@@ -100,3 +100,17 @@ logs/
 tmp/
 temp/
 *.tmp
+
+# archived mobile
+.expo/
+.expo-shared/
+web-build/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+*.keystore
+**/__generated__/
+npm-debug.*
