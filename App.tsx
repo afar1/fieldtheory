@@ -1,8 +1,45 @@
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator, ScrollView } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  GestureResponderEvent,
+  Pressable,
+  SafeAreaView,
+  SectionList,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { useWhisperRecording } from './hooks/useWhisperRecording';
-import { useState, useEffect } from 'react';
 import { ensureModelAvailable } from './services/modelService';
+
+type TranscriptEntry = {
+  id: string;
+  text: string;
+  createdAt: number;
+};
+
+const MAX_PREVIEW_LINES = 3;
+const dateHeaderFormatter = new Intl.DateTimeFormat('en-US', {
+  weekday: 'short',
+  month: 'short',
+  day: 'numeric',
+});
+const timeFormatter = new Intl.DateTimeFormat('en-US', {
+  hour: 'numeric',
+  minute: 'numeric',
+});
+
+const getDateKey = (timestamp: number) => {
+  const date = new Date(timestamp);
+  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+};
+
+const formatDateHeader = (timestamp: number) => dateHeaderFormatter.format(new Date(timestamp));
+const formatTime = (timestamp: number) => timeFormatter.format(new Date(timestamp));
 
 export default function App() {
   const {
@@ -14,15 +51,29 @@ export default function App() {
     stopRecording,
     isReady,
   } = useWhisperRecording();
-  
+
   const [modelDownloadProgress, setModelDownloadProgress] = useState<number | null>(null);
   const [isDownloadingModel, setIsDownloadingModel] = useState(false);
+  const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
+  const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
+  const [expandedMap, setExpandedMap] = useState<Record<string, boolean>>({});
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Check model availability on mount
+  // Keep copying feedback timers tidy.
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Ensure the Whisper model is available before we allow recordings.
   useEffect(() => {
     async function checkModel() {
       try {
-        const modelPath = await ensureModelAvailable((progress) => {
+        await ensureModelAvailable((progress) => {
           setModelDownloadProgress(progress);
           setIsDownloadingModel(progress < 1);
         });
@@ -32,11 +83,60 @@ export default function App() {
         console.error('Model check failed:', err);
       }
     }
-    
+
     if (!isReady) {
       checkModel();
     }
   }, [isReady]);
+
+  // Capture every finished transcription so we can build the timeline.
+  useEffect(() => {
+    if (transcription === null) {
+      return;
+    }
+
+    const cleanedText =
+      transcription.trim().length > 0
+        ? transcription.trim()
+        : 'No speech detected in this recording.';
+
+    setTranscripts((prev) => [
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        text: cleanedText,
+        createdAt: Date.now(),
+      },
+      ...prev,
+    ]);
+  }, [transcription]);
+
+  const sortedTranscripts = useMemo(() => {
+    return [...transcripts].sort((a, b) =>
+      sortOrder === 'newest' ? b.createdAt - a.createdAt : a.createdAt - b.createdAt,
+    );
+  }, [transcripts, sortOrder]);
+
+  const sections = useMemo(() => {
+    const grouped: { key: string; title: string; data: TranscriptEntry[] }[] = [];
+    const sectionIndex: Record<string, number> = {};
+
+    sortedTranscripts.forEach((entry) => {
+      const key = getDateKey(entry.createdAt);
+
+      if (sectionIndex[key] === undefined) {
+        sectionIndex[key] = grouped.length;
+        grouped.push({
+          key,
+          title: formatDateHeader(entry.createdAt),
+          data: [],
+        });
+      }
+
+      grouped[sectionIndex[key]].data.push(entry);
+    });
+
+    return grouped;
+  }, [sortedTranscripts]);
 
   const handleRecordPress = async () => {
     if (isRecording) {
@@ -46,183 +146,387 @@ export default function App() {
     }
   };
 
-  return (
-    <View style={styles.container}>
-      <StatusBar style="auto" />
-      
-      <View style={styles.content}>
-        <Text style={styles.title}>Little AI</Text>
-        <Text style={styles.subtitle}>Speech to Text</Text>
-        
-        {/* Model download status */}
-        {isDownloadingModel && (
-          <View style={styles.downloadContainer}>
-            <Text style={styles.downloadText}>
-              Downloading model... {modelDownloadProgress ? Math.round(modelDownloadProgress * 100) : 0}%
-            </Text>
-            <ActivityIndicator size="small" color="#007AFF" />
-          </View>
-        )}
-        
-        {/* Ready status */}
-        {isReady && !isDownloadingModel && (
-          <Text style={styles.readyText}>Ready to record</Text>
-        )}
-        
-        {/* Error display */}
-        {error && (
-          <View style={styles.errorContainer}>
-            <Text style={styles.errorText}>{error}</Text>
-          </View>
-        )}
-        
-        {/* Recording button */}
-        <TouchableOpacity
-          style={[
-            styles.recordButton,
-            isRecording && styles.recordButtonActive,
-            (!isReady || isProcessing) && styles.recordButtonDisabled,
-          ]}
-          onPress={handleRecordPress}
-          disabled={!isReady || isProcessing}
+  const handleCopyTranscript = async (entry: TranscriptEntry) => {
+    await Clipboard.setStringAsync(entry.text);
+    setCopiedId(entry.id);
+
+    if (copyTimeoutRef.current) {
+      clearTimeout(copyTimeoutRef.current);
+    }
+    copyTimeoutRef.current = setTimeout(() => setCopiedId(null), 1500);
+  };
+
+  const handleToggleExpand = (id: string) => {
+    setExpandedMap((prev) => ({
+      ...prev,
+      [id]: !prev[id],
+    }));
+  };
+
+  const handleDeleteTranscript = (id: string) => {
+    Alert.alert('Delete transcription?', 'This removes the text from your device.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          setTranscripts((prev) => prev.filter((entry) => entry.id !== id));
+          setExpandedMap((prev) => {
+            const next = { ...prev };
+            delete next[id];
+            return next;
+          });
+        },
+      },
+    ]);
+  };
+
+  const renderTranscriptItem = ({ item }: { item: TranscriptEntry }) => {
+    const isExpanded = Boolean(expandedMap[item.id]);
+    const isCopied = copiedId === item.id;
+    const shouldShowExpand = item.text.length > 160 || item.text.includes('\n');
+
+    const handleExpandPress = (event: GestureResponderEvent) => {
+      event.stopPropagation();
+      handleToggleExpand(item.id);
+    };
+
+    return (
+      <Pressable
+        onPress={() => handleCopyTranscript(item)}
+        onLongPress={() => handleDeleteTranscript(item.id)}
+        android_ripple={{ color: '#E2E8F0' }}
+        style={({ pressed }) => [
+          styles.transcriptCard,
+          pressed && styles.transcriptCardPressed,
+          isCopied && styles.transcriptCardCopied,
+        ]}
+      >
+        <View style={styles.transcriptHeader}>
+          <Text style={styles.transcriptTime}>{formatTime(item.createdAt)}</Text>
+          {isCopied && <Text style={styles.copiedLabel}>Copied</Text>}
+        </View>
+        <Text
+          style={styles.transcriptText}
+          numberOfLines={isExpanded ? undefined : MAX_PREVIEW_LINES}
         >
-          {isProcessing ? (
-            <ActivityIndicator size="large" color="#fff" />
-          ) : (
-            <Text style={styles.recordButtonText}>
-              {isRecording ? 'Stop Recording' : 'Start Recording'}
-            </Text>
-          )}
-        </TouchableOpacity>
-        
-        {/* Recording indicator */}
-        {isRecording && (
-          <View style={styles.recordingIndicator}>
-            <View style={styles.recordingDot} />
-            <Text style={styles.recordingText}>Recording...</Text>
+          {item.text}
+        </Text>
+        {shouldShowExpand && (
+          <TouchableOpacity
+            onPress={handleExpandPress}
+            hitSlop={8}
+            style={styles.expandButton}
+          >
+            <Text style={styles.expandButtonText}>{isExpanded ? 'Show less' : 'Expand'}</Text>
+          </TouchableOpacity>
+        )}
+      </Pressable>
+    );
+  };
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar style="dark" />
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.title}>Little AI</Text>
+            <Text style={styles.subtitle}>Local speech capture</Text>
           </View>
-        )}
-        
-        {/* Transcription display */}
-        {transcription !== null && (
-          <ScrollView style={styles.transcriptionContainer}>
-            <Text style={styles.transcriptionLabel}>Transcription:</Text>
-            <Text style={styles.transcriptionText}>
-              {transcription.trim().length > 0 ? transcription : 'No speech detected in this recording.'}
+          <TouchableOpacity
+            style={styles.sortButton}
+            onPress={() =>
+              setSortOrder((prev) => (prev === 'newest' ? 'oldest' : 'newest'))
+            }
+          >
+            <Text style={styles.sortButtonText}>
+              {sortOrder === 'newest' ? 'Newest first' : 'Oldest first'}
             </Text>
-          </ScrollView>
-        )}
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.controlCard}>
+          <View style={styles.countRow}>
+            <Text style={styles.countLabel}>Transcriptions</Text>
+            <Text style={styles.countValue}>{transcripts.length}</Text>
+          </View>
+
+          {isDownloadingModel && (
+            <View style={styles.downloadRow}>
+              <Text style={styles.downloadText}>
+                Downloading model… {modelDownloadProgress ? Math.round(modelDownloadProgress * 100) : 0}%
+              </Text>
+              <ActivityIndicator size="small" color="#007AFF" />
+            </View>
+          )}
+
+          {isReady && !isDownloadingModel && (
+            <Text style={styles.readyText}>Ready to record</Text>
+          )}
+
+          {error && (
+            <View style={styles.errorContainer}>
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          )}
+
+          <TouchableOpacity
+            style={[
+              styles.recordButton,
+              isRecording && styles.recordButtonActive,
+              (!isReady || isProcessing) && styles.recordButtonDisabled,
+            ]}
+            onPress={handleRecordPress}
+            disabled={!isReady || isProcessing}
+          >
+            {isProcessing ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.recordButtonText}>
+                {isRecording ? 'Stop recording' : 'Start recording'}
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          {isRecording && (
+            <View style={styles.recordingIndicator}>
+              <View style={styles.recordingDot} />
+              <Text style={styles.recordingText}>Recording…</Text>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.listContainer}>
+          {sections.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>No transcripts yet</Text>
+              <Text style={styles.emptySubtitle}>
+                Tap “Start recording” to capture the first note.
+              </Text>
+            </View>
+          ) : (
+            <SectionList
+              sections={sections}
+              keyExtractor={(item) => item.id}
+              renderItem={renderTranscriptItem}
+              stickySectionHeadersEnabled
+              renderSectionHeader={({ section }) => (
+                <View style={styles.sectionHeader}>
+                  <Text style={styles.sectionHeaderText}>{section.title}</Text>
+                </View>
+              )}
+              contentContainerStyle={styles.sectionContent}
+            />
+          )}
+        </View>
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#F4F5F7',
+  },
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    paddingHorizontal: 20,
+    paddingTop: 12,
   },
-  content: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    marginBottom: 8,
-    color: '#000',
-  },
-  subtitle: {
-    fontSize: 18,
-    color: '#666',
-    marginBottom: 40,
-  },
-  downloadContainer: {
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#111',
+  },
+  subtitle: {
+    fontSize: 15,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  sortButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: '#E5E7EB',
+    borderRadius: 20,
+  },
+  sortButtonText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#111827',
+  },
+  controlCard: {
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 20,
     marginBottom: 20,
-    gap: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  countRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  countLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#111',
+  },
+  countValue: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#111',
+  },
+  downloadRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
   },
   downloadText: {
     fontSize: 14,
-    color: '#666',
+    color: '#374151',
   },
   readyText: {
     fontSize: 14,
-    color: '#007AFF',
-    marginBottom: 20,
+    color: '#059669',
+    marginBottom: 12,
   },
   errorContainer: {
-    backgroundColor: '#FFEBEE',
+    backgroundColor: '#FEE2E2',
     padding: 12,
-    borderRadius: 8,
-    marginBottom: 20,
-    maxWidth: '100%',
+    borderRadius: 10,
+    marginBottom: 12,
   },
   errorText: {
-    color: '#C62828',
+    color: '#B91C1C',
     fontSize: 14,
-    textAlign: 'center',
   },
   recordButton: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 40,
-    paddingVertical: 16,
-    borderRadius: 25,
-    minWidth: 200,
+    backgroundColor: '#2563EB',
+    borderRadius: 14,
+    paddingVertical: 14,
     alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 20,
   },
   recordButtonActive: {
-    backgroundColor: '#FF3B30',
+    backgroundColor: '#DC2626',
   },
   recordButtonDisabled: {
-    backgroundColor: '#CCC',
+    backgroundColor: '#9CA3AF',
   },
   recordButtonText: {
     color: '#fff',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '600',
   },
   recordingIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
+    marginTop: 12,
     gap: 8,
   },
   recordingDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#FF3B30',
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#DC2626',
   },
   recordingText: {
-    fontSize: 16,
-    color: '#FF3B30',
-    fontWeight: '500',
-  },
-  transcriptionContainer: {
-    width: '100%',
-    maxHeight: 300,
-    backgroundColor: '#F5F5F5',
-    borderRadius: 12,
-    padding: 16,
-    marginTop: 20,
-  },
-  transcriptionLabel: {
-    fontSize: 14,
+    color: '#DC2626',
     fontWeight: '600',
-    color: '#666',
+  },
+  listContainer: {
+    flex: 1,
+  },
+  emptyState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingBottom: 80,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111',
     marginBottom: 8,
   },
-  transcriptionText: {
+  emptySubtitle: {
+    fontSize: 15,
+    color: '#6B7280',
+    textAlign: 'center',
+  },
+  sectionHeader: {
+    backgroundColor: '#F4F5F7',
+    paddingVertical: 6,
+  },
+  sectionHeaderText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6B7280',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  sectionContent: {
+    paddingBottom: 40,
+  },
+  transcriptCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  transcriptCardPressed: {
+    opacity: 0.8,
+  },
+  transcriptCardCopied: {
+    borderColor: '#2563EB',
+  },
+  transcriptHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  transcriptTime: {
+    fontSize: 13,
+    color: '#6B7280',
+  },
+  copiedLabel: {
+    fontSize: 12,
+    color: '#2563EB',
+    fontWeight: '600',
+  },
+  transcriptText: {
     fontSize: 16,
-    color: '#000',
-    lineHeight: 24,
+    lineHeight: 22,
+    color: '#111',
+  },
+  expandButton: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: '#EEF2FF',
+  },
+  expandButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#4338CA',
   },
 });
-
 
