@@ -18,4 +18,10 @@ export interface Settings {
   anthropicKey?: string; // Optional override for API key
 }
 
+export interface TranscriptEntry {
+  id: string;
+  text: string;
+  createdAt: number;
+}
+
 

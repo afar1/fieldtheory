@@ -6,24 +6,33 @@ import {
   TouchableOpacity,
   TextInput,
   Modal,
-  ScrollView,
+  SectionList,
   Alert,
 } from 'react-native';
 import { Todo } from '../types';
 import * as Clipboard from 'expo-clipboard';
 
+type TodoSection = {
+  key: string;
+  title: string;
+  data: Todo[];
+};
+
 interface TodoListProps {
-  todos: Todo[];
+  sections: TodoSection[];
   onToggleComplete: (id: string) => void;
   onUpdate: (id: string, text: string) => void;
   onDelete: (id: string) => void;
+  formatTime: (timestamp: number) => string;
+  formatDateHeader: (timestamp: number) => string;
 }
 
 /**
  * List component for displaying and managing todos.
  * Supports tap-to-edit, checkbox toggle, swipe-to-delete, and copy.
+ * Groups items by date with sticky section headers.
  */
-export function TodoList({ todos, onToggleComplete, onUpdate, onDelete }: TodoListProps) {
+export function TodoList({ sections, onToggleComplete, onUpdate, onDelete, formatTime, formatDateHeader }: TodoListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
 
@@ -57,7 +66,50 @@ export function TodoList({ todos, onToggleComplete, onUpdate, onDelete }: TodoLi
     ]);
   };
 
-  if (todos.length === 0) {
+  const renderItem = ({ item: todo }: { item: Todo }) => (
+    <View style={styles.item}>
+      <TouchableOpacity
+        style={styles.checkbox}
+        onPress={() => onToggleComplete(todo.id)}
+      >
+        <Text style={styles.checkboxText}>{todo.completed ? '✓' : '○'}</Text>
+      </TouchableOpacity>
+      
+      <View style={styles.textContainer}>
+        <View style={styles.itemHeader}>
+          <Text style={styles.itemTime}>{formatTime(todo.createdAt)}</Text>
+        </View>
+        <TouchableOpacity
+          onPress={() => handleEdit(todo)}
+          onLongPress={() => handleCopy(todo.text)}
+        >
+          <Text
+            style={[
+              styles.text,
+              todo.completed && styles.textCompleted,
+            ]}
+          >
+            {todo.text}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <TouchableOpacity
+        style={styles.deleteButton}
+        onPress={() => handleDelete(todo.id)}
+      >
+        <Text style={styles.deleteButtonText}>×</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const renderSectionHeader = ({ section }: { section: TodoSection }) => (
+    <View style={styles.sectionHeader}>
+      <Text style={styles.sectionHeaderText}>{section.title}</Text>
+    </View>
+  );
+
+  if (sections.length === 0) {
     return (
       <View style={styles.emptyContainer}>
         <Text style={styles.emptyText}>No todos yet</Text>
@@ -67,39 +119,16 @@ export function TodoList({ todos, onToggleComplete, onUpdate, onDelete }: TodoLi
   }
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {todos.map((todo) => (
-        <View key={todo.id} style={styles.item}>
-          <TouchableOpacity
-            style={styles.checkbox}
-            onPress={() => onToggleComplete(todo.id)}
-          >
-            <Text style={styles.checkboxText}>{todo.completed ? '✓' : '○'}</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={styles.textContainer}
-            onPress={() => handleEdit(todo)}
-            onLongPress={() => handleCopy(todo.text)}
-          >
-            <Text
-              style={[
-                styles.text,
-                todo.completed && styles.textCompleted,
-              ]}
-            >
-              {todo.text}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.deleteButton}
-            onPress={() => handleDelete(todo.id)}
-          >
-            <Text style={styles.deleteButtonText}>×</Text>
-          </TouchableOpacity>
-        </View>
-      ))}
+    <>
+      <SectionList
+        sections={sections}
+        keyExtractor={(item) => item.id}
+        renderItem={renderItem}
+        renderSectionHeader={renderSectionHeader}
+        stickySectionHeadersEnabled
+        contentContainerStyle={styles.content}
+        style={styles.container}
+      />
 
       <Modal
         visible={editingId !== null}
@@ -134,7 +163,7 @@ export function TodoList({ todos, onToggleComplete, onUpdate, onDelete }: TodoLi
           </View>
         </View>
       </Modal>
-    </ScrollView>
+    </>
   );
 }
 
@@ -143,7 +172,22 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    padding: 16,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 40,
+  },
+  sectionHeader: {
+    backgroundColor: '#F5F5F5',
+    paddingVertical: 6,
+    paddingHorizontal: 20,
+    marginHorizontal: -20,
+  },
+  sectionHeaderText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6B7280',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   emptyContainer: {
     flex: 1,
@@ -184,6 +228,13 @@ const styles = StyleSheet.create({
   },
   textContainer: {
     flex: 1,
+  },
+  itemHeader: {
+    marginBottom: 4,
+  },
+  itemTime: {
+    fontSize: 13,
+    color: '#6B7280',
   },
   text: {
     fontSize: 16,

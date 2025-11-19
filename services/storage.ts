@@ -1,10 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Todo, Observation, Settings } from '../types';
+import { Todo, Observation, Settings, TranscriptEntry } from '../types';
 
 // Storage keys
 const TODOS_KEY = '@littleai/todos';
 const OBSERVATIONS_KEY = '@littleai/observations';
 const SETTINGS_KEY = '@littleai/settings';
+const TRANSCRIPTS_KEY = '@littleai/transcripts';
 
 /**
  * Storage service for persisting todos, observations, and settings.
@@ -82,6 +83,31 @@ export class StorageService {
       await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
     } catch (error) {
       console.error('Failed to save settings:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Load all transcripts from storage.
+   */
+  static async getTranscripts(): Promise<TranscriptEntry[]> {
+    try {
+      const data = await AsyncStorage.getItem(TRANSCRIPTS_KEY);
+      return data ? JSON.parse(data) : [];
+    } catch (error) {
+      console.error('Failed to load transcripts:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Save transcripts to storage.
+   */
+  static async saveTranscripts(transcripts: TranscriptEntry[]): Promise<void> {
+    try {
+      await AsyncStorage.setItem(TRANSCRIPTS_KEY, JSON.stringify(transcripts));
+    } catch (error) {
+      console.error('Failed to save transcripts:', error);
       throw error;
     }
   }
