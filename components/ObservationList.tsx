@@ -8,6 +8,7 @@ import {
   Modal,
   SectionList,
   Alert,
+  Vibration,
 } from 'react-native';
 import { Observation } from '../types';
 import * as Clipboard from 'expo-clipboard';
@@ -61,6 +62,7 @@ export function ObservationList({
 
   const handleCopy = async (text: string) => {
     await Clipboard.setStringAsync(text);
+    Vibration.vibrate();
     Alert.alert('Copied', 'Observation copied to clipboard');
   };
 
@@ -110,7 +112,7 @@ export function ObservationList({
   }
 
   return (
-    <>
+    <React.Fragment>
       <SectionList
         sections={sections}
         keyExtractor={(item) => item.id}
@@ -154,7 +156,7 @@ export function ObservationList({
           </View>
         </View>
       </Modal>
-    </>
+    </React.Fragment>
   );
 }
 
