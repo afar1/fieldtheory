@@ -6,26 +6,37 @@ import {
   TouchableOpacity,
   TextInput,
   Modal,
-  ScrollView,
+  SectionList,
   Alert,
 } from 'react-native';
 import { Observation } from '../types';
 import * as Clipboard from 'expo-clipboard';
 
+type ObservationSection = {
+  key: string;
+  title: string;
+  data: Observation[];
+};
+
 interface ObservationListProps {
-  observations: Observation[];
+  sections: ObservationSection[];
   onUpdate: (id: string, text: string) => void;
   onDelete: (id: string) => void;
+  formatTime: (timestamp: number) => string;
+  formatDateHeader: (timestamp: number) => string;
 }
 
 /**
  * List component for displaying and managing observations.
  * Supports tap-to-edit, swipe-to-delete, and copy.
+ * Groups items by date with sticky section headers.
  */
 export function ObservationList({
-  observations,
+  sections,
   onUpdate,
   onDelete,
+  formatTime,
+  formatDateHeader,
 }: ObservationListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
@@ -60,7 +71,36 @@ export function ObservationList({
     ]);
   };
 
-  if (observations.length === 0) {
+  const renderItem = ({ item: observation }: { item: Observation }) => (
+    <View style={styles.item}>
+      <View style={styles.textContainer}>
+        <View style={styles.itemHeader}>
+          <Text style={styles.itemTime}>{formatTime(observation.createdAt)}</Text>
+        </View>
+        <TouchableOpacity
+          onPress={() => handleEdit(observation)}
+          onLongPress={() => handleCopy(observation.text)}
+        >
+          <Text style={styles.text}>{observation.text}</Text>
+        </TouchableOpacity>
+      </View>
+
+      <TouchableOpacity
+        style={styles.deleteButton}
+        onPress={() => handleDelete(observation.id)}
+      >
+        <Text style={styles.deleteButtonText}>×</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const renderSectionHeader = ({ section }: { section: ObservationSection }) => (
+    <View style={styles.sectionHeader}>
+      <Text style={styles.sectionHeaderText}>{section.title}</Text>
+    </View>
+  );
+
+  if (sections.length === 0) {
     return (
       <View style={styles.emptyContainer}>
         <Text style={styles.emptyText}>No observations yet</Text>
@@ -70,25 +110,16 @@ export function ObservationList({
   }
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {observations.map((observation) => (
-        <View key={observation.id} style={styles.item}>
-          <TouchableOpacity
-            style={styles.textContainer}
-            onPress={() => handleEdit(observation)}
-            onLongPress={() => handleCopy(observation.text)}
-          >
-            <Text style={styles.text}>{observation.text}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.deleteButton}
-            onPress={() => handleDelete(observation.id)}
-          >
-            <Text style={styles.deleteButtonText}>×</Text>
-          </TouchableOpacity>
-        </View>
-      ))}
+    <>
+      <SectionList
+        sections={sections}
+        keyExtractor={(item) => item.id}
+        renderItem={renderItem}
+        renderSectionHeader={renderSectionHeader}
+        stickySectionHeadersEnabled
+        contentContainerStyle={styles.content}
+        style={styles.container}
+      />
 
       <Modal
         visible={editingId !== null}
@@ -123,7 +154,7 @@ export function ObservationList({
           </View>
         </View>
       </Modal>
-    </ScrollView>
+    </>
   );
 }
 
@@ -132,7 +163,22 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    padding: 16,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 40,
+  },
+  sectionHeader: {
+    backgroundColor: '#F5F5F5',
+    paddingVertical: 6,
+    paddingHorizontal: 20,
+    marginHorizontal: -20,
+  },
+  sectionHeaderText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6B7280',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   emptyContainer: {
     flex: 1,
@@ -162,6 +208,13 @@ const styles = StyleSheet.create({
   },
   textContainer: {
     flex: 1,
+  },
+  itemHeader: {
+    marginBottom: 4,
+  },
+  itemTime: {
+    fontSize: 13,
+    color: '#6B7280',
   },
   text: {
     fontSize: 16,

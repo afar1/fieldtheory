@@ -22,13 +22,7 @@ import { TodoList } from './components/TodoList';
 import { ObservationList } from './components/ObservationList';
 import { StorageService } from './services/storage';
 import { processTranscription } from './services/llm';
-import { Todo, Observation, Settings } from './types';
-
-type TranscriptEntry = {
-  id: string;
-  text: string;
-  createdAt: number;
-};
+import { Todo, Observation, Settings, TranscriptEntry } from './types';
 
 const MAX_PREVIEW_LINES = 3;
 const dateHeaderFormatter = new Intl.DateTimeFormat('en-US', {
@@ -72,6 +66,8 @@ export default function App() {
   // Transcript history state
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
+  const [todosSortOrder, setTodosSortOrder] = useState<'newest' | 'oldest'>('newest');
+  const [observationsSortOrder, setObservationsSortOrder] = useState<'newest' | 'oldest'>('newest');
   const [expandedMap, setExpandedMap] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -82,14 +78,16 @@ export default function App() {
   // Load data from storage on mount
   useEffect(() => {
     async function loadData() {
-      const [loadedTodos, loadedObservations, loadedSettings] = await Promise.all([
+      const [loadedTodos, loadedObservations, loadedSettings, loadedTranscripts] = await Promise.all([
         StorageService.getTodos(),
         StorageService.getObservations(),
         StorageService.getSettings(),
+        StorageService.getTranscripts(),
       ]);
       setTodos(loadedTodos);
       setObservations(loadedObservations);
       setSettings(loadedSettings);
+      setTranscripts(loadedTranscripts);
     }
     loadData();
   }, []);
@@ -144,14 +142,18 @@ export default function App() {
         ? transcription.trim()
         : 'No speech detected in this recording.';
 
-    setTranscripts((prev) => [
-      {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        text: cleanedText,
-        createdAt: Date.now(),
-      },
-      ...prev,
-    ]);
+    const newEntry: TranscriptEntry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      text: cleanedText,
+      createdAt: Date.now(),
+    };
+
+    setTranscripts((prev) => {
+      const updated = [newEntry, ...prev];
+      // Save to storage whenever transcripts change
+      StorageService.saveTranscripts(updated).catch(console.error);
+      return updated;
+    });
   }, [transcription]);
 
   const handleProcessTranscription = useCallback(async (text: string) => {
@@ -234,6 +236,18 @@ export default function App() {
     );
   }, [transcripts, sortOrder]);
 
+  const sortedTodos = useMemo(() => {
+    return [...todos].sort((a, b) =>
+      todosSortOrder === 'newest' ? b.createdAt - a.createdAt : a.createdAt - b.createdAt,
+    );
+  }, [todos, todosSortOrder]);
+
+  const sortedObservations = useMemo(() => {
+    return [...observations].sort((a, b) =>
+      observationsSortOrder === 'newest' ? b.createdAt - a.createdAt : a.createdAt - b.createdAt,
+    );
+  }, [observations, observationsSortOrder]);
+
   const sections = useMemo(() => {
     const grouped: { key: string; title: string; data: TranscriptEntry[] }[] = [];
     const sectionIndex: Record<string, number> = {};
@@ -255,6 +269,50 @@ export default function App() {
 
     return grouped;
   }, [sortedTranscripts]);
+
+  const todosSections = useMemo(() => {
+    const grouped: { key: string; title: string; data: Todo[] }[] = [];
+    const sectionIndex: Record<string, number> = {};
+
+    sortedTodos.forEach((todo) => {
+      const key = getDateKey(todo.createdAt);
+
+      if (sectionIndex[key] === undefined) {
+        sectionIndex[key] = grouped.length;
+        grouped.push({
+          key,
+          title: formatDateHeader(todo.createdAt),
+          data: [],
+        });
+      }
+
+      grouped[sectionIndex[key]].data.push(todo);
+    });
+
+    return grouped;
+  }, [sortedTodos]);
+
+  const observationsSections = useMemo(() => {
+    const grouped: { key: string; title: string; data: Observation[] }[] = [];
+    const sectionIndex: Record<string, number> = {};
+
+    sortedObservations.forEach((observation) => {
+      const key = getDateKey(observation.createdAt);
+
+      if (sectionIndex[key] === undefined) {
+        sectionIndex[key] = grouped.length;
+        grouped.push({
+          key,
+          title: formatDateHeader(observation.createdAt),
+          data: [],
+        });
+      }
+
+      grouped[sectionIndex[key]].data.push(observation);
+    });
+
+    return grouped;
+  }, [sortedObservations]);
 
   const handleRecordPress = async () => {
     if (isRecording) {
@@ -326,7 +384,12 @@ export default function App() {
         text: 'Delete',
         style: 'destructive',
         onPress: () => {
-          setTranscripts((prev) => prev.filter((entry) => entry.id !== id));
+          setTranscripts((prev) => {
+            const updated = prev.filter((entry) => entry.id !== id);
+            // Save to storage when deleting
+            StorageService.saveTranscripts(updated).catch(console.error);
+            return updated;
+          });
           setExpandedMap((prev) => {
             const next = { ...prev };
             delete next[id];
@@ -393,7 +456,7 @@ export default function App() {
             onPress={() => setPageIndex(0)}
           >
             <Text style={[styles.tabText, pageIndex === 0 && styles.tabTextActive]}>
-              Todos
+              Transcripts
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
@@ -401,7 +464,7 @@ export default function App() {
             onPress={() => setPageIndex(1)}
           >
             <Text style={[styles.tabText, pageIndex === 1 && styles.tabTextActive]}>
-              Observations
+              Tasks
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
@@ -409,7 +472,7 @@ export default function App() {
             onPress={() => setPageIndex(2)}
           >
             <Text style={[styles.tabText, pageIndex === 2 && styles.tabTextActive]}>
-              Transcripts
+              Observations
             </Text>
           </TouchableOpacity>
         </View>
@@ -454,24 +517,9 @@ export default function App() {
         initialPage={0}
         onPageSelected={(e) => setPageIndex(e.nativeEvent.position)}
       >
-        <View key="todos">
-          <TodoList
-            todos={todos}
-            onToggleComplete={handleToggleComplete}
-            onUpdate={handleUpdateTodo}
-            onDelete={handleDeleteTodo}
-          />
-        </View>
-        <View key="observations">
-          <ObservationList
-            observations={observations}
-            onUpdate={handleUpdateObservation}
-            onDelete={handleDeleteObservation}
-          />
-        </View>
         <View key="transcripts" style={styles.transcriptContainer}>
-          {pageIndex === 2 && (
-            <View style={styles.transcriptHeaderControls}>
+          <View style={styles.transcriptHeaderControls}>
+            {pageIndex === 0 && (
               <TouchableOpacity
                 style={styles.sortButton}
                 onPress={() =>
@@ -482,8 +530,8 @@ export default function App() {
                   {sortOrder === 'newest' ? 'Newest first' : 'Oldest first'}
                 </Text>
               </TouchableOpacity>
-            </View>
-          )}
+            )}
+          </View>
           {sections.length === 0 ? (
             <View style={styles.emptyState}>
               <Text style={styles.emptyTitle}>No transcripts yet</Text>
@@ -505,6 +553,53 @@ export default function App() {
               contentContainerStyle={styles.sectionContent}
             />
           )}
+        </View>
+        <View key="todos" style={styles.pageContainer}>
+          <View style={styles.transcriptHeaderControls}>
+            {pageIndex === 1 && (
+              <TouchableOpacity
+                style={styles.sortButton}
+                onPress={() =>
+                  setTodosSortOrder((prev) => (prev === 'newest' ? 'oldest' : 'newest'))
+                }
+              >
+                <Text style={styles.sortButtonText}>
+                  {todosSortOrder === 'newest' ? 'Newest first' : 'Oldest first'}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          <TodoList
+            sections={todosSections}
+            onToggleComplete={handleToggleComplete}
+            onUpdate={handleUpdateTodo}
+            onDelete={handleDeleteTodo}
+            formatTime={formatTime}
+            formatDateHeader={formatDateHeader}
+          />
+        </View>
+        <View key="observations" style={styles.pageContainer}>
+          <View style={styles.transcriptHeaderControls}>
+            {pageIndex === 2 && (
+              <TouchableOpacity
+                style={styles.sortButton}
+                onPress={() =>
+                  setObservationsSortOrder((prev) => (prev === 'newest' ? 'oldest' : 'newest'))
+                }
+              >
+                <Text style={styles.sortButtonText}>
+                  {observationsSortOrder === 'newest' ? 'Newest first' : 'Oldest first'}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          <ObservationList
+            sections={observationsSections}
+            onUpdate={handleUpdateObservation}
+            onDelete={handleDeleteObservation}
+            formatTime={formatTime}
+            formatDateHeader={formatDateHeader}
+          />
         </View>
       </PagerView>
 
@@ -640,11 +735,16 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F4F5F7',
   },
+  pageContainer: {
+    flex: 1,
+    backgroundColor: '#F5F5F5',
+  },
   transcriptHeaderControls: {
     paddingHorizontal: 20,
     paddingTop: 12,
     paddingBottom: 8,
-    backgroundColor: '#F4F5F7',
+    backgroundColor: '#F5F5F5',
+    minHeight: 44, // Reserve space for sort button to prevent layout shift
   },
   sortButton: {
     alignSelf: 'flex-end',
