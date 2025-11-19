@@ -12,6 +12,8 @@ import {
   GestureResponderEvent,
   Pressable,
   SectionList,
+  Vibration,
+  AppState,
 } from 'react-native';
 import { useWhisperRecording } from './hooks/useWhisperRecording';
 import { useHeadsetControls } from './hooks/useHeadsetControls';
@@ -74,6 +76,12 @@ export default function App() {
   
   // Track last processed transcription to prevent loops/duplicate processing
   const lastProcessedText = useRef<string | null>(null);
+  // Track if we've auto-started recording on this app session (only once per launch)
+  const hasAutoStartedRef = useRef<boolean>(false);
+  // Track previous app state to detect foreground transitions
+  const appStateRef = useRef<string>(AppState.currentState);
+  // Track if user manually stopped recording (prevents auto-start until they manually start again)
+  const manuallyStoppedRef = useRef<boolean>(false);
 
   // Load data from storage on mount
   useEffect(() => {
@@ -124,12 +132,38 @@ export default function App() {
   // Configure audio session for headset controls
   useHeadsetControls();
 
-  // Auto-start recording if enabled
+  // Auto-start recording when app returns to foreground (if enabled)
   useEffect(() => {
-    if (settings.autoStart && isReady && !isRecording && !isProcessing && !isDownloadingModel) {
-      startRecording().catch(console.error);
-    }
-  }, [settings.autoStart, isReady, isRecording, isProcessing, isDownloadingModel]);
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      // Reset auto-start flag when app goes to background, so it can trigger again on next foreground
+      if (appStateRef.current === 'active' && nextAppState.match(/inactive|background/)) {
+        hasAutoStartedRef.current = false;
+      }
+      
+      // Auto-start when transitioning from background/inactive to active (foreground)
+      // Only if user hasn't manually stopped recording
+      if (
+        appStateRef.current.match(/inactive|background/) &&
+        nextAppState === 'active' &&
+        settings.autoStart &&
+        isReady &&
+        !isRecording &&
+        !isProcessing &&
+        !isDownloadingModel &&
+        !hasAutoStartedRef.current &&
+        !manuallyStoppedRef.current
+      ) {
+        hasAutoStartedRef.current = true;
+        startRecording().catch(console.error);
+      }
+      
+      appStateRef.current = nextAppState;
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [settings.autoStart, isReady, isRecording, isProcessing, isDownloadingModel, startRecording]);
 
   // Capture every finished transcription so we can build the timeline.
   useEffect(() => {
@@ -152,6 +186,8 @@ export default function App() {
       const updated = [newEntry, ...prev];
       // Save to storage whenever transcripts change
       StorageService.saveTranscripts(updated).catch(console.error);
+      // Auto-copy transcription to clipboard after it's added
+      Clipboard.setStringAsync(cleanedText).catch(console.error);
       return updated;
     });
   }, [transcription]);
@@ -317,8 +353,10 @@ export default function App() {
   const handleRecordPress = async () => {
     if (isRecording) {
       await stopRecording();
+      manuallyStoppedRef.current = true; // User manually stopped - don't auto-start again
     } else {
       await startRecording();
+      manuallyStoppedRef.current = false; // User manually started - allow auto-start again
     }
   };
 
@@ -362,6 +400,7 @@ export default function App() {
 
   const handleCopyTranscript = async (entry: TranscriptEntry) => {
     await Clipboard.setStringAsync(entry.text);
+    Vibration.vibrate();
     setCopiedId(entry.id);
 
     if (copyTimeoutRef.current) {
@@ -506,7 +545,7 @@ export default function App() {
         <View style={styles.processingContainer}>
           <ActivityIndicator size="small" color="#007AFF" />
           <Text style={styles.processingText}>
-            {isProcessing ? 'Transcribing...' : 'Processing with AI...'}
+            {isProcessing ? 'Transcribing...' : 'Separating transcript into tasks and observations'}
           </Text>
         </View>
       )}

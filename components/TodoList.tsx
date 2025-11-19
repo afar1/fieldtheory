@@ -8,6 +8,7 @@ import {
   Modal,
   SectionList,
   Alert,
+  Vibration,
 } from 'react-native';
 import { Todo } from '../types';
 import * as Clipboard from 'expo-clipboard';
@@ -56,6 +57,7 @@ export function TodoList({ sections, onToggleComplete, onUpdate, onDelete, forma
 
   const handleCopy = async (text: string) => {
     await Clipboard.setStringAsync(text);
+    Vibration.vibrate();
     Alert.alert('Copied', 'Todo copied to clipboard');
   };
 
@@ -119,7 +121,7 @@ export function TodoList({ sections, onToggleComplete, onUpdate, onDelete, forma
   }
 
   return (
-    <>
+    <React.Fragment>
       <SectionList
         sections={sections}
         keyExtractor={(item) => item.id}
@@ -163,7 +165,7 @@ export function TodoList({ sections, onToggleComplete, onUpdate, onDelete, forma
           </View>
         </View>
       </Modal>
-    </>
+    </React.Fragment>
   );
 }
 
