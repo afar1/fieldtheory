@@ -14,9 +14,7 @@
     "assetBundlePatterns": [
       "**/*"
     ],
-    "plugins": [
-      "expo-dev-client"
-    ],
+    "plugins": [],
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
