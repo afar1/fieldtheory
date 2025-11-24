@@ -5,12 +5,14 @@ export interface Todo {
   text: string;
   completed: boolean;
   createdAt: number;
+  updatedAt: number;
 }
 
 export interface Observation {
   id: string;
   text: string;
   createdAt: number;
+  updatedAt: number;
 }
 
 export interface Settings {
@@ -22,6 +24,7 @@ export interface TranscriptEntry {
   id: string;
   text: string;
   createdAt: number;
+  updatedAt: number;
 }
 
 

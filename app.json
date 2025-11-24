@@ -23,10 +23,19 @@
       "bundleIdentifier": "com.afar1.littleai"
     },
     "android": {
-      "package": "com.afar1.littleai"
+      "package": "com.afar1.littleai",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ],
+      "versionCode": 1
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "52287007-1AA2-4787-A5F2-B039D54A607D"
+      }
     }
   }
 }

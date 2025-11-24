@@ -14,10 +14,12 @@ import {
   SectionList,
   Vibration,
   AppState,
+  TextInput,
+  RefreshControl,
 } from 'react-native';
 import { useWhisperRecording } from './hooks/useWhisperRecording';
 import { useHeadsetControls } from './hooks/useHeadsetControls';
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, Component, ErrorInfo, ReactNode } from 'react';
 import { ensureModelAvailable } from './services/modelService';
 import PagerView from 'react-native-pager-view';
 import { TodoList } from './components/TodoList';
@@ -25,6 +27,50 @@ import { ObservationList } from './components/ObservationList';
 import { StorageService } from './services/storage';
 import { processTranscription } from './services/llm';
 import { Todo, Observation, Settings, TranscriptEntry } from './types';
+import { requestOtp, verifyOtp, getSession, signOut as supabaseSignOut } from './services/auth';
+import { syncAll, seedRemoteFromLocal } from './services/sync';
+import { supabase } from './services/supabase';
+import type { Session } from '@supabase/supabase-js';
+
+// Error boundary component to catch and display errors
+class ErrorBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('Error caught by boundary:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={styles.errorBoundaryContainer}>
+          <Text style={styles.errorBoundaryTitle}>Something went wrong</Text>
+          <Text style={styles.errorBoundaryText}>
+            {this.state.error?.message || 'Unknown error'}
+          </Text>
+          <TouchableOpacity
+            style={styles.errorBoundaryButton}
+            onPress={() => this.setState({ hasError: false, error: null })}
+          >
+            <Text style={styles.errorBoundaryButtonText}>Try Again</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 const MAX_PREVIEW_LINES = 3;
 const dateHeaderFormatter = new Intl.DateTimeFormat('en-US', {
@@ -46,6 +92,8 @@ const formatDateHeader = (timestamp: number) => dateHeaderFormatter.format(new D
 const formatTime = (timestamp: number) => timeFormatter.format(new Date(timestamp));
 
 export default function App() {
+  console.log('[App] Component rendering');
+  
   const {
     isRecording,
     isProcessing,
@@ -73,6 +121,19 @@ export default function App() {
   const [expandedMap, setExpandedMap] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  type PagerRef = React.ComponentRef<typeof PagerView>;
+  const pagerRef = useRef<PagerRef>(null);
+  const [isInitialized, setIsInitialized] = useState(false);
+  const [session, setSession] = useState<Session | null>(null);
+  const [authEmail, setAuthEmail] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [isRequestingOtp, setIsRequestingOtp] = useState(false);
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
+  const [isSyncingData, setIsSyncingData] = useState(false);
+  const [isSeeding, setIsSeeding] = useState(false);
+  const [syncedAt, setSyncedAt] = useState<number | null>(null);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
   
   // Track last processed transcription to prevent loops/duplicate processing
   const lastProcessedText = useRef<string | null>(null);
@@ -83,21 +144,55 @@ export default function App() {
   // Track if user manually stopped recording (prevents auto-start until they manually start again)
   const manuallyStoppedRef = useRef<boolean>(false);
 
+  // Track pull-to-record gesture state so we can show the spinner while starting a recording.
+  const [isPullRecording, setIsPullRecording] = useState(false);
+
   // Load data from storage on mount
   useEffect(() => {
     async function loadData() {
-      const [loadedTodos, loadedObservations, loadedSettings, loadedTranscripts] = await Promise.all([
-        StorageService.getTodos(),
-        StorageService.getObservations(),
-        StorageService.getSettings(),
-        StorageService.getTranscripts(),
-      ]);
-      setTodos(loadedTodos);
-      setObservations(loadedObservations);
-      setSettings(loadedSettings);
-      setTranscripts(loadedTranscripts);
+      try {
+        const [loadedTodos, loadedObservations, loadedSettings, loadedTranscripts] = await Promise.all([
+          StorageService.getTodos(),
+          StorageService.getObservations(),
+          StorageService.getSettings(),
+          StorageService.getTranscripts(),
+        ]);
+        setTodos(loadedTodos);
+        setObservations(loadedObservations);
+        setSettings(loadedSettings);
+        setTranscripts(loadedTranscripts);
+      } catch (err) {
+        console.error('Failed to load data from storage:', err);
+        // Continue with empty state if storage fails
+      } finally {
+        setIsInitialized(true);
+      }
     }
     loadData();
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    getSession()
+      .then((currentSession) => {
+        if (isMounted) {
+          setSession(currentSession);
+        }
+      })
+      .catch((err) => console.error('Failed to fetch Supabase session:', err));
+
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      if (!newSession) {
+        setSyncedAt(null);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.subscription.unsubscribe();
+    };
   }, []);
 
   // Keep copying feedback timers tidy.
@@ -108,6 +203,10 @@ export default function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    pagerRef.current?.setPage(pageIndex);
+  }, [pageIndex]);
 
   // Ensure the Whisper model is available before we allow recordings.
   useEffect(() => {
@@ -180,6 +279,7 @@ export default function App() {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       text: cleanedText,
       createdAt: Date.now(),
+      updatedAt: Date.now(),
     };
 
     setTranscripts((prev) => {
@@ -216,6 +316,7 @@ export default function App() {
           text: todo.text,
           completed: false,
           createdAt: Date.now(),
+          updatedAt: Date.now(),
         };
         newTodos.push(newTodo);
       }
@@ -228,6 +329,7 @@ export default function App() {
             ...newTodos[index],
             ...(update.text !== undefined && { text: update.text }),
             ...(update.completed !== undefined && { completed: update.completed }),
+            updatedAt: Date.now(),
           };
         }
       }
@@ -241,6 +343,7 @@ export default function App() {
           id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
           text: obs.text,
           createdAt: Date.now(),
+          updatedAt: Date.now(),
         };
         newObservations.push(newObs);
       }
@@ -273,9 +376,14 @@ export default function App() {
   }, [transcripts, sortOrder]);
 
   const sortedTodos = useMemo(() => {
-    return [...todos].sort((a, b) =>
-      todosSortOrder === 'newest' ? b.createdAt - a.createdAt : a.createdAt - b.createdAt,
-    );
+    return [...todos].sort((a, b) => {
+      // Incomplete tasks come first, then completed tasks
+      if (a.completed !== b.completed) {
+        return a.completed ? 1 : -1;
+      }
+      // Within each group, sort by date
+      return todosSortOrder === 'newest' ? b.createdAt - a.createdAt : a.createdAt - b.createdAt;
+    });
   }, [todos, todosSortOrder]);
 
   const sortedObservations = useMemo(() => {
@@ -360,16 +468,138 @@ export default function App() {
     }
   };
 
+  /**
+   * Handle "pull to record" on the transcripts list.
+   * We only start a new recording if one is not already in progress.
+   * The RefreshControl spinner is just a visual affordance while we kick off recording.
+   */
+  const handlePullToRecord = useCallback(async () => {
+    if (isRecording) {
+      // If a recording is already running, ignore the gesture to avoid surprising stops.
+      return;
+    }
+
+    setIsPullRecording(true);
+    try {
+      await startRecording();
+      manuallyStoppedRef.current = false;
+    } catch (err) {
+      console.error('Pull-to-record failed:', err);
+    } finally {
+      setIsPullRecording(false);
+    }
+  }, [isRecording, startRecording]);
+
+  const handleRequestOtp = useCallback(async () => {
+    const email = authEmail.trim();
+
+    if (!email) {
+      Alert.alert('Email required', 'Enter an email address to receive the OTP.');
+      return;
+    }
+
+    setIsRequestingOtp(true);
+    setAuthNotice(null);
+
+    try {
+      await requestOtp(email.toLowerCase());
+      setAuthNotice('Check your email for the six-digit code.');
+    } catch (err) {
+      console.error('Failed to request OTP:', err);
+      Alert.alert('OTP error', err instanceof Error ? err.message : 'Unable to send code right now.');
+    } finally {
+      setIsRequestingOtp(false);
+    }
+  }, [authEmail]);
+
+  const handleVerifyOtp = useCallback(async () => {
+    const email = authEmail.trim();
+    const token = otpCode.trim();
+
+    if (!email || !token) {
+      Alert.alert('Missing info', 'Provide both your email and the code from your inbox.');
+      return;
+    }
+
+    setIsVerifyingOtp(true);
+    setAuthNotice(null);
+
+    try {
+      await verifyOtp(email.toLowerCase(), token);
+      const currentSession = await getSession();
+      setSession(currentSession);
+      setAuthNotice('Signed in. You can sync now.');
+      setOtpCode('');
+    } catch (err) {
+      console.error('Failed to verify OTP:', err);
+      Alert.alert('Verification failed', err instanceof Error ? err.message : 'Unable to verify the code right now.');
+    } finally {
+      setIsVerifyingOtp(false);
+    }
+  }, [authEmail, otpCode]);
+
+  const handleSignOutPress = useCallback(async () => {
+    try {
+      await supabaseSignOut();
+      setSession(null);
+      setSyncNotice(null);
+      setAuthNotice('Signed out.');
+    } catch (err) {
+      console.error('Failed to sign out:', err);
+      Alert.alert('Sign out failed', err instanceof Error ? err.message : 'Unable to sign out.');
+    }
+  }, []);
+
+  const handleSyncNow = useCallback(async () => {
+    setIsSyncingData(true);
+    setSyncNotice(null);
+
+    try {
+      const result = await syncAll();
+      const [nextTodos, nextObservations, nextTranscripts] = await Promise.all([
+        StorageService.getTodos(),
+        StorageService.getObservations(),
+        StorageService.getTranscripts(),
+      ]);
+
+      setTodos(nextTodos);
+      setObservations(nextObservations);
+      setTranscripts(nextTranscripts);
+      setSyncedAt(result.syncedAt);
+      setSyncNotice('Synced with Supabase.');
+    } catch (err) {
+      console.error('Sync failed:', err);
+      Alert.alert('Sync failed', err instanceof Error ? err.message : 'Unable to sync right now.');
+    } finally {
+      setIsSyncingData(false);
+    }
+  }, []);
+
+  const handleSeedNow = useCallback(async () => {
+    setIsSeeding(true);
+    setSyncNotice(null);
+
+    try {
+      await seedRemoteFromLocal();
+      setSyncNotice('Seeded current device data to Supabase.');
+    } catch (err) {
+      console.error('Seed failed:', err);
+      Alert.alert('Seed failed', err instanceof Error ? err.message : 'Unable to seed right now.');
+    } finally {
+      setIsSeeding(false);
+    }
+  }, []);
+
   const handleToggleComplete = useCallback(async (id: string) => {
     const newTodos = todos.map((t) =>
-      t.id === id ? { ...t, completed: !t.completed } : t
+      t.id === id ? { ...t, completed: !t.completed, updatedAt: Date.now() } : t
     );
     setTodos(newTodos);
     await StorageService.saveTodos(newTodos);
   }, [todos]);
 
   const handleUpdateTodo = useCallback(async (id: string, text: string) => {
-    const newTodos = todos.map((t) => (t.id === id ? { ...t, text } : t));
+    const newTodos = todos.map((t) => (t.id === id ? { ...t, text, updatedAt: Date.now() } : t));
     setTodos(newTodos);
     await StorageService.saveTodos(newTodos);
   }, [todos]);
@@ -381,7 +611,7 @@ export default function App() {
   }, [todos]);
 
   const handleUpdateObservation = useCallback(async (id: string, text: string) => {
-    const newObservations = observations.map((o) => (o.id === id ? { ...o, text } : o));
+    const newObservations = observations.map((o) => (o.id === id ? { ...o, text, updatedAt: Date.now() } : o));
     setObservations(newObservations);
     await StorageService.saveObservations(newObservations);
   }, [observations]);
@@ -483,37 +713,28 @@ export default function App() {
     );
   };
 
-  return (
-    <View style={styles.container}>
-      <StatusBar style="auto" />
+  // Show loading state during initial data load
+  if (!isInitialized) {
+    return (
+      <View style={styles.container}>
+        <StatusBar style="auto" />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#007AFF" />
+          <Text style={styles.loadingText}>Loading...</Text>
+        </View>
+      </View>
+    );
+  }
 
-      {/* Header */}
+  return (
+    <ErrorBoundary>
+      <View style={styles.container}>
+        <StatusBar style="auto" />
+
+      {/* Header: simple title + settings */}
       <View style={styles.header}>
-        <View style={styles.tabContainer}>
-          <TouchableOpacity
-            style={[styles.tab, pageIndex === 0 && styles.tabActive]}
-            onPress={() => setPageIndex(0)}
-          >
-            <Text style={[styles.tabText, pageIndex === 0 && styles.tabTextActive]}>
-              Transcripts
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tab, pageIndex === 1 && styles.tabActive]}
-            onPress={() => setPageIndex(1)}
-          >
-            <Text style={[styles.tabText, pageIndex === 1 && styles.tabTextActive]}>
-              Tasks
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tab, pageIndex === 2 && styles.tabActive]}
-            onPress={() => setPageIndex(2)}
-          >
-            <Text style={[styles.tabText, pageIndex === 2 && styles.tabTextActive]}>
-              Observations
-            </Text>
-          </TouchableOpacity>
+        <View style={styles.headerTitleContainer}>
+          <Text style={styles.headerTitleText}>Little AI</Text>
         </View>
         <TouchableOpacity
           style={styles.settingsButton}
@@ -552,9 +773,15 @@ export default function App() {
 
       {/* Pager View */}
       <PagerView
+        ref={pagerRef}
         style={styles.pager}
-        initialPage={0}
-        onPageSelected={(e) => setPageIndex(e.nativeEvent.position)}
+        onPageSelected={(e) => {
+          try {
+            setPageIndex(e.nativeEvent.position);
+          } catch (err) {
+            console.error('Error handling page selection:', err);
+          }
+        }}
       >
         <View key="transcripts" style={styles.transcriptContainer}>
           <View style={styles.transcriptHeaderControls}>
@@ -590,6 +817,12 @@ export default function App() {
                 </View>
               )}
               contentContainerStyle={styles.sectionContent}
+              refreshControl={
+                <RefreshControl
+                  refreshing={isPullRecording}
+                  onRefresh={handlePullToRecord}
+                />
+              }
             />
           )}
         </View>
@@ -661,6 +894,34 @@ export default function App() {
             </Text>
           )}
         </TouchableOpacity>
+
+        {/* Page tabs beneath the record button, using simple icon + label text. */}
+        <View style={styles.tabContainer}>
+          <TouchableOpacity
+            style={[styles.tab, pageIndex === 0 && styles.tabActive]}
+            onPress={() => setPageIndex(0)}
+          >
+            <Text style={[styles.tabText, pageIndex === 0 && styles.tabTextActive]}>
+              📝 Transcripts
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tab, pageIndex === 1 && styles.tabActive]}
+            onPress={() => setPageIndex(1)}
+          >
+            <Text style={[styles.tabText, pageIndex === 1 && styles.tabTextActive]}>
+              ✅ Tasks
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tab, pageIndex === 2 && styles.tabActive]}
+            onPress={() => setPageIndex(2)}
+          >
+            <Text style={[styles.tabText, pageIndex === 2 && styles.tabTextActive]}>
+              👁️ Observations
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Settings Modal */}
@@ -682,6 +943,106 @@ export default function App() {
               />
             </View>
 
+            <View style={styles.syncSection}>
+              <Text style={styles.sectionHeading}>Supabase Sync</Text>
+              <Text style={styles.syncStatusText}>
+                {session ? `Signed in as ${session.user.email}` : 'Not signed in'}
+              </Text>
+
+              <TextInput
+                style={styles.fieldInput}
+                placeholder="you@example.com"
+                autoCapitalize="none"
+                keyboardType="email-address"
+                value={authEmail}
+                onChangeText={setAuthEmail}
+              />
+
+              {!session && (
+                <>
+                  <TouchableOpacity
+                    style={[
+                      styles.actionButton,
+                      isRequestingOtp && styles.buttonDisabled,
+                    ]}
+                    onPress={handleRequestOtp}
+                    disabled={isRequestingOtp}
+                  >
+                    <Text style={styles.actionButtonText}>
+                      {isRequestingOtp ? 'Sending code...' : 'Send Code'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TextInput
+                    style={styles.fieldInput}
+                    placeholder="6-digit code"
+                    keyboardType="number-pad"
+                    autoCapitalize="none"
+                    value={otpCode}
+                    onChangeText={setOtpCode}
+                  />
+
+                  <TouchableOpacity
+                    style={[
+                      styles.actionButton,
+                      isVerifyingOtp && styles.buttonDisabled,
+                    ]}
+                    onPress={handleVerifyOtp}
+                    disabled={isVerifyingOtp}
+                  >
+                    <Text style={styles.actionButtonText}>
+                      {isVerifyingOtp ? 'Verifying...' : 'Verify Code'}
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              )}
+
+              {session && (
+                <>
+                  <TouchableOpacity
+                    style={[
+                      styles.actionButton,
+                      (isSyncingData || isSeeding) && styles.buttonDisabled,
+                    ]}
+                    onPress={handleSyncNow}
+                    disabled={isSyncingData || isSeeding}
+                  >
+                    <Text style={styles.actionButtonText}>
+                      {isSyncingData ? 'Syncing...' : 'Sync Now'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.secondaryButton,
+                      isSeeding && styles.buttonDisabled,
+                    ]}
+                    onPress={handleSeedNow}
+                    disabled={isSeeding}
+                  >
+                    <Text style={styles.secondaryButtonText}>
+                      {isSeeding ? 'Seeding...' : 'Seed Current Data'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.secondaryButton}
+                    onPress={handleSignOutPress}
+                  >
+                    <Text style={styles.secondaryButtonText}>Sign Out</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+
+              {syncedAt && (
+                <Text style={styles.syncStatusText}>
+                  Last synced at {formatTime(syncedAt)}
+                </Text>
+              )}
+              {syncNotice && <Text style={styles.syncStatusText}>{syncNotice}</Text>}
+              {authNotice && <Text style={styles.syncStatusText}>{authNotice}</Text>}
+            </View>
+
             <TouchableOpacity
               style={styles.modalButton}
               onPress={() => setShowSettings(false)}
@@ -691,7 +1052,8 @@ export default function App() {
           </View>
         </View>
       </Modal>
-    </View>
+      </View>
+    </ErrorBoundary>
   );
 }
 
@@ -711,9 +1073,18 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#E0E0E0',
   },
+  headerTitleContainer: {
+    flex: 1,
+  },
+  headerTitleText: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#111827',
+  },
   tabContainer: {
     flexDirection: 'row',
     gap: 8,
+    marginTop: 12,
   },
   tab: {
     paddingHorizontal: 16,
@@ -837,6 +1208,53 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 400,
   },
+  syncSection: {
+    marginTop: 24,
+    gap: 12,
+  },
+  sectionHeading: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  syncStatusText: {
+    fontSize: 13,
+    color: '#4B5563',
+  },
+  fieldInput: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: '#111827',
+  },
+  actionButton: {
+    backgroundColor: '#111827',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  actionButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  secondaryButton: {
+    backgroundColor: '#E5E7EB',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  secondaryButtonText: {
+    color: '#111827',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
   modalTitle: {
     fontSize: 20,
     fontWeight: '600',
@@ -944,5 +1362,46 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#4338CA',
+  },
+  errorBoundaryContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: '#F5F5F5',
+  },
+  errorBoundaryTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#DC2626',
+    marginBottom: 12,
+  },
+  errorBoundaryText: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  errorBoundaryButton: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  errorBoundaryButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    color: '#666',
   },
 });
