@@ -1,6 +1,22 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Todo, Observation, Settings, TranscriptEntry } from '../types';
 
+// Normalize saved records so new fields are always present.
+const normalizeTodo = (raw: Todo): Todo => ({
+  ...raw,
+  updatedAt: raw.updatedAt ?? raw.createdAt,
+});
+
+const normalizeObservation = (raw: Observation): Observation => ({
+  ...raw,
+  updatedAt: raw.updatedAt ?? raw.createdAt,
+});
+
+const normalizeTranscript = (raw: TranscriptEntry): TranscriptEntry => ({
+  ...raw,
+  updatedAt: raw.updatedAt ?? raw.createdAt,
+});
+
 // Storage keys
 const TODOS_KEY = '@littleai/todos';
 const OBSERVATIONS_KEY = '@littleai/observations';
@@ -18,7 +34,7 @@ export class StorageService {
   static async getTodos(): Promise<Todo[]> {
     try {
       const data = await AsyncStorage.getItem(TODOS_KEY);
-      return data ? JSON.parse(data) : [];
+      return data ? JSON.parse(data).map(normalizeTodo) : [];
     } catch (error) {
       console.error('Failed to load todos:', error);
       return [];
@@ -43,7 +59,7 @@ export class StorageService {
   static async getObservations(): Promise<Observation[]> {
     try {
       const data = await AsyncStorage.getItem(OBSERVATIONS_KEY);
-      return data ? JSON.parse(data) : [];
+      return data ? JSON.parse(data).map(normalizeObservation) : [];
     } catch (error) {
       console.error('Failed to load observations:', error);
       return [];
@@ -93,7 +109,7 @@ export class StorageService {
   static async getTranscripts(): Promise<TranscriptEntry[]> {
     try {
       const data = await AsyncStorage.getItem(TRANSCRIPTS_KEY);
-      return data ? JSON.parse(data) : [];
+      return data ? JSON.parse(data).map(normalizeTranscript) : [];
     } catch (error) {
       console.error('Failed to load transcripts:', error);
       return [];

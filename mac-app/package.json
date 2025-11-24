@@ -1,0 +1,29 @@
+{
+  "name": "littleai-mac",
+  "version": "0.1.0",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:vite\" \"npm:dev:electron\"",
+    "dev:vite": "vite",
+    "dev:electron": "wait-on tcp:5173 && ELECTRON_START_URL=http://localhost:5173 electron .",
+    "build": "vite build",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.19",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.3",
+    "concurrently": "^8.2.2",
+    "electron": "^31.0.2",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.8",
+    "wait-on": "^7.2.0"
+  }
+}
