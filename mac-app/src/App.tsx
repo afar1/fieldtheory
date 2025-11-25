@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from './supabaseClient';
+import AudioSettingsPanel from './components/AudioSettingsPanel';
 
 const formatTime = (iso: string) => new Date(iso).toLocaleString();
+
+// Available tabs in the app.
+type TabId = 'data' | 'audio';
 
 type TodoRow = {
   id: string;
@@ -37,6 +41,7 @@ export default function App() {
   const [todos, setTodos] = useState<TodoRow[]>([]);
   const [observations, setObservations] = useState<ObservationRow[]>([]);
   const [transcripts, setTranscripts] = useState<TranscriptRow[]>([]);
+  const [activeTab, setActiveTab] = useState<TabId>('data');
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -146,6 +151,38 @@ export default function App() {
 
   return (
     <div style={styles.root}>
+      {/* Tab navigation */}
+      <div style={styles.tabBar}>
+        <button
+          style={{
+            ...styles.tabButton,
+            ...(activeTab === 'data' ? styles.tabButtonActive : {}),
+          }}
+          onClick={() => setActiveTab('data')}
+        >
+          Data
+        </button>
+        <button
+          style={{
+            ...styles.tabButton,
+            ...(activeTab === 'audio' ? styles.tabButtonActive : {}),
+          }}
+          onClick={() => setActiveTab('audio')}
+        >
+          Audio
+        </button>
+      </div>
+
+      {/* Audio settings tab */}
+      {activeTab === 'audio' && (
+        <div style={styles.tabContent}>
+          <AudioSettingsPanel />
+        </div>
+      )}
+
+      {/* Data tab (original content) */}
+      {activeTab === 'data' && (
+      <div style={styles.dataTabContent}>
       <div style={styles.card}>
         <h1 style={{ marginTop: 0 }}>Little AI Companion</h1>
         {session ? (
@@ -246,6 +283,8 @@ export default function App() {
           </section>
         </div>
       )}
+      </div>
+      )}
     </div>
   );
 }
@@ -255,9 +294,42 @@ const styles: Record<string, React.CSSProperties> = {
     minHeight: '100vh',
     padding: '32px',
     display: 'flex',
+    flexDirection: 'column',
     gap: '24px',
     alignItems: 'flex-start',
     backgroundColor: '#f5f5f5',
+  },
+  tabBar: {
+    display: 'flex',
+    gap: '8px',
+    marginBottom: '8px',
+  },
+  tabButton: {
+    padding: '8px 16px',
+    fontSize: '14px',
+    fontWeight: 500,
+    color: '#6b7280',
+    backgroundColor: '#fff',
+    border: '1px solid #e5e7eb',
+    borderRadius: '8px',
+    cursor: 'pointer',
+  },
+  tabButtonActive: {
+    backgroundColor: '#111827',
+    color: '#fff',
+    borderColor: '#111827',
+  },
+  tabContent: {
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: '16px',
+    boxShadow: '0 20px 45px rgba(15, 23, 42, 0.1)',
+  },
+  dataTabContent: {
+    display: 'flex',
+    gap: '24px',
+    alignItems: 'flex-start',
+    width: '100%',
   },
   card: {
     width: '320px',
