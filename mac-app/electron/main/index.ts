@@ -11,6 +11,7 @@ import { TrayManager } from './trayManager';
 import {
   AudioIPCChannels,
   SetPriorityModePayload,
+  SetPriorityDevicePayload,
 } from './types/audio';
 
 // =============================================================================
@@ -31,9 +32,8 @@ let trayManager: TrayManager | null = null;
  */
 function createWindow(): void {
   // Determine the preload script path.
-  const preloadPath = app.isPackaged
-    ? path.join(__dirname, '../preload.js')
-    : path.join(__dirname, '../preload.ts');
+  // In both dev and production, use the compiled .js file
+  const preloadPath = path.join(__dirname, '../preload.js');
 
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -89,9 +89,8 @@ function setupIPCHandlers(): void {
         devices: [],
         defaultInputId: null,
         priorityMode: false,
+        priorityDeviceId: null,
         userOverrideId: null,
-        littleOnePresent: false,
-        preferredLittleOneId: null,
       };
     }
     return audioManager.getState();
@@ -103,6 +102,16 @@ function setupIPCHandlers(): void {
     async (_event, payload: SetPriorityModePayload) => {
       if (audioManager) {
         await audioManager.setPriorityMode(payload.enabled);
+      }
+    }
+  );
+
+  // Set priority device (which device to prioritize).
+  ipcMain.handle(
+    AudioIPCChannels.SET_PRIORITY_DEVICE,
+    async (_event, payload: SetPriorityDevicePayload) => {
+      if (audioManager) {
+        await audioManager.setPriorityDevice(payload.deviceId);
       }
     }
   );

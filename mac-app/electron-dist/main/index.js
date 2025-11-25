@@ -28,9 +28,8 @@ let trayManager = null;
  */
 function createWindow() {
     // Determine the preload script path.
-    const preloadPath = electron_1.app.isPackaged
-        ? path_1.default.join(__dirname, '../preload.js')
-        : path_1.default.join(__dirname, '../preload.ts');
+    // In both dev and production, use the compiled .js file
+    const preloadPath = path_1.default.join(__dirname, '../preload.js');
     mainWindow = new electron_1.BrowserWindow({
         width: 1200,
         height: 800,
@@ -82,9 +81,8 @@ function setupIPCHandlers() {
                 devices: [],
                 defaultInputId: null,
                 priorityMode: false,
+                priorityDeviceId: null,
                 userOverrideId: null,
-                littleOnePresent: false,
-                preferredLittleOneId: null,
             };
         }
         return audioManager.getState();
@@ -93,6 +91,12 @@ function setupIPCHandlers() {
     electron_1.ipcMain.handle(audio_1.AudioIPCChannels.SET_PRIORITY_MODE, async (_event, payload) => {
         if (audioManager) {
             await audioManager.setPriorityMode(payload.enabled);
+        }
+    });
+    // Set priority device (which device to prioritize).
+    electron_1.ipcMain.handle(audio_1.AudioIPCChannels.SET_PRIORITY_DEVICE, async (_event, payload) => {
+        if (audioManager) {
+            await audioManager.setPriorityDevice(payload.deviceId);
         }
     });
     // Reset user override.

@@ -22,6 +22,13 @@ const audioAPI = {
         return electron_1.ipcRenderer.invoke(audio_1.AudioIPCChannels.SET_PRIORITY_MODE, payload);
     },
     /**
+     * Set which device should be prioritized.
+     */
+    setPriorityDevice: async (deviceId) => {
+        const payload = { deviceId };
+        return electron_1.ipcRenderer.invoke(audio_1.AudioIPCChannels.SET_PRIORITY_DEVICE, payload);
+    },
+    /**
      * Reset any user override and re-enforce priority if enabled.
      */
     resetOverride: async () => {

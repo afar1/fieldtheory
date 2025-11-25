@@ -28,6 +28,7 @@ class NativeHelper extends events_1.EventEmitter {
     child = null;
     buffer = '';
     isRunning = false;
+    isReady = false; // Track if helper has sent initial message
     // Pending promise resolvers for request/response pattern.
     pendingDevicesResolve = null;
     pendingDefaultInputResolve = null;
@@ -66,6 +67,10 @@ class NativeHelper extends events_1.EventEmitter {
             this.isRunning = true;
             // Handle stdout - JSON messages from the helper.
             this.child.stdout.on('data', (data) => {
+                // Mark as ready once we receive any data
+                if (!this.isReady) {
+                    this.isReady = true;
+                }
                 this.onStdout(data);
             });
             // Handle stderr - log messages and errors.
@@ -76,6 +81,7 @@ class NativeHelper extends events_1.EventEmitter {
             this.child.on('exit', (code, signal) => {
                 console.warn('[NativeHelper] Process exited', { code, signal });
                 this.isRunning = false;
+                this.isReady = false;
                 this.child = null;
                 // Attempt to restart after a delay if it crashed unexpectedly.
                 if (code !== 0 && code !== null) {
@@ -111,16 +117,34 @@ class NativeHelper extends events_1.EventEmitter {
         return this.isRunning;
     }
     /**
+     * Wait for the helper to be ready (has sent initial message).
+     */
+    async waitForReady() {
+        if (this.isReady)
+            return;
+        // Wait up to 2 seconds for the helper to send its initial log message
+        const maxWait = 2000;
+        const startTime = Date.now();
+        while (!this.isReady && Date.now() - startTime < maxWait) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        if (!this.isReady) {
+            console.warn('[NativeHelper] Helper did not become ready within timeout');
+        }
+    }
+    /**
      * Request the current list of audio devices from the helper.
      * Returns a promise that resolves with the device list.
      */
     async getDevices() {
-        return new Promise((resolve, reject) => {
+        return new Promise(async (resolve, reject) => {
             if (!this.child || !this.child.stdin.writable) {
                 // Return empty list if helper isn't running (non-macOS or not started).
                 resolve([]);
                 return;
             }
+            // Wait for helper to be ready before sending commands
+            await this.waitForReady();
             // Set up resolver for when we receive the response.
             this.pendingDevicesResolve = resolve;
             // Send the command with a timeout.
@@ -139,11 +163,13 @@ class NativeHelper extends events_1.EventEmitter {
      * Returns a promise that resolves with the device ID or null.
      */
     async getDefaultInput() {
-        return new Promise((resolve, reject) => {
+        return new Promise(async (resolve, reject) => {
             if (!this.child || !this.child.stdin.writable) {
                 resolve(null);
                 return;
             }
+            // Wait for helper to be ready before sending commands
+            await this.waitForReady();
             this.pendingDefaultInputResolve = resolve;
             this.send({ type: 'getDefaultInput' });
             setTimeout(() => {
@@ -165,7 +191,8 @@ class NativeHelper extends events_1.EventEmitter {
      * Tell the helper to start monitoring for CoreAudio changes.
      * After this, we'll receive 'devicesChanged' and 'defaultInputChanged' events.
      */
-    startMonitoring() {
+    async startMonitoring() {
+        await this.waitForReady();
         this.send({ type: 'startMonitoring' });
     }
     // ---------------------------------------------------------------------------
@@ -181,7 +208,9 @@ class NativeHelper extends events_1.EventEmitter {
         }
         else {
             // Development: helper is built locally.
-            return path_1.default.join(__dirname, '../../native/build/LittleOneHelper');
+            // Use app.getAppPath() to get the mac-app directory, then navigate to native/build/
+            const appPath = electron_1.app.getAppPath();
+            return path_1.default.join(appPath, 'electron/native/build/LittleOneHelper');
         }
     }
     /**
@@ -283,8 +312,27 @@ class NativeHelper extends events_1.EventEmitter {
             console.warn('[NativeHelper] Cannot send command - helper not running');
             return;
         }
-        const json = JSON.stringify(command);
-        this.child.stdin.write(json + '\n');
+        try {
+            const json = JSON.stringify(command);
+            const success = this.child.stdin.write(json + '\n');
+            // If write returns false, the stream is full and we should wait for drain
+            if (!success) {
+                this.child.stdin.once('drain', () => {
+                    // Stream drained, ready for more writes
+                });
+            }
+        }
+        catch (error) {
+            // Handle EPIPE and other write errors gracefully
+            if (error.code === 'EPIPE') {
+                console.warn('[NativeHelper] Broken pipe - helper process may have exited');
+                this.isRunning = false;
+                this.child = null;
+            }
+            else {
+                console.error('[NativeHelper] Error sending command:', error);
+            }
+        }
     }
 }
 exports.NativeHelper = NativeHelper;

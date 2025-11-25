@@ -8,6 +8,7 @@ import {
   AudioState,
   AudioIPCChannels,
   SetPriorityModePayload,
+  SetPriorityDevicePayload,
 } from './main/types/audio';
 
 /**
@@ -18,8 +19,11 @@ export interface AudioAPI {
   // Get the current audio state snapshot.
   getState: () => Promise<AudioState>;
 
-  // Enable or disable priority mode ("Lock input to Little One").
+  // Enable or disable priority mode ("Lock to Priority Device").
   setPriorityMode: (enabled: boolean) => Promise<void>;
+
+  // Set which device should be prioritized.
+  setPriorityDevice: (deviceId: string | null) => Promise<void>;
 
   // Clear user override and re-enable priority enforcement.
   resetOverride: () => Promise<void>;
@@ -43,6 +47,14 @@ const audioAPI: AudioAPI = {
   setPriorityMode: async (enabled: boolean): Promise<void> => {
     const payload: SetPriorityModePayload = { enabled };
     return ipcRenderer.invoke(AudioIPCChannels.SET_PRIORITY_MODE, payload);
+  },
+
+  /**
+   * Set which device should be prioritized.
+   */
+  setPriorityDevice: async (deviceId: string | null): Promise<void> => {
+    const payload: SetPriorityDevicePayload = { deviceId };
+    return ipcRenderer.invoke(AudioIPCChannels.SET_PRIORITY_DEVICE, payload);
   },
 
   /**
