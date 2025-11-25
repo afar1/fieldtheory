@@ -9,6 +9,7 @@ import {
   SectionList,
   Alert,
   Vibration,
+  RefreshControl,
 } from 'react-native';
 import { Todo } from '../types';
 import * as Clipboard from 'expo-clipboard';
@@ -26,6 +27,8 @@ interface TodoListProps {
   onDelete: (id: string) => void;
   formatTime: (timestamp: number) => string;
   formatDateHeader: (timestamp: number) => string;
+  onRefresh?: () => void;
+  refreshing?: boolean;
 }
 
 /**
@@ -33,7 +36,16 @@ interface TodoListProps {
  * Supports tap-to-edit, checkbox toggle, swipe-to-delete, and copy.
  * Groups items by date with sticky section headers.
  */
-export function TodoList({ sections, onToggleComplete, onUpdate, onDelete, formatTime, formatDateHeader }: TodoListProps) {
+export function TodoList({ 
+  sections, 
+  onToggleComplete, 
+  onUpdate, 
+  onDelete, 
+  formatTime, 
+  formatDateHeader,
+  onRefresh,
+  refreshing
+}: TodoListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
 
@@ -113,10 +125,22 @@ export function TodoList({ sections, onToggleComplete, onUpdate, onDelete, forma
 
   if (sections.length === 0) {
     return (
-      <View style={styles.emptyContainer}>
-        <Text style={styles.emptyText}>No todos yet</Text>
-        <Text style={styles.emptySubtext}>Record something to get started</Text>
-      </View>
+      <SectionList
+        sections={[]}
+        renderItem={() => null}
+        ListEmptyComponent={
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>No todos yet</Text>
+            <Text style={styles.emptySubtext}>Pull down to record</Text>
+          </View>
+        }
+        contentContainerStyle={{ flex: 1 }}
+        refreshControl={
+          onRefresh ? (
+            <RefreshControl refreshing={refreshing || false} onRefresh={onRefresh} />
+          ) : undefined
+        }
+      />
     );
   }
 
@@ -130,6 +154,11 @@ export function TodoList({ sections, onToggleComplete, onUpdate, onDelete, forma
         stickySectionHeadersEnabled
         contentContainerStyle={styles.content}
         style={styles.container}
+        refreshControl={
+          onRefresh ? (
+            <RefreshControl refreshing={refreshing || false} onRefresh={onRefresh} />
+          ) : undefined
+        }
       />
 
       <Modal

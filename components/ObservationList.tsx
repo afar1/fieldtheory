@@ -9,6 +9,7 @@ import {
   SectionList,
   Alert,
   Vibration,
+  RefreshControl,
 } from 'react-native';
 import { Observation } from '../types';
 import * as Clipboard from 'expo-clipboard';
@@ -25,6 +26,8 @@ interface ObservationListProps {
   onDelete: (id: string) => void;
   formatTime: (timestamp: number) => string;
   formatDateHeader: (timestamp: number) => string;
+  onRefresh?: () => void;
+  refreshing?: boolean;
 }
 
 /**
@@ -38,6 +41,8 @@ export function ObservationList({
   onDelete,
   formatTime,
   formatDateHeader,
+  onRefresh,
+  refreshing,
 }: ObservationListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
@@ -104,10 +109,22 @@ export function ObservationList({
 
   if (sections.length === 0) {
     return (
-      <View style={styles.emptyContainer}>
-        <Text style={styles.emptyText}>No observations yet</Text>
-        <Text style={styles.emptySubtext}>Record something to get started</Text>
-      </View>
+      <SectionList
+        sections={[]}
+        renderItem={() => null}
+        ListEmptyComponent={
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>No observations yet</Text>
+            <Text style={styles.emptySubtext}>Pull down to record</Text>
+          </View>
+        }
+        contentContainerStyle={{ flex: 1 }}
+        refreshControl={
+          onRefresh ? (
+            <RefreshControl refreshing={refreshing || false} onRefresh={onRefresh} />
+          ) : undefined
+        }
+      />
     );
   }
 
@@ -121,6 +138,11 @@ export function ObservationList({
         stickySectionHeadersEnabled
         contentContainerStyle={styles.content}
         style={styles.container}
+        refreshControl={
+          onRefresh ? (
+            <RefreshControl refreshing={refreshing || false} onRefresh={onRefresh} />
+          ) : undefined
+        }
       />
 
       <Modal

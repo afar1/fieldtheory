@@ -17,6 +17,7 @@ import {
   TextInput,
   RefreshControl,
 } from 'react-native';
+import { Feather } from '@expo/vector-icons';
 import { useWhisperRecording } from './hooks/useWhisperRecording';
 import { useHeadsetControls } from './hooks/useHeadsetControls';
 import { useState, useEffect, useCallback, useMemo, useRef, Component, ErrorInfo, ReactNode } from 'react';
@@ -256,13 +257,26 @@ export default function App() {
         startRecording().catch(console.error);
       }
       
+      // Sync data when app comes to foreground (if user is authenticated)
+      // Runs silently in background, doesn't block UI
+      if (
+        appStateRef.current.match(/inactive|background/) &&
+        nextAppState === 'active' &&
+        session
+      ) {
+        syncAll().catch((error) => {
+          // Log error but don't interrupt user experience
+          console.error('Background sync failed:', error);
+        });
+      }
+      
       appStateRef.current = nextAppState;
     });
 
     return () => {
       subscription.remove();
     };
-  }, [settings.autoStart, isReady, isRecording, isProcessing, isDownloadingModel, startRecording]);
+  }, [settings.autoStart, isReady, isRecording, isProcessing, isDownloadingModel, startRecording, session]);
 
   // Capture every finished transcription so we can build the timeline.
   useEffect(() => {
@@ -731,18 +745,7 @@ export default function App() {
       <View style={styles.container}>
         <StatusBar style="auto" />
 
-      {/* Header: simple title + settings */}
-      <View style={styles.header}>
-        <View style={styles.headerTitleContainer}>
-          <Text style={styles.headerTitleText}>Little AI</Text>
-        </View>
-        <TouchableOpacity
-          style={styles.settingsButton}
-          onPress={() => setShowSettings(true)}
-        >
-          <Text style={styles.settingsButtonText}>⚙️</Text>
-        </TouchableOpacity>
-      </View>
+      {/* Header removed - moved settings to bottom tab */}
 
       {/* Model download status */}
       {isDownloadingModel && (
@@ -848,6 +851,8 @@ export default function App() {
             onDelete={handleDeleteTodo}
             formatTime={formatTime}
             formatDateHeader={formatDateHeader}
+            onRefresh={handlePullToRecord}
+            refreshing={isPullRecording}
           />
         </View>
         <View key="observations" style={styles.pageContainer}>
@@ -871,57 +876,80 @@ export default function App() {
             onDelete={handleDeleteObservation}
             formatTime={formatTime}
             formatDateHeader={formatDateHeader}
+            onRefresh={handlePullToRecord}
+            refreshing={isPullRecording}
           />
         </View>
       </PagerView>
 
-      {/* Bottom Bar with Record Button */}
+      {/* NEW BOTTOM BAR LAYOUT */}
       <View style={styles.bottomBar}>
-        <TouchableOpacity
-          style={[
-            styles.recordButton,
-            isRecording && styles.recordButtonActive,
-            (!isReady || isProcessing || isProcessingLLM) && styles.recordButtonDisabled,
-          ]}
-          onPress={handleRecordPress}
-          disabled={!isReady || isProcessing || isProcessingLLM}
+        {/* Transcripts Tab */}
+        <TouchableOpacity 
+          style={styles.tabButton} 
+          onPress={() => pagerRef.current?.setPage(0)}
         >
-          {isProcessing || isProcessingLLM ? (
-            <ActivityIndicator size="large" color="#fff" />
-          ) : (
-            <Text style={styles.recordButtonText}>
-              {isRecording ? 'Stop Recording' : 'Record'}
-            </Text>
-          )}
+          <Feather 
+            name="file-text" 
+            size={24} 
+            color={pageIndex === 0 ? '#007AFF' : '#9CA3AF'} 
+          />
         </TouchableOpacity>
 
-        {/* Page tabs beneath the record button, using simple icon + label text. */}
-        <View style={styles.tabContainer}>
+        {/* Tasks Tab */}
+        <TouchableOpacity 
+          style={styles.tabButton} 
+          onPress={() => pagerRef.current?.setPage(1)}
+        >
+          <Feather 
+            name="check-square" 
+            size={24} 
+            color={pageIndex === 1 ? '#007AFF' : '#9CA3AF'} 
+          />
+        </TouchableOpacity>
+
+        {/* RECORD BUTTON - Floating Center */}
+        <View style={styles.recordButtonContainer}>
           <TouchableOpacity
-            style={[styles.tab, pageIndex === 0 && styles.tabActive]}
-            onPress={() => setPageIndex(0)}
+            style={[
+              styles.recordButton,
+              isRecording && styles.recordButtonActive,
+              (!isReady || isProcessing || isProcessingLLM) && styles.recordButtonDisabled,
+            ]}
+            onPress={handleRecordPress}
+            disabled={!isReady || isProcessing || isProcessingLLM}
           >
-            <Text style={[styles.tabText, pageIndex === 0 && styles.tabTextActive]}>
-              📝 Transcripts
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tab, pageIndex === 1 && styles.tabActive]}
-            onPress={() => setPageIndex(1)}
-          >
-            <Text style={[styles.tabText, pageIndex === 1 && styles.tabTextActive]}>
-              ✅ Tasks
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tab, pageIndex === 2 && styles.tabActive]}
-            onPress={() => setPageIndex(2)}
-          >
-            <Text style={[styles.tabText, pageIndex === 2 && styles.tabTextActive]}>
-              👁️ Observations
-            </Text>
+             {isProcessing || isProcessingLLM ? (
+               <ActivityIndicator color="#fff" />
+             ) : (
+               <Feather name={isRecording ? "square" : "mic"} size={32} color="#fff" />
+             )}
           </TouchableOpacity>
         </View>
+
+        {/* Observations Tab */}
+        <TouchableOpacity 
+          style={styles.tabButton} 
+          onPress={() => pagerRef.current?.setPage(2)}
+        >
+          <Feather 
+            name="eye" 
+            size={24} 
+            color={pageIndex === 2 ? '#007AFF' : '#9CA3AF'} 
+          />
+        </TouchableOpacity>
+
+         {/* Settings Tab */}
+         <TouchableOpacity 
+          style={styles.tabButton} 
+          onPress={() => setShowSettings(true)}
+        >
+          <Feather 
+            name="settings" 
+            size={24} 
+            color="#9CA3AF" 
+          />
+        </TouchableOpacity>
       </View>
 
       {/* Settings Modal */}
@@ -1062,52 +1090,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F5F5F5',
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 60,
-    paddingBottom: 12,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
-  },
-  headerTitleContainer: {
-    flex: 1,
-  },
-  headerTitleText: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#111827',
-  },
-  tabContainer: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 12,
-  },
-  tab: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  tabActive: {
-    backgroundColor: '#007AFF',
-  },
-  tabText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#666',
-  },
-  tabTextActive: {
-    color: '#fff',
-  },
-  settingsButton: {
-    padding: 8,
-  },
-  settingsButtonText: {
-    fontSize: 20,
-  },
   downloadContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1169,19 +1151,41 @@ const styles = StyleSheet.create({
     color: '#111827',
   },
   bottomBar: {
-    padding: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
     backgroundColor: '#fff',
     borderTopWidth: 1,
     borderTopColor: '#E0E0E0',
-    alignItems: 'center',
+    paddingBottom: 30, // Safe area for modern iPhones
+    paddingTop: 10,
+    height: 90,
   },
-  recordButton: {
-    backgroundColor: '#2563EB',
-    borderRadius: 14,
-    paddingVertical: 14,
+  tabButton: {
+    padding: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    minWidth: 200,
+  },
+  recordButtonContainer: {
+    top: -30, // Float above
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.30,
+    shadowRadius: 4.65,
+    elevation: 8,
+  },
+  recordButton: {
+    width: 72,
+    height: 72,
+    borderRadius: 36, // Circle
+    backgroundColor: '#2563EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 4,
+    borderColor: '#fff', // White border to separate from background content
   },
   recordButtonActive: {
     backgroundColor: '#DC2626',
@@ -1189,7 +1193,7 @@ const styles = StyleSheet.create({
   recordButtonDisabled: {
     backgroundColor: '#9CA3AF',
   },
-  recordButtonText: {
+  recordButtonText: { // Keep for fallback/types but unused with icon
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',

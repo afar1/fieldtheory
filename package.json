@@ -16,6 +16,7 @@
     "expo-av": "~15.0.2",
     "expo-clipboard": "~7.0.1",
     "expo-file-system": "~18.0.12",
+    "expo-font": "~13.0.4",
     "expo-status-bar": "~2.0.0",
     "react": "18.3.1",
     "react-native": "^0.76.9",
