@@ -1084,7 +1084,7 @@ jobs:
           name: whisper-${{ needs.determine-tag.outputs.tag_name }}-xcframework.zip
 
   android:
-    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' ||
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
             github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-22.04
 
@@ -1115,6 +1115,8 @@ jobs:
           ./gradlew assembleRelease --no-daemon
 
   android_java:
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+            github.event.inputs.run_type == 'full-ci' }}
     runs-on: ubuntu-22.04
 
     steps:
