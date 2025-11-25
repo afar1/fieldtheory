@@ -1,8 +1,3 @@
-// =============================================================================
-// TrayManager - macOS menu bar (Tray) integration for Little One.
-// Displays connection status and provides controls for priority locking.
-// =============================================================================
-
 import { Tray, Menu, nativeImage, app, MenuItemConstructorOptions } from 'electron';
 import path from 'path';
 import { AudioState } from './types/audio';
@@ -35,7 +30,6 @@ export class TrayManager {
    * Initialize the tray icon and set up event listeners.
    */
   init(showWindowCallback?: () => void): void {
-    // Only create tray on macOS.
     if (process.platform !== 'darwin') {
       console.log('[TrayManager] Not on macOS, skipping tray creation');
       return;
@@ -43,20 +37,14 @@ export class TrayManager {
 
     this.showWindowCallback = showWindowCallback || null;
 
-    // Create the tray with the initial disconnected icon.
     const iconPath = this.getIconPath('disconnected');
     const icon = nativeImage.createFromPath(iconPath);
-
-    // For macOS, use template images for proper dark/light mode support.
     this.tray = new Tray(icon);
     this.tray.setToolTip('Little One');
 
-    // Listen for state changes to update the tray.
     this.audioManager.on('stateChanged', (state: AudioState) => {
       this.updateTray(state);
     });
-
-    // Initial update with current state.
     this.updateTray(this.audioManager.getState());
 
     console.log('[TrayManager] Initialized');
@@ -72,21 +60,15 @@ export class TrayManager {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Private methods
-  // ---------------------------------------------------------------------------
-
   /**
    * Get the path to a tray icon based on the current state.
    */
   private getIconPath(state: 'disconnected' | 'connected' | 'active'): string {
-    // Use Template.png suffix for macOS to get automatic dark/light mode support.
     const filename = `littleone-${state}Template.png`;
 
     if (app.isPackaged) {
       return path.join(process.resourcesPath, 'assets', filename);
     } else {
-      // Dev: compiled code runs from electron-dist/main, assets are in electron/assets
       const appPath = app.getAppPath();
       return path.join(appPath, 'electron', 'assets', filename);
     }
@@ -100,7 +82,6 @@ export class TrayManager {
 
     const { priorityMode, priorityDeviceId, userOverrideId, defaultInputId, devices } = state;
 
-    // --- Update icon based on state ---
     let iconState: 'disconnected' | 'connected' | 'active';
     if (!priorityDeviceId) {
       iconState = 'disconnected';
@@ -136,7 +117,6 @@ export class TrayManager {
     }
     this.tray.setToolTip(tooltip);
 
-    // --- Build context menu ---
     const menuItems = this.buildContextMenu(state);
     const contextMenu = Menu.buildFromTemplate(menuItems);
     this.tray.setContextMenu(contextMenu);
@@ -148,30 +128,21 @@ export class TrayManager {
   private buildContextMenu(state: AudioState): MenuItemConstructorOptions[] {
     const { priorityMode, priorityDeviceId, userOverrideId, defaultInputId, devices } = state;
 
-    // Find the current default input device name.
     const currentDefaultDevice = devices.find((d) => d.id === defaultInputId);
     const currentDefaultName = currentDefaultDevice?.name || 'None';
-
-    // Get all input devices for the picker menu.
     const inputDevices = devices.filter((d) => d.isInput);
-
-    // Find the priority device name.
     const priorityDevice = devices.find((d) => d.id === priorityDeviceId);
     const priorityDeviceName = priorityDevice?.name || 'None';
 
     const items: MenuItemConstructorOptions[] = [
-      // Current mic status.
       {
         label: `Current mic: ${currentDefaultName}`,
         enabled: false,
       },
       { type: 'separator' },
-
-      // Priority device selection submenu.
       {
         label: 'Priority Device',
         submenu: [
-          // "None" option to clear selection.
           {
             label: 'None',
             type: 'radio',
@@ -181,7 +152,6 @@ export class TrayManager {
             },
           },
           { type: 'separator' },
-          // List of all input devices.
           ...inputDevices.map((device) => ({
             label: device.name,
             type: 'radio' as const,
@@ -193,8 +163,6 @@ export class TrayManager {
         ],
       },
       { type: 'separator' },
-
-      // Priority lock toggle.
       {
         label: 'Lock to Priority Device',
         type: 'checkbox',
@@ -206,7 +174,6 @@ export class TrayManager {
       },
     ];
 
-    // If there's a user override, show an option to reset it.
     if (userOverrideId && priorityMode && priorityDeviceId) {
       items.push({
         label: `Reset to ${priorityDeviceName}`,
@@ -216,7 +183,6 @@ export class TrayManager {
       });
     }
 
-    // Status/explanation text.
     if (priorityDeviceId) {
       items.push({
         label: priorityMode
@@ -233,7 +199,6 @@ export class TrayManager {
 
     items.push({ type: 'separator' });
 
-    // Open main app window.
     items.push({
       label: 'Open Little One App…',
       click: () => {
@@ -243,7 +208,6 @@ export class TrayManager {
       },
     });
 
-    // Quit action.
     items.push({
       label: 'Quit Little One',
       role: 'quit',

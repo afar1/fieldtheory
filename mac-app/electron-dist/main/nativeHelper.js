@@ -1,8 +1,4 @@
 "use strict";
-// =============================================================================
-// NativeHelper - Wrapper for the Swift CoreAudio helper process.
-// Manages spawning the helper, sending commands, and receiving events via JSON.
-// =============================================================================
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -12,7 +8,6 @@ const events_1 = require("events");
 const child_process_1 = require("child_process");
 const path_1 = __importDefault(require("path"));
 const electron_1 = require("electron");
-// Debounce delay in milliseconds to prevent rapid-fire events from CoreAudio.
 const DEBOUNCE_DELAY_MS = 200;
 /**
  * NativeHelper manages the Swift CLI helper process that interfaces with CoreAudio.
@@ -28,11 +23,9 @@ class NativeHelper extends events_1.EventEmitter {
     child = null;
     buffer = '';
     isRunning = false;
-    isReady = false; // Track if helper has sent initial message
-    // Pending promise resolvers for request/response pattern.
+    isReady = false;
     pendingDevicesResolve = null;
     pendingDefaultInputResolve = null;
-    // Debounce timers to prevent event flapping.
     devicesDebounceTimer = null;
     defaultInputDebounceTimer = null;
     pendingDevices = null;
@@ -46,7 +39,6 @@ class NativeHelper extends events_1.EventEmitter {
      * On other platforms, this is a no-op.
      */
     start() {
-        // Only run on macOS - other platforms just no-op.
         if (process.platform !== 'darwin') {
             console.log('[NativeHelper] Not on macOS, skipping helper start');
             return;
@@ -55,9 +47,6 @@ class NativeHelper extends events_1.EventEmitter {
             console.warn('[NativeHelper] Helper already running');
             return;
         }
-        // Determine the path to the helper binary.
-        // In development: look in electron/native/build/
-        // In production: look in app.asar.unpacked or resources/
         const helperPath = this.getHelperPath();
         console.log('[NativeHelper] Starting helper at:', helperPath);
         try {
@@ -65,25 +54,20 @@ class NativeHelper extends events_1.EventEmitter {
                 stdio: ['pipe', 'pipe', 'pipe'],
             });
             this.isRunning = true;
-            // Handle stdout - JSON messages from the helper.
             this.child.stdout.on('data', (data) => {
-                // Mark as ready once we receive any data
                 if (!this.isReady) {
                     this.isReady = true;
                 }
                 this.onStdout(data);
             });
-            // Handle stderr - log messages and errors.
             this.child.stderr.on('data', (data) => {
                 console.error('[NativeHelper stderr]', data.toString().trim());
             });
-            // Handle process exit.
             this.child.on('exit', (code, signal) => {
                 console.warn('[NativeHelper] Process exited', { code, signal });
                 this.isRunning = false;
                 this.isReady = false;
                 this.child = null;
-                // Attempt to restart after a delay if it crashed unexpectedly.
                 if (code !== 0 && code !== null) {
                     console.log('[NativeHelper] Will attempt restart in 5 seconds...');
                     setTimeout(() => this.start(), 5000);
@@ -139,17 +123,12 @@ class NativeHelper extends events_1.EventEmitter {
     async getDevices() {
         return new Promise(async (resolve, reject) => {
             if (!this.child || !this.child.stdin.writable) {
-                // Return empty list if helper isn't running (non-macOS or not started).
                 resolve([]);
                 return;
             }
-            // Wait for helper to be ready before sending commands
             await this.waitForReady();
-            // Set up resolver for when we receive the response.
             this.pendingDevicesResolve = resolve;
-            // Send the command with a timeout.
             this.send({ type: 'getDevices' });
-            // Timeout after 5 seconds.
             setTimeout(() => {
                 if (this.pendingDevicesResolve) {
                     this.pendingDevicesResolve = null;
@@ -168,7 +147,6 @@ class NativeHelper extends events_1.EventEmitter {
                 resolve(null);
                 return;
             }
-            // Wait for helper to be ready before sending commands
             await this.waitForReady();
             this.pendingDefaultInputResolve = resolve;
             this.send({ type: 'getDefaultInput' });
@@ -182,7 +160,6 @@ class NativeHelper extends events_1.EventEmitter {
     }
     /**
      * Set the system default input device.
-     * This is a fire-and-forget command - we don't wait for confirmation.
      */
     setDefaultInput(deviceId) {
         this.send({ type: 'setDefaultInput', deviceId });
@@ -195,20 +172,14 @@ class NativeHelper extends events_1.EventEmitter {
         await this.waitForReady();
         this.send({ type: 'startMonitoring' });
     }
-    // ---------------------------------------------------------------------------
-    // Private methods
-    // ---------------------------------------------------------------------------
     /**
      * Determine the path to the helper binary based on the environment.
      */
     getHelperPath() {
         if (electron_1.app.isPackaged) {
-            // Production: helper is in the app bundle's Resources folder.
             return path_1.default.join(process.resourcesPath, 'LittleOneHelper');
         }
         else {
-            // Development: helper is built locally.
-            // Use app.getAppPath() to get the mac-app directory, then navigate to native/build/
             const appPath = electron_1.app.getAppPath();
             return path_1.default.join(appPath, 'electron/native/build/LittleOneHelper');
         }
@@ -219,7 +190,6 @@ class NativeHelper extends events_1.EventEmitter {
      */
     onStdout(data) {
         this.buffer += data.toString();
-        // Process complete lines (JSON messages are newline-delimited).
         let newlineIndex;
         while ((newlineIndex = this.buffer.indexOf('\n')) >= 0) {
             const line = this.buffer.slice(0, newlineIndex).trim();
@@ -263,13 +233,11 @@ class NativeHelper extends events_1.EventEmitter {
      * Uses debouncing to prevent rapid-fire events.
      */
     handleDevicesChanged(devices) {
-        // If there's a pending request, resolve it immediately.
         if (this.pendingDevicesResolve) {
             this.pendingDevicesResolve(devices);
             this.pendingDevicesResolve = null;
             return;
         }
-        // Otherwise, debounce the event to prevent flapping.
         this.pendingDevices = devices;
         if (this.devicesDebounceTimer) {
             clearTimeout(this.devicesDebounceTimer);
@@ -287,13 +255,11 @@ class NativeHelper extends events_1.EventEmitter {
      * Uses debouncing to prevent rapid-fire events.
      */
     handleDefaultInputChanged(deviceId) {
-        // If there's a pending request, resolve it immediately.
         if (this.pendingDefaultInputResolve) {
             this.pendingDefaultInputResolve(deviceId);
             this.pendingDefaultInputResolve = null;
             return;
         }
-        // Otherwise, debounce the event.
         this.pendingDefaultInput = deviceId;
         if (this.defaultInputDebounceTimer) {
             clearTimeout(this.defaultInputDebounceTimer);
@@ -315,15 +281,11 @@ class NativeHelper extends events_1.EventEmitter {
         try {
             const json = JSON.stringify(command);
             const success = this.child.stdin.write(json + '\n');
-            // If write returns false, the stream is full and we should wait for drain
             if (!success) {
-                this.child.stdin.once('drain', () => {
-                    // Stream drained, ready for more writes
-                });
+                this.child.stdin.once('drain', () => { });
             }
         }
         catch (error) {
-            // Handle EPIPE and other write errors gracefully
             if (error.code === 'EPIPE') {
                 console.warn('[NativeHelper] Broken pipe - helper process may have exited');
                 this.isRunning = false;

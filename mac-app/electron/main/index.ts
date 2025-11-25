@@ -1,8 +1,3 @@
-// =============================================================================
-// Main Entry Point - Wires together all Electron main process components.
-// Handles app lifecycle, window creation, IPC handlers, and audio management.
-// =============================================================================
-
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'path';
 import { NativeHelper } from './nativeHelper';
@@ -14,18 +9,10 @@ import {
   SetPriorityDevicePayload,
 } from './types/audio';
 
-// =============================================================================
-// Global references - Keep these alive to prevent garbage collection.
-// =============================================================================
-
 let mainWindow: BrowserWindow | null = null;
 let nativeHelper: NativeHelper | null = null;
 let audioManager: AudioManager | null = null;
 let trayManager: TrayManager | null = null;
-
-// =============================================================================
-// Window Management
-// =============================================================================
 
 /**
  * Create the main application window.
@@ -74,15 +61,10 @@ function showMainWindow(): void {
   }
 }
 
-// =============================================================================
-// IPC Handlers - Bridge between renderer and audio management.
-// =============================================================================
-
 /**
  * Set up all IPC handlers for audio-related communication.
  */
 function setupIPCHandlers(): void {
-  // Get current audio state.
   ipcMain.handle(AudioIPCChannels.GET_STATE, () => {
     if (!audioManager) {
       return {
@@ -96,7 +78,6 @@ function setupIPCHandlers(): void {
     return audioManager.getState();
   });
 
-  // Set priority mode (lock/unlock).
   ipcMain.handle(
     AudioIPCChannels.SET_PRIORITY_MODE,
     async (_event, payload: SetPriorityModePayload) => {
@@ -106,7 +87,6 @@ function setupIPCHandlers(): void {
     }
   );
 
-  // Set priority device (which device to prioritize).
   ipcMain.handle(
     AudioIPCChannels.SET_PRIORITY_DEVICE,
     async (_event, payload: SetPriorityDevicePayload) => {
@@ -116,7 +96,6 @@ function setupIPCHandlers(): void {
     }
   );
 
-  // Reset user override.
   ipcMain.handle(AudioIPCChannels.RESET_OVERRIDE, async () => {
     if (audioManager) {
       await audioManager.clearUserOverride();
@@ -132,17 +111,12 @@ function broadcastStateChanged(): void {
 
   const state = audioManager.getState();
 
-  // Send to all windows.
   BrowserWindow.getAllWindows().forEach((window) => {
     if (!window.isDestroyed()) {
       window.webContents.send(AudioIPCChannels.STATE_CHANGED, state);
     }
   });
 }
-
-// =============================================================================
-// Audio System Initialization
-// =============================================================================
 
 /**
  * Initialize the audio management system.
@@ -151,31 +125,20 @@ function broadcastStateChanged(): void {
 async function initAudioSystem(): Promise<void> {
   console.log('[Main] Initializing audio system...');
 
-  // Create and start the native helper (macOS only).
   nativeHelper = new NativeHelper();
   nativeHelper.start();
 
-  // Create the audio manager with the native helper.
   audioManager = new AudioManager(nativeHelper);
-
-  // Set up state change broadcasting to renderer.
   audioManager.on('stateChanged', () => {
     broadcastStateChanged();
   });
-
-  // Initialize the audio manager (fetches devices, starts monitoring).
   await audioManager.init();
 
-  // Create and initialize the tray manager.
   trayManager = new TrayManager(audioManager);
   trayManager.init(showMainWindow);
 
   console.log('[Main] Audio system initialized');
 }
-
-// =============================================================================
-// App Lifecycle
-// =============================================================================
 
 // Prevent multiple instances of the app.
 const gotTheLock = app.requestSingleInstanceLock();
@@ -184,24 +147,16 @@ if (!gotTheLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    // Someone tried to run a second instance - focus our window instead.
     showMainWindow();
   });
 
-  // App is ready - initialize everything.
   app.whenReady().then(async () => {
     console.log('[Main] App ready');
 
-    // Set up IPC handlers before creating windows.
     setupIPCHandlers();
-
-    // Initialize the audio system (native helper, manager, tray).
     await initAudioSystem();
-
-    // Create the main window.
     createWindow();
 
-    // macOS: Re-create window when clicking dock icon with no windows open.
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
         createWindow();
@@ -209,15 +164,12 @@ if (!gotTheLock) {
     });
   });
 
-  // Quit when all windows are closed (except on macOS).
   app.on('window-all-closed', () => {
-    // On macOS, keep the app running in the menu bar.
     if (process.platform !== 'darwin') {
       app.quit();
     }
   });
 
-  // Clean up before quitting.
   app.on('before-quit', () => {
     console.log('[Main] App quitting, cleaning up...');
 
