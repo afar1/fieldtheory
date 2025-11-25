@@ -1,0 +1,1 @@
+Create a mermaid chart, flowchart of how my recent system works. ask me for scope of mermaid before doing it. I sometimes might want the whole project and other times the recent work we've done.

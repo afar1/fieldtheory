@@ -1,0 +1,1 @@
+Take the prompt that I just gave you and improve or rewrite it as if you were an expert prompt engineer. Know your audience and write for them.

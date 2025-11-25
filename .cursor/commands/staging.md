@@ -1,0 +1,3 @@
+Okay, merge staging into this branch to make sure there are no merge conflicts. Resolve them if there are any. Once resolved, or if there are no conflicts, commit and push this branch to origin, then merge the branch into staging.
+
+Then switch to staging. 

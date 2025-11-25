@@ -1,0 +1,3 @@
+create a single best of breed that combines the best, most thoughtful, most elegant aspects of these various plans that aligns with our /eng principles and uses industry best practices to accomplish the goal. make sure to explain any meanginful differences or choices that I need to make as a user and explain why you made certain choices that align with our beliefs.
+
+if the plans are not good, say so. be concise. 
