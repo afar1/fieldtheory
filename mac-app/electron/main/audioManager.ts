@@ -1,8 +1,3 @@
-// =============================================================================
-// AudioManager - Core audio device management and priority policy logic.
-// This is the single source of truth for audio state in the Electron app.
-// =============================================================================
-
 import { EventEmitter } from 'events';
 import { AudioDevice, AudioState, TransportType } from './types/audio';
 import { NativeHelper } from './nativeHelper';
@@ -21,26 +16,12 @@ import { NativeHelper } from './nativeHelper';
  * - 'stateChanged': Emitted with AudioState whenever any state changes.
  */
 export class AudioManager extends EventEmitter {
-  // Current list of audio devices (both input and output).
   private devices: AudioDevice[] = [];
-
-  // Current system default input device ID.
   private defaultInputId: string | null = null;
-
-  // Whether priority lock is enabled.
   private priorityMode = false;
-
-  // The device ID selected by the user to prioritize, or null if none selected.
   private priorityDeviceId: string | null = null;
-
-  // User override device ID (if user manually changed input while priority was ON).
   private userOverrideId: string | null = null;
-
-  // Flag to track when we're in the middle of setting default input.
-  // Used to distinguish our own changes from user-initiated changes.
   private isSettingDefaultInput = false;
-
-  // Reference to the native helper for CoreAudio operations.
   private helper: NativeHelper;
 
   constructor(helper: NativeHelper) {
@@ -82,10 +63,6 @@ export class AudioManager extends EventEmitter {
 
     console.log('[AudioManager] Initialized with state:', this.getState());
   }
-
-  // ---------------------------------------------------------------------------
-  // Public API
-  // ---------------------------------------------------------------------------
 
   /**
    * Get the current audio state snapshot.
@@ -177,10 +154,6 @@ export class AudioManager extends EventEmitter {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Private methods - Event handlers
-  // ---------------------------------------------------------------------------
-
   /**
    * Handle device list changes from CoreAudio.
    * Re-evaluates priority policy if needed.
@@ -246,10 +219,6 @@ export class AudioManager extends EventEmitter {
 
     this.emitStateChanged();
   }
-
-  // ---------------------------------------------------------------------------
-  // Private methods - Priority enforcement
-  // ---------------------------------------------------------------------------
 
   /**
    * Enforce the priority policy - make the priority device the default input.
