@@ -2,13 +2,19 @@
   "name": "littleai-mac",
   "version": "0.1.0",
   "private": true,
-  "main": "electron/main.js",
+  "main": "electron-dist/main/index.js",
   "scripts": {
     "dev": "concurrently -k \"npm:dev:vite\" \"npm:dev:electron\"",
     "dev:vite": "vite",
-    "dev:electron": "wait-on tcp:5173 && ELECTRON_START_URL=http://localhost:5173 electron .",
-    "build": "vite build",
-    "start": "electron ."
+    "dev:electron": "npm run build:electron && wait-on tcp:5173 && ELECTRON_START_URL=http://localhost:5173 electron .",
+    "build": "npm run build:electron && npm run build:vite",
+    "build:vite": "vite build",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "build:native": "cd electron/native && swift build -c release && mkdir -p ../build && cp .build/release/LittleOneHelper ../build/",
+    "build:all": "npm run build:native && npm run build",
+    "start": "electron .",
+    "package": "npm run build:all && electron-builder",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.3",
@@ -22,8 +28,37 @@
     "@vitejs/plugin-react": "^4.3.3",
     "concurrently": "^8.2.2",
     "electron": "^31.0.2",
+    "electron-builder": "^24.13.3",
     "typescript": "^5.6.2",
     "vite": "^5.4.8",
     "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.littleone.mac",
+    "productName": "Little One",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": ["dmg", "zip"],
+      "icon": "assets/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "extraResources": [
+        {
+          "from": "electron/native/build/LittleOneHelper",
+          "to": "LittleOneHelper"
+        },
+        {
+          "from": "electron/assets",
+          "to": "assets"
+        }
+      ]
+    },
+    "files": [
+      "dist/**/*",
+      "electron-dist/**/*"
+    ],
+    "directories": {
+      "output": "release"
+    }
   }
 }
