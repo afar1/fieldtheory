@@ -14,16 +14,14 @@ interface AudioDevice {
   isOutput: boolean;
   manufacturer?: string;
   transportType?: string;
-  isLittleOne?: boolean;
 }
 
 interface AudioState {
   devices: AudioDevice[];
   defaultInputId: string | null;
   priorityMode: boolean;
+  priorityDeviceId: string | null;
   userOverrideId: string | null;
-  littleOnePresent: boolean;
-  preferredLittleOneId: string | null;
 }
 
 /**
@@ -83,6 +81,17 @@ export default function AudioSettingsPanel() {
     }
   }, [audioState]);
 
+  // Handler for setting priority device.
+  const handleSetPriorityDevice = useCallback(async (deviceId: string | null) => {
+    if (!window.audioAPI) return;
+
+    try {
+      await window.audioAPI.setPriorityDevice(deviceId);
+    } catch (err) {
+      console.error('Failed to set priority device:', err);
+    }
+  }, []);
+
   // Handler for resetting user override.
   const handleResetOverride = useCallback(async () => {
     if (!window.audioAPI) return;
@@ -129,7 +138,7 @@ export default function AudioSettingsPanel() {
   // Get input devices only for the list.
   const inputDevices = audioState.devices.filter((d) => d.isInput);
   const currentDefault = inputDevices.find((d) => d.id === audioState.defaultInputId);
-  const littleOneDevice = inputDevices.find((d) => d.isLittleOne);
+  const priorityDevice = inputDevices.find((d) => d.id === audioState.priorityDeviceId);
 
   return (
     <div style={styles.container}>
@@ -138,29 +147,19 @@ export default function AudioSettingsPanel() {
       {/* Status section */}
       <div style={styles.statusCard}>
         <div style={styles.statusRow}>
-          <span style={styles.statusLabel}>Little One Status:</span>
-          <span style={{
-            ...styles.statusValue,
-            color: audioState.littleOnePresent ? '#22c55e' : '#ef4444',
-          }}>
-            {audioState.littleOnePresent ? 'Connected' : 'Not Connected'}
-          </span>
-        </div>
-
-        {littleOneDevice && (
-          <div style={styles.statusRow}>
-            <span style={styles.statusLabel}>Device:</span>
-            <span style={styles.statusValue}>
-              {littleOneDevice.name}
-              {littleOneDevice.transportType && ` (${littleOneDevice.transportType.toUpperCase()})`}
-            </span>
-          </div>
-        )}
-
-        <div style={styles.statusRow}>
           <span style={styles.statusLabel}>Current Microphone:</span>
           <span style={styles.statusValue}>
             {currentDefault?.name || 'None'}
+          </span>
+        </div>
+
+        <div style={styles.statusRow}>
+          <span style={styles.statusLabel}>Priority Device:</span>
+          <span style={{
+            ...styles.statusValue,
+            color: audioState.priorityDeviceId ? '#3b82f6' : '#6b7280',
+          }}>
+            {priorityDevice?.name || 'None selected'}
           </span>
         </div>
 
@@ -186,29 +185,45 @@ export default function AudioSettingsPanel() {
 
       {/* Controls section */}
       <div style={styles.controlsSection}>
+        <label style={styles.selectLabel}>
+          <span>Priority Device:</span>
+          <select
+            value={audioState.priorityDeviceId || ''}
+            onChange={(e) => handleSetPriorityDevice(e.target.value || null)}
+            style={styles.select}
+          >
+            <option value="">None</option>
+            {inputDevices.map((device) => (
+              <option key={device.id} value={device.id}>
+                {device.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
         <label style={styles.checkboxLabel}>
           <input
             type="checkbox"
             checked={audioState.priorityMode}
             onChange={handleTogglePriority}
-            disabled={!audioState.littleOnePresent}
+            disabled={!audioState.priorityDeviceId}
             style={styles.checkbox}
           />
-          <span>Lock input to Little One</span>
+          <span>Lock to Priority Device</span>
         </label>
 
         <p style={styles.helpText}>
-          {audioState.littleOnePresent
-            ? 'When enabled, Little One stays your microphone even when headphones connect or disconnect.'
-            : 'Connect Little One to enable priority locking.'}
+          {audioState.priorityDeviceId
+            ? `When enabled, ${priorityDevice?.name || 'the priority device'} stays your microphone even when other devices connect or disconnect.`
+            : 'Select a device above to enable priority locking.'}
         </p>
 
-        {audioState.userOverrideId && audioState.priorityMode && (
+        {audioState.userOverrideId && audioState.priorityMode && priorityDevice && (
           <button
             onClick={handleResetOverride}
             style={styles.resetButton}
           >
-            Reset to Little One
+            Reset to {priorityDevice.name}
           </button>
         )}
       </div>
@@ -224,12 +239,12 @@ export default function AudioSettingsPanel() {
                 ...styles.deviceItem,
                 backgroundColor: device.id === audioState.defaultInputId
                   ? '#eff6ff'
-                  : device.isLittleOne
+                  : device.id === audioState.priorityDeviceId
                     ? '#f0fdf4'
                     : '#fff',
                 borderColor: device.id === audioState.defaultInputId
                   ? '#3b82f6'
-                  : device.isLittleOne
+                  : device.id === audioState.priorityDeviceId
                     ? '#22c55e'
                     : '#e5e7eb',
               }}
@@ -237,8 +252,8 @@ export default function AudioSettingsPanel() {
               <div style={styles.deviceInfo}>
                 <span style={styles.deviceName}>
                   {device.name}
-                  {device.isLittleOne && (
-                    <span style={styles.littleOneBadge}>Little One</span>
+                  {device.id === audioState.priorityDeviceId && (
+                    <span style={styles.priorityBadge}>Priority</span>
                   )}
                 </span>
                 <span style={styles.deviceMeta}>
@@ -307,6 +322,22 @@ const styles: Record<string, React.CSSProperties> = {
   controlsSection: {
     marginBottom: '24px',
   },
+  selectLabel: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+    marginBottom: '16px',
+    fontSize: '15px',
+    fontWeight: 500,
+  },
+  select: {
+    padding: '8px 12px',
+    fontSize: '14px',
+    border: '1px solid #e5e7eb',
+    borderRadius: '8px',
+    backgroundColor: '#fff',
+    cursor: 'pointer',
+  },
   checkboxLabel: {
     display: 'flex',
     alignItems: 'center',
@@ -366,7 +397,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '12px',
     color: '#6b7280',
   },
-  littleOneBadge: {
+  priorityBadge: {
     fontSize: '11px',
     fontWeight: 600,
     color: '#15803d',
