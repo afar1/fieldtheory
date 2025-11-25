@@ -7,22 +7,12 @@ import { EventEmitter } from 'events';
 import { AudioDevice, AudioState, TransportType } from './types/audio';
 import { NativeHelper } from './nativeHelper';
 
-// Device name patterns used to identify Little One devices.
-// These should match the actual device names as reported by CoreAudio.
-const LITTLE_ONE_NAME_PATTERNS = [
-  'Little One',
-  'LittleOne',
-  'Little One Mic',
-  'Little One Microphone',
-];
-
 /**
  * AudioManager handles all audio device state and implements the priority policy.
  * 
  * Priority Policy Rules:
- * 1. When priorityMode is ON and Little One is connected:
- *    - If no user override, ensure Little One is the default input.
- *    - Prefer USB dongle over Bluetooth for stability.
+ * 1. When priorityMode is ON and a priority device is selected:
+ *    - If no user override, ensure the priority device is the default input.
  * 2. When priorityMode is OFF:
  *    - Don't interfere with macOS default behavior.
  * 3. User overrides are respected until explicitly cleared.
@@ -39,6 +29,9 @@ export class AudioManager extends EventEmitter {
 
   // Whether priority lock is enabled.
   private priorityMode = false;
+
+  // The device ID selected by the user to prioritize, or null if none selected.
+  private priorityDeviceId: string | null = null;
 
   // User override device ID (if user manually changed input while priority was ON).
   private userOverrideId: string | null = null;
@@ -82,7 +75,7 @@ export class AudioManager extends EventEmitter {
     }
 
     // Start monitoring for CoreAudio changes.
-    this.helper.startMonitoring();
+    await this.helper.startMonitoring();
 
     // Emit initial state to subscribers.
     this.emitStateChanged();
@@ -99,22 +92,34 @@ export class AudioManager extends EventEmitter {
    * This is the primary way for UI to read current state.
    */
   getState(): AudioState {
-    const littleOne = this.pickPreferredLittleOne();
-    const littleOnePresent = littleOne !== null;
-
     return {
       devices: this.devices,
       defaultInputId: this.defaultInputId,
       priorityMode: this.priorityMode,
+      priorityDeviceId: this.priorityDeviceId,
       userOverrideId: this.userOverrideId,
-      littleOnePresent,
-      preferredLittleOneId: littleOne ? littleOne.id : null,
     };
   }
 
   /**
-   * Enable or disable priority mode ("Lock input to Little One").
-   * When enabled, we'll actively maintain Little One as the default input.
+   * Set which device should be prioritized (user selection).
+   */
+  async setPriorityDevice(deviceId: string | null): Promise<void> {
+    console.log('[AudioManager] setPriorityDevice:', deviceId);
+    this.priorityDeviceId = deviceId;
+
+    // If priority mode is enabled and we have a device, enforce it immediately.
+    if (this.priorityMode && deviceId) {
+      this.userOverrideId = null;
+      await this.enforcePriority();
+    }
+
+    this.emitStateChanged();
+  }
+
+  /**
+   * Enable or disable priority mode ("Lock to Priority Device").
+   * When enabled, we'll actively maintain the priority device as the default input.
    */
   async setPriorityMode(enabled: boolean): Promise<void> {
     console.log('[AudioManager] setPriorityMode:', enabled);
@@ -137,13 +142,13 @@ export class AudioManager extends EventEmitter {
 
   /**
    * Clear the user override, allowing priority enforcement to resume.
-   * Call this when the user explicitly wants to "reset" to Little One.
+   * Call this when the user explicitly wants to "reset" to the priority device.
    */
   async clearUserOverride(): Promise<void> {
     console.log('[AudioManager] clearUserOverride');
     this.userOverrideId = null;
 
-    if (this.priorityMode) {
+    if (this.priorityMode && this.priorityDeviceId) {
       await this.enforcePriority();
     }
 
@@ -157,68 +162,19 @@ export class AudioManager extends EventEmitter {
   async refreshDevices(): Promise<void> {
     try {
       const devices = await this.helper.getDevices();
-      this.devices = this.markLittleOneDevices(devices);
+      this.devices = devices;
+      
+      // If the priority device was removed, clear it.
+      if (this.priorityDeviceId) {
+        const stillExists = devices.some((d) => d.id === this.priorityDeviceId);
+        if (!stillExists) {
+          console.log('[AudioManager] Priority device removed, clearing selection');
+          this.priorityDeviceId = null;
+        }
+      }
     } catch (error) {
       console.error('[AudioManager] Failed to refresh devices:', error);
     }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Private methods - Device identification
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Mark devices that are Little One devices based on name matching.
-   * Returns a new array with isLittleOne flags set.
-   */
-  private markLittleOneDevices(devices: AudioDevice[]): AudioDevice[] {
-    return devices.map((device) => ({
-      ...device,
-      isLittleOne: this.isLittleOneDevice(device),
-    }));
-  }
-
-  /**
-   * Check if a device is a Little One device.
-   * Currently uses name matching; could be extended to use VID/PID.
-   */
-  private isLittleOneDevice(device: AudioDevice): boolean {
-    // Only consider input devices.
-    if (!device.isInput) return false;
-
-    // Check if the device name matches any of our patterns.
-    const nameLower = device.name.toLowerCase();
-    return LITTLE_ONE_NAME_PATTERNS.some((pattern) =>
-      nameLower.includes(pattern.toLowerCase())
-    );
-  }
-
-  /**
-   * Get all connected Little One devices.
-   */
-  private getLittleOneDevices(): AudioDevice[] {
-    return this.devices.filter((d) => d.isLittleOne);
-  }
-
-  /**
-   * Pick the preferred Little One device if multiple are connected.
-   * Prefers USB dongle over Bluetooth for lower latency and stability.
-   */
-  private pickPreferredLittleOne(): AudioDevice | null {
-    const littleOnes = this.getLittleOneDevices();
-
-    if (littleOnes.length === 0) {
-      return null;
-    }
-
-    // Prefer USB (dongle) over Bluetooth for stability and latency.
-    const usbDevices = littleOnes.filter((d) => d.transportType === 'usb');
-    if (usbDevices.length > 0) {
-      return usbDevices[0];
-    }
-
-    // Fall back to any available Little One device.
-    return littleOnes[0];
   }
 
   // ---------------------------------------------------------------------------
@@ -232,11 +188,20 @@ export class AudioManager extends EventEmitter {
   private async handleDevicesChanged(devices: AudioDevice[]): Promise<void> {
     console.log('[AudioManager] Devices changed, count:', devices.length);
 
-    this.devices = this.markLittleOneDevices(devices);
+    this.devices = devices;
+
+    // If the priority device was removed, clear it.
+    if (this.priorityDeviceId) {
+      const stillExists = devices.some((d) => d.id === this.priorityDeviceId);
+      if (!stillExists) {
+        console.log('[AudioManager] Priority device removed, clearing selection');
+        this.priorityDeviceId = null;
+      }
+    }
 
     // If priority mode is on, check if we need to enforce it.
-    // This handles the case where Little One was just connected.
-    if (this.priorityMode) {
+    // This handles the case where the priority device was just connected.
+    if (this.priorityMode && this.priorityDeviceId) {
       await this.enforcePriority();
     }
 
@@ -245,12 +210,11 @@ export class AudioManager extends EventEmitter {
 
   /**
    * Handle default input changes from CoreAudio.
-   * Detects user overrides and updates state accordingly.
+   * When priority mode is locked, always restore the priority device.
    */
   private async handleDefaultInputChanged(deviceId: string | null): Promise<void> {
     console.log('[AudioManager] Default input changed to:', deviceId);
 
-    const prevDefaultId = this.defaultInputId;
     this.defaultInputId = deviceId;
 
     // If priority mode is off, just update state and emit.
@@ -259,28 +223,25 @@ export class AudioManager extends EventEmitter {
       return;
     }
 
-    // If we just set this ourselves, don't treat it as a user override.
+    // If we just set this ourselves, ignore the callback.
     if (this.isSettingDefaultInput) {
       this.emitStateChanged();
       return;
     }
 
-    // Check if the new default is a Little One device.
-    const littleOnes = this.getLittleOneDevices();
-    const isLittleOne = littleOnes.some((d) => d.id === deviceId);
-
-    if (isLittleOne) {
-      // User (or us) switched to Little One - clear any override.
+    // While locked, always restore the priority device if it changed away.
+    if (this.priorityDeviceId && deviceId !== this.priorityDeviceId) {
+      console.log('[AudioManager] Non-priority device became default while locked, restoring priority');
+      // Clear any user override since we're enforcing
       this.userOverrideId = null;
+      await this.enforcePriority();
       this.emitStateChanged();
       return;
     }
 
-    // Non-Little-One became default while priority mode is ON.
-    // If this wasn't us setting it, treat it as a user override.
-    if (prevDefaultId !== deviceId && deviceId !== null) {
-      console.log('[AudioManager] Detected user override to:', deviceId);
-      this.userOverrideId = deviceId;
+    // Priority device is the default - clear any override.
+    if (deviceId === this.priorityDeviceId) {
+      this.userOverrideId = null;
     }
 
     this.emitStateChanged();
@@ -291,13 +252,13 @@ export class AudioManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Enforce the priority policy - make Little One the default input if conditions are met.
+   * Enforce the priority policy - make the priority device the default input.
+   * When priority mode is locked, this always enforces regardless of auto-switches.
    * 
    * Conditions:
    * - Priority mode is ON
-   * - Little One is connected
-   * - No user override is active
-   * - Little One is not already the default
+   * - A priority device is selected
+   * - Priority device is not already the default
    */
   private async enforcePriority(): Promise<void> {
     // Don't enforce if priority mode is off.
@@ -305,36 +266,35 @@ export class AudioManager extends EventEmitter {
       return;
     }
 
-    // Get the preferred Little One device.
-    const littleOne = this.pickPreferredLittleOne();
-
-    // If no Little One is connected, nothing to enforce.
-    if (!littleOne) {
-      console.log('[AudioManager] No Little One device connected');
+    // If no priority device is selected, nothing to enforce.
+    if (!this.priorityDeviceId) {
+      console.log('[AudioManager] No priority device selected');
       return;
     }
 
-    // If user has explicitly overridden, respect that.
-    if (this.userOverrideId) {
-      console.log('[AudioManager] User override active, not enforcing');
+    // Find the priority device.
+    const priorityDevice = this.devices.find((d) => d.id === this.priorityDeviceId);
+    if (!priorityDevice) {
+      console.log('[AudioManager] Priority device not found');
       return;
     }
 
-    // If Little One is already the default, nothing to do.
-    if (this.defaultInputId === littleOne.id) {
-      console.log('[AudioManager] Little One already default');
+    // If priority device is already the default, nothing to do.
+    if (this.defaultInputId === this.priorityDeviceId) {
+      console.log('[AudioManager] Priority device already default');
       return;
     }
 
-    // Set Little One as the default input.
-    console.log('[AudioManager] Enforcing Little One as default input:', littleOne.name);
+    // Set priority device as the default input.
+    // When locked, we always enforce - ignore auto-switches from macOS.
+    console.log('[AudioManager] Enforcing priority device as default input:', priorityDevice.name);
 
     // Mark that we're setting the default to avoid treating it as user override.
     this.isSettingDefaultInput = true;
 
     try {
-      this.helper.setDefaultInput(littleOne.id);
-      this.defaultInputId = littleOne.id;
+      this.helper.setDefaultInput(this.priorityDeviceId);
+      this.defaultInputId = this.priorityDeviceId;
     } finally {
       // Reset flag after a short delay to account for async CoreAudio callback.
       setTimeout(() => {

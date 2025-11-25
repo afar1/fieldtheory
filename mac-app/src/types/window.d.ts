@@ -17,7 +17,6 @@ interface AudioDevice {
   isOutput: boolean;
   manufacturer?: string;
   transportType?: TransportType;
-  isLittleOne?: boolean;
 }
 
 /**
@@ -27,9 +26,8 @@ interface AudioState {
   devices: AudioDevice[];
   defaultInputId: string | null;
   priorityMode: boolean;
+  priorityDeviceId: string | null;
   userOverrideId: string | null;
-  littleOnePresent: boolean;
-  preferredLittleOneId: string | null;
 }
 
 /**
@@ -38,6 +36,7 @@ interface AudioState {
 interface AudioAPI {
   getState: () => Promise<AudioState>;
   setPriorityMode: (enabled: boolean) => Promise<void>;
+  setPriorityDevice: (deviceId: string | null) => Promise<void>;
   resetOverride: () => Promise<void>;
   onStateChanged: (callback: (state: AudioState) => void) => () => void;
 }

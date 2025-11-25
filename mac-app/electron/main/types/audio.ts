@@ -11,13 +11,12 @@ export type TransportType = 'usb' | 'bluetooth' | 'built-in' | 'other';
 
 /**
  * Represents a single audio device as seen by CoreAudio.
- * Includes both raw device info and computed flags for Little One identification.
  */
 export interface AudioDevice {
   // CoreAudio device UID - stable identifier that persists across reboots.
   id: string;
 
-  // Human-readable device name (e.g., "Little One Mic", "MacBook Pro Microphone").
+  // Human-readable device name (e.g., "MacBook Pro Microphone", "Wireless Microphone").
   name: string;
 
   // Whether this device supports audio input (microphone).
@@ -29,11 +28,8 @@ export interface AudioDevice {
   // Device manufacturer (optional, may not be available for all devices).
   manufacturer?: string;
 
-  // How the device is connected - used to prefer USB dongle over Bluetooth.
+  // How the device is connected (USB, Bluetooth, built-in, etc.).
   transportType?: TransportType;
-
-  // Computed flag: true if this device is identified as a Little One device.
-  isLittleOne?: boolean;
 }
 
 /**
@@ -47,19 +43,16 @@ export interface AudioState {
   // The current system default input device ID, or null if none.
   defaultInputId: string | null;
 
-  // Whether "Lock input to Little One" is enabled.
-  // When true, we actively enforce Little One as the default mic.
+  // Whether priority locking is enabled.
+  // When true, we actively enforce the priority device as the default mic.
   priorityMode: boolean;
+
+  // The ID of the device selected by the user to prioritize, or null if none selected.
+  priorityDeviceId: string | null;
 
   // If the user manually changed the default input while priorityMode was ON,
   // this stores that device ID. We respect this override until explicitly cleared.
   userOverrideId: string | null;
-
-  // Whether at least one Little One device is currently connected.
-  littleOnePresent: boolean;
-
-  // The ID of the preferred Little One device (prefers USB dongle over Bluetooth).
-  preferredLittleOneId: string | null;
 }
 
 // =============================================================================
@@ -74,6 +67,7 @@ export const AudioIPCChannels = {
   // Renderer -> Main (invoke/handle pattern)
   GET_STATE: 'audio:getState',
   SET_PRIORITY_MODE: 'audio:setPriorityMode',
+  SET_PRIORITY_DEVICE: 'audio:setPriorityDevice',
   RESET_OVERRIDE: 'audio:resetOverride',
 
   // Main -> Renderer (send pattern, broadcast)
@@ -85,6 +79,13 @@ export const AudioIPCChannels = {
  */
 export interface SetPriorityModePayload {
   enabled: boolean;
+}
+
+/**
+ * Payload for setting priority device.
+ */
+export interface SetPriorityDevicePayload {
+  deviceId: string | null;
 }
 
 // =============================================================================
@@ -121,7 +122,7 @@ export interface HelperMessage {
  */
 export interface DevicesChangedMessage extends HelperMessage {
   type: 'devicesChanged';
-  devices: Omit<AudioDevice, 'isLittleOne'>[];
+  devices: AudioDevice[];
 }
 
 /**

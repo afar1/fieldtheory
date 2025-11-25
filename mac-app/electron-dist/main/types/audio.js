@@ -16,6 +16,7 @@ exports.AudioIPCChannels = {
     // Renderer -> Main (invoke/handle pattern)
     GET_STATE: 'audio:getState',
     SET_PRIORITY_MODE: 'audio:setPriorityMode',
+    SET_PRIORITY_DEVICE: 'audio:setPriorityDevice',
     RESET_OVERRIDE: 'audio:resetOverride',
     // Main -> Renderer (send pattern, broadcast)
     STATE_CHANGED: 'audio:stateChanged',

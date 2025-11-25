@@ -77,7 +77,9 @@ class TrayManager {
             return path_1.default.join(process.resourcesPath, 'assets', filename);
         }
         else {
-            return path_1.default.join(__dirname, '../assets', filename);
+            // Dev: compiled code runs from electron-dist/main, assets are in electron/assets
+            const appPath = electron_1.app.getAppPath();
+            return path_1.default.join(appPath, 'electron', 'assets', filename);
         }
     }
     /**
@@ -86,10 +88,10 @@ class TrayManager {
     updateTray(state) {
         if (!this.tray)
             return;
-        const { littleOnePresent, priorityMode, userOverrideId, defaultInputId, devices } = state;
+        const { priorityMode, priorityDeviceId, userOverrideId, defaultInputId, devices } = state;
         // --- Update icon based on state ---
         let iconState;
-        if (!littleOnePresent) {
+        if (!priorityDeviceId) {
             iconState = 'disconnected';
         }
         else if (priorityMode && !userOverrideId) {
@@ -109,18 +111,20 @@ class TrayManager {
             console.warn('[TrayManager] Failed to load icon:', iconPath);
         }
         // --- Update tooltip ---
+        const priorityDevice = devices.find((d) => d.id === priorityDeviceId);
+        const priorityDeviceName = priorityDevice?.name || 'None';
         let tooltip;
-        if (!littleOnePresent) {
-            tooltip = 'Little One: Not connected';
+        if (!priorityDeviceId) {
+            tooltip = 'Audio Priority: No device selected';
         }
         else if (priorityMode && !userOverrideId) {
-            tooltip = 'Little One: Locked as microphone';
+            tooltip = `Audio Priority: ${priorityDeviceName} locked`;
         }
         else if (priorityMode && userOverrideId) {
-            tooltip = 'Little One: Override active (click to reset)';
+            tooltip = 'Audio Priority: Override active (click to reset)';
         }
         else {
-            tooltip = 'Little One: Connected (click menu to lock)';
+            tooltip = `Audio Priority: ${priorityDeviceName} (click menu to lock)`;
         }
         this.tray.setToolTip(tooltip);
         // --- Build context menu ---
@@ -132,62 +136,83 @@ class TrayManager {
      * Build the context menu items based on current state.
      */
     buildContextMenu(state) {
-        const { littleOnePresent, priorityMode, userOverrideId, defaultInputId, devices } = state;
-        // Determine the status label to display.
-        let statusLabel;
-        if (!littleOnePresent) {
-            statusLabel = 'Little One: Not connected';
-        }
-        else if (priorityMode && !userOverrideId) {
-            statusLabel = 'Little One: Locked as input';
-        }
-        else if (priorityMode && userOverrideId) {
-            statusLabel = 'Little One: Override active';
-        }
-        else {
-            statusLabel = 'Little One: Available (not locked)';
-        }
+        const { priorityMode, priorityDeviceId, userOverrideId, defaultInputId, devices } = state;
         // Find the current default input device name.
         const currentDefaultDevice = devices.find((d) => d.id === defaultInputId);
         const currentDefaultName = currentDefaultDevice?.name || 'None';
+        // Get all input devices for the picker menu.
+        const inputDevices = devices.filter((d) => d.isInput);
+        // Find the priority device name.
+        const priorityDevice = devices.find((d) => d.id === priorityDeviceId);
+        const priorityDeviceName = priorityDevice?.name || 'None';
         const items = [
-            // Status line (disabled, just for display).
-            {
-                label: statusLabel,
-                enabled: false,
-            },
+            // Current mic status.
             {
                 label: `Current mic: ${currentDefaultName}`,
                 enabled: false,
             },
             { type: 'separator' },
+            // Priority device selection submenu.
+            {
+                label: 'Priority Device',
+                submenu: [
+                    // "None" option to clear selection.
+                    {
+                        label: 'None',
+                        type: 'radio',
+                        checked: priorityDeviceId === null,
+                        click: async () => {
+                            await this.audioManager.setPriorityDevice(null);
+                        },
+                    },
+                    { type: 'separator' },
+                    // List of all input devices.
+                    ...inputDevices.map((device) => ({
+                        label: device.name,
+                        type: 'radio',
+                        checked: device.id === priorityDeviceId,
+                        click: async () => {
+                            await this.audioManager.setPriorityDevice(device.id);
+                        },
+                    })),
+                ],
+            },
+            { type: 'separator' },
             // Priority lock toggle.
             {
-                label: 'Lock input to Little One',
+                label: 'Lock to Priority Device',
                 type: 'checkbox',
                 checked: priorityMode,
-                enabled: littleOnePresent,
+                enabled: !!priorityDeviceId,
                 click: async (menuItem) => {
                     await this.audioManager.setPriorityMode(menuItem.checked);
                 },
             },
         ];
         // If there's a user override, show an option to reset it.
-        if (userOverrideId && priorityMode) {
+        if (userOverrideId && priorityMode && priorityDeviceId) {
             items.push({
-                label: 'Reset to Little One',
+                label: `Reset to ${priorityDeviceName}`,
                 click: async () => {
                     await this.audioManager.clearUserOverride();
                 },
             });
         }
-        // Explanation text (disabled, just for information).
-        items.push({
-            label: littleOnePresent
-                ? 'When locked, Little One stays your mic'
-                : 'Connect Little One to enable locking',
-            enabled: false,
-        });
+        // Status/explanation text.
+        if (priorityDeviceId) {
+            items.push({
+                label: priorityMode
+                    ? `When locked, ${priorityDeviceName} stays your mic`
+                    : `Select "${priorityDeviceName}" to enable locking`,
+                enabled: false,
+            });
+        }
+        else {
+            items.push({
+                label: 'Select a device above to enable priority locking',
+                enabled: false,
+            });
+        }
         items.push({ type: 'separator' });
         // Open main app window.
         items.push({
