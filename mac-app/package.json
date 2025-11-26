@@ -10,8 +10,9 @@
     "build": "npm run build:electron && npm run build:vite",
     "build:vite": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json",
-    "build:native": "cd electron/native && swift build -c release && mkdir -p ../build && cp .build/release/LittleOneHelper ../build/",
-    "build:all": "npm run build:native && npm run build",
+    "build:native": "cd electron/native && swift build -c release && mkdir -p build && cp .build/release/LittleOneHelper build/ && codesign --force --deep --sign - build/LittleOneHelper",
+    "build:whisper": "scripts/build-whisper.sh",
+    "build:all": "npm run build:native && npm run build:whisper && npm run build",
     "start": "electron .",
     "package": "npm run build:all && electron-builder",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit"
@@ -50,6 +51,10 @@
         {
           "from": "electron/assets",
           "to": "assets"
+        },
+        {
+          "from": "../../build-whisper/bin/whisper-cli",
+          "to": "whisper-cli"
         }
       ]
     },
