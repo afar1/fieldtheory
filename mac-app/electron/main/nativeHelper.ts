@@ -199,6 +199,75 @@ export class NativeHelper extends EventEmitter {
   }
 
   /**
+   * Start recording audio from the default input device.
+   * Returns a promise that resolves when recording starts.
+   */
+  async startRecording(): Promise<void> {
+    await this.waitForReady();
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('startRecording timed out'));
+      }, 5000);
+
+      const handler = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'recordingStarted') {
+          clearTimeout(timeout);
+          this.removeListener('message', handler);
+          resolve();
+        } else if (msg.type === 'error') {
+          clearTimeout(timeout);
+          this.removeListener('message', handler);
+          reject(new Error((msg as any).message));
+        }
+      };
+
+      this.once('message', handler);
+      this.send({ type: 'startRecording' });
+    });
+  }
+
+  /**
+   * Stop recording and get the path to the recorded WAV file.
+   */
+  async stopRecording(): Promise<string> {
+    await this.waitForReady();
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        console.error('[NativeHelper] stopRecording timeout - no response received');
+        reject(new Error('stopRecording timed out'));
+      }, 10000); // Increased timeout to 10 seconds
+
+      const handler = (msg: HelperOutgoingMessage) => {
+        console.log('[NativeHelper] Received message in stopRecording handler:', msg.type);
+        if (msg.type === 'recordingStopped') {
+          clearTimeout(timeout);
+          this.removeListener('message', handler);
+          const filePath = (msg as any).filePath;
+          console.log('[NativeHelper] Recording stopped, file path:', filePath);
+          resolve(filePath);
+        } else if (msg.type === 'error') {
+          clearTimeout(timeout);
+          this.removeListener('message', handler);
+          reject(new Error((msg as any).message));
+        }
+        // Note: other message types are ignored (like log messages)
+      };
+
+      this.once('message', handler);
+      console.log('[NativeHelper] Sending stopRecording command');
+      this.send({ type: 'stopRecording' });
+    });
+  }
+
+  /**
+   * Cancel the current recording without saving.
+   */
+  async cancelRecording(): Promise<void> {
+    await this.waitForReady();
+    this.send({ type: 'cancelRecording' });
+  }
+
+  /**
    * Determine the path to the helper binary based on the environment.
    */
   private getHelperPath(): string {
@@ -226,6 +295,7 @@ export class NativeHelper extends EventEmitter {
 
       try {
         const msg = JSON.parse(line) as HelperOutgoingMessage;
+        console.log('[NativeHelper] Parsed message:', msg.type, msg);
         this.handleMessage(msg);
       } catch (err) {
         console.error('[NativeHelper] Failed to parse JSON:', line, err);
@@ -254,6 +324,19 @@ export class NativeHelper extends EventEmitter {
       case 'error':
         console.error('[NativeHelper error]', msg.message);
         this.emit('error', new Error(msg.message));
+        break;
+
+      case 'recordingStarted':
+      case 'recordingStopped':
+      case 'recordingCancelled':
+        // Emit as 'message' event for promise-based handlers
+        console.log(`[NativeHelper] Emitting message event: ${msg.type}`, msg);
+        this.emit('message', msg);
+        break;
+
+      case 'audioLevel':
+        // Emit audio level for live waveform display
+        this.emit('audioLevel', (msg as any).level);
         break;
 
       default:

@@ -42,6 +42,32 @@ interface AudioAPI {
 }
 
 /**
+ * Transcription status.
+ */
+type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
+
+/**
+ * Model download status.
+ */
+type ModelStatus = 'downloaded' | 'downloading' | 'missing';
+
+/**
+ * The transcription API exposed by the preload script.
+ */
+interface TranscribeAPI {
+  getStatus: () => Promise<TranscriptionStatus>;
+  getModelStatus: () => Promise<ModelStatus>;
+  downloadModel: () => Promise<void>;
+  getHotkey: () => Promise<string>;
+  setHotkey: (hotkey: string) => Promise<boolean>;
+  onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
+  onResult: (callback: (text: string) => void) => () => void;
+  onError: (callback: (error: string) => void) => () => void;
+  onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
+  onHotkeyChanged: (callback: (hotkey: string) => void) => () => void;
+}
+
+/**
  * Platform information exposed by the preload script.
  */
 interface PlatformInfo {
@@ -56,6 +82,7 @@ interface PlatformInfo {
 declare global {
   interface Window {
     audioAPI?: AudioAPI;
+    transcribeAPI?: TranscribeAPI;
     platform?: PlatformInfo;
   }
 }

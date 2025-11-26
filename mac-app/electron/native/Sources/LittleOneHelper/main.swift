@@ -6,6 +6,7 @@
 import Foundation
 import CoreAudio
 import AudioToolbox
+import AVFoundation
 
 // MARK: - Data Models
 
@@ -25,6 +26,9 @@ enum MessageType: String, Codable {
     case getDefaultInput
     case setDefaultInput
     case startMonitoring
+    case startRecording
+    case stopRecording
+    case cancelRecording
 }
 
 /// Message received from Electron.
@@ -38,22 +42,79 @@ struct IncomingMessage: Codable {
 struct DevicesChangedMessage: Codable {
     let type = "devicesChanged"
     let devices: [Device]
+    
+    enum CodingKeys: String, CodingKey {
+        case type
+        case devices
+    }
 }
 
 struct DefaultInputChangedMessage: Codable {
     let type = "defaultInputChanged"
     let deviceId: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case type
+        case deviceId
+    }
 }
 
 struct LogMessage: Codable {
     let type = "log"
     let level: String
     let message: String
+    
+    enum CodingKeys: String, CodingKey {
+        case type
+        case level
+        case message
+    }
 }
 
 struct ErrorMessage: Codable {
     let type = "error"
     let message: String
+    
+    enum CodingKeys: String, CodingKey {
+        case type
+        case message
+    }
+}
+
+struct RecordingStartedMessage: Codable {
+    let type = "recordingStarted"
+    
+    enum CodingKeys: String, CodingKey {
+        case type
+    }
+}
+
+struct RecordingStoppedMessage: Codable {
+    let type = "recordingStopped"
+    let filePath: String
+    
+    enum CodingKeys: String, CodingKey {
+        case type
+        case filePath
+    }
+}
+
+struct RecordingCancelledMessage: Codable {
+    let type = "recordingCancelled"
+    
+    enum CodingKeys: String, CodingKey {
+        case type
+    }
+}
+
+struct AudioLevelMessage: Codable {
+    let type = "audioLevel"
+    let level: Double  // 0.0 to 1.0
+    
+    enum CodingKeys: String, CodingKey {
+        case type
+        case level
+    }
 }
 
 // MARK: - CoreAudio Helper
@@ -456,6 +517,239 @@ final class CoreAudioHelper {
     }
 }
 
+// MARK: - Audio Recording Helper
+
+/// Manages audio recording using AVAudioEngine.
+/// Records from the default input device at 16kHz mono PCM (whisper.cpp format).
+final class RecordingHelper {
+    
+    static let shared = RecordingHelper()
+    
+    private var audioEngine: AVAudioEngine?
+    private var audioFile: AVAudioFile?
+    private var recordingURL: URL?
+    private var isRecording = false
+    
+    private init() {}
+    
+    /// Start recording from the default input device.
+    /// Records to a temporary WAV file at 16kHz mono PCM.
+    func startRecording() -> Bool {
+        guard !isRecording else {
+            sendLog(level: "error", message: "Recording already in progress")
+            return false
+        }
+        
+        // Create temporary file path
+        let tempDir = FileManager.default.temporaryDirectory
+        let fileName = "littleone-recording-\(UUID().uuidString).wav"
+        recordingURL = tempDir.appendingPathComponent(fileName)
+        
+        guard let url = recordingURL else {
+            sendLog(level: "error", message: "Failed to create recording URL")
+            return false
+        }
+        
+        // Set up audio engine
+        let engine = AVAudioEngine()
+        let inputNode = engine.inputNode
+        let inputFormat = inputNode.inputFormat(forBus: 0)
+        
+        sendLog(level: "info", message: "Input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount) channels")
+        
+        // Target format: 16kHz mono PCM (whisper.cpp requirement)
+        let targetFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16000,
+            channels: 1,
+            interleaved: false
+        )
+        
+        guard let format = targetFormat else {
+            sendLog(level: "error", message: "Failed to create target audio format")
+            return false
+        }
+        
+        // Create audio file first
+        let file: AVAudioFile
+        do {
+            file = try AVAudioFile(forWriting: url, settings: [
+                AVFormatIDKey: Int(kAudioFormatLinearPCM),
+                AVSampleRateKey: 16000,
+                AVNumberOfChannelsKey: 1,
+                AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true,
+                AVLinearPCMIsBigEndianKey: false
+            ])
+            audioFile = file
+        } catch {
+            sendLog(level: "error", message: "Failed to create audio file: \(error.localizedDescription)")
+            return false
+        }
+        
+        // Install tap on input node
+        let bufferSize: AVAudioFrameCount = 4096
+        inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, _ in
+            guard let self = self, self.isRecording, let audioFile = self.audioFile else { return }
+            
+            // Calculate audio level (RMS) for live waveform display
+            if let channelData = buffer.floatChannelData {
+                let channel = channelData[0]
+                let frameLength = Int(buffer.frameLength)
+                var sum: Float = 0
+                for i in 0..<frameLength {
+                    let sample = channel[i]
+                    sum += sample * sample
+                }
+                let rms = sqrt(sum / Float(frameLength))
+                // Normalize to 0-1 range (assuming max amplitude is 1.0)
+                let level = min(1.0, Double(rms))
+                
+                // Send audio level to Electron for live waveform
+                let levelMessage = AudioLevelMessage(level: level)
+                sendJSON(levelMessage)
+            }
+            
+            // Convert to target format if needed
+            if inputFormat.sampleRate != format.sampleRate || inputFormat.channelCount != format.channelCount {
+                guard let converter = AVAudioConverter(from: inputFormat, to: format) else {
+                    sendLog(level: "error", message: "Failed to create audio converter")
+                    return
+                }
+                
+                let capacity = AVAudioFrameCount(Double(buffer.frameLength) * format.sampleRate / inputFormat.sampleRate)
+                guard let convertedBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else {
+                    return
+                }
+                
+                var error: NSError?
+                let inputBlock: AVAudioConverterInputBlock = { _, outStatus in
+                    outStatus.pointee = .haveData
+                    return buffer
+                }
+                
+                converter.convert(to: convertedBuffer, error: &error, withInputFrom: inputBlock)
+                
+                if let error = error {
+                    sendLog(level: "error", message: "Audio conversion error: \(error.localizedDescription)")
+                    return
+                }
+                
+                // Write converted buffer to file
+                do {
+                    try audioFile.write(from: convertedBuffer)
+                } catch {
+                    sendLog(level: "error", message: "Failed to write audio buffer: \(error.localizedDescription)")
+                }
+            } else {
+                // No conversion needed, write directly
+                do {
+                    try audioFile.write(from: buffer)
+                } catch {
+                    sendLog(level: "error", message: "Failed to write audio buffer: \(error.localizedDescription)")
+                }
+            }
+        }
+        
+        audioEngine = engine
+        
+        // Start engine
+        do {
+            try engine.start()
+            isRecording = true
+            sendLog(level: "info", message: "Recording started: \(url.path)")
+            return true
+        } catch {
+            sendLog(level: "error", message: "Failed to start audio engine: \(error.localizedDescription)")
+            inputNode.removeTap(onBus: 0)
+            audioEngine = nil
+            audioFile = nil
+            recordingURL = nil
+            return false
+        }
+    }
+    
+    /// Stop recording and return the file path.
+    func stopRecording() -> String? {
+        guard isRecording else {
+            sendLog(level: "error", message: "No recording in progress (isRecording=false)")
+            return nil
+        }
+        
+        guard let engine = audioEngine else {
+            sendLog(level: "error", message: "No audio engine available")
+            isRecording = false
+            return nil
+        }
+        
+        guard let url = recordingURL else {
+            sendLog(level: "error", message: "No recording URL available")
+            isRecording = false
+            audioEngine = nil
+            return nil
+        }
+        
+        // Stop recording first
+        isRecording = false
+        
+        // Remove tap and stop engine
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        
+        // Flush and close audio file
+        // File is automatically flushed when deallocated
+        audioFile = nil
+        
+        // Get path before clearing URL
+        let path = url.path
+        
+        // Clean up
+        audioEngine = nil
+        recordingURL = nil
+        
+        // Verify file exists
+        if !FileManager.default.fileExists(atPath: path) {
+            sendLog(level: "error", message: "Recording file does not exist: \(path)")
+            return nil
+        }
+        
+        // Check file size
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+           let fileSize = attributes[.size] as? Int64 {
+            sendLog(level: "info", message: "Recording stopped: \(path) (\(fileSize) bytes)")
+        } else {
+            sendLog(level: "info", message: "Recording stopped: \(path)")
+        }
+        
+        return path
+    }
+    
+    /// Cancel recording without saving.
+    func cancelRecording() {
+        guard isRecording else {
+            return
+        }
+        
+        isRecording = false
+        
+        if let engine = audioEngine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
+        
+        // Delete the file if it exists
+        if let url = recordingURL {
+            try? FileManager.default.removeItem(at: url)
+        }
+        
+        audioEngine = nil
+        audioFile = nil
+        recordingURL = nil
+        
+        sendLog(level: "info", message: "Recording cancelled")
+    }
+}
+
 // MARK: - CoreAudio Callbacks
 
 /// Callback when the device list changes.
@@ -501,13 +795,13 @@ func sendJSON<T: Encodable>(_ value: T) {
 
 /// Send a log message to Electron.
 func sendLog(level: String, message: String) {
-    let logMessage = LogMessage(type: "log", level: level, message: message)
+    let logMessage = LogMessage(level: level, message: message)
     sendJSON(logMessage)
 }
 
 /// Send an error message to Electron.
 func sendError(_ message: String) {
-    let errorMessage = ErrorMessage(type: "error", message: message)
+    let errorMessage = ErrorMessage(message: message)
     sendJSON(errorMessage)
 }
 
@@ -537,6 +831,27 @@ final class MessageHandler {
             
         case .startMonitoring:
             CoreAudioHelper.shared.startMonitoring()
+            
+        case .startRecording:
+            if RecordingHelper.shared.startRecording() {
+                let response = RecordingStartedMessage()
+                sendJSON(response)
+            } else {
+                sendError("Failed to start recording")
+            }
+            
+        case .stopRecording:
+            if let filePath = RecordingHelper.shared.stopRecording() {
+                let response = RecordingStoppedMessage(filePath: filePath)
+                sendJSON(response)
+            } else {
+                sendError("Failed to stop recording")
+            }
+            
+        case .cancelRecording:
+            RecordingHelper.shared.cancelRecording()
+            let response = RecordingCancelledMessage()
+            sendJSON(response)
         }
     }
 }

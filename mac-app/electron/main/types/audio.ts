@@ -99,7 +99,11 @@ export type HelperOutgoingMessageType =
   | 'devicesChanged'
   | 'defaultInputChanged'
   | 'error'
-  | 'log';
+  | 'log'
+  | 'recordingStarted'
+  | 'recordingStopped'
+  | 'recordingCancelled'
+  | 'audioLevel';
 
 /**
  * Message types sent FROM Electron main TO the Swift helper.
@@ -108,7 +112,10 @@ export type HelperIncomingMessageType =
   | 'getDevices'
   | 'getDefaultInput'
   | 'setDefaultInput'
-  | 'startMonitoring';
+  | 'startMonitoring'
+  | 'startRecording'
+  | 'stopRecording'
+  | 'cancelRecording';
 
 /**
  * Base interface for all messages from the native helper.
@@ -151,13 +158,47 @@ export interface HelperLogMessage extends HelperMessage {
 }
 
 /**
+ * Recording started message from the helper.
+ */
+export interface RecordingStartedMessage extends HelperMessage {
+  type: 'recordingStarted';
+}
+
+/**
+ * Recording stopped message from the helper.
+ */
+export interface RecordingStoppedMessage extends HelperMessage {
+  type: 'recordingStopped';
+  filePath: string;
+}
+
+/**
+ * Recording cancelled message from the helper.
+ */
+export interface RecordingCancelledMessage extends HelperMessage {
+  type: 'recordingCancelled';
+}
+
+/**
+ * Audio level message from the helper (for live waveform display).
+ */
+export interface AudioLevelMessage extends HelperMessage {
+  type: 'audioLevel';
+  level: number; // 0.0 to 1.0
+}
+
+/**
  * Union type of all possible messages from the helper.
  */
 export type HelperOutgoingMessage =
   | DevicesChangedMessage
   | DefaultInputChangedMessage
   | HelperErrorMessage
-  | HelperLogMessage;
+  | HelperLogMessage
+  | RecordingStartedMessage
+  | RecordingStoppedMessage
+  | RecordingCancelledMessage
+  | AudioLevelMessage;
 
 /**
  * Commands sent to the helper.
@@ -179,6 +220,18 @@ export interface StartMonitoringCommand {
   type: 'startMonitoring';
 }
 
+export interface StartRecordingCommand {
+  type: 'startRecording';
+}
+
+export interface StopRecordingCommand {
+  type: 'stopRecording';
+}
+
+export interface CancelRecordingCommand {
+  type: 'cancelRecording';
+}
+
 /**
  * Union type of all possible commands to the helper.
  */
@@ -186,4 +239,7 @@ export type HelperIncomingCommand =
   | GetDevicesCommand
   | GetDefaultInputCommand
   | SetDefaultInputCommand
-  | StartMonitoringCommand;
+  | StartMonitoringCommand
+  | StartRecordingCommand
+  | StopRecordingCommand
+  | CancelRecordingCommand;

@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from './supabaseClient';
 import AudioSettingsPanel from './components/AudioSettingsPanel';
+import TranscriptionSettings from './components/TranscriptionSettings';
 
 const formatTime = (iso: string) => new Date(iso).toLocaleString();
 
 // Available tabs in the app.
-type TabId = 'data' | 'audio';
+type TabId = 'data' | 'audio' | 'transcription';
 
 type TodoRow = {
   id: string;
@@ -171,12 +172,28 @@ export default function App() {
         >
           Audio
         </button>
+        <button
+          style={{
+            ...styles.tabButton,
+            ...(activeTab === 'transcription' ? styles.tabButtonActive : {}),
+          }}
+          onClick={() => setActiveTab('transcription')}
+        >
+          Transcription
+        </button>
       </div>
 
       {/* Audio settings tab */}
       {activeTab === 'audio' && (
         <div style={styles.tabContent}>
           <AudioSettingsPanel />
+        </div>
+      )}
+
+      {/* Transcription settings tab */}
+      {activeTab === 'transcription' && (
+        <div style={styles.tabContent}>
+          <TranscriptionSettings />
         </div>
       )}
 
