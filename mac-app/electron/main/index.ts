@@ -29,11 +29,18 @@ function createWindow(): void {
   // In both dev and production, use the compiled .js file
   const preloadPath = path.join(__dirname, '../preload.js');
 
+  // Load saved window state from preferences
+  const savedState = preferencesManager?.get().windowState;
+  const defaultWidth = 1200;
+  const defaultHeight = 800;
+
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 900,
-    minHeight: 600,
+    width: savedState?.width || defaultWidth,
+    height: savedState?.height || defaultHeight,
+    x: savedState?.x,
+    y: savedState?.y,
+    minWidth: 600,  // Reduced from 900 - allows single column layout
+    minHeight: 400, // Reduced from 600 - more compact
     backgroundColor: '#f5f5f5',
     titleBarStyle: 'hiddenInset', // Modern macOS style with traffic lights in content.
     webPreferences: {
@@ -42,6 +49,30 @@ function createWindow(): void {
       preload: preloadPath,
     },
   });
+
+  // Save window state on resize/move (debounced)
+  let saveTimeout: NodeJS.Timeout | null = null;
+  const saveWindowState = () => {
+    if (saveTimeout) clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed() && preferencesManager) {
+        const bounds = mainWindow.getBounds();
+        preferencesManager.save({
+          windowState: {
+            width: bounds.width,
+            height: bounds.height,
+            x: bounds.x,
+            y: bounds.y,
+          },
+        }).catch((error) => {
+          console.error('[Main] Failed to save window state:', error);
+        });
+      }
+    }, 500); // Debounce saves to avoid excessive disk writes
+  };
+
+  mainWindow.on('resized', saveWindowState);
+  mainWindow.on('moved', saveWindowState);
 
   // Load the app - either from Vite dev server or built files.
   const startUrl = process.env.ELECTRON_START_URL;
@@ -126,18 +157,25 @@ function setupTranscribeIPCHandlers(): void {
       return 'missing';
     }
     const modelManager = transcriberManager.getModelManager();
-    const isAvailable = await modelManager.isModelAvailable();
+    const selectedModel = modelManager.getSelectedModel();
+    const isAvailable = await modelManager.isModelAvailableForSize(selectedModel);
     return isAvailable ? 'downloaded' : 'missing';
   });
 
-  ipcMain.handle(TranscribeIPCChannels.DOWNLOAD_MODEL, async () => {
+  ipcMain.handle(TranscribeIPCChannels.DOWNLOAD_MODEL, async (_event, modelSize?: string) => {
     if (!transcriberManager) {
       throw new Error('TranscriberManager not initialized');
     }
     const modelManager = transcriberManager.getModelManager();
     
     // Broadcast progress updates
-    await modelManager.downloadModel((downloaded, total) => {
+    const downloadFn = modelSize 
+      ? (onProgress?: (downloaded: number, total: number) => void) => 
+          modelManager.downloadModelForSize(modelSize as any, onProgress)
+      : (onProgress?: (downloaded: number, total: number) => void) => 
+          modelManager.downloadModel(onProgress);
+    
+    await downloadFn((downloaded, total) => {
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send(
@@ -148,6 +186,36 @@ function setupTranscribeIPCHandlers(): void {
         }
       });
     });
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AVAILABLE_MODELS, () => {
+    if (!transcriberManager) {
+      throw new Error('TranscriberManager not initialized');
+    }
+    const modelManager = transcriberManager.getModelManager();
+    return modelManager.getAvailableModels();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_MODEL_DOWNLOAD_STATUS, async () => {
+    if (!transcriberManager) {
+      throw new Error('TranscriberManager not initialized');
+    }
+    const modelManager = transcriberManager.getModelManager();
+    return modelManager.getDownloadStatus();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_SELECTED_MODEL, () => {
+    if (!transcriberManager) {
+      return 'base';
+    }
+    return transcriberManager.getSelectedModel();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_SELECTED_MODEL, async (_event, modelSize: string) => {
+    if (!transcriberManager) {
+      throw new Error('TranscriberManager not initialized');
+    }
+    await transcriberManager.setSelectedModel(modelSize);
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_HOTKEY, () => {

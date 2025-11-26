@@ -136,6 +136,11 @@ export default function App() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [darkMode, setDarkMode] = useState(() => {
+    // Load dark mode preference from localStorage
+    const saved = localStorage.getItem('darkMode');
+    return saved === 'true';
+  });
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -589,75 +594,62 @@ export default function App() {
           transition: background-color 0.2s;
         }
         .item-actions button:hover {
-          background-color: #f3f4f6 !important;
+          background-color: ${darkMode ? '#404040' : '#f3f4f6'} !important;
         }
         .delete-button:hover {
           background-color: #fee2e2 !important;
         }
+        input[type="checkbox"] {
+          accent-color: ${darkMode ? '#9ca3af' : '#3b82f6'};
+          width: 16px;
+          height: 16px;
+          cursor: pointer;
+        }
       `}</style>
-      <div style={styles.root}>
+      {/* Draggable region for window movement */}
+      <div style={styles.draggableRegion}></div>
+      <div 
+        style={{
+          ...styles.root,
+          backgroundColor: darkMode ? '#1a1a1a' : '#f5f5f5',
+          color: darkMode ? '#e5e5e5' : '#111',
+        }}
+        onClick={(e) => {
+          // Clear focus when clicking on empty space (but not on interactive elements or list items)
+          const target = e.target as HTMLElement;
+          // Only clear if not clicking on buttons, inputs, textareas, or list items
+          if (!target.closest('button') && !target.closest('input') && !target.closest('textarea') && !target.closest('li') && !target.closest('section')) {
+            setFocusedItemId(null);
+            setFocusedItemType(null);
+            setFocusedSection(null);
+          }
+        }}
+      >
       <div style={styles.dataTabContent}>
-      <div style={styles.card}>
-        <h1 style={{ marginTop: 0 }}>Little AI Companion</h1>
-        {session ? (
-          <p>Signed in as {session.user.email}</p>
-        ) : (
-          <p>Enter your email to request a 6-digit code.</p>
-        )}
-
-        <label style={styles.label}>
-          Email
-          <input
-            style={styles.input}
-            type="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-          />
-        </label>
-
-        {!session && (
-          <>
-            <button style={styles.primaryButton} onClick={handleSendOtp} disabled={isSending}>
-              {isSending ? 'Sending…' : 'Send Code'}
-            </button>
-
-            <label style={styles.label}>
-              Code
-              <input
-                style={styles.input}
-                type="text"
-                value={otp}
-                onChange={(event) => setOtp(event.target.value)}
-              />
-            </label>
-
-            <button style={styles.primaryButton} onClick={handleVerifyOtp} disabled={isVerifying}>
-              {isVerifying ? 'Verifying…' : 'Verify & Sign In'}
-            </button>
-          </>
-        )}
-
-        {session && (
-          <>
-            <button style={styles.primaryButton} onClick={fetchLists} disabled={isRefreshing}>
-              {isRefreshing ? 'Refreshing…' : 'Refresh'}
-            </button>
-            <button style={styles.secondaryButton} onClick={handleSignOut}>Sign Out</button>
-            <p>{summary}</p>
-          </>
-        )}
-
-        {message && <p style={styles.message}>{message}</p>}
-      </div>
 
       {session && (
         <div style={styles.listsContainer}>
           {/* Tasks Section */}
-          <section style={styles.listSection}>
+          <section style={{
+            ...styles.listSection,
+            backgroundColor: darkMode ? '#2d2d2d' : '#fff',
+            color: darkMode ? '#e5e5e5' : '#111',
+            borderColor: darkMode ? '#404040' : 'transparent',
+          }}>
             <div style={styles.sectionHeaderRow}>
-              <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 400 }}>Tasks</h2>
+              <h2 style={{
+                margin: 0,
+                fontSize: '15px',
+                fontWeight: 400,
+                color: darkMode ? '#e5e5e5' : '#111',
+              }}>Tasks</h2>
               <button
-                style={styles.sortButton}
+                style={{
+                  ...styles.sortButton,
+                  color: darkMode ? '#9ca3af' : '#6b7280',
+                  backgroundColor: darkMode ? '#2d2d2d' : '#f9fafb',
+                  borderColor: darkMode ? '#404040' : '#e5e7eb',
+                }}
                 onClick={() => setTodosSortOrder((prev) => (prev === 'newest' ? 'oldest' : 'newest'))}
               >
                 {todosSortOrder === 'newest' ? 'Newest first' : 'Oldest first'}
@@ -665,13 +657,23 @@ export default function App() {
             </div>
             {todosSections.length === 0 ? (
               <div style={styles.emptyState}>
-                <p style={styles.emptyTitle}>No tasks yet</p>
-                <p style={styles.emptySubtitle}>Pull down to record</p>
+                <p style={{
+                  ...styles.emptyTitle,
+                  color: darkMode ? '#e5e5e5' : '#111',
+                }}>No tasks yet</p>
+                <p style={{
+                  ...styles.emptySubtitle,
+                  color: darkMode ? '#9ca3af' : '#6b7280',
+                }}>Pull down to record</p>
               </div>
             ) : (
               todosSections.map((section) => (
                 <div key={section.key}>
-                  <h3 style={styles.sectionHeader}>{section.title}</h3>
+                  <h3 style={{
+                    ...styles.sectionHeader,
+                    color: darkMode ? '#9ca3af' : '#6b7280',
+                    borderBottomColor: darkMode ? '#404040' : '#e5e7eb',
+                  }}>{section.title}</h3>
                   <ul>
                     {section.data.map((todo) => (
                       <li
@@ -679,9 +681,17 @@ export default function App() {
                         className={`list-item-wrapper ${focusedItemId === todo.id && focusedItemType === 'todo' ? 'focused' : ''}`}
                         style={{
                           ...styles.listItem,
-                          ...(focusedItemId === todo.id && focusedItemType === 'todo' ? styles.focusedItem : {}),
+                          backgroundColor: darkMode ? '#1a1a1a' : 'transparent',
+                          borderColor: darkMode ? '#404040' : '#e5e7eb',
+                          color: darkMode ? '#e5e5e5' : '#111',
+                          ...(focusedItemId === todo.id && focusedItemType === 'todo' ? {
+                            ...styles.focusedItem,
+                            backgroundColor: darkMode ? '#2d2d2d' : '#f3f4f6',
+                            borderColor: darkMode ? '#555' : '#d1d5db',
+                          } : {}),
                         }}
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           setFocusedItemId(todo.id);
                           setFocusedItemType('todo');
                           setFocusedSection('todo');
@@ -691,7 +701,11 @@ export default function App() {
                           <input
                             type="checkbox"
                             checked={todo.completed}
-                            onChange={() => handleToggleComplete(todo.id)}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              handleToggleComplete(todo.id);
+                            }}
+                            onClick={(e) => e.stopPropagation()}
                             style={styles.checkbox}
                           />
                           <div style={styles.itemContent}>
@@ -700,6 +714,7 @@ export default function App() {
                                 style={{
                                   ...styles.itemText,
                                   ...(todo.completed ? styles.itemTextCompleted : {}),
+                                  color: darkMode ? (todo.completed ? '#9ca3af' : '#e5e5e5') : (todo.completed ? '#6b7280' : '#111'),
                                 }}
                               >
                                 {todo.text}
@@ -707,28 +722,39 @@ export default function App() {
                               <div className="item-actions" style={styles.itemActions}>
                                 <button
                                   style={styles.actionButton}
-                                  onClick={() => handleCopy(todo.text, todo.id)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleCopy(todo.text, todo.id);
+                                  }}
                                 >
                                   {copiedId === todo.id ? 'Copied' : 'Copy'}
                                 </button>
                                 <button
                                   style={styles.actionButton}
-                                  onClick={() => handleEdit(todo, 'todo')}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleEdit(todo, 'todo');
+                                  }}
                                 >
                                   Edit
                                 </button>
                                 <button
                                   className="delete-button"
                                   style={styles.deleteButton}
-                                  onClick={() => handleDelete(todo.id, 'todo')}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDelete(todo.id, 'todo');
+                                  }}
                                 >
                                   Delete
                                 </button>
                               </div>
                             </div>
-                            <div style={styles.metaRow}>
-                              <span>{todo.completed ? 'Done' : 'Open'}</span>
-                              <span>{formatTime(todo.client_created_at_ms)}</span>
+                            <div style={{
+                              ...styles.metaRow,
+                              color: darkMode ? '#9ca3af' : '#6b7280',
+                            }}>
+                              {formatTime(todo.client_created_at_ms)}
                             </div>
                           </div>
                         </div>
@@ -741,11 +767,26 @@ export default function App() {
           </section>
 
           {/* Observations Section */}
-          <section style={styles.listSection}>
+          <section style={{
+            ...styles.listSection,
+            backgroundColor: darkMode ? '#2d2d2d' : '#fff',
+            color: darkMode ? '#e5e5e5' : '#111',
+            borderColor: darkMode ? '#404040' : 'transparent',
+          }}>
             <div style={styles.sectionHeaderRow}>
-              <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 400 }}>Observations</h2>
+              <h2 style={{
+                margin: 0,
+                fontSize: '15px',
+                fontWeight: 400,
+                color: darkMode ? '#e5e5e5' : '#111',
+              }}>Observations</h2>
               <button
-                style={styles.sortButton}
+                style={{
+                  ...styles.sortButton,
+                  color: darkMode ? '#9ca3af' : '#6b7280',
+                  backgroundColor: darkMode ? '#2d2d2d' : '#f9fafb',
+                  borderColor: darkMode ? '#404040' : '#e5e7eb',
+                }}
                 onClick={() => setObservationsSortOrder((prev) => (prev === 'newest' ? 'oldest' : 'newest'))}
               >
                 {observationsSortOrder === 'newest' ? 'Newest first' : 'Oldest first'}
@@ -753,13 +794,23 @@ export default function App() {
             </div>
             {observationsSections.length === 0 ? (
               <div style={styles.emptyState}>
-                <p style={styles.emptyTitle}>No observations yet</p>
-                <p style={styles.emptySubtitle}>Pull down to record</p>
+                <p style={{
+                  ...styles.emptyTitle,
+                  color: darkMode ? '#e5e5e5' : '#111',
+                }}>No observations yet</p>
+                <p style={{
+                  ...styles.emptySubtitle,
+                  color: darkMode ? '#9ca3af' : '#6b7280',
+                }}>Pull down to record</p>
               </div>
             ) : (
               observationsSections.map((section) => (
                 <div key={section.key}>
-                  <h3 style={styles.sectionHeader}>{section.title}</h3>
+                  <h3 style={{
+                    ...styles.sectionHeader,
+                    color: darkMode ? '#9ca3af' : '#6b7280',
+                    borderBottomColor: darkMode ? '#404040' : '#e5e7eb',
+                  }}>{section.title}</h3>
                   <ul>
                     {section.data.map((observation) => (
                       <li
@@ -767,9 +818,17 @@ export default function App() {
                         className={`list-item-wrapper ${focusedItemId === observation.id && focusedItemType === 'observation' ? 'focused' : ''}`}
                         style={{
                           ...styles.listItem,
-                          ...(focusedItemId === observation.id && focusedItemType === 'observation' ? styles.focusedItem : {}),
+                          backgroundColor: darkMode ? '#1a1a1a' : 'transparent',
+                          borderColor: darkMode ? '#404040' : '#e5e7eb',
+                          color: darkMode ? '#e5e5e5' : '#111',
+                          ...(focusedItemId === observation.id && focusedItemType === 'observation' ? {
+                            ...styles.focusedItem,
+                            backgroundColor: darkMode ? '#2d2d2d' : '#f3f4f6',
+                            borderColor: darkMode ? '#555' : '#d1d5db',
+                          } : {}),
                         }}
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           setFocusedItemId(observation.id);
                           setFocusedItemType('observation');
                           setFocusedSection('observation');
@@ -777,30 +836,45 @@ export default function App() {
                       >
                         <div style={styles.itemContent}>
                           <div style={styles.itemHeader}>
-                            <strong style={styles.itemText}>{observation.text}</strong>
+                            <strong style={{
+                              ...styles.itemText,
+                              color: darkMode ? '#e5e5e5' : '#111',
+                            }}>{observation.text}</strong>
                             <div className="item-actions" style={styles.itemActions}>
                               <button
                                 style={styles.actionButton}
-                                onClick={() => handleCopy(observation.text, observation.id)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleCopy(observation.text, observation.id);
+                                }}
                               >
                                 {copiedId === observation.id ? 'Copied' : 'Copy'}
                               </button>
                               <button
                                 style={styles.actionButton}
-                                onClick={() => handleEdit(observation, 'observation')}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEdit(observation, 'observation');
+                                }}
                               >
                                 Edit
                               </button>
                               <button
                                 className="delete-button"
                                 style={styles.deleteButton}
-                                onClick={() => handleDelete(observation.id, 'observation')}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDelete(observation.id, 'observation');
+                                }}
                               >
                                 Delete
                               </button>
                             </div>
                           </div>
-                          <div style={styles.metaRow}>{formatTime(observation.client_created_at_ms)}</div>
+                          <div style={{
+                            ...styles.metaRow,
+                            color: darkMode ? '#9ca3af' : '#6b7280',
+                          }}>{formatTime(observation.client_created_at_ms)}</div>
                         </div>
                       </li>
                     ))}
@@ -811,11 +885,26 @@ export default function App() {
           </section>
 
           {/* Transcripts Section */}
-          <section style={styles.listSection}>
+          <section style={{
+            ...styles.listSection,
+            backgroundColor: darkMode ? '#2d2d2d' : '#fff',
+            color: darkMode ? '#e5e5e5' : '#111',
+            borderColor: darkMode ? '#404040' : 'transparent',
+          }}>
             <div style={styles.sectionHeaderRow}>
-              <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 400 }}>Transcripts</h2>
+              <h2 style={{
+                margin: 0,
+                fontSize: '15px',
+                fontWeight: 400,
+                color: darkMode ? '#e5e5e5' : '#111',
+              }}>Transcripts</h2>
               <button
-                style={styles.sortButton}
+                style={{
+                  ...styles.sortButton,
+                  color: darkMode ? '#9ca3af' : '#6b7280',
+                  backgroundColor: darkMode ? '#2d2d2d' : '#f9fafb',
+                  borderColor: darkMode ? '#404040' : '#e5e7eb',
+                }}
                 onClick={() => setTranscriptsSortOrder((prev) => (prev === 'newest' ? 'oldest' : 'newest'))}
               >
                 {transcriptsSortOrder === 'newest' ? 'Newest first' : 'Oldest first'}
@@ -823,13 +912,23 @@ export default function App() {
             </div>
             {transcriptsSections.length === 0 ? (
               <div style={styles.emptyState}>
-                <p style={styles.emptyTitle}>No transcripts yet</p>
-                <p style={styles.emptySubtitle}>Tap "Record" to capture the first note</p>
+                <p style={{
+                  ...styles.emptyTitle,
+                  color: darkMode ? '#e5e5e5' : '#111',
+                }}>No transcripts yet</p>
+                <p style={{
+                  ...styles.emptySubtitle,
+                  color: darkMode ? '#9ca3af' : '#6b7280',
+                }}>Tap "Record" to capture the first note</p>
               </div>
             ) : (
               transcriptsSections.map((section) => (
                 <div key={section.key}>
-                  <h3 style={styles.sectionHeader}>{section.title}</h3>
+                  <h3 style={{
+                    ...styles.sectionHeader,
+                    color: darkMode ? '#9ca3af' : '#6b7280',
+                    borderBottomColor: darkMode ? '#404040' : '#e5e7eb',
+                  }}>{section.title}</h3>
                   <ul>
                     {section.data.map((transcript) => {
                       const isExpanded = Boolean(expandedMap[transcript.id]);
@@ -840,9 +939,17 @@ export default function App() {
                           className={`list-item-wrapper ${focusedItemId === transcript.id && focusedItemType === 'transcript' ? 'focused' : ''}`}
                           style={{
                             ...styles.listItem,
-                            ...(focusedItemId === transcript.id && focusedItemType === 'transcript' ? styles.focusedItem : {}),
+                            backgroundColor: darkMode ? '#1a1a1a' : 'transparent',
+                            borderColor: darkMode ? '#404040' : '#e5e7eb',
+                            color: darkMode ? '#e5e5e5' : '#111',
+                            ...(focusedItemId === transcript.id && focusedItemType === 'transcript' ? {
+                              ...styles.focusedItem,
+                              backgroundColor: darkMode ? '#2d2d2d' : '#f3f4f6',
+                              borderColor: darkMode ? '#555' : '#d1d5db',
+                            } : {}),
                           }}
-                          onClick={() => {
+                          onClick={(e) => {
+                            e.stopPropagation();
                             setFocusedItemId(transcript.id);
                             setFocusedItemType('transcript');
                             setFocusedSection('transcript');
@@ -852,11 +959,13 @@ export default function App() {
                             <div style={styles.itemHeader}>
                               <p
                                 style={{
+                                  ...styles.itemText,
                                   margin: '0 0 4px',
                                   display: '-webkit-box',
                                   WebkitLineClamp: isExpanded ? undefined : MAX_PREVIEW_LINES,
                                   WebkitBoxOrient: 'vertical',
                                   overflow: 'hidden',
+                                  color: darkMode ? '#e5e5e5' : '#111',
                                 }}
                               >
                                 {transcript.text}
@@ -864,14 +973,29 @@ export default function App() {
                               <div className="item-actions" style={styles.itemActions}>
                                 <button
                                   style={styles.actionButton}
-                                  onClick={() => handleCopy(transcript.text, transcript.id)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleCopy(transcript.text, transcript.id);
+                                  }}
                                 >
                                   {copiedId === transcript.id ? 'Copied' : 'Copy'}
                                 </button>
                                 <button
+                                  style={styles.actionButton}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleEdit(transcript, 'transcript');
+                                  }}
+                                >
+                                  Edit
+                                </button>
+                                <button
                                   className="delete-button"
                                   style={styles.deleteButton}
-                                  onClick={() => handleDelete(transcript.id, 'transcript')}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDelete(transcript.id, 'transcript');
+                                  }}
                                 >
                                   Delete
                                 </button>
@@ -880,12 +1004,18 @@ export default function App() {
                             {shouldShowExpand && (
                               <button
                                 style={styles.expandButton}
-                                onClick={() => handleToggleExpand(transcript.id)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleExpand(transcript.id);
+                                }}
                               >
                                 {isExpanded ? 'Show less' : 'Expand'}
                               </button>
                             )}
-                            <div style={styles.metaRow}>{formatTime(transcript.client_created_at_ms)}</div>
+                            <div style={{
+                              ...styles.metaRow,
+                              color: darkMode ? '#9ca3af' : '#6b7280',
+                            }}>{formatTime(transcript.client_created_at_ms)}</div>
                           </div>
                         </li>
                       );
@@ -901,7 +1031,11 @@ export default function App() {
       {/* Edit Modal */}
       {editingId && editingType && (
         <div style={styles.modalOverlay}>
-          <div style={styles.modalContent}>
+          <div style={{
+            ...styles.modalContent,
+            backgroundColor: darkMode ? '#2d2d2d' : '#fff',
+            color: darkMode ? '#e5e5e5' : '#111',
+          }}>
             <h3 style={styles.modalTitle}>Edit {editingType === 'todo' ? 'Task' : 'Observation'}</h3>
             <textarea
               style={styles.modalInput}
@@ -924,10 +1058,36 @@ export default function App() {
       {/* Shortcuts and Settings Buttons */}
       {session && (
         <div style={styles.bottomButtons}>
-          <button style={styles.shortcutsButton} onClick={() => setShowShortcuts(true)}>
+          <button style={{
+            ...styles.shortcutsButton,
+            backgroundColor: darkMode ? '#2d2d2d' : '#fff',
+            color: darkMode ? '#e5e5e5' : '#6b7280',
+            borderColor: darkMode ? '#404040' : '#e5e7eb',
+          }} onClick={() => setShowShortcuts(true)}>
             Keyboard Shortcuts (?)
           </button>
-          <button style={styles.settingsButton} onClick={() => setShowSettings(true)}>
+          <button
+            style={{
+              ...styles.settingsButton,
+              backgroundColor: darkMode ? '#374151' : '#fff',
+              color: darkMode ? '#fff' : '#6b7280',
+              borderColor: darkMode ? '#374151' : '#e5e7eb',
+            }}
+            onClick={() => {
+              const newDarkMode = !darkMode;
+              setDarkMode(newDarkMode);
+              localStorage.setItem('darkMode', String(newDarkMode));
+            }}
+            title={darkMode ? 'Light mode' : 'Dark mode'}
+          >
+            {darkMode ? '☀️' : '🌙'}
+          </button>
+          <button style={{
+            ...styles.settingsButton,
+            backgroundColor: darkMode ? '#2d2d2d' : '#fff',
+            color: darkMode ? '#e5e5e5' : '#6b7280',
+            borderColor: darkMode ? '#404040' : '#e5e7eb',
+          }} onClick={() => setShowSettings(true)}>
             ⚙️
           </button>
         </div>
@@ -936,7 +1096,11 @@ export default function App() {
       {/* Shortcuts Modal */}
       {showShortcuts && (
         <div style={styles.shortcutsModal} onClick={() => setShowShortcuts(false)}>
-          <div style={styles.shortcutsContent} onClick={(e) => e.stopPropagation()}>
+          <div style={{
+            ...styles.shortcutsContent,
+            backgroundColor: darkMode ? '#2d2d2d' : '#fff',
+            color: darkMode ? '#e5e5e5' : '#111',
+          }} onClick={(e) => e.stopPropagation()}>
             <h2 style={styles.shortcutsTitle}>Keyboard Shortcuts</h2>
 
             <div style={styles.shortcutsSection}>
@@ -1003,7 +1167,11 @@ export default function App() {
       {/* Settings Modal */}
       {showSettings && (
         <div style={styles.shortcutsModal} onClick={() => setShowSettings(false)}>
-          <div style={styles.settingsContent} onClick={(e) => e.stopPropagation()}>
+          <div style={{
+            ...styles.settingsContent,
+            backgroundColor: darkMode ? '#2d2d2d' : '#fff',
+            color: darkMode ? '#e5e5e5' : '#111',
+          }} onClick={(e) => e.stopPropagation()}>
             <h2 style={styles.shortcutsTitle}>Settings</h2>
 
             <div style={styles.settingsSection}>
@@ -1016,12 +1184,86 @@ export default function App() {
               <TranscriptionSettings />
             </div>
 
+            <div style={styles.settingsSection}>
+              <h3 style={styles.shortcutsSectionTitle}>Account</h3>
+              {session ? (
+                <>
+                  <p style={styles.accountText}>Signed in as {session.user.email}</p>
+                  <div style={styles.accountActions}>
+                    <button 
+                      style={styles.primaryButton} 
+                      onClick={fetchLists} 
+                      disabled={isRefreshing}
+                    >
+                      {isRefreshing ? 'Refreshing…' : 'Refresh Lists'}
+                    </button>
+                    <button 
+                      style={styles.secondaryButton} 
+                      onClick={handleSignOut}
+                    >
+                      Sign Out
+                    </button>
+                  </div>
+                  {message && <p style={styles.message}>{message}</p>}
+                </>
+              ) : (
+                <>
+                  <p style={styles.accountText}>Not signed in</p>
+                  <label style={styles.label}>
+                    Email
+                    <input
+                      style={styles.input}
+                      type="email"
+                      value={email}
+                      onChange={(event) => setEmail(event.target.value)}
+                    />
+                  </label>
+                  <button 
+                    style={styles.primaryButton} 
+                    onClick={handleSendOtp} 
+                    disabled={isSending}
+                  >
+                    {isSending ? 'Sending…' : 'Send Code'}
+                  </button>
+                  <label style={styles.label}>
+                    Code
+                    <input
+                      style={styles.input}
+                      type="text"
+                      value={otp}
+                      onChange={(event) => setOtp(event.target.value)}
+                    />
+                  </label>
+                  <button 
+                    style={styles.primaryButton} 
+                    onClick={handleVerifyOtp} 
+                    disabled={isVerifying}
+                  >
+                    {isVerifying ? 'Verifying…' : 'Verify & Sign In'}
+                  </button>
+                  {message && <p style={styles.message}>{message}</p>}
+                </>
+              )}
+            </div>
+
             <div style={{ marginTop: '20px', textAlign: 'right' }}>
               <button style={styles.secondaryButton} onClick={() => setShowSettings(false)}>
                 Close
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Logged in indicator - bottom right */}
+      {session && (
+        <div style={{
+          ...styles.loggedInIndicator,
+          backgroundColor: darkMode ? '#2d2d2d' : '#fff',
+          color: darkMode ? '#e5e5e5' : '#6b7280',
+          borderColor: darkMode ? '#404040' : '#e5e7eb',
+        }}>
+          Logged in
         </div>
       )}
       </div>
@@ -1031,14 +1273,28 @@ export default function App() {
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  draggableRegion: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: '44px', // Standard macOS title bar height
+    WebkitAppRegion: 'drag',
+    zIndex: 1000,
+    pointerEvents: 'auto',
+  },
   root: {
     minHeight: '100vh',
     padding: '20px',
+    paddingTop: '64px', // Add padding to account for draggable region
     display: 'flex',
     flexDirection: 'column',
     gap: '16px',
     alignItems: 'flex-start',
     backgroundColor: '#f5f5f5',
+    width: '100%',
+    boxSizing: 'border-box',
+    overflowX: 'hidden', // Prevent horizontal scroll
   },
   tabBar: {
     display: 'flex',
@@ -1071,6 +1327,8 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '16px',
     alignItems: 'flex-start',
     width: '100%',
+    boxSizing: 'border-box',
+    minWidth: 0, // Allow flex children to shrink below content size
   },
   card: {
     width: '280px',
@@ -1125,16 +1383,20 @@ const styles: Record<string, React.CSSProperties> = {
   listsContainer: {
     flex: 1,
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))',
     gap: '12px',
+    width: '100%',
   },
   listSection: {
     backgroundColor: '#fff',
     borderRadius: '10px',
     padding: '12px',
     boxShadow: '0 4px 12px rgba(15, 23, 42, 0.06)',
-    maxHeight: '80vh',
+    maxHeight: 'calc(100vh - 200px)', // More responsive than fixed 80vh
+    minHeight: '200px', // Ensure minimum usable height
     overflow: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
   },
   listItem: {
     padding: '8px',
@@ -1145,7 +1407,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   metaRow: {
     display: 'flex',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end', // Right-align time (bottom right)
     fontSize: '11px',
     color: '#6b7280',
     marginTop: '4px',
@@ -1212,14 +1474,18 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'flex-start',
     gap: '6px',
     marginBottom: '2px',
+    flexWrap: 'wrap', // Allow buttons to wrap on narrow screens
   },
   itemText: {
-    flex: 1,
+    flex: '1 1 auto', // Allow text to grow and shrink, but maintain auto basis
     fontSize: '14px',
     fontWeight: 400,
     color: '#111',
     lineHeight: '20px',
     minWidth: 0,
+    maxWidth: '100%', // Prevent text from exceeding container width
+    wordWrap: 'break-word',
+    overflowWrap: 'break-word',
   },
   itemTextCompleted: {
     textDecoration: 'line-through',
@@ -1229,6 +1495,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     gap: '2px',
     flexShrink: 0,
+    flexWrap: 'wrap', // Allow buttons to wrap if needed
+    marginLeft: 'auto', // Push buttons to the right when wrapping
   },
   actionButton: {
     padding: '2px 6px',
@@ -1313,7 +1581,8 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '20px',
     width: '90%',
     maxWidth: '600px',
-    maxHeight: '80vh',
+    minWidth: 'min(320px, 90vw)', // Ensure minimum width on small screens
+    maxHeight: 'min(80vh, 600px)', // Better height constraint
     overflow: 'auto',
     boxShadow: '0 10px 25px rgba(15, 23, 42, 0.15)',
   },
@@ -1323,7 +1592,8 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '20px',
     width: '90%',
     maxWidth: '800px',
-    maxHeight: '80vh',
+    minWidth: 'min(320px, 90vw)', // Ensure minimum width on small screens
+    maxHeight: 'min(80vh, 700px)', // Better height constraint
     overflow: 'auto',
     boxShadow: '0 10px 25px rgba(15, 23, 42, 0.15)',
   },
@@ -1365,6 +1635,30 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: 'monospace',
     minWidth: '24px',
     textAlign: 'center',
+  },
+  loggedInIndicator: {
+    position: 'fixed',
+    bottom: '16px',
+    right: '16px',
+    padding: '6px 12px',
+    fontSize: '12px',
+    fontWeight: 400,
+    color: '#6b7280',
+    backgroundColor: '#fff',
+    border: '1px solid #e5e7eb',
+    borderRadius: '6px',
+    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
+    zIndex: 100,
+  },
+  accountText: {
+    fontSize: '14px',
+    color: '#374151',
+    marginBottom: '12px',
+  },
+  accountActions: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
   },
   modalOverlay: {
     position: 'fixed',
