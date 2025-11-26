@@ -2,15 +2,30 @@ import { app } from 'electron';
 import fs from 'fs/promises';
 import path from 'path';
 
+import { ModelSize } from './modelManager';
+
+/**
+ * Window state for persistence.
+ */
+interface WindowState {
+  width: number;
+  height: number;
+  x?: number;
+  y?: number;
+}
+
 /**
  * Application preferences stored in userData directory.
  */
 interface Preferences {
   transcriptionHotkey: string;
+  selectedModel: ModelSize;
+  windowState?: WindowState;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
   transcriptionHotkey: 'Alt+Space',
+  selectedModel: 'base',
 };
 
 /**
