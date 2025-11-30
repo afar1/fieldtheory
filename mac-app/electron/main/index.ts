@@ -232,6 +232,20 @@ function setupTranscribeIPCHandlers(): void {
     const success = await transcriberManager.setHotkey(hotkey);
     return success;
   });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_OVERLAY_STYLE, () => {
+    if (!transcriberManager) {
+      return 'rectangle';
+    }
+    return transcriberManager.getOverlayStyle();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_OVERLAY_STYLE, async (_event, style: string) => {
+    if (!transcriberManager) {
+      throw new Error('TranscriberManager not initialized');
+    }
+    await transcriberManager.setOverlayStyle(style as 'rectangle' | 'top-emerging');
+  });
 }
 
 /**

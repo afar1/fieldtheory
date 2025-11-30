@@ -114,3 +114,10 @@ web-build/
 *.keystore
 **/__generated__/
 npm-debug.*
+
+# Cursor plans and testing docs
+.cursor/plans/*.plan.md
+**/TESTING.md
+
+# Electron build outputs
+mac-app/electron-dist/
