@@ -5,39 +5,151 @@ import path from 'path';
 import https from 'https';
 
 /**
+ * Available Whisper model sizes.
+ * Larger models provide better accuracy but require more disk space and processing time.
+ */
+export type ModelSize = 'base' | 'small' | 'medium' | 'large';
+
+/**
+ * Model metadata including name, URL, and expected size.
+ */
+interface ModelInfo {
+  name: string;
+  url: string;
+  sizeBytes: number;
+  description: string;
+}
+
+/**
+ * Available models configuration.
+ */
+const MODELS: Record<ModelSize, ModelInfo> = {
+  base: {
+    name: 'ggml-base.en.bin',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin',
+    sizeBytes: 142 * 1024 * 1024, // ~142MB
+    description: 'Base (142MB) - Fast, good accuracy',
+  },
+  small: {
+    name: 'ggml-small.en.bin',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin',
+    sizeBytes: 466 * 1024 * 1024, // ~466MB
+    description: 'Small (466MB) - Better accuracy',
+  },
+  medium: {
+    name: 'ggml-medium.en.bin',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin',
+    sizeBytes: 1420 * 1024 * 1024, // ~1.4GB
+    description: 'Medium (1.4GB) - High accuracy',
+  },
+  large: {
+    name: 'ggml-large-v3.bin',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin',
+    sizeBytes: 2900 * 1024 * 1024, // ~2.9GB
+    description: 'Large (2.9GB) - Best accuracy (multilingual)',
+  },
+};
+
+/**
  * Manages Whisper model downloads and storage.
  * Models are stored in ~/Library/Application Support/Little One/models/
  */
 export class ModelManager {
   private modelsDir: string;
-  private readonly MODEL_NAME = 'ggml-base.en.bin';
-  private readonly MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin';
-  private readonly EXPECTED_SIZE = 142 * 1024 * 1024; // ~142MB
+  private selectedModel: ModelSize = 'base';
 
-  constructor() {
+  constructor(selectedModel?: ModelSize) {
     const appDataPath = app.getPath('userData');
     this.modelsDir = path.join(appDataPath, 'models');
+    if (selectedModel) {
+      this.selectedModel = selectedModel;
+    }
   }
 
   /**
-   * Get the path to the model file.
+   * Get the currently selected model size.
+   */
+  getSelectedModel(): ModelSize {
+    return this.selectedModel;
+  }
+
+  /**
+   * Set the selected model size.
+   */
+  setSelectedModel(size: ModelSize): void {
+    this.selectedModel = size;
+  }
+
+  /**
+   * Get information about all available models.
+   */
+  getAvailableModels(): Record<ModelSize, ModelInfo> {
+    return MODELS;
+  }
+
+  /**
+   * Get download status for all models.
+   * Returns a record mapping model sizes to whether they are downloaded.
+   */
+  async getDownloadStatus(): Promise<Record<ModelSize, boolean>> {
+    const status: Record<ModelSize, boolean> = {} as Record<ModelSize, boolean>;
+    const modelSizes: ModelSize[] = ['base', 'small', 'medium', 'large'];
+    
+    await Promise.all(
+      modelSizes.map(async (size) => {
+        status[size] = await this.isModelAvailableForSize(size);
+      })
+    );
+    
+    return status;
+  }
+
+  /**
+   * Get information about a specific model size.
+   */
+  getModelInfo(size: ModelSize): ModelInfo {
+    return MODELS[size];
+  }
+
+  /**
+   * Get the path to the currently selected model file.
    */
   getModelPath(): string {
-    return path.join(this.modelsDir, this.MODEL_NAME);
+    const modelInfo = MODELS[this.selectedModel];
+    return path.join(this.modelsDir, modelInfo.name);
   }
 
   /**
-   * Check if the model is downloaded and valid.
+   * Get the path to a specific model file.
+   */
+  getModelPathForSize(size: ModelSize): string {
+    const modelInfo = MODELS[size];
+    return path.join(this.modelsDir, modelInfo.name);
+  }
+
+  /**
+   * Check if the currently selected model is downloaded and valid.
    */
   async isModelAvailable(): Promise<boolean> {
+    return this.isModelAvailableForSize(this.selectedModel);
+  }
+
+  /**
+   * Check if a specific model size is downloaded and valid.
+   */
+  async isModelAvailableForSize(size: ModelSize): Promise<boolean> {
     try {
-      const modelPath = this.getModelPath();
+      const modelPath = this.getModelPathForSize(size);
       const stats = await fs.stat(modelPath);
+      const modelInfo = MODELS[size];
       
-      // Basic size check - should be approximately 142MB
-      const sizeMB = stats.size / (1024 * 1024);
-      if (sizeMB < 100 || sizeMB > 200) {
-        console.warn(`[ModelManager] Model size suspicious: ${sizeMB.toFixed(2)}MB`);
+      // Check if file size is within reasonable range (80% to 120% of expected)
+      const expectedSize = modelInfo.sizeBytes;
+      const minSize = expectedSize * 0.8;
+      const maxSize = expectedSize * 1.2;
+      
+      if (stats.size < minSize || stats.size > maxSize) {
+        console.warn(`[ModelManager] Model ${size} size suspicious: ${(stats.size / 1024 / 1024).toFixed(2)}MB (expected ~${(expectedSize / 1024 / 1024).toFixed(0)}MB)`);
         return false;
       }
       
@@ -48,34 +160,47 @@ export class ModelManager {
   }
 
   /**
-   * Download the model with progress tracking.
+   * Download the currently selected model with progress tracking.
    * Returns a promise that resolves when download completes.
    * Handles redirects automatically.
    */
   async downloadModel(
     onProgress?: (bytesDownloaded: number, totalBytes: number) => void
   ): Promise<void> {
-    const modelPath = this.getModelPath();
+    return this.downloadModelForSize(this.selectedModel, onProgress);
+  }
+
+  /**
+   * Download a specific model size with progress tracking.
+   * Returns a promise that resolves when download completes.
+   * Handles redirects automatically.
+   */
+  async downloadModelForSize(
+    size: ModelSize,
+    onProgress?: (bytesDownloaded: number, totalBytes: number) => void
+  ): Promise<void> {
+    const modelInfo = MODELS[size];
+    const modelPath = this.getModelPathForSize(size);
     
     // Ensure models directory exists
     await fs.mkdir(this.modelsDir, { recursive: true });
     
     // Check if already downloaded
-    if (await this.isModelAvailable()) {
-      console.log('[ModelManager] Model already downloaded');
+    if (await this.isModelAvailableForSize(size)) {
+      console.log(`[ModelManager] Model ${size} already downloaded`);
       return;
     }
 
-    console.log('[ModelManager] Starting model download...');
+    console.log(`[ModelManager] Starting download of ${size} model...`);
     
     // Download with redirect handling
-    await this.downloadWithRedirects(this.MODEL_URL, modelPath, onProgress);
+    await this.downloadWithRedirects(modelInfo.url, modelPath, onProgress);
     
     // Verify download
-    if (await this.isModelAvailable()) {
-      console.log('[ModelManager] Model downloaded successfully');
+    if (await this.isModelAvailableForSize(size)) {
+      console.log(`[ModelManager] Model ${size} downloaded successfully`);
     } else {
-      throw new Error('Downloaded file validation failed');
+      throw new Error(`Downloaded file validation failed for ${size} model`);
     }
   }
 
@@ -146,15 +271,23 @@ export class ModelManager {
   }
 
   /**
-   * Get download progress information.
+   * Get download progress information for the currently selected model.
    */
   async getDownloadProgress(): Promise<{ downloaded: number; total: number } | null> {
+    return this.getDownloadProgressForSize(this.selectedModel);
+  }
+
+  /**
+   * Get download progress information for a specific model size.
+   */
+  async getDownloadProgressForSize(size: ModelSize): Promise<{ downloaded: number; total: number } | null> {
     try {
-      const modelPath = this.getModelPath();
+      const modelPath = this.getModelPathForSize(size);
       const stats = await fs.stat(modelPath);
+      const modelInfo = MODELS[size];
       return {
         downloaded: stats.size,
-        total: this.EXPECTED_SIZE,
+        total: modelInfo.sizeBytes,
       };
     } catch {
       return null;

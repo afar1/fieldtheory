@@ -11,6 +11,9 @@ contextBridge.exposeInMainWorld('overlayAPI', {
   onAudioLevel: (callback: (level: number) => void) => {
     ipcRenderer.on('audio-level', (_event, level) => callback(level));
   },
+  onStyleChange: (callback: (style: 'rectangle' | 'top-emerging') => void) => {
+    ipcRenderer.on('overlay-style', (_event, style) => callback(style));
+  },
   removeAllListeners: (channel: string) => {
     ipcRenderer.removeAllListeners(channel);
   },

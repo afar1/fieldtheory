@@ -42,8 +42,9 @@ export class TranscriberManager extends EventEmitter {
   constructor(nativeHelper: NativeHelper, preferences: PreferencesManager) {
     super();
     this.nativeHelper = nativeHelper;
-    this.modelManager = new ModelManager();
     this.preferences = preferences;
+    // ModelManager will be initialized with selected model in init()
+    this.modelManager = new ModelManager();
     this.overlay = new RecordingOverlay();
     
     // Listen for audio levels from native helper
@@ -64,6 +65,16 @@ export class TranscriberManager extends EventEmitter {
     // Load preferences
     await this.preferences.load();
     this.hotkey = this.preferences.getPreference('transcriptionHotkey');
+    
+    // Set the selected model from preferences
+    const selectedModel = this.preferences.getPreference('selectedModel');
+    this.modelManager.setSelectedModel(selectedModel);
+    console.log(`[TranscriberManager] Using model: ${selectedModel}`);
+
+    // Set overlay style from preferences
+    const overlayStyle = this.preferences.getPreference('overlayStyle');
+    this.overlay.setOverlayStyle(overlayStyle);
+    console.log(`[TranscriberManager] Using overlay style: ${overlayStyle}`);
 
     // Register global hotkey
     await this.registerHotkey(this.hotkey);
@@ -437,6 +448,38 @@ export class TranscriberManager extends EventEmitter {
    */
   getModelManager(): ModelManager {
     return this.modelManager;
+  }
+
+  /**
+   * Get the currently selected model size.
+   */
+  getSelectedModel(): string {
+    return this.modelManager.getSelectedModel();
+  }
+
+  /**
+   * Set the selected model size and save to preferences.
+   */
+  async setSelectedModel(size: string): Promise<void> {
+    this.modelManager.setSelectedModel(size as any);
+    await this.preferences.save({ selectedModel: size as any });
+    console.log(`[TranscriberManager] Model changed to: ${size}`);
+  }
+
+  /**
+   * Set the overlay style and save to preferences.
+   */
+  async setOverlayStyle(style: 'rectangle' | 'top-emerging'): Promise<void> {
+    this.overlay.setOverlayStyle(style);
+    await this.preferences.save({ overlayStyle: style });
+    console.log(`[TranscriberManager] Overlay style changed to: ${style}`);
+  }
+
+  /**
+   * Get the current overlay style.
+   */
+  getOverlayStyle(): 'rectangle' | 'top-emerging' {
+    return this.preferences.getPreference('overlayStyle');
   }
 
   /**

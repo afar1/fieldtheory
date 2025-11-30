@@ -8,6 +8,13 @@ import { useEffect, useState, useCallback } from 'react';
 type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
 type ModelStatus = 'downloaded' | 'downloading' | 'missing';
 
+type ModelInfo = {
+  name: string;
+  url: string;
+  sizeBytes: number;
+  description: string;
+};
+
 /**
  * TranscriptionSettings displays transcription status and model management.
  */
@@ -20,6 +27,10 @@ export default function TranscriptionSettings() {
   const [hotkey, setHotkey] = useState<string>('Alt+Space');
   const [isCapturingHotkey, setIsCapturingHotkey] = useState(false);
   const [hotkeyError, setHotkeyError] = useState<string | null>(null);
+  const [availableModels, setAvailableModels] = useState<Record<string, ModelInfo>>({});
+  const [selectedModel, setSelectedModel] = useState<string>('base');
+  const [modelDownloadStatus, setModelDownloadStatus] = useState<Record<string, boolean>>({});
+  const [overlayStyle, setOverlayStyle] = useState<'rectangle' | 'top-emerging'>('rectangle');
 
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
 
@@ -31,14 +42,22 @@ export default function TranscriptionSettings() {
 
     const fetchStatus = async () => {
       try {
-        const [currentStatus, currentModelStatus, currentHotkey] = await Promise.all([
+        const [currentStatus, currentModelStatus, currentHotkey, models, currentSelectedModel, downloadStatus, currentOverlayStyle] = await Promise.all([
           window.transcribeAPI!.getStatus(),
           window.transcribeAPI!.getModelStatus(),
           window.transcribeAPI!.getHotkey(),
+          window.transcribeAPI!.getAvailableModels(),
+          window.transcribeAPI!.getSelectedModel(),
+          window.transcribeAPI!.getModelDownloadStatus(),
+          window.transcribeAPI!.getOverlayStyle(),
         ]);
         setStatus(currentStatus);
         setModelStatus(currentModelStatus);
         setHotkey(currentHotkey);
+        setAvailableModels(models);
+        setSelectedModel(currentSelectedModel);
+        setModelDownloadStatus(downloadStatus);
+        setOverlayStyle(currentOverlayStyle);
       } catch (err) {
         console.error('Failed to fetch transcription status:', err);
       }
@@ -87,9 +106,12 @@ export default function TranscriptionSettings() {
     setModelStatus('downloading');
 
     try {
-      await window.transcribeAPI.downloadModel();
+      await window.transcribeAPI.downloadModel(selectedModel);
       setModelStatus('downloaded');
       setDownloadProgress(null);
+      // Refresh download status for all models
+      const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
+      setModelDownloadStatus(downloadStatus);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to download model');
       setModelStatus('missing');
@@ -97,7 +119,42 @@ export default function TranscriptionSettings() {
     } finally {
       setIsDownloading(false);
     }
+  }, [isDownloading, selectedModel]);
+
+  // Handler for changing the selected model.
+  const handleModelChange = useCallback(async (newModel: string) => {
+    if (!window.transcribeAPI || isDownloading) return;
+    
+    setSelectedModel(newModel);
+    setError(null);
+    try {
+      await window.transcribeAPI.setSelectedModel(newModel);
+      // Refresh model status for the new model
+      const newModelStatus = await window.transcribeAPI.getModelStatus();
+      setModelStatus(newModelStatus);
+      setDownloadProgress(null);
+      // Refresh download status for all models
+      const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
+      setModelDownloadStatus(downloadStatus);
+    } catch (err) {
+      console.error('Failed to change model:', err);
+      setError(err instanceof Error ? err.message : 'Failed to change model');
+    }
   }, [isDownloading]);
+
+  // Handler for changing overlay style.
+  const handleOverlayStyleChange = useCallback(async (newStyle: 'rectangle' | 'top-emerging') => {
+    if (!window.transcribeAPI) return;
+    
+    setOverlayStyle(newStyle);
+    setError(null);
+    try {
+      await window.transcribeAPI.setOverlayStyle(newStyle);
+    } catch (err) {
+      console.error('Failed to change overlay style:', err);
+      setError(err instanceof Error ? err.message : 'Failed to change overlay style');
+    }
+  }, []);
 
   // Handler for capturing hotkey.
   const handleStartCaptureHotkey = useCallback(() => {
@@ -303,6 +360,27 @@ export default function TranscriptionSettings() {
         )}
       </div>
 
+      {/* Overlay style configuration section */}
+      <div style={styles.controlsSection}>
+        <h3 style={styles.subheading}>Recording Overlay Style</h3>
+        <p style={styles.helpText}>
+          Choose how the recording indicator appears when you're recording audio.
+          The top-emerging style mimics the Dynamic Island on iPhone, appearing to emerge from the top notch area.
+        </p>
+
+        <div style={styles.modelSelector}>
+          <label style={styles.label}>Overlay Style:</label>
+          <select
+            value={overlayStyle}
+            onChange={(e) => handleOverlayStyleChange(e.target.value as 'rectangle' | 'top-emerging')}
+            style={styles.select}
+          >
+            <option value="rectangle">Rectangle (Centered)</option>
+            <option value="top-emerging">Top Emerging (Dynamic Island style)</option>
+          </select>
+        </div>
+      </div>
+
       {/* Error display */}
       {error && (
         <div style={styles.errorCard}>
@@ -314,9 +392,28 @@ export default function TranscriptionSettings() {
       <div style={{ ...styles.controlsSection, marginTop: '24px' }}>
         <h3 style={styles.subheading}>Model Management</h3>
         <p style={styles.helpText}>
-          The Whisper base.en model (~142MB) is required for transcription.
-          It will be downloaded to your app data directory.
+          Select a Whisper model size. Larger models provide better accuracy but require more disk space and processing time.
+          Models are downloaded to your app data directory.
         </p>
+
+        <div style={styles.modelSelector}>
+          <label style={styles.label}>Model Size:</label>
+          <select
+            value={selectedModel}
+            onChange={(e) => handleModelChange(e.target.value)}
+            disabled={isDownloading}
+            style={styles.select}
+          >
+            {Object.entries(availableModels).map(([size, info]) => {
+              const isDownloaded = modelDownloadStatus[size] || false;
+              return (
+                <option key={size} value={size}>
+                  {info.description} {isDownloaded ? '✓' : ''}
+                </option>
+              );
+            })}
+          </select>
+        </div>
 
         {modelStatus === 'missing' && (
           <button
@@ -324,7 +421,7 @@ export default function TranscriptionSettings() {
             disabled={isDownloading}
             style={styles.downloadButton}
           >
-            {isDownloading ? 'Downloading...' : 'Download Model'}
+            {isDownloading ? 'Downloading...' : `Download ${availableModels[selectedModel]?.description || 'Model'}`}
           </button>
         )}
 
@@ -522,6 +619,26 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: '8px',
     fontSize: '13px',
     color: '#ef4444',
+  },
+  modelSelector: {
+    marginBottom: '16px',
+  },
+  label: {
+    display: 'block',
+    marginBottom: '8px',
+    fontSize: '14px',
+    fontWeight: 500,
+    color: '#374151',
+  },
+  select: {
+    width: '100%',
+    padding: '10px 12px',
+    fontSize: '14px',
+    border: '1px solid #d1d5db',
+    borderRadius: '8px',
+    backgroundColor: '#fff',
+    color: '#111827',
+    cursor: 'pointer',
   },
 };
 
