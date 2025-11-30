@@ -1,5 +1,6 @@
 import { BrowserWindow, screen } from 'electron';
 import path from 'path';
+import { OverlayStyle } from './preferences';
 
 /**
  * Manages the recording indicator overlay window.
@@ -7,8 +8,32 @@ import path from 'path';
  */
 export class RecordingOverlay {
   private window: BrowserWindow | null = null;
-  private readonly WINDOW_WIDTH = 100;
-  private readonly WINDOW_HEIGHT = 36;
+  private overlayStyle: OverlayStyle = 'rectangle';
+  
+  // Rectangle style dimensions
+  private readonly RECTANGLE_WIDTH = 100;
+  private readonly RECTANGLE_HEIGHT = 36;
+  
+  // Top-emerging style dimensions (wider, taller to look like Dynamic Island)
+  private readonly TOP_EMERGING_WIDTH = 120;
+  private readonly TOP_EMERGING_HEIGHT = 44;
+
+  /**
+   * Set the overlay style preference.
+   */
+  setOverlayStyle(style: OverlayStyle): void {
+    this.overlayStyle = style;
+    // If window exists, recreate it with new style
+    if (this.window && !this.window.isDestroyed()) {
+      const wasVisible = this.window.isVisible();
+      const currentState = this.window.webContents ? 'recording' : 'recording';
+      this.window.close();
+      this.window = null;
+      if (wasVisible) {
+        this.showRecording();
+      }
+    }
+  }
 
   /**
    * Show the overlay window in recording state.
@@ -19,27 +44,35 @@ export class RecordingOverlay {
     if (this.window && !this.window.isDestroyed()) {
       this.window.showInactive();
       this.sendState('recording');
+      this.sendStyle(this.overlayStyle);
       return;
     }
 
-    const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
-    const x = Math.floor((screenWidth - this.WINDOW_WIDTH) / 2);
-    const y = 50;
+    const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
+    const isTopEmerging = this.overlayStyle === 'top-emerging';
+    
+    // Calculate dimensions based on style
+    const width = isTopEmerging ? this.TOP_EMERGING_WIDTH : this.RECTANGLE_WIDTH;
+    const height = isTopEmerging ? this.TOP_EMERGING_HEIGHT : this.RECTANGLE_HEIGHT;
+    
+    // Calculate position based on style
+    const x = Math.floor((screenWidth - width) / 2);
+    const y = isTopEmerging ? 8 : 50; // Top-emerging: near top (8px), Rectangle: centered vertically (50px)
 
     this.window = new BrowserWindow({
-      width: this.WINDOW_WIDTH,
-      height: this.WINDOW_HEIGHT,
+      width,
+      height,
       x,
       y,
       frame: false,
-      transparent: false, // Use solid background - more reliable
+      transparent: isTopEmerging, // Top-emerging uses transparent for rounded top effect
       alwaysOnTop: true,
       skipTaskbar: true,
       resizable: false,
       movable: false,
       focusable: false,
       show: false,
-      backgroundColor: '#1a1a1a', // Dark background - visible
+      backgroundColor: isTopEmerging ? '#00000000' : '#1a1a1a', // Transparent for top-emerging, dark for rectangle
       hasShadow: true,
       roundedCorners: true,
       webPreferences: {
@@ -72,6 +105,7 @@ export class RecordingOverlay {
     this.window.webContents.once('did-finish-load', () => {
       console.log('[RecordingOverlay] Content loaded');
       this.sendState('recording');
+      this.sendStyle(this.overlayStyle);
     });
   }
 
@@ -100,6 +134,12 @@ export class RecordingOverlay {
   private sendState(state: 'recording' | 'transcribing' | 'dismiss'): void {
     if (this.window && !this.window.isDestroyed()) {
       this.window.webContents.send('overlay-state', state);
+    }
+  }
+
+  private sendStyle(style: OverlayStyle): void {
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send('overlay-style', style);
     }
   }
 

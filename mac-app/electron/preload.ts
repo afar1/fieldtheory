@@ -13,8 +13,14 @@ const TranscribeIPCChannels = {
   GET_STATUS: 'transcribe:getStatus',
   GET_MODEL_STATUS: 'transcribe:getModelStatus',
   DOWNLOAD_MODEL: 'transcribe:downloadModel',
+  GET_AVAILABLE_MODELS: 'transcribe:getAvailableModels',
+  GET_MODEL_DOWNLOAD_STATUS: 'transcribe:getModelDownloadStatus',
+  GET_SELECTED_MODEL: 'transcribe:getSelectedModel',
+  SET_SELECTED_MODEL: 'transcribe:setSelectedModel',
   GET_HOTKEY: 'transcribe:getHotkey',
   SET_HOTKEY: 'transcribe:setHotkey',
+  GET_OVERLAY_STYLE: 'transcribe:getOverlayStyle',
+  SET_OVERLAY_STYLE: 'transcribe:setOverlayStyle',
   STATUS_CHANGED: 'transcribe:statusChanged',
   RESULT: 'transcribe:result',
   ERROR: 'transcribe:error',
@@ -41,6 +47,13 @@ type AudioState = {
 type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
 type ModelStatus = 'downloaded' | 'downloading' | 'missing';
 
+type ModelInfo = {
+  name: string;
+  url: string;
+  sizeBytes: number;
+  description: string;
+};
+
 export interface AudioAPI {
   getState: () => Promise<AudioState>;
   setPriorityMode: (enabled: boolean) => Promise<void>;
@@ -52,9 +65,15 @@ export interface AudioAPI {
 export interface TranscribeAPI {
   getStatus: () => Promise<TranscriptionStatus>;
   getModelStatus: () => Promise<ModelStatus>;
-  downloadModel: () => Promise<void>;
+  downloadModel: (modelSize?: string) => Promise<void>;
+  getAvailableModels: () => Promise<Record<string, ModelInfo>>;
+  getModelDownloadStatus: () => Promise<Record<string, boolean>>;
+  getSelectedModel: () => Promise<string>;
+  setSelectedModel: (modelSize: string) => Promise<void>;
   getHotkey: () => Promise<string>;
   setHotkey: (hotkey: string) => Promise<boolean>;
+  getOverlayStyle: () => Promise<'rectangle' | 'top-emerging'>;
+  setOverlayStyle: (style: 'rectangle' | 'top-emerging') => Promise<void>;
   onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
   onResult: (callback: (text: string) => void) => () => void;
   onError: (callback: (error: string) => void) => () => void;
@@ -101,8 +120,24 @@ const transcribeAPI: TranscribeAPI = {
     return ipcRenderer.invoke(TranscribeIPCChannels.GET_MODEL_STATUS);
   },
 
-  downloadModel: async (): Promise<void> => {
-    return ipcRenderer.invoke(TranscribeIPCChannels.DOWNLOAD_MODEL);
+  downloadModel: async (modelSize?: string): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.DOWNLOAD_MODEL, modelSize);
+  },
+
+  getAvailableModels: async (): Promise<Record<string, ModelInfo>> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AVAILABLE_MODELS);
+  },
+
+  getModelDownloadStatus: async (): Promise<Record<string, boolean>> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_MODEL_DOWNLOAD_STATUS);
+  },
+
+  getSelectedModel: async (): Promise<string> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_SELECTED_MODEL);
+  },
+
+  setSelectedModel: async (modelSize: string): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_SELECTED_MODEL, modelSize);
   },
 
   getHotkey: async (): Promise<string> => {
@@ -111,6 +146,14 @@ const transcribeAPI: TranscribeAPI = {
 
   setHotkey: async (hotkey: string): Promise<boolean> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_HOTKEY, hotkey);
+  },
+
+  getOverlayStyle: async (): Promise<'rectangle' | 'top-emerging'> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_OVERLAY_STYLE);
+  },
+
+  setOverlayStyle: async (style: 'rectangle' | 'top-emerging'): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_OVERLAY_STYLE, style);
   },
 
   onStatusChanged: (callback: (status: TranscriptionStatus) => void): (() => void) => {

@@ -15,17 +15,24 @@ interface WindowState {
 }
 
 /**
+ * Overlay animation style options.
+ */
+export type OverlayStyle = 'rectangle' | 'top-emerging';
+
+/**
  * Application preferences stored in userData directory.
  */
 interface Preferences {
   transcriptionHotkey: string;
   selectedModel: ModelSize;
+  overlayStyle: OverlayStyle;
   windowState?: WindowState;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
   transcriptionHotkey: 'Alt+Space',
   selectedModel: 'base',
+  overlayStyle: 'rectangle',
 };
 
 /**
