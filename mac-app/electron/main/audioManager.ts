@@ -157,6 +157,7 @@ export class AudioManager extends EventEmitter {
   /**
    * Handle device list changes from CoreAudio.
    * Re-evaluates priority policy if needed.
+   * Also handles wake-from-sleep recovery.
    */
   private async handleDevicesChanged(devices: AudioDevice[]): Promise<void> {
     console.log('[AudioManager] Devices changed, count:', devices.length);
@@ -173,8 +174,10 @@ export class AudioManager extends EventEmitter {
     }
 
     // If priority mode is on, check if we need to enforce it.
-    // This handles the case where the priority device was just connected.
+    // This handles the case where the priority device was just connected or reconnected after sleep.
     if (this.priorityMode && this.priorityDeviceId) {
+      // Refresh default input to ensure we have current state after wake.
+      await this.refreshDefaultInput();
       await this.enforcePriority();
     }
 
