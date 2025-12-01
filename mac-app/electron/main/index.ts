@@ -193,6 +193,11 @@ function setupIPCHandlers(): void {
       await audioManager.clearUserOverride();
     }
   });
+
+  // Permission check handler
+  ipcMain.handle('permissions:check', async () => {
+    return await checkPermissions();
+  });
 }
 
 /**
@@ -430,13 +435,18 @@ function setupClipboardIPCHandlers(): void {
       return;
     }
     
+    // Hide window and restore focus BEFORE pasting (so Cmd+V lands in the right place)
+    if (clipboardHistoryWindow) {
+      clipboardHistoryWindow.hide(); // This includes app.hide() to restore focus
+    }
+    
     const { exec } = require('child_process');
     const { promisify } = require('util');
     const execAsync = promisify(exec);
     
     if (item.type === 'text' || item.type === 'transcript') {
       clipboard.writeText(item.content || '');
-      // Paste using AppleScript
+      // Paste using AppleScript (focus is already on the previous app's input field)
       await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
     } else if (item.imageData) {
       const { nativeImage } = require('electron');
@@ -467,13 +477,30 @@ function setupClipboardIPCHandlers(): void {
   });
 
   // Handle closing the clipboard history window
-  ipcMain.on('clipboard:closeWindow', (event) => {
-    // Find the window that sent this message and close it
+  ipcMain.on('clipboard:closeWindow', async (event) => {
+    // Find the window that sent this message and hide it
     const window = BrowserWindow.fromWebContents(event.sender);
     if (window && !window.isDestroyed()) {
-      window.close();
+      window.hide();
+      // Focus restoration happens in ClipboardHistoryWindow.hide() via app.hide()
     }
   });
+}
+
+
+/**
+ * Check permissions and return status.
+ */
+async function checkPermissions(): Promise<{ accessibilityGranted: boolean; inputMonitoringGranted: boolean }> {
+  if (!nativeHelper) {
+    return { accessibilityGranted: false, inputMonitoringGranted: false };
+  }
+  try {
+    return await nativeHelper.checkPermissions();
+  } catch (error) {
+    console.error('[Main] Failed to check permissions:', error);
+    return { accessibilityGranted: false, inputMonitoringGranted: false };
+  }
 }
 
 /**
@@ -615,11 +642,27 @@ async function initTranscriberSystem(): Promise<void> {
     }
   });
   
-  clipboardManager.registerHistoryHotkey(() => {
+  // Debounce to avoid repeated toggles when the hotkey auto-repeats
+  let lastHistoryToggleAt = 0;
+  
+  clipboardManager.registerHistoryHotkey(async () => {
+    const now = Date.now();
+    if (now - lastHistoryToggleAt < 250) return;
+    lastHistoryToggleAt = now;
+
     if (!clipboardHistoryWindow) {
       clipboardHistoryWindow = new ClipboardHistoryWindow();
     }
-    clipboardHistoryWindow.toggle();
+
+    const visible = clipboardHistoryWindow.isVisible();
+
+    if (!visible) {
+      // Show window and take focus (like Alfred)
+      clipboardHistoryWindow.show();
+    } else {
+      // Hide window and restore focus to previous app
+      clipboardHistoryWindow.hide();
+    }
   });
 
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager);
@@ -647,7 +690,15 @@ if (!gotTheLock) {
     setupClipboardIPCHandlers();
     await initAudioSystem();
     await initTranscriberSystem();
-    createWindow();
+
+    // Check permissions on startup and notify main window
+    const permissions = await checkPermissions();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.once('did-finish-load', () => {
+        mainWindow?.webContents.send('permissions-status', permissions);
+      });
+    }
+    // createWindow(); // Commented out for testing - app runs in background, opens manually
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

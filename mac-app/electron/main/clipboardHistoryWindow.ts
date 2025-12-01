@@ -33,10 +33,11 @@ export class ClipboardHistoryWindow {
 
   /**
    * Show the clipboard history window.
+   * Window takes focus like Alfred - uses standard keyboard input.
    */
   show(): void {
     if (this.window && !this.window.isDestroyed()) {
-      app.focus({ steal: true });
+      // Show and take focus
       this.window.show();
       this.window.focus();
       return;
@@ -54,16 +55,16 @@ export class ClipboardHistoryWindow {
       x,
       y,
       frame: false,
-      transparent: false,
+      transparent: true, // Transparent so overlay can cover everything
       alwaysOnTop: true,
       skipTaskbar: true,
       resizable: false,
       movable: true,
-      focusable: true,
+      focusable: true, // Focusable - uses standard keyboard input like Alfred
       fullscreenable: false,
       simpleFullscreen: false,
       show: false, // Don't show until content loads
-      backgroundColor: '#ffffff',
+      backgroundColor: '#00000000', // Fully transparent
       hasShadow: true,
       roundedCorners: true,
       webPreferences: {
@@ -87,10 +88,10 @@ export class ClipboardHistoryWindow {
     });
 
     // Show window only after content loads to avoid blank screen
+    // Show and take focus (like Alfred)
     this.window.webContents.once('did-finish-load', () => {
       console.log('[ClipboardHistoryWindow] Content loaded');
       if (this.window && !this.window.isDestroyed()) {
-        app.focus({ steal: true });
         this.window.show();
         this.window.focus();
       }
@@ -118,16 +119,24 @@ export class ClipboardHistoryWindow {
 
   /**
    * Hide the clipboard history window.
+   * Restores focus to the previous app (including exact input field).
    */
   hide(): void {
     if (this.window && !this.window.isDestroyed()) {
       this.window.hide();
     }
 
-    if (this.previouslyFocusedWindow && !this.previouslyFocusedWindow.isDestroyed()) {
-      this.previouslyFocusedWindow.focus();
-    }
+    // Hide entire app to guarantee focus returns to previous app
+    // This ensures the exact input field that was active gets focus back
+    app.hide();
     this.previouslyFocusedWindow = null;
+  }
+
+  /**
+   * Get the BrowserWindow instance for IPC communication.
+   */
+  getWindow(): BrowserWindow | null {
+    return this.window;
   }
 
   /**

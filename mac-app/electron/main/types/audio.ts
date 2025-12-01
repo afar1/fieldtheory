@@ -103,7 +103,10 @@ export type HelperOutgoingMessageType =
   | 'recordingStarted'
   | 'recordingStopped'
   | 'recordingCancelled'
-  | 'audioLevel';
+  | 'audioLevel'
+  | 'permissionsStatus'
+  | 'keyEvent'
+  | 'keyboardMonitoringDisabled';
 
 /**
  * Message types sent FROM Electron main TO the Swift helper.
@@ -115,7 +118,10 @@ export type HelperIncomingMessageType =
   | 'startMonitoring'
   | 'startRecording'
   | 'stopRecording'
-  | 'cancelRecording';
+  | 'cancelRecording'
+  | 'checkPermissions'
+  | 'startKeyboardMonitoring'
+  | 'stopKeyboardMonitoring';
 
 /**
  * Base interface for all messages from the native helper.
@@ -188,6 +194,32 @@ export interface AudioLevelMessage extends HelperMessage {
 }
 
 /**
+ * Permissions status message from the helper.
+ */
+export interface PermissionsStatusMessage extends HelperMessage {
+  type: 'permissionsStatus';
+  accessibilityGranted: boolean;
+  inputMonitoringGranted: boolean;
+}
+
+/**
+ * Key event message from the helper (for global keyboard capture).
+ */
+export interface KeyEventMessage extends HelperMessage {
+  type: 'keyEvent';
+  characters: string;
+  keyCode: number;
+  modifiers: string[];
+}
+
+/**
+ * Keyboard monitoring disabled message (permission revoked).
+ */
+export interface KeyboardMonitoringDisabledMessage extends HelperMessage {
+  type: 'keyboardMonitoringDisabled';
+}
+
+/**
  * Union type of all possible messages from the helper.
  */
 export type HelperOutgoingMessage =
@@ -198,7 +230,10 @@ export type HelperOutgoingMessage =
   | RecordingStartedMessage
   | RecordingStoppedMessage
   | RecordingCancelledMessage
-  | AudioLevelMessage;
+  | AudioLevelMessage
+  | PermissionsStatusMessage
+  | KeyEventMessage
+  | KeyboardMonitoringDisabledMessage;
 
 /**
  * Commands sent to the helper.
@@ -232,6 +267,18 @@ export interface CancelRecordingCommand {
   type: 'cancelRecording';
 }
 
+export interface CheckPermissionsCommand {
+  type: 'checkPermissions';
+}
+
+export interface StartKeyboardMonitoringCommand {
+  type: 'startKeyboardMonitoring';
+}
+
+export interface StopKeyboardMonitoringCommand {
+  type: 'stopKeyboardMonitoring';
+}
+
 /**
  * Union type of all possible commands to the helper.
  */
@@ -242,4 +289,7 @@ export type HelperIncomingCommand =
   | StartMonitoringCommand
   | StartRecordingCommand
   | StopRecordingCommand
-  | CancelRecordingCommand;
+  | CancelRecordingCommand
+  | CheckPermissionsCommand
+  | StartKeyboardMonitoringCommand
+  | StopKeyboardMonitoringCommand;

@@ -147,6 +147,10 @@ export default function App() {
     return saved === 'true';
   });
   
+  // Permissions state
+  const [permissions, setPermissions] = useState<{ accessibilityGranted: boolean } | null>(null);
+  const [showPermissionsGate, setShowPermissionsGate] = useState(false);
+  
   // Clipboard hotkey configuration
   const [clipboardHotkeys, setClipboardHotkeys] = useState<{ screenshot?: string; history?: string }>({
     screenshot: 'CommandOrControl+Shift+4',
@@ -347,6 +351,52 @@ export default function App() {
       data.subscription.unsubscribe();
     };
   }, []);
+
+  // Check permissions on mount and when status changes
+  useEffect(() => {
+    const permissionsAPI = window.permissionsAPI;
+    if (!permissionsAPI) return;
+
+    const checkPermissions = async () => {
+      try {
+        const status = await permissionsAPI.check();
+        setPermissions(status);
+        setShowPermissionsGate(!status.accessibilityGranted);
+      } catch (error) {
+        console.error('Failed to check permissions:', error);
+      }
+    };
+
+    checkPermissions();
+
+    // Listen for permission status changes
+    const unsubscribeStatus = permissionsAPI.onStatusChanged((status: { accessibilityGranted: boolean }) => {
+      setPermissions(status);
+      setShowPermissionsGate(!status.accessibilityGranted);
+    });
+
+    // Listen for permission revocation
+    const unsubscribeRevoked = permissionsAPI.onRevoked(() => {
+      setShowPermissionsGate(true);
+      checkPermissions();
+    });
+
+    // Poll for permission changes every 2 seconds while gate is visible
+    let pollInterval: ReturnType<typeof setInterval> | null = null;
+    if (showPermissionsGate) {
+      pollInterval = setInterval(() => {
+        checkPermissions();
+      }, 2000);
+    }
+
+    return () => {
+      unsubscribeStatus?.();
+      unsubscribeRevoked?.();
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
+    };
+  }, [showPermissionsGate]);
 
   const fetchLists = useCallback(async () => {
     if (!session) {
@@ -778,6 +828,134 @@ export default function App() {
     return (
       <div style={styles.root}>
         <div>Loading...</div>
+      </div>
+    );
+  }
+
+  // Permissions gate UI - blocks app until permissions are granted
+  if (showPermissionsGate && permissions) {
+    const openAccessibility = () => {
+      // Deep link to Accessibility settings
+      window.open('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility', '_blank');
+    };
+
+
+    const handleRecheck = async () => {
+      if (window.permissionsAPI) {
+        try {
+          const status = await window.permissionsAPI.check();
+          setPermissions(status);
+          setShowPermissionsGate(!status.accessibilityGranted);
+        } catch (error) {
+          console.error('Failed to recheck permissions:', error);
+        }
+      }
+    };
+
+
+    return (
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: '#ffffff',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        zIndex: 10000,
+      }}>
+        <div style={{
+          maxWidth: '600px',
+          padding: '40px',
+          textAlign: 'center',
+        }}>
+          <h1 style={{ fontSize: '24px', fontWeight: '600', marginBottom: '16px' }}>
+            Permissions Required
+          </h1>
+          <p style={{ fontSize: '16px', color: '#666', marginBottom: '32px', lineHeight: '1.5' }}>
+            LittleOne needs Accessibility permission to paste clipboard items:
+          </p>
+
+          <div style={{ marginBottom: '24px', textAlign: 'left' }}>
+            <div style={{
+              padding: '16px',
+              backgroundColor: permissions.accessibilityGranted ? '#e8f5e9' : '#fff3e0',
+              borderRadius: '8px',
+              marginBottom: '12px',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '4px' }}>
+                    Accessibility
+                  </h3>
+                  <p style={{ fontSize: '14px', color: '#666' }}>
+                    Required for pasting clipboard items
+                  </p>
+                </div>
+                {permissions.accessibilityGranted ? (
+                  <span style={{ color: '#4caf50', fontSize: '14px', fontWeight: '600' }}>✓ Granted</span>
+                ) : (
+                  <button
+                    onClick={openAccessibility}
+                    style={{
+                      padding: '8px 16px',
+                      backgroundColor: '#007AFF',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      fontSize: '14px',
+                    }}
+                  >
+                    Open Settings
+                  </button>
+                )}
+              </div>
+            </div>
+
+          </div>
+
+          <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+            <button
+              onClick={handleRecheck}
+              style={{
+                padding: '12px 24px',
+                backgroundColor: '#f0f0f0',
+                color: '#333',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: '500',
+              }}
+            >
+              Recheck Permissions
+            </button>
+            {false && (
+              <button
+                onClick={() => {
+                  // Restart app - reload for now (relaunch would need IPC)
+                  window.location.reload();
+                }}
+                style={{
+                  padding: '12px 24px',
+                  backgroundColor: '#007AFF',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                }}
+              >
+                Restart App
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     );
   }
