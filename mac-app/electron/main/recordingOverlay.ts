@@ -1,4 +1,4 @@
-import { BrowserWindow, screen } from 'electron';
+import { app, BrowserWindow, screen } from 'electron';
 import path from 'path';
 import { OverlayStyle } from './preferences';
 
@@ -91,7 +91,11 @@ export class RecordingOverlay {
     if (startUrl) {
       this.window.loadURL(`${startUrl}overlay.html`);
     } else {
-      this.window.loadFile(path.join(__dirname, '../../dist/overlay.html'));
+      // Use absolute path via app.getAppPath() to ensure correct resolution
+      // regardless of working directory (important for npm start vs packaged app)
+      const htmlPath = path.join(app.getAppPath(), 'dist', 'overlay.html');
+      console.log('[RecordingOverlay] Loading HTML from:', htmlPath);
+      this.window.loadFile(htmlPath);
     }
 
     this.window.on('closed', () => {

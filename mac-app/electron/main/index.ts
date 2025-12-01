@@ -1,10 +1,13 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard } from 'electron';
 import path from 'path';
+import os from 'os';
 import { NativeHelper } from './nativeHelper';
 import { AudioManager } from './audioManager';
 import { TrayManager } from './trayManager';
 import { TranscriberManager } from './transcriberManager';
 import { PreferencesManager } from './preferences';
+import { ClipboardManager } from './clipboardManager';
+import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
 import {
   AudioIPCChannels,
   SetPriorityModePayload,
@@ -13,6 +16,21 @@ import {
 import {
   TranscribeIPCChannels,
 } from './types/transcribe';
+import {
+  ClipboardIPCChannels,
+  ClipboardQueryOptions,
+} from './types/clipboard';
+
+// Override userData path for experimental builds to isolate data from production.
+// This must happen before app.whenReady() and before any code calls app.getPath('userData').
+if (process.env.EXPERIMENTAL === 'true') {
+  const experimentalUserData = path.join(
+    os.homedir(),
+    'Library/Application Support/Little One Experimental'
+  );
+  app.setPath('userData', experimentalUserData);
+  app.setName('Little One Experimental');
+}
 
 let mainWindow: BrowserWindow | null = null;
 let nativeHelper: NativeHelper | null = null;
@@ -20,6 +38,8 @@ let audioManager: AudioManager | null = null;
 let trayManager: TrayManager | null = null;
 let transcriberManager: TranscriberManager | null = null;
 let preferencesManager: PreferencesManager | null = null;
+let clipboardManager: ClipboardManager | null = null;
+let clipboardHistoryWindow: ClipboardHistoryWindow | null = null;
 
 /**
  * Create the main application window.
@@ -47,8 +67,17 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       preload: preloadPath,
+      // Enable DevTools in development to debug renderer issues
+      devTools: process.env.NODE_ENV !== 'production',
+      // Allow loading local files (needed for file:// protocol with ES modules)
+      webSecurity: true, // Keep security enabled, but ensure file:// works
     },
   });
+  
+  // Open DevTools in development mode to see renderer console errors
+  if (process.env.NODE_ENV !== 'production' || !process.env.ELECTRON_START_URL) {
+    mainWindow.webContents.openDevTools();
+  }
 
   // Save window state on resize/move (debounced)
   let saveTimeout: NodeJS.Timeout | null = null;
@@ -79,7 +108,28 @@ function createWindow(): void {
   if (startUrl) {
     mainWindow.loadURL(startUrl);
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'));
+    // Use absolute path via app.getAppPath() to ensure correct resolution
+    // regardless of working directory (important for npm start vs packaged app)
+    // Use loadURL with file:// protocol to properly support ES modules
+    const htmlPath = path.join(app.getAppPath(), 'dist', 'index.html');
+    const fileUrl = `file://${htmlPath}`;
+    console.log('[Main] Loading HTML from:', fileUrl);
+    mainWindow.loadURL(fileUrl);
+    
+    // Add error handlers to debug loading issues
+    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+      console.error('[Main] Failed to load:', errorCode, errorDescription, validatedURL);
+    });
+    
+    mainWindow.webContents.once('did-finish-load', () => {
+      console.log('[Main] Window content loaded successfully');
+      // Log any console messages from renderer for debugging
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+          console.log(`[Renderer ${level}]:`, message);
+        });
+      }
+    });
   }
 
   mainWindow.on('closed', () => {
@@ -130,6 +180,10 @@ function setupIPCHandlers(): void {
     async (_event, payload: SetPriorityDevicePayload) => {
       if (audioManager) {
         await audioManager.setPriorityDevice(payload.deviceId);
+        // Save priority device to preferences
+        if (preferencesManager) {
+          await preferencesManager.save({ priorityDeviceId: payload.deviceId });
+        }
       }
     }
   );
@@ -246,6 +300,180 @@ function setupTranscribeIPCHandlers(): void {
     }
     await transcriberManager.setOverlayStyle(style as 'rectangle' | 'top-emerging');
   });
+
+  ipcMain.handle('transcribe:getStackCount', () => {
+    if (!transcriberManager) {
+      return 0;
+    }
+    return transcriberManager.getCurrentStack().length;
+  });
+}
+
+/**
+ * Set up all IPC handlers for clipboard-related communication.
+ */
+function setupClipboardIPCHandlers(): void {
+  ipcMain.handle(ClipboardIPCChannels.QUERY_ITEMS, async (_event, options?: ClipboardQueryOptions) => {
+    if (!clipboardManager) {
+      return [];
+    }
+    const items = clipboardManager.queryItems(options);
+    // Convert Buffer to base64 for IPC
+    return items.map(item => ({
+      ...item,
+      imageData: item.imageData ? item.imageData.toString('base64') : null,
+    }));
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.GET_ITEM, async (_event, id: number) => {
+    if (!clipboardManager) {
+      return null;
+    }
+    const item = clipboardManager.getItem(id);
+    if (!item) {
+      return null;
+    }
+    return {
+      ...item,
+      imageData: item.imageData ? item.imageData.toString('base64') : null,
+    } as any; // Type assertion needed because IPC serializes Buffer to string
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.DELETE_ITEM, async (_event, id: number) => {
+    if (clipboardManager) {
+      clipboardManager.deleteItem(id);
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(ClipboardIPCChannels.ITEM_DELETED, id);
+        }
+      });
+    }
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.CLEAR_ALL, async () => {
+    if (clipboardManager) {
+      clipboardManager.clearAll();
+    }
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.CAPTURE_SCREENSHOT, async (_event, region?: boolean) => {
+    if (!clipboardManager) {
+      return -1;
+    }
+    const id = await clipboardManager.captureScreenshot(region || false);
+    if (id > 0) {
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
+        }
+      });
+    }
+    return id;
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.GET_HOTKEYS, async () => {
+    if (!clipboardManager) {
+      return {
+        screenshot: 'Alt+1',
+        history: 'Control+Alt+Space',
+      };
+    }
+    return clipboardManager.getHotkeys();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SET_HOTKEYS, async (_event, hotkeys: { screenshot?: string; history?: string }) => {
+    if (!clipboardManager || !preferencesManager) {
+      return false;
+    }
+    
+    let success = true;
+    const prefsToSave: { clipboardScreenshotHotkey?: string; clipboardHistoryHotkey?: string } = {};
+    
+    if (hotkeys.screenshot !== undefined) {
+      if (typeof hotkeys.screenshot !== 'string' || hotkeys.screenshot.trim() === '') {
+        return false;
+      }
+      const result = clipboardManager.setScreenshotHotkey(hotkeys.screenshot);
+      if (!result) {
+        success = false;
+      } else {
+        prefsToSave.clipboardScreenshotHotkey = hotkeys.screenshot;
+      }
+    }
+    
+    if (hotkeys.history !== undefined) {
+      if (typeof hotkeys.history !== 'string' || hotkeys.history.trim() === '') {
+        return false;
+      }
+      const result = clipboardManager.setHistoryHotkey(hotkeys.history);
+      if (!result) {
+        success = false;
+      } else {
+        prefsToSave.clipboardHistoryHotkey = hotkeys.history;
+      }
+    }
+    
+    // Save hotkeys to preferences
+    if (Object.keys(prefsToSave).length > 0) {
+      await preferencesManager.save(prefsToSave);
+    }
+    
+    return success;
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.PASTE_ITEM, async (_event, id: number) => {
+    if (!clipboardManager) {
+      return;
+    }
+    const item = clipboardManager.getItem(id);
+    if (!item) {
+      return;
+    }
+    
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
+    
+    if (item.type === 'text' || item.type === 'transcript') {
+      clipboard.writeText(item.content || '');
+      // Paste using AppleScript
+      await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+    } else if (item.imageData) {
+      const { nativeImage } = require('electron');
+      // item.imageData is already a base64 string from IPC serialization
+      const imageBuffer = typeof item.imageData === 'string' 
+        ? Buffer.from(item.imageData, 'base64')
+        : item.imageData;
+      const image = nativeImage.createFromBuffer(imageBuffer);
+      clipboard.writeImage(image);
+      await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+    }
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.PASTE_STACK, async (_event, ids: number[]) => {
+    if (!transcriberManager) {
+      return;
+    }
+    // Add items to stack and paste
+    ids.forEach(id => transcriberManager!.addToStack(id));
+    await transcriberManager.pasteStack();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SEPARATE_INTO_TASKS, async (_event, id: number) => {
+    if (!transcriberManager) {
+      throw new Error('TranscriberManager not initialized');
+    }
+    await transcriberManager.separateIntoTasks(id);
+  });
+
+  // Handle closing the clipboard history window
+  ipcMain.on('clipboard:closeWindow', (event) => {
+    // Find the window that sent this message and close it
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (window && !window.isDestroyed()) {
+      window.close();
+    }
+  });
 }
 
 /**
@@ -285,6 +513,14 @@ function broadcastTranscribeEvents(): void {
       }
     });
   });
+
+  transcriberManager.on('stackChanged', (count) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send('transcribe:stackChanged', count);
+      }
+    });
+  });
 }
 
 /**
@@ -309,10 +545,23 @@ function broadcastStateChanged(): void {
 async function initAudioSystem(): Promise<void> {
   console.log('[Main] Initializing audio system...');
 
+  // Initialize preferences manager first to load saved priority device
+  if (!preferencesManager) {
+    preferencesManager = new PreferencesManager();
+    await preferencesManager.load();
+  }
+
   nativeHelper = new NativeHelper();
   nativeHelper.start();
 
   audioManager = new AudioManager(nativeHelper);
+  
+  // Load saved priority device from preferences
+  const prefs = preferencesManager.get();
+  if (prefs.priorityDeviceId) {
+    audioManager.setSavedPriorityDeviceId(prefs.priorityDeviceId);
+  }
+  
   audioManager.on('stateChanged', () => {
     broadcastStateChanged();
   });
@@ -339,7 +588,41 @@ async function initTranscriberSystem(): Promise<void> {
   preferencesManager = new PreferencesManager();
   await preferencesManager.load();
 
-  transcriberManager = new TranscriberManager(nativeHelper, preferencesManager);
+  // Initialize clipboard manager with hotkeys from preferences
+  clipboardManager = new ClipboardManager();
+  const prefs = preferencesManager.get();
+  clipboardManager.loadHotkeysFromPreferences(
+    prefs.clipboardScreenshotHotkey,
+    prefs.clipboardHistoryHotkey
+  );
+  
+  // Register clipboard hotkeys
+  clipboardManager.registerScreenshotHotkey(async () => {
+    // Capture screenshot with region selection (drag to select)
+    const id = await clipboardManager!.captureScreenshot(true);
+    if (id > 0) {
+      // Add screenshot to prompt stack
+      if (transcriberManager) {
+        transcriberManager.addToStack(id);
+      }
+      
+      // Notify all windows (including clipboard history window)
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
+        }
+      });
+    }
+  });
+  
+  clipboardManager.registerHistoryHotkey(() => {
+    if (!clipboardHistoryWindow) {
+      clipboardHistoryWindow = new ClipboardHistoryWindow();
+    }
+    clipboardHistoryWindow.toggle();
+  });
+
+  transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager);
   await transcriberManager.init();
   broadcastTranscribeEvents();
 
@@ -361,6 +644,7 @@ if (!gotTheLock) {
 
     setupIPCHandlers();
     setupTranscribeIPCHandlers();
+    setupClipboardIPCHandlers();
     await initAudioSystem();
     await initTranscriberSystem();
     createWindow();
@@ -391,6 +675,14 @@ if (!gotTheLock) {
 
     if (nativeHelper) {
       nativeHelper.stop();
+    }
+
+    if (clipboardManager) {
+      clipboardManager.destroy();
+    }
+
+    if (clipboardHistoryWindow) {
+      clipboardHistoryWindow.destroy();
     }
   });
 }

@@ -27,12 +27,17 @@ interface Preferences {
   selectedModel: ModelSize;
   overlayStyle: OverlayStyle;
   windowState?: WindowState;
+  clipboardScreenshotHotkey?: string;
+  clipboardHistoryHotkey?: string;
+  priorityDeviceId?: string | null;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
   transcriptionHotkey: 'Alt+Space',
   selectedModel: 'base',
   overlayStyle: 'rectangle',
+  clipboardScreenshotHotkey: 'Alt+1',
+  clipboardHistoryHotkey: 'Control+Alt+Space',
 };
 
 /**

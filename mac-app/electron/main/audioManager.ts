@@ -23,10 +23,19 @@ export class AudioManager extends EventEmitter {
   private userOverrideId: string | null = null;
   private isSettingDefaultInput = false;
   private helper: NativeHelper;
+  private savedPriorityDeviceId: string | null = null;
 
   constructor(helper: NativeHelper) {
     super();
     this.helper = helper;
+  }
+
+  /**
+   * Set the saved priority device ID (loaded from preferences).
+   * This will be applied after devices are loaded.
+   */
+  setSavedPriorityDeviceId(deviceId: string | null): void {
+    this.savedPriorityDeviceId = deviceId;
   }
 
   /**
@@ -51,6 +60,19 @@ export class AudioManager extends EventEmitter {
     try {
       await this.refreshDevices();
       await this.refreshDefaultInput();
+      
+      // Restore saved priority device if available
+      if (this.savedPriorityDeviceId) {
+        // Check if the saved device still exists
+        const deviceExists = this.devices.some(d => d.id === this.savedPriorityDeviceId);
+        if (deviceExists) {
+          console.log('[AudioManager] Restoring saved priority device:', this.savedPriorityDeviceId);
+          await this.setPriorityDevice(this.savedPriorityDeviceId);
+        } else {
+          console.log('[AudioManager] Saved priority device no longer exists, clearing');
+          this.savedPriorityDeviceId = null;
+        }
+      }
     } catch (error) {
       console.error('[AudioManager] Failed to fetch initial state:', error);
     }
@@ -85,10 +107,22 @@ export class AudioManager extends EventEmitter {
     console.log('[AudioManager] setPriorityDevice:', deviceId);
     this.priorityDeviceId = deviceId;
 
-    // If priority mode is enabled and we have a device, enforce it immediately.
-    if (this.priorityMode && deviceId) {
+    // Automatically enable priority mode when a device is set, disable when cleared.
+    if (deviceId) {
+      // Device is being set - enable priority mode and enforce it.
+      if (!this.priorityMode) {
+        this.priorityMode = true;
+        console.log('[AudioManager] Auto-enabled priority mode for device:', deviceId);
+      }
       this.userOverrideId = null;
       await this.enforcePriority();
+    } else {
+      // Device is being cleared - disable priority mode.
+      if (this.priorityMode) {
+        this.priorityMode = false;
+        this.userOverrideId = null;
+        console.log('[AudioManager] Auto-disabled priority mode (no device selected)');
+      }
     }
 
     this.emitStateChanged();

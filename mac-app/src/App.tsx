@@ -129,7 +129,7 @@ export default function App() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
-  const [editingType, setEditingType] = useState<'todo' | 'observation' | null>(null);
+  const [editingType, setEditingType] = useState<'todo' | 'observation' | 'transcript' | null>(null);
   const [focusedItemId, setFocusedItemId] = useState<string | null>(null);
   const [focusedItemType, setFocusedItemType] = useState<'todo' | 'observation' | 'transcript' | null>(null);
   const [focusedSection, setFocusedSection] = useState<'todo' | 'observation' | 'transcript' | null>(null);
@@ -141,6 +141,201 @@ export default function App() {
     const saved = localStorage.getItem('darkMode');
     return saved === 'true';
   });
+  // Individual experimental feature flags
+  const [experimentalClipboardHistory, setExperimentalClipboardHistory] = useState(() => {
+    const saved = localStorage.getItem('experimentalClipboardHistory');
+    return saved === 'true';
+  });
+  
+  // Clipboard hotkey configuration
+  const [clipboardHotkeys, setClipboardHotkeys] = useState<{ screenshot?: string; history?: string }>({
+    screenshot: 'CommandOrControl+Shift+4',
+    history: 'CommandOrControl+Shift+V',
+  });
+  const [isCapturingScreenshotHotkey, setIsCapturingScreenshotHotkey] = useState(false);
+  const [isCapturingHistoryHotkey, setIsCapturingHistoryHotkey] = useState(false);
+  const [hotkeyError, setHotkeyError] = useState<string | null>(null);
+  
+  // Load clipboard hotkeys on mount
+  useEffect(() => {
+    if (window.clipboardAPI) {
+      window.clipboardAPI.getHotkeys().then(hotkeys => {
+        setClipboardHotkeys(hotkeys);
+      });
+    }
+  }, []);
+  
+  // Helper function to convert Electron hotkey format to display format
+  const formatHotkeyForDisplay = (hotkey: string): string => {
+    return hotkey.replace(/CommandOrControl/g, '⌘').replace(/Command/g, '⌘').replace(/Control/g, '⌃').replace(/Alt/g, '⌥').replace(/Shift/g, '⇧');
+  };
+  
+  // Helper function to build hotkey string from keyboard event (uses physical key codes)
+  const buildHotkeyString = (event: KeyboardEvent): string => {
+    const parts: string[] = [];
+    if (event.metaKey) parts.push('Command');
+    if (event.ctrlKey) parts.push('Control');
+    if (event.altKey) parts.push('Alt');
+    if (event.shiftKey) parts.push('Shift');
+
+    // Use physical key code to avoid locale-specific characters (e.g., Alt+¡)
+    let key = event.code;
+
+    if (key.startsWith('Key')) {
+      key = key.substring(3).toUpperCase(); // KeyA -> A
+    } else if (key.startsWith('Digit')) {
+      key = key.substring(5); // Digit1 -> 1
+    } else {
+      const codeMap: Record<string, string> = {
+        'Space': 'Space',
+        'Backquote': '`',
+        'Backslash': '\\',
+        'BracketLeft': '[',
+        'BracketRight': ']',
+        'Comma': ',',
+        'Equal': '=',
+        'Minus': '-',
+        'Period': '.',
+        'Quote': "'",
+        'Semicolon': ';',
+        'Slash': '/',
+        'CapsLock': 'CapsLock',
+        'Escape': 'Escape',
+        'Enter': 'Enter',
+        'Tab': 'Tab',
+        'Backspace': 'Backspace',
+        'Delete': 'Delete',
+        'ArrowUp': 'Up',
+        'ArrowDown': 'Down',
+        'ArrowLeft': 'Left',
+        'ArrowRight': 'Right',
+        'PageUp': 'PageUp',
+        'PageDown': 'PageDown',
+        'Home': 'Home',
+        'End': 'End',
+        'Insert': 'Insert',
+        'F1': 'F1', 'F2': 'F2', 'F3': 'F3', 'F4': 'F4',
+        'F5': 'F5', 'F6': 'F6', 'F7': 'F7', 'F8': 'F8',
+        'F9': 'F9', 'F10': 'F10', 'F11': 'F11', 'F12': 'F12',
+      };
+      if (codeMap[key]) {
+        key = codeMap[key];
+      } else {
+        // Fallback only for single ASCII characters
+        const fallback = event.key;
+        if (fallback && fallback.length === 1 && fallback.charCodeAt(0) < 128) {
+          key = fallback.toUpperCase();
+        } else {
+          console.warn(`[Hotkey] Unsupported key: ${event.code} (key: ${event.key})`);
+          return '';
+        }
+      }
+    }
+
+    // If only a modifier was pressed, return empty to indicate invalid
+    if (key === 'Meta' || key === 'Control' || key === 'Alt' || key === 'Shift') {
+      return '';
+    }
+
+    return parts.length > 0 ? `${parts.join('+')}+${key}` : key;
+  };
+
+  // Utility: detect modifier-only strings
+  const isModifierOnly = (s: string) => {
+    return s === 'Command' || s === 'Control' || s === 'Alt' || s === 'Shift';
+  };
+  
+  // Handler for setting screenshot hotkey
+  const handleSetScreenshotHotkey = useCallback(async (hotkeyString: string) => {
+    setIsCapturingScreenshotHotkey(false);
+    setHotkeyError(null);
+    
+    if (!window.clipboardAPI) return;
+    
+    // Guard invalid or modifier-only strings
+    if (!hotkeyString || isModifierOnly(hotkeyString)) {
+      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+      return;
+    }
+
+    try {
+      const success = await window.clipboardAPI.setHotkeys({ screenshot: hotkeyString });
+      if (!success) {
+        setHotkeyError('Failed to register screenshot hotkey. It may be in use by another application.');
+      } else {
+        setClipboardHotkeys(prev => ({ ...prev, screenshot: hotkeyString }));
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set screenshot hotkey');
+      console.error('Failed to set screenshot hotkey:', err);
+    }
+  }, []);
+  
+  // Handler for setting history hotkey
+  const handleSetHistoryHotkey = useCallback(async (hotkeyString: string) => {
+    setIsCapturingHistoryHotkey(false);
+    setHotkeyError(null);
+    
+    if (!window.clipboardAPI) return;
+    
+    // Guard invalid or modifier-only strings
+    if (!hotkeyString || isModifierOnly(hotkeyString)) {
+      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+      return;
+    }
+
+    try {
+      const success = await window.clipboardAPI.setHotkeys({ history: hotkeyString });
+      if (!success) {
+        setHotkeyError('Failed to register history hotkey. It may be in use by another application.');
+      } else {
+        setClipboardHotkeys(prev => ({ ...prev, history: hotkeyString }));
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set history hotkey');
+      console.error('Failed to set history hotkey:', err);
+    }
+  }, []);
+  
+  // Handler for keydown events when capturing screenshot hotkey
+  useEffect(() => {
+    if (!isCapturingScreenshotHotkey) return;
+    
+    const handleKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      
+      const hotkeyString = buildHotkeyString(event);
+      if (hotkeyString) {
+        handleSetScreenshotHotkey(hotkeyString);
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isCapturingScreenshotHotkey, handleSetScreenshotHotkey]);
+  
+  // Handler for keydown events when capturing history hotkey
+  useEffect(() => {
+    if (!isCapturingHistoryHotkey) return;
+    
+    const handleKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      
+      const hotkeyString = buildHotkeyString(event);
+      if (hotkeyString) {
+        handleSetHistoryHotkey(hotkeyString);
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isCapturingHistoryHotkey, handleSetHistoryHotkey]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -300,7 +495,7 @@ export default function App() {
   };
 
   // Edit functionality
-  const handleEdit = (item: TodoRow | ObservationRow, type: 'todo' | 'observation') => {
+  const handleEdit = (item: TodoRow | ObservationRow | TranscriptRow, type: 'todo' | 'observation' | 'transcript') => {
     setEditingId(item.id);
     setEditText(item.text);
     setEditingType(type);
@@ -317,13 +512,21 @@ export default function App() {
         const cached = loadFromCache();
         if (cached) saveToCache({ ...cached, todos: updatedTodos });
       }
-    } else {
+    } else if (editingType === 'observation') {
       const { error } = await supabase.from('observations').update({ text: editText.trim() }).eq('id', editingId);
       if (!error) {
         const updatedObservations = observations.map((o) => (o.id === editingId ? { ...o, text: editText.trim() } : o));
         setObservations(updatedObservations);
         const cached = loadFromCache();
         if (cached) saveToCache({ ...cached, observations: updatedObservations });
+      }
+    } else if (editingType === 'transcript') {
+      const { error } = await supabase.from('transcripts').update({ text: editText.trim() }).eq('id', editingId);
+      if (!error) {
+        const updatedTranscripts = transcripts.map((t) => (t.id === editingId ? { ...t, text: editText.trim() } : t));
+        setTranscripts(updatedTranscripts);
+        const cached = loadFromCache();
+        if (cached) saveToCache({ ...cached, transcripts: updatedTranscripts });
       }
     }
 
@@ -627,7 +830,7 @@ export default function App() {
       >
       <div style={styles.dataTabContent}>
 
-      {session && (
+      {session ? (
         <div style={styles.listsContainer}>
           {/* Tasks Section */}
           <section style={{
@@ -1026,6 +1229,68 @@ export default function App() {
             )}
           </section>
         </div>
+      ) : (
+        <div style={{ 
+          flex: 1, 
+          display: 'flex', 
+          alignItems: 'center', 
+          justifyContent: 'center', 
+          width: '100%',
+          minHeight: '400px',
+        }}>
+          <div style={{ 
+            textAlign: 'center', 
+            maxWidth: '480px', 
+            padding: '32px',
+            backgroundColor: darkMode ? '#2d2d2d' : '#fff',
+            borderRadius: '12px',
+            boxShadow: darkMode ? '0 4px 12px rgba(0, 0, 0, 0.3)' : '0 4px 12px rgba(15, 23, 42, 0.08)',
+          }}>
+            <h2 style={{ 
+              marginTop: 0, 
+              marginBottom: '12px',
+              color: darkMode ? '#e5e5e5' : '#111',
+              fontSize: '24px',
+              fontWeight: 600,
+            }}>
+              Welcome to Little One
+            </h2>
+            <p style={{ 
+              color: darkMode ? '#9ca3af' : '#6b7280',
+              marginBottom: '24px',
+              fontSize: '14px',
+              lineHeight: '1.6',
+            }}>
+              Sign in to view tasks, observations, and transcripts. Use the settings button to get started.
+            </p>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+              <button
+                style={{ 
+                  ...styles.primaryButton, 
+                  width: 'auto',
+                  padding: '10px 20px',
+                }}
+                onClick={() => setShowSettings(true)}
+              >
+                Open Settings
+              </button>
+              <button
+                style={{ 
+                  ...styles.secondaryButton, 
+                  width: 'auto',
+                  padding: '10px 20px',
+                }}
+                onClick={() => {
+                  const newDarkMode = !darkMode;
+                  setDarkMode(newDarkMode);
+                  localStorage.setItem('darkMode', String(newDarkMode));
+                }}
+              >
+                {darkMode ? '☀️ Light' : '🌙 Dark'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Edit Modal */}
@@ -1036,7 +1301,7 @@ export default function App() {
             backgroundColor: darkMode ? '#2d2d2d' : '#fff',
             color: darkMode ? '#e5e5e5' : '#111',
           }}>
-            <h3 style={styles.modalTitle}>Edit {editingType === 'todo' ? 'Task' : 'Observation'}</h3>
+            <h3 style={styles.modalTitle}>Edit {editingType === 'todo' ? 'Task' : editingType === 'observation' ? 'Observation' : 'Transcript'}</h3>
             <textarea
               style={styles.modalInput}
               value={editText}
@@ -1056,8 +1321,8 @@ export default function App() {
       )}
 
       {/* Shortcuts and Settings Buttons */}
-      {session && (
-        <div style={styles.bottomButtons}>
+      <div style={styles.bottomButtons}>
+        {session && (
           <button style={{
             ...styles.shortcutsButton,
             backgroundColor: darkMode ? '#2d2d2d' : '#fff',
@@ -1066,32 +1331,32 @@ export default function App() {
           }} onClick={() => setShowShortcuts(true)}>
             Keyboard Shortcuts (?)
           </button>
-          <button
-            style={{
-              ...styles.settingsButton,
-              backgroundColor: darkMode ? '#374151' : '#fff',
-              color: darkMode ? '#fff' : '#6b7280',
-              borderColor: darkMode ? '#374151' : '#e5e7eb',
-            }}
-            onClick={() => {
-              const newDarkMode = !darkMode;
-              setDarkMode(newDarkMode);
-              localStorage.setItem('darkMode', String(newDarkMode));
-            }}
-            title={darkMode ? 'Light mode' : 'Dark mode'}
-          >
-            {darkMode ? '☀️' : '🌙'}
-          </button>
-          <button style={{
+        )}
+        <button
+          style={{
             ...styles.settingsButton,
-            backgroundColor: darkMode ? '#2d2d2d' : '#fff',
-            color: darkMode ? '#e5e5e5' : '#6b7280',
-            borderColor: darkMode ? '#404040' : '#e5e7eb',
-          }} onClick={() => setShowSettings(true)}>
-            ⚙️
-          </button>
-        </div>
-      )}
+            backgroundColor: darkMode ? '#374151' : '#fff',
+            color: darkMode ? '#fff' : '#6b7280',
+            borderColor: darkMode ? '#374151' : '#e5e7eb',
+          }}
+          onClick={() => {
+            const newDarkMode = !darkMode;
+            setDarkMode(newDarkMode);
+            localStorage.setItem('darkMode', String(newDarkMode));
+          }}
+          title={darkMode ? 'Light mode' : 'Dark mode'}
+        >
+          {darkMode ? '☀️' : '🌙'}
+        </button>
+        <button style={{
+          ...styles.settingsButton,
+          backgroundColor: darkMode ? '#2d2d2d' : '#fff',
+          color: darkMode ? '#e5e5e5' : '#6b7280',
+          borderColor: darkMode ? '#404040' : '#e5e7eb',
+        }} onClick={() => setShowSettings(true)}>
+          ⚙️
+        </button>
+      </div>
 
       {/* Shortcuts Modal */}
       {showShortcuts && (
@@ -1185,6 +1450,203 @@ export default function App() {
             </div>
 
             <div style={styles.settingsSection}>
+              <h3 style={styles.shortcutsSectionTitle}>Experimental Features</h3>
+              <p style={{
+                fontSize: '13px',
+                color: darkMode ? '#9ca3af' : '#6b7280',
+                marginBottom: '16px',
+                marginTop: '4px',
+              }}>
+                Features that are still in development. These may be unstable or incomplete. Enable individual features below.
+              </p>
+              
+              <div style={styles.experimentalSection}>
+                <label style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '12px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  color: darkMode ? '#e5e5e5' : '#374151',
+                  padding: '12px',
+                  borderRadius: '8px',
+                  backgroundColor: darkMode ? '#1a1a1a' : '#f9fafb',
+                  border: `1px solid ${darkMode ? '#404040' : '#e5e7eb'}`,
+                  marginBottom: '12px',
+                }}>
+                  <input
+                    type="checkbox"
+                    checked={experimentalClipboardHistory}
+                    onChange={(e) => {
+                      const enabled = e.target.checked;
+                      setExperimentalClipboardHistory(enabled);
+                      localStorage.setItem('experimentalClipboardHistory', String(enabled));
+                    }}
+                    style={{
+                      width: '18px',
+                      height: '18px',
+                      cursor: 'pointer',
+                      accentColor: darkMode ? '#3b82f6' : '#2563eb',
+                      marginTop: '2px',
+                      flexShrink: 0,
+                    }}
+                  />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 500, marginBottom: '4px' }}>
+                      Clipboard History
+                    </div>
+                    <div style={{ fontSize: '12px', color: darkMode ? '#9ca3af' : '#6b7280', lineHeight: '1.5' }}>
+                      Alfred-style clipboard history popup with fuzzy search and multi-select. Access via hotkey or by calling the API. Shows text, images, transcripts, and screenshots from your clipboard.
+                    </div>
+                  </div>
+                </label>
+                
+                {/* Hotkey Configuration */}
+                {experimentalClipboardHistory && (
+                  <div style={{
+                    marginTop: '16px',
+                    padding: '16px',
+                    borderRadius: '8px',
+                    backgroundColor: darkMode ? '#1a1a1a' : '#f9fafb',
+                    border: `1px solid ${darkMode ? '#404040' : '#e5e7eb'}`,
+                  }}>
+                    <h4 style={{
+                      marginTop: 0,
+                      marginBottom: '12px',
+                      fontSize: '14px',
+                      fontWeight: 600,
+                      color: darkMode ? '#e5e5e5' : '#374151',
+                    }}>
+                      Hotkey Configuration
+                    </h4>
+                    
+                    {/* Screenshot Hotkey */}
+                    <div style={{ marginBottom: '12px' }}>
+                      <label style={{
+                        display: 'block',
+                        marginBottom: '6px',
+                        fontSize: '13px',
+                        color: darkMode ? '#d1d5db' : '#6b7280',
+                      }}>
+                        Screenshot Hotkey
+                      </label>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <button
+                          onClick={() => {
+                            setIsCapturingScreenshotHotkey(true);
+                            setHotkeyError(null);
+                          }}
+                          disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey}
+                          style={{
+                            padding: '6px 12px',
+                            fontSize: '12px',
+                            fontWeight: 500,
+                            color: isCapturingScreenshotHotkey ? '#fff' : (darkMode ? '#e5e5e5' : '#374151'),
+                            backgroundColor: isCapturingScreenshotHotkey ? '#3b82f6' : (darkMode ? '#2d2d2d' : '#fff'),
+                            border: `1px solid ${darkMode ? '#404040' : '#d1d5db'}`,
+                            borderRadius: '6px',
+                            cursor: isCapturingScreenshotHotkey || isCapturingHistoryHotkey ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          {isCapturingScreenshotHotkey ? 'Press key combination...' : `Change (${clipboardHotkeys.screenshot || 'Not set'})`}
+                        </button>
+                        {isCapturingScreenshotHotkey && (
+                          <button
+                            onClick={() => {
+                              setIsCapturingScreenshotHotkey(false);
+                              setHotkeyError(null);
+                            }}
+                            style={{
+                              padding: '6px 12px',
+                              fontSize: '12px',
+                              color: darkMode ? '#9ca3af' : '#6b7280',
+                              backgroundColor: 'transparent',
+                              border: 'none',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {/* History Hotkey */}
+                    <div style={{ marginBottom: '12px' }}>
+                      <label style={{
+                        display: 'block',
+                        marginBottom: '6px',
+                        fontSize: '13px',
+                        color: darkMode ? '#d1d5db' : '#6b7280',
+                      }}>
+                        History Hotkey
+                      </label>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <button
+                          onClick={() => {
+                            setIsCapturingHistoryHotkey(true);
+                            setHotkeyError(null);
+                          }}
+                          disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey}
+                          style={{
+                            padding: '6px 12px',
+                            fontSize: '12px',
+                            fontWeight: 500,
+                            color: isCapturingHistoryHotkey ? '#fff' : (darkMode ? '#e5e5e5' : '#374151'),
+                            backgroundColor: isCapturingHistoryHotkey ? '#3b82f6' : (darkMode ? '#2d2d2d' : '#fff'),
+                            border: `1px solid ${darkMode ? '#404040' : '#d1d5db'}`,
+                            borderRadius: '6px',
+                            cursor: isCapturingScreenshotHotkey || isCapturingHistoryHotkey ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          {isCapturingHistoryHotkey ? 'Press key combination...' : `Change (${clipboardHotkeys.history || 'Not set'})`}
+                        </button>
+                        {isCapturingHistoryHotkey && (
+                          <button
+                            onClick={() => {
+                              setIsCapturingHistoryHotkey(false);
+                              setHotkeyError(null);
+                            }}
+                            style={{
+                              padding: '6px 12px',
+                              fontSize: '12px',
+                              color: darkMode ? '#9ca3af' : '#6b7280',
+                              backgroundColor: 'transparent',
+                              border: 'none',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {hotkeyError && (
+                      <p style={{
+                        marginTop: '8px',
+                        fontSize: '12px',
+                        color: '#ef4444',
+                      }}>
+                        {hotkeyError}
+                      </p>
+                    )}
+                    
+                    <p style={{
+                      marginTop: '12px',
+                      marginBottom: 0,
+                      fontSize: '11px',
+                      color: darkMode ? '#9ca3af' : '#6b7280',
+                      lineHeight: '1.5',
+                    }}>
+                      Supports 2-3 modifier keys + primary key (e.g., Command+Shift+Control+Space). Screenshot hotkey captures selected area and adds to prompt stack.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div style={styles.settingsSection}>
               <h3 style={styles.shortcutsSectionTitle}>Account</h3>
               {session ? (
                 <>
@@ -1266,6 +1728,8 @@ export default function App() {
           Logged in
         </div>
       )}
+
+      {/* Experimental features - Clipboard History is now in its own window */}
       </div>
       </div>
     </>
@@ -1279,7 +1743,7 @@ const styles: Record<string, React.CSSProperties> = {
     left: 0,
     right: 0,
     height: '44px', // Standard macOS title bar height
-    WebkitAppRegion: 'drag',
+    WebkitAppRegion: 'drag' as any,
     zIndex: 1000,
     pointerEvents: 'auto',
   },
@@ -1649,6 +2113,9 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: '6px',
     boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
     zIndex: 100,
+  },
+  experimentalSection: {
+    marginTop: '8px',
   },
   accountText: {
     fontSize: '14px',
