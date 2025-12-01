@@ -11,6 +11,7 @@ export default function RecordingOverlay() {
   const [state, setState] = useState<OverlayState>('recording');
   const [style, setStyle] = useState<OverlayStyle>('rectangle');
   const [audioLevel, setAudioLevel] = useState<number>(0);
+  const [stackCount, setStackCount] = useState<number>(0);
   const [bars, setBars] = useState<number[]>([4, 6, 8, 10, 8, 6, 4]);
   const frameRef = useRef<number>();
 
@@ -32,6 +33,30 @@ export default function RecordingOverlay() {
     window.overlayAPI.onAudioLevel((l) => setAudioLevel(l));
     return () => window.overlayAPI?.removeAllListeners('audio-level');
   }, [state]);
+
+  // Listen for stack count changes
+  useEffect(() => {
+    if (!window.transcribeAPI) return;
+    
+    // Get initial stack count
+    (async () => {
+      try {
+        const count = await window.transcribeAPI.getStackCount() || 0;
+        setStackCount(count);
+      } catch (e) {
+        // Ignore if not available
+      }
+    })();
+    
+    // Listen for stack changed events
+    const unsubscribe = window.transcribeAPI.onStackChanged?.((count: number) => {
+      setStackCount(count);
+    });
+    
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
 
   // Animation
   useEffect(() => {
@@ -75,12 +100,36 @@ export default function RecordingOverlay() {
       {/* Recording indicator */}
       {state === 'recording' && (
         <div style={{
-          width: isTopEmerging ? 12 : 10,
-          height: isTopEmerging ? 12 : 10,
-          borderRadius: '50%',
-          background: '#ff3b30',
-          boxShadow: isTopEmerging ? '0 0 12px rgba(255, 59, 48, 0.6)' : '0 0 8px #ff3b30',
-        }} />
+          display: 'flex',
+          alignItems: 'center',
+          gap: isTopEmerging ? '6px' : '4px',
+        }}>
+          <div style={{
+            width: isTopEmerging ? 12 : 10,
+            height: isTopEmerging ? 12 : 10,
+            borderRadius: '50%',
+            background: '#ff3b30',
+            boxShadow: isTopEmerging ? '0 0 12px rgba(255, 59, 48, 0.6)' : '0 0 8px #ff3b30',
+          }} />
+          {/* Stack count indicator */}
+          {stackCount > 0 && (
+            <div style={{
+              minWidth: isTopEmerging ? '18px' : '16px',
+              height: isTopEmerging ? '18px' : '16px',
+              padding: '0 4px',
+              borderRadius: isTopEmerging ? '9px' : '8px',
+              background: isTopEmerging ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.1)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: isTopEmerging ? '10px' : '9px',
+              fontWeight: 600,
+              color: isTopEmerging ? '#fff' : '#333',
+            }}>
+              {stackCount}
+            </div>
+          )}
+        </div>
       )}
 
       {/* Bars */}

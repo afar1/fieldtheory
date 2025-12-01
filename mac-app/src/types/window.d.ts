@@ -57,14 +57,84 @@ type ModelStatus = 'downloaded' | 'downloading' | 'missing';
 interface TranscribeAPI {
   getStatus: () => Promise<TranscriptionStatus>;
   getModelStatus: () => Promise<ModelStatus>;
-  downloadModel: () => Promise<void>;
+  downloadModel: (modelSize?: string) => Promise<void>;
+  getAvailableModels: () => Promise<Record<string, ModelInfo>>;
+  getModelDownloadStatus: () => Promise<Record<string, boolean>>;
+  getSelectedModel: () => Promise<string>;
+  setSelectedModel: (modelSize: string) => Promise<void>;
   getHotkey: () => Promise<string>;
   setHotkey: (hotkey: string) => Promise<boolean>;
+  getOverlayStyle: () => Promise<'rectangle' | 'top-emerging'>;
+  setOverlayStyle: (style: 'rectangle' | 'top-emerging') => Promise<void>;
+  getStackCount: () => Promise<number>;
   onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
   onResult: (callback: (text: string) => void) => () => void;
   onError: (callback: (error: string) => void) => () => void;
   onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
   onHotkeyChanged: (callback: (hotkey: string) => void) => () => void;
+  onStackChanged: (callback: (count: number) => void) => () => void;
+}
+
+/**
+ * Clipboard item type.
+ */
+type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
+
+/**
+ * Clipboard item.
+ */
+interface ClipboardItem {
+  id: number;
+  type: ClipboardItemType;
+  content: string | null;
+  imageData: string | null;
+  imageWidth: number | null;
+  imageHeight: number | null;
+  imageSize: number | null;
+  sourceApp: string | null;
+  sourceAppName: string | null;
+  wordCount: number | null;
+  charCount: number | null;
+  createdAt: number;
+  contentHash: string;
+}
+
+/**
+ * Clipboard query options.
+ */
+interface ClipboardQueryOptions {
+  type?: ClipboardItemType;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * Clipboard hotkeys.
+ */
+interface ClipboardHotkeys {
+  screenshot?: string;
+  history?: string;
+}
+
+/**
+ * The clipboard API exposed by the preload script.
+ */
+interface ClipboardAPI {
+  queryItems: (options?: ClipboardQueryOptions) => Promise<ClipboardItem[]>;
+  getItem: (id: number) => Promise<ClipboardItem | null>;
+  deleteItem: (id: number) => Promise<void>;
+  clearAll: () => Promise<void>;
+  captureScreenshot: (region?: boolean) => Promise<number>;
+  getHotkeys: () => Promise<ClipboardHotkeys>;
+  setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
+  pasteItem: (id: number) => Promise<void>;
+  pasteStack: (ids: number[]) => Promise<void>;
+  separateIntoTasks: (id: number) => Promise<void>;
+  onItemAdded: (callback: (id: number) => void) => () => void;
+  onItemDeleted: (callback: (id: number) => void) => () => void;
+  onShowHistory: (callback: () => void) => () => void;
+  closeWindow: () => Promise<void>;
 }
 
 /**
@@ -77,12 +147,23 @@ interface PlatformInfo {
 }
 
 /**
+ * Model information.
+ */
+interface ModelInfo {
+  name: string;
+  url: string;
+  sizeBytes: number;
+  description: string;
+}
+
+/**
  * Extend the Window interface with our custom APIs.
  */
 declare global {
   interface Window {
     audioAPI?: AudioAPI;
     transcribeAPI?: TranscribeAPI;
+    clipboardAPI?: ClipboardAPI;
     platform?: PlatformInfo;
   }
 }

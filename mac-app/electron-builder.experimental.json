@@ -1,0 +1,36 @@
+{
+  "appId": "com.littleone.mac.experimental",
+  "productName": "Little One Experimental",
+  "mac": {
+    "category": "public.app-category.productivity",
+    "target": [
+      "dmg",
+      "zip"
+    ],
+    "icon": "assets/icon.icns",
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false,
+    "extraResources": [
+      {
+        "from": "electron/native/build/LittleOneHelper",
+        "to": "LittleOneHelper"
+      },
+      {
+        "from": "electron/assets",
+        "to": "assets"
+      },
+      {
+        "from": "../../build-whisper/bin/whisper-cli",
+        "to": "whisper-cli"
+      }
+    ]
+  },
+  "files": [
+    "dist/**/*",
+    "electron-dist/**/*"
+  ],
+  "directories": {
+    "output": "release-experimental"
+  }
+}
+
