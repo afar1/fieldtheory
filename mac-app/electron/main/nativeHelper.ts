@@ -118,7 +118,11 @@ export class NativeHelper extends EventEmitter {
    * Wait for the helper to be ready (has sent initial message).
    */
   private async waitForReady(): Promise<void> {
-    if (this.isReady) return;
+    if (this.isReady) {
+      // Even if ready, give a small delay to ensure stdin loop is fully initialized
+      await new Promise(resolve => setTimeout(resolve, 50));
+      return;
+    }
     
     // Wait up to 2 seconds for the helper to send its initial log message
     const maxWait = 2000;
@@ -130,6 +134,9 @@ export class NativeHelper extends EventEmitter {
     
     if (!this.isReady) {
       console.warn('[NativeHelper] Helper did not become ready within timeout');
+    } else {
+      // Give Swift a moment to fully initialize its stdin reading loop after first message
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
   }
 
@@ -268,6 +275,43 @@ export class NativeHelper extends EventEmitter {
   }
 
   /**
+   * Check if Accessibility and Input Monitoring permissions are granted.
+   */
+  async checkPermissions(): Promise<{ accessibilityGranted: boolean; inputMonitoringGranted: boolean }> {
+    await this.waitForReady();
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error('checkPermissions timed out'));
+      }, 5000);
+
+      const onMessage = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'permissionsStatus') {
+          const status = msg as any;
+          cleanup();
+          resolve({
+            accessibilityGranted: status.accessibilityGranted,
+            inputMonitoringGranted: status.inputMonitoringGranted,
+          });
+        } else if (msg.type === 'error') {
+          cleanup();
+          reject(new Error((msg as any).message));
+        }
+        // ignore other messages (e.g. 'log')
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', onMessage);
+      };
+
+      this.on('message', onMessage);
+      this.send({ type: 'checkPermissions' });
+    });
+  }
+
+
+  /**
    * Determine the path to the helper binary based on the environment.
    */
   private getHelperPath(): string {
@@ -295,10 +339,14 @@ export class NativeHelper extends EventEmitter {
 
       try {
         const msg = JSON.parse(line) as HelperOutgoingMessage;
-        console.log('[NativeHelper] Parsed message:', msg.type, msg);
+        // Only log non-debug messages to reduce noise
+        if (msg.type !== 'log' || (msg as any).level !== 'debug') {
+          console.log('[NativeHelper] Parsed message:', msg.type, msg);
+        }
         this.handleMessage(msg);
       } catch (err) {
-        console.error('[NativeHelper] Failed to parse JSON:', line, err);
+        console.error('[NativeHelper] Failed to parse JSON from helper. Line:', line.substring(0, 200), 'Error:', err);
+        // Don't crash - just log and continue
       }
     }
   }
@@ -318,12 +366,22 @@ export class NativeHelper extends EventEmitter {
 
       case 'log':
         const level = msg.level || 'info';
+        // Only log debug messages if explicitly enabled
+        if (level === 'debug' && !process.env.DEBUG_NATIVE_HELPER) {
+          // Skip debug messages unless DEBUG_NATIVE_HELPER is set
+          break;
+        }
         console.log(`[NativeHelper ${level}]`, msg.message);
         break;
 
       case 'error':
         console.error('[NativeHelper error]', msg.message);
-        this.emit('error', new Error(msg.message));
+        // Only emit error event if there are listeners to avoid unhandled errors
+        if (this.listenerCount('error') > 0) {
+          this.emit('error', new Error(msg.message));
+        }
+        // Also emit as message for promise-based handlers that might be waiting
+        this.emit('message', msg);
         break;
 
       case 'recordingStarted':
@@ -337,6 +395,11 @@ export class NativeHelper extends EventEmitter {
       case 'audioLevel':
         // Emit audio level for live waveform display
         this.emit('audioLevel', (msg as any).level);
+        break;
+
+      case 'permissionsStatus':
+        // Emit as 'message' event for promise-based handlers
+        this.emit('message', msg);
         break;
 
       default:
@@ -401,6 +464,9 @@ export class NativeHelper extends EventEmitter {
 
     try {
       const json = JSON.stringify(command);
+      if (process.env.DEBUG_NATIVE_HELPER) {
+        console.log('[NativeHelper] Sending command:', json);
+      }
       const success = this.child.stdin.write(json + '\n');
       
       if (!success) {
@@ -412,7 +478,7 @@ export class NativeHelper extends EventEmitter {
         this.isRunning = false;
         this.child = null;
       } else {
-        console.error('[NativeHelper] Error sending command:', error);
+        console.error('[NativeHelper] Error sending command:', error, 'Command was:', command);
       }
     }
   }

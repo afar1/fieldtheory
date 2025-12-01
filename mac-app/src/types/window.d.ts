@@ -134,7 +134,31 @@ interface ClipboardAPI {
   onItemAdded: (callback: (id: number) => void) => () => void;
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
+  onKeyEvent: (callback: (event: { characters: string; keyCode: number; modifiers: string[] }) => void) => () => void;
   closeWindow: () => Promise<void>;
+}
+
+/**
+ * Permissions status.
+ */
+interface PermissionsStatus {
+  accessibilityGranted: boolean;
+}
+
+/**
+ * The permissions API exposed by the preload script.
+ */
+interface PermissionsAPI {
+  check: () => Promise<PermissionsStatus>;
+  onStatusChanged: (callback: (status: PermissionsStatus) => void) => () => void;
+  onRevoked: (callback: () => void) => () => void;
+}
+
+/**
+ * Electron API for app control.
+ */
+interface ElectronAPI {
+  relaunch: () => void;
 }
 
 /**
@@ -164,6 +188,8 @@ declare global {
     audioAPI?: AudioAPI;
     transcribeAPI?: TranscribeAPI;
     clipboardAPI?: ClipboardAPI;
+    permissionsAPI?: PermissionsAPI;
+    electronAPI?: ElectronAPI;
     platform?: PlatformInfo;
   }
 }

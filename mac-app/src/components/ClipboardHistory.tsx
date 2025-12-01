@@ -143,9 +143,6 @@ export default function ClipboardHistory() {
     setSelectedIndex(0);
     setSelectedIds(new Set());
     setIsMultiSelect(false);
-    setTimeout(() => {
-      inputRef.current?.focus();
-    }, 100);
 
     // Listen for item additions
     const unsubscribeAdded = window.clipboardAPI.onItemAdded((id) => {
@@ -169,31 +166,46 @@ export default function ClipboardHistory() {
     };
   }, [isMacOS, isVisible, loadItems]);
 
-  // Handle keyboard navigation.
+  // Handle keyboard input via standard DOM events (window is focusable).
   useEffect(() => {
     if (!isVisible) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        // Close the window (in standalone mode)
+      const hasShift = e.shiftKey;
+      const hasMeta = e.metaKey;
+      const hasCtrl = e.ctrlKey;
+      const hasAlt = e.altKey;
+      const key = e.key;
+
+      // If typing in the input, let it handle normal characters
+      if (document.activeElement === inputRef.current && 
+          key.length === 1 && 
+          !hasMeta && !hasCtrl && !hasAlt && 
+          key !== 'ArrowUp' && key !== 'ArrowDown' && key !== 'Enter' && key !== 'Escape' && key !== 'Tab') {
+        return; // Let input handle it naturally
+      }
+
+      // Prevent default for navigation keys
+      if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Enter' || key === 'Escape' || key === 'Tab') {
+        e.preventDefault();
+      }
+
+      if (key === 'Escape') {
         window.clipboardAPI?.closeWindow();
         return;
       }
 
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
+      if (key === 'ArrowDown') {
         setSelectedIndex(prev => Math.min(prev + 1, items.length - 1));
         return;
       }
 
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
+      if (key === 'ArrowUp') {
         setSelectedIndex(prev => Math.max(prev - 1, 0));
         return;
       }
 
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
+      if (key === 'Enter' && !hasShift) {
         if (selectedIds.size > 0) {
           // Paste stack
           window.clipboardAPI?.pasteStack(Array.from(selectedIds));
@@ -208,8 +220,7 @@ export default function ClipboardHistory() {
         return;
       }
 
-      if (e.key === 'Enter' && e.shiftKey) {
-        e.preventDefault();
+      if (key === 'Enter' && hasShift) {
         // Toggle multi-select mode
         setIsMultiSelect(true);
         if (items[selectedIndex]) {
@@ -226,52 +237,54 @@ export default function ClipboardHistory() {
         return;
       }
 
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (e.metaKey || e.ctrlKey) {
-          e.preventDefault();
-          // Delete selected item
-          if (items[selectedIndex]) {
-            window.clipboardAPI?.deleteItem(items[selectedIndex].id);
-          }
+      if (key === 'Backspace' && (hasMeta || hasCtrl)) {
+        // Delete selected item
+        if (items[selectedIndex]) {
+          window.clipboardAPI?.deleteItem(items[selectedIndex].id);
         }
+        return;
       }
 
-      // Tab navigation between filter tabs - always works, even when input is focused
-      if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        e.preventDefault();
-        // Blur input if focused so Tab doesn't insert a tab character
-        inputRef.current?.blur();
+      // Tab navigation between filter tabs
+      if (key === 'Tab' && !hasCtrl && !hasMeta && !hasAlt) {
         const tabs: FilterType[] = ['all', 'transcript', 'screenshot'];
-        const nextIndex = (focusedTabIndex + 1) % tabs.length;
-        setFocusedTabIndex(nextIndex);
-        setFilter(tabs[nextIndex]);
-        setSelectedIndex(0);
-        // Focus the tab button
-        setTimeout(() => {
-          tabRefs.current[nextIndex]?.focus();
-        }, 0);
-      }
-
-      if (e.key === 'Tab' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        // Shift+Tab - go backwards through tabs
-        e.preventDefault();
-        // Blur input if focused so Tab doesn't insert a tab character
-        inputRef.current?.blur();
-        const tabs: FilterType[] = ['all', 'transcript', 'screenshot'];
-        const prevIndex = (focusedTabIndex - 1 + tabs.length) % tabs.length;
-        setFocusedTabIndex(prevIndex);
-        setFilter(tabs[prevIndex]);
-        setSelectedIndex(0);
-        // Focus the tab button
-        setTimeout(() => {
-          tabRefs.current[prevIndex]?.focus();
-        }, 0);
+        if (hasShift) {
+          // Shift+Tab - go backwards
+          const prevIndex = (focusedTabIndex - 1 + tabs.length) % tabs.length;
+          setFocusedTabIndex(prevIndex);
+          setFilter(tabs[prevIndex]);
+          setSelectedIndex(0);
+          setTimeout(() => {
+            tabRefs.current[prevIndex]?.focus();
+          }, 0);
+        } else {
+          // Tab - go forwards
+          const nextIndex = (focusedTabIndex + 1) % tabs.length;
+          setFocusedTabIndex(nextIndex);
+          setFilter(tabs[nextIndex]);
+          setSelectedIndex(0);
+          setTimeout(() => {
+            tabRefs.current[nextIndex]?.focus();
+          }, 0);
+        }
+        return;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
   }, [isVisible, items, selectedIndex, selectedIds, focusedTabIndex, filter]);
+
+  // Focus input when window becomes visible
+  useEffect(() => {
+    if (isVisible && inputRef.current) {
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 100);
+    }
+  }, [isVisible]);
 
   // Scroll selected item into view.
   useEffect(() => {
@@ -309,23 +322,18 @@ export default function ClipboardHistory() {
     }
   };
 
-  // Handle click outside to close
-  useEffect(() => {
-    if (!isVisible) return;
+  // Handle click outside to close (Alfred-like behavior)
+  const handleOverlayClick = (event: React.MouseEvent) => {
+    // Close if clicking on the overlay background (not the dialog content)
+    if (event.target === event.currentTarget) {
+      window.clipboardAPI?.closeWindow();
+    }
+  };
 
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dialogRef.current && !dialogRef.current.contains(event.target as Node)) {
-        // Close the window (in standalone mode)
-        window.clipboardAPI?.closeWindow();
-      }
-    };
-
-    // Use mousedown to catch clicks outside
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [isVisible]);
+  // Prevent clicks inside dialog from closing the window
+  const handleDialogClick = (event: React.MouseEvent) => {
+    event.stopPropagation();
+  };
 
   if (!isVisible) {
     return null;
@@ -339,32 +347,50 @@ export default function ClipboardHistory() {
 
   return (
     <div
-      ref={dialogRef}
+      onClick={handleOverlayClick}
       style={{
-        position: 'relative',
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
         width: '100%',
         height: '100%',
-        boxSizing: 'border-box',
-        padding: '16px',
-        backgroundColor: '#ffffff',
-        borderRadius: '12px',
-        boxShadow: '0 20px 45px rgba(0, 0, 0, 0.25)',
+        backgroundColor: 'rgba(0, 0, 0, 0.1)', // Subtle overlay like Alfred
         display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        alignItems: 'center',
+        justifyContent: 'center',
+        cursor: 'default',
       }}
     >
-      {/* Search input */}
+      <div
+        ref={dialogRef}
+        onClick={handleDialogClick}
+        style={{
+          position: 'relative',
+          width: '600px',
+          maxWidth: '90vw',
+          maxHeight: '80vh',
+          boxSizing: 'border-box',
+          padding: '16px',
+          backgroundColor: '#ffffff',
+          borderRadius: '12px',
+          boxShadow: '0 20px 45px rgba(0, 0, 0, 0.25)',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          cursor: 'default',
+        }}
+      >
+      {/* Search input - standard input element with autoFocus */}
       <input
         ref={inputRef}
         type="text"
         value={searchQuery}
-        onChange={(e) => {
-          setSearchQuery(e.target.value);
-          setSelectedIndex(0);
-        }}
+        onChange={(e) => setSearchQuery(e.target.value)}
         placeholder="Search clipboard history..."
+        autoFocus
         style={{
           width: '100%',
           padding: '10px 14px',
@@ -373,6 +399,7 @@ export default function ClipboardHistory() {
           fontSize: '13px',
           outline: 'none',
           boxSizing: 'border-box',
+          backgroundColor: '#ffffff',
         }}
       />
 
@@ -609,6 +636,7 @@ export default function ClipboardHistory() {
             {loading ? 'Loading...' : 'Load More'}
           </button>
         )}
+      </div>
       </div>
     </div>
   );
