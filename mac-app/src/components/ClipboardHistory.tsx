@@ -236,37 +236,36 @@ export default function ClipboardHistory() {
         }
       }
 
-      // Tab navigation between filter tabs
+      // Tab navigation between filter tabs - always works, even when input is focused
       if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        // Only handle Tab if not in input field and not with modifiers
-        if (document.activeElement !== inputRef.current) {
-          e.preventDefault();
-          const tabs: FilterType[] = ['all', 'transcript', 'screenshot'];
-          const nextIndex = (focusedTabIndex + 1) % tabs.length;
-          setFocusedTabIndex(nextIndex);
-          setFilter(tabs[nextIndex]);
-          setSelectedIndex(0);
-          // Focus the tab button
-          setTimeout(() => {
-            tabRefs.current[nextIndex]?.focus();
-          }, 0);
-        }
+        e.preventDefault();
+        // Blur input if focused so Tab doesn't insert a tab character
+        inputRef.current?.blur();
+        const tabs: FilterType[] = ['all', 'transcript', 'screenshot'];
+        const nextIndex = (focusedTabIndex + 1) % tabs.length;
+        setFocusedTabIndex(nextIndex);
+        setFilter(tabs[nextIndex]);
+        setSelectedIndex(0);
+        // Focus the tab button
+        setTimeout(() => {
+          tabRefs.current[nextIndex]?.focus();
+        }, 0);
       }
 
       if (e.key === 'Tab' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
         // Shift+Tab - go backwards through tabs
-        if (document.activeElement !== inputRef.current) {
-          e.preventDefault();
-          const tabs: FilterType[] = ['all', 'transcript', 'screenshot'];
-          const prevIndex = (focusedTabIndex - 1 + tabs.length) % tabs.length;
-          setFocusedTabIndex(prevIndex);
-          setFilter(tabs[prevIndex]);
-          setSelectedIndex(0);
-          // Focus the tab button
-          setTimeout(() => {
-            tabRefs.current[prevIndex]?.focus();
-          }, 0);
-        }
+        e.preventDefault();
+        // Blur input if focused so Tab doesn't insert a tab character
+        inputRef.current?.blur();
+        const tabs: FilterType[] = ['all', 'transcript', 'screenshot'];
+        const prevIndex = (focusedTabIndex - 1 + tabs.length) % tabs.length;
+        setFocusedTabIndex(prevIndex);
+        setFilter(tabs[prevIndex]);
+        setSelectedIndex(0);
+        // Focus the tab button
+        setTimeout(() => {
+          tabRefs.current[prevIndex]?.focus();
+        }, 0);
       }
     };
 
@@ -371,7 +370,7 @@ export default function ClipboardHistory() {
           padding: '10px 14px',
           border: '1px solid #e0e0e0',
           borderRadius: '8px',
-          fontSize: '16px',
+          fontSize: '13px',
           outline: 'none',
           boxSizing: 'border-box',
         }}
@@ -402,8 +401,8 @@ export default function ClipboardHistory() {
               backgroundColor: filter === tab ? '#f0f0f0' : 'transparent',
               cursor: 'pointer',
               textTransform: 'capitalize',
-              fontSize: '14px',
-              fontWeight: filter === tab ? '600' : '400',
+              fontSize: '12px',
+              fontWeight: '400',
               outline: 'none',
               borderRadius: '8px 8px 0 0',
             }}
@@ -416,7 +415,7 @@ export default function ClipboardHistory() {
             style={{
               marginLeft: 'auto',
               padding: '8px 16px',
-              fontSize: '14px',
+              fontSize: '12px',
               color: '#666',
             }}
           >
@@ -487,25 +486,45 @@ export default function ClipboardHistory() {
                   </div>
                 )}
 
+                {/* Screenshot thumbnail */}
+                {(item.type === 'screenshot' || item.type === 'image') && item.imageData && (
+                  <img
+                    src={`data:image/png;base64,${item.imageData}`}
+                    alt="Screenshot preview"
+                    style={{
+                      width: '48px',
+                      height: 'auto',
+                      borderRadius: '4px',
+                      border: '1px solid #e0e0e0',
+                      flexShrink: 0,
+                      objectFit: 'cover',
+                    }}
+                  />
+                )}
+
                 {/* Item preview */}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   {item.type === 'text' || item.type === 'transcript' ? (
                     <>
                       <div
                         style={{
-                          fontSize: '14px',
+                          fontSize: '12px',
                           fontWeight: '500',
                           marginBottom: '4px',
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
+                          display: '-webkit-box',
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: 'vertical' as const,
+                          wordBreak: 'break-word',
+                          whiteSpace: 'normal',
                         }}
                       >
-                        {item.content ? truncateText(item.content, 80) : 'Empty'}
+                        {item.content || 'Empty'}
                       </div>
                       <div
                         style={{
-                          fontSize: '12px',
+                          fontSize: '10px',
                           color: '#666',
                         }}
                       >
@@ -521,7 +540,7 @@ export default function ClipboardHistory() {
                     <>
                       <div
                         style={{
-                          fontSize: '14px',
+                          fontSize: '12px',
                           fontWeight: '500',
                           marginBottom: '4px',
                         }}
@@ -530,7 +549,7 @@ export default function ClipboardHistory() {
                       </div>
                       <div
                         style={{
-                          fontSize: '12px',
+                          fontSize: '10px',
                           color: '#666',
                         }}
                       >
@@ -556,7 +575,7 @@ export default function ClipboardHistory() {
                     }}
                     style={{
                       padding: '4px 8px',
-                      fontSize: '12px',
+                      fontSize: '11px',
                       backgroundColor: '#007AFF',
                       color: 'white',
                       border: 'none',
@@ -584,7 +603,7 @@ export default function ClipboardHistory() {
               borderTop: '1px solid #e0e0e0',
               backgroundColor: '#f9f9f9',
               cursor: loading ? 'wait' : 'pointer',
-              fontSize: '14px',
+              fontSize: '12px',
             }}
           >
             {loading ? 'Loading...' : 'Load More'}
