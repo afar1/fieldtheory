@@ -8,6 +8,7 @@ import { NativeHelper } from './nativeHelper';
 import { ModelManager } from './modelManager';
 import { PreferencesManager } from './preferences';
 import { RecordingOverlay } from './recordingOverlay';
+import { ClipboardManager } from './clipboardManager';
 
 const execAsync = promisify(exec);
 
@@ -23,26 +24,33 @@ export interface TranscriberEvents {
   statusChanged: (status: TranscriptionStatus) => void;
   result: (text: string) => void;
   error: (error: Error) => void;
+  stackChanged: (count: number) => void;
 }
 
 /**
  * Manages push-to-talk transcription using whisper-cli.
  * Handles hotkey registration, recording, transcription, and text insertion.
+ * Integrates with clipboard history for prompt stacking.
  */
 export class TranscriberManager extends EventEmitter {
   private nativeHelper: NativeHelper;
   private modelManager: ModelManager;
   private preferences: PreferencesManager;
   private overlay: RecordingOverlay;
+  private clipboardManager: ClipboardManager | null = null;
   private status: TranscriptionStatus = 'idle';
   private hotkey: string = 'Alt+Space'; // Option+Space on macOS
   private whisperProcess: ChildProcess | null = null;
   private escapeKeyRegistered: boolean = false;
+  
+  // Current stack of items (transcriptions + screenshots) for prompt stacking
+  private currentStack: number[] = [];
 
-  constructor(nativeHelper: NativeHelper, preferences: PreferencesManager) {
+  constructor(nativeHelper: NativeHelper, preferences: PreferencesManager, clipboardManager?: ClipboardManager) {
     super();
     this.nativeHelper = nativeHelper;
     this.preferences = preferences;
+    this.clipboardManager = clipboardManager || null;
     // ModelManager will be initialized with selected model in init()
     this.modelManager = new ModelManager();
     this.overlay = new RecordingOverlay();
@@ -233,6 +241,14 @@ export class TranscriberManager extends EventEmitter {
         this.setStatus('idle');
         this.overlay.dismiss();
         return;
+      }
+      
+      // Store transcription in clipboard history
+      if (this.clipboardManager) {
+        const itemId = await this.clipboardManager.storeText(trimmedText, 'transcript');
+        if (itemId > 0) {
+          this.currentStack.push(itemId);
+        }
       }
       
       // Speech detected - paste text
@@ -480,6 +496,95 @@ export class TranscriberManager extends EventEmitter {
    */
   getOverlayStyle(): 'rectangle' | 'top-emerging' {
     return this.preferences.getPreference('overlayStyle');
+  }
+
+  /**
+   * Get the current stack of items (for prompt stacking).
+   */
+  getCurrentStack(): number[] {
+    return [...this.currentStack];
+  }
+
+  /**
+   * Clear the current stack.
+   */
+  clearStack(): void {
+    this.currentStack = [];
+    // Emit stack changed event
+    this.emit('stackChanged', 0);
+  }
+
+  /**
+   * Add an item to the current stack (e.g., screenshot).
+   */
+  addToStack(itemId: number): void {
+    if (!this.currentStack.includes(itemId)) {
+      this.currentStack.push(itemId);
+      // Emit stack changed event
+      this.emit('stackChanged', this.currentStack.length);
+    }
+  }
+
+  /**
+   * Paste all items in the current stack.
+   * Combines text items and images for multimodal paste.
+   */
+  async pasteStack(): Promise<void> {
+    if (!this.clipboardManager || this.currentStack.length === 0) {
+      return;
+    }
+
+    const items = this.currentStack
+      .map(id => this.clipboardManager!.getItem(id))
+      .filter(item => item !== null) as any[];
+
+    if (items.length === 0) {
+      return;
+    }
+
+    // Separate text and images
+    const textItems = items.filter(item => item.type === 'text' || item.type === 'transcript');
+    const imageItems = items.filter(item => item.type === 'image' || item.type === 'screenshot');
+
+    // Combine text items
+    if (textItems.length > 0) {
+      const combinedText = textItems
+        .map(item => item.content)
+        .filter(Boolean)
+        .join('\n\n');
+      
+      clipboard.writeText(combinedText);
+      await this.pasteText();
+    }
+
+    // For images, we'd need to handle multimodal paste differently
+    // For now, just paste the text. Images can be pasted individually from clipboard history.
+    
+    // Clear stack after paste
+    this.clearStack();
+  }
+
+  /**
+   * Separate a transcript into tasks and observations using LLM.
+   * This bridges from workhorse to structured data.
+   */
+  async separateIntoTasks(transcriptId: number): Promise<void> {
+    if (!this.clipboardManager) {
+      throw new Error('ClipboardManager not available');
+    }
+
+    const item = this.clipboardManager.getItem(transcriptId);
+    if (!item || !item.content) {
+      throw new Error('Transcript not found or has no content');
+    }
+
+    // Import processTranscription from services/llm.ts
+    // Note: This requires the main process to have access to environment variables
+    // and Supabase client. For now, we'll emit an event that the renderer can handle.
+    this.emit('separateIntoTasks', {
+      transcriptId,
+      text: item.content,
+    });
   }
 
   /**

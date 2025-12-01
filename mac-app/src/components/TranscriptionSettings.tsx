@@ -356,7 +356,7 @@ export default function TranscriptionSettings() {
         </div>
 
         {hotkeyError && (
-          <p style={styles.errorText}>{hotkeyError}</p>
+          <p style={styles.hotkeyErrorText}>{hotkeyError}</p>
         )}
       </div>
 
@@ -615,7 +615,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: '8px',
     cursor: 'pointer',
   },
-  errorText: {
+  hotkeyErrorText: {
     marginTop: '8px',
     fontSize: '13px',
     color: '#ef4444',

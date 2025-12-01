@@ -7,18 +7,25 @@
     "dev": "concurrently -k \"npm:dev:vite\" \"npm:dev:electron\"",
     "dev:vite": "vite",
     "dev:electron": "npm run build:electron && wait-on tcp:5173 && ELECTRON_START_URL=http://localhost:5173 electron .",
+    "dev:experimental": "EXPERIMENTAL=true npm run dev",
     "build": "npm run build:electron && npm run build:vite",
     "build:vite": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json",
     "build:native": "cd electron/native && swift build -c release && mkdir -p build && cp .build/release/LittleOneHelper build/ && codesign --force --deep --sign - build/LittleOneHelper",
     "build:whisper": "scripts/build-whisper.sh",
     "build:all": "npm run build:native && npm run build:whisper && npm run build",
+    "build:experimental": "EXPERIMENTAL=true npm run build",
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
     "start": "electron .",
     "package": "npm run build:all && electron-builder",
+    "package:experimental": "npm run build:all && electron-builder --config electron-builder.experimental.json",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.3",
+    "@types/better-sqlite3": "^7.6.13",
+    "better-sqlite3": "^12.5.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -30,6 +37,7 @@
     "concurrently": "^8.2.2",
     "electron": "^31.0.2",
     "electron-builder": "^24.13.3",
+    "electron-rebuild": "^3.2.9",
     "typescript": "^5.6.2",
     "vite": "^5.4.8",
     "wait-on": "^7.2.0"
@@ -39,7 +47,10 @@
     "productName": "Little One",
     "mac": {
       "category": "public.app-category.productivity",
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "icon": "assets/icon.icns",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,

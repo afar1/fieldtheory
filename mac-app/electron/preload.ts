@@ -28,6 +28,21 @@ const TranscribeIPCChannels = {
   HOTKEY_CHANGED: 'transcribe:hotkeyChanged',
 } as const;
 
+const ClipboardIPCChannels = {
+  QUERY_ITEMS: 'clipboard:queryItems',
+  GET_ITEM: 'clipboard:getItem',
+  DELETE_ITEM: 'clipboard:deleteItem',
+  CLEAR_ALL: 'clipboard:clearAll',
+  CAPTURE_SCREENSHOT: 'clipboard:captureScreenshot',
+  GET_HOTKEYS: 'clipboard:getHotkeys',
+  SET_HOTKEYS: 'clipboard:setHotkeys',
+  PASTE_ITEM: 'clipboard:pasteItem',
+  PASTE_STACK: 'clipboard:pasteStack',
+  SEPARATE_INTO_TASKS: 'clipboard:separateIntoTasks',
+  ITEM_ADDED: 'clipboard:itemAdded',
+  ITEM_DELETED: 'clipboard:itemDeleted',
+} as const;
+
 // Types (only for TypeScript checking, not runtime)
 type AudioState = {
   devices: Array<{
@@ -54,6 +69,36 @@ type ModelInfo = {
   description: string;
 };
 
+type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
+
+type ClipboardItem = {
+  id: number;
+  type: ClipboardItemType;
+  content: string | null;
+  imageData: string | null;
+  imageWidth: number | null;
+  imageHeight: number | null;
+  imageSize: number | null;
+  sourceApp: string | null;
+  sourceAppName: string | null;
+  wordCount: number | null;
+  charCount: number | null;
+  createdAt: number;
+  contentHash: string;
+};
+
+type ClipboardQueryOptions = {
+  type?: ClipboardItemType;
+  search?: string;
+  limit?: number;
+  offset?: number;
+};
+
+type ClipboardHotkeys = {
+  screenshot?: string;
+  history?: string;
+};
+
 export interface AudioAPI {
   getState: () => Promise<AudioState>;
   setPriorityMode: (enabled: boolean) => Promise<void>;
@@ -74,11 +119,30 @@ export interface TranscribeAPI {
   setHotkey: (hotkey: string) => Promise<boolean>;
   getOverlayStyle: () => Promise<'rectangle' | 'top-emerging'>;
   setOverlayStyle: (style: 'rectangle' | 'top-emerging') => Promise<void>;
+  getStackCount: () => Promise<number>;
   onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
   onResult: (callback: (text: string) => void) => () => void;
   onError: (callback: (error: string) => void) => () => void;
   onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
   onHotkeyChanged: (callback: (hotkey: string) => void) => () => void;
+  onStackChanged: (callback: (count: number) => void) => () => void;
+}
+
+export interface ClipboardAPI {
+  queryItems: (options?: ClipboardQueryOptions) => Promise<ClipboardItem[]>;
+  getItem: (id: number) => Promise<ClipboardItem | null>;
+  deleteItem: (id: number) => Promise<void>;
+  clearAll: () => Promise<void>;
+  captureScreenshot: (region?: boolean) => Promise<number>;
+  getHotkeys: () => Promise<ClipboardHotkeys>;
+  setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
+  pasteItem: (id: number) => Promise<void>;
+  pasteStack: (ids: number[]) => Promise<void>;
+  separateIntoTasks: (id: number) => Promise<void>;
+  onItemAdded: (callback: (id: number) => void) => () => void;
+  onItemDeleted: (callback: (id: number) => void) => () => void;
+  onShowHistory: (callback: () => void) => () => void;
+  closeWindow: () => Promise<void>;
 }
 
 const audioAPI: AudioAPI = {
@@ -215,10 +279,104 @@ const transcribeAPI: TranscribeAPI = {
       ipcRenderer.removeListener(TranscribeIPCChannels.HOTKEY_CHANGED, handler);
     };
   },
+
+  getStackCount: async (): Promise<number> => {
+    return ipcRenderer.invoke('transcribe:getStackCount');
+  },
+
+  onStackChanged: (callback: (count: number) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, count: number) => {
+      callback(count);
+    };
+
+    ipcRenderer.on('transcribe:stackChanged', handler);
+
+    return () => {
+      ipcRenderer.removeListener('transcribe:stackChanged', handler);
+    };
+  },
+};
+
+const clipboardAPI: ClipboardAPI = {
+  queryItems: async (options?: ClipboardQueryOptions): Promise<ClipboardItem[]> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.QUERY_ITEMS, options);
+  },
+
+  getItem: async (id: number): Promise<ClipboardItem | null> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_ITEM, id);
+  },
+
+  deleteItem: async (id: number): Promise<void> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.DELETE_ITEM, id);
+  },
+
+  clearAll: async (): Promise<void> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.CLEAR_ALL);
+  },
+
+  captureScreenshot: async (region?: boolean): Promise<number> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.CAPTURE_SCREENSHOT, region);
+  },
+
+  getHotkeys: async (): Promise<ClipboardHotkeys> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_HOTKEYS);
+  },
+
+  setHotkeys: async (hotkeys: ClipboardHotkeys): Promise<boolean> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SET_HOTKEYS, hotkeys);
+  },
+
+  pasteItem: async (id: number): Promise<void> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.PASTE_ITEM, id);
+  },
+
+  pasteStack: async (ids: number[]): Promise<void> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.PASTE_STACK, ids);
+  },
+
+  separateIntoTasks: async (id: number): Promise<void> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SEPARATE_INTO_TASKS, id);
+  },
+
+  onItemAdded: (callback: (id: number) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, id: number) => {
+      callback(id);
+    };
+    ipcRenderer.on(ClipboardIPCChannels.ITEM_ADDED, handler);
+    return () => {
+      ipcRenderer.removeListener(ClipboardIPCChannels.ITEM_ADDED, handler);
+    };
+  },
+
+  onItemDeleted: (callback: (id: number) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, id: number) => {
+      callback(id);
+    };
+    ipcRenderer.on(ClipboardIPCChannels.ITEM_DELETED, handler);
+    return () => {
+      ipcRenderer.removeListener(ClipboardIPCChannels.ITEM_DELETED, handler);
+    };
+  },
+
+  onShowHistory: (callback: () => void): (() => void) => {
+    const handler = () => {
+      callback();
+    };
+    ipcRenderer.on('clipboard:showHistory', handler);
+    return () => {
+      ipcRenderer.removeListener('clipboard:showHistory', handler);
+    };
+  },
+
+  closeWindow: async (): Promise<void> => {
+    // Send IPC to main process to close the current window
+    ipcRenderer.send('clipboard:closeWindow');
+  },
 };
 
 contextBridge.exposeInMainWorld('audioAPI', audioAPI);
 contextBridge.exposeInMainWorld('transcribeAPI', transcribeAPI);
+contextBridge.exposeInMainWorld('clipboardAPI', clipboardAPI);
 
 contextBridge.exposeInMainWorld('platform', {
   isMacOS: process.platform === 'darwin',
@@ -230,6 +388,7 @@ declare global {
   interface Window {
     audioAPI: AudioAPI;
     transcribeAPI: TranscribeAPI;
+    clipboardAPI: ClipboardAPI;
     platform: {
       isMacOS: boolean;
       isWindows: boolean;
