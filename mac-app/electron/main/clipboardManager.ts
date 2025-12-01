@@ -358,9 +358,11 @@ export class ClipboardManager {
     }
 
     if (search) {
-      // Use FTS5 for text search
+      // Enable prefix matching for fuzzy search: "hel wor" matches "hello world"
+      const words = search.trim().split(/\s+/).filter(w => w.length > 0);
+      const ftsQuery = words.map(w => `"${w}"*`).join(' ');
       conditions.push('id IN (SELECT rowid FROM clipboard_fts WHERE clipboard_fts MATCH ?)');
-      params.push(search);
+      params.push(ftsQuery);
     }
 
     if (conditions.length > 0) {
@@ -373,10 +375,21 @@ export class ClipboardManager {
     const stmt = this.db.prepare(query);
     const rows = stmt.all(...params) as any[];
 
-    // Convert BLOB to Buffer
+    // Map database columns (snake_case) to TypeScript properties (camelCase)
     return rows.map(row => ({
-      ...row,
+      id: row.id,
+      type: row.type,
+      content: row.content,
       imageData: row.image_data ? Buffer.from(row.image_data) : null,
+      imageWidth: row.image_width,
+      imageHeight: row.image_height,
+      imageSize: row.image_size,
+      sourceApp: row.source_app,
+      sourceAppName: row.source_app_name,
+      wordCount: row.word_count,
+      charCount: row.char_count,
+      createdAt: row.created_at,
+      contentHash: row.content_hash,
     })) as ClipboardItem[];
   }
 
@@ -392,9 +405,21 @@ export class ClipboardManager {
       return null;
     }
 
+    // Map database columns (snake_case) to TypeScript properties (camelCase)
     return {
-      ...row,
+      id: row.id,
+      type: row.type,
+      content: row.content,
       imageData: row.image_data ? Buffer.from(row.image_data) : null,
+      imageWidth: row.image_width,
+      imageHeight: row.image_height,
+      imageSize: row.image_size,
+      sourceApp: row.source_app,
+      sourceAppName: row.source_app_name,
+      wordCount: row.word_count,
+      charCount: row.char_count,
+      createdAt: row.created_at,
+      contentHash: row.content_hash,
     } as ClipboardItem;
   }
 
