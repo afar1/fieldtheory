@@ -145,6 +145,12 @@ export interface ClipboardAPI {
   closeWindow: () => Promise<void>;
 }
 
+export interface PermissionsAPI {
+  check: () => Promise<{ accessibilityGranted: boolean; inputMonitoringGranted: boolean }>;
+  onStatusChanged: (callback: (status: { accessibilityGranted: boolean; inputMonitoringGranted: boolean }) => void) => () => void;
+  onRevoked: (callback: () => void) => () => void;
+}
+
 const audioAPI: AudioAPI = {
   getState: async (): Promise<AudioState> => {
     return ipcRenderer.invoke(AudioIPCChannels.GET_STATE);
@@ -374,9 +380,36 @@ const clipboardAPI: ClipboardAPI = {
   },
 };
 
+const permissionsAPI: PermissionsAPI = {
+  check: async (): Promise<{ accessibilityGranted: boolean; inputMonitoringGranted: boolean }> => {
+    return ipcRenderer.invoke('permissions:check');
+  },
+
+  onStatusChanged: (callback: (status: { accessibilityGranted: boolean; inputMonitoringGranted: boolean }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: { accessibilityGranted: boolean; inputMonitoringGranted: boolean }) => {
+      callback(status);
+    };
+    ipcRenderer.on('permissions-status', handler);
+    return () => {
+      ipcRenderer.removeListener('permissions-status', handler);
+    };
+  },
+
+  onRevoked: (callback: () => void): (() => void) => {
+    const handler = () => {
+      callback();
+    };
+    ipcRenderer.on('permissions-revoked', handler);
+    return () => {
+      ipcRenderer.removeListener('permissions-revoked', handler);
+    };
+  },
+};
+
 contextBridge.exposeInMainWorld('audioAPI', audioAPI);
 contextBridge.exposeInMainWorld('transcribeAPI', transcribeAPI);
 contextBridge.exposeInMainWorld('clipboardAPI', clipboardAPI);
+contextBridge.exposeInMainWorld('permissionsAPI', permissionsAPI);
 
 contextBridge.exposeInMainWorld('platform', {
   isMacOS: process.platform === 'darwin',
@@ -389,6 +422,7 @@ declare global {
     audioAPI: AudioAPI;
     transcribeAPI: TranscribeAPI;
     clipboardAPI: ClipboardAPI;
+    permissionsAPI: PermissionsAPI;
     platform: {
       isMacOS: boolean;
       isWindows: boolean;

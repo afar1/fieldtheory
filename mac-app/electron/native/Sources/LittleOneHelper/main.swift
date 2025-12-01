@@ -7,6 +7,7 @@ import Foundation
 import CoreAudio
 import AudioToolbox
 import AVFoundation
+import ApplicationServices
 
 // MARK: - Data Models
 
@@ -29,6 +30,9 @@ enum MessageType: String, Codable {
     case startRecording
     case stopRecording
     case cancelRecording
+    case checkPermissions
+    case startKeyboardMonitoring
+    case stopKeyboardMonitoring
 }
 
 /// Message received from Electron.
@@ -114,6 +118,40 @@ struct AudioLevelMessage: Codable {
     enum CodingKeys: String, CodingKey {
         case type
         case level
+    }
+}
+
+struct PermissionsStatusMessage: Codable {
+    let type = "permissionsStatus"
+    let accessibilityGranted: Bool
+    let inputMonitoringGranted: Bool
+    
+    enum CodingKeys: String, CodingKey {
+        case type
+        case accessibilityGranted
+        case inputMonitoringGranted
+    }
+}
+
+struct KeyEventMessage: Codable {
+    let type = "keyEvent"
+    let characters: String
+    let keyCode: Int
+    let modifiers: [String]
+    
+    enum CodingKeys: String, CodingKey {
+        case type
+        case characters
+        case keyCode
+        case modifiers
+    }
+}
+
+struct KeyboardMonitoringDisabledMessage: Codable {
+    let type = "keyboardMonitoringDisabled"
+    
+    enum CodingKeys: String, CodingKey {
+        case type
     }
 }
 
@@ -517,6 +555,192 @@ final class CoreAudioHelper {
     }
 }
 
+// MARK: - Keyboard Monitor
+
+/// Manages global keyboard event monitoring using CGEventTap.
+/// Captures keyboard input without stealing focus from the active application.
+final class KeyboardMonitor {
+    
+    static let shared = KeyboardMonitor()
+    
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+    private var isMonitoring = false
+    
+    private init() {}
+    
+    /// Check if Input Monitoring permission is granted.
+    /// Attempts to create a test event tap - if it returns nil, permission is denied.
+    func checkInputMonitoringPermission() -> Bool {
+        // Try to create a test event tap
+        let eventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+        let testTap = CGEvent.tapCreate(
+            tap: .cghidEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: CGEventMask(eventMask),
+            callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
+                return Unmanaged.passUnretained(event)
+            },
+            userInfo: nil
+        )
+        
+        // If tap is nil, permission is denied
+        if testTap == nil {
+            return false
+        }
+        
+        // Clean up test tap
+        if let tap = testTap {
+            CFMachPortInvalidate(tap)
+        }
+        
+        return true
+    }
+    
+    /// Check if Accessibility permission is granted.
+    func checkAccessibilityPermission() -> Bool {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: false] as CFDictionary
+        return AXIsProcessTrustedWithOptions(options)
+    }
+    
+    /// Start monitoring keyboard events.
+    /// Only captures events when clipboard history window is visible.
+    func startMonitoring() -> Bool {
+        guard !isMonitoring else {
+            sendLog(level: "info", message: "Keyboard monitoring already active")
+            return true
+        }
+        
+        // Check permissions first
+        guard checkInputMonitoringPermission() else {
+            sendLog(level: "error", message: "Input Monitoring permission denied")
+            return false
+        }
+        
+        // Create event tap for keyDown and keyUp events
+        let eventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+        
+        eventTap = CGEvent.tapCreate(
+            tap: .cghidEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: CGEventMask(eventMask),
+            callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
+                // Call the callback on the KeyboardMonitor instance
+                let monitor = Unmanaged<KeyboardMonitor>.fromOpaque(refcon!).takeUnretainedValue()
+                return monitor.handleEvent(proxy: proxy, type: type, event: event)
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        )
+        
+        guard let tap = eventTap else {
+            sendLog(level: "error", message: "Failed to create keyboard event tap - permission may be denied")
+            return false
+        }
+        
+        // Check if tap is enabled (may be disabled by user input)
+        if CGEvent.tapIsEnabled(tap: tap) {
+            // Create run loop source
+            runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+            if let source = runLoopSource {
+                // Add to main run loop - CGEventTap callbacks must run on main run loop
+                CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+            }
+            
+            isMonitoring = true
+            sendLog(level: "info", message: "Keyboard monitoring started")
+            return true
+        } else {
+            // Tap was disabled (likely permission issue)
+            CFMachPortInvalidate(tap)
+            eventTap = nil
+            sendLog(level: "error", message: "Keyboard event tap disabled - permission may have been revoked")
+            let message = KeyboardMonitoringDisabledMessage()
+            sendJSON(message)
+            return false
+        }
+    }
+    
+    /// Stop monitoring keyboard events.
+    func stopMonitoring() {
+        guard isMonitoring else {
+            return
+        }
+        
+        if let source = runLoopSource {
+            // Remove from main run loop (where we added it)
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            runLoopSource = nil
+        }
+        
+        if let tap = eventTap {
+            CFMachPortInvalidate(tap)
+            eventTap = nil
+        }
+        
+        isMonitoring = false
+        sendLog(level: "info", message: "Keyboard monitoring stopped")
+    }
+    
+    /// Handle keyboard event from CGEventTap callback.
+    private func handleEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        // Check if tap was disabled (user may have revoked permission)
+        if type == .tapDisabledByUserInput || type == .tapDisabledByTimeout {
+            sendLog(level: "warn", message: "Keyboard event tap disabled")
+            let message = KeyboardMonitoringDisabledMessage()
+            sendJSON(message)
+            stopMonitoring()
+            return nil
+        }
+        
+        // Only process keyDown events (we'll handle keyUp if needed later)
+        guard type == .keyDown else {
+            return Unmanaged.passUnretained(event)
+        }
+        
+        // Extract key information
+        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        let flags = event.flags
+        
+        // Get characters (Unicode string)
+        var characters: String = ""
+        var length: Int = 0
+        var buffer = [UniChar](repeating: 0, count: 8)
+        event.keyboardGetUnicodeString(maxStringLength: buffer.count, actualStringLength: &length, unicodeString: &buffer)
+        if length > 0 {
+            characters = String(utf16CodeUnits: buffer, count: Int(length))
+        }
+        
+        // Build modifiers array
+        var modifiers: [String] = []
+        if flags.contains(.maskCommand) {
+            modifiers.append("meta")
+        }
+        if flags.contains(.maskShift) {
+            modifiers.append("shift")
+        }
+        if flags.contains(.maskControl) {
+            modifiers.append("ctrl")
+        }
+        if flags.contains(.maskAlternate) {
+            modifiers.append("alt")
+        }
+        
+        // Send key event to Electron
+        let keyMessage = KeyEventMessage(
+            characters: characters,
+            keyCode: Int(keyCode),
+            modifiers: modifiers
+        )
+        sendJSON(keyMessage)
+        
+        // Consume the event (don't let it reach the original app)
+        // This is the "intercepting" behavior - we swallow the keystroke
+        return nil
+    }
+}
+
 // MARK: - Audio Recording Helper
 
 /// Manages audio recording using AVAudioEngine.
@@ -785,12 +1009,29 @@ private func defaultInputChanged(
 /// Send a JSON-encodable message to stdout.
 func sendJSON<T: Encodable>(_ value: T) {
     let encoder = JSONEncoder()
-    guard let data = try? encoder.encode(value),
-          let json = String(data: data, encoding: .utf8) else {
-        return
+    do {
+        let data = try encoder.encode(value)
+        guard let json = String(data: data, encoding: .utf8) else {
+            // Fallback: try to send error message, but avoid recursion
+            let fallbackError = ErrorMessage(message: "Failed to convert encoded data to UTF-8 string")
+            if let fallbackData = try? encoder.encode(fallbackError),
+               let fallbackJson = String(data: fallbackData, encoding: .utf8) {
+                print(fallbackJson)
+                fflush(stdout)
+            }
+            return
+        }
+        print(json)
+        fflush(stdout)
+    } catch {
+        // Try to send error message about encoding failure
+        let encodingError = ErrorMessage(message: "Failed to encode JSON: \(error.localizedDescription)")
+        if let errorData = try? encoder.encode(encodingError),
+           let errorJson = String(data: errorData, encoding: .utf8) {
+            print(errorJson)
+            fflush(stdout)
+        }
     }
-    print(json)
-    fflush(stdout)
 }
 
 /// Send a log message to Electron.
@@ -852,6 +1093,26 @@ final class MessageHandler {
             RecordingHelper.shared.cancelRecording()
             let response = RecordingCancelledMessage()
             sendJSON(response)
+            
+        case .checkPermissions:
+            let accessibilityGranted = KeyboardMonitor.shared.checkAccessibilityPermission()
+            let inputMonitoringGranted = KeyboardMonitor.shared.checkInputMonitoringPermission()
+            let response = PermissionsStatusMessage(
+                accessibilityGranted: accessibilityGranted,
+                inputMonitoringGranted: inputMonitoringGranted
+            )
+            sendJSON(response)
+            
+        case .startKeyboardMonitoring:
+            if KeyboardMonitor.shared.startMonitoring() {
+                sendLog(level: "info", message: "Keyboard monitoring started successfully")
+            } else {
+                sendError("Failed to start keyboard monitoring - check Input Monitoring permission")
+            }
+            
+        case .stopKeyboardMonitoring:
+            KeyboardMonitor.shared.stopMonitoring()
+            sendLog(level: "info", message: "Keyboard monitoring stopped")
         }
     }
 }
@@ -869,15 +1130,34 @@ func main() {
         guard !trimmed.isEmpty else { continue }
         
         guard let data = trimmed.data(using: .utf8) else {
-            sendError("Failed to parse input as UTF-8")
+            sendError("Failed to parse input as UTF-8. Input length: \(trimmed.count), first 50 chars: \(String(trimmed.prefix(50)))")
             continue
         }
         
         do {
             let message = try JSONDecoder().decode(IncomingMessage.self, from: data)
             handler.handle(message)
+        } catch let decodingError as DecodingError {
+            var errorDetails = "Failed to parse JSON: "
+            switch decodingError {
+            case .dataCorrupted(let context):
+                errorDetails += "Data corrupted: \(context.debugDescription)"
+            case .keyNotFound(let key, let context):
+                errorDetails += "Key '\(key.stringValue)' not found: \(context.debugDescription)"
+            case .typeMismatch(let type, let context):
+                errorDetails += "Type mismatch for \(type): \(context.debugDescription)"
+            case .valueNotFound(let type, let context):
+                errorDetails += "Value not found for \(type): \(context.debugDescription)"
+            @unknown default:
+                errorDetails += decodingError.localizedDescription
+            }
+            // Include first 100 chars of input to help debug
+            let inputPreview = trimmed.count > 100 ? String(trimmed.prefix(100)) + "..." : trimmed
+            sendError("\(errorDetails). Input preview: \(inputPreview)")
         } catch {
-            sendError("Failed to parse JSON: \(error.localizedDescription)")
+            // Include first 100 chars of input to help debug
+            let inputPreview = trimmed.count > 100 ? String(trimmed.prefix(100)) + "..." : trimmed
+            sendError("Failed to parse JSON: \(error.localizedDescription). Input preview: \(inputPreview)")
         }
     }
 }
