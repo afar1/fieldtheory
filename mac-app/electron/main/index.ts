@@ -21,6 +21,7 @@ import {
   ClipboardIPCChannels,
   ClipboardQueryOptions,
 } from './types/clipboard';
+import { ClipboardItem } from './clipboardManager';
 
 // Override userData path for experimental builds to isolate data from production.
 // This must happen before app.whenReady() and before any code calls app.getPath('userData').
@@ -311,6 +312,13 @@ function setupTranscribeIPCHandlers(): void {
     }
     return transcriberManager.getCurrentStack().length;
   });
+
+  ipcMain.handle('transcribe:getStackingMode', () => {
+    if (!transcriberManager) {
+      return { active: false, stackId: null, targetApp: null };
+    }
+    return transcriberManager.getStackingMode();
+  });
 }
 
 /**
@@ -426,46 +434,100 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle(ClipboardIPCChannels.PASTE_ITEM, async (_event, id: number) => {
-    if (!clipboardManager) {
-      return;
-    }
-    const item = clipboardManager.getItem(id);
-    if (!item) {
-      return;
-    }
-    
-    // Hide window and restore focus BEFORE pasting (so Cmd+V lands in the right place)
-    if (clipboardHistoryWindow) {
-      clipboardHistoryWindow.hide(); // This includes app.hide() to restore focus
-    }
-    
-    const { exec } = require('child_process');
-    const { promisify } = require('util');
-    const execAsync = promisify(exec);
-    
-    if (item.type === 'text' || item.type === 'transcript') {
-      clipboard.writeText(item.content || '');
-      // Paste using AppleScript (focus is already on the previous app's input field)
-      await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-    } else if (item.imageData) {
-      const { nativeImage } = require('electron');
-      // item.imageData is already a base64 string from IPC serialization
-      const imageBuffer = typeof item.imageData === 'string' 
-        ? Buffer.from(item.imageData, 'base64')
-        : item.imageData;
-      const image = nativeImage.createFromBuffer(imageBuffer);
-      clipboard.writeImage(image);
-      await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+    try {
+      if (!clipboardManager) {
+        console.error('[Main] pasteItem: clipboardManager not initialized');
+        return;
+      }
+      const item = clipboardManager.getItem(id);
+      if (!item) {
+        console.error('[Main] pasteItem: item not found', id);
+        return;
+      }
+      
+      // Hide window and restore focus BEFORE pasting (so Cmd+V lands in the right place)
+      if (clipboardHistoryWindow) {
+        clipboardHistoryWindow.hide(); // This includes app.hide() to restore focus
+      }
+      
+      const { exec } = require('child_process');
+      const { promisify } = require('util');
+      const execAsync = promisify(exec);
+      
+      if (item.type === 'text' || item.type === 'transcript') {
+        clipboard.writeText(item.content || '');
+        // Paste using AppleScript (focus is already on the previous app's input field)
+        await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+      } else if (item.imageData) {
+        const { nativeImage } = require('electron');
+        // item.imageData is already a base64 string from IPC serialization
+        const imageBuffer = typeof item.imageData === 'string' 
+          ? Buffer.from(item.imageData, 'base64')
+          : item.imageData;
+        const image = nativeImage.createFromBuffer(imageBuffer);
+        clipboard.writeImage(image);
+        await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+      }
+    } catch (error) {
+      console.error('[Main] pasteItem error:', error);
     }
   });
 
   ipcMain.handle(ClipboardIPCChannels.PASTE_STACK, async (_event, ids: number[]) => {
-    if (!transcriberManager) {
-      return;
+    try {
+      if (!clipboardManager) {
+        console.error('[Main] pasteStack: clipboardManager not initialized');
+        return;
+      }
+      if (!ids || ids.length === 0) {
+        console.error('[Main] pasteStack: no item IDs provided');
+        return;
+      }
+      
+      // Get all items from IDs
+      const items = ids
+        .map(id => clipboardManager!.getItem(id))
+        .filter((item): item is ClipboardItem => item !== null);
+      
+      if (items.length === 0) {
+        console.error('[Main] pasteStack: no valid items found');
+        return;
+      }
+      
+      // Hide window and restore focus BEFORE pasting
+      if (clipboardHistoryWindow) {
+        clipboardHistoryWindow.hide();
+      }
+      
+      const { exec } = require('child_process');
+      const { promisify } = require('util');
+      const execAsync = promisify(exec);
+      const { nativeImage } = require('electron');
+      
+      // Paste each item sequentially with small delays
+      for (const item of items) {
+        try {
+          if (item.type === 'text' || item.type === 'transcript') {
+            clipboard.writeText(item.content || '');
+            await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+          } else if (item.imageData) {
+            const imageBuffer = typeof item.imageData === 'string' 
+              ? Buffer.from(item.imageData, 'base64')
+              : item.imageData;
+            const image = nativeImage.createFromBuffer(imageBuffer);
+            clipboard.writeImage(image);
+            await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+          }
+          // Small delay between pastes to let the target app process
+          await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (itemError) {
+          console.error('[Main] pasteStack: failed to paste item', item.id, itemError);
+          // Continue with next item even if this one fails
+        }
+      }
+    } catch (error) {
+      console.error('[Main] pasteStack error:', error);
     }
-    // Add items to stack and paste
-    ids.forEach(id => transcriberManager!.addToStack(id));
-    await transcriberManager.pasteStack();
   });
 
   ipcMain.handle(ClipboardIPCChannels.SEPARATE_INTO_TASKS, async (_event, id: number) => {
@@ -503,6 +565,115 @@ function setupClipboardIPCHandlers(): void {
     const window = BrowserWindow.fromWebContents(event.sender);
     if (window && !window.isDestroyed()) {
       window.hide();
+    }
+  });
+
+  // Stack operations for prompt stacking feature
+  ipcMain.handle('clipboard:queryItemsByStack', async (_event, stackId: string) => {
+    if (!clipboardManager) {
+      return [];
+    }
+    const items = clipboardManager.queryItemsByStackId(stackId);
+    return items.map(item => ({
+      ...item,
+      imageData: item.imageData ? item.imageData.toString('base64') : null,
+    }));
+  });
+
+  ipcMain.handle('clipboard:getUniqueStacks', async () => {
+    if (!clipboardManager) {
+      return [];
+    }
+    return clipboardManager.getUniqueStacks();
+  });
+
+  ipcMain.handle('clipboard:updateStackId', async (_event, itemIds: number[], stackId: string | null) => {
+    try {
+      if (!clipboardManager) {
+        console.error('[Main] updateStackId: clipboardManager not initialized');
+        return;
+      }
+      clipboardManager.updateStackId(itemIds, stackId);
+    } catch (error) {
+      console.error('[Main] updateStackId error:', error);
+    }
+  });
+
+  // Track temp files for cleanup
+  const dragTempFiles: string[] = [];
+
+  ipcMain.handle('clipboard:startDrag', async (event, stackId: string) => {
+    try {
+      if (!clipboardManager) {
+        console.error('[Main] startDrag: clipboardManager not initialized');
+        return;
+      }
+
+      const items = clipboardManager.queryItemsByStackId(stackId);
+      if (items.length === 0) {
+        console.error('[Main] startDrag: no items found for stack', stackId);
+        return;
+      }
+
+      const fs = await import('fs');
+      const tempFiles: string[] = [];
+
+      // Collect text content and write images to temp files
+      let combinedText = '';
+      for (const item of items) {
+        if (item.imageData) {
+          try {
+            const tempPath = path.join(app.getPath('temp'), `drag-${item.id}-${Date.now()}.png`);
+            fs.writeFileSync(tempPath, item.imageData);
+            tempFiles.push(tempPath);
+            dragTempFiles.push(tempPath); // Track for cleanup
+          } catch (writeError) {
+            console.error('[Main] startDrag: failed to write temp image', item.id, writeError);
+          }
+        }
+        if (item.content) {
+          combinedText += (combinedText ? '\n\n' : '') + item.content;
+        }
+      }
+
+      // If no images but we have text, create a temp text file
+      if (tempFiles.length === 0 && combinedText) {
+        try {
+          const textTempPath = path.join(app.getPath('temp'), `drag-text-${Date.now()}.txt`);
+          fs.writeFileSync(textTempPath, combinedText);
+          tempFiles.push(textTempPath);
+          dragTempFiles.push(textTempPath);
+        } catch (writeError) {
+          console.error('[Main] startDrag: failed to write temp text file', writeError);
+        }
+      }
+
+      // If we have files to drag, initiate native drag
+      if (tempFiles.length > 0) {
+        event.sender.startDrag({
+          file: tempFiles[0], // Primary file (required by Electron API)
+          files: tempFiles,   // All files for multi-file drag
+          icon: tempFiles[0], // Use first image as icon
+        });
+      } else {
+        console.warn('[Main] startDrag: no files to drag for stack', stackId);
+      }
+    } catch (error) {
+      console.error('[Main] startDrag error:', error);
+    }
+  });
+
+  // Clean up temp files on app quit
+  app.on('will-quit', () => {
+    const fs = require('fs');
+    for (const tempFile of dragTempFiles) {
+      try {
+        if (fs.existsSync(tempFile)) {
+          fs.unlinkSync(tempFile);
+        }
+      } catch (cleanupError) {
+        // Ignore cleanup errors - files will be cleaned by OS eventually
+      }
     }
   });
 }
@@ -565,6 +736,14 @@ function broadcastTranscribeEvents(): void {
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send('transcribe:stackChanged', count);
+      }
+    });
+  });
+
+  transcriberManager.on('stackingModeChanged', (active: boolean, stackId: string | null) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send('transcribe:stackingModeChanged', active, stackId);
       }
     });
   });
@@ -647,12 +826,41 @@ async function initTranscriberSystem(): Promise<void> {
   
   // Register clipboard hotkeys
   clipboardManager.registerScreenshotHotkey(async () => {
+    // Get current stackId if in stacking mode
+    const stackId = transcriberManager?.getCurrentStackId() || undefined;
+    
     // Capture screenshot with region selection (drag to select)
-    const id = await clipboardManager!.captureScreenshot(true);
+    // If in stacking mode, the screenshot is tagged with the current stackId
+    const id = await clipboardManager!.captureScreenshot(true, stackId);
     if (id > 0) {
-      // Add screenshot to prompt stack
+      // Add screenshot to prompt stack tracking
       if (transcriberManager) {
         transcriberManager.addToStack(id);
+        
+        // In stacking mode, auto-paste the screenshot to the target app
+        const stackingMode = transcriberManager.getStackingMode();
+        if (stackingMode.active && stackingMode.targetApp) {
+          const { exec } = await import('child_process');
+          const { promisify } = await import('util');
+          const execAsync = promisify(exec);
+          
+          // Activate target app
+          try {
+            await execAsync(`osascript -e 'tell application id "${stackingMode.targetApp}" to activate'`);
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+            // Read the screenshot and paste it
+            const item = clipboardManager!.getItem(id);
+            if (item?.imageData) {
+              const { nativeImage } = await import('electron');
+              const image = nativeImage.createFromBuffer(item.imageData);
+              clipboard.writeImage(image);
+              await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+            }
+          } catch (err) {
+            console.error('[Main] Failed to auto-paste screenshot in stacking mode:', err);
+          }
+        }
       }
       
       // Notify all windows (including clipboard history window)

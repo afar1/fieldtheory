@@ -21,7 +21,22 @@ type ClipboardItem = {
   charCount: number | null;
   createdAt: number;
   contentHash: string;
+  stackId: string | null;
 };
+
+type StackInfo = {
+  stackId: string;
+  itemCount: number;
+  imageCount: number;
+  textCount: number;
+  createdAt: number;
+  firstTextPreview: string | null;
+};
+
+// A row in the list can be either a single item or a grouped stack
+type ListRow = 
+  | { type: 'item'; item: ClipboardItem }
+  | { type: 'stack'; stack: StackInfo; items: ClipboardItem[]; expanded: boolean };
 
 type FilterType = 'all' | 'transcript' | 'screenshot';
 
@@ -65,6 +80,8 @@ function truncateText(text: string, maxLength: number = 100): string {
 export default function ClipboardHistory() {
   const [isVisible, setIsVisible] = useState(false);
   const [items, setItems] = useState<ClipboardItem[]>([]);
+  const [stacks, setStacks] = useState<StackInfo[]>([]);
+  const [expandedStacks, setExpandedStacks] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [filter, setFilter] = useState<FilterType>('all');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -91,7 +108,7 @@ export default function ClipboardHistory() {
 
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
 
-  // Load items from clipboard history.
+  // Load items from clipboard history plus stack info.
   const loadItems = useCallback(async (reset: boolean = false) => {
     if (!isMacOS || !window.clipboardAPI) {
       return;
@@ -114,13 +131,18 @@ export default function ClipboardHistory() {
         queryOptions.search = searchQuery.trim();
       }
 
-      const newItems = await window.clipboardAPI.queryItems(queryOptions);
+      // Load items and stacks in parallel
+      const [newItems, stacksData] = await Promise.all([
+        window.clipboardAPI.queryItems(queryOptions),
+        reset ? window.clipboardAPI.getUniqueStacks?.() : Promise.resolve(stacks),
+      ]);
       
       if (reset) {
-        setItems(newItems);
+        setItems(newItems as ClipboardItem[]);
+        setStacks(stacksData || []);
         setOffset(newItems.length);
       } else {
-        setItems(prev => [...prev, ...newItems]);
+        setItems(prev => [...prev, ...(newItems as ClipboardItem[])]);
         setOffset(prev => prev + newItems.length);
       }
 
@@ -130,7 +152,7 @@ export default function ClipboardHistory() {
     } finally {
       setLoading(false);
     }
-  }, [isMacOS, filter, searchQuery, offset]);
+  }, [isMacOS, filter, searchQuery, offset, stacks]);
 
   // Initial load and filter/search changes.
   useEffect(() => {
@@ -234,7 +256,8 @@ export default function ClipboardHistory() {
       }
 
       if (key === 'ArrowDown') {
-        setSelectedIndex(prev => Math.min(prev + 1, items.length - 1));
+        // Use filteredItems.length since listRows isn't available in this scope
+        setSelectedIndex(prev => Math.min(prev + 1, filteredItems.length - 1));
         return;
       }
 
@@ -461,11 +484,74 @@ export default function ClipboardHistory() {
     return null;
   }
 
+  // Build list rows with stack grouping.
+  // Stacked items are grouped together, non-stacked items appear individually.
+  const buildListRows = (): ListRow[] => {
+    const rows: ListRow[] = [];
+    const seenStackIds = new Set<string>();
+    
+    // Filter items first
+    const filtered = items.filter(item => {
+      if (filter === 'transcript' && item.type !== 'transcript') return false;
+      if (filter === 'screenshot' && item.type !== 'screenshot') return false;
+      return true;
+    });
+    
+    for (const item of filtered) {
+      if (item.stackId) {
+        // This item belongs to a stack
+        if (!seenStackIds.has(item.stackId)) {
+          seenStackIds.add(item.stackId);
+          
+          // Find the stack info
+          const stackInfo = stacks.find(s => s.stackId === item.stackId);
+          if (stackInfo) {
+            // Get all items in this stack
+            const stackItems = filtered.filter(i => i.stackId === item.stackId);
+            const isExpanded = expandedStacks.has(item.stackId);
+            
+            rows.push({
+              type: 'stack',
+              stack: stackInfo,
+              items: stackItems,
+              expanded: isExpanded,
+            });
+          } else {
+            // Stack info not loaded, show as individual item
+            rows.push({ type: 'item', item });
+          }
+        }
+        // If we've already seen this stack, don't add another row
+      } else {
+        // Individual item (not in a stack)
+        rows.push({ type: 'item', item });
+      }
+    }
+    
+    return rows;
+  };
+  
+  const listRows = buildListRows();
+  
+  // For backward compatibility, keep filteredItems for navigation count
   const filteredItems = items.filter(item => {
     if (filter === 'transcript' && item.type !== 'transcript') return false;
     if (filter === 'screenshot' && item.type !== 'screenshot') return false;
     return true;
   });
+
+  // Toggle stack expansion
+  const toggleStackExpanded = (stackId: string) => {
+    setExpandedStacks(prev => {
+      const next = new Set(prev);
+      if (next.has(stackId)) {
+        next.delete(stackId);
+      } else {
+        next.add(stackId);
+      }
+      return next;
+    });
+  };
 
   // Calculate dialog bounds: use received bounds or fallback to centered
   const dialogStyle: React.CSSProperties = dialogBounds
@@ -659,7 +745,7 @@ export default function ClipboardHistory() {
           border: '1px solid #f0f0f0',
         }}
       >
-        {filteredItems.length === 0 && !loading ? (
+        {listRows.length === 0 && !loading ? (
           <div
             style={{
               padding: '40px',
@@ -670,146 +756,523 @@ export default function ClipboardHistory() {
             No items found
           </div>
         ) : (
-          filteredItems.map((item, index) => {
-            const isSelected = selectedIndex === index;
-            const isInStack = selectedIds.has(item.id);
+          listRows.map((row, index) => {
+            if (row.type === 'stack') {
+              // Render a prompt stack row
+              const { stack, items: stackItems, expanded } = row;
+              
+              // Handle drag start for stack (in-app combining only - no OS drag)
+              const handleStackDragStart = (e: React.DragEvent) => {
+                e.dataTransfer.setData('text/plain', stack.stackId);
+                e.dataTransfer.effectAllowed = 'copy';
+              };
 
-            return (
-              <div
-                key={item.id}
-                onClick={() => handleItemClick(item, index)}
-                style={{
-                  padding: '12px 16px',
-                  backgroundColor: isSelected ? '#f0f0f0' : 'transparent',
-                  borderBottom: '1px solid #f0f0f0',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '12px',
-                }}
-              >
-                {/* Selection indicator */}
-                {isInStack && (
+              // Handle drag-out to external apps (OS-level drag via dedicated handle)
+              const handleDragOutStart = (e: React.DragEvent) => {
+                e.stopPropagation(); // Don't trigger row drag
+                e.dataTransfer.setData('text/plain', stack.stackId);
+                e.dataTransfer.effectAllowed = 'copy';
+                // Trigger native OS drag via IPC
+                window.clipboardAPI?.startDrag?.(stack.stackId);
+              };
+
+              // Handle drop on stack (merge stacks or add item)
+              const handleStackDrop = async (e: React.DragEvent) => {
+                e.preventDefault();
+                const data = e.dataTransfer.getData('text/plain');
+                
+                if (data.startsWith('item:')) {
+                  // An item dropped on this stack - add to stack
+                  const droppedItemId = parseInt(data.replace('item:', ''), 10);
+                  await window.clipboardAPI?.updateStackId?.([droppedItemId], stack.stackId);
+                  loadItems(true);
+                } else if (data && data !== stack.stackId) {
+                  // Another stack dropped on this stack - merge them
+                  const otherStackId = data;
+                  // Get items from other stack and add to this stack
+                  const otherStackItems = await window.clipboardAPI?.queryItemsByStackId?.(otherStackId);
+                  if (otherStackItems && otherStackItems.length > 0) {
+                    const itemIds = otherStackItems.map((i: ClipboardItem) => i.id);
+                    await window.clipboardAPI?.updateStackId?.(itemIds, stack.stackId);
+                    loadItems(true);
+                  }
+                }
+              };
+
+              const handleStackDragOver = (e: React.DragEvent) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
+              };
+
+              return (
+                <div key={`stack-${stack.stackId}`}>
+                  {/* Stack header row - draggable and droppable */}
                   <div
-                    style={{
-                      width: '20px',
-                      height: '20px',
-                      borderRadius: '4px',
-                      backgroundColor: '#007AFF',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: 'white',
-                      fontSize: '12px',
-                      flexShrink: 0,
-                    }}
-                  >
-                    ✓
-                  </div>
-                )}
-
-                {/* Screenshot thumbnail */}
-                {(item.type === 'screenshot' || item.type === 'image') && item.imageData && (
-                  <img
-                    src={`data:image/png;base64,${item.imageData}`}
-                    alt="Screenshot preview"
-                    style={{
-                      width: '48px',
-                      height: 'auto',
-                      borderRadius: '4px',
-                      border: '1px solid #e0e0e0',
-                      flexShrink: 0,
-                      objectFit: 'cover',
-                    }}
-                  />
-                )}
-
-                {/* Item preview */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  {item.type === 'text' || item.type === 'transcript' ? (
-                    <>
-                      <div
-                        style={{
-                          fontSize: '12px',
-                          fontWeight: '500',
-                          marginBottom: '4px',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          display: '-webkit-box',
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: 'vertical' as const,
-                          wordBreak: 'break-word',
-                          whiteSpace: 'normal',
-                        }}
-                      >
-                        {item.content || 'Empty'}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: '10px',
-                          color: '#666',
-                        }}
-                      >
-                        {item.wordCount && item.charCount
-                          ? `${item.wordCount} words, ${item.charCount} chars`
-                          : ''}
-                        {item.sourceAppName && ` • ${item.sourceAppName}`}
-                        {' • '}
-                        {formatRelativeTime(item.createdAt)}
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div
-                        style={{
-                          fontSize: '12px',
-                          fontWeight: '500',
-                          marginBottom: '4px',
-                        }}
-                      >
-                        Screenshot
-                      </div>
-                      <div
-                        style={{
-                          fontSize: '10px',
-                          color: '#666',
-                        }}
-                      >
-                        {item.imageWidth && item.imageHeight
-                          ? `${item.imageWidth}×${item.imageHeight}`
-                          : ''}
-                        {item.imageSize && ` • ${formatFileSize(item.imageSize)}`}
-                        {item.sourceAppName && ` • ${item.sourceAppName}`}
-                        {' • '}
-                        {formatRelativeTime(item.createdAt)}
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                {/* Actions */}
-                {item.type === 'transcript' && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      window.clipboardAPI?.separateIntoTasks(item.id);
+                    draggable
+                    onDragStart={handleStackDragStart}
+                    onDrop={handleStackDrop}
+                    onDragOver={handleStackDragOver}
+                    onClick={() => {
+                      // Paste all items in the stack
+                      const itemIds = stackItems.map(i => i.id);
+                      window.clipboardAPI?.pasteStack(itemIds);
                       window.clipboardAPI?.closeWindow();
                     }}
                     style={{
-                      padding: '4px 8px',
-                      fontSize: '11px',
-                      backgroundColor: '#007AFF',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '4px',
+                      padding: '12px 16px',
+                      backgroundColor: selectedIndex === index ? '#f0f0f0' : '#fafafa',
+                      borderBottom: '1px solid #f0f0f0',
                       cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
                     }}
                   >
-                    Tasks
-                  </button>
-                )}
-              </div>
-            );
+                    {/* Expand/collapse chevron */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleStackExpanded(stack.stackId);
+                      }}
+                      style={{
+                        width: '20px',
+                        height: '20px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        background: 'none',
+                        border: 'none',
+                        padding: 0,
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                        transition: 'transform 0.15s ease',
+                        transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                      }}
+                      title={expanded ? 'Collapse' : 'Expand'}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="2.5">
+                        <path d="M9 18l6-6-6-6" />
+                      </svg>
+                    </button>
+
+                    {/* Stack icon */}
+                    <div
+                      style={{
+                        width: '24px',
+                        height: '24px',
+                        position: 'relative',
+                        flexShrink: 0,
+                      }}
+                    >
+                      <div style={{
+                        position: 'absolute',
+                        width: '18px',
+                        height: '14px',
+                        border: '2px solid #666',
+                        borderRadius: '3px',
+                        top: '0',
+                        left: '0',
+                        background: '#fff',
+                      }} />
+                      <div style={{
+                        position: 'absolute',
+                        width: '18px',
+                        height: '14px',
+                        border: '2px solid #888',
+                        borderRadius: '3px',
+                        top: '5px',
+                        left: '3px',
+                        background: '#fff',
+                      }} />
+                    </div>
+
+                    {/* Stack info */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div
+                        style={{
+                          fontSize: '12px',
+                          fontWeight: '600',
+                          marginBottom: '4px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                        }}
+                      >
+                        <span>Prompt Stack</span>
+                        {stack.imageCount > 0 && (
+                          <span style={{
+                            fontSize: '10px',
+                            background: '#e0e0e0',
+                            padding: '2px 6px',
+                            borderRadius: '10px',
+                            color: '#555',
+                          }}>
+                            📷 {stack.imageCount}
+                          </span>
+                        )}
+                        {stack.textCount > 0 && (
+                          <span style={{
+                            fontSize: '10px',
+                            background: '#e0e0e0',
+                            padding: '2px 6px',
+                            borderRadius: '10px',
+                            color: '#555',
+                          }}>
+                            📝 {stack.textCount}
+                          </span>
+                        )}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: '11px',
+                          color: '#666',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {stack.firstTextPreview || 'No text content'}
+                      </div>
+                      <div style={{ fontSize: '10px', color: '#999', marginTop: '2px' }}>
+                        {formatRelativeTime(stack.createdAt)} • click to paste
+                      </div>
+                    </div>
+
+                    {/* Drag-out handle for external apps */}
+                    <div
+                      draggable
+                      onDragStart={handleDragOutStart}
+                      onClick={(e) => e.stopPropagation()}
+                      title="Drag to external apps"
+                      style={{
+                        width: '24px',
+                        height: '24px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'grab',
+                        borderRadius: '4px',
+                        backgroundColor: '#f0f0f0',
+                        flexShrink: 0,
+                      }}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="2">
+                        <path d="M7 17L17 7M17 7H8M17 7V16" />
+                      </svg>
+                    </div>
+                  </div>
+
+                  {/* Expanded stack actions and items */}
+                  {expanded && (
+                    <>
+                      {/* Unstack actions */}
+                      <div
+                        style={{
+                          padding: '8px 16px 8px 48px',
+                          backgroundColor: '#f5f5f5',
+                          borderBottom: '1px solid #f0f0f0',
+                          display: 'flex',
+                          gap: '8px',
+                          fontSize: '11px',
+                        }}
+                      >
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            const itemIds = stackItems.map(i => i.id);
+                            await window.clipboardAPI?.updateStackId?.(itemIds, null);
+                            loadItems(true);
+                          }}
+                          style={{
+                            padding: '4px 8px',
+                            fontSize: '10px',
+                            backgroundColor: '#fff',
+                            color: '#666',
+                            border: '1px solid #ddd',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          unstack all
+                        </button>
+                        {stack.imageCount > 0 && (
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              const imageIds = stackItems
+                                .filter(i => i.type === 'image' || i.type === 'screenshot')
+                                .map(i => i.id);
+                              await window.clipboardAPI?.updateStackId?.(imageIds, null);
+                              loadItems(true);
+                            }}
+                            style={{
+                              padding: '4px 8px',
+                              fontSize: '10px',
+                              backgroundColor: '#fff',
+                              color: '#666',
+                              border: '1px solid #ddd',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            unstack screenshots
+                          </button>
+                        )}
+                        {stack.textCount > 0 && (
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              const textIds = stackItems
+                                .filter(i => i.type === 'text' || i.type === 'transcript')
+                                .map(i => i.id);
+                              await window.clipboardAPI?.updateStackId?.(textIds, null);
+                              loadItems(true);
+                            }}
+                            style={{
+                              padding: '4px 8px',
+                              fontSize: '10px',
+                              backgroundColor: '#fff',
+                              color: '#666',
+                              border: '1px solid #ddd',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            unstack text
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+
+                  {/* Expanded stack items */}
+                  {expanded && stackItems.map((item, itemIdx) => (
+                    <div
+                      key={item.id}
+                      onClick={() => handleItemClick(item, index)}
+                      style={{
+                        padding: '10px 16px 10px 48px',
+                        backgroundColor: '#fefefe',
+                        borderBottom: '1px solid #f0f0f0',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px',
+                        borderLeft: '3px solid #007AFF',
+                      }}
+                    >
+                      {/* Item content */}
+                      {(item.type === 'screenshot' || item.type === 'image') && item.imageData && (
+                        <img
+                          src={`data:image/png;base64,${item.imageData}`}
+                          alt="Screenshot preview"
+                          style={{
+                            width: '40px',
+                            height: 'auto',
+                            borderRadius: '4px',
+                            border: '1px solid #e0e0e0',
+                            flexShrink: 0,
+                          }}
+                        />
+                      )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{
+                          fontSize: '11px',
+                          color: '#333',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}>
+                          {item.type === 'text' || item.type === 'transcript' 
+                            ? truncateText(item.content || 'Empty', 80)
+                            : `Screenshot ${item.imageWidth}×${item.imageHeight}`
+                          }
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            } else {
+              // Render individual item (same as before)
+              const { item } = row;
+              const isSelected = selectedIndex === index;
+              const isInStack = selectedIds.has(item.id);
+
+              // Handle drag start for individual item
+              const handleItemDragStart = (e: React.DragEvent) => {
+                e.dataTransfer.setData('text/plain', `item:${item.id}`);
+                e.dataTransfer.effectAllowed = 'copy';
+              };
+
+              // Handle drop on item (create/join stack)
+              const handleItemDrop = async (e: React.DragEvent) => {
+                e.preventDefault();
+                const data = e.dataTransfer.getData('text/plain');
+                
+                if (data.startsWith('item:')) {
+                  // Another item dropped on this item - create a new stack
+                  const droppedItemId = parseInt(data.replace('item:', ''), 10);
+                  if (droppedItemId !== item.id) {
+                    // Generate a new stack ID and add both items
+                    const newStackId = crypto.randomUUID();
+                    await window.clipboardAPI?.updateStackId?.([droppedItemId, item.id], newStackId);
+                    loadItems(true);
+                  }
+                } else if (data && !data.startsWith('item:')) {
+                  // A stack dropped on this item - add item to stack
+                  const stackId = data;
+                  await window.clipboardAPI?.updateStackId?.([item.id], stackId);
+                  loadItems(true);
+                }
+              };
+
+              const handleItemDragOver = (e: React.DragEvent) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
+              };
+
+              return (
+                <div
+                  key={item.id}
+                  draggable
+                  onDragStart={handleItemDragStart}
+                  onDrop={handleItemDrop}
+                  onDragOver={handleItemDragOver}
+                  onClick={() => handleItemClick(item, index)}
+                  style={{
+                    padding: '12px 16px',
+                    backgroundColor: isSelected ? '#f0f0f0' : 'transparent',
+                    borderBottom: '1px solid #f0f0f0',
+                    cursor: 'grab',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                  }}
+                >
+                  {/* Selection indicator */}
+                  {isInStack && (
+                    <div
+                      style={{
+                        width: '20px',
+                        height: '20px',
+                        borderRadius: '4px',
+                        backgroundColor: '#007AFF',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: 'white',
+                        fontSize: '12px',
+                        flexShrink: 0,
+                      }}
+                    >
+                      ✓
+                    </div>
+                  )}
+
+                  {/* Screenshot thumbnail */}
+                  {(item.type === 'screenshot' || item.type === 'image') && item.imageData && (
+                    <img
+                      src={`data:image/png;base64,${item.imageData}`}
+                      alt="Screenshot preview"
+                      style={{
+                        width: '48px',
+                        height: 'auto',
+                        borderRadius: '4px',
+                        border: '1px solid #e0e0e0',
+                        flexShrink: 0,
+                        objectFit: 'cover',
+                      }}
+                    />
+                  )}
+
+                  {/* Item preview */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {item.type === 'text' || item.type === 'transcript' ? (
+                      <>
+                        <div
+                          style={{
+                            fontSize: '12px',
+                            fontWeight: '500',
+                            marginBottom: '4px',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical' as const,
+                            wordBreak: 'break-word',
+                            whiteSpace: 'normal',
+                          }}
+                        >
+                          {item.content || 'Empty'}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: '10px',
+                            color: '#666',
+                          }}
+                        >
+                          {item.wordCount && item.charCount
+                            ? `${item.wordCount} words, ${item.charCount} chars`
+                            : ''}
+                          {item.sourceAppName && ` • ${item.sourceAppName}`}
+                          {' • '}
+                          {formatRelativeTime(item.createdAt)}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div
+                          style={{
+                            fontSize: '12px',
+                            fontWeight: '500',
+                            marginBottom: '4px',
+                          }}
+                        >
+                          Screenshot
+                        </div>
+                        <div
+                          style={{
+                            fontSize: '10px',
+                            color: '#666',
+                          }}
+                        >
+                          {item.imageWidth && item.imageHeight
+                            ? `${item.imageWidth}×${item.imageHeight}`
+                            : ''}
+                          {item.imageSize && ` • ${formatFileSize(item.imageSize)}`}
+                          {item.sourceAppName && ` • ${item.sourceAppName}`}
+                          {' • '}
+                          {formatRelativeTime(item.createdAt)}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Actions */}
+                  {item.type === 'transcript' && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        window.clipboardAPI?.separateIntoTasks(item.id);
+                        window.clipboardAPI?.closeWindow();
+                      }}
+                      style={{
+                        padding: '4px 8px',
+                        fontSize: '11px',
+                        backgroundColor: '#007AFF',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Tasks
+                    </button>
+                  )}
+                </div>
+              );
+            }
           })
         )}
 
