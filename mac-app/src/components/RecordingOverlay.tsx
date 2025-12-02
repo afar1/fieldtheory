@@ -34,21 +34,13 @@ export default function RecordingOverlay() {
     return () => window.overlayAPI?.removeAllListeners('audio-level');
   }, [state]);
 
-  // Listen for stack count changes
   useEffect(() => {
     if (!window.transcribeAPI) return;
     
-    // Get initial stack count
-    (async () => {
-      try {
-        const count = await window.transcribeAPI.getStackCount() || 0;
-        setStackCount(count);
-      } catch (e) {
-        // Ignore if not available
-      }
-    })();
+    window.transcribeAPI.getStackCount().then(count => {
+      setStackCount(count || 0);
+    });
     
-    // Listen for stack changed events
     const unsubscribe = window.transcribeAPI.onStackChanged?.((count: number) => {
       setStackCount(count);
     });

@@ -91,8 +91,6 @@ export class RecordingOverlay {
     if (startUrl) {
       this.window.loadURL(`${startUrl}overlay.html`);
     } else {
-      // Use absolute path via app.getAppPath() to ensure correct resolution
-      // regardless of working directory (important for npm start vs packaged app)
       const htmlPath = path.join(app.getAppPath(), 'dist', 'overlay.html');
       console.log('[RecordingOverlay] Loading HTML from:', htmlPath);
       this.window.loadFile(htmlPath);

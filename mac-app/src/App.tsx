@@ -301,45 +301,23 @@ export default function App() {
     }
   }, []);
   
-  // Handler for keydown events when capturing screenshot hotkey
+  // Capture hotkey when user is setting screenshot or history shortcut.
   useEffect(() => {
-    if (!isCapturingScreenshotHotkey) return;
+    const capturing = isCapturingScreenshotHotkey ? 'screenshot' : isCapturingHistoryHotkey ? 'history' : null;
+    if (!capturing) return;
     
     const handleKeyDown = (event: KeyboardEvent) => {
       event.preventDefault();
       event.stopPropagation();
-      
       const hotkeyString = buildHotkeyString(event);
       if (hotkeyString) {
-        handleSetScreenshotHotkey(hotkeyString);
+        capturing === 'screenshot' ? handleSetScreenshotHotkey(hotkeyString) : handleSetHistoryHotkey(hotkeyString);
       }
     };
     
     window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isCapturingScreenshotHotkey, handleSetScreenshotHotkey]);
-  
-  // Handler for keydown events when capturing history hotkey
-  useEffect(() => {
-    if (!isCapturingHistoryHotkey) return;
-    
-    const handleKeyDown = (event: KeyboardEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-      
-      const hotkeyString = buildHotkeyString(event);
-      if (hotkeyString) {
-        handleSetHistoryHotkey(hotkeyString);
-      }
-    };
-    
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isCapturingHistoryHotkey, handleSetHistoryHotkey]);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isCapturingScreenshotHotkey, isCapturingHistoryHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -444,13 +422,6 @@ export default function App() {
     setIsInitialized(true);
     if (session) fetchLists(); // Background sync
   }, [session, fetchLists]);
-
-  // Cleanup copy timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
-    };
-  }, []);
 
   const handleSendOtp = async () => {
     const trimmed = email.trim();
@@ -1914,14 +1885,14 @@ export default function App() {
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
+const styles: Record<string, React.CSSProperties & { WebkitAppRegion?: string }> = {
   draggableRegion: {
     position: 'fixed',
     top: 0,
     left: 0,
     right: 0,
     height: '44px', // Standard macOS title bar height
-    WebkitAppRegion: 'drag' as any,
+    WebkitAppRegion: 'drag',
     zIndex: 1000,
     pointerEvents: 'auto',
   },

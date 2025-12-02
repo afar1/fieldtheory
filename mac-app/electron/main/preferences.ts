@@ -15,6 +15,17 @@ interface WindowState {
 }
 
 /**
+ * Clipboard history dialog bounds for persistence.
+ */
+interface ClipboardHistoryBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  displayConfig: string; // Hash of display arrangement to detect changes
+}
+
+/**
  * Overlay animation style options.
  */
 export type OverlayStyle = 'rectangle' | 'top-emerging';
@@ -30,6 +41,7 @@ interface Preferences {
   clipboardScreenshotHotkey?: string;
   clipboardHistoryHotkey?: string;
   priorityDeviceId?: string | null;
+  clipboardHistoryBounds?: ClipboardHistoryBounds;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {

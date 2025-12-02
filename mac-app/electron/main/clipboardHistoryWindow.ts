@@ -13,6 +13,20 @@ export class ClipboardHistoryWindow {
   private readonly DIALOG_HEIGHT = 600;
 
   /**
+   * Generate a display configuration hash to detect display arrangement changes.
+   */
+  static getDisplayConfigHash(): string {
+    const displays = screen.getAllDisplays();
+    const minX = Math.min(...displays.map(d => d.bounds.x));
+    const minY = Math.min(...displays.map(d => d.bounds.y));
+    const maxX = Math.max(...displays.map(d => d.bounds.x + d.bounds.width));
+    const maxY = Math.max(...displays.map(d => d.bounds.y + d.bounds.height));
+    const totalWidth = maxX - minX;
+    const totalHeight = maxY - minY;
+    return `${displays.length}-${totalWidth}x${totalHeight}`;
+  }
+
+  /**
    * Show or toggle the clipboard history window.
    */
   toggle(): void {
@@ -34,14 +48,15 @@ export class ClipboardHistoryWindow {
   /**
    * Show the clipboard history window.
    * Window takes focus like Alfred - uses standard keyboard input.
+   * @param savedBounds Optional saved bounds to restore position/size
    */
-  show(): void {
+  show(savedBounds?: { x: number; y: number; width: number; height: number }): void {
     if (this.window && !this.window.isDestroyed()) {
       // Show and take focus
       this.window.show();
       this.window.focus();
-      // Recalculate and send dialog position
-      this.sendDialogPosition();
+      // Recalculate and send dialog bounds
+      this.sendDialogBounds(savedBounds);
       // Notify renderer to reset search query
       this.window.webContents.send('clipboard:showHistory');
       return;
@@ -56,19 +71,37 @@ export class ClipboardHistoryWindow {
     const allDisplaysWidth = maxX - minX;
     const allDisplaysHeight = maxY - minY;
 
-    // Find active display (display containing cursor)
-    const cursorPoint = screen.getCursorScreenPoint();
-    const activeDisplay = screen.getDisplayNearestPoint(cursorPoint);
-    const displayBounds = activeDisplay.bounds;
+    // Use saved bounds if provided, otherwise calculate default position
+    // Note: savedBounds are already in overlay-relative coordinates (converted in index.ts)
+    let dialogLeft: number;
+    let dialogTop: number;
+    let dialogWidth: number;
+    let dialogHeight: number;
 
-    // Calculate dialog position: 80px from top, centered horizontally on active display
-    // Position is relative to the overlay window origin (minX, minY)
-    const dialogLeft = (displayBounds.x + displayBounds.width / 2 - this.DIALOG_WIDTH / 2) - minX;
-    const dialogTop = 80 + (displayBounds.y - minY);
-
-    // Clamp position to ensure dialog stays within overlay bounds
-    const clampedLeft = Math.max(0, Math.min(dialogLeft, allDisplaysWidth - this.DIALOG_WIDTH));
-    const clampedTop = Math.max(0, Math.min(dialogTop, allDisplaysHeight - this.DIALOG_HEIGHT));
+    if (savedBounds) {
+      dialogLeft = savedBounds.x;
+      dialogTop = savedBounds.y;
+      dialogWidth = savedBounds.width;
+      dialogHeight = savedBounds.height;
+      
+      // Clamp to ensure dialog stays within overlay bounds
+      dialogLeft = Math.max(0, Math.min(dialogLeft, allDisplaysWidth - dialogWidth));
+      dialogTop = Math.max(0, Math.min(dialogTop, allDisplaysHeight - dialogHeight));
+    } else {
+      // Calculate default position: 80px from top, centered horizontally on active display
+      const cursorPoint = screen.getCursorScreenPoint();
+      const activeDisplay = screen.getDisplayNearestPoint(cursorPoint);
+      const displayBounds = activeDisplay.bounds;
+      
+      dialogLeft = (displayBounds.x + displayBounds.width / 2 - this.DIALOG_WIDTH / 2) - minX;
+      dialogTop = 80 + (displayBounds.y - minY);
+      dialogWidth = this.DIALOG_WIDTH;
+      dialogHeight = this.DIALOG_HEIGHT;
+      
+      // Clamp position to ensure dialog stays within overlay bounds
+      dialogLeft = Math.max(0, Math.min(dialogLeft, allDisplaysWidth - dialogWidth));
+      dialogTop = Math.max(0, Math.min(dialogTop, allDisplaysHeight - dialogHeight));
+    }
 
     const options: BrowserWindowConstructorOptions = {
       width: allDisplaysWidth,
@@ -115,11 +148,8 @@ export class ClipboardHistoryWindow {
       if (this.window && !this.window.isDestroyed()) {
         this.window.show();
         this.window.focus();
-        // Send dialog position to renderer
-        this.window.webContents.send('clipboard:dialogPosition', {
-          left: clampedLeft,
-          top: clampedTop,
-        });
+        // Send dialog bounds to renderer
+        this.sendDialogBounds(savedBounds);
         // Notify renderer to reset search query
         this.window.webContents.send('clipboard:showHistory');
       }
@@ -175,9 +205,9 @@ export class ClipboardHistoryWindow {
   }
 
   /**
-   * Send dialog position to renderer.
+   * Send dialog bounds to renderer.
    */
-  private sendDialogPosition(): void {
+  private sendDialogBounds(savedBounds?: { x: number; y: number; width: number; height: number }): void {
     if (!this.window || this.window.isDestroyed()) {
       return;
     }
@@ -190,19 +220,47 @@ export class ClipboardHistoryWindow {
     const allDisplaysWidth = maxX - minX;
     const allDisplaysHeight = maxY - minY;
 
-    const cursorPoint = screen.getCursorScreenPoint();
-    const activeDisplay = screen.getDisplayNearestPoint(cursorPoint);
-    const displayBounds = activeDisplay.bounds;
+    let dialogLeft: number;
+    let dialogTop: number;
+    let dialogWidth: number;
+    let dialogHeight: number;
 
-    const dialogLeft = (displayBounds.x + displayBounds.width / 2 - this.DIALOG_WIDTH / 2) - minX;
-    const dialogTop = 80 + (displayBounds.y - minY);
+    if (savedBounds) {
+      // savedBounds are already in overlay-relative coordinates (converted in index.ts)
+      dialogLeft = savedBounds.x;
+      dialogTop = savedBounds.y;
+      dialogWidth = savedBounds.width;
+      dialogHeight = savedBounds.height;
+      
+      // Clamp to ensure dialog stays within overlay bounds
+      dialogLeft = Math.max(0, Math.min(dialogLeft, allDisplaysWidth - dialogWidth));
+      dialogTop = Math.max(0, Math.min(dialogTop, allDisplaysHeight - dialogHeight));
+    } else {
+      // Calculate default position: 80px from top, centered horizontally on active display
+      const cursorPoint = screen.getCursorScreenPoint();
+      const activeDisplay = screen.getDisplayNearestPoint(cursorPoint);
+      const displayBounds = activeDisplay.bounds;
+      
+      dialogLeft = (displayBounds.x + displayBounds.width / 2 - this.DIALOG_WIDTH / 2) - minX;
+      dialogTop = 80 + (displayBounds.y - minY);
+      dialogWidth = this.DIALOG_WIDTH;
+      dialogHeight = this.DIALOG_HEIGHT;
+      
+      // Clamp position to ensure dialog stays within overlay bounds
+      dialogLeft = Math.max(0, Math.min(dialogLeft, allDisplaysWidth - dialogWidth));
+      dialogTop = Math.max(0, Math.min(dialogTop, allDisplaysHeight - dialogHeight));
+    }
 
-    const clampedLeft = Math.max(0, Math.min(dialogLeft, allDisplaysWidth - this.DIALOG_WIDTH));
-    const clampedTop = Math.max(0, Math.min(dialogTop, allDisplaysHeight - this.DIALOG_HEIGHT));
-
+    // Send both old format (for backward compatibility) and new format
     this.window.webContents.send('clipboard:dialogPosition', {
-      left: clampedLeft,
-      top: clampedTop,
+      left: dialogLeft,
+      top: dialogTop,
+    });
+    this.window.webContents.send('clipboard:dialogBounds', {
+      x: dialogLeft,
+      y: dialogTop,
+      width: dialogWidth,
+      height: dialogHeight,
     });
   }
 

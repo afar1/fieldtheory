@@ -224,7 +224,7 @@ export class NativeHelper extends EventEmitter {
         } else if (msg.type === 'error') {
           clearTimeout(timeout);
           this.removeListener('message', handler);
-          reject(new Error((msg as any).message));
+          reject(new Error(msg.message));
         }
       };
 
@@ -249,15 +249,13 @@ export class NativeHelper extends EventEmitter {
         if (msg.type === 'recordingStopped') {
           clearTimeout(timeout);
           this.removeListener('message', handler);
-          const filePath = (msg as any).filePath;
-          console.log('[NativeHelper] Recording stopped, file path:', filePath);
-          resolve(filePath);
+          console.log('[NativeHelper] Recording stopped, file path:', msg.filePath);
+          resolve(msg.filePath);
         } else if (msg.type === 'error') {
           clearTimeout(timeout);
           this.removeListener('message', handler);
-          reject(new Error((msg as any).message));
+          reject(new Error(msg.message));
         }
-        // Note: other message types are ignored (like log messages)
       };
 
       this.once('message', handler);
@@ -287,17 +285,15 @@ export class NativeHelper extends EventEmitter {
 
       const onMessage = (msg: HelperOutgoingMessage) => {
         if (msg.type === 'permissionsStatus') {
-          const status = msg as any;
           cleanup();
           resolve({
-            accessibilityGranted: status.accessibilityGranted,
-            inputMonitoringGranted: status.inputMonitoringGranted,
+            accessibilityGranted: msg.accessibilityGranted,
+            inputMonitoringGranted: msg.inputMonitoringGranted,
           });
         } else if (msg.type === 'error') {
           cleanup();
-          reject(new Error((msg as any).message));
+          reject(new Error(msg.message));
         }
-        // ignore other messages (e.g. 'log')
       };
 
       const cleanup = () => {
@@ -339,14 +335,12 @@ export class NativeHelper extends EventEmitter {
 
       try {
         const msg = JSON.parse(line) as HelperOutgoingMessage;
-        // Only log non-debug messages to reduce noise
-        if (msg.type !== 'log' || (msg as any).level !== 'debug') {
+        if (msg.type !== 'log' || msg.level !== 'debug') {
           console.log('[NativeHelper] Parsed message:', msg.type, msg);
         }
         this.handleMessage(msg);
       } catch (err) {
         console.error('[NativeHelper] Failed to parse JSON from helper. Line:', line.substring(0, 200), 'Error:', err);
-        // Don't crash - just log and continue
       }
     }
   }
@@ -366,9 +360,7 @@ export class NativeHelper extends EventEmitter {
 
       case 'log':
         const level = msg.level || 'info';
-        // Only log debug messages if explicitly enabled
         if (level === 'debug' && !process.env.DEBUG_NATIVE_HELPER) {
-          // Skip debug messages unless DEBUG_NATIVE_HELPER is set
           break;
         }
         console.log(`[NativeHelper ${level}]`, msg.message);
@@ -376,34 +368,29 @@ export class NativeHelper extends EventEmitter {
 
       case 'error':
         console.error('[NativeHelper error]', msg.message);
-        // Only emit error event if there are listeners to avoid unhandled errors
         if (this.listenerCount('error') > 0) {
           this.emit('error', new Error(msg.message));
         }
-        // Also emit as message for promise-based handlers that might be waiting
         this.emit('message', msg);
         break;
 
       case 'recordingStarted':
       case 'recordingStopped':
       case 'recordingCancelled':
-        // Emit as 'message' event for promise-based handlers
         console.log(`[NativeHelper] Emitting message event: ${msg.type}`, msg);
         this.emit('message', msg);
         break;
 
       case 'audioLevel':
-        // Emit audio level for live waveform display
-        this.emit('audioLevel', (msg as any).level);
+        this.emit('audioLevel', msg.level);
         break;
 
       case 'permissionsStatus':
-        // Emit as 'message' event for promise-based handlers
         this.emit('message', msg);
         break;
 
       default:
-        console.warn('[NativeHelper] Unknown message type:', (msg as any).type);
+        console.warn('[NativeHelper] Unknown message type:', msg.type);
     }
   }
 
@@ -472,8 +459,9 @@ export class NativeHelper extends EventEmitter {
       if (!success) {
         this.child.stdin.once('drain', () => {});
       }
-    } catch (error: any) {
-      if (error.code === 'EPIPE') {
+    } catch (error: unknown) {
+      const isEPIPE = error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'EPIPE';
+      if (isEPIPE) {
         console.warn('[NativeHelper] Broken pipe - helper process may have exited');
         this.isRunning = false;
         this.child = null;
