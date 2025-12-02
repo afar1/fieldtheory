@@ -17,6 +17,7 @@ export const ClipboardIPCChannels = {
   // Main -> Renderer (send pattern)
   ITEM_ADDED: 'clipboard:itemAdded',
   ITEM_DELETED: 'clipboard:itemDeleted',
+  DIALOG_POSITION: 'clipboard:dialogPosition',
 } as const;
 
 /**

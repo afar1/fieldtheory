@@ -9,8 +9,8 @@ export class ClipboardHistoryWindow {
   private window: BrowserWindow | null = null;
   private previouslyFocusedWindow: BrowserWindow | null = null;
   
-  private readonly WIDTH = 600;
-  private readonly HEIGHT = 500;
+  private readonly DIALOG_WIDTH = 900;
+  private readonly DIALOG_HEIGHT = 600;
 
   /**
    * Show or toggle the clipboard history window.
@@ -40,33 +40,52 @@ export class ClipboardHistoryWindow {
       // Show and take focus
       this.window.show();
       this.window.focus();
+      // Recalculate and send dialog position
+      this.sendDialogPosition();
       return;
     }
 
-    const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
-    
-    // Center the window on screen
-    const x = Math.floor((screenWidth - this.WIDTH) / 2);
-    const y = Math.floor((screenHeight - this.HEIGHT) / 2);
+    // Calculate union of all displays for full-screen overlay
+    const displays = screen.getAllDisplays();
+    const minX = Math.min(...displays.map(d => d.bounds.x));
+    const minY = Math.min(...displays.map(d => d.bounds.y));
+    const maxX = Math.max(...displays.map(d => d.bounds.x + d.bounds.width));
+    const maxY = Math.max(...displays.map(d => d.bounds.y + d.bounds.height));
+    const allDisplaysWidth = maxX - minX;
+    const allDisplaysHeight = maxY - minY;
+
+    // Find active display (display containing cursor)
+    const cursorPoint = screen.getCursorScreenPoint();
+    const activeDisplay = screen.getDisplayNearestPoint(cursorPoint);
+    const displayBounds = activeDisplay.bounds;
+
+    // Calculate dialog position: 80px from top, centered horizontally on active display
+    // Position is relative to the overlay window origin (minX, minY)
+    const dialogLeft = (displayBounds.x + displayBounds.width / 2 - this.DIALOG_WIDTH / 2) - minX;
+    const dialogTop = 80 + (displayBounds.y - minY);
+
+    // Clamp position to ensure dialog stays within overlay bounds
+    const clampedLeft = Math.max(0, Math.min(dialogLeft, allDisplaysWidth - this.DIALOG_WIDTH));
+    const clampedTop = Math.max(0, Math.min(dialogTop, allDisplaysHeight - this.DIALOG_HEIGHT));
 
     const options: BrowserWindowConstructorOptions = {
-      width: this.WIDTH,
-      height: this.HEIGHT,
-      x,
-      y,
+      width: allDisplaysWidth,
+      height: allDisplaysHeight,
+      x: minX,
+      y: minY,
       frame: false,
-      transparent: true, // Transparent so overlay can cover everything
+      transparent: true,
       alwaysOnTop: true,
       skipTaskbar: true,
       resizable: false,
-      movable: true,
-      focusable: true, // Focusable - uses standard keyboard input like Alfred
+      movable: false,
+      focusable: true,
       fullscreenable: false,
       simpleFullscreen: false,
-      show: false, // Don't show until content loads
-      backgroundColor: '#00000000', // Fully transparent
-      hasShadow: true,
-      roundedCorners: true,
+      show: false,
+      backgroundColor: '#00000000',
+      hasShadow: false,
+      roundedCorners: false,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
@@ -94,6 +113,11 @@ export class ClipboardHistoryWindow {
       if (this.window && !this.window.isDestroyed()) {
         this.window.show();
         this.window.focus();
+        // Send dialog position to renderer
+        this.window.webContents.send('clipboard:dialogPosition', {
+          left: clampedLeft,
+          top: clampedTop,
+        });
       }
     });
 
@@ -144,6 +168,38 @@ export class ClipboardHistoryWindow {
    */
   isVisible(): boolean {
     return this.window !== null && !this.window.isDestroyed() && this.window.isVisible();
+  }
+
+  /**
+   * Send dialog position to renderer.
+   */
+  private sendDialogPosition(): void {
+    if (!this.window || this.window.isDestroyed()) {
+      return;
+    }
+
+    const displays = screen.getAllDisplays();
+    const minX = Math.min(...displays.map(d => d.bounds.x));
+    const minY = Math.min(...displays.map(d => d.bounds.y));
+    const maxX = Math.max(...displays.map(d => d.bounds.x + d.bounds.width));
+    const maxY = Math.max(...displays.map(d => d.bounds.y + d.bounds.height));
+    const allDisplaysWidth = maxX - minX;
+    const allDisplaysHeight = maxY - minY;
+
+    const cursorPoint = screen.getCursorScreenPoint();
+    const activeDisplay = screen.getDisplayNearestPoint(cursorPoint);
+    const displayBounds = activeDisplay.bounds;
+
+    const dialogLeft = (displayBounds.x + displayBounds.width / 2 - this.DIALOG_WIDTH / 2) - minX;
+    const dialogTop = 80 + (displayBounds.y - minY);
+
+    const clampedLeft = Math.max(0, Math.min(dialogLeft, allDisplaysWidth - this.DIALOG_WIDTH));
+    const clampedTop = Math.max(0, Math.min(dialogTop, allDisplaysHeight - this.DIALOG_HEIGHT));
+
+    this.window.webContents.send('clipboard:dialogPosition', {
+      left: clampedLeft,
+      top: clampedTop,
+    });
   }
 
   /**

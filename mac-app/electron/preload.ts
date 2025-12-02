@@ -41,6 +41,7 @@ const ClipboardIPCChannels = {
   SEPARATE_INTO_TASKS: 'clipboard:separateIntoTasks',
   ITEM_ADDED: 'clipboard:itemAdded',
   ITEM_DELETED: 'clipboard:itemDeleted',
+  DIALOG_POSITION: 'clipboard:dialogPosition',
 } as const;
 
 // Types (only for TypeScript checking, not runtime)
@@ -142,6 +143,7 @@ export interface ClipboardAPI {
   onItemAdded: (callback: (id: number) => void) => () => void;
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
+  onDialogPosition: (callback: (position: { left: number; top: number }) => void) => () => void;
   closeWindow: () => Promise<void>;
 }
 
@@ -371,6 +373,16 @@ const clipboardAPI: ClipboardAPI = {
     ipcRenderer.on('clipboard:showHistory', handler);
     return () => {
       ipcRenderer.removeListener('clipboard:showHistory', handler);
+    };
+  },
+
+  onDialogPosition: (callback: (position: { left: number; top: number }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, position: { left: number; top: number }) => {
+      callback(position);
+    };
+    ipcRenderer.on(ClipboardIPCChannels.DIALOG_POSITION, handler);
+    return () => {
+      ipcRenderer.removeListener(ClipboardIPCChannels.DIALOG_POSITION, handler);
     };
   },
 
