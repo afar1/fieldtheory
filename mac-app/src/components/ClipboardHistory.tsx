@@ -25,6 +25,11 @@ type ClipboardItem = {
 
 type FilterType = 'all' | 'transcript' | 'screenshot';
 
+type RunningApp = {
+  bundleId: string;
+  name: string;
+};
+
 /**
  * Format timestamp to relative time (e.g., "2 minutes ago").
  */
@@ -79,6 +84,11 @@ export default function ClipboardHistory() {
   const [isResizing, setIsResizing] = useState(false);
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [resizeStart, setResizeStart] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  
+  // Target app for pasting - the app content will be pasted into.
+  const [targetApp, setTargetApp] = useState<RunningApp | null>(null);
+  const [runningApps, setRunningApps] = useState<RunningApp[]>([]);
+  const [targetAppIndex, setTargetAppIndex] = useState(0);
   
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -181,6 +191,21 @@ export default function ClipboardHistory() {
       inputRef.current?.focus();
     });
 
+    // Listen for target app info (sent when window is shown).
+    const unsubscribeTargetAppInfo = window.clipboardAPI.onTargetAppInfo?.((info) => {
+      setTargetApp(info.targetApp);
+      setRunningApps(info.runningApps);
+      // Find index of target app in running apps list.
+      if (info.targetApp && info.runningApps.length > 0) {
+        const idx = info.runningApps.findIndex(
+          app => app.bundleId === info.targetApp?.bundleId
+        );
+        setTargetAppIndex(idx >= 0 ? idx : 0);
+      } else {
+        setTargetAppIndex(0);
+      }
+    });
+
     // Listen for item additions
     const unsubscribeAdded = window.clipboardAPI.onItemAdded((id) => {
       loadItems(true);
@@ -199,6 +224,7 @@ export default function ClipboardHistory() {
       unsubscribeBounds?.();
       unsubscribePosition();
       unsubscribeShowHistory();
+      unsubscribeTargetAppInfo?.();
       unsubscribeAdded();
       unsubscribeDeleted();
     };
@@ -244,15 +270,18 @@ export default function ClipboardHistory() {
       }
 
       if (key === 'Enter' && !hasShift) {
+        // Get the target bundle ID if user selected a specific target.
+        const targetBundleId = targetApp?.bundleId;
+        
         if (selectedIds.size > 0) {
-          // Paste stack
+          // Paste stack - for now, paste to default target (stack paste doesn't support custom target yet).
           window.clipboardAPI?.pasteStack(Array.from(selectedIds));
           window.clipboardAPI?.closeWindow();
           setSelectedIds(new Set());
           setIsMultiSelect(false);
         } else if (items[selectedIndex]) {
-          // Paste single item
-          window.clipboardAPI?.pasteItem(items[selectedIndex].id);
+          // Paste single item to target app.
+          window.clipboardAPI?.pasteItem(items[selectedIndex].id, targetBundleId);
           window.clipboardAPI?.closeWindow();
         }
         return;
@@ -283,28 +312,29 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // Tab navigation between filter tabs (only when input is not focused)
-      if (key === 'Tab' && !hasCtrl && !hasMeta && !hasAlt && document.activeElement !== inputRef.current) {
+      // Tab cycles through running apps (target app selection).
+      // Works anywhere in the window.
+      if (key === 'Tab' && !hasCtrl && !hasMeta && !hasAlt) {
         e.preventDefault();
-        const tabs: FilterType[] = ['all', 'transcript', 'screenshot'];
+        
+        if (runningApps.length === 0) {
+          return; // No apps to cycle through.
+        }
+        
         if (hasShift) {
-          // Shift+Tab - go backwards
-          const prevIndex = (focusedTabIndex - 1 + tabs.length) % tabs.length;
-          setFocusedTabIndex(prevIndex);
-          setFilter(tabs[prevIndex]);
-          setSelectedIndex(0);
-          setTimeout(() => {
-            tabRefs.current[prevIndex]?.focus();
-          }, 0);
+          // Shift+Tab - go backwards through running apps.
+          const prevIndex = (targetAppIndex - 1 + runningApps.length) % runningApps.length;
+          setTargetAppIndex(prevIndex);
+          setTargetApp(runningApps[prevIndex]);
+          // Notify main process of the change.
+          window.clipboardAPI?.setTargetApp(runningApps[prevIndex]);
         } else {
-          // Tab - go forwards
-          const nextIndex = (focusedTabIndex + 1) % tabs.length;
-          setFocusedTabIndex(nextIndex);
-          setFilter(tabs[nextIndex]);
-          setSelectedIndex(0);
-          setTimeout(() => {
-            tabRefs.current[nextIndex]?.focus();
-          }, 0);
+          // Tab - go forwards through running apps.
+          const nextIndex = (targetAppIndex + 1) % runningApps.length;
+          setTargetAppIndex(nextIndex);
+          setTargetApp(runningApps[nextIndex]);
+          // Notify main process of the change.
+          window.clipboardAPI?.setTargetApp(runningApps[nextIndex]);
         }
         return;
       }
@@ -314,7 +344,7 @@ export default function ClipboardHistory() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, focusedTabIndex, filter]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetApp, runningApps, targetAppIndex]);
 
   // Scroll selected item into view.
   useEffect(() => {
@@ -340,7 +370,9 @@ export default function ClipboardHistory() {
       });
       setSelectedIndex(index);
     } else {
-      window.clipboardAPI?.pasteItem(item.id);
+      // Paste to target app.
+      const targetBundleId = targetApp?.bundleId;
+      window.clipboardAPI?.pasteItem(item.id, targetBundleId);
       window.clipboardAPI?.closeWindow();
     }
   };
@@ -830,6 +862,41 @@ export default function ClipboardHistory() {
           >
             {loading ? 'Loading...' : 'Load More'}
           </button>
+        )}
+      </div>
+      
+      {/* Target app footer - shows which app content will be pasted into. */}
+      <div
+        style={{
+          padding: '10px 16px',
+          borderTop: '1px solid #e0e0e0',
+          backgroundColor: '#fafafa',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          fontSize: '12px',
+          color: '#555',
+          userSelect: 'none',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ color: '#888' }}>Paste into:</span>
+          <span
+            style={{
+              fontWeight: 500,
+              color: '#333',
+              backgroundColor: '#e8e8e8',
+              padding: '3px 8px',
+              borderRadius: '4px',
+            }}
+          >
+            {targetApp?.name || 'Previous App'}
+          </span>
+        </div>
+        {runningApps.length > 1 && (
+          <div style={{ color: '#999', fontSize: '11px' }}>
+            Tab to switch • {runningApps.length} apps
+          </div>
         )}
       </div>
         </div>

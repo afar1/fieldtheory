@@ -425,7 +425,7 @@ function setupClipboardIPCHandlers(): void {
     return success;
   });
 
-  ipcMain.handle(ClipboardIPCChannels.PASTE_ITEM, async (_event, id: number) => {
+  ipcMain.handle(ClipboardIPCChannels.PASTE_ITEM, async (_event, id: number, targetBundleId?: string) => {
     if (!clipboardManager) {
       return;
     }
@@ -434,27 +434,33 @@ function setupClipboardIPCHandlers(): void {
       return;
     }
     
-    // Hide window and restore focus BEFORE pasting (so Cmd+V lands in the right place)
+    // Put content on clipboard first.
+    if (item.type === 'text' || item.type === 'transcript') {
+      clipboard.writeText(item.content || '');
+    } else if (item.imageData) {
+      const { nativeImage } = require('electron');
+      const imageBuffer = typeof item.imageData === 'string' 
+        ? Buffer.from(item.imageData, 'base64')
+        : item.imageData;
+      const image = nativeImage.createFromBuffer(imageBuffer);
+      clipboard.writeImage(image);
+    }
+    
+    // Hide window first.
     if (clipboardHistoryWindow) {
-      clipboardHistoryWindow.hide(); // This includes app.hide() to restore focus
+      clipboardHistoryWindow.hide();
     }
     
     const { exec } = require('child_process');
     const { promisify } = require('util');
     const execAsync = promisify(exec);
     
-    if (item.type === 'text' || item.type === 'transcript') {
-      clipboard.writeText(item.content || '');
-      // Paste using AppleScript (focus is already on the previous app's input field)
-      await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-    } else if (item.imageData) {
-      const { nativeImage } = require('electron');
-      // item.imageData is already a base64 string from IPC serialization
-      const imageBuffer = typeof item.imageData === 'string' 
-        ? Buffer.from(item.imageData, 'base64')
-        : item.imageData;
-      const image = nativeImage.createFromBuffer(imageBuffer);
-      clipboard.writeImage(image);
+    // If a specific target app was provided, activate it and paste there.
+    // Otherwise, use the default behavior (paste to previous app).
+    if (targetBundleId && clipboardHistoryWindow) {
+      await clipboardHistoryWindow.pasteToApp(targetBundleId);
+    } else {
+      // Default behavior: paste to previous app (focus restored by hide()).
       await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
     }
   });
@@ -497,6 +503,41 @@ function setupClipboardIPCHandlers(): void {
         displayConfig,
       },
     });
+  });
+
+  // Target app management handlers.
+  ipcMain.handle(ClipboardIPCChannels.GET_TARGET_APP, async () => {
+    if (!clipboardHistoryWindow) {
+      return null;
+    }
+    return clipboardHistoryWindow.getTargetApp();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SET_TARGET_APP, async (_event, app: { bundleId: string; name: string } | null) => {
+    if (!clipboardHistoryWindow) {
+      return;
+    }
+    clipboardHistoryWindow.setTargetApp(app);
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.GET_RUNNING_APPS, async () => {
+    if (!clipboardHistoryWindow) {
+      return [];
+    }
+    // Return cached apps (already fetched when window was shown).
+    return clipboardHistoryWindow.getCachedRunningApps();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.PASTE_TO_APP, async (_event, bundleId: string) => {
+    if (!clipboardHistoryWindow) {
+      return false;
+    }
+    
+    // Hide our window first.
+    clipboardHistoryWindow.hide();
+    
+    // Paste to the target app.
+    return clipboardHistoryWindow.pasteToApp(bundleId);
   });
 
   ipcMain.on('clipboard:closeWindow', async (event) => {
@@ -700,8 +741,8 @@ async function initTranscriberSystem(): Promise<void> {
       }
       
       // Show window and take focus (like Alfred)
-      // show() will send clipboard:showHistory event to reset search
-      clipboardHistoryWindow.show(boundsToUse);
+      // show() will capture the previous app, then send clipboard:showHistory event to reset search.
+      await clipboardHistoryWindow.show(boundsToUse);
     } else {
       // Hide window and restore focus to previous app
       clipboardHistoryWindow.hide();
