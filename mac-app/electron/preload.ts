@@ -88,6 +88,22 @@ type ClipboardItem = {
   charCount: number | null;
   createdAt: number;
   contentHash: string;
+  stackId: string | null;
+};
+
+type StackInfo = {
+  stackId: string;
+  itemCount: number;
+  imageCount: number;
+  textCount: number;
+  createdAt: number;
+  firstTextPreview: string | null;
+};
+
+type StackingModeState = {
+  active: boolean;
+  stackId: string | null;
+  targetApp: string | null;
 };
 
 type ClipboardQueryOptions = {
@@ -123,12 +139,14 @@ export interface TranscribeAPI {
   getOverlayStyle: () => Promise<'rectangle' | 'top-emerging'>;
   setOverlayStyle: (style: 'rectangle' | 'top-emerging') => Promise<void>;
   getStackCount: () => Promise<number>;
+  getStackingMode: () => Promise<StackingModeState>;
   onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
   onResult: (callback: (text: string) => void) => () => void;
   onError: (callback: (error: string) => void) => () => void;
   onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
   onHotkeyChanged: (callback: (hotkey: string) => void) => () => void;
   onStackChanged: (callback: (count: number) => void) => () => void;
+  onStackingModeChanged: (callback: (active: boolean, stackId: string | null) => void) => () => void;
 }
 
 export interface ClipboardAPI {
@@ -149,6 +167,12 @@ export interface ClipboardAPI {
   onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number }) => void) => () => void;
   saveBounds: (bounds: { x: number; y: number; width: number; height: number }) => Promise<void>;
   closeWindow: () => Promise<void>;
+  
+  // Stack operations for prompt stacking feature
+  queryItemsByStackId: (stackId: string) => Promise<ClipboardItem[]>;
+  getUniqueStacks: () => Promise<StackInfo[]>;
+  updateStackId: (itemIds: number[], stackId: string | null) => Promise<void>;
+  startDrag: (stackId: string) => Promise<void>;
 }
 
 export interface PermissionsAPI {
@@ -296,6 +320,10 @@ const transcribeAPI: TranscribeAPI = {
     return ipcRenderer.invoke('transcribe:getStackCount');
   },
 
+  getStackingMode: async (): Promise<StackingModeState> => {
+    return ipcRenderer.invoke('transcribe:getStackingMode');
+  },
+
   onStackChanged: (callback: (count: number) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, count: number) => {
       callback(count);
@@ -305,6 +333,18 @@ const transcribeAPI: TranscribeAPI = {
 
     return () => {
       ipcRenderer.removeListener('transcribe:stackChanged', handler);
+    };
+  },
+
+  onStackingModeChanged: (callback: (active: boolean, stackId: string | null) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, active: boolean, stackId: string | null) => {
+      callback(active, stackId);
+    };
+
+    ipcRenderer.on('transcribe:stackingModeChanged', handler);
+
+    return () => {
+      ipcRenderer.removeListener('transcribe:stackingModeChanged', handler);
     };
   },
 };
@@ -407,6 +447,23 @@ const clipboardAPI: ClipboardAPI = {
   closeWindow: async (): Promise<void> => {
     // Send IPC to main process to close the current window
     ipcRenderer.send('clipboard:closeWindow');
+  },
+
+  // Stack operations for prompt stacking feature
+  queryItemsByStackId: async (stackId: string): Promise<ClipboardItem[]> => {
+    return ipcRenderer.invoke('clipboard:queryItemsByStack', stackId);
+  },
+
+  getUniqueStacks: async (): Promise<StackInfo[]> => {
+    return ipcRenderer.invoke('clipboard:getUniqueStacks');
+  },
+
+  updateStackId: async (itemIds: number[], stackId: string | null): Promise<void> => {
+    return ipcRenderer.invoke('clipboard:updateStackId', itemIds, stackId);
+  },
+
+  startDrag: async (stackId: string): Promise<void> => {
+    return ipcRenderer.invoke('clipboard:startDrag', stackId);
   },
 };
 

@@ -5,10 +5,12 @@ import { OverlayStyle } from './preferences';
 /**
  * Manages the recording indicator overlay window.
  * Shows a small, always-on-top window with live waveform animation.
+ * Supports stacking mode with persistent "stacking" indicator.
  */
 export class RecordingOverlay {
   private window: BrowserWindow | null = null;
   private overlayStyle: OverlayStyle = 'rectangle';
+  private isStackingMode: boolean = false;
   
   // Rectangle style dimensions
   private readonly RECTANGLE_WIDTH = 100;
@@ -17,6 +19,10 @@ export class RecordingOverlay {
   // Top-emerging style dimensions (wider, taller to look like Dynamic Island)
   private readonly TOP_EMERGING_WIDTH = 120;
   private readonly TOP_EMERGING_HEIGHT = 44;
+  
+  // Stacking mode dimensions (slightly wider to fit "stacking" label)
+  private readonly STACKING_WIDTH = 140;
+  private readonly STACKING_HEIGHT = 44;
 
   /**
    * Set the overlay style preference.
@@ -121,21 +127,132 @@ export class RecordingOverlay {
     this.sendState('transcribing');
   }
 
-  dismiss(): void {
-    if (this.window) {
-      this.sendState('dismiss');
-      setTimeout(() => {
-        if (this.window && !this.window.isDestroyed()) {
-          this.window.close();
-          this.window = null;
-        }
-      }, 300);
+  /**
+   * Show the overlay in stacking idle state.
+   * Displays a minimal "stacking" label without recording/transcribing indicators.
+   * Used between recordings when stacking mode is active.
+   */
+  showStackingIdle(): void {
+    console.log('[RecordingOverlay] showStackingIdle() called');
+    
+    if (!this.isStackingMode) {
+      console.warn('[RecordingOverlay] showStackingIdle called but stacking mode is off');
+      return;
     }
+
+    // If window doesn't exist, create it
+    if (!this.window || this.window.isDestroyed()) {
+      this.createStackingWindow();
+    } else {
+      this.window.showInactive();
+    }
+    
+    this.sendState('stacking-idle');
+    this.sendStyle(this.overlayStyle);
+    this.sendStackingMode(true);
   }
 
-  private sendState(state: 'recording' | 'transcribing' | 'dismiss'): void {
+  /**
+   * Create the overlay window configured for stacking mode.
+   */
+  private createStackingWindow(): void {
+    const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
+    
+    const width = this.STACKING_WIDTH;
+    const height = this.STACKING_HEIGHT;
+    const x = Math.floor((screenWidth - width) / 2);
+    const y = 8; // Near top like top-emerging style
+
+    this.window = new BrowserWindow({
+      width,
+      height,
+      x,
+      y,
+      frame: false,
+      transparent: true,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      movable: false,
+      focusable: false,
+      show: false,
+      backgroundColor: '#00000000',
+      hasShadow: true,
+      roundedCorners: true,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, '../overlay-preload.js'),
+      },
+    });
+    
+    this.window.showInactive();
+
+    const startUrl = process.env.ELECTRON_START_URL;
+    if (startUrl) {
+      this.window.loadURL(`${startUrl}overlay.html`);
+    } else {
+      const htmlPath = path.join(app.getAppPath(), 'dist', 'overlay.html');
+      this.window.loadFile(htmlPath);
+    }
+
+    this.window.on('closed', () => {
+      this.window = null;
+    });
+
+    this.window.webContents.once('did-finish-load', () => {
+      this.sendState('stacking-idle');
+      this.sendStyle(this.overlayStyle);
+      this.sendStackingMode(true);
+    });
+  }
+
+  /**
+   * Set stacking mode on/off.
+   * When on, the overlay persists between recordings.
+   */
+  setStackingMode(active: boolean): void {
+    console.log(`[RecordingOverlay] setStackingMode(${active})`);
+    this.isStackingMode = active;
+    this.sendStackingMode(active);
+  }
+
+  /**
+   * Dismiss the overlay. In stacking mode, only hides temporarily during certain states.
+   * When stacking mode is off, fully closes the window.
+   */
+  dismiss(): void {
+    if (!this.window) {
+      return;
+    }
+
+    // In stacking mode, don't close the window - just send dismiss state briefly
+    // The window should remain visible for the next recording
+    if (this.isStackingMode) {
+      // Keep window visible but show idle stacking state
+      this.sendState('stacking-idle');
+      return;
+    }
+
+    // Normal dismiss - close the window
+    this.sendState('dismiss');
+    setTimeout(() => {
+      if (this.window && !this.window.isDestroyed()) {
+        this.window.close();
+        this.window = null;
+      }
+    }, 300);
+  }
+
+  private sendState(state: 'recording' | 'transcribing' | 'dismiss' | 'stacking-idle'): void {
     if (this.window && !this.window.isDestroyed()) {
       this.window.webContents.send('overlay-state', state);
+    }
+  }
+  
+  private sendStackingMode(active: boolean): void {
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send('overlay-stacking-mode', active);
     }
   }
 
