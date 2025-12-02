@@ -5,10 +5,10 @@ import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { NativeHelper } from './nativeHelper';
-import { ModelManager } from './modelManager';
+import { ModelManager, ModelSize } from './modelManager';
 import { PreferencesManager } from './preferences';
 import { RecordingOverlay } from './recordingOverlay';
-import { ClipboardManager } from './clipboardManager';
+import { ClipboardManager, ClipboardItem } from './clipboardManager';
 
 const execAsync = promisify(exec);
 
@@ -484,9 +484,9 @@ export class TranscriberManager extends EventEmitter {
   /**
    * Set the selected model size and save to preferences.
    */
-  async setSelectedModel(size: string): Promise<void> {
-    this.modelManager.setSelectedModel(size as any);
-    await this.preferences.save({ selectedModel: size as any });
+  async setSelectedModel(size: ModelSize): Promise<void> {
+    this.modelManager.setSelectedModel(size);
+    await this.preferences.save({ selectedModel: size });
     console.log(`[TranscriberManager] Model changed to: ${size}`);
   }
 
@@ -518,7 +518,6 @@ export class TranscriberManager extends EventEmitter {
    */
   clearStack(): void {
     this.currentStack = [];
-    // Emit stack changed event
     this.emit('stackChanged', 0);
   }
 
@@ -528,7 +527,6 @@ export class TranscriberManager extends EventEmitter {
   addToStack(itemId: number): void {
     if (!this.currentStack.includes(itemId)) {
       this.currentStack.push(itemId);
-      // Emit stack changed event
       this.emit('stackChanged', this.currentStack.length);
     }
   }
@@ -544,7 +542,7 @@ export class TranscriberManager extends EventEmitter {
 
     const items = this.currentStack
       .map(id => this.clipboardManager!.getItem(id))
-      .filter(item => item !== null) as any[];
+      .filter((item): item is ClipboardItem => item !== null);
 
     if (items.length === 0) {
       return;
@@ -572,10 +570,6 @@ export class TranscriberManager extends EventEmitter {
     this.clearStack();
   }
 
-  /**
-   * Separate a transcript into tasks and observations using LLM.
-   * This bridges from workhorse to structured data.
-   */
   async separateIntoTasks(transcriptId: number): Promise<void> {
     if (!this.clipboardManager) {
       throw new Error('ClipboardManager not available');
@@ -586,9 +580,6 @@ export class TranscriberManager extends EventEmitter {
       throw new Error('Transcript not found or has no content');
     }
 
-    // Import processTranscription from services/llm.ts
-    // Note: This requires the main process to have access to environment variables
-    // and Supabase client. For now, we'll emit an event that the renderer can handle.
     this.emit('separateIntoTasks', {
       transcriptId,
       text: item.content,

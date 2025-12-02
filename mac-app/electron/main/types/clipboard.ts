@@ -13,11 +13,13 @@ export const ClipboardIPCChannels = {
   PASTE_ITEM: 'clipboard:pasteItem',
   PASTE_STACK: 'clipboard:pasteStack',
   SEPARATE_INTO_TASKS: 'clipboard:separateIntoTasks',
+  SAVE_BOUNDS: 'clipboard:saveBounds',
 
   // Main -> Renderer (send pattern)
   ITEM_ADDED: 'clipboard:itemAdded',
   ITEM_DELETED: 'clipboard:itemDeleted',
   DIALOG_POSITION: 'clipboard:dialogPosition',
+  DIALOG_BOUNDS: 'clipboard:dialogBounds',
 } as const;
 
 /**

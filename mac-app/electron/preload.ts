@@ -39,9 +39,11 @@ const ClipboardIPCChannels = {
   PASTE_ITEM: 'clipboard:pasteItem',
   PASTE_STACK: 'clipboard:pasteStack',
   SEPARATE_INTO_TASKS: 'clipboard:separateIntoTasks',
+  SAVE_BOUNDS: 'clipboard:saveBounds',
   ITEM_ADDED: 'clipboard:itemAdded',
   ITEM_DELETED: 'clipboard:itemDeleted',
   DIALOG_POSITION: 'clipboard:dialogPosition',
+  DIALOG_BOUNDS: 'clipboard:dialogBounds',
 } as const;
 
 // Types (only for TypeScript checking, not runtime)
@@ -144,6 +146,8 @@ export interface ClipboardAPI {
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
   onDialogPosition: (callback: (position: { left: number; top: number }) => void) => () => void;
+  onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number }) => void) => () => void;
+  saveBounds: (bounds: { x: number; y: number; width: number; height: number }) => Promise<void>;
   closeWindow: () => Promise<void>;
 }
 
@@ -384,6 +388,20 @@ const clipboardAPI: ClipboardAPI = {
     return () => {
       ipcRenderer.removeListener(ClipboardIPCChannels.DIALOG_POSITION, handler);
     };
+  },
+
+  onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, bounds: { x: number; y: number; width: number; height: number }) => {
+      callback(bounds);
+    };
+    ipcRenderer.on(ClipboardIPCChannels.DIALOG_BOUNDS, handler);
+    return () => {
+      ipcRenderer.removeListener(ClipboardIPCChannels.DIALOG_BOUNDS, handler);
+    };
+  },
+
+  saveBounds: async (bounds: { x: number; y: number; width: number; height: number }): Promise<void> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SAVE_BOUNDS, bounds);
   },
 
   closeWindow: async (): Promise<void> => {

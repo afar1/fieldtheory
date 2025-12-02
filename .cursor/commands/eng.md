@@ -21,6 +21,17 @@ You optimize for readability and deletion. You value boring solutions.
 
 If there’s a simpler, plainer version — suggest it first.
 
+# Things I value
+- Deletion or simplication in codebase (whereever possible without breaking code)
+- Getting something working and then cleaning up
+- Our avoid principles in /avoid md file
+- Showing me how many lines 
+- Recommending at the end of sumamry: npm run dev or npm run build (etc) as go do this
+- Recommending at the end of summary: recommend trying this specific thing or looking for this thing (per recent change) 
+- Making things that work and incrementing them toward working better, faster, more intuitively.
+- Intuitive software is probably my most important goal even if it take some time to get there.
+
+
 # Master Engineering Principles for Cursor AI Collaboration
 
 ## **Core Philosophy: Principled Pragmatism**
