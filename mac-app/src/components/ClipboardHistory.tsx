@@ -88,6 +88,7 @@ export default function ClipboardHistory() {
   const [stacks, setStacks] = useState<StackInfo[]>([]);
   const [expandedStacks, setExpandedStacks] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [filter, setFilter] = useState<FilterType>('all');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -95,7 +96,6 @@ export default function ClipboardHistory() {
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [focusedTabIndex, setFocusedTabIndex] = useState(0);
   const [dialogBounds, setDialogBounds] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
@@ -103,14 +103,21 @@ export default function ClipboardHistory() {
   const [resizeStart, setResizeStart] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   
   // Target app for pasting - the app content will be pasted into.
-  const [targetApp, setTargetApp] = useState<RunningApp | null>(null);
-  const [runningApps, setRunningApps] = useState<RunningApp[]>([]);
-  const [targetAppIndex, setTargetAppIndex] = useState(0);
+  // Combined into single state object to batch updates and reduce re-renders.
+  const [targetAppInfo, setTargetAppInfo] = useState<{
+    targetApp: RunningApp | null;
+    runningApps: RunningApp[];
+    targetAppIndex: number;
+  }>({
+    targetApp: null,
+    runningApps: [],
+    targetAppIndex: 0,
+  });
   
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
-  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const searchDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ITEMS_PER_PAGE = 50;
   
   const MIN_WIDTH = 400;
@@ -131,14 +138,10 @@ export default function ClipboardHistory() {
         offset: reset ? 0 : offset,
       };
 
-      if (filter === 'transcript') {
-        queryOptions.type = 'transcript';
-      } else if (filter === 'screenshot') {
-        queryOptions.type = 'screenshot';
-      }
+      // No filter - show all items
 
-      if (searchQuery.trim()) {
-        queryOptions.search = searchQuery.trim();
+      if (debouncedSearchQuery.trim()) {
+        queryOptions.search = debouncedSearchQuery.trim();
       }
 
       // Load items and stacks in parallel
@@ -162,15 +165,35 @@ export default function ClipboardHistory() {
     } finally {
       setLoading(false);
     }
-  }, [isMacOS, filter, searchQuery, offset, stacks]);
+  }, [isMacOS, debouncedSearchQuery, offset, stacks]);
 
-  // Initial load and filter/search changes.
+  // Debounce search query to avoid querying database on every keystroke.
+  useEffect(() => {
+    // Clear existing timer
+    if (searchDebounceTimerRef.current) {
+      clearTimeout(searchDebounceTimerRef.current);
+    }
+    
+    // Set new timer to update debounced value after 150ms of no typing
+    searchDebounceTimerRef.current = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 150);
+    
+    // Cleanup on unmount or when searchQuery changes
+    return () => {
+      if (searchDebounceTimerRef.current) {
+        clearTimeout(searchDebounceTimerRef.current);
+      }
+    };
+  }, [searchQuery]);
+
+  // Initial load and search changes.
   useEffect(() => {
     if (isVisible) {
       setOffset(0);
       loadItems(true);
     }
-  }, [isVisible, filter, searchQuery]);
+  }, [isVisible, debouncedSearchQuery]);
 
   // When component mounts in standalone window, show immediately
   useEffect(() => {
@@ -206,6 +229,7 @@ export default function ClipboardHistory() {
     // Listen for window show event to reset search and focus input
     const unsubscribeShowHistory = window.clipboardAPI.onShowHistory(() => {
       setSearchQuery('');
+      setDebouncedSearchQuery(''); // Also reset debounced value immediately
       setSelectedIndex(0);
       setSelectedIds(new Set());
       setIsMultiSelect(false);
@@ -214,18 +238,23 @@ export default function ClipboardHistory() {
     });
 
     // Listen for target app info (sent when window is shown).
+    // Batched into single state update to reduce re-renders.
     const unsubscribeTargetAppInfo = window.clipboardAPI.onTargetAppInfo?.((info) => {
-      setTargetApp(info.targetApp);
-      setRunningApps(info.runningApps);
       // Find index of target app in running apps list.
+      let targetAppIndex = 0;
       if (info.targetApp && info.runningApps.length > 0) {
         const idx = info.runningApps.findIndex(
           app => app.bundleId === info.targetApp?.bundleId
         );
-        setTargetAppIndex(idx >= 0 ? idx : 0);
-      } else {
-        setTargetAppIndex(0);
+        targetAppIndex = idx >= 0 ? idx : 0;
       }
+      
+      // Single state update batches all changes together
+      setTargetAppInfo({
+        targetApp: info.targetApp,
+        runningApps: info.runningApps,
+        targetAppIndex,
+      });
     });
 
     // Listen for item additions
@@ -294,7 +323,7 @@ export default function ClipboardHistory() {
 
       if (key === 'Enter' && !hasShift) {
         // Get the target bundle ID if user selected a specific target.
-        const targetBundleId = targetApp?.bundleId;
+        const targetBundleId = targetAppInfo.targetApp?.bundleId;
         
         if (selectedIds.size > 0) {
           // Paste stack - for now, paste to default target (stack paste doesn't support custom target yet).
@@ -340,24 +369,32 @@ export default function ClipboardHistory() {
       if (key === 'Tab' && !hasCtrl && !hasMeta && !hasAlt) {
         e.preventDefault();
         
-        if (runningApps.length === 0) {
+        if (targetAppInfo.runningApps.length === 0) {
           return; // No apps to cycle through.
         }
         
         if (hasShift) {
           // Shift+Tab - go backwards through running apps.
-          const prevIndex = (targetAppIndex - 1 + runningApps.length) % runningApps.length;
-          setTargetAppIndex(prevIndex);
-          setTargetApp(runningApps[prevIndex]);
+          const prevIndex = (targetAppInfo.targetAppIndex - 1 + targetAppInfo.runningApps.length) % targetAppInfo.runningApps.length;
+          const newApp = targetAppInfo.runningApps[prevIndex];
+          setTargetAppInfo(prev => ({
+            ...prev,
+            targetApp: newApp,
+            targetAppIndex: prevIndex,
+          }));
           // Notify main process of the change.
-          window.clipboardAPI?.setTargetApp(runningApps[prevIndex]);
+          window.clipboardAPI?.setTargetApp(newApp);
         } else {
           // Tab - go forwards through running apps.
-          const nextIndex = (targetAppIndex + 1) % runningApps.length;
-          setTargetAppIndex(nextIndex);
-          setTargetApp(runningApps[nextIndex]);
+          const nextIndex = (targetAppInfo.targetAppIndex + 1) % targetAppInfo.runningApps.length;
+          const newApp = targetAppInfo.runningApps[nextIndex];
+          setTargetAppInfo(prev => ({
+            ...prev,
+            targetApp: newApp,
+            targetAppIndex: nextIndex,
+          }));
           // Notify main process of the change.
-          window.clipboardAPI?.setTargetApp(runningApps[nextIndex]);
+          window.clipboardAPI?.setTargetApp(newApp);
         }
         return;
       }
@@ -367,7 +404,7 @@ export default function ClipboardHistory() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetApp, runningApps, targetAppIndex]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo]);
 
   // Scroll selected item into view.
   useEffect(() => {
@@ -394,7 +431,7 @@ export default function ClipboardHistory() {
       setSelectedIndex(index);
     } else {
       // Paste to target app.
-      const targetBundleId = targetApp?.bundleId;
+      const targetBundleId = targetAppInfo.targetApp?.bundleId;
       window.clipboardAPI?.pasteItem(item.id, targetBundleId);
       window.clipboardAPI?.closeWindow();
     }
@@ -522,14 +559,8 @@ export default function ClipboardHistory() {
     const rows: ListRow[] = [];
     const seenStackIds = new Set<string>();
     
-    // Filter items first
-    const filtered = items.filter(item => {
-      if (filter === 'transcript' && item.type !== 'transcript') return false;
-      if (filter === 'screenshot' && item.type !== 'screenshot') return false;
-      return true;
-    });
-    
-    for (const item of filtered) {
+    // Process all items (no filtering)
+    for (const item of items) {
       if (item.stackId) {
         // This item belongs to a stack
         if (!seenStackIds.has(item.stackId)) {
@@ -539,7 +570,7 @@ export default function ClipboardHistory() {
           const stackInfo = stacks.find(s => s.stackId === item.stackId);
           if (stackInfo) {
             // Get all items in this stack
-            const stackItems = filtered.filter(i => i.stackId === item.stackId);
+            const stackItems = items.filter((i: ClipboardItem) => i.stackId === item.stackId);
             const isExpanded = expandedStacks.has(item.stackId);
             
             rows.push({
@@ -565,12 +596,8 @@ export default function ClipboardHistory() {
   
   const listRows = buildListRows();
   
-  // For backward compatibility, keep filteredItems for navigation count
-  const filteredItems = items.filter(item => {
-    if (filter === 'transcript' && item.type !== 'transcript') return false;
-    if (filter === 'screenshot' && item.type !== 'screenshot') return false;
-    return true;
-  });
+  // All items are shown (no filtering)
+  const filteredItems = items;
 
   // Toggle stack expansion
   const toggleStackExpanded = (stackId: string) => {
@@ -725,31 +752,6 @@ export default function ClipboardHistory() {
           marginTop: '12px',
         }}
       >
-        {(['all', 'transcript', 'screenshot'] as FilterType[]).map((tab, index) => (
-          <button
-            key={tab}
-            ref={(el) => { tabRefs.current[index] = el; }}
-            onClick={() => {
-              setFilter(tab);
-              setSelectedIndex(0);
-              setFocusedTabIndex(index);
-            }}
-            onFocus={() => setFocusedTabIndex(index)}
-            style={{
-              padding: '8px 16px',
-              border: 'none',
-              backgroundColor: filter === tab ? '#f0f0f0' : 'transparent',
-              cursor: 'pointer',
-              textTransform: 'capitalize',
-              fontSize: '12px',
-              fontWeight: '400',
-              outline: 'none',
-              borderRadius: '8px 8px 0 0',
-            }}
-          >
-            {tab}
-          </button>
-        ))}
         {selectedIds.size > 0 && (
           <div
             style={{
@@ -1281,27 +1283,6 @@ export default function ClipboardHistory() {
                     )}
                   </div>
 
-                  {/* Actions */}
-                  {item.type === 'transcript' && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        window.clipboardAPI?.separateIntoTasks(item.id);
-                        window.clipboardAPI?.closeWindow();
-                      }}
-                      style={{
-                        padding: '4px 8px',
-                        fontSize: '11px',
-                        backgroundColor: '#007AFF',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Tasks
-                    </button>
-                  )}
                 </div>
               );
             }
@@ -1353,12 +1334,12 @@ export default function ClipboardHistory() {
               borderRadius: '4px',
             }}
           >
-            {targetApp?.name || 'Previous App'}
+            {targetAppInfo.targetApp?.name || 'Select app'}
           </span>
         </div>
-        {runningApps.length > 1 && (
+        {targetAppInfo.runningApps.length > 1 && (
           <div style={{ color: '#999', fontSize: '11px' }}>
-            Tab to switch • {runningApps.length} apps
+            Tab to switch • {targetAppInfo.runningApps.length} apps
           </div>
         )}
       </div>

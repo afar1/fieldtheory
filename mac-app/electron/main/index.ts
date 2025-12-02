@@ -147,6 +147,42 @@ function showMainWindow(): void {
 }
 
 /**
+ * Show clipboard history window when app becomes active.
+ * Called from app 'activate' event handler.
+ */
+function showClipboardHistoryOnActivate(): void {
+  // Ensure clipboard history window is initialized
+  if (!clipboardHistoryWindow) {
+    clipboardHistoryWindow = new ClipboardHistoryWindow();
+  }
+  
+  // Only show if not already visible
+  if (!clipboardHistoryWindow.isVisible()) {
+    // Load saved bounds from preferences
+    const prefs = preferencesManager?.get();
+    const savedBounds = prefs?.clipboardHistoryBounds;
+    const currentDisplayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
+    
+    // Only use saved bounds if display config matches
+    let boundsToUse: { x: number; y: number; width: number; height: number } | undefined;
+    if (savedBounds && savedBounds.displayConfig === currentDisplayConfig) {
+      const displays = screen.getAllDisplays();
+      const minX = Math.min(...displays.map((d: Display) => d.bounds.x));
+      const minY = Math.min(...displays.map((d: Display) => d.bounds.y));
+      
+      boundsToUse = {
+        x: savedBounds.x - minX,
+        y: savedBounds.y - minY,
+        width: savedBounds.width,
+        height: savedBounds.height,
+      };
+    }
+    
+    clipboardHistoryWindow.show(boundsToUse);
+  }
+}
+
+/**
  * Set up all IPC handlers for audio-related communication.
  */
 function setupIPCHandlers(): void {
@@ -860,6 +896,16 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize clipboard manager with hotkeys from preferences
   clipboardManager = new ClipboardManager();
+  
+  // Broadcast ITEM_ADDED when clipboard polling detects new items
+  clipboardManager.setOnItemAdded((id) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
+      }
+    });
+  });
+  
   const prefs = preferencesManager.get();
   clipboardManager.loadHotkeysFromPreferences(
     prefs.clipboardScreenshotHotkey,
@@ -950,8 +996,8 @@ async function initTranscriberSystem(): Promise<void> {
       }
       
       // Show window and take focus (like Alfred)
-      // show() will capture the previous app, then send clipboard:showHistory event to reset search.
-      await clipboardHistoryWindow.show(boundsToUse);
+      // show() is now synchronous - window appears immediately, app data loads in background.
+      clipboardHistoryWindow.show(boundsToUse);
     } else {
       // Hide window and restore focus to previous app
       clipboardHistoryWindow.hide();
@@ -996,6 +1042,9 @@ if (!gotTheLock) {
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
         createWindow();
+      } else {
+        // When app becomes active, show clipboard history window
+        showClipboardHistoryOnActivate();
       }
     });
   });
