@@ -138,6 +138,8 @@ export class ClipboardManager {
       CREATE INDEX IF NOT EXISTS idx_created_at ON clipboard_items(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_type ON clipboard_items(type);
       CREATE INDEX IF NOT EXISTS idx_content_hash ON clipboard_items(content_hash);
+      CREATE INDEX IF NOT EXISTS idx_source_app_name ON clipboard_items(source_app_name);
+      CREATE INDEX IF NOT EXISTS idx_source_app ON clipboard_items(source_app);
 
       CREATE VIRTUAL TABLE IF NOT EXISTS clipboard_fts USING fts5(
         content,
@@ -359,10 +361,29 @@ export class ClipboardManager {
 
     if (search) {
       // Enable prefix matching for fuzzy search: "hel wor" matches "hello world"
-      const words = search.trim().split(/\s+/).filter(w => w.length > 0);
+      const words = search.trim().toLowerCase().split(/\s+/).filter(w => w.length > 0);
       const ftsQuery = words.map(w => `"${w}"*`).join(' ');
-      conditions.push('id IN (SELECT rowid FROM clipboard_fts WHERE clipboard_fts MATCH ?)');
-      params.push(ftsQuery);
+
+      const searchOrClauses: string[] = [];
+      const searchParams: any[] = [];
+
+      // Content via FTS (AND semantics across words)
+      searchOrClauses.push('id IN (SELECT rowid FROM clipboard_fts WHERE clipboard_fts MATCH ?)');
+      searchParams.push(ftsQuery);
+
+      // Match any word against source app name / bundle id / type (OR semantics across words)
+      for (const word of words) {
+        const like = `%${word}%`;
+        searchOrClauses.push('LOWER(source_app_name) LIKE ?');
+        searchParams.push(like);
+        searchOrClauses.push('LOWER(source_app) LIKE ?');
+        searchParams.push(like);
+        searchOrClauses.push('LOWER(type) LIKE ?');
+        searchParams.push(like);
+      }
+
+      conditions.push(`(${searchOrClauses.join(' OR ')})`);
+      params.push(...searchParams);
     }
 
     if (conditions.length > 0) {
