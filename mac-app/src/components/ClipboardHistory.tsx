@@ -74,6 +74,7 @@ export default function ClipboardHistory() {
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
   const [focusedTabIndex, setFocusedTabIndex] = useState(0);
+  const [dialogPosition, setDialogPosition] = useState<{ left: number; top: number } | null>(null);
   
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -143,12 +144,16 @@ export default function ClipboardHistory() {
     setSelectedIndex(0);
     setSelectedIds(new Set());
     setIsMultiSelect(false);
+    setSearchQuery('');
+
+    // Listen for dialog position from Electron
+    const unsubscribePosition = window.clipboardAPI.onDialogPosition((position) => {
+      setDialogPosition(position);
+    });
 
     // Listen for item additions
     const unsubscribeAdded = window.clipboardAPI.onItemAdded((id) => {
-      if (isVisible) {
-        loadItems(true);
-      }
+      loadItems(true);
     });
 
     const unsubscribeDeleted = window.clipboardAPI.onItemDeleted((id) => {
@@ -161,10 +166,11 @@ export default function ClipboardHistory() {
     });
 
     return () => {
+      unsubscribePosition();
       unsubscribeAdded();
       unsubscribeDeleted();
     };
-  }, [isMacOS, isVisible, loadItems]);
+  }, [isMacOS, loadItems]);
 
   // Handle keyboard input via standard DOM events (window is focusable).
   useEffect(() => {
@@ -177,21 +183,22 @@ export default function ClipboardHistory() {
       const hasAlt = e.altKey;
       const key = e.key;
 
-      // If typing in the input, let it handle normal characters
+      // If typing in the input, let it handle normal characters and Tab
       if (document.activeElement === inputRef.current && 
           key.length === 1 && 
           !hasMeta && !hasCtrl && !hasAlt && 
-          key !== 'ArrowUp' && key !== 'ArrowDown' && key !== 'Enter' && key !== 'Escape' && key !== 'Tab') {
+          key !== 'ArrowUp' && key !== 'ArrowDown' && key !== 'Enter' && key !== 'Escape') {
         return; // Let input handle it naturally
       }
 
-      // Prevent default for navigation keys
-      if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Enter' || key === 'Escape' || key === 'Tab') {
+      // Prevent default for navigation keys (except Tab when input is focused)
+      if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Enter' || key === 'Escape') {
         e.preventDefault();
       }
 
       if (key === 'Escape') {
         window.clipboardAPI?.closeWindow();
+        setSearchQuery('');
         return;
       }
 
@@ -212,10 +219,12 @@ export default function ClipboardHistory() {
           window.clipboardAPI?.closeWindow();
           setSelectedIds(new Set());
           setIsMultiSelect(false);
+          setSearchQuery('');
         } else if (items[selectedIndex]) {
           // Paste single item
           window.clipboardAPI?.pasteItem(items[selectedIndex].id);
           window.clipboardAPI?.closeWindow();
+          setSearchQuery('');
         }
         return;
       }
@@ -245,8 +254,9 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // Tab navigation between filter tabs
-      if (key === 'Tab' && !hasCtrl && !hasMeta && !hasAlt) {
+      // Tab navigation between filter tabs (only when input is not focused)
+      if (key === 'Tab' && !hasCtrl && !hasMeta && !hasAlt && document.activeElement !== inputRef.current) {
+        e.preventDefault();
         const tabs: FilterType[] = ['all', 'transcript', 'screenshot'];
         if (hasShift) {
           // Shift+Tab - go backwards
@@ -322,12 +332,10 @@ export default function ClipboardHistory() {
     }
   };
 
-  // Handle click outside to close (Alfred-like behavior)
-  const handleOverlayClick = (event: React.MouseEvent) => {
-    // Close if clicking on the overlay background (not the dialog content)
-    if (event.target === event.currentTarget) {
-      window.clipboardAPI?.closeWindow();
-    }
+  // Handle click anywhere to close (Alfred-like behavior)
+  const handleOverlayClick = () => {
+    window.clipboardAPI?.closeWindow();
+    setSearchQuery('');
   };
 
   // Prevent clicks inside dialog from closing the window
@@ -345,6 +353,20 @@ export default function ClipboardHistory() {
     return true;
   });
 
+  // Calculate dialog position: use received position or fallback to centered
+  const dialogStyle: React.CSSProperties = dialogPosition
+    ? {
+        position: 'absolute',
+        left: `${dialogPosition.left}px`,
+        top: `${dialogPosition.top}px`,
+      }
+    : {
+        position: 'absolute',
+        left: '50%',
+        top: '80px',
+        transform: 'translateX(-50%)',
+      };
+
   return (
     <div
       onClick={handleOverlayClick}
@@ -356,10 +378,7 @@ export default function ClipboardHistory() {
         bottom: 0,
         width: '100%',
         height: '100%',
-        backgroundColor: 'rgba(0, 0, 0, 0.1)', // Subtle overlay like Alfred
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+        backgroundColor: 'rgba(0, 0, 0, 0.1)',
         cursor: 'default',
       }}
     >
@@ -367,8 +386,8 @@ export default function ClipboardHistory() {
         ref={dialogRef}
         onClick={handleDialogClick}
         style={{
-          position: 'relative',
-          width: '600px',
+          ...dialogStyle,
+          width: '900px',
           maxWidth: '90vw',
           maxHeight: '80vh',
           boxSizing: 'border-box',

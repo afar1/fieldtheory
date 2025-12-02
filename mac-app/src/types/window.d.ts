@@ -134,6 +134,7 @@ interface ClipboardAPI {
   onItemAdded: (callback: (id: number) => void) => () => void;
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
+  onDialogPosition: (callback: (position: { left: number; top: number }) => void) => () => void;
   onKeyEvent: (callback: (event: { characters: string; keyCode: number; modifiers: string[] }) => void) => () => void;
   closeWindow: () => Promise<void>;
 }
