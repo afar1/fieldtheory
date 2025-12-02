@@ -118,6 +118,22 @@ interface ClipboardHotkeys {
 }
 
 /**
+ * Represents a running application with its bundle ID and display name.
+ */
+interface RunningApp {
+  bundleId: string;
+  name: string;
+}
+
+/**
+ * Target app info sent when clipboard history window is shown.
+ */
+interface TargetAppInfo {
+  targetApp: RunningApp | null;
+  runningApps: RunningApp[];
+}
+
+/**
  * The clipboard API exposed by the preload script.
  */
 interface ClipboardAPI {
@@ -128,14 +144,20 @@ interface ClipboardAPI {
   captureScreenshot: (region?: boolean) => Promise<number>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
-  pasteItem: (id: number) => Promise<void>;
+  pasteItem: (id: number, targetBundleId?: string) => Promise<void>;
   pasteStack: (ids: number[]) => Promise<void>;
   separateIntoTasks: (id: number) => Promise<void>;
+  // Target app management.
+  getTargetApp: () => Promise<RunningApp | null>;
+  setTargetApp: (app: RunningApp | null) => Promise<void>;
+  getRunningApps: () => Promise<RunningApp[]>;
+  pasteToApp: (bundleId: string) => Promise<boolean>;
   onItemAdded: (callback: (id: number) => void) => () => void;
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
   onDialogPosition: (callback: (position: { left: number; top: number }) => void) => () => void;
   onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number }) => void) => () => void;
+  onTargetAppInfo: (callback: (info: TargetAppInfo) => void) => () => void;
   saveBounds: (bounds: { x: number; y: number; width: number; height: number }) => Promise<void>;
   onKeyEvent: (callback: (event: { characters: string; keyCode: number; modifiers: string[] }) => void) => () => void;
   closeWindow: () => Promise<void>;
