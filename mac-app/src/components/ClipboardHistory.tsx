@@ -144,11 +144,16 @@ export default function ClipboardHistory() {
     setSelectedIndex(0);
     setSelectedIds(new Set());
     setIsMultiSelect(false);
-    setSearchQuery('');
+    // Search will be reset via onShowHistory event from main process
 
     // Listen for dialog position from Electron
     const unsubscribePosition = window.clipboardAPI.onDialogPosition((position) => {
       setDialogPosition(position);
+    });
+
+    // Listen for window show event to reset search
+    const unsubscribeShowHistory = window.clipboardAPI.onShowHistory(() => {
+      setSearchQuery('');
     });
 
     // Listen for item additions
@@ -167,6 +172,7 @@ export default function ClipboardHistory() {
 
     return () => {
       unsubscribePosition();
+      unsubscribeShowHistory();
       unsubscribeAdded();
       unsubscribeDeleted();
     };
@@ -198,7 +204,6 @@ export default function ClipboardHistory() {
 
       if (key === 'Escape') {
         window.clipboardAPI?.closeWindow();
-        setSearchQuery('');
         return;
       }
 
@@ -219,12 +224,10 @@ export default function ClipboardHistory() {
           window.clipboardAPI?.closeWindow();
           setSelectedIds(new Set());
           setIsMultiSelect(false);
-          setSearchQuery('');
         } else if (items[selectedIndex]) {
           // Paste single item
           window.clipboardAPI?.pasteItem(items[selectedIndex].id);
           window.clipboardAPI?.closeWindow();
-          setSearchQuery('');
         }
         return;
       }
@@ -335,7 +338,6 @@ export default function ClipboardHistory() {
   // Handle click anywhere to close (Alfred-like behavior)
   const handleOverlayClick = () => {
     window.clipboardAPI?.closeWindow();
-    setSearchQuery('');
   };
 
   // Prevent clicks inside dialog from closing the window
