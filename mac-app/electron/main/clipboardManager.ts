@@ -29,6 +29,19 @@ export interface ClipboardItem {
   charCount: number | null;
   createdAt: number;
   contentHash: string;
+  stackId: string | null; // Groups items into a prompt stack for batch paste
+}
+
+/**
+ * Summary info for a stack of items.
+ */
+export interface StackInfo {
+  stackId: string;
+  itemCount: number;
+  imageCount: number;
+  textCount: number;
+  createdAt: number;
+  firstTextPreview: string | null;
 }
 
 /**
@@ -148,6 +161,15 @@ export class ClipboardManager {
       );
     `);
 
+    // Migration: Add stack_id column for prompt stacking feature.
+    // SQLite gracefully handles ALTER TABLE on existing tables (NULL for existing rows).
+    this.runMigration('add_stack_id', () => {
+      this.db.exec(`
+        ALTER TABLE clipboard_items ADD COLUMN stack_id TEXT;
+        CREATE INDEX IF NOT EXISTS idx_stack_id ON clipboard_items(stack_id);
+      `);
+    });
+
     // Trigger to keep FTS index in sync
     this.db.exec(`
       CREATE TRIGGER IF NOT EXISTS clipboard_items_ai AFTER INSERT ON clipboard_items BEGIN
@@ -165,6 +187,44 @@ export class ClipboardManager {
     `);
 
     console.log('[ClipboardManager] Database initialized');
+  }
+
+  /**
+   * Run a migration if it hasn't been run yet.
+   * Uses a simple migrations table to track which migrations have been applied.
+   */
+  private runMigration(name: string, migration: () => void): void {
+    // Create migrations table if it doesn't exist
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS migrations (
+        name TEXT PRIMARY KEY,
+        applied_at INTEGER NOT NULL
+      );
+    `);
+
+    // Check if migration already applied
+    const existing = this.db
+      .prepare('SELECT name FROM migrations WHERE name = ?')
+      .get(name);
+
+    if (existing) {
+      return; // Already applied
+    }
+
+    try {
+      migration();
+      this.db
+        .prepare('INSERT INTO migrations (name, applied_at) VALUES (?, ?)')
+        .run(name, Date.now());
+      console.log(`[ClipboardManager] Migration applied: ${name}`);
+    } catch (error) {
+      // If migration fails (e.g., column already exists), log and continue
+      console.warn(`[ClipboardManager] Migration ${name} may have already been applied:`, error);
+      // Still mark as applied to avoid retrying
+      this.db
+        .prepare('INSERT OR IGNORE INTO migrations (name, applied_at) VALUES (?, ?)')
+        .run(name, Date.now());
+    }
   }
 
   /**
@@ -227,21 +287,28 @@ export class ClipboardManager {
 
   /**
    * Store text content in clipboard history.
+   * @param text - The text content to store
+   * @param type - Item type (text, transcript, etc.)
+   * @param sourceApp - Optional source app bundle ID
+   * @param stackId - Optional stack ID to group items for prompt stacking
    */
   async storeText(
     text: string,
     type: ClipboardItemType = 'text',
-    sourceApp?: string
+    sourceApp?: string,
+    stackId?: string
   ): Promise<number> {
     const hash = this.hashContent(text);
     
-    // Check if already exists
-    const existing = this.db
-      .prepare('SELECT id FROM clipboard_items WHERE content_hash = ?')
-      .get(hash) as { id: number } | undefined;
-    
-    if (existing) {
-      return existing.id;
+    // Check if already exists (unless it's part of a stack - stacks can have duplicates)
+    if (!stackId) {
+      const existing = this.db
+        .prepare('SELECT id FROM clipboard_items WHERE content_hash = ?')
+        .get(hash) as { id: number } | undefined;
+      
+      if (existing) {
+        return existing.id;
+      }
     }
 
     // Get source app info if not provided
@@ -263,8 +330,8 @@ export class ClipboardManager {
     const stmt = this.db.prepare(`
       INSERT INTO clipboard_items (
         type, content, source_app, source_app_name,
-        word_count, char_count, created_at, content_hash
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        word_count, char_count, created_at, content_hash, stack_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const result = stmt.run(
@@ -275,7 +342,8 @@ export class ClipboardManager {
       wordCount,
       charCount,
       createdAt,
-      hash
+      hash,
+      stackId || null
     );
 
     // Cleanup old items
@@ -286,22 +354,30 @@ export class ClipboardManager {
 
   /**
    * Store image in clipboard history.
+   * @param image - The NativeImage to store
+   * @param imageBuffer - PNG buffer of the image
+   * @param type - Item type (image, screenshot, etc.)
+   * @param sourceApp - Optional source app bundle ID
+   * @param stackId - Optional stack ID to group items for prompt stacking
    */
   async storeImage(
     image: Electron.NativeImage,
     imageBuffer: Buffer,
     type: ClipboardItemType = 'image',
-    sourceApp?: string
+    sourceApp?: string,
+    stackId?: string
   ): Promise<number> {
     const hash = this.hashContent(imageBuffer.toString('base64'));
     
-    // Check if already exists
-    const existing = this.db
-      .prepare('SELECT id FROM clipboard_items WHERE content_hash = ?')
-      .get(hash) as { id: number } | undefined;
-    
-    if (existing) {
-      return existing.id;
+    // Check if already exists (unless it's part of a stack - stacks can have duplicates)
+    if (!stackId) {
+      const existing = this.db
+        .prepare('SELECT id FROM clipboard_items WHERE content_hash = ?')
+        .get(hash) as { id: number } | undefined;
+      
+      if (existing) {
+        return existing.id;
+      }
     }
 
     // Get source app info if not provided
@@ -322,8 +398,8 @@ export class ClipboardManager {
     const stmt = this.db.prepare(`
       INSERT INTO clipboard_items (
         type, image_data, image_width, image_height, image_size,
-        source_app, source_app_name, created_at, content_hash
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        source_app, source_app_name, created_at, content_hash, stack_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const result = stmt.run(
@@ -335,7 +411,8 @@ export class ClipboardManager {
       sourceApp,
       sourceAppName,
       createdAt,
-      hash
+      hash,
+      stackId || null
     );
 
     // Cleanup old items
@@ -411,6 +488,7 @@ export class ClipboardManager {
       charCount: row.char_count,
       createdAt: row.created_at,
       contentHash: row.content_hash,
+      stackId: row.stack_id || null,
     })) as ClipboardItem[];
   }
 
@@ -441,6 +519,7 @@ export class ClipboardManager {
       charCount: row.char_count,
       createdAt: row.created_at,
       contentHash: row.content_hash,
+      stackId: row.stack_id || null,
     } as ClipboardItem;
   }
 
@@ -459,11 +538,97 @@ export class ClipboardManager {
     console.log('[ClipboardManager] Cleared all clipboard history');
   }
 
+  // =========================================================================
+  // Stack Operations - for prompt stacking feature
+  // =========================================================================
+
+  /**
+   * Get all items belonging to a specific stack.
+   */
+  queryItemsByStackId(stackId: string): ClipboardItem[] {
+    const rows = this.db
+      .prepare('SELECT * FROM clipboard_items WHERE stack_id = ? ORDER BY created_at ASC')
+      .all(stackId) as any[];
+
+    return rows.map(row => ({
+      id: row.id,
+      type: row.type,
+      content: row.content,
+      imageData: row.image_data ? Buffer.from(row.image_data) : null,
+      imageWidth: row.image_width,
+      imageHeight: row.image_height,
+      imageSize: row.image_size,
+      sourceApp: row.source_app,
+      sourceAppName: row.source_app_name,
+      wordCount: row.word_count,
+      charCount: row.char_count,
+      createdAt: row.created_at,
+      contentHash: row.content_hash,
+      stackId: row.stack_id || null,
+    })) as ClipboardItem[];
+  }
+
+  /**
+   * Get summary info for all unique stacks.
+   * Returns stack metadata including item counts and preview text.
+   */
+  getUniqueStacks(): StackInfo[] {
+    const rows = this.db.prepare(`
+      SELECT 
+        stack_id,
+        COUNT(*) as item_count,
+        SUM(CASE WHEN type IN ('image', 'screenshot') THEN 1 ELSE 0 END) as image_count,
+        SUM(CASE WHEN type IN ('text', 'transcript') THEN 1 ELSE 0 END) as text_count,
+        MIN(created_at) as created_at,
+        (SELECT content FROM clipboard_items ci2 
+         WHERE ci2.stack_id = clipboard_items.stack_id 
+         AND ci2.type IN ('text', 'transcript') 
+         AND ci2.content IS NOT NULL 
+         ORDER BY ci2.created_at ASC LIMIT 1) as first_text_preview
+      FROM clipboard_items 
+      WHERE stack_id IS NOT NULL 
+      GROUP BY stack_id 
+      ORDER BY MIN(created_at) DESC
+    `).all() as any[];
+
+    return rows.map(row => ({
+      stackId: row.stack_id,
+      itemCount: row.item_count,
+      imageCount: row.image_count,
+      textCount: row.text_count,
+      createdAt: row.created_at,
+      firstTextPreview: row.first_text_preview ? 
+        (row.first_text_preview.length > 100 
+          ? row.first_text_preview.substring(0, 100) + '...' 
+          : row.first_text_preview) 
+        : null,
+    }));
+  }
+
+  /**
+   * Update the stack ID for a set of items.
+   * Used for combining items into stacks or unstacking them.
+   * @param itemIds - Array of item IDs to update
+   * @param stackId - New stack ID (or null to unstack)
+   */
+  updateStackId(itemIds: number[], stackId: string | null): void {
+    if (itemIds.length === 0) return;
+
+    const placeholders = itemIds.map(() => '?').join(',');
+    this.db
+      .prepare(`UPDATE clipboard_items SET stack_id = ? WHERE id IN (${placeholders})`)
+      .run(stackId, ...itemIds);
+    
+    console.log(`[ClipboardManager] Updated stack_id for ${itemIds.length} items to: ${stackId}`);
+  }
+
   /**
    * Capture screenshot and add to clipboard history.
    * When region=true, uses interactive selection (drag to select) like macOS Command+Shift+Control+4.
+   * @param region - Whether to use region selection mode
+   * @param stackId - Optional stack ID to group this screenshot with other items
    */
-  async captureScreenshot(region: boolean = false): Promise<number> {
+  async captureScreenshot(region: boolean = false, stackId?: string): Promise<number> {
     try {
       if (region) {
         // Interactive selection mode: drag to select area, saves directly to clipboard
@@ -482,8 +647,8 @@ export class ClipboardManager {
         
         const imageBuffer = image.toPNG();
         
-        // Store in history
-        const id = await this.storeImage(image, imageBuffer, 'screenshot');
+        // Store in history (with stackId if provided)
+        const id = await this.storeImage(image, imageBuffer, 'screenshot', undefined, stackId);
         return id;
       } else {
         // Full screen capture
@@ -497,8 +662,8 @@ export class ClipboardManager {
           // Create NativeImage from file buffer (clipboard is empty for full-screen capture)
           const image = nativeImage.createFromBuffer(imageBuffer);
           
-          // Store in history
-          const id = await this.storeImage(image, imageBuffer, 'screenshot');
+          // Store in history (with stackId if provided)
+          const id = await this.storeImage(image, imageBuffer, 'screenshot', undefined, stackId);
           
           // Clean up temp file
           await fs.unlink(tempPath);
