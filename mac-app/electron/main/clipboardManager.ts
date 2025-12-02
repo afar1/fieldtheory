@@ -101,6 +101,7 @@ export class ClipboardManager {
   private historyHotkeyRegistered: boolean = false;
   private screenshotCallback: ScreenshotCallback | null = null;
   private historyCallback: HistoryCallback | null = null;
+  private onItemAddedCallback: ((id: number) => void) | null = null;
 
   constructor(config: Partial<ClipboardConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -124,6 +125,13 @@ export class ClipboardManager {
     if (historyHotkey) {
       this.config.historyHotkey = historyHotkey;
     }
+  }
+
+  /**
+   * Set callback to be invoked when a new item is added via clipboard polling.
+   */
+  setOnItemAdded(callback: (id: number) => void): void {
+    this.onItemAddedCallback = callback;
   }
 
   /**
@@ -263,8 +271,23 @@ export class ClipboardManager {
       if (text) {
         const hash = this.hashContent(text);
         if (hash !== this.lastContentHash) {
-          await this.storeText(text);
-          this.lastContentHash = hash;
+          // Check database first to avoid storing duplicates
+          const existing = this.db
+            .prepare('SELECT id FROM clipboard_items WHERE content_hash = ?')
+            .get(hash) as { id: number } | undefined;
+          
+          if (existing) {
+            // Item already exists, just update lastContentHash to avoid checking again
+            this.lastContentHash = hash;
+          } else {
+            // New item, store it
+            const id = await this.storeText(text);
+            this.lastContentHash = hash;
+            // Notify listeners of new item
+            if (id > 0 && this.onItemAddedCallback) {
+              this.onItemAddedCallback(id);
+            }
+          }
         }
         return;
       }
@@ -275,8 +298,23 @@ export class ClipboardManager {
         const imageBuffer = image.toPNG();
         const hash = this.hashContent(imageBuffer.toString('base64'));
         if (hash !== this.lastContentHash) {
-          await this.storeImage(image, imageBuffer);
-          this.lastContentHash = hash;
+          // Check database first to avoid storing duplicates
+          const existing = this.db
+            .prepare('SELECT id FROM clipboard_items WHERE content_hash = ?')
+            .get(hash) as { id: number } | undefined;
+          
+          if (existing) {
+            // Item already exists, just update lastContentHash to avoid checking again
+            this.lastContentHash = hash;
+          } else {
+            // New item, store it
+            const id = await this.storeImage(image, imageBuffer);
+            this.lastContentHash = hash;
+            // Notify listeners of new item
+            if (id > 0 && this.onItemAddedCallback) {
+              this.onItemAddedCallback(id);
+            }
+          }
         }
       }
     } catch (error) {
@@ -647,6 +685,10 @@ export class ClipboardManager {
         
         const imageBuffer = image.toPNG();
         
+        // Update lastContentHash to prevent polling from re-storing this image.
+        // This must happen before storeImage to avoid race with the polling interval.
+        this.lastContentHash = this.hashContent(imageBuffer.toString('base64'));
+        
         // Store in history (with stackId if provided)
         const id = await this.storeImage(image, imageBuffer, 'screenshot', undefined, stackId);
         return id;
@@ -661,6 +703,10 @@ export class ClipboardManager {
           const imageBuffer = await fs.readFile(tempPath);
           // Create NativeImage from file buffer (clipboard is empty for full-screen capture)
           const image = nativeImage.createFromBuffer(imageBuffer);
+          
+          // Update lastContentHash to prevent polling from re-storing this image.
+          // This must happen before storeImage to avoid race with the polling interval.
+          this.lastContentHash = this.hashContent(imageBuffer.toString('base64'));
           
           // Store in history (with stackId if provided)
           const id = await this.storeImage(image, imageBuffer, 'screenshot', undefined, stackId);
