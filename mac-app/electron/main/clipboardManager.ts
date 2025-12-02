@@ -1,4 +1,4 @@
-import { app, clipboard, globalShortcut } from 'electron';
+import { app, clipboard, globalShortcut, nativeImage } from 'electron';
 import Database from 'better-sqlite3';
 import path from 'path';
 import { exec } from 'child_process';
@@ -494,7 +494,8 @@ export class ClipboardManager {
         const fs = await import('fs/promises');
         try {
           const imageBuffer = await fs.readFile(tempPath);
-          const image = clipboard.readImage();
+          // Create NativeImage from file buffer (clipboard is empty for full-screen capture)
+          const image = nativeImage.createFromBuffer(imageBuffer);
           
           // Store in history
           const id = await this.storeImage(image, imageBuffer, 'screenshot');

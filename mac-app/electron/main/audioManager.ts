@@ -61,9 +61,7 @@ export class AudioManager extends EventEmitter {
       await this.refreshDevices();
       await this.refreshDefaultInput();
       
-      // Restore saved priority device if available
       if (this.savedPriorityDeviceId) {
-        // Check if the saved device still exists
         const deviceExists = this.devices.some(d => d.id === this.savedPriorityDeviceId);
         if (deviceExists) {
           console.log('[AudioManager] Restoring saved priority device:', this.savedPriorityDeviceId);
@@ -107,9 +105,7 @@ export class AudioManager extends EventEmitter {
     console.log('[AudioManager] setPriorityDevice:', deviceId);
     this.priorityDeviceId = deviceId;
 
-    // Automatically enable priority mode when a device is set, disable when cleared.
     if (deviceId) {
-      // Device is being set - enable priority mode and enforce it.
       if (!this.priorityMode) {
         this.priorityMode = true;
         console.log('[AudioManager] Auto-enabled priority mode for device:', deviceId);
@@ -117,7 +113,6 @@ export class AudioManager extends EventEmitter {
       this.userOverrideId = null;
       await this.enforcePriority();
     } else {
-      // Device is being cleared - disable priority mode.
       if (this.priorityMode) {
         this.priorityMode = false;
         this.userOverrideId = null;

@@ -74,13 +74,20 @@ export default function ClipboardHistory() {
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
   const [focusedTabIndex, setFocusedTabIndex] = useState(0);
-  const [dialogPosition, setDialogPosition] = useState<{ left: number; top: number } | null>(null);
+  const [dialogBounds, setDialogBounds] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
+  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
+  const [resizeStart, setResizeStart] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const ITEMS_PER_PAGE = 50;
+  
+  const MIN_WIDTH = 400;
+  const MIN_HEIGHT = 300;
 
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
 
@@ -146,14 +153,32 @@ export default function ClipboardHistory() {
     setIsMultiSelect(false);
     // Search will be reset via onShowHistory event from main process
 
-    // Listen for dialog position from Electron
+    // Listen for dialog bounds from Electron
+    const unsubscribeBounds = window.clipboardAPI.onDialogBounds?.((bounds) => {
+      setDialogBounds(bounds);
+    });
+    
+    // Also listen for old position format for backward compatibility
     const unsubscribePosition = window.clipboardAPI.onDialogPosition((position) => {
-      setDialogPosition(position);
+      // Convert old position format to bounds (use default size)
+      if (!dialogBounds) {
+        setDialogBounds({
+          x: position.left,
+          y: position.top,
+          width: 900,
+          height: 600,
+        });
+      }
     });
 
-    // Listen for window show event to reset search
+    // Listen for window show event to reset search and focus input
     const unsubscribeShowHistory = window.clipboardAPI.onShowHistory(() => {
       setSearchQuery('');
+      setSelectedIndex(0);
+      setSelectedIds(new Set());
+      setIsMultiSelect(false);
+      // Focus input directly - this fires on every window show
+      inputRef.current?.focus();
     });
 
     // Listen for item additions
@@ -171,6 +196,7 @@ export default function ClipboardHistory() {
     });
 
     return () => {
+      unsubscribeBounds?.();
       unsubscribePosition();
       unsubscribeShowHistory();
       unsubscribeAdded();
@@ -290,15 +316,6 @@ export default function ClipboardHistory() {
     };
   }, [isVisible, items, selectedIndex, selectedIds, focusedTabIndex, filter]);
 
-  // Focus input when window becomes visible
-  useEffect(() => {
-    if (isVisible && inputRef.current) {
-      setTimeout(() => {
-        inputRef.current?.focus();
-      }, 100);
-    }
-  }, [isVisible]);
-
   // Scroll selected item into view.
   useEffect(() => {
     if (listRef.current && selectedIndex >= 0) {
@@ -345,6 +362,101 @@ export default function ClipboardHistory() {
     event.stopPropagation();
   };
 
+  // Handle drag start
+  const handleDragStart = (e: React.MouseEvent) => {
+    if (!dialogBounds) return;
+    setIsDragging(true);
+    setDragStart({
+      x: e.clientX - dialogBounds.x,
+      y: e.clientY - dialogBounds.y,
+    });
+    e.preventDefault();
+  };
+
+  // Handle resize start
+  const handleResizeStart = (e: React.MouseEvent) => {
+    if (!dialogBounds) return;
+    setIsResizing(true);
+    setResizeStart({
+      x: e.clientX,
+      y: e.clientY,
+      width: dialogBounds.width,
+      height: dialogBounds.height,
+    });
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  // Handle mouse move for drag/resize
+  useEffect(() => {
+    if (!isDragging && !isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isDragging && dragStart && dialogBounds) {
+        const newX = e.clientX - dragStart.x;
+        const newY = e.clientY - dragStart.y;
+        
+        // Clamp to viewport bounds
+        const clampedX = Math.max(0, Math.min(newX, window.innerWidth - dialogBounds.width));
+        const clampedY = Math.max(0, Math.min(newY, window.innerHeight - dialogBounds.height));
+        
+        setDialogBounds({
+          ...dialogBounds,
+          x: clampedX,
+          y: clampedY,
+        });
+      } else if (isResizing && resizeStart && dialogBounds) {
+        const deltaX = e.clientX - resizeStart.x;
+        const deltaY = e.clientY - resizeStart.y;
+        
+        let newWidth = resizeStart.width + deltaX;
+        let newHeight = resizeStart.height + deltaY;
+        
+        // Enforce minimum size
+        newWidth = Math.max(MIN_WIDTH, newWidth);
+        newHeight = Math.max(MIN_HEIGHT, newHeight);
+        
+        // Clamp to viewport bounds
+        const maxWidth = window.innerWidth - dialogBounds.x;
+        const maxHeight = window.innerHeight - dialogBounds.y;
+        newWidth = Math.min(newWidth, maxWidth);
+        newHeight = Math.min(newHeight, maxHeight);
+        
+        setDialogBounds({
+          ...dialogBounds,
+          width: newWidth,
+          height: newHeight,
+        });
+      }
+    };
+
+    const handleMouseUp = () => {
+      if (isDragging || isResizing) {
+        // Save bounds when drag/resize ends
+        if (dialogBounds && window.clipboardAPI?.saveBounds) {
+          // Convert overlay-relative coordinates to screen coordinates
+          // We need to get the overlay window's position
+          // For now, we'll save the overlay-relative coordinates and let main process handle conversion
+          window.clipboardAPI.saveBounds(dialogBounds).catch((err) => {
+            console.error('Failed to save bounds:', err);
+          });
+        }
+      }
+      setIsDragging(false);
+      setIsResizing(false);
+      setDragStart(null);
+      setResizeStart(null);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging, isResizing, dragStart, resizeStart, dialogBounds]);
+
   if (!isVisible) {
     return null;
   }
@@ -355,18 +467,22 @@ export default function ClipboardHistory() {
     return true;
   });
 
-  // Calculate dialog position: use received position or fallback to centered
-  const dialogStyle: React.CSSProperties = dialogPosition
+  // Calculate dialog bounds: use received bounds or fallback to centered
+  const dialogStyle: React.CSSProperties = dialogBounds
     ? {
         position: 'absolute',
-        left: `${dialogPosition.left}px`,
-        top: `${dialogPosition.top}px`,
+        left: `${dialogBounds.x}px`,
+        top: `${dialogBounds.y}px`,
+        width: `${dialogBounds.width}px`,
+        height: `${dialogBounds.height}px`,
       }
     : {
         position: 'absolute',
         left: '50%',
         top: '80px',
         transform: 'translateX(-50%)',
+        width: '900px',
+        height: '600px',
       };
 
   return (
@@ -389,11 +505,9 @@ export default function ClipboardHistory() {
         onClick={handleDialogClick}
         style={{
           ...dialogStyle,
-          width: '900px',
           maxWidth: '90vw',
           maxHeight: '80vh',
           boxSizing: 'border-box',
-          padding: '16px',
           backgroundColor: '#ffffff',
           borderRadius: '12px',
           boxShadow: '0 20px 45px rgba(0, 0, 0, 0.25)',
@@ -402,8 +516,68 @@ export default function ClipboardHistory() {
           overflow: 'hidden',
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
           cursor: 'default',
+          position: 'relative',
         }}
       >
+        {/* Draggable header */}
+        <div
+          onMouseDown={handleDragStart}
+          style={{
+            height: '32px',
+            padding: '0 16px',
+            display: 'flex',
+            alignItems: 'center',
+            cursor: isDragging ? 'grabbing' : 'grab',
+            userSelect: 'none',
+            borderBottom: '1px solid #e0e0e0',
+            backgroundColor: '#f9f9f9',
+            borderRadius: '12px 12px 0 0',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              gap: '6px',
+              alignItems: 'center',
+            }}
+          >
+            <div
+              style={{
+                width: '12px',
+                height: '12px',
+                borderRadius: '50%',
+                backgroundColor: '#ff5f57',
+              }}
+            />
+            <div
+              style={{
+                width: '12px',
+                height: '12px',
+                borderRadius: '50%',
+                backgroundColor: '#ffbd2e',
+              }}
+            />
+            <div
+              style={{
+                width: '12px',
+                height: '12px',
+                borderRadius: '50%',
+                backgroundColor: '#28ca42',
+              }}
+            />
+          </div>
+        </div>
+        
+        {/* Content area */}
+        <div
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            padding: '16px',
+          }}
+        >
       {/* Search input - standard input element with autoFocus */}
       <input
         ref={inputRef}
@@ -658,6 +832,22 @@ export default function ClipboardHistory() {
           </button>
         )}
       </div>
+        </div>
+        
+        {/* Resize handle */}
+        <div
+          onMouseDown={handleResizeStart}
+          style={{
+            position: 'absolute',
+            bottom: 0,
+            right: 0,
+            width: '16px',
+            height: '16px',
+            cursor: 'nwse-resize',
+            background: 'linear-gradient(135deg, transparent 0%, transparent 40%, #ccc 40%, #ccc 45%, transparent 45%, transparent 55%, #ccc 55%, #ccc 60%, transparent 60%)',
+            borderRadius: '0 0 12px 0',
+          }}
+        />
       </div>
     </div>
   );

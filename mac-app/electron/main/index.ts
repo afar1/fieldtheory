@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, clipboard } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, screen, Display } from 'electron';
 import path from 'path';
 import os from 'os';
 import { NativeHelper } from './nativeHelper';
@@ -7,6 +7,7 @@ import { TrayManager } from './trayManager';
 import { TranscriberManager } from './transcriberManager';
 import { PreferencesManager } from './preferences';
 import { ClipboardManager } from './clipboardManager';
+import { ModelSize } from './modelManager';
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
 import {
   AudioIPCChannels,
@@ -73,12 +74,6 @@ function createWindow(): void {
       webSecurity: true, // Keep security enabled, but ensure file:// works
     },
   });
-  
-  // Open DevTools in development mode to see renderer console errors
-  // Commented out to prevent auto-opening console
-  // if (process.env.NODE_ENV !== 'production' || !process.env.ELECTRON_START_URL) {
-  //   mainWindow.webContents.openDevTools();
-  // }
 
   // Save window state on resize/move (debounced)
   let saveTimeout: NodeJS.Timeout | null = null;
@@ -228,10 +223,9 @@ function setupTranscribeIPCHandlers(): void {
     }
     const modelManager = transcriberManager.getModelManager();
     
-    // Broadcast progress updates
     const downloadFn = modelSize 
       ? (onProgress?: (downloaded: number, total: number) => void) => 
-          modelManager.downloadModelForSize(modelSize as any, onProgress)
+          modelManager.downloadModelForSize(modelSize as 'base' | 'small' | 'medium' | 'large', onProgress)
       : (onProgress?: (downloaded: number, total: number) => void) => 
           modelManager.downloadModel(onProgress);
     
@@ -275,7 +269,11 @@ function setupTranscribeIPCHandlers(): void {
     if (!transcriberManager) {
       throw new Error('TranscriberManager not initialized');
     }
-    await transcriberManager.setSelectedModel(modelSize);
+    const validSizes: ModelSize[] = ['base', 'small', 'medium', 'large'];
+    if (!validSizes.includes(modelSize as ModelSize)) {
+      throw new Error(`Invalid model size: ${modelSize}`);
+    }
+    await transcriberManager.setSelectedModel(modelSize as ModelSize);
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_HOTKEY, () => {
@@ -342,7 +340,7 @@ function setupClipboardIPCHandlers(): void {
     return {
       ...item,
       imageData: item.imageData ? item.imageData.toString('base64') : null,
-    } as any; // Type assertion needed because IPC serializes Buffer to string
+    };
   });
 
   ipcMain.handle(ClipboardIPCChannels.DELETE_ITEM, async (_event, id: number) => {
@@ -477,13 +475,34 @@ function setupClipboardIPCHandlers(): void {
     await transcriberManager.separateIntoTasks(id);
   });
 
-  // Handle closing the clipboard history window
+  ipcMain.handle(ClipboardIPCChannels.SAVE_BOUNDS, async (_event, bounds: { x: number; y: number; width: number; height: number }) => {
+    if (!preferencesManager) {
+      return;
+    }
+    
+    // Generate current display config hash
+    const displayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
+    
+    const displays = screen.getAllDisplays();
+    const minX = Math.min(...displays.map((d: Display) => d.bounds.x));
+    const minY = Math.min(...displays.map((d: Display) => d.bounds.y));
+    
+    // Save bounds with display config (in screen coordinates)
+    await preferencesManager.save({
+      clipboardHistoryBounds: {
+        x: bounds.x + minX,
+        y: bounds.y + minY,
+        width: bounds.width,
+        height: bounds.height,
+        displayConfig,
+      },
+    });
+  });
+
   ipcMain.on('clipboard:closeWindow', async (event) => {
-    // Find the window that sent this message and hide it
     const window = BrowserWindow.fromWebContents(event.sender);
     if (window && !window.isDestroyed()) {
       window.hide();
-      // Focus restoration happens in ClipboardHistoryWindow.hide() via app.hide()
     }
   });
 }
@@ -660,9 +679,29 @@ async function initTranscriberSystem(): Promise<void> {
     const visible = clipboardHistoryWindow.isVisible();
 
     if (!visible) {
+      // Load saved bounds from preferences
+      const prefs = preferencesManager?.get();
+      const savedBounds = prefs?.clipboardHistoryBounds;
+      const currentDisplayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
+      
+      // Only use saved bounds if display config matches
+      let boundsToUse: { x: number; y: number; width: number; height: number } | undefined;
+      if (savedBounds && savedBounds.displayConfig === currentDisplayConfig) {
+        const displays = screen.getAllDisplays();
+        const minX = Math.min(...displays.map((d: Display) => d.bounds.x));
+        const minY = Math.min(...displays.map((d: Display) => d.bounds.y));
+        
+        boundsToUse = {
+          x: savedBounds.x - minX,
+          y: savedBounds.y - minY,
+          width: savedBounds.width,
+          height: savedBounds.height,
+        };
+      }
+      
       // Show window and take focus (like Alfred)
       // show() will send clipboard:showHistory event to reset search
-      clipboardHistoryWindow.show();
+      clipboardHistoryWindow.show(boundsToUse);
     } else {
       // Hide window and restore focus to previous app
       clipboardHistoryWindow.hide();
