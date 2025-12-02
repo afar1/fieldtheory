@@ -14,13 +14,28 @@ export const ClipboardIPCChannels = {
   PASTE_STACK: 'clipboard:pasteStack',
   SEPARATE_INTO_TASKS: 'clipboard:separateIntoTasks',
   SAVE_BOUNDS: 'clipboard:saveBounds',
+  
+  // Target app management.
+  GET_TARGET_APP: 'clipboard:getTargetApp',
+  SET_TARGET_APP: 'clipboard:setTargetApp',
+  GET_RUNNING_APPS: 'clipboard:getRunningApps',
+  PASTE_TO_APP: 'clipboard:pasteToApp',
 
   // Main -> Renderer (send pattern)
   ITEM_ADDED: 'clipboard:itemAdded',
   ITEM_DELETED: 'clipboard:itemDeleted',
   DIALOG_POSITION: 'clipboard:dialogPosition',
   DIALOG_BOUNDS: 'clipboard:dialogBounds',
+  TARGET_APP_INFO: 'clipboard:targetAppInfo',
 } as const;
+
+/**
+ * Represents a running application with its bundle ID and display name.
+ */
+export interface RunningApp {
+  bundleId: string;
+  name: string;
+}
 
 /**
  * Clipboard item type.

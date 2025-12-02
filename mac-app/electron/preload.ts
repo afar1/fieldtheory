@@ -40,10 +40,15 @@ const ClipboardIPCChannels = {
   PASTE_STACK: 'clipboard:pasteStack',
   SEPARATE_INTO_TASKS: 'clipboard:separateIntoTasks',
   SAVE_BOUNDS: 'clipboard:saveBounds',
+  GET_TARGET_APP: 'clipboard:getTargetApp',
+  SET_TARGET_APP: 'clipboard:setTargetApp',
+  GET_RUNNING_APPS: 'clipboard:getRunningApps',
+  PASTE_TO_APP: 'clipboard:pasteToApp',
   ITEM_ADDED: 'clipboard:itemAdded',
   ITEM_DELETED: 'clipboard:itemDeleted',
   DIALOG_POSITION: 'clipboard:dialogPosition',
   DIALOG_BOUNDS: 'clipboard:dialogBounds',
+  TARGET_APP_INFO: 'clipboard:targetAppInfo',
 } as const;
 
 // Types (only for TypeScript checking, not runtime)
@@ -102,6 +107,16 @@ type ClipboardHotkeys = {
   history?: string;
 };
 
+type RunningApp = {
+  bundleId: string;
+  name: string;
+};
+
+type TargetAppInfo = {
+  targetApp: RunningApp | null;
+  runningApps: RunningApp[];
+};
+
 export interface AudioAPI {
   getState: () => Promise<AudioState>;
   setPriorityMode: (enabled: boolean) => Promise<void>;
@@ -139,14 +154,20 @@ export interface ClipboardAPI {
   captureScreenshot: (region?: boolean) => Promise<number>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
-  pasteItem: (id: number) => Promise<void>;
+  pasteItem: (id: number, targetBundleId?: string) => Promise<void>;
   pasteStack: (ids: number[]) => Promise<void>;
   separateIntoTasks: (id: number) => Promise<void>;
+  // Target app management.
+  getTargetApp: () => Promise<RunningApp | null>;
+  setTargetApp: (app: RunningApp | null) => Promise<void>;
+  getRunningApps: () => Promise<RunningApp[]>;
+  pasteToApp: (bundleId: string) => Promise<boolean>;
   onItemAdded: (callback: (id: number) => void) => () => void;
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
   onDialogPosition: (callback: (position: { left: number; top: number }) => void) => () => void;
   onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number }) => void) => () => void;
+  onTargetAppInfo: (callback: (info: TargetAppInfo) => void) => () => void;
   saveBounds: (bounds: { x: number; y: number; width: number; height: number }) => Promise<void>;
   closeWindow: () => Promise<void>;
 }
@@ -338,8 +359,8 @@ const clipboardAPI: ClipboardAPI = {
     return ipcRenderer.invoke(ClipboardIPCChannels.SET_HOTKEYS, hotkeys);
   },
 
-  pasteItem: async (id: number): Promise<void> => {
-    return ipcRenderer.invoke(ClipboardIPCChannels.PASTE_ITEM, id);
+  pasteItem: async (id: number, targetBundleId?: string): Promise<void> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.PASTE_ITEM, id, targetBundleId);
   },
 
   pasteStack: async (ids: number[]): Promise<void> => {
@@ -348,6 +369,23 @@ const clipboardAPI: ClipboardAPI = {
 
   separateIntoTasks: async (id: number): Promise<void> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.SEPARATE_INTO_TASKS, id);
+  },
+
+  // Target app management.
+  getTargetApp: async (): Promise<RunningApp | null> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_TARGET_APP);
+  },
+
+  setTargetApp: async (app: RunningApp | null): Promise<void> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SET_TARGET_APP, app);
+  },
+
+  getRunningApps: async (): Promise<RunningApp[]> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_RUNNING_APPS);
+  },
+
+  pasteToApp: async (bundleId: string): Promise<boolean> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.PASTE_TO_APP, bundleId);
   },
 
   onItemAdded: (callback: (id: number) => void): (() => void) => {
@@ -397,6 +435,16 @@ const clipboardAPI: ClipboardAPI = {
     ipcRenderer.on(ClipboardIPCChannels.DIALOG_BOUNDS, handler);
     return () => {
       ipcRenderer.removeListener(ClipboardIPCChannels.DIALOG_BOUNDS, handler);
+    };
+  },
+
+  onTargetAppInfo: (callback: (info: TargetAppInfo) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, info: TargetAppInfo) => {
+      callback(info);
+    };
+    ipcRenderer.on(ClipboardIPCChannels.TARGET_APP_INFO, handler);
+    return () => {
+      ipcRenderer.removeListener(ClipboardIPCChannels.TARGET_APP_INFO, handler);
     };
   },
 
