@@ -6,6 +6,25 @@ import { promisify } from 'util';
 const execAsync = promisify(exec);
 
 /**
+ * Check if an app is the Electron app itself (should be excluded from target apps).
+ */
+function isElectronApp(bundleId: string, appName: string): boolean {
+  const appNameLower = appName.toLowerCase();
+  const bundleIdLower = bundleId.toLowerCase();
+  const currentAppName = app.getName().toLowerCase();
+  
+  // Check if bundle ID or name matches our app
+  return (
+    bundleIdLower.includes('little-one') ||
+    bundleIdLower.includes('littleai') ||
+    bundleIdLower.includes('electron') ||
+    appNameLower.includes('little one') ||
+    appNameLower === currentAppName ||
+    bundleIdLower === process.execPath.toLowerCase()
+  );
+}
+
+/**
  * Represents a running application with its bundle ID and display name.
  */
 export interface RunningApp {
@@ -30,6 +49,10 @@ export class ClipboardHistoryWindow {
   
   // Cached list of running apps for Tab cycling.
   private runningApps: RunningApp[] = [];
+  
+  // Cache for running apps with TTL (5 seconds)
+  private runningAppsCache: { apps: RunningApp[]; timestamp: number } | null = null;
+  private readonly RUNNING_APPS_CACHE_TTL = 5000; // 5 seconds
   
   private readonly DIALOG_WIDTH = 900;
   private readonly DIALOG_HEIGHT = 600;
@@ -70,26 +93,39 @@ export class ClipboardHistoryWindow {
   /**
    * Show the clipboard history window.
    * Window takes focus like Alfred - uses standard keyboard input.
+   * Shows window immediately, then fetches app data in background for instant UX.
    * @param savedBounds Optional saved bounds to restore position/size
    */
-  async show(savedBounds?: { x: number; y: number; width: number; height: number }): Promise<void> {
-    // Capture the previous app BEFORE we show our window and take focus.
-    await this.capturePreviousApp();
-    
-    // Refresh the list of running apps for Tab cycling.
-    await this.getRunningApps();
-    
+  show(savedBounds?: { x: number; y: number; width: number; height: number }): void {
+    // If window exists, show it immediately with cached data, then refresh in background
     if (this.window && !this.window.isDestroyed()) {
-      // Show and take focus
+      // Show window immediately with cached/stale data
       this.window.show();
       this.window.focus();
       // Recalculate and send dialog bounds
       this.sendDialogBounds(savedBounds);
-      // Notify renderer to reset search query and send target app info.
+      // Notify renderer to reset search query and send target app info (with cached data)
       this.window.webContents.send('clipboard:showHistory');
       this.sendTargetAppInfo();
+      
+      // Fetch fresh app data in background and update when ready
+      this.refreshAppDataInBackground();
       return;
     }
+    
+    // For new window creation, create window immediately, fetch app data in background.
+    // This avoids blocking on AppleScript calls.
+    this.createWindow(savedBounds);
+    
+    // Fetch app data in background (don't await)
+    this.refreshAppDataInBackground();
+  }
+  
+  /**
+   * Create the clipboard history window.
+   * Separated from show() to allow non-blocking window creation.
+   */
+  private createWindow(savedBounds?: { x: number; y: number; width: number; height: number }): void {
 
     // Calculate union of all displays for full-screen overlay
     const displays = screen.getAllDisplays();
@@ -324,6 +360,7 @@ export class ClipboardHistoryWindow {
   /**
    * Get the frontmost app's bundle ID and name using AppleScript.
    * Called before showing the clipboard history to track what app to paste into.
+   * Excludes the Electron app itself - if Electron app is frontmost, returns null.
    */
   async capturePreviousApp(): Promise<RunningApp | null> {
     try {
@@ -338,6 +375,12 @@ export class ClipboardHistoryWindow {
       const [bundleId, name] = stdout.trim().split('|');
       
       if (bundleId && name) {
+        // Skip if this is the Electron app itself
+        if (isElectronApp(bundleId, name)) {
+          console.log('[ClipboardHistoryWindow] Frontmost app is Electron app, skipping');
+          return null;
+        }
+        
         this.previousApp = { bundleId, name };
         // Reset selected target to previous app when window is shown.
         this.selectedTargetApp = null;
@@ -351,9 +394,20 @@ export class ClipboardHistoryWindow {
 
   /**
    * Get the current target app (user-selected or previous app).
+   * If no previous app (e.g., Electron app was frontmost), use first running app as fallback.
    */
   getTargetApp(): RunningApp | null {
-    return this.selectedTargetApp || this.previousApp;
+    if (this.selectedTargetApp) {
+      return this.selectedTargetApp;
+    }
+    if (this.previousApp) {
+      return this.previousApp;
+    }
+    // Fallback: use first running app if available
+    if (this.runningApps.length > 0) {
+      return this.runningApps[0];
+    }
+    return null;
   }
 
   /**
@@ -364,10 +418,36 @@ export class ClipboardHistoryWindow {
   }
 
   /**
+   * Refresh app data in background after window is shown.
+   * Updates target app info when fresh data is available.
+   */
+  private async refreshAppDataInBackground(): Promise<void> {
+    // Fetch fresh data in parallel
+    await Promise.all([
+      this.capturePreviousApp(),
+      this.getRunningApps(),
+    ]);
+    
+    // Send updated info to renderer
+    this.sendTargetAppInfo();
+  }
+
+  /**
    * Get list of running applications (for Tab cycling).
    * Filters to visible apps with windows (not background processes).
+   * Uses a 5-second cache to avoid repeated expensive AppleScript calls.
    */
   async getRunningApps(): Promise<RunningApp[]> {
+    // Check cache first
+    if (this.runningAppsCache) {
+      const age = Date.now() - this.runningAppsCache.timestamp;
+      if (age < this.RUNNING_APPS_CACHE_TTL) {
+        // Cache is still valid, return cached data
+        this.runningApps = this.runningAppsCache.apps;
+        return this.runningAppsCache.apps;
+      }
+    }
+    
     try {
       // Get visible application processes (those that appear in Dock).
       const script = `
@@ -392,17 +472,27 @@ export class ClipboardHistoryWindow {
       for (const line of lines) {
         const [bundleId, name] = line.split('|');
         if (bundleId && name) {
-          // Skip our own app.
-          if (!bundleId.includes('little-one') && !bundleId.includes('Little One')) {
+          // Skip our own Electron app.
+          if (!isElectronApp(bundleId.trim(), name.trim())) {
             apps.push({ bundleId: bundleId.trim(), name: name.trim() });
           }
         }
       }
       
+      // Update cache
       this.runningApps = apps;
+      this.runningAppsCache = {
+        apps,
+        timestamp: Date.now(),
+      };
+      
       return apps;
     } catch (error) {
       console.error('[ClipboardHistoryWindow] Failed to get running apps:', error);
+      // Return cached data if available, even if stale
+      if (this.runningAppsCache) {
+        return this.runningAppsCache.apps;
+      }
       return [];
     }
   }
