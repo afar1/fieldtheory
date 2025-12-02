@@ -75,9 +75,10 @@ function createWindow(): void {
   });
   
   // Open DevTools in development mode to see renderer console errors
-  if (process.env.NODE_ENV !== 'production' || !process.env.ELECTRON_START_URL) {
-    mainWindow.webContents.openDevTools();
-  }
+  // Commented out to prevent auto-opening console
+  // if (process.env.NODE_ENV !== 'production' || !process.env.ELECTRON_START_URL) {
+  //   mainWindow.webContents.openDevTools();
+  // }
 
   // Save window state on resize/move (debounced)
   let saveTimeout: NodeJS.Timeout | null = null;
@@ -611,9 +612,11 @@ async function initTranscriberSystem(): Promise<void> {
     return;
   }
 
-  // Initialize preferences manager
-  preferencesManager = new PreferencesManager();
-  await preferencesManager.load();
+  // Initialize preferences manager if needed (already loaded in initAudioSystem)
+  if (!preferencesManager) {
+    preferencesManager = new PreferencesManager();
+    await preferencesManager.load();
+  }
 
   // Initialize clipboard manager with hotkeys from preferences
   clipboardManager = new ClipboardManager();
@@ -658,6 +661,7 @@ async function initTranscriberSystem(): Promise<void> {
 
     if (!visible) {
       // Show window and take focus (like Alfred)
+      // show() will send clipboard:showHistory event to reset search
       clipboardHistoryWindow.show();
     } else {
       // Hide window and restore focus to previous app

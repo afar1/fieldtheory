@@ -42,6 +42,8 @@ export class ClipboardHistoryWindow {
       this.window.focus();
       // Recalculate and send dialog position
       this.sendDialogPosition();
+      // Notify renderer to reset search query
+      this.window.webContents.send('clipboard:showHistory');
       return;
     }
 
@@ -118,6 +120,8 @@ export class ClipboardHistoryWindow {
           left: clampedLeft,
           top: clampedTop,
         });
+        // Notify renderer to reset search query
+        this.window.webContents.send('clipboard:showHistory');
       }
     });
 
