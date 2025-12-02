@@ -40,6 +40,7 @@ export class TranscriberManager extends EventEmitter {
   private clipboardManager: ClipboardManager | null = null;
   private status: TranscriptionStatus = 'idle';
   private hotkey: string = 'Alt+Space'; // Option+Space on macOS
+  private registeredHotkey: string | null = null; // Track currently registered transcription hotkey
   private whisperProcess: ChildProcess | null = null;
   private escapeKeyRegistered: boolean = false;
   
@@ -87,19 +88,25 @@ export class TranscriberManager extends EventEmitter {
     // Register global hotkey
     await this.registerHotkey(this.hotkey);
 
-    // Handle app quit
+    // Handle app quit - only unregister transcription hotkey
     app.on('will-quit', () => {
-      globalShortcut.unregisterAll();
+      if (this.registeredHotkey) {
+        globalShortcut.unregister(this.registeredHotkey);
+        this.registeredHotkey = null;
+      }
     });
   }
 
   /**
-   * Register a global hotkey. Unregisters the previous one if it exists.
+   * Register a global hotkey. Unregisters the previous transcription hotkey if it exists.
    * Attempts to take precedence over other apps by checking if already registered.
    */
   private async registerHotkey(hotkey: string): Promise<boolean> {
-    // Unregister existing hotkey first
-    globalShortcut.unregisterAll();
+    // Unregister existing transcription hotkey only (not all hotkeys)
+    if (this.registeredHotkey && this.registeredHotkey !== hotkey) {
+      globalShortcut.unregister(this.registeredHotkey);
+      this.registeredHotkey = null;
+    }
 
     // Check if the hotkey is already registered by another app
     // Note: This doesn't guarantee we can steal it, but we try
@@ -136,7 +143,8 @@ export class TranscriberManager extends EventEmitter {
     }
 
     this.hotkey = hotkey;
-    console.log(`[TranscriberManager] Registered hotkey: ${hotkey}`);
+    this.registeredHotkey = hotkey; // Track the registered hotkey
+    console.log(`[TranscriberManager] Registered transcription hotkey: ${hotkey}`);
     return true;
   }
 
@@ -592,7 +600,11 @@ export class TranscriberManager extends EventEmitter {
    */
   destroy(): void {
     this.unregisterEscapeKey();
-    globalShortcut.unregisterAll();
+    // Only unregister transcription hotkey (not all hotkeys)
+    if (this.registeredHotkey) {
+      globalShortcut.unregister(this.registeredHotkey);
+      this.registeredHotkey = null;
+    }
     if (this.whisperProcess) {
       this.whisperProcess.kill();
       this.whisperProcess = null;
