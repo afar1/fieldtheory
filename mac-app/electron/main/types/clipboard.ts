@@ -20,6 +20,12 @@ export const ClipboardIPCChannels = {
   SET_TARGET_APP: 'clipboard:setTargetApp',
   GET_RUNNING_APPS: 'clipboard:getRunningApps',
   PASTE_TO_APP: 'clipboard:pasteToApp',
+  
+  // Stack operations for prompt stacking feature
+  QUERY_ITEMS_BY_STACK: 'clipboard:queryItemsByStack',
+  GET_UNIQUE_STACKS: 'clipboard:getUniqueStacks',
+  UPDATE_STACK_ID: 'clipboard:updateStackId',
+  START_DRAG: 'clipboard:startDrag',
 
   // Main -> Renderer (send pattern)
   ITEM_ADDED: 'clipboard:itemAdded',
@@ -59,6 +65,19 @@ export interface ClipboardItem {
   charCount: number | null;
   createdAt: number;
   contentHash: string;
+  stackId: string | null; // Groups items into a prompt stack for batch paste
+}
+
+/**
+ * Summary info for a stack of items.
+ */
+export interface StackInfo {
+  stackId: string;
+  itemCount: number;
+  imageCount: number;
+  textCount: number;
+  createdAt: number;
+  firstTextPreview: string | null;
 }
 
 /**
@@ -95,5 +114,11 @@ export interface ClipboardAPI {
   separateIntoTasks: (id: number) => Promise<void>;
   onItemAdded: (callback: (item: ClipboardItem) => void) => () => void;
   onItemDeleted: (callback: (id: number) => void) => () => void;
+  
+  // Stack operations for prompt stacking feature
+  queryItemsByStackId: (stackId: string) => Promise<ClipboardItem[]>;
+  getUniqueStacks: () => Promise<StackInfo[]>;
+  updateStackId: (itemIds: number[], stackId: string | null) => Promise<void>;
+  startDrag: (stackId: string) => Promise<void>;
 }
 
