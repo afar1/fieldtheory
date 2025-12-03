@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback, useImperativeHandle, forwardRef } from 'react';
+import React, { useRef, useState, useCallback, useImperativeHandle, forwardRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,8 @@ import {
   Linking,
   Alert,
   Platform,
+  AppState,
+  AppStateStatus,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Feather } from '@expo/vector-icons';
@@ -21,11 +23,18 @@ const STATUS_BAR_HEIGHT = Platform.OS === 'ios' ? 54 : 0;
 // This is the web interface where users can interact with Cursor's AI.
 const CURSOR_AGENT_URL = 'https://www.cursor.com/agent';
 
+// Keep-alive interval: How often to ping the page to keep it fresh (5 minutes).
+const KEEP_ALIVE_INTERVAL_MS = 5 * 60 * 1000;
+
+// If page hasn't been refreshed in this time, auto-reload when visited (15 minutes).
+const STALE_THRESHOLD_MS = 15 * 60 * 1000;
+
 // Ref handle exposed to parent components.
 // Lets the parent paste text into the Cursor input and focus the browser.
 export interface CursorBrowserHandle {
   pasteText: (text: string) => void;
   reload: () => void;
+  ensureFresh: () => void;
 }
 
 interface CursorBrowserProps {
@@ -54,99 +63,185 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
     const [canGoForward, setCanGoForward] = useState(false);
     const [currentUrl, setCurrentUrl] = useState(CURSOR_AGENT_URL);
     const [hasError, setHasError] = useState(false);
+    
+    // Track last successful page load time for keep-alive mechanism
+    const lastRefreshRef = useRef<number>(Date.now());
+    const keepAliveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+
+    // Keep-alive mechanism: Periodically inject a simple JS ping to prevent page staling.
+    // This runs a lightweight check that keeps the WebView's JS context active.
+    const pingPage = useCallback(() => {
+      if (webViewRef.current && !hasError) {
+        // Inject a lightweight ping that checks if the page is still responsive
+        const pingJS = `
+          (function() {
+            // Just access the document to keep the page active
+            return document.readyState;
+          })();
+        `;
+        webViewRef.current.injectJavaScript(pingJS);
+      }
+    }, [hasError]);
+
+    // Check if page is stale and needs refresh
+    const isPageStale = useCallback(() => {
+      const timeSinceLastRefresh = Date.now() - lastRefreshRef.current;
+      return timeSinceLastRefresh > STALE_THRESHOLD_MS;
+    }, []);
+
+    // Ensure the page is fresh before interacting with it
+    const ensureFresh = useCallback(() => {
+      if (isPageStale() || hasError) {
+        console.log('[CursorBrowser] Page is stale, auto-reloading...');
+        setHasError(false);
+        webViewRef.current?.reload();
+      }
+    }, [isPageStale, hasError]);
+
+    // Set up keep-alive interval when component mounts
+    useEffect(() => {
+      // Start the keep-alive interval
+      keepAliveIntervalRef.current = setInterval(pingPage, KEEP_ALIVE_INTERVAL_MS);
+
+      // Handle app state changes - refresh if returning from background and page is stale
+      const subscription = AppState.addEventListener('change', (nextAppState) => {
+        if (
+          appStateRef.current.match(/inactive|background/) &&
+          nextAppState === 'active'
+        ) {
+          // App just came to foreground, check if page needs refresh
+          if (isPageStale()) {
+            console.log('[CursorBrowser] App foregrounded with stale page, refreshing...');
+            ensureFresh();
+          }
+        }
+        appStateRef.current = nextAppState;
+      });
+
+      return () => {
+        // Clean up interval and subscription on unmount
+        if (keepAliveIntervalRef.current) {
+          clearInterval(keepAliveIntervalRef.current);
+        }
+        subscription.remove();
+      };
+    }, [pingPage, isPageStale, ensureFresh]);
 
     // Expose methods to parent component via ref.
     useImperativeHandle(ref, () => ({
       /**
        * Paste text into Cursor's chat input field.
        * This uses JavaScript injection to find the input and set its value.
+       * Automatically ensures the page is fresh before pasting.
        */
       pasteText: (text: string) => {
-        // Escape the text for safe JavaScript injection.
-        const escapedText = text
-          .replace(/\\/g, '\\\\')
-          .replace(/'/g, "\\'")
-          .replace(/\n/g, '\\n')
-          .replace(/\r/g, '\\r');
-
-        // JavaScript to find and populate the Cursor input field.
-        // We try multiple selectors since the UI might vary.
-        const injectedJS = `
-          (function() {
-            // Try to find the chat input. Cursor uses various input types.
-            // Priority order: specific Cursor selectors first, then generic fallbacks.
-            const selectors = [
-              // Cursor's main input field (placeholder: "Ask Cursor to build, fix bugs, explore")
-              'textarea[placeholder*="Ask Cursor"]',
-              'textarea[placeholder*="build"]',
-              'textarea[placeholder*="explore"]',
-              // Generic message inputs
-              'textarea[placeholder*="message"]',
-              'textarea[placeholder*="Message"]',
-              // Test IDs
-              'textarea[data-testid="chat-input"]',
-              '[data-testid="chat-input"]',
-              // Contenteditable elements (React rich text editors)
-              '[contenteditable="true"][role="textbox"]',
-              '[contenteditable="true"]',
-              // Generic fallbacks
-              'textarea',
-              'input[type="text"]'
-            ];
-            
-            let input = null;
-            for (const selector of selectors) {
-              input = document.querySelector(selector);
-              if (input) break;
-            }
-            
-            if (input) {
-              input.focus();
-              input.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              
-              // For textarea or input elements - use native setter to bypass React
-              if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
-                // Get the native value setter (React overrides this, so we grab the original)
-                const nativeSetter = Object.getOwnPropertyDescriptor(
-                  input.tagName === 'TEXTAREA' 
-                    ? window.HTMLTextAreaElement.prototype 
-                    : window.HTMLInputElement.prototype,
-                  'value'
-                ).set;
-                
-                // Call the native setter to actually set the value
-                nativeSetter.call(input, '${escapedText}');
-                
-                // Dispatch input event so React updates its state
-                const inputEvent = new Event('input', { bubbles: true });
-                input.dispatchEvent(inputEvent);
-              } 
-              // For contenteditable divs
-              else if (input.contentEditable === 'true') {
-                // Use execCommand for contenteditable (works better with frameworks)
-                document.execCommand('selectAll', false, null);
-                document.execCommand('insertText', false, '${escapedText}');
-              }
-              
-              return true;
-            }
-            
-            // Fallback: copy to clipboard if we can't find the input
-            if (navigator.clipboard) {
-              navigator.clipboard.writeText('${escapedText}');
-            }
-            return false;
-          })();
-        `;
-
-        webViewRef.current?.injectJavaScript(injectedJS);
+        // First, ensure the page is fresh
+        if (isPageStale() || hasError) {
+          console.log('[CursorBrowser] Page stale before paste, refreshing first...');
+          setHasError(false);
+          webViewRef.current?.reload();
+          // Queue the paste operation after reload
+          // We use a small delay to allow the page to start loading
+          setTimeout(() => {
+            performPaste(text);
+          }, 2000);
+          return;
+        }
+        
+        performPaste(text);
       },
 
       reload: () => {
         setHasError(false);
+        lastRefreshRef.current = Date.now();
         webViewRef.current?.reload();
       },
+
+      ensureFresh,
     }));
+
+    // Helper function to perform the actual paste operation
+    const performPaste = useCallback((text: string) => {
+      // Escape the text for safe JavaScript injection.
+      const escapedText = text
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r');
+
+      // JavaScript to find and populate the Cursor input field.
+      // We try multiple selectors since the UI might vary.
+      const injectedJS = `
+        (function() {
+          // Try to find the chat input. Cursor uses various input types.
+          // Priority order: specific Cursor selectors first, then generic fallbacks.
+          const selectors = [
+            // Cursor's main input field (placeholder: "Ask Cursor to build, fix bugs, explore")
+            'textarea[placeholder*="Ask Cursor"]',
+            'textarea[placeholder*="build"]',
+            'textarea[placeholder*="explore"]',
+            // Generic message inputs
+            'textarea[placeholder*="message"]',
+            'textarea[placeholder*="Message"]',
+            // Test IDs
+            'textarea[data-testid="chat-input"]',
+            '[data-testid="chat-input"]',
+            // Contenteditable elements (React rich text editors)
+            '[contenteditable="true"][role="textbox"]',
+            '[contenteditable="true"]',
+            // Generic fallbacks
+            'textarea',
+            'input[type="text"]'
+          ];
+          
+          let input = null;
+          for (const selector of selectors) {
+            input = document.querySelector(selector);
+            if (input) break;
+          }
+          
+          if (input) {
+            input.focus();
+            input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            
+            // For textarea or input elements - use native setter to bypass React
+            if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+              // Get the native value setter (React overrides this, so we grab the original)
+              const nativeSetter = Object.getOwnPropertyDescriptor(
+                input.tagName === 'TEXTAREA' 
+                  ? window.HTMLTextAreaElement.prototype 
+                  : window.HTMLInputElement.prototype,
+                'value'
+              ).set;
+              
+              // Call the native setter to actually set the value
+              nativeSetter.call(input, '${escapedText}');
+              
+              // Dispatch input event so React updates its state
+              const inputEvent = new Event('input', { bubbles: true });
+              input.dispatchEvent(inputEvent);
+            } 
+            // For contenteditable divs
+            else if (input.contentEditable === 'true') {
+              // Use execCommand for contenteditable (works better with frameworks)
+              document.execCommand('selectAll', false, null);
+              document.execCommand('insertText', false, '${escapedText}');
+            }
+            
+            return true;
+          }
+          
+          // Fallback: copy to clipboard if we can't find the input
+          if (navigator.clipboard) {
+            navigator.clipboard.writeText('${escapedText}');
+          }
+          return false;
+        })();
+      `;
+
+      webViewRef.current?.injectJavaScript(injectedJS);
+    }, []);
 
     // Handle navigation state changes to update back/forward buttons.
     const handleNavigationStateChange = useCallback((navState: any) => {
@@ -159,6 +254,8 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
     const handleLoadEnd = useCallback(() => {
       setIsLoading(false);
       setHasError(false);
+      // Track when we last successfully loaded the page
+      lastRefreshRef.current = Date.now();
       onReady?.();
     }, [onReady]);
 
@@ -185,6 +282,7 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
     const handleGoForward = () => webViewRef.current?.goForward();
     const handleReload = () => {
       setHasError(false);
+      lastRefreshRef.current = Date.now();
       webViewRef.current?.reload();
     };
     const handleGoHome = () => {

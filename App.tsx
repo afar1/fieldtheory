@@ -110,7 +110,14 @@ export default function App() {
   const [isDownloadingModel, setIsDownloadingModel] = useState(false);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [observations, setObservations] = useState<Observation[]>([]);
-  const [settings, setSettings] = useState<Settings>({ autoStart: false });
+  // Default settings with all features enabled
+  const [settings, setSettings] = useState<Settings>({
+    autoStart: false,
+    showTodos: true,
+    showObservations: true,
+    showCursor: true,
+    autoSeparate: true,
+  });
   const [isProcessingLLM, setIsProcessingLLM] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [pageIndex, setPageIndex] = useState(0);
@@ -378,12 +385,12 @@ export default function App() {
     }
   }, [todos, observations]);
 
-  // Process transcription with LLM when it becomes available
+  // Process transcription with LLM when it becomes available (only if auto-separate is enabled)
   useEffect(() => {
-    if (transcription && transcription.trim().length > 0) {
+    if (transcription && transcription.trim().length > 0 && settings.autoSeparate) {
       handleProcessTranscription(transcription);
     }
-  }, [transcription, handleProcessTranscription]);
+  }, [transcription, handleProcessTranscription, settings.autoSeparate]);
 
   const sortedTranscripts = useMemo(() => {
     return [...transcripts].sort((a, b) =>
@@ -644,6 +651,12 @@ export default function App() {
     await StorageService.saveSettings(newSettings);
   }, [settings]);
 
+  const handleToggleSetting = useCallback(async (key: keyof Settings, value: boolean) => {
+    const newSettings = { ...settings, [key]: value };
+    setSettings(newSettings);
+    await StorageService.saveSettings(newSettings);
+  }, [settings]);
+
   const handleCopyTranscript = async (entry: TranscriptEntry) => {
     await Clipboard.setStringAsync(entry.text);
     Vibration.vibrate();
@@ -691,13 +704,27 @@ export default function App() {
     // Paste the text into Cursor's input field.
     cursorBrowserRef.current?.pasteText(text);
     
-    // Switch to the Cursor browser page (index 3 in the pager).
-    pagerRef.current?.setPage(3);
-    setPageIndex(3);
+    // Calculate the correct page index for Cursor based on visible tabs
+    let cursorPageIndex = 1; // Base: after transcripts
+    if (settings.showTodos) cursorPageIndex++;
+    if (settings.showObservations) cursorPageIndex++;
+    
+    // Switch to the Cursor browser page.
+    pagerRef.current?.setPage(cursorPageIndex);
+    setPageIndex(cursorPageIndex);
     
     // Provide haptic feedback.
     Vibration.vibrate();
-  }, []);
+  }, [settings.showTodos, settings.showObservations]);
+
+  // Manually separate a transcript into tasks and observations.
+  // This is used when auto-separate is disabled.
+  const handleManualSeparate = useCallback(async (text: string) => {
+    if (isProcessingLLM) return; // Don't allow multiple separations at once
+    
+    Vibration.vibrate();
+    await handleProcessTranscription(text);
+  }, [isProcessingLLM, handleProcessTranscription]);
 
   const renderTranscriptItem = ({ item }: { item: TranscriptEntry }) => {
     const isExpanded = Boolean(expandedMap[item.id]);
@@ -712,6 +739,11 @@ export default function App() {
     const handleSendToCursorPress = (event: GestureResponderEvent) => {
       event.stopPropagation();
       handleSendToCursor(item.text);
+    };
+
+    const handleSeparatePress = (event: GestureResponderEvent) => {
+      event.stopPropagation();
+      handleManualSeparate(item.text);
     };
 
     return (
@@ -745,14 +777,31 @@ export default function App() {
               <Text style={styles.expandButtonText}>{isExpanded ? 'Show less' : 'Expand'}</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity
-            onPress={handleSendToCursorPress}
-            hitSlop={8}
-            style={styles.sendToCursorButton}
-          >
-            <Feather name="terminal" size={14} color="#059669" />
-            <Text style={styles.sendToCursorText}>Send to Cursor</Text>
-          </TouchableOpacity>
+          {/* Manual Separate button - only shown when auto-separate is disabled */}
+          {!settings.autoSeparate && (
+            <TouchableOpacity
+              onPress={handleSeparatePress}
+              hitSlop={8}
+              style={styles.separateButton}
+              disabled={isProcessingLLM}
+            >
+              <Feather name="git-branch" size={14} color={isProcessingLLM ? '#9CA3AF' : '#7C3AED'} />
+              <Text style={[styles.separateButtonText, isProcessingLLM && styles.separateButtonTextDisabled]}>
+                {isProcessingLLM ? 'Separating...' : 'Separate'}
+              </Text>
+            </TouchableOpacity>
+          )}
+          {/* Send to Cursor button - only shown when Cursor tab is enabled */}
+          {settings.showCursor && (
+            <TouchableOpacity
+              onPress={handleSendToCursorPress}
+              hitSlop={8}
+              style={styles.sendToCursorButton}
+            >
+              <Feather name="terminal" size={14} color="#059669" />
+              <Text style={styles.sendToCursorText}>Send to Cursor</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </Pressable>
     );
@@ -918,7 +967,7 @@ export default function App() {
 
       {/* NEW BOTTOM BAR LAYOUT */}
       <View style={styles.bottomBar}>
-        {/* Transcripts Tab */}
+        {/* Transcripts Tab - always visible */}
         <TouchableOpacity 
           style={styles.tabButton} 
           onPress={() => pagerRef.current?.setPage(0)}
@@ -930,17 +979,19 @@ export default function App() {
           />
         </TouchableOpacity>
 
-        {/* Tasks Tab */}
-        <TouchableOpacity 
-          style={styles.tabButton} 
-          onPress={() => pagerRef.current?.setPage(1)}
-        >
-          <Feather 
-            name="check-square" 
-            size={22} 
-            color={pageIndex === 1 ? '#007AFF' : '#9CA3AF'} 
-          />
-        </TouchableOpacity>
+        {/* Tasks Tab - conditionally visible */}
+        {settings.showTodos && (
+          <TouchableOpacity 
+            style={styles.tabButton} 
+            onPress={() => pagerRef.current?.setPage(1)}
+          >
+            <Feather 
+              name="check-square" 
+              size={22} 
+              color={pageIndex === 1 ? '#007AFF' : '#9CA3AF'} 
+            />
+          </TouchableOpacity>
+        )}
 
         {/* RECORD BUTTON - Floating Center */}
         <View style={styles.recordButtonContainer}>
@@ -961,31 +1012,35 @@ export default function App() {
           </TouchableOpacity>
         </View>
 
-        {/* Observations Tab */}
-        <TouchableOpacity 
-          style={styles.tabButton} 
-          onPress={() => pagerRef.current?.setPage(2)}
-        >
-          <Feather 
-            name="eye" 
-            size={22} 
-            color={pageIndex === 2 ? '#007AFF' : '#9CA3AF'} 
-          />
-        </TouchableOpacity>
+        {/* Observations Tab - conditionally visible */}
+        {settings.showObservations && (
+          <TouchableOpacity 
+            style={styles.tabButton} 
+            onPress={() => pagerRef.current?.setPage(2)}
+          >
+            <Feather 
+              name="eye" 
+              size={22} 
+              color={pageIndex === 2 ? '#007AFF' : '#9CA3AF'} 
+            />
+          </TouchableOpacity>
+        )}
 
-        {/* Cursor Tab */}
-        <TouchableOpacity 
-          style={styles.tabButton} 
-          onPress={() => pagerRef.current?.setPage(3)}
-        >
-          <Feather 
-            name="terminal" 
-            size={22} 
-            color={pageIndex === 3 ? '#007AFF' : '#9CA3AF'} 
-          />
-        </TouchableOpacity>
+        {/* Cursor Tab - conditionally visible */}
+        {settings.showCursor && (
+          <TouchableOpacity 
+            style={styles.tabButton} 
+            onPress={() => pagerRef.current?.setPage(3)}
+          >
+            <Feather 
+              name="terminal" 
+              size={22} 
+              color={pageIndex === 3 ? '#007AFF' : '#9CA3AF'} 
+            />
+          </TouchableOpacity>
+        )}
 
-         {/* Settings Tab */}
+         {/* Settings Tab - always visible */}
          <TouchableOpacity 
           style={styles.tabButton} 
           onPress={() => setShowSettings(true)}
@@ -1014,6 +1069,51 @@ export default function App() {
               <Switch
                 value={settings.autoStart}
                 onValueChange={handleToggleAutoStart}
+              />
+            </View>
+
+            {/* Feature Visibility Section */}
+            <Text style={styles.settingsSectionTitle}>Show Features</Text>
+            
+            <View style={styles.settingRow}>
+              <Text style={styles.settingLabel}>Tasks tab</Text>
+              <Switch
+                value={settings.showTodos}
+                onValueChange={(value) => handleToggleSetting('showTodos', value)}
+              />
+            </View>
+
+            <View style={styles.settingRow}>
+              <Text style={styles.settingLabel}>Observations tab</Text>
+              <Switch
+                value={settings.showObservations}
+                onValueChange={(value) => handleToggleSetting('showObservations', value)}
+              />
+            </View>
+
+            <View style={styles.settingRow}>
+              <Text style={styles.settingLabel}>Cursor tab</Text>
+              <Switch
+                value={settings.showCursor}
+                onValueChange={(value) => handleToggleSetting('showCursor', value)}
+              />
+            </View>
+
+            {/* Separation Section */}
+            <Text style={styles.settingsSectionTitle}>Transcript Processing</Text>
+            
+            <View style={styles.settingRow}>
+              <View style={styles.settingLabelContainer}>
+                <Text style={styles.settingLabel}>Auto-separate into tasks</Text>
+                <Text style={styles.settingDescription}>
+                  {settings.autoSeparate 
+                    ? 'Transcripts are automatically processed' 
+                    : 'Use the Separate button on each transcript'}
+                </Text>
+              </View>
+              <Switch
+                value={settings.autoSeparate}
+                onValueChange={(value) => handleToggleSetting('autoSeparate', value)}
               />
             </View>
 
@@ -1431,6 +1531,41 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#059669',
+  },
+  separateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: '#F3E8FF',
+    gap: 5,
+  },
+  separateButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#7C3AED',
+  },
+  separateButtonTextDisabled: {
+    color: '#9CA3AF',
+  },
+  settingsSectionTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6B7280',
+    marginTop: 20,
+    marginBottom: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  settingLabelContainer: {
+    flex: 1,
+    marginRight: 12,
+  },
+  settingDescription: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    marginTop: 2,
   },
   errorBoundaryContainer: {
     flex: 1,

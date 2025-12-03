@@ -80,14 +80,29 @@ export class StorageService {
 
   /**
    * Load settings from storage.
+   * Merges stored settings with defaults to handle new settings added in updates.
    */
   static async getSettings(): Promise<Settings> {
+    // Default settings - all features enabled by default
+    const defaultSettings: Settings = {
+      autoStart: false,
+      showTodos: true,
+      showObservations: true,
+      showCursor: true,
+      autoSeparate: true,
+    };
+    
     try {
       const data = await AsyncStorage.getItem(SETTINGS_KEY);
-      return data ? JSON.parse(data) : { autoStart: false };
+      if (data) {
+        const stored = JSON.parse(data);
+        // Merge stored settings with defaults so new fields get their default values
+        return { ...defaultSettings, ...stored };
+      }
+      return defaultSettings;
     } catch (error) {
       console.error('Failed to load settings:', error);
-      return { autoStart: false };
+      return defaultSettings;
     }
   }
 
