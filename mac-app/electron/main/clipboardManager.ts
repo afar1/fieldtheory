@@ -1,9 +1,10 @@
 import { app, clipboard, globalShortcut, nativeImage } from 'electron';
 import Database from 'better-sqlite3';
 import path from 'path';
-import { exec } from 'child_process';
+import { exec, spawn, ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import crypto from 'crypto';
+import { EventEmitter } from 'events';
 
 const execAsync = promisify(exec);
 
@@ -89,10 +90,29 @@ const DEFAULT_CONFIG: ClipboardConfig = {
 };
 
 /**
+ * Continuous Context mode state.
+ * Allows continuous screenshotting where each screenshot re-activates the capture tool.
+ */
+export interface ContinuousContextState {
+  active: boolean;
+  stackId: string | null;
+  screenshotCount: number;
+}
+
+/**
+ * Events emitted by ClipboardManager.
+ */
+export interface ClipboardManagerEvents {
+  continuousContextChanged: (state: ContinuousContextState) => void;
+  continuousContextScreenshot: (itemId: number) => void;
+}
+
+/**
  * Manages clipboard history with SQLite storage.
  * Polls clipboard every 500ms and stores changes locally.
+ * Also manages Continuous Context mode for multi-screenshot capture sessions.
  */
-export class ClipboardManager {
+export class ClipboardManager extends EventEmitter {
   private db: Database.Database;
   private pollInterval: NodeJS.Timeout | null = null;
   private lastContentHash: string = '';
@@ -102,8 +122,19 @@ export class ClipboardManager {
   private screenshotCallback: ScreenshotCallback | null = null;
   private historyCallback: HistoryCallback | null = null;
   private onItemAddedCallback: ((id: number) => void) | null = null;
+  
+  // Continuous Context mode state
+  private continuousContextActive: boolean = false;
+  private continuousContextStackId: string | null = null;
+  private continuousContextScreenshotCount: number = 0;
+  private continuousContextHotkeyRegistered: boolean = false;
+  private continuousContextHotkey: string = 'Shift+Alt+1';
+  private continuousContextEnabled: boolean = false;
+  private continuousContextCallback: (() => void) | null = null;
+  private screencaptureProcess: ChildProcess | null = null;
 
   constructor(config: Partial<ClipboardConfig> = {}) {
+    super();
     this.config = { ...DEFAULT_CONFIG, ...config };
     
     // Initialize database
@@ -863,6 +894,276 @@ export class ClipboardManager {
     };
   }
 
+  // =========================================================================
+  // Continuous Context Mode - allows continuous screenshotting with stacked results
+  // User takes multiple screenshots without re-pressing hotkey, until Escape pressed.
+  // =========================================================================
+
+  /**
+   * Enable or disable continuous context feature globally.
+   * When disabled, the hotkey won't be registered.
+   */
+  setContinuousContextEnabled(enabled: boolean): void {
+    this.continuousContextEnabled = enabled;
+    
+    if (enabled && this.continuousContextCallback) {
+      this.registerContinuousContextHotkey(this.continuousContextCallback);
+    } else if (!enabled && this.continuousContextHotkeyRegistered) {
+      if (this.continuousContextHotkey) {
+        globalShortcut.unregister(this.continuousContextHotkey);
+        this.continuousContextHotkeyRegistered = false;
+      }
+    }
+    
+    console.log(`[ClipboardManager] Continuous Context ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
+  /**
+   * Check if continuous context feature is enabled.
+   */
+  isContinuousContextEnabled(): boolean {
+    return this.continuousContextEnabled;
+  }
+
+  /**
+   * Set the continuous context hotkey.
+   */
+  setContinuousContextHotkey(hotkey: string): boolean {
+    // Unregister old hotkey
+    if (this.continuousContextHotkeyRegistered && this.continuousContextHotkey) {
+      globalShortcut.unregister(this.continuousContextHotkey);
+      this.continuousContextHotkeyRegistered = false;
+    }
+
+    this.continuousContextHotkey = hotkey;
+
+    // Re-register if enabled and callback exists
+    if (this.continuousContextEnabled && this.continuousContextCallback) {
+      return this.registerContinuousContextHotkey(this.continuousContextCallback);
+    }
+
+    return true;
+  }
+
+  /**
+   * Get the current continuous context hotkey.
+   */
+  getContinuousContextHotkey(): string {
+    return this.continuousContextHotkey;
+  }
+
+  /**
+   * Load continuous context settings from preferences.
+   */
+  loadContinuousContextFromPreferences(enabled?: boolean, hotkey?: string): void {
+    if (enabled !== undefined) {
+      this.continuousContextEnabled = enabled;
+    }
+    if (hotkey) {
+      this.continuousContextHotkey = hotkey;
+    }
+  }
+
+  /**
+   * Register the continuous context hotkey.
+   */
+  registerContinuousContextHotkey(callback: () => void): boolean {
+    if (!this.continuousContextEnabled) {
+      console.log('[ClipboardManager] Continuous Context disabled, not registering hotkey');
+      return false;
+    }
+
+    if (!this.continuousContextHotkey) {
+      return false;
+    }
+
+    this.continuousContextCallback = callback;
+
+    if (this.continuousContextHotkeyRegistered) {
+      globalShortcut.unregister(this.continuousContextHotkey);
+    }
+
+    const registered = globalShortcut.register(this.continuousContextHotkey, callback);
+    this.continuousContextHotkeyRegistered = registered;
+
+    if (registered) {
+      console.log(`[ClipboardManager] Registered continuous context hotkey: ${this.continuousContextHotkey}`);
+    } else {
+      console.warn(`[ClipboardManager] Failed to register continuous context hotkey: ${this.continuousContextHotkey}`);
+    }
+
+    return registered;
+  }
+
+  /**
+   * Start continuous context mode.
+   * Creates a new stack ID and begins the first screenshot capture.
+   */
+  async startContinuousContext(): Promise<void> {
+    if (this.continuousContextActive) {
+      console.log('[ClipboardManager] Continuous context already active');
+      return;
+    }
+
+    console.log('[ClipboardManager] Starting continuous context mode');
+    
+    // Generate a new stack ID for this session
+    this.continuousContextStackId = crypto.randomUUID();
+    this.continuousContextActive = true;
+    this.continuousContextScreenshotCount = 0;
+
+    this.emit('continuousContextChanged', this.getContinuousContextState());
+
+    // Take the first screenshot
+    await this.captureContinuousScreenshot();
+  }
+
+  /**
+   * Stop continuous context mode.
+   * Called when user presses Escape or explicitly stops the mode.
+   */
+  stopContinuousContext(): void {
+    if (!this.continuousContextActive) {
+      return;
+    }
+
+    console.log(`[ClipboardManager] Stopping continuous context mode. Screenshots taken: ${this.continuousContextScreenshotCount}`);
+    
+    // Kill any running screencapture process
+    if (this.screencaptureProcess && !this.screencaptureProcess.killed) {
+      this.screencaptureProcess.kill();
+      this.screencaptureProcess = null;
+    }
+
+    this.continuousContextActive = false;
+    // Keep stackId so transcription can still be added if started during the session
+    this.emit('continuousContextChanged', this.getContinuousContextState());
+  }
+
+  /**
+   * Get the current continuous context state.
+   */
+  getContinuousContextState(): ContinuousContextState {
+    return {
+      active: this.continuousContextActive,
+      stackId: this.continuousContextStackId,
+      screenshotCount: this.continuousContextScreenshotCount,
+    };
+  }
+
+  /**
+   * Get the current continuous context stack ID (for transcription to use).
+   */
+  getContinuousContextStackId(): string | null {
+    return this.continuousContextStackId;
+  }
+
+  /**
+   * Capture a screenshot in continuous context mode.
+   * After the screenshot is taken, automatically triggers another capture
+   * unless the mode has been stopped.
+   */
+  private async captureContinuousScreenshot(): Promise<void> {
+    if (!this.continuousContextActive) {
+      return;
+    }
+
+    try {
+      // Use interactive selection mode with -i flag
+      // This matches macOS Command+Shift+4 behavior
+      // We use spawn instead of exec to be able to detect when the process exits
+      await new Promise<void>((resolve, reject) => {
+        this.screencaptureProcess = spawn('screencapture', ['-i', '-c']);
+
+        this.screencaptureProcess.on('close', (code) => {
+          this.screencaptureProcess = null;
+          
+          if (code === 0) {
+            resolve();
+          } else if (code === 1) {
+            // User cancelled (pressed Escape during selection)
+            // Stop continuous context mode
+            this.stopContinuousContext();
+            resolve();
+          } else {
+            reject(new Error(`screencapture exited with code ${code}`));
+          }
+        });
+
+        this.screencaptureProcess.on('error', (err) => {
+          this.screencaptureProcess = null;
+          reject(err);
+        });
+      });
+
+      // If mode was stopped during capture, don't process
+      if (!this.continuousContextActive) {
+        return;
+      }
+
+      // Small delay to ensure clipboard is updated
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Read from clipboard
+      const image = clipboard.readImage();
+      if (image.isEmpty()) {
+        console.warn('[ClipboardManager] Continuous context: screenshot capture cancelled or failed');
+        // Still continue if mode is active - maybe user just cancelled this one
+        if (this.continuousContextActive) {
+          // Small delay before trying again
+          setTimeout(() => this.captureContinuousScreenshot(), 200);
+        }
+        return;
+      }
+
+      const imageBuffer = image.toPNG();
+      
+      // Update lastContentHash to prevent polling from re-storing this image
+      this.lastContentHash = this.hashContent(imageBuffer.toString('base64'));
+      
+      // Store in history with the continuous context stack ID
+      const id = await this.storeImage(
+        image,
+        imageBuffer,
+        'screenshot',
+        undefined,
+        this.continuousContextStackId || undefined
+      );
+      
+      if (id > 0) {
+        this.continuousContextScreenshotCount++;
+        console.log(`[ClipboardManager] Continuous context: screenshot ${this.continuousContextScreenshotCount} stored (id: ${id})`);
+        
+        // Emit events
+        this.emit('continuousContextScreenshot', id);
+        this.emit('continuousContextChanged', this.getContinuousContextState());
+        
+        // Notify item added
+        if (this.onItemAddedCallback) {
+          this.onItemAddedCallback(id);
+        }
+      }
+
+      // If still active, trigger another capture after a brief delay
+      if (this.continuousContextActive) {
+        setTimeout(() => this.captureContinuousScreenshot(), 200);
+      }
+    } catch (error) {
+      console.error('[ClipboardManager] Continuous context screenshot failed:', error);
+      // If error occurs, stop the mode
+      this.stopContinuousContext();
+    }
+  }
+
+  /**
+   * Clear the continuous context stack ID.
+   * Called when the stack is pasted or the session is fully complete.
+   */
+  clearContinuousContextStack(): void {
+    this.continuousContextStackId = null;
+    this.continuousContextScreenshotCount = 0;
+  }
+
   /**
    * Get frontmost application bundle ID.
    */
@@ -932,6 +1233,7 @@ export class ClipboardManager {
    */
   destroy(): void {
     this.stopPolling();
+    this.stopContinuousContext();
     
     if (this.screenshotHotkeyRegistered && this.config.screenshotHotkey) {
       globalShortcut.unregister(this.config.screenshotHotkey);
@@ -939,6 +1241,10 @@ export class ClipboardManager {
     
     if (this.historyHotkeyRegistered && this.config.historyHotkey) {
       globalShortcut.unregister(this.config.historyHotkey);
+    }
+    
+    if (this.continuousContextHotkeyRegistered && this.continuousContextHotkey) {
+      globalShortcut.unregister(this.continuousContextHotkey);
     }
 
     this.db.close();
