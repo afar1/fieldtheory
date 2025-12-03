@@ -1,6 +1,6 @@
 {
   "name": "littleai-mac",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "main": "electron-dist/main/index.js",
   "scripts": {
@@ -60,6 +60,8 @@
       "icon": "assets/icon.icns",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "extraResources": [
         {
           "from": "electron/native/build/LittleOneHelper",
