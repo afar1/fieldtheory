@@ -2,7 +2,7 @@
 // RecordingOverlay - Shows recording state and stacking mode indicator
 // =============================================================================
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 
 type OverlayState = 'recording' | 'transcribing' | 'dismiss' | 'stacking-idle';
 type OverlayStyle = 'rectangle' | 'top-emerging';
@@ -10,11 +10,8 @@ type OverlayStyle = 'rectangle' | 'top-emerging';
 export default function RecordingOverlay() {
   const [state, setState] = useState<OverlayState>('recording');
   const [style, setStyle] = useState<OverlayStyle>('rectangle');
-  const [audioLevel, setAudioLevel] = useState<number>(0);
   const [stackCount, setStackCount] = useState<number>(0);
   const [isStackingMode, setIsStackingMode] = useState<boolean>(false);
-  const [bars, setBars] = useState<number[]>([4, 6, 8, 10, 8, 6, 4]);
-  const frameRef = useRef<number>();
 
   // IPC listeners for overlay state and style
   useEffect(() => {
@@ -33,13 +30,6 @@ export default function RecordingOverlay() {
     };
   }, []);
 
-  // Audio level listener (only active during recording)
-  useEffect(() => {
-    if (!window.overlayAPI || state !== 'recording') return;
-    window.overlayAPI.onAudioLevel((l) => setAudioLevel(l));
-    return () => window.overlayAPI?.removeAllListeners('audio-level');
-  }, [state]);
-
   // Stack count listener
   useEffect(() => {
     if (!window.transcribeAPI) return;
@@ -56,37 +46,6 @@ export default function RecordingOverlay() {
       unsubscribe?.();
     };
   }, []);
-
-  // Animation - different behavior based on state
-  useEffect(() => {
-    let t = 0;
-    const animate = () => {
-      t += 0.1;
-      let newBars: number[];
-      
-      if (state === 'recording') {
-        // Active recording - responsive to audio level
-        newBars = [4, 6, 8, 10, 8, 6, 4].map((h, i) => 
-          Math.max(3, h + Math.sin(t + i) * 4 + audioLevel * 10));
-      } else if (state === 'transcribing') {
-        // Processing - gentle wave animation
-        newBars = [4, 6, 8, 10, 8, 6, 4].map((h, i) => 
-          Math.max(3, h + Math.sin(t * 0.5 + i * 0.5) * 5));
-      } else if (state === 'stacking-idle') {
-        // Stacking idle - subtle pulse to show it's waiting
-        newBars = [4, 6, 8, 10, 8, 6, 4].map((h, i) => 
-          Math.max(3, h * 0.6 + Math.sin(t * 0.3) * 2));
-      } else {
-        // Dismiss/hidden - flat bars
-        newBars = [3, 3, 3, 3, 3, 3, 3];
-      }
-      
-      setBars(newBars);
-      frameRef.current = requestAnimationFrame(animate);
-    };
-    frameRef.current = requestAnimationFrame(animate);
-    return () => { if (frameRef.current) cancelAnimationFrame(frameRef.current); };
-  }, [state, audioLevel]);
 
   // In stacking mode, always use top-emerging style look
   const isTopEmerging = style === 'top-emerging' || isStackingMode;
@@ -157,16 +116,6 @@ export default function RecordingOverlay() {
         </div>
       )}
 
-      {/* Waveform bars */}
-      {bars.map((h, i) => (
-        <div key={i} style={{
-          width: isTopEmerging ? 5 : 4,
-          height: isTopEmerging ? h * 1.2 : h,
-          background: isTopEmerging ? 'rgba(255, 255, 255, 0.9)' : 'white',
-          borderRadius: isTopEmerging ? 3 : 2,
-        }} />
-      ))}
-
       {/* Transcribing indicator - purple dot when processing */}
       {state === 'transcribing' && (
         <div style={{
@@ -204,7 +153,6 @@ declare global {
   interface Window {
     overlayAPI?: {
       onStateChange: (cb: (s: OverlayState) => void) => void;
-      onAudioLevel: (cb: (l: number) => void) => void;
       onStyleChange?: (cb: (s: OverlayStyle) => void) => void;
       onStackingModeChange?: (cb: (active: boolean) => void) => void;
       removeAllListeners: (c: string) => void;
