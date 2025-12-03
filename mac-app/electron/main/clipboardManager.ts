@@ -661,6 +661,29 @@ export class ClipboardManager {
   }
 
   /**
+   * Update the content field for a specific item.
+   * Used to store AI-generated descriptions for images/screenshots.
+   * @param itemId - ID of the item to update
+   * @param content - New content to set
+   */
+  updateItemContent(itemId: number, content: string): void {
+    const stmt = this.db.prepare('UPDATE clipboard_items SET content = ? WHERE id = ?');
+    stmt.run(content, itemId);
+    
+    // Update word and character counts
+    const wordCount = content.split(/\s+/).filter(w => w.length > 0).length;
+    const charCount = content.length;
+    const countStmt = this.db.prepare('UPDATE clipboard_items SET word_count = ?, char_count = ? WHERE id = ?');
+    countStmt.run(wordCount, charCount, itemId);
+    
+    // Update FTS index
+    this.db.prepare('DELETE FROM clipboard_fts WHERE rowid = ?').run(itemId);
+    this.db.prepare('INSERT INTO clipboard_fts(rowid, content) VALUES (?, ?)').run(itemId, content);
+    
+    console.log(`[ClipboardManager] Updated content for item ${itemId}`);
+  }
+
+  /**
    * Capture screenshot and add to clipboard history.
    * When region=true, uses interactive selection (drag to select) like macOS Command+Shift+Control+4.
    * @param region - Whether to use region selection mode

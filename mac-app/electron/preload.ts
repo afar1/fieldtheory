@@ -29,6 +29,19 @@ const TranscribeIPCChannels = {
   HOTKEY_CHANGED: 'transcribe:hotkeyChanged',
 } as const;
 
+const VisionIPCChannels = {
+  GET_MODEL_STATUS: 'vision:getModelStatus',
+  DOWNLOAD_MODEL: 'vision:downloadModel',
+  DELETE_MODEL: 'vision:deleteModel',
+  GET_AVAILABLE_MODELS: 'vision:getAvailableModels',
+  GET_MODEL_DOWNLOAD_STATUS: 'vision:getModelDownloadStatus',
+  GET_SELECTED_MODEL: 'vision:getSelectedModel',
+  SET_SELECTED_MODEL: 'vision:setSelectedModel',
+  MODEL_DOWNLOAD_PROGRESS: 'vision:modelDownloadProgress',
+  DESCRIPTION_READY: 'vision:descriptionReady',
+  ERROR: 'vision:error',
+} as const;
+
 const ClipboardIPCChannels = {
   QUERY_ITEMS: 'clipboard:queryItems',
   GET_ITEM: 'clipboard:getItem',
@@ -74,6 +87,15 @@ type ModelStatus = 'downloaded' | 'downloading' | 'missing';
 type ModelInfo = {
   name: string;
   url: string;
+  sizeBytes: number;
+  description: string;
+};
+
+type VisionModelStatus = 'downloaded' | 'downloading' | 'missing';
+
+type VisionModelInfo = {
+  name: string;
+  repo: string;
   sizeBytes: number;
   description: string;
 };
@@ -164,6 +186,19 @@ export interface TranscribeAPI {
   onHotkeyChanged: (callback: (hotkey: string) => void) => () => void;
   onStackChanged: (callback: (count: number) => void) => () => void;
   onStackingModeChanged: (callback: (active: boolean, stackId: string | null) => void) => () => void;
+}
+
+export interface VisionAPI {
+  getModelStatus: () => Promise<VisionModelStatus>;
+  downloadModel: (modelSize?: string) => Promise<void>;
+  deleteModel: (modelSize: string) => Promise<boolean>;
+  getAvailableModels: () => Promise<Record<string, VisionModelInfo>>;
+  getModelDownloadStatus: () => Promise<Record<string, boolean>>;
+  getSelectedModel: () => Promise<string>;
+  setSelectedModel: (modelSize: string) => Promise<void>;
+  onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
+  onDescriptionReady: (callback: (itemId: number, description: string) => void) => () => void;
+  onError: (callback: (itemId: number, error: string) => void) => () => void;
 }
 
 export interface ClipboardAPI {
@@ -521,6 +556,72 @@ const clipboardAPI: ClipboardAPI = {
   },
 };
 
+const visionAPI: VisionAPI = {
+  getModelStatus: async (): Promise<VisionModelStatus> => {
+    return ipcRenderer.invoke(VisionIPCChannels.GET_MODEL_STATUS);
+  },
+
+  downloadModel: async (modelSize?: string): Promise<void> => {
+    return ipcRenderer.invoke(VisionIPCChannels.DOWNLOAD_MODEL, modelSize);
+  },
+
+  deleteModel: async (modelSize: string): Promise<boolean> => {
+    return ipcRenderer.invoke(VisionIPCChannels.DELETE_MODEL, modelSize);
+  },
+
+  getAvailableModels: async (): Promise<Record<string, VisionModelInfo>> => {
+    return ipcRenderer.invoke(VisionIPCChannels.GET_AVAILABLE_MODELS);
+  },
+
+  getModelDownloadStatus: async (): Promise<Record<string, boolean>> => {
+    return ipcRenderer.invoke(VisionIPCChannels.GET_MODEL_DOWNLOAD_STATUS);
+  },
+
+  getSelectedModel: async (): Promise<string> => {
+    return ipcRenderer.invoke(VisionIPCChannels.GET_SELECTED_MODEL);
+  },
+
+  setSelectedModel: async (modelSize: string): Promise<void> => {
+    return ipcRenderer.invoke(VisionIPCChannels.SET_SELECTED_MODEL, modelSize);
+  },
+
+  onModelDownloadProgress: (callback: (downloaded: number, total: number) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, downloaded: number, total: number) => {
+      callback(downloaded, total);
+    };
+
+    ipcRenderer.on(VisionIPCChannels.MODEL_DOWNLOAD_PROGRESS, handler);
+
+    return () => {
+      ipcRenderer.removeListener(VisionIPCChannels.MODEL_DOWNLOAD_PROGRESS, handler);
+    };
+  },
+
+  onDescriptionReady: (callback: (itemId: number, description: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, itemId: number, description: string) => {
+      callback(itemId, description);
+    };
+
+    ipcRenderer.on(VisionIPCChannels.DESCRIPTION_READY, handler);
+
+    return () => {
+      ipcRenderer.removeListener(VisionIPCChannels.DESCRIPTION_READY, handler);
+    };
+  },
+
+  onError: (callback: (itemId: number, error: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, itemId: number, error: string) => {
+      callback(itemId, error);
+    };
+
+    ipcRenderer.on(VisionIPCChannels.ERROR, handler);
+
+    return () => {
+      ipcRenderer.removeListener(VisionIPCChannels.ERROR, handler);
+    };
+  },
+};
+
 const permissionsAPI: PermissionsAPI = {
   check: async (): Promise<{ accessibilityGranted: boolean; inputMonitoringGranted: boolean }> => {
     return ipcRenderer.invoke('permissions:check');
@@ -563,6 +664,7 @@ declare global {
     audioAPI: AudioAPI;
     transcribeAPI: TranscribeAPI;
     clipboardAPI: ClipboardAPI;
+    visionAPI: VisionAPI;
     permissionsAPI: PermissionsAPI;
     platform: {
       isMacOS: boolean;

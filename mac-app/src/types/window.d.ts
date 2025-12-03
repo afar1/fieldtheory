@@ -52,6 +52,21 @@ type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
 type ModelStatus = 'downloaded' | 'downloading' | 'missing';
 
 /**
+ * Vision model download status.
+ */
+type VisionModelStatus = 'downloaded' | 'downloading' | 'missing';
+
+/**
+ * Vision model information.
+ */
+interface VisionModelInfo {
+  name: string;
+  repo: string;
+  sizeBytes: number;
+  description: string;
+}
+
+/**
  * The transcription API exposed by the preload script.
  */
 interface TranscribeAPI {
@@ -74,6 +89,22 @@ interface TranscribeAPI {
   onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
   onHotkeyChanged: (callback: (hotkey: string) => void) => () => void;
   onStackChanged: (callback: (count: number) => void) => () => void;
+}
+
+/**
+ * The vision API exposed by the preload script.
+ */
+interface VisionAPI {
+  getModelStatus: () => Promise<VisionModelStatus>;
+  downloadModel: (modelSize?: string) => Promise<void>;
+  deleteModel: (modelSize: string) => Promise<boolean>;
+  getAvailableModels: () => Promise<Record<string, VisionModelInfo>>;
+  getModelDownloadStatus: () => Promise<Record<string, boolean>>;
+  getSelectedModel: () => Promise<string>;
+  setSelectedModel: (modelSize: string) => Promise<void>;
+  onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
+  onDescriptionReady: (callback: (itemId: number, description: string) => void) => () => void;
+  onError: (callback: (itemId: number, error: string) => void) => () => void;
 }
 
 /**
@@ -214,6 +245,7 @@ declare global {
     audioAPI?: AudioAPI;
     transcribeAPI?: TranscribeAPI;
     clipboardAPI?: ClipboardAPI;
+    visionAPI?: VisionAPI;
     permissionsAPI?: PermissionsAPI;
     electronAPI?: ElectronAPI;
     platform?: PlatformInfo;
