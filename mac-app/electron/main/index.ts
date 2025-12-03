@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import os from 'os';
@@ -33,6 +33,12 @@ if (process.env.EXPERIMENTAL === 'true') {
   );
   app.setPath('userData', experimentalUserData);
   app.setName('Oscar Experimental');
+}
+
+// Configure autoUpdater for manual update flow (only in production builds).
+if (!process.env.ELECTRON_START_URL) {
+  autoUpdater.autoDownload = false;
+  autoUpdater.setFeedURL({ provider: 'github', owner: 'afar1', repo: 'littleai' });
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -1050,41 +1056,65 @@ if (!gotTheLock) {
     await initAudioSystem(checkForUpdatesManual);
     await initTranscriberSystem();
 
-    // Auto-updater event handlers for logging and user notifications.
+    // Auto-updater event handlers with manual consent dialogs.
     autoUpdater.on('checking-for-update', () => {
       console.log('[Updater] Checking for updates...');
     });
 
-    autoUpdater.on('update-available', (info) => {
+    autoUpdater.on('update-available', async (info) => {
       console.log('[Updater] Update available:', info.version);
-      new Notification({
+      const { response } = await dialog.showMessageBox({
+        type: 'info',
+        buttons: ['Update', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
         title: 'Update Available',
-        body: `Version ${info.version} is downloading...`,
-      }).show();
+        message: `Oscar ${info.version} is available.`,
+        detail: 'Would you like to download it now?',
+      });
+      if (response === 0) {
+        autoUpdater.downloadUpdate();
+      }
     });
 
-    autoUpdater.on('update-not-available', (info) => {
+    autoUpdater.on('update-not-available', async () => {
       console.log('[Updater] No update available. Current version is up to date.');
+      await dialog.showMessageBox({
+        type: 'info',
+        title: 'Up to Date',
+        message: 'You have the latest version of Oscar.',
+      });
     });
 
-    autoUpdater.on('error', (err) => {
+    autoUpdater.on('error', async (err) => {
       console.error('[Updater] Error checking for updates:', err.message);
+      await dialog.showMessageBox({
+        type: 'error',
+        title: 'Update Error',
+        message: 'Could not check for updates.',
+        detail: err.message,
+      });
     });
 
     autoUpdater.on('download-progress', (progress) => {
       console.log(`[Updater] Download progress: ${Math.round(progress.percent)}%`);
     });
 
-    autoUpdater.on('update-downloaded', (info) => {
+    autoUpdater.on('update-downloaded', async (info) => {
       console.log('[Updater] Update downloaded:', info.version);
-      new Notification({
+      const { response } = await dialog.showMessageBox({
+        type: 'info',
+        buttons: ['Install and Restart', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
         title: 'Update Ready',
-        body: 'Restart Oscar to install the update.',
-      }).show();
+        message: `Oscar ${info.version} is ready to install.`,
+        detail: 'The app will restart to complete the update.',
+      });
+      if (response === 0) {
+        autoUpdater.quitAndInstall();
+      }
     });
-
-    // Check for updates and notify user if available
-    autoUpdater.checkForUpdatesAndNotify();
 
     // Check permissions on startup and notify main window
     const permissions = await checkPermissions();
