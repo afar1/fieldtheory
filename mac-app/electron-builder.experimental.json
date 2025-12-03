@@ -3,6 +3,7 @@
   "productName": "Oscar Experimental",
   "mac": {
     "category": "public.app-category.productivity",
+    "minimumSystemVersion": "13.0",
     "target": [
       "dmg",
       "zip"
