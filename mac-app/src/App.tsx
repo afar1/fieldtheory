@@ -23,6 +23,16 @@ export default function App() {
   const [isCapturingHistoryHotkey, setIsCapturingHistoryHotkey] = useState(false);
   const [hotkeyError, setHotkeyError] = useState<string | null>(null);
   
+  // Continuous Context feature settings
+  const [continuousContextEnabled, setContinuousContextEnabled] = useState(false);
+  const [continuousContextHotkey, setContinuousContextHotkey] = useState('Shift+Alt+1');
+  const [isCapturingContinuousContextHotkey, setIsCapturingContinuousContextHotkey] = useState(false);
+  const [continuousContextState, setContinuousContextState] = useState<{ active: boolean; stackId: string | null; screenshotCount: number }>({
+    active: false,
+    stackId: null,
+    screenshotCount: 0,
+  });
+  
   // Load clipboard hotkeys on mount
   useEffect(() => {
     if (window.clipboardAPI) {
@@ -30,6 +40,31 @@ export default function App() {
         setClipboardHotkeys(hotkeys);
       });
     }
+  }, []);
+  
+  // Load continuous context settings on mount and listen for state changes
+  useEffect(() => {
+    if (!window.clipboardAPI) return;
+    
+    // Load initial settings
+    window.clipboardAPI.getContinuousContextEnabled().then(enabled => {
+      setContinuousContextEnabled(enabled);
+    });
+    window.clipboardAPI.getContinuousContextHotkey().then(hotkey => {
+      setContinuousContextHotkey(hotkey);
+    });
+    window.clipboardAPI.getContinuousContextState().then(state => {
+      setContinuousContextState(state);
+    });
+    
+    // Listen for state changes
+    const unsubscribe = window.clipboardAPI.onContinuousContextChanged((state) => {
+      setContinuousContextState(state);
+    });
+    
+    return () => {
+      unsubscribe?.();
+    };
   }, []);
   
   // Helper function to build hotkey string from keyboard event (uses physical key codes)
@@ -159,9 +194,55 @@ export default function App() {
     }
   }, []);
   
-  // Capture hotkey when user is setting screenshot or history shortcut.
+  // Handler for setting continuous context hotkey
+  const handleSetContinuousContextHotkey = useCallback(async (hotkeyString: string) => {
+    setIsCapturingContinuousContextHotkey(false);
+    setHotkeyError(null);
+    
+    if (!window.clipboardAPI) return;
+    
+    // Guard invalid or modifier-only strings
+    if (!hotkeyString || isModifierOnly(hotkeyString)) {
+      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+      return;
+    }
+
+    try {
+      const success = await window.clipboardAPI.setContinuousContextHotkey(hotkeyString);
+      if (!success) {
+        setHotkeyError('Failed to register continuous context hotkey. It may be in use by another application.');
+      } else {
+        setContinuousContextHotkey(hotkeyString);
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set continuous context hotkey');
+      console.error('Failed to set continuous context hotkey:', err);
+    }
+  }, []);
+  
+  // Handler for toggling continuous context feature
+  const handleToggleContinuousContext = useCallback(async (enabled: boolean) => {
+    if (!window.clipboardAPI) return;
+    
+    try {
+      const success = await window.clipboardAPI.setContinuousContextEnabled(enabled);
+      if (success) {
+        setContinuousContextEnabled(enabled);
+      }
+    } catch (err) {
+      console.error('Failed to toggle continuous context:', err);
+    }
+  }, []);
+  
+  // Capture hotkey when user is setting screenshot, history, or continuous context shortcut.
   useEffect(() => {
-    const capturing = isCapturingScreenshotHotkey ? 'screenshot' : isCapturingHistoryHotkey ? 'history' : null;
+    const capturing = isCapturingScreenshotHotkey 
+      ? 'screenshot' 
+      : isCapturingHistoryHotkey 
+        ? 'history' 
+        : isCapturingContinuousContextHotkey 
+          ? 'continuousContext' 
+          : null;
     if (!capturing) return;
     
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -169,13 +250,19 @@ export default function App() {
       event.stopPropagation();
       const hotkeyString = buildHotkeyString(event);
       if (hotkeyString) {
-        capturing === 'screenshot' ? handleSetScreenshotHotkey(hotkeyString) : handleSetHistoryHotkey(hotkeyString);
+        if (capturing === 'screenshot') {
+          handleSetScreenshotHotkey(hotkeyString);
+        } else if (capturing === 'history') {
+          handleSetHistoryHotkey(hotkeyString);
+        } else {
+          handleSetContinuousContextHotkey(hotkeyString);
+        }
       }
     };
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isCapturingScreenshotHotkey, isCapturingHistoryHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey]);
+  }, [isCapturingScreenshotHotkey, isCapturingHistoryHotkey, isCapturingContinuousContextHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetContinuousContextHotkey]);
 
   // Check permissions on mount and when status changes
   useEffect(() => {
@@ -537,6 +624,158 @@ export default function App() {
                 lineHeight: '1.5',
               }}>
                 Supports 2-3 modifier keys + primary key (e.g., Command+Shift+Control+Space). Screenshot hotkey captures selected area and adds to prompt stack.
+              </p>
+            </div>
+          </div>
+
+          {/* Continuous Context Section */}
+          <div style={styles.settingsSection}>
+            <h3 style={styles.sectionTitle}>Continuous Context</h3>
+            <p style={{
+              fontSize: '13px',
+              color: darkMode ? '#9ca3af' : '#6b7280',
+              marginBottom: '16px',
+              marginTop: '4px',
+            }}>
+              Take multiple screenshots in a row without re-pressing the hotkey. All screenshots are stacked together, and you can transcribe while capturing.
+            </p>
+            
+            <div style={{
+              padding: '16px',
+              borderRadius: '8px',
+              backgroundColor: darkMode ? '#1a1a1a' : '#f9fafb',
+              border: `1px solid ${darkMode ? '#404040' : '#e5e7eb'}`,
+            }}>
+              {/* Enable Toggle */}
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'space-between',
+                marginBottom: '16px',
+              }}>
+                <div>
+                  <h4 style={{
+                    margin: 0,
+                    fontSize: '14px',
+                    fontWeight: 600,
+                    color: darkMode ? '#e5e5e5' : '#374151',
+                  }}>
+                    Enable Continuous Context
+                  </h4>
+                  <p style={{
+                    margin: '4px 0 0 0',
+                    fontSize: '12px',
+                    color: darkMode ? '#9ca3af' : '#6b7280',
+                  }}>
+                    Press hotkey to start, Escape to stop
+                  </p>
+                </div>
+                <button
+                  onClick={() => handleToggleContinuousContext(!continuousContextEnabled)}
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: '12px',
+                    fontWeight: 500,
+                    color: continuousContextEnabled ? '#fff' : (darkMode ? '#e5e5e5' : '#374151'),
+                    backgroundColor: continuousContextEnabled ? '#10b981' : (darkMode ? '#2d2d2d' : '#fff'),
+                    border: `1px solid ${continuousContextEnabled ? '#10b981' : (darkMode ? '#404040' : '#d1d5db')}`,
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    minWidth: '60px',
+                  }}
+                >
+                  {continuousContextEnabled ? 'On' : 'Off'}
+                </button>
+              </div>
+              
+              {/* Status Indicator - only show when active */}
+              {continuousContextState.active && (
+                <div style={{
+                  padding: '12px',
+                  marginBottom: '16px',
+                  borderRadius: '6px',
+                  backgroundColor: darkMode ? '#064e3b' : '#d1fae5',
+                  border: `1px solid ${darkMode ? '#059669' : '#10b981'}`,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{
+                      width: '8px',
+                      height: '8px',
+                      borderRadius: '50%',
+                      backgroundColor: '#10b981',
+                      animation: 'pulse 2s infinite',
+                    }} />
+                    <span style={{
+                      fontSize: '13px',
+                      fontWeight: 500,
+                      color: darkMode ? '#a7f3d0' : '#047857',
+                    }}>
+                      Continuous Context Active — {continuousContextState.screenshotCount} screenshot{continuousContextState.screenshotCount !== 1 ? 's' : ''} captured
+                    </span>
+                  </div>
+                </div>
+              )}
+              
+              {/* Hotkey Configuration */}
+              <div>
+                <label style={{
+                  display: 'block',
+                  marginBottom: '6px',
+                  fontSize: '13px',
+                  color: darkMode ? '#d1d5db' : '#6b7280',
+                }}>
+                  Continuous Context Hotkey
+                </label>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <button
+                    onClick={() => {
+                      setIsCapturingContinuousContextHotkey(true);
+                      setHotkeyError(null);
+                    }}
+                    disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey || !continuousContextEnabled}
+                    style={{
+                      padding: '6px 12px',
+                      fontSize: '12px',
+                      fontWeight: 500,
+                      color: isCapturingContinuousContextHotkey ? '#fff' : (darkMode ? '#e5e5e5' : '#374151'),
+                      backgroundColor: isCapturingContinuousContextHotkey ? '#3b82f6' : (darkMode ? '#2d2d2d' : '#fff'),
+                      border: `1px solid ${darkMode ? '#404040' : '#d1d5db'}`,
+                      borderRadius: '6px',
+                      cursor: (!continuousContextEnabled || isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey) ? 'not-allowed' : 'pointer',
+                      opacity: !continuousContextEnabled ? 0.5 : 1,
+                    }}
+                  >
+                    {isCapturingContinuousContextHotkey ? 'Press key combination...' : `Change (${continuousContextHotkey || 'Not set'})`}
+                  </button>
+                  {isCapturingContinuousContextHotkey && (
+                    <button
+                      onClick={() => {
+                        setIsCapturingContinuousContextHotkey(false);
+                        setHotkeyError(null);
+                      }}
+                      style={{
+                        padding: '6px 12px',
+                        fontSize: '12px',
+                        color: darkMode ? '#9ca3af' : '#6b7280',
+                        backgroundColor: 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </div>
+              
+              <p style={{
+                marginTop: '12px',
+                marginBottom: 0,
+                fontSize: '11px',
+                color: darkMode ? '#9ca3af' : '#6b7280',
+                lineHeight: '1.5',
+              }}>
+                When enabled, press the hotkey to start continuous screenshotting. Each screenshot is automatically saved and stacked. Press Escape during capture to stop. Transcription during capture will be added to the same stack.
               </p>
             </div>
           </div>
