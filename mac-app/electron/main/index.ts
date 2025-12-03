@@ -22,7 +22,12 @@ import {
   ClipboardIPCChannels,
   ClipboardQueryOptions,
 } from './types/clipboard';
+import {
+  VisionIPCChannels,
+} from './types/vision';
 import { ClipboardItem } from './clipboardManager';
+import { VisionModelManager, VisionModelSize } from './visionModelManager';
+import { VisionProcessor } from './visionProcessor';
 
 // Override userData path for experimental builds to isolate data from production.
 // This must happen before app.whenReady() and before any code calls app.getPath('userData').
@@ -49,6 +54,8 @@ let transcriberManager: TranscriberManager | null = null;
 let preferencesManager: PreferencesManager | null = null;
 let clipboardManager: ClipboardManager | null = null;
 let clipboardHistoryWindow: ClipboardHistoryWindow | null = null;
+let visionModelManager: VisionModelManager | null = null;
+let visionProcessor: VisionProcessor | null = null;
 
 /**
  * Create the main application window.
@@ -373,6 +380,87 @@ function setupTranscribeIPCHandlers(): void {
       return { active: false, stackId: null, targetApp: null };
     }
     return transcriberManager.getStackingMode();
+  });
+}
+
+/**
+ * Set up all IPC handlers for vision model-related communication.
+ */
+function setupVisionIPCHandlers(): void {
+  ipcMain.handle(VisionIPCChannels.GET_MODEL_STATUS, async () => {
+    if (!visionModelManager) {
+      return 'missing';
+    }
+    const selectedModel = visionModelManager.getSelectedModel();
+    const isAvailable = await visionModelManager.isModelAvailableForSize(selectedModel);
+    return isAvailable ? 'downloaded' : 'missing';
+  });
+
+  ipcMain.handle(VisionIPCChannels.DOWNLOAD_MODEL, async (_event, modelSize?: string) => {
+    if (!visionModelManager) {
+      throw new Error('VisionModelManager not initialized');
+    }
+    
+    const downloadFn = modelSize 
+      ? (onProgress?: (downloaded: number, total: number) => void) => 
+          visionModelManager!.downloadModelForSize(modelSize as VisionModelSize, onProgress)
+      : (onProgress?: (downloaded: number, total: number) => void) => 
+          visionModelManager!.downloadModel(onProgress);
+    
+    await downloadFn((downloaded, total) => {
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(
+            VisionIPCChannels.MODEL_DOWNLOAD_PROGRESS,
+            downloaded,
+            total
+          );
+        }
+      });
+    });
+  });
+
+  ipcMain.handle(VisionIPCChannels.DELETE_MODEL, async (_event, modelSize: string) => {
+    if (!visionModelManager) {
+      throw new Error('VisionModelManager not initialized');
+    }
+    const validSizes: VisionModelSize[] = ['nano'];
+    if (!validSizes.includes(modelSize as VisionModelSize)) {
+      throw new Error(`Invalid model size: ${modelSize}`);
+    }
+    return await visionModelManager.deleteModelForSize(modelSize as VisionModelSize);
+  });
+
+  ipcMain.handle(VisionIPCChannels.GET_AVAILABLE_MODELS, () => {
+    if (!visionModelManager) {
+      throw new Error('VisionModelManager not initialized');
+    }
+    return visionModelManager.getAvailableModels();
+  });
+
+  ipcMain.handle(VisionIPCChannels.GET_MODEL_DOWNLOAD_STATUS, async () => {
+    if (!visionModelManager) {
+      throw new Error('VisionModelManager not initialized');
+    }
+    return visionModelManager.getDownloadStatus();
+  });
+
+  ipcMain.handle(VisionIPCChannels.GET_SELECTED_MODEL, () => {
+    if (!visionModelManager) {
+      return 'nano';
+    }
+    return visionModelManager.getSelectedModel();
+  });
+
+  ipcMain.handle(VisionIPCChannels.SET_SELECTED_MODEL, async (_event, modelSize: string) => {
+    if (!visionModelManager) {
+      throw new Error('VisionModelManager not initialized');
+    }
+    const validSizes: VisionModelSize[] = ['nano'];
+    if (!validSizes.includes(modelSize as VisionModelSize)) {
+      throw new Error(`Invalid model size: ${modelSize}`);
+    }
+    visionModelManager.setSelectedModel(modelSize as VisionModelSize);
   });
 }
 
@@ -970,6 +1058,13 @@ async function initTranscriberSystem(): Promise<void> {
         }
       }
       
+      // Queue for vision processing if vision processor is available
+      if (visionProcessor) {
+        visionProcessor.queueImage(id).catch((error) => {
+          console.error('[Main] Failed to queue image for vision processing:', error);
+        });
+      }
+      
       // Notify all windows (including clipboard history window)
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
@@ -994,6 +1089,10 @@ async function initTranscriberSystem(): Promise<void> {
     const visible = clipboardHistoryWindow.isVisible();
 
     if (!visible) {
+      // Capture the frontmost app BEFORE showing our window.
+      // Once show() takes focus, Oscar becomes frontmost and we'd lose track of the real previous app.
+      await clipboardHistoryWindow.capturePreviousAppBeforeShow();
+      
       // Load saved bounds from preferences
       const prefs = preferencesManager?.get();
       const savedBounds = prefs?.clipboardHistoryBounds;
@@ -1030,6 +1129,64 @@ async function initTranscriberSystem(): Promise<void> {
   console.log('[Main] Transcription system initialized');
 }
 
+/**
+ * Initialize the vision system.
+ */
+async function initVisionSystem(): Promise<void> {
+  console.log('[Main] Initializing vision system...');
+
+  if (!clipboardManager) {
+    console.error('[Main] Cannot initialize vision - clipboardManager not available');
+    return;
+  }
+
+  visionModelManager = new VisionModelManager();
+  visionProcessor = new VisionProcessor(visionModelManager, clipboardManager);
+
+  // Update clipboard manager callback to include vision processing
+  // This ensures images added via clipboard polling are also processed
+  clipboardManager.setOnItemAdded((id) => {
+    // Queue for vision processing if it's an image and vision processor is available
+    if (visionProcessor) {
+      const item = clipboardManager!.getItem(id);
+      if (item && (item.type === 'image' || item.type === 'screenshot')) {
+        visionProcessor.queueImage(id).catch((error) => {
+          console.error('[Main] Failed to queue image for vision processing:', error);
+        });
+      }
+    }
+    
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
+      }
+    });
+  });
+
+  // Listen for description ready events
+  visionProcessor.on('descriptionReady', (itemId: number, description: string) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(VisionIPCChannels.DESCRIPTION_READY, itemId, description);
+        // Also send item update to refresh UI
+        window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, itemId);
+      }
+    });
+  });
+
+  // Listen for errors
+  visionProcessor.on('error', (itemId: number, error: Error) => {
+    console.error(`[Main] Vision processing error for item ${itemId}:`, error);
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(VisionIPCChannels.ERROR, itemId, error.message);
+      }
+    });
+  });
+
+  console.log('[Main] Vision system initialized');
+}
+
 // Prevent multiple instances of the app.
 const gotTheLock = app.requestSingleInstanceLock();
 
@@ -1045,6 +1202,7 @@ if (!gotTheLock) {
 
     setupIPCHandlers();
     setupTranscribeIPCHandlers();
+    setupVisionIPCHandlers();
     setupClipboardIPCHandlers();
 
     // Manual update check function for tray menu.
@@ -1055,6 +1213,7 @@ if (!gotTheLock) {
 
     await initAudioSystem(checkForUpdatesManual);
     await initTranscriberSystem();
+    await initVisionSystem();
 
     // Auto-updater event handlers with manual consent dialogs.
     autoUpdater.on('checking-for-update', () => {

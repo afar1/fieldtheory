@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import AudioSettingsPanel from './components/AudioSettingsPanel';
 import TranscriptionSettings from './components/TranscriptionSettings';
+import VisionSettings from './components/VisionSettings';
 
 export default function App() {
   const [darkMode, setDarkMode] = useState(() => {
@@ -382,6 +383,11 @@ export default function App() {
           <div style={styles.settingsSection}>
             <h3 style={styles.sectionTitle}>Transcription</h3>
             <TranscriptionSettings />
+          </div>
+
+          <div style={styles.settingsSection}>
+            <h3 style={styles.sectionTitle}>Vision</h3>
+            <VisionSettings />
           </div>
 
           <div style={styles.settingsSection}>
