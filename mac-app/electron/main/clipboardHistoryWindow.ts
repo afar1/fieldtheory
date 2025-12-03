@@ -1,9 +1,10 @@
 import { app, BrowserWindow, BrowserWindowConstructorOptions, screen } from 'electron';
 import path from 'path';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Check if an app is the Electron app itself (should be excluded from target apps).
@@ -15,9 +16,11 @@ function isElectronApp(bundleId: string, appName: string): boolean {
   
   // Check if bundle ID or name matches our app
   return (
+    bundleIdLower.includes('oscar') ||
     bundleIdLower.includes('little-one') ||
     bundleIdLower.includes('littleai') ||
     bundleIdLower.includes('electron') ||
+    appNameLower.includes('oscar') ||
     appNameLower.includes('little one') ||
     appNameLower === currentAppName ||
     bundleIdLower === process.execPath.toLowerCase()
@@ -361,6 +364,7 @@ export class ClipboardHistoryWindow {
    * Get the frontmost app's bundle ID and name using AppleScript.
    * Called before showing the clipboard history to track what app to paste into.
    * Excludes the Electron app itself - if Electron app is frontmost, returns null.
+   * Only resets selectedTargetApp on first capture to preserve user's manual selections.
    */
   async capturePreviousApp(): Promise<RunningApp | null> {
     try {
@@ -381,9 +385,17 @@ export class ClipboardHistoryWindow {
           return null;
         }
         
+        // Only reset selectedTargetApp if this is the first time capturing previousApp.
+        // This preserves user's manual target app selections when window is reopened.
+        const isFirstCapture = this.previousApp === null;
         this.previousApp = { bundleId, name };
-        // Reset selected target to previous app when window is shown.
-        this.selectedTargetApp = null;
+        
+        if (isFirstCapture) {
+          // Reset selected target to previous app only on first capture.
+          this.selectedTargetApp = null;
+        }
+        // Otherwise, preserve user's manual selection (if any).
+        
         return this.previousApp;
       }
     } catch (error) {
@@ -507,15 +519,19 @@ export class ClipboardHistoryWindow {
   /**
    * Activate (focus) a specific app by bundle ID.
    * This brings the app to the foreground.
+   * Uses execFile to prevent command injection via bundleId.
    */
   async activateApp(bundleId: string): Promise<boolean> {
     try {
-      const script = `
-        tell application id "${bundleId}"
-          activate
-        end tell
-      `;
-      await execAsync(`osascript -e '${script}'`);
+      // Validate bundleId doesn't contain quotes (bundle IDs shouldn't have them anyway)
+      if (bundleId.includes('"') || bundleId.includes("'")) {
+        console.error('[ClipboardHistoryWindow] Invalid bundleId contains quotes:', bundleId);
+        return false;
+      }
+      // Use execFile with array arguments to avoid shell interpretation
+      // This prevents command injection even if bundleId contains special characters
+      const script = `tell application id "${bundleId}"\n  activate\nend tell`;
+      await execFileAsync('osascript', ['-e', script]);
       return true;
     } catch (error) {
       console.error('[ClipboardHistoryWindow] Failed to activate app:', error);
@@ -526,23 +542,22 @@ export class ClipboardHistoryWindow {
   /**
    * Paste content to a specific app.
    * Activates the app first, then sends Cmd+V.
+   * Uses execFile to prevent command injection via bundleId.
    */
   async pasteToApp(bundleId: string): Promise<boolean> {
     try {
+      // Validate bundleId doesn't contain quotes (bundle IDs shouldn't have them anyway)
+      if (bundleId.includes('"') || bundleId.includes("'")) {
+        console.error('[ClipboardHistoryWindow] Invalid bundleId contains quotes:', bundleId);
+        return false;
+      }
       // Small delay after hiding our window to ensure focus transfer.
       await new Promise(resolve => setTimeout(resolve, 50));
       
-      // Activate the target app and paste.
-      const script = `
-        tell application id "${bundleId}"
-          activate
-        end tell
-        delay 0.1
-        tell application "System Events"
-          keystroke "v" using command down
-        end tell
-      `;
-      await execAsync(`osascript -e '${script}'`);
+      // Use execFile with array arguments to avoid shell interpretation
+      // This prevents command injection even if bundleId contains special characters
+      const script = `tell application id "${bundleId}"\n  activate\nend tell\ndelay 0.1\ntell application "System Events"\n  keystroke "v" using command down\nend tell`;
+      await execFileAsync('osascript', ['-e', script]);
       return true;
     } catch (error) {
       console.error('[ClipboardHistoryWindow] Failed to paste to app:', error);

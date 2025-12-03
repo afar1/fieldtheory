@@ -21,6 +21,7 @@ export class TrayManager {
   private tray: Tray | null = null;
   private audioManager: AudioManager;
   private showWindowCallback: (() => void) | null = null;
+  private checkForUpdatesCallback: (() => void) | null = null;
 
   constructor(audioManager: AudioManager) {
     this.audioManager = audioManager;
@@ -29,18 +30,19 @@ export class TrayManager {
   /**
    * Initialize the tray icon and set up event listeners.
    */
-  init(showWindowCallback?: () => void): void {
+  init(showWindowCallback?: () => void, checkForUpdatesCallback?: () => void): void {
     if (process.platform !== 'darwin') {
       console.log('[TrayManager] Not on macOS, skipping tray creation');
       return;
     }
 
     this.showWindowCallback = showWindowCallback || null;
+    this.checkForUpdatesCallback = checkForUpdatesCallback || null;
 
     const iconPath = this.getIconPath('disconnected');
     const icon = nativeImage.createFromPath(iconPath);
     this.tray = new Tray(icon);
-    this.tray.setToolTip('Little One');
+    this.tray.setToolTip('Oscar');
 
     this.audioManager.on('stateChanged', (state: AudioState) => {
       this.updateTray(state);
@@ -200,7 +202,7 @@ export class TrayManager {
     items.push({ type: 'separator' });
 
     items.push({
-      label: 'Open Little One App…',
+      label: 'Settings…',
       click: () => {
         if (this.showWindowCallback) {
           this.showWindowCallback();
@@ -209,7 +211,16 @@ export class TrayManager {
     });
 
     items.push({
-      label: 'Quit Little One',
+      label: 'Check for Updates…',
+      click: () => {
+        if (this.checkForUpdatesCallback) {
+          this.checkForUpdatesCallback();
+        }
+      },
+    });
+
+    items.push({
+      label: 'Quit Oscar',
       role: 'quit',
     });
 
