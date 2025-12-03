@@ -1,6 +1,6 @@
 {
   "name": "littleai-mac",
-  "version": "0.1.7",
+  "version": "0.1.9",
   "private": true,
   "main": "electron-dist/main/index.js",
   "scripts": {
@@ -53,6 +53,7 @@
     },
     "mac": {
       "category": "public.app-category.productivity",
+      "minimumSystemVersion": "13.0",
       "target": [
         "dmg",
         "zip"
