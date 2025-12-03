@@ -7,9 +7,15 @@ import {
   ActivityIndicator,
   Linking,
   Alert,
+  Platform,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Feather } from '@expo/vector-icons';
+import * as WebBrowser from 'expo-web-browser';
+
+// Status bar height for modern iPhones with notch/Dynamic Island.
+// This pushes the nav bar below the status bar area.
+const STATUS_BAR_HEIGHT = Platform.OS === 'ios' ? 54 : 0;
 
 // Cursor's agent dashboard URL.
 // This is the web interface where users can interact with Cursor's AI.
@@ -67,13 +73,23 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
         // We try multiple selectors since the UI might vary.
         const injectedJS = `
           (function() {
-            // Try to find the chat input textarea or contenteditable div.
-            // Cursor's agent page typically uses a textarea or contenteditable element.
+            // Try to find the chat input. Cursor uses various input types.
+            // Priority order: specific Cursor selectors first, then generic fallbacks.
             const selectors = [
+              // Cursor's main input field (placeholder: "Ask Cursor to build, fix bugs, explore")
+              'textarea[placeholder*="Ask Cursor"]',
+              'textarea[placeholder*="build"]',
+              'textarea[placeholder*="explore"]',
+              // Generic message inputs
               'textarea[placeholder*="message"]',
               'textarea[placeholder*="Message"]',
+              // Test IDs
               'textarea[data-testid="chat-input"]',
+              '[data-testid="chat-input"]',
+              // Contenteditable elements (React rich text editors)
+              '[contenteditable="true"][role="textbox"]',
               '[contenteditable="true"]',
+              // Generic fallbacks
               'textarea',
               'input[type="text"]'
             ];
@@ -85,22 +101,39 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
             }
             
             if (input) {
-              // For textarea or input elements
+              input.focus();
+              input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              
+              // For textarea or input elements - use native setter to bypass React
               if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
-                input.value = '${escapedText}';
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-                input.focus();
+                // Get the native value setter (React overrides this, so we grab the original)
+                const nativeSetter = Object.getOwnPropertyDescriptor(
+                  input.tagName === 'TEXTAREA' 
+                    ? window.HTMLTextAreaElement.prototype 
+                    : window.HTMLInputElement.prototype,
+                  'value'
+                ).set;
+                
+                // Call the native setter to actually set the value
+                nativeSetter.call(input, '${escapedText}');
+                
+                // Dispatch input event so React updates its state
+                const inputEvent = new Event('input', { bubbles: true });
+                input.dispatchEvent(inputEvent);
               } 
               // For contenteditable divs
               else if (input.contentEditable === 'true') {
-                input.textContent = '${escapedText}';
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-                input.focus();
+                // Use execCommand for contenteditable (works better with frameworks)
+                document.execCommand('selectAll', false, null);
+                document.execCommand('insertText', false, '${escapedText}');
               }
               
-              // Scroll the input into view
-              input.scrollIntoView({ behavior: 'smooth', block: 'center' });
               return true;
+            }
+            
+            // Fallback: copy to clipboard if we can't find the input
+            if (navigator.clipboard) {
+              navigator.clipboard.writeText('${escapedText}');
             }
             return false;
           })();
@@ -142,20 +175,9 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
       onError?.(nativeEvent.description || 'Failed to load page');
     }, [onError]);
 
-    // Handle links that should open externally (like OAuth flows).
-    const handleShouldStartLoadWithRequest = useCallback((request: any) => {
-      // Let the WebView handle most navigation internally.
-      // Only open external links in the system browser for OAuth, etc.
-      const isExternalOAuth = 
-        request.url.includes('accounts.google.com') ||
-        request.url.includes('github.com/login') ||
-        request.url.includes('auth0.com');
-
-      if (isExternalOAuth) {
-        Linking.openURL(request.url);
-        return false;
-      }
-
+    // Allow all navigation in WebView - no OAuth interception needed.
+    // Users can use the "Login in Safari" button for authentication.
+    const handleShouldStartLoadWithRequest = useCallback((_request: any) => {
       return true;
     }, []);
 
@@ -173,6 +195,14 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
     // Open current page in external browser.
     const handleOpenExternal = () => {
       Linking.openURL(currentUrl);
+    };
+
+    // Open Cursor login in Safari. User completes login there (nonce cookie + OAuth
+    // all in one place), then returns. The WebView reloads to pick up the session.
+    const handleLoginInSafari = async () => {
+      await WebBrowser.openBrowserAsync(CURSOR_AGENT_URL);
+      // Reload WebView after Safari closes to pick up session
+      webViewRef.current?.reload();
     };
 
     return (
@@ -208,6 +238,10 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
               {currentUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')}
             </Text>
           </View>
+
+          <TouchableOpacity style={styles.navButton} onPress={handleLoginInSafari}>
+            <Feather name="log-in" size={18} color="#111" />
+          </TouchableOpacity>
 
           <TouchableOpacity style={styles.navButton} onPress={handleOpenExternal}>
             <Feather name="external-link" size={18} color="#111" />
@@ -286,6 +320,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fff',
+    paddingTop: STATUS_BAR_HEIGHT,
   },
   navBar: {
     flexDirection: 'row',
