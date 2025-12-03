@@ -23,6 +23,7 @@
     "react-native-get-random-values": "^1.11.0",
     "react-native-pager-view": "6.5.1",
     "react-native-url-polyfill": "^2.0.0",
+    "react-native-webview": "^13.16.0",
     "whisper.rn": "^0.5.2"
   },
   "devDependencies": {
