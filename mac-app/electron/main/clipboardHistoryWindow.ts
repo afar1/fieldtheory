@@ -405,6 +405,33 @@ export class ClipboardHistoryWindow {
   }
 
   /**
+   * Capture the frontmost app BEFORE showing the window.
+   * Must be called before show() because once the window takes focus, Oscar becomes frontmost.
+   * Always resets selectedTargetApp since this is a fresh window open.
+   */
+  async capturePreviousAppBeforeShow(): Promise<void> {
+    try {
+      const script = `
+        tell application "System Events"
+          set frontApp to first application process whose frontmost is true
+          return (bundle identifier of frontApp) & "|" & (name of frontApp)
+        end tell
+      `;
+      const { stdout } = await execAsync(`osascript -e '${script}'`);
+      const [bundleId, name] = stdout.trim().split('|');
+      
+      if (bundleId && name && !isElectronApp(bundleId, name)) {
+        this.previousApp = { bundleId, name };
+        // Reset selected target when opening window fresh.
+        this.selectedTargetApp = null;
+        console.log(`[ClipboardHistoryWindow] Captured previous app: ${name} (${bundleId})`);
+      }
+    } catch (error) {
+      console.error('[ClipboardHistoryWindow] Failed to capture previous app:', error);
+    }
+  }
+
+  /**
    * Get the current target app (user-selected or previous app).
    * If no previous app (e.g., Electron app was frontmost), use first running app as fallback.
    */
@@ -431,14 +458,12 @@ export class ClipboardHistoryWindow {
 
   /**
    * Refresh app data in background after window is shown.
-   * Updates target app info when fresh data is available.
+   * Only refreshes running apps list - previousApp is captured before show() via
+   * capturePreviousAppBeforeShow() to avoid race condition where Oscar becomes frontmost.
    */
   private async refreshAppDataInBackground(): Promise<void> {
-    // Fetch fresh data in parallel
-    await Promise.all([
-      this.capturePreviousApp(),
-      this.getRunningApps(),
-    ]);
+    // Only refresh running apps - previousApp was captured before show().
+    await this.getRunningApps();
     
     // Send updated info to renderer
     this.sendTargetAppInfo();
@@ -489,6 +514,16 @@ export class ClipboardHistoryWindow {
             apps.push({ bundleId: bundleId.trim(), name: name.trim() });
           }
         }
+      }
+      
+      // Sort apps: put previousApp first so Tab cycling starts with the most recent app.
+      if (this.previousApp) {
+        const previousBundleId = this.previousApp.bundleId;
+        apps.sort((a, b) => {
+          if (a.bundleId === previousBundleId) return -1;
+          if (b.bundleId === previousBundleId) return 1;
+          return 0; // Preserve original order for other apps.
+        });
       }
       
       // Update cache
