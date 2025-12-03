@@ -3,7 +3,7 @@
 // Shows local clipboard history with fuzzy search and multi-select.
 // =============================================================================
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 
 type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
 
@@ -281,6 +281,50 @@ export default function ClipboardHistory() {
     };
   }, [isMacOS, loadItems]);
 
+  // Build list rows with stack grouping.
+  // Stacked items are grouped together, non-stacked items appear individually.
+  const buildListRows = useCallback((): ListRow[] => {
+    const rows: ListRow[] = [];
+    const seenStackIds = new Set<string>();
+    
+    // Process all items (no filtering)
+    for (const item of items) {
+      if (item.stackId) {
+        // This item belongs to a stack
+        if (!seenStackIds.has(item.stackId)) {
+          seenStackIds.add(item.stackId);
+          
+          // Find the stack info
+          const stackInfo = stacks.find(s => s.stackId === item.stackId);
+          if (stackInfo) {
+            // Get all items in this stack
+            const stackItems = items.filter((i: ClipboardItem) => i.stackId === item.stackId);
+            const isExpanded = expandedStacks.has(item.stackId);
+            
+            rows.push({
+              type: 'stack',
+              stack: stackInfo,
+              items: stackItems,
+              expanded: isExpanded,
+            });
+          } else {
+            // Stack info not loaded, show as individual item
+            rows.push({ type: 'item', item });
+          }
+        }
+        // If we've already seen this stack, don't add another row
+      } else {
+        // Individual item (not in a stack)
+        rows.push({ type: 'item', item });
+      }
+    }
+    
+    return rows;
+  }, [items, stacks, expandedStacks]);
+  
+  // Memoize listRows so it's available in keyboard handler
+  const listRows = useMemo(() => buildListRows(), [buildListRows]);
+
   // Handle keyboard input via standard DOM events (window is focusable).
   useEffect(() => {
     if (!isVisible) return;
@@ -311,8 +355,7 @@ export default function ClipboardHistory() {
       }
 
       if (key === 'ArrowDown') {
-        // Use filteredItems.length since listRows isn't available in this scope
-        setSelectedIndex(prev => Math.min(prev + 1, filteredItems.length - 1));
+        setSelectedIndex(prev => Math.min(prev + 1, listRows.length - 1));
         return;
       }
 
@@ -326,15 +369,24 @@ export default function ClipboardHistory() {
         const targetBundleId = targetAppInfo.targetApp?.bundleId;
         
         if (selectedIds.size > 0) {
-          // Paste stack - for now, paste to default target (stack paste doesn't support custom target yet).
+          // Paste multi-selected items
           window.clipboardAPI?.pasteStack(Array.from(selectedIds));
           window.clipboardAPI?.closeWindow();
           setSelectedIds(new Set());
           setIsMultiSelect(false);
-        } else if (items[selectedIndex]) {
-          // Paste single item to target app.
-          window.clipboardAPI?.pasteItem(items[selectedIndex].id, targetBundleId);
-          window.clipboardAPI?.closeWindow();
+        } else {
+          // Check what type of row is selected
+          const selectedRow = listRows[selectedIndex];
+          if (selectedRow?.type === 'stack') {
+            // Paste all items in the stack
+            const itemIds = selectedRow.items.map(i => i.id);
+            window.clipboardAPI?.pasteStack(itemIds);
+            window.clipboardAPI?.closeWindow();
+          } else if (selectedRow?.type === 'item') {
+            // Paste single item to target app
+            window.clipboardAPI?.pasteItem(selectedRow.item.id, targetBundleId);
+            window.clipboardAPI?.closeWindow();
+          }
         }
         return;
       }
@@ -342,13 +394,27 @@ export default function ClipboardHistory() {
       if (key === 'Enter' && hasShift) {
         // Toggle multi-select mode
         setIsMultiSelect(true);
-        if (items[selectedIndex]) {
+        const selectedRow = listRows[selectedIndex];
+        if (selectedRow?.type === 'item') {
           setSelectedIds(prev => {
             const next = new Set(prev);
-            if (next.has(items[selectedIndex].id)) {
-              next.delete(items[selectedIndex].id);
+            if (next.has(selectedRow.item.id)) {
+              next.delete(selectedRow.item.id);
             } else {
-              next.add(items[selectedIndex].id);
+              next.add(selectedRow.item.id);
+            }
+            return next;
+          });
+        } else if (selectedRow?.type === 'stack') {
+          // For stacks, toggle all items in the stack
+          const stackItemIds = selectedRow.items.map(i => i.id);
+          setSelectedIds(prev => {
+            const next = new Set(prev);
+            const allSelected = stackItemIds.every(id => next.has(id));
+            if (allSelected) {
+              stackItemIds.forEach(id => next.delete(id));
+            } else {
+              stackItemIds.forEach(id => next.add(id));
             }
             return next;
           });
@@ -357,9 +423,15 @@ export default function ClipboardHistory() {
       }
 
       if (key === 'Backspace' && (hasMeta || hasCtrl)) {
-        // Delete selected item
-        if (items[selectedIndex]) {
-          window.clipboardAPI?.deleteItem(items[selectedIndex].id);
+        // Delete selected item or stack
+        const selectedRow = listRows[selectedIndex];
+        if (selectedRow?.type === 'item') {
+          window.clipboardAPI?.deleteItem(selectedRow.item.id);
+        } else if (selectedRow?.type === 'stack') {
+          // Delete all items in the stack
+          selectedRow.items.forEach(item => {
+            window.clipboardAPI?.deleteItem(item.id);
+          });
         }
         return;
       }
@@ -404,7 +476,7 @@ export default function ClipboardHistory() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows]);
 
   // Scroll selected item into view.
   useEffect(() => {
@@ -553,49 +625,6 @@ export default function ClipboardHistory() {
     return null;
   }
 
-  // Build list rows with stack grouping.
-  // Stacked items are grouped together, non-stacked items appear individually.
-  const buildListRows = (): ListRow[] => {
-    const rows: ListRow[] = [];
-    const seenStackIds = new Set<string>();
-    
-    // Process all items (no filtering)
-    for (const item of items) {
-      if (item.stackId) {
-        // This item belongs to a stack
-        if (!seenStackIds.has(item.stackId)) {
-          seenStackIds.add(item.stackId);
-          
-          // Find the stack info
-          const stackInfo = stacks.find(s => s.stackId === item.stackId);
-          if (stackInfo) {
-            // Get all items in this stack
-            const stackItems = items.filter((i: ClipboardItem) => i.stackId === item.stackId);
-            const isExpanded = expandedStacks.has(item.stackId);
-            
-            rows.push({
-              type: 'stack',
-              stack: stackInfo,
-              items: stackItems,
-              expanded: isExpanded,
-            });
-          } else {
-            // Stack info not loaded, show as individual item
-            rows.push({ type: 'item', item });
-          }
-        }
-        // If we've already seen this stack, don't add another row
-      } else {
-        // Individual item (not in a stack)
-        rows.push({ type: 'item', item });
-      }
-    }
-    
-    return rows;
-  };
-  
-  const listRows = buildListRows();
-  
   // All items are shown (no filtering)
   const filteredItems = items;
 

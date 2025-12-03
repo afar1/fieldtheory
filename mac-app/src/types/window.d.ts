@@ -58,6 +58,7 @@ interface TranscribeAPI {
   getStatus: () => Promise<TranscriptionStatus>;
   getModelStatus: () => Promise<ModelStatus>;
   downloadModel: (modelSize?: string) => Promise<void>;
+  deleteModel: (modelSize: string) => Promise<boolean>;
   getAvailableModels: () => Promise<Record<string, ModelInfo>>;
   getModelDownloadStatus: () => Promise<Record<string, boolean>>;
   getSelectedModel: () => Promise<string>;
