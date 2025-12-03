@@ -25,6 +25,7 @@ import { ensureModelAvailable } from './services/modelService';
 import PagerView from 'react-native-pager-view';
 import { TodoList } from './components/TodoList';
 import { ObservationList } from './components/ObservationList';
+import { CursorBrowser, CursorBrowserHandle } from './components/CursorBrowser';
 import { StorageService } from './services/storage';
 import { processTranscription } from './services/llm';
 import { Todo, Observation, Settings, TranscriptEntry } from './types';
@@ -124,6 +125,7 @@ export default function App() {
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   type PagerRef = React.ComponentRef<typeof PagerView>;
   const pagerRef = useRef<PagerRef>(null);
+  const cursorBrowserRef = useRef<CursorBrowserHandle>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [authEmail, setAuthEmail] = useState('');
@@ -683,6 +685,20 @@ export default function App() {
     ]);
   };
 
+  // Send transcribed text to Cursor's agent dashboard.
+  // This pastes the text into Cursor's input field and switches to the browser view.
+  const handleSendToCursor = useCallback((text: string) => {
+    // Paste the text into Cursor's input field.
+    cursorBrowserRef.current?.pasteText(text);
+    
+    // Switch to the Cursor browser page (index 3 in the pager).
+    pagerRef.current?.setPage(3);
+    setPageIndex(3);
+    
+    // Provide haptic feedback.
+    Vibration.vibrate();
+  }, []);
+
   const renderTranscriptItem = ({ item }: { item: TranscriptEntry }) => {
     const isExpanded = Boolean(expandedMap[item.id]);
     const isCopied = copiedId === item.id;
@@ -691,6 +707,11 @@ export default function App() {
     const handleExpandPress = (event: GestureResponderEvent) => {
       event.stopPropagation();
       handleToggleExpand(item.id);
+    };
+
+    const handleSendToCursorPress = (event: GestureResponderEvent) => {
+      event.stopPropagation();
+      handleSendToCursor(item.text);
     };
 
     return (
@@ -714,15 +735,25 @@ export default function App() {
         >
           {item.text}
         </Text>
-        {shouldShowExpand && (
+        <View style={styles.transcriptActions}>
+          {shouldShowExpand && (
+            <TouchableOpacity
+              onPress={handleExpandPress}
+              hitSlop={8}
+              style={styles.expandButton}
+            >
+              <Text style={styles.expandButtonText}>{isExpanded ? 'Show less' : 'Expand'}</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
-            onPress={handleExpandPress}
+            onPress={handleSendToCursorPress}
             hitSlop={8}
-            style={styles.expandButton}
+            style={styles.sendToCursorButton}
           >
-            <Text style={styles.expandButtonText}>{isExpanded ? 'Show less' : 'Expand'}</Text>
+            <Feather name="terminal" size={14} color="#059669" />
+            <Text style={styles.sendToCursorText}>Send to Cursor</Text>
           </TouchableOpacity>
-        )}
+        </View>
       </Pressable>
     );
   };
@@ -880,6 +911,9 @@ export default function App() {
             refreshing={isPullRecording}
           />
         </View>
+        <View key="cursor" style={styles.pageContainer}>
+          <CursorBrowser ref={cursorBrowserRef} />
+        </View>
       </PagerView>
 
       {/* NEW BOTTOM BAR LAYOUT */}
@@ -891,7 +925,7 @@ export default function App() {
         >
           <Feather 
             name="file-text" 
-            size={24} 
+            size={22} 
             color={pageIndex === 0 ? '#007AFF' : '#9CA3AF'} 
           />
         </TouchableOpacity>
@@ -903,7 +937,7 @@ export default function App() {
         >
           <Feather 
             name="check-square" 
-            size={24} 
+            size={22} 
             color={pageIndex === 1 ? '#007AFF' : '#9CA3AF'} 
           />
         </TouchableOpacity>
@@ -934,8 +968,20 @@ export default function App() {
         >
           <Feather 
             name="eye" 
-            size={24} 
+            size={22} 
             color={pageIndex === 2 ? '#007AFF' : '#9CA3AF'} 
+          />
+        </TouchableOpacity>
+
+        {/* Cursor Tab */}
+        <TouchableOpacity 
+          style={styles.tabButton} 
+          onPress={() => pagerRef.current?.setPage(3)}
+        >
+          <Feather 
+            name="terminal" 
+            size={22} 
+            color={pageIndex === 3 ? '#007AFF' : '#9CA3AF'} 
           />
         </TouchableOpacity>
 
@@ -946,7 +992,7 @@ export default function App() {
         >
           <Feather 
             name="settings" 
-            size={24} 
+            size={22} 
             color="#9CA3AF" 
           />
         </TouchableOpacity>
@@ -1354,8 +1400,13 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: '#111',
   },
-  expandButton: {
+  transcriptActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginTop: 10,
+    gap: 8,
+  },
+  expandButton: {
     alignSelf: 'flex-start',
     paddingHorizontal: 8,
     paddingVertical: 4,
@@ -1366,6 +1417,20 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#4338CA',
+  },
+  sendToCursorButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: '#ECFDF5',
+    gap: 5,
+  },
+  sendToCursorText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#059669',
   },
   errorBoundaryContainer: {
     flex: 1,
