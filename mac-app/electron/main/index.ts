@@ -21,6 +21,7 @@ import {
 import {
   ClipboardIPCChannels,
   ClipboardQueryOptions,
+  ContinuousContextState,
 } from './types/clipboard';
 import {
   VisionIPCChannels,
@@ -861,6 +862,65 @@ function setupClipboardIPCHandlers(): void {
       }
     }
   });
+
+  // =========================================================================
+  // Continuous Context Mode IPC Handlers
+  // =========================================================================
+
+  ipcMain.handle(ClipboardIPCChannels.GET_CONTINUOUS_CONTEXT_STATE, async () => {
+    if (!clipboardManager) {
+      return { active: false, stackId: null, screenshotCount: 0 };
+    }
+    return clipboardManager.getContinuousContextState();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.GET_CONTINUOUS_CONTEXT_ENABLED, async () => {
+    if (!clipboardManager) {
+      return false;
+    }
+    return clipboardManager.isContinuousContextEnabled();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SET_CONTINUOUS_CONTEXT_ENABLED, async (_event, enabled: boolean) => {
+    if (!clipboardManager || !preferencesManager) {
+      return false;
+    }
+    clipboardManager.setContinuousContextEnabled(enabled);
+    await preferencesManager.save({ continuousContextEnabled: enabled });
+    return true;
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.GET_CONTINUOUS_CONTEXT_HOTKEY, async () => {
+    if (!clipboardManager) {
+      return 'Shift+Alt+1';
+    }
+    return clipboardManager.getContinuousContextHotkey();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SET_CONTINUOUS_CONTEXT_HOTKEY, async (_event, hotkey: string) => {
+    if (!clipboardManager || !preferencesManager) {
+      return false;
+    }
+    const success = clipboardManager.setContinuousContextHotkey(hotkey);
+    if (success) {
+      await preferencesManager.save({ continuousContextHotkey: hotkey });
+    }
+    return success;
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.START_CONTINUOUS_CONTEXT, async () => {
+    if (!clipboardManager) {
+      return;
+    }
+    await clipboardManager.startContinuousContext();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.STOP_CONTINUOUS_CONTEXT, async () => {
+    if (!clipboardManager) {
+      return;
+    }
+    clipboardManager.stopContinuousContext();
+  });
 }
 
 
@@ -1018,6 +1078,53 @@ async function initTranscriberSystem(): Promise<void> {
     prefs.clipboardScreenshotHotkey,
     prefs.clipboardHistoryHotkey
   );
+  
+  // Load continuous context preferences
+  clipboardManager.loadContinuousContextFromPreferences(
+    prefs.continuousContextEnabled,
+    prefs.continuousContextHotkey
+  );
+  
+  // Listen for continuous context state changes and broadcast to renderer
+  clipboardManager.on('continuousContextChanged', (state: ContinuousContextState) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(ClipboardIPCChannels.CONTINUOUS_CONTEXT_CHANGED, state);
+      }
+    });
+  });
+  
+  // When continuous context captures a screenshot, notify all windows
+  clipboardManager.on('continuousContextScreenshot', (itemId: number) => {
+    // Queue for vision processing if available
+    if (visionProcessor) {
+      visionProcessor.queueImage(itemId).catch((error) => {
+        console.error('[Main] Failed to queue continuous context image for vision:', error);
+      });
+    }
+    
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, itemId);
+      }
+    });
+  });
+  
+  // Register continuous context hotkey if enabled
+  if (prefs.continuousContextEnabled) {
+    clipboardManager.registerContinuousContextHotkey(async () => {
+      if (!clipboardManager) return;
+      
+      const state = clipboardManager.getContinuousContextState();
+      if (state.active) {
+        // If already active, stop it
+        clipboardManager.stopContinuousContext();
+      } else {
+        // Start continuous context mode
+        await clipboardManager.startContinuousContext();
+      }
+    });
+  }
   
   // Register clipboard hotkeys
   clipboardManager.registerScreenshotHotkey(async () => {
