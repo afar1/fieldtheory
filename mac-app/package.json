@@ -1,6 +1,6 @@
 {
   "name": "littleai-mac",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "private": true,
   "main": "electron-dist/main/index.js",
   "scripts": {
@@ -26,6 +26,7 @@
     "@supabase/supabase-js": "^2.45.3",
     "@types/better-sqlite3": "^7.6.13",
     "better-sqlite3": "^12.5.0",
+    "electron-updater": "^6.6.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -43,8 +44,13 @@
     "wait-on": "^7.2.0"
   },
   "build": {
-    "appId": "com.littleone.mac",
-    "productName": "Little One",
+    "appId": "com.oscar.app",
+    "productName": "Oscar",
+    "publish": {
+      "provider": "github",
+      "owner": "afar1",
+      "repo": "littleai"
+    },
     "mac": {
       "category": "public.app-category.productivity",
       "target": [
@@ -64,7 +70,7 @@
           "to": "assets"
         },
         {
-          "from": "../../build-whisper/bin/whisper-cli",
+          "from": "../build-whisper/bin/whisper-cli",
           "to": "whisper-cli"
         }
       ]

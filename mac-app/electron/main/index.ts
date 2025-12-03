@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, clipboard, screen, Display } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification } from 'electron';
+import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import os from 'os';
 import { NativeHelper } from './nativeHelper';
@@ -28,10 +29,10 @@ import { ClipboardItem } from './clipboardManager';
 if (process.env.EXPERIMENTAL === 'true') {
   const experimentalUserData = path.join(
     os.homedir(),
-    'Library/Application Support/Little One Experimental'
+    'Library/Application Support/Oscar Experimental'
   );
   app.setPath('userData', experimentalUserData);
-  app.setName('Little One Experimental');
+  app.setName('Oscar Experimental');
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -53,16 +54,16 @@ function createWindow(): void {
 
   // Load saved window state from preferences
   const savedState = preferencesManager?.get().windowState;
-  const defaultWidth = 1200;
-  const defaultHeight = 800;
+  const defaultWidth = 800;
+  const defaultHeight = 600;
 
   mainWindow = new BrowserWindow({
     width: savedState?.width || defaultWidth,
     height: savedState?.height || defaultHeight,
     x: savedState?.x,
     y: savedState?.y,
-    minWidth: 600,  // Reduced from 900 - allows single column layout
-    minHeight: 400, // Reduced from 600 - more compact
+    minWidth: 500,  // Settings panel doesn't need to be too wide
+    minHeight: 400, // More compact for settings
     backgroundColor: '#f5f5f5',
     titleBarStyle: 'hiddenInset', // Modern macOS style with traffic lights in content.
     webPreferences: {
@@ -277,6 +278,18 @@ function setupTranscribeIPCHandlers(): void {
         }
       });
     });
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.DELETE_MODEL, async (_event, modelSize: string) => {
+    if (!transcriberManager) {
+      throw new Error('TranscriberManager not initialized');
+    }
+    const modelManager = transcriberManager.getModelManager();
+    const validSizes: ModelSize[] = ['base', 'small', 'medium', 'large'];
+    if (!validSizes.includes(modelSize as ModelSize)) {
+      throw new Error(`Invalid model size: ${modelSize}`);
+    }
+    return await modelManager.deleteModelForSize(modelSize as ModelSize);
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_AVAILABLE_MODELS, () => {
@@ -846,7 +859,7 @@ function broadcastStateChanged(): void {
  * Initialize the audio management system.
  * This sets up the native helper, audio manager, and tray integration.
  */
-async function initAudioSystem(): Promise<void> {
+async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<void> {
   console.log('[Main] Initializing audio system...');
 
   // Initialize preferences manager first to load saved priority device
@@ -872,7 +885,7 @@ async function initAudioSystem(): Promise<void> {
   await audioManager.init();
 
   trayManager = new TrayManager(audioManager);
-  trayManager.init(showMainWindow);
+  trayManager.init(showMainWindow, checkForUpdatesCallback);
 
   console.log('[Main] Audio system initialized');
 }
@@ -1027,8 +1040,51 @@ if (!gotTheLock) {
     setupIPCHandlers();
     setupTranscribeIPCHandlers();
     setupClipboardIPCHandlers();
-    await initAudioSystem();
+
+    // Manual update check function for tray menu.
+    function checkForUpdatesManual(): void {
+      console.log('[Updater] Manual update check triggered');
+      autoUpdater.checkForUpdates();
+    }
+
+    await initAudioSystem(checkForUpdatesManual);
     await initTranscriberSystem();
+
+    // Auto-updater event handlers for logging and user notifications.
+    autoUpdater.on('checking-for-update', () => {
+      console.log('[Updater] Checking for updates...');
+    });
+
+    autoUpdater.on('update-available', (info) => {
+      console.log('[Updater] Update available:', info.version);
+      new Notification({
+        title: 'Update Available',
+        body: `Version ${info.version} is downloading...`,
+      }).show();
+    });
+
+    autoUpdater.on('update-not-available', (info) => {
+      console.log('[Updater] No update available. Current version is up to date.');
+    });
+
+    autoUpdater.on('error', (err) => {
+      console.error('[Updater] Error checking for updates:', err.message);
+    });
+
+    autoUpdater.on('download-progress', (progress) => {
+      console.log(`[Updater] Download progress: ${Math.round(progress.percent)}%`);
+    });
+
+    autoUpdater.on('update-downloaded', (info) => {
+      console.log('[Updater] Update downloaded:', info.version);
+      new Notification({
+        title: 'Update Ready',
+        body: 'Restart Oscar to install the update.',
+      }).show();
+    });
+
+    // Check for updates and notify user if available
+    autoUpdater.checkForUpdatesAndNotify();
 
     // Check permissions on startup and notify main window
     const permissions = await checkPermissions();

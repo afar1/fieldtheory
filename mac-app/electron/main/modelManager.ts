@@ -52,7 +52,7 @@ const MODELS: Record<ModelSize, ModelInfo> = {
 
 /**
  * Manages Whisper model downloads and storage.
- * Models are stored in ~/Library/Application Support/Little One/models/
+ * Models are stored in ~/Library/Application Support/Oscar/models/
  */
 export class ModelManager {
   private modelsDir: string;
@@ -291,6 +291,25 @@ export class ModelManager {
       };
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Delete a specific model file.
+   * Returns true if the file was deleted, false if it didn't exist.
+   */
+  async deleteModelForSize(size: ModelSize): Promise<boolean> {
+    try {
+      const modelPath = this.getModelPathForSize(size);
+      await fs.unlink(modelPath);
+      console.log(`[ModelManager] Deleted model ${size}`);
+      return true;
+    } catch (error: any) {
+      if (error.code === 'ENOENT') {
+        // File doesn't exist, that's fine
+        return false;
+      }
+      throw error;
     }
   }
 }

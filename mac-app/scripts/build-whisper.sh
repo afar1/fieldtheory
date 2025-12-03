@@ -14,11 +14,12 @@ echo "Repo root: $REPO_ROOT"
 # Build directory
 BUILD_DIR="build-whisper"
 
-# Configure with Metal enabled
+# Configure with Metal enabled and static linking
 cmake -B "$BUILD_DIR" \
   -DGGML_METAL=ON \
   -DWHISPER_BUILD_EXAMPLES=ON \
-  -DCMAKE_BUILD_TYPE=Release
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=OFF
 
 # Build only the whisper-cli target
 cmake --build "$BUILD_DIR" --target whisper-cli -j

@@ -31,6 +31,9 @@ export default function TranscriptionSettings() {
   const [selectedModel, setSelectedModel] = useState<string>('base');
   const [modelDownloadStatus, setModelDownloadStatus] = useState<Record<string, boolean>>({});
   const [overlayStyle, setOverlayStyle] = useState<'rectangle' | 'top-emerging'>('rectangle');
+  const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
+  const [deletingModel, setDeletingModel] = useState<string | null>(null);
+  const [modelDownloadProgress, setModelDownloadProgress] = useState<Record<string, { downloaded: number; total: number }>>({});
 
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
 
@@ -82,6 +85,16 @@ export default function TranscriptionSettings() {
 
     const unsubscribeProgress = window.transcribeAPI!.onModelDownloadProgress((downloaded, total) => {
       setDownloadProgress({ downloaded, total });
+      // Also track progress for the currently downloading model
+      setModelDownloadProgress(prev => {
+        if (downloadingModel) {
+          return {
+            ...prev,
+            [downloadingModel]: { downloaded, total },
+          };
+        }
+        return prev;
+      });
     });
 
     const unsubscribeHotkey = window.transcribeAPI!.onHotkeyChanged((newHotkey) => {
@@ -95,7 +108,7 @@ export default function TranscriptionSettings() {
       unsubscribeProgress();
       unsubscribeHotkey();
     };
-  }, [isMacOS]);
+  }, [isMacOS, downloadingModel]);
 
   // Handler for downloading the model.
   const handleDownloadModel = useCallback(async () => {
@@ -121,6 +134,31 @@ export default function TranscriptionSettings() {
     }
   }, [isDownloading, selectedModel]);
 
+  // Handler for downloading a specific model.
+  const handleDownloadModelForSize = useCallback(async (modelSize: string) => {
+    if (!window.transcribeAPI || downloadingModel) return;
+
+    setDownloadingModel(modelSize);
+    setError(null);
+
+    try {
+      await window.transcribeAPI.downloadModel(modelSize);
+      // Refresh download status for all models
+      const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
+      setModelDownloadStatus(downloadStatus);
+      setModelDownloadProgress(prev => {
+        const next = { ...prev };
+        delete next[modelSize];
+        return next;
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Failed to download ${modelSize} model`);
+      console.error(`Failed to download ${modelSize} model:`, err);
+    } finally {
+      setDownloadingModel(null);
+    }
+  }, [downloadingModel]);
+
   // Handler for changing the selected model.
   const handleModelChange = useCallback(async (newModel: string) => {
     if (!window.transcribeAPI || isDownloading) return;
@@ -141,6 +179,42 @@ export default function TranscriptionSettings() {
       setError(err instanceof Error ? err.message : 'Failed to change model');
     }
   }, [isDownloading]);
+
+  // Handler for deleting a specific model.
+  const handleDeleteModel = useCallback(async (modelSize: string) => {
+    if (!window.transcribeAPI || deletingModel) return;
+
+    // Don't allow deleting the currently selected model if it's the only one downloaded
+    const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
+    const downloadedCount = Object.values(downloadStatus).filter(Boolean).length;
+    if (modelSize === selectedModel && downloadedCount === 1) {
+      setError('Cannot delete the only downloaded model. Please download another model first.');
+      return;
+    }
+
+    setDeletingModel(modelSize);
+    setError(null);
+
+    try {
+      await window.transcribeAPI.deleteModel(modelSize);
+      // Refresh download status for all models
+      const newDownloadStatus = await window.transcribeAPI.getModelDownloadStatus();
+      setModelDownloadStatus(newDownloadStatus);
+      
+      // If we deleted the selected model, switch to another downloaded model or base
+      if (modelSize === selectedModel) {
+        const availableModel = Object.entries(newDownloadStatus).find(([size, downloaded]) => 
+          downloaded && size !== modelSize
+        )?.[0] || 'base';
+        await handleModelChange(availableModel);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Failed to delete ${modelSize} model`);
+      console.error(`Failed to delete ${modelSize} model:`, err);
+    } finally {
+      setDeletingModel(null);
+    }
+  }, [deletingModel, selectedModel, handleModelChange]);
 
   // Handler for changing overlay style.
   const handleOverlayStyleChange = useCallback(async (newStyle: 'rectangle' | 'top-emerging') => {
@@ -393,15 +467,15 @@ export default function TranscriptionSettings() {
         <h3 style={styles.subheading}>Model Management</h3>
         <p style={styles.helpText}>
           Select a Whisper model size. Larger models provide better accuracy but require more disk space and processing time.
-          Models are downloaded to your app data directory.
+          Models are downloaded to your app data directory. You can delete and redownload any model at any time.
         </p>
 
         <div style={styles.modelSelector}>
-          <label style={styles.label}>Model Size:</label>
+          <label style={styles.label}>Selected Model:</label>
           <select
             value={selectedModel}
             onChange={(e) => handleModelChange(e.target.value)}
-            disabled={isDownloading}
+            disabled={isDownloading || downloadingModel !== null}
             style={styles.select}
           >
             {Object.entries(availableModels).map(([size, info]) => {
@@ -415,37 +489,90 @@ export default function TranscriptionSettings() {
           </select>
         </div>
 
-        {modelStatus === 'missing' && (
-          <button
-            onClick={handleDownloadModel}
-            disabled={isDownloading}
-            style={styles.downloadButton}
-          >
-            {isDownloading ? 'Downloading...' : `Download ${availableModels[selectedModel]?.description || 'Model'}`}
-          </button>
-        )}
+        {/* List of all models with actions */}
+        <div style={styles.modelsList}>
+          {Object.entries(availableModels).map(([size, info]) => {
+            const isDownloaded = modelDownloadStatus[size] || false;
+            const isSelected = size === selectedModel;
+            const isDownloadingThis = downloadingModel === size;
+            const isDeletingThis = deletingModel === size;
+            const progress = modelDownloadProgress[size];
+            const progressPercent = progress ? Math.round((progress.downloaded / progress.total) * 100) : 0;
 
-        {modelStatus === 'downloading' && downloadProgress && (
-          <div style={styles.progressContainer}>
-            <div style={styles.progressBar}>
-              <div
-                style={{
-                  ...styles.progressFill,
-                  width: `${downloadPercent}%`,
-                }}
-              />
-            </div>
-            <p style={styles.progressText}>
-              {downloadPercent}% ({Math.round(downloadProgress.downloaded / 1024 / 1024)}MB / {Math.round(downloadProgress.total / 1024 / 1024)}MB)
-            </p>
-          </div>
-        )}
-
-        {modelStatus === 'downloaded' && (
-          <p style={styles.successText}>
-            ✓ Model downloaded and ready to use.
-          </p>
-        )}
+            return (
+              <div key={size} style={{
+                ...styles.modelItem,
+                backgroundColor: isSelected ? '#f0f9ff' : '#f9fafb',
+                borderColor: isSelected ? '#3b82f6' : '#e5e7eb',
+              }}>
+                <div style={styles.modelItemHeader}>
+                  <div>
+                    <div style={styles.modelItemName}>
+                      {info.description}
+                      {isSelected && <span style={styles.selectedBadge}>Selected</span>}
+                      {isDownloaded && !isSelected && <span style={styles.downloadedBadge}>Downloaded</span>}
+                    </div>
+                    <div style={styles.modelItemSize}>
+                      {(info.sizeBytes / 1024 / 1024).toFixed(0)}MB
+                    </div>
+                  </div>
+                  <div style={styles.modelItemActions}>
+                    {isDownloaded ? (
+                      <>
+                        <button
+                          onClick={() => handleDeleteModel(size)}
+                          disabled={isDeletingThis || isDownloadingThis || (isSelected && Object.values(modelDownloadStatus).filter(Boolean).length === 1)}
+                          style={{
+                            ...styles.deleteButton,
+                            opacity: (isDeletingThis || isDownloadingThis || (isSelected && Object.values(modelDownloadStatus).filter(Boolean).length === 1)) ? 0.5 : 1,
+                          }}
+                        >
+                          {isDeletingThis ? 'Deleting...' : 'Delete'}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteModel(size).then(() => handleDownloadModelForSize(size))}
+                          disabled={isDeletingThis || isDownloadingThis}
+                          style={{
+                            ...styles.redownloadButton,
+                            opacity: (isDeletingThis || isDownloadingThis) ? 0.5 : 1,
+                          }}
+                        >
+                          Redownload
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => handleDownloadModelForSize(size)}
+                        disabled={isDownloadingThis || downloadingModel !== null}
+                        style={{
+                          ...styles.downloadButtonSmall,
+                          opacity: (isDownloadingThis || downloadingModel !== null) ? 0.5 : 1,
+                        }}
+                      >
+                        {isDownloadingThis ? 'Downloading...' : 'Download'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {isDownloadingThis && progress && (
+                  <div style={styles.progressContainer}>
+                    <div style={styles.progressBar}>
+                      <div
+                        style={{
+                          ...styles.progressFill,
+                          width: `${progressPercent}%`,
+                        }}
+                      />
+                    </div>
+                    <p style={styles.progressText}>
+                      {progressPercent}% ({Math.round(progress.downloaded / 1024 / 1024)}MB / {Math.round(progress.total / 1024 / 1024)}MB)
+                    </p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Usage instructions */}
@@ -537,6 +664,16 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: '#111827',
     border: 'none',
     borderRadius: '8px',
+    cursor: 'pointer',
+  },
+  downloadButtonSmall: {
+    padding: '6px 12px',
+    fontSize: '13px',
+    fontWeight: 500,
+    color: '#fff',
+    backgroundColor: '#111827',
+    border: 'none',
+    borderRadius: '6px',
     cursor: 'pointer',
   },
   progressContainer: {
@@ -638,6 +775,78 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: '8px',
     backgroundColor: '#fff',
     color: '#111827',
+    cursor: 'pointer',
+  },
+  modelsList: {
+    marginTop: '16px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+  },
+  modelItem: {
+    padding: '16px',
+    borderRadius: '8px',
+    border: '1px solid #e5e7eb',
+    backgroundColor: '#f9fafb',
+  },
+  modelItemHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: '16px',
+  },
+  modelItemName: {
+    fontSize: '15px',
+    fontWeight: 500,
+    color: '#111827',
+    marginBottom: '4px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  modelItemSize: {
+    fontSize: '13px',
+    color: '#6b7280',
+  },
+  modelItemActions: {
+    display: 'flex',
+    gap: '8px',
+    flexShrink: 0,
+  },
+  selectedBadge: {
+    fontSize: '11px',
+    fontWeight: 500,
+    color: '#3b82f6',
+    backgroundColor: '#dbeafe',
+    padding: '2px 8px',
+    borderRadius: '4px',
+  },
+  downloadedBadge: {
+    fontSize: '11px',
+    fontWeight: 500,
+    color: '#22c55e',
+    backgroundColor: '#dcfce7',
+    padding: '2px 8px',
+    borderRadius: '4px',
+  },
+  deleteButton: {
+    padding: '6px 12px',
+    fontSize: '13px',
+    fontWeight: 500,
+    color: '#dc2626',
+    backgroundColor: '#fff',
+    border: '1px solid #fecaca',
+    borderRadius: '6px',
+    cursor: 'pointer',
+  },
+  redownloadButton: {
+    padding: '6px 12px',
+    fontSize: '13px',
+    fontWeight: 500,
+    color: '#111827',
+    backgroundColor: '#fff',
+    border: '1px solid #d1d5db',
+    borderRadius: '6px',
     cursor: 'pointer',
   },
 };

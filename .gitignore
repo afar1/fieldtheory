@@ -121,3 +121,5 @@ npm-debug.*
 
 # Electron build outputs
 mac-app/electron-dist/
+mac-app/release/
+mac-app/assets/

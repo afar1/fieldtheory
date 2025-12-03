@@ -13,6 +13,7 @@ const TranscribeIPCChannels = {
   GET_STATUS: 'transcribe:getStatus',
   GET_MODEL_STATUS: 'transcribe:getModelStatus',
   DOWNLOAD_MODEL: 'transcribe:downloadModel',
+  DELETE_MODEL: 'transcribe:deleteModel',
   GET_AVAILABLE_MODELS: 'transcribe:getAvailableModels',
   GET_MODEL_DOWNLOAD_STATUS: 'transcribe:getModelDownloadStatus',
   GET_SELECTED_MODEL: 'transcribe:getSelectedModel',
@@ -145,6 +146,7 @@ export interface TranscribeAPI {
   getStatus: () => Promise<TranscriptionStatus>;
   getModelStatus: () => Promise<ModelStatus>;
   downloadModel: (modelSize?: string) => Promise<void>;
+  deleteModel: (modelSize: string) => Promise<boolean>;
   getAvailableModels: () => Promise<Record<string, ModelInfo>>;
   getModelDownloadStatus: () => Promise<Record<string, boolean>>;
   getSelectedModel: () => Promise<string>;
@@ -243,6 +245,10 @@ const transcribeAPI: TranscribeAPI = {
 
   downloadModel: async (modelSize?: string): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.DOWNLOAD_MODEL, modelSize);
+  },
+
+  deleteModel: async (modelSize: string): Promise<boolean> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.DELETE_MODEL, modelSize);
   },
 
   getAvailableModels: async (): Promise<Record<string, ModelInfo>> => {

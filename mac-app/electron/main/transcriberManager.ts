@@ -244,8 +244,11 @@ export class TranscriberManager extends EventEmitter {
       console.log('[TranscriberManager] Recording stopped, file:', wavPath);
 
       // Check if model is available
+      console.log('[TranscriberManager] Checking model availability...');
       const modelAvailable = await this.modelManager.isModelAvailable();
+      console.log('[TranscriberManager] Model available:', modelAvailable);
       if (!modelAvailable) {
+        console.log('[TranscriberManager] Model not available, emitting error');
         this.setStatus('idle');
         this.handleOverlayAfterTranscription();
         this.emit('error', new Error('Model not available. Please download the model first.'));
@@ -253,11 +256,13 @@ export class TranscriberManager extends EventEmitter {
       }
 
       // Switch to transcribing state
+      console.log('[TranscriberManager] Starting transcription...');
       this.setStatus('transcribing');
       this.overlay.showTranscribing();
       
       // Transcribe
       const text = await this.transcribe(wavPath);
+      console.log('[TranscriberManager] Transcription result:', text?.substring(0, 100) || '(empty)');
       
       // Check for silence (empty or whitespace-only text)
       const trimmedText = text ? text.trim() : '';
@@ -516,12 +521,12 @@ export class TranscriberManager extends EventEmitter {
 
     return new Promise((resolve, reject) => {
       // Spawn whisper-cli process
-      // whisper-cli -m model.bin -f audio.wav --no-timestamps --print-colors false
+      // whisper-cli -m model.bin -f audio.wav --no-timestamps --language en
+      // Note: --print-colors is a flag (defaults to false), don't pass 'false' as value
       const args = [
         '-m', modelPath,
         '-f', wavPath,
         '--no-timestamps',
-        '--print-colors', 'false',
         '--language', 'en',
       ];
 

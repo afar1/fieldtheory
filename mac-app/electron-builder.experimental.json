@@ -1,6 +1,6 @@
 {
-  "appId": "com.littleone.mac.experimental",
-  "productName": "Little One Experimental",
+  "appId": "com.oscar.app.experimental",
+  "productName": "Oscar Experimental",
   "mac": {
     "category": "public.app-category.productivity",
     "target": [
