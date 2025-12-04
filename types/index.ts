@@ -18,6 +18,22 @@ export interface Observation {
 export interface Settings {
   autoStart: boolean;
   anthropicKey?: string; // Optional override for API key
+  
+  // Feature visibility toggles - when false, the tab button is hidden
+  showTodos: boolean;
+  showObservations: boolean;
+  showCursor: boolean;
+  
+  // Auto-separation toggle - when true, transcriptions are automatically processed
+  // into tasks and observations. When false, user must manually tap "Separate".
+  autoSeparate: boolean;
+}
+
+export interface TranscriptSegment {
+  id: string;
+  text: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface TranscriptEntry {
@@ -25,6 +41,7 @@ export interface TranscriptEntry {
   text: string;
   createdAt: number;
   updatedAt: number;
+  stackSegments?: TranscriptSegment[];
 }
 
 

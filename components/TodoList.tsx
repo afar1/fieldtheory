@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,10 +9,10 @@ import {
   SectionList,
   Alert,
   Vibration,
-  RefreshControl,
 } from 'react-native';
 import { Todo } from '../types';
 import * as Clipboard from 'expo-clipboard';
+import { PullToCreate } from './PullToCreate';
 
 type TodoSection = {
   key: string;
@@ -27,14 +27,15 @@ interface TodoListProps {
   onDelete: (id: string) => void;
   formatTime: (timestamp: number) => string;
   formatDateHeader: (timestamp: number) => string;
-  onRefresh?: () => void;
-  refreshing?: boolean;
+  // Called when user creates a new task via pull-to-create.
+  onCreateTask?: (text: string) => Promise<boolean> | boolean;
 }
 
 /**
  * List component for displaying and managing todos.
  * Supports tap-to-edit, checkbox toggle, swipe-to-delete, and copy.
  * Groups items by date with sticky section headers.
+ * Pull down at the top to create a new task inline (no modal).
  */
 export function TodoList({ 
   sections, 
@@ -43,8 +44,7 @@ export function TodoList({
   onDelete, 
   formatTime, 
   formatDateHeader,
-  onRefresh,
-  refreshing
+  onCreateTask,
 }: TodoListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
@@ -79,6 +79,14 @@ export function TodoList({
       { text: 'Delete', style: 'destructive', onPress: () => onDelete(id) },
     ]);
   };
+
+  // Handle creating a new task via pull-to-create.
+  const handleCreateTask = useCallback(async (text: string) => {
+    if (onCreateTask) {
+      return await onCreateTask(text);
+    }
+    return false;
+  }, [onCreateTask]);
 
   const renderItem = ({ item: todo }: { item: Todo }) => (
     <View style={styles.item}>
@@ -125,41 +133,44 @@ export function TodoList({
 
   if (sections.length === 0) {
     return (
-      <SectionList
-        sections={[]}
-        renderItem={() => null}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>No todos yet</Text>
-            <Text style={styles.emptySubtext}>Pull down to record</Text>
-          </View>
-        }
-        contentContainerStyle={{ flex: 1 }}
-        refreshControl={
-          onRefresh ? (
-            <RefreshControl refreshing={refreshing || false} onRefresh={onRefresh} />
-          ) : undefined
-        }
-      />
+      <PullToCreate
+        itemType="task"
+        onCreateItem={handleCreateTask}
+        enabled={!!onCreateTask}
+        style={styles.container}
+      >
+        <SectionList
+          sections={[]}
+          renderItem={() => null}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyText}>No todos yet</Text>
+              <Text style={styles.emptySubtext}>Pull down to create a task</Text>
+            </View>
+          }
+          contentContainerStyle={{ flex: 1 }}
+        />
+      </PullToCreate>
     );
   }
 
   return (
     <React.Fragment>
-      <SectionList
-        sections={sections}
-        keyExtractor={(item) => item.id}
-        renderItem={renderItem}
-        renderSectionHeader={renderSectionHeader}
-        stickySectionHeadersEnabled
-        contentContainerStyle={styles.content}
+      <PullToCreate
+        itemType="task"
+        onCreateItem={handleCreateTask}
+        enabled={!!onCreateTask}
         style={styles.container}
-        refreshControl={
-          onRefresh ? (
-            <RefreshControl refreshing={refreshing || false} onRefresh={onRefresh} />
-          ) : undefined
-        }
-      />
+      >
+        <SectionList
+          sections={sections}
+          keyExtractor={(item) => item.id}
+          renderItem={renderItem}
+          renderSectionHeader={renderSectionHeader}
+          stickySectionHeadersEnabled
+          contentContainerStyle={styles.content}
+        />
+      </PullToCreate>
 
       <Modal
         visible={editingId !== null}
