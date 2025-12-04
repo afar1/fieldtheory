@@ -16,6 +16,7 @@ import {
   AppState,
   TextInput,
   RefreshControl,
+  Keyboard,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useWhisperRecording } from './hooks/useWhisperRecording';
@@ -74,7 +75,8 @@ class ErrorBoundary extends Component<
   }
 }
 
-const MAX_PREVIEW_LINES = 3;
+const MAX_PREVIEW_CHARS = 160; // Max chars to show before truncation
+const ENDING_WORD_COUNT = 4; // Number of words to show from the end
 const dateHeaderFormatter = new Intl.DateTimeFormat('en-US', {
   weekday: 'short',
   month: 'short',
@@ -84,6 +86,40 @@ const timeFormatter = new Intl.DateTimeFormat('en-US', {
   hour: 'numeric',
   minute: 'numeric',
 });
+
+/**
+ * Truncate text to show beginning and ending (like crypto addresses).
+ * Shows first ~160 chars + "..." + last 4 words.
+ * This helps users verify they captured the full transcription.
+ */
+const truncateWithEnding = (text: string): { preview: string; needsTruncation: boolean } => {
+  const words = text.split(/\s+/);
+  
+  // If text is short enough, no truncation needed
+  if (text.length <= MAX_PREVIEW_CHARS + 50) {
+    return { preview: text, needsTruncation: false };
+  }
+  
+  // Get the first portion (up to MAX_PREVIEW_CHARS, but try to end at a word boundary)
+  let firstPart = text.slice(0, MAX_PREVIEW_CHARS);
+  const lastSpaceInFirst = firstPart.lastIndexOf(' ');
+  if (lastSpaceInFirst > MAX_PREVIEW_CHARS * 0.7) {
+    firstPart = firstPart.slice(0, lastSpaceInFirst);
+  }
+  
+  // Get the last few words
+  const lastWords = words.slice(-ENDING_WORD_COUNT).join(' ');
+  
+  // Make sure we're not showing duplicate content (if text is just barely over the limit)
+  if (firstPart.includes(lastWords)) {
+    return { preview: text, needsTruncation: false };
+  }
+  
+  return {
+    preview: `${firstPart.trim()} ... ${lastWords}`,
+    needsTruncation: true,
+  };
+};
 
 const getDateKey = (timestamp: number) => {
   const date = new Date(timestamp);
@@ -701,13 +737,14 @@ export default function App() {
   // Send transcribed text to Cursor's agent dashboard.
   // This pastes the text into Cursor's input field and switches to the browser view.
   const handleSendToCursor = useCallback((text: string) => {
+    // Dismiss keyboard before navigating to prevent it from staying open.
+    Keyboard.dismiss();
+    
     // Paste the text into Cursor's input field.
     cursorBrowserRef.current?.pasteText(text);
     
-    // Calculate the correct page index for Cursor based on visible tabs
-    let cursorPageIndex = 1; // Base: after transcripts
-    if (settings.showTodos) cursorPageIndex++;
-    if (settings.showObservations) cursorPageIndex++;
+    // Cursor is always at page 1 (right after Transcripts).
+    const cursorPageIndex = 1;
     
     // Switch to the Cursor browser page.
     pagerRef.current?.setPage(cursorPageIndex);
@@ -715,7 +752,7 @@ export default function App() {
     
     // Provide haptic feedback.
     Vibration.vibrate();
-  }, [settings.showTodos, settings.showObservations]);
+  }, []);
 
   // Manually separate a transcript into tasks and observations.
   // This is used when auto-separate is disabled.
@@ -729,7 +766,10 @@ export default function App() {
   const renderTranscriptItem = ({ item }: { item: TranscriptEntry }) => {
     const isExpanded = Boolean(expandedMap[item.id]);
     const isCopied = copiedId === item.id;
-    const shouldShowExpand = item.text.length > 160 || item.text.includes('\n');
+    
+    // Use crypto-style truncation to show beginning and ending of transcript.
+    const { preview, needsTruncation } = truncateWithEnding(item.text);
+    const shouldShowExpand = needsTruncation || item.text.includes('\n');
 
     const handleExpandPress = (event: GestureResponderEvent) => {
       event.stopPropagation();
@@ -761,11 +801,8 @@ export default function App() {
           <Text style={styles.transcriptTime}>{formatTime(item.createdAt)}</Text>
           {isCopied && <Text style={styles.copiedLabel}>Copied</Text>}
         </View>
-        <Text
-          style={styles.transcriptText}
-          numberOfLines={isExpanded ? undefined : MAX_PREVIEW_LINES}
-        >
-          {item.text}
+        <Text style={styles.transcriptText}>
+          {isExpanded ? item.text : preview}
         </Text>
         <View style={styles.transcriptActions}>
           {shouldShowExpand && (
@@ -854,7 +891,8 @@ export default function App() {
         </View>
       )}
 
-      {/* Pager View */}
+      {/* Pager View - Order: Transcripts → Cursor → Tasks → Observations */}
+      {/* This allows natural swipe-left from Cursor to go back to Transcripts */}
       <PagerView
         ref={pagerRef}
         style={styles.pager}
@@ -909,9 +947,12 @@ export default function App() {
             />
           )}
         </View>
+        <View key="cursor" style={styles.pageContainer}>
+          <CursorBrowser ref={cursorBrowserRef} />
+        </View>
         <View key="todos" style={styles.pageContainer}>
           <View style={styles.transcriptHeaderControls}>
-            {pageIndex === 1 && (
+            {pageIndex === 2 && (
               <TouchableOpacity
                 style={styles.sortButton}
                 onPress={() =>
@@ -937,7 +978,7 @@ export default function App() {
         </View>
         <View key="observations" style={styles.pageContainer}>
           <View style={styles.transcriptHeaderControls}>
-            {pageIndex === 2 && (
+            {pageIndex === 3 && (
               <TouchableOpacity
                 style={styles.sortButton}
                 onPress={() =>
@@ -960,14 +1001,11 @@ export default function App() {
             refreshing={isPullRecording}
           />
         </View>
-        <View key="cursor" style={styles.pageContainer}>
-          <CursorBrowser ref={cursorBrowserRef} />
-        </View>
       </PagerView>
 
-      {/* NEW BOTTOM BAR LAYOUT */}
+      {/* BOTTOM BAR - Tab order matches swipe order: Transcripts → Cursor → Tasks → Observations */}
       <View style={styles.bottomBar}>
-        {/* Transcripts Tab - always visible */}
+        {/* Transcripts Tab (page 0) - always visible */}
         <TouchableOpacity 
           style={styles.tabButton} 
           onPress={() => pagerRef.current?.setPage(0)}
@@ -979,14 +1017,14 @@ export default function App() {
           />
         </TouchableOpacity>
 
-        {/* Tasks Tab - conditionally visible */}
-        {settings.showTodos && (
+        {/* Cursor Tab (page 1) - conditionally visible */}
+        {settings.showCursor && (
           <TouchableOpacity 
             style={styles.tabButton} 
             onPress={() => pagerRef.current?.setPage(1)}
           >
             <Feather 
-              name="check-square" 
+              name="terminal" 
               size={22} 
               color={pageIndex === 1 ? '#007AFF' : '#9CA3AF'} 
             />
@@ -1012,28 +1050,28 @@ export default function App() {
           </TouchableOpacity>
         </View>
 
-        {/* Observations Tab - conditionally visible */}
-        {settings.showObservations && (
+        {/* Tasks Tab (page 2) - conditionally visible */}
+        {settings.showTodos && (
           <TouchableOpacity 
             style={styles.tabButton} 
             onPress={() => pagerRef.current?.setPage(2)}
           >
             <Feather 
-              name="eye" 
+              name="check-square" 
               size={22} 
               color={pageIndex === 2 ? '#007AFF' : '#9CA3AF'} 
             />
           </TouchableOpacity>
         )}
 
-        {/* Cursor Tab - conditionally visible */}
-        {settings.showCursor && (
+        {/* Observations Tab (page 3) - conditionally visible */}
+        {settings.showObservations && (
           <TouchableOpacity 
             style={styles.tabButton} 
             onPress={() => pagerRef.current?.setPage(3)}
           >
             <Feather 
-              name="terminal" 
+              name="eye" 
               size={22} 
               color={pageIndex === 3 ? '#007AFF' : '#9CA3AF'} 
             />
