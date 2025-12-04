@@ -29,11 +29,19 @@ export interface Settings {
   autoSeparate: boolean;
 }
 
+export interface TranscriptSegment {
+  id: string;
+  text: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface TranscriptEntry {
   id: string;
   text: string;
   createdAt: number;
   updatedAt: number;
+  stackSegments?: TranscriptSegment[];
 }
 
 
