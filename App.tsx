@@ -16,6 +16,8 @@ import {
   TextInput,
   SafeAreaView,
   FlatList,
+  RefreshControl,
+  Keyboard,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -76,7 +78,8 @@ class ErrorBoundary extends Component<
   }
 }
 
-const MAX_PREVIEW_LINES = 3;
+const MAX_PREVIEW_CHARS = 160; // Max chars to show before truncation
+const ENDING_WORD_COUNT = 4; // Number of words to show from the end
 const dateHeaderFormatter = new Intl.DateTimeFormat('en-US', {
   weekday: 'short',
   month: 'short',
@@ -86,6 +89,40 @@ const timeFormatter = new Intl.DateTimeFormat('en-US', {
   hour: 'numeric',
   minute: 'numeric',
 });
+
+/**
+ * Truncate text to show beginning and ending (like crypto addresses).
+ * Shows first ~160 chars + "..." + last 4 words.
+ * This helps users verify they captured the full transcription.
+ */
+const truncateWithEnding = (text: string): { preview: string; needsTruncation: boolean } => {
+  const words = text.split(/\s+/);
+  
+  // If text is short enough, no truncation needed
+  if (text.length <= MAX_PREVIEW_CHARS + 50) {
+    return { preview: text, needsTruncation: false };
+  }
+  
+  // Get the first portion (up to MAX_PREVIEW_CHARS, but try to end at a word boundary)
+  let firstPart = text.slice(0, MAX_PREVIEW_CHARS);
+  const lastSpaceInFirst = firstPart.lastIndexOf(' ');
+  if (lastSpaceInFirst > MAX_PREVIEW_CHARS * 0.7) {
+    firstPart = firstPart.slice(0, lastSpaceInFirst);
+  }
+  
+  // Get the last few words
+  const lastWords = words.slice(-ENDING_WORD_COUNT).join(' ');
+  
+  // Make sure we're not showing duplicate content (if text is just barely over the limit)
+  if (firstPart.includes(lastWords)) {
+    return { preview: text, needsTruncation: false };
+  }
+  
+  return {
+    preview: `${firstPart.trim()} ... ${lastWords}`,
+    needsTruncation: true,
+  };
+};
 
 const getDateKey = (timestamp: number) => {
   const date = new Date(timestamp);
@@ -740,12 +777,18 @@ export default function App() {
   // Send transcribed text to Cursor's agent dashboard.
   // This pastes the text into Cursor's input field and switches to the browser view.
   const handleSendToCursor = useCallback((text: string) => {
+    // Dismiss keyboard before navigating to prevent it from staying open.
+    Keyboard.dismiss();
+    
     // Paste the text into Cursor's input field.
     cursorBrowserRef.current?.pasteText(text);
     
-    // Switch to the Cursor browser page (always page 3).
-    pagerRef.current?.setPage(3);
-    setPageIndex(3);
+    // Cursor is always at page 1 (right after Transcripts).
+    const cursorPageIndex = 1;
+    
+    // Switch to the Cursor browser page.
+    pagerRef.current?.setPage(cursorPageIndex);
+    setPageIndex(cursorPageIndex);
     
     // Provide haptic feedback.
     Vibration.vibrate();
@@ -1215,7 +1258,8 @@ export default function App() {
         </View>
       )}
 
-      {/* Pager View - all pages always rendered, navigation controlled by tab buttons */}
+      {/* Pager View - Order: Transcripts → Cursor → Tasks → Observations */}
+      {/* This allows natural swipe-left from Cursor to go back to Transcripts */}
       <PagerView
         ref={pagerRef}
         style={styles.pager}
@@ -1260,7 +1304,24 @@ export default function App() {
             </PullToCreate>
           </View>
         </View>
+        <View key="cursor" style={styles.pageContainer}>
+          <CursorBrowser ref={cursorBrowserRef} />
+        </View>
         <View key="todos" style={styles.pageContainer}>
+          <View style={styles.transcriptHeaderControls}>
+            {pageIndex === 2 && (
+              <TouchableOpacity
+                style={styles.sortButton}
+                onPress={() =>
+                  setTodosSortOrder((prev) => (prev === 'newest' ? 'oldest' : 'newest'))
+                }
+              >
+                <Text style={styles.sortButtonText}>
+                  {todosSortOrder === 'newest' ? 'Newest first' : 'Oldest first'}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
           <TodoList
             sections={todosSections}
             onToggleComplete={handleToggleComplete}
@@ -1272,6 +1333,20 @@ export default function App() {
           />
         </View>
         <View key="observations" style={styles.pageContainer}>
+          <View style={styles.transcriptHeaderControls}>
+            {pageIndex === 3 && (
+              <TouchableOpacity
+                style={styles.sortButton}
+                onPress={() =>
+                  setObservationsSortOrder((prev) => (prev === 'newest' ? 'oldest' : 'newest'))
+                }
+              >
+                <Text style={styles.sortButtonText}>
+                  {observationsSortOrder === 'newest' ? 'Newest first' : 'Oldest first'}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
           <ObservationList
             sections={observationsSections}
             onUpdate={handleUpdateObservation}
@@ -1280,9 +1355,6 @@ export default function App() {
             formatDateHeader={formatDateHeader}
             onCreateObservation={handleCreateObservation}
           />
-        </View>
-        <View key="cursor" style={styles.pageContainer}>
-          <CursorBrowser ref={cursorBrowserRef} />
         </View>
       </PagerView>
 
@@ -1350,19 +1422,19 @@ export default function App() {
               </Text>
             </TouchableOpacity>
 
-            {/* Tasks Tab - flashes when tasks are saved */}
-            {settings.showTodos && (
+            {/* Cursor Tab */}
+            {settings.showCursor && (
               <TouchableOpacity 
                 style={styles.tabButton} 
                 onPress={() => pagerRef.current?.setPage(1)}
               >
                 <Feather 
-                  name="check-square" 
+                  name="terminal" 
                   size={22} 
-                  color={tasksTabFlash ? '#059669' : (pageIndex === 1 ? '#007AFF' : '#9CA3AF')} 
+                  color={pageIndex === 1 ? '#007AFF' : '#9CA3AF'} 
                 />
-                <Text style={[styles.tabLabel, pageIndex === 1 && styles.tabLabelActive, tasksTabFlash && styles.tabLabelFlash]}>
-                  Tasks
+                <Text style={[styles.tabLabel, pageIndex === 1 && styles.tabLabelActive]}>
+                  Cursor
                 </Text>
               </TouchableOpacity>
             )}
@@ -1386,36 +1458,36 @@ export default function App() {
               </TouchableOpacity>
             </View>
 
-            {/* Observations Tab */}
-            {settings.showObservations && (
+            {/* Tasks Tab - flashes when tasks are saved */}
+            {settings.showTodos && (
               <TouchableOpacity 
                 style={styles.tabButton} 
                 onPress={() => pagerRef.current?.setPage(2)}
               >
                 <Feather 
-                  name="eye" 
+                  name="check-square" 
                   size={22} 
-                  color={pageIndex === 2 ? '#007AFF' : '#9CA3AF'} 
+                  color={tasksTabFlash ? '#059669' : (pageIndex === 2 ? '#007AFF' : '#9CA3AF')} 
                 />
-                <Text style={[styles.tabLabel, pageIndex === 2 && styles.tabLabelActive]}>
-                  Notes
+                <Text style={[styles.tabLabel, pageIndex === 2 && styles.tabLabelActive, tasksTabFlash && styles.tabLabelFlash]}>
+                  Tasks
                 </Text>
               </TouchableOpacity>
             )}
 
-            {/* Cursor Tab */}
-            {settings.showCursor && (
+            {/* Observations Tab */}
+            {settings.showObservations && (
               <TouchableOpacity 
                 style={styles.tabButton} 
                 onPress={() => pagerRef.current?.setPage(3)}
               >
                 <Feather 
-                  name="terminal" 
+                  name="eye" 
                   size={22} 
                   color={pageIndex === 3 ? '#007AFF' : '#9CA3AF'} 
                 />
                 <Text style={[styles.tabLabel, pageIndex === 3 && styles.tabLabelActive]}>
-                  Cursor
+                  Notes
                 </Text>
               </TouchableOpacity>
             )}
