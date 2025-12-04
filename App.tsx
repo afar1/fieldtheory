@@ -27,6 +27,7 @@ import PagerView from 'react-native-pager-view';
 import { TodoList } from './components/TodoList';
 import { ObservationList } from './components/ObservationList';
 import { CursorBrowser, CursorBrowserHandle } from './components/CursorBrowser';
+import { PullToCreate } from './components/PullToCreate';
 import { StorageService } from './services/storage';
 import { processTranscription } from './services/llm';
 import { Todo, Observation, Settings, TranscriptEntry, TranscriptSegment } from './types';
@@ -640,6 +641,49 @@ export default function App() {
     await StorageService.saveObservations(newObservations);
   }, [observations]);
 
+  // Create a new task via pull-to-create.
+  const handleCreateTask = useCallback(async (text: string): Promise<boolean> => {
+    const newTodo: Todo = {
+      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+      text,
+      completed: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const newTodos = [newTodo, ...todos];
+    setTodos(newTodos);
+    await StorageService.saveTodos(newTodos);
+    return true;
+  }, [todos]);
+
+  // Create a new observation via pull-to-create.
+  const handleCreateObservation = useCallback(async (text: string): Promise<boolean> => {
+    const newObs: Observation = {
+      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+      text,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const newObservations = [newObs, ...observations];
+    setObservations(newObservations);
+    await StorageService.saveObservations(newObservations);
+    return true;
+  }, [observations]);
+
+  // Create a new transcript via pull-to-create.
+  const handleCreateTranscript = useCallback(async (text: string): Promise<boolean> => {
+    const newEntry: TranscriptEntry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      text,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const newTranscripts = [newEntry, ...transcripts];
+    setTranscripts(newTranscripts);
+    await StorageService.saveTranscripts(newTranscripts);
+    return true;
+  }, [transcripts]);
+
   const handleToggleAutoStart = useCallback(async (value: boolean) => {
     const newSettings = { ...settings, autoStart: value };
     setSettings(newSettings);
@@ -1171,21 +1215,35 @@ export default function App() {
       >
         <View key="transcripts" style={styles.transcriptContainer}>
           <View style={styles.transcriptListWrapper}>
-            {sortedTranscripts.length === 0 ? (
-              <View style={styles.emptyState}>
-                <Text style={styles.emptyTitle}>No transcripts yet</Text>
-                <Text style={styles.emptySubtitle}>
-                  Tap "Record" to capture the first note.
-                </Text>
-              </View>
-            ) : (
-              <FlatList
-                data={sortedTranscripts}
-                keyExtractor={(item) => item.id}
-                renderItem={renderTranscriptItem}
-                contentContainerStyle={styles.sectionContent}
-              />
-            )}
+            <PullToCreate
+              itemType="transcript"
+              onCreateItem={handleCreateTranscript}
+              enabled={true}
+              style={{ flex: 1 }}
+            >
+              {sortedTranscripts.length === 0 ? (
+                <FlatList
+                  data={[]}
+                  renderItem={() => null}
+                  ListEmptyComponent={
+                    <View style={styles.emptyState}>
+                      <Text style={styles.emptyTitle}>No transcripts yet</Text>
+                      <Text style={styles.emptySubtitle}>
+                        Pull down to type a note, or tap Record.
+                      </Text>
+                    </View>
+                  }
+                  contentContainerStyle={{ flex: 1 }}
+                />
+              ) : (
+                <FlatList
+                  data={sortedTranscripts}
+                  keyExtractor={(item) => item.id}
+                  renderItem={renderTranscriptItem}
+                  contentContainerStyle={styles.sectionContent}
+                />
+              )}
+            </PullToCreate>
           </View>
         </View>
         <View key="todos" style={styles.pageContainer}>
@@ -1196,6 +1254,7 @@ export default function App() {
             onDelete={handleDeleteTodo}
             formatTime={formatTime}
             formatDateHeader={formatDateHeader}
+            onCreateTask={handleCreateTask}
           />
         </View>
         <View key="observations" style={styles.pageContainer}>
@@ -1205,6 +1264,7 @@ export default function App() {
             onDelete={handleDeleteObservation}
             formatTime={formatTime}
             formatDateHeader={formatDateHeader}
+            onCreateObservation={handleCreateObservation}
           />
         </View>
         <View key="cursor" style={styles.pageContainer}>

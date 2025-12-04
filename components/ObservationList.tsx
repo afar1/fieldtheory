@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,10 +9,10 @@ import {
   SectionList,
   Alert,
   Vibration,
-  RefreshControl,
 } from 'react-native';
 import { Observation } from '../types';
 import * as Clipboard from 'expo-clipboard';
+import { PullToCreate } from './PullToCreate';
 
 type ObservationSection = {
   key: string;
@@ -26,14 +26,15 @@ interface ObservationListProps {
   onDelete: (id: string) => void;
   formatTime: (timestamp: number) => string;
   formatDateHeader: (timestamp: number) => string;
-  onRefresh?: () => void;
-  refreshing?: boolean;
+  // Called when user creates a new observation via pull-to-create.
+  onCreateObservation?: (text: string) => Promise<boolean> | boolean;
 }
 
 /**
  * List component for displaying and managing observations.
  * Supports tap-to-edit, swipe-to-delete, and copy.
  * Groups items by date with sticky section headers.
+ * Pull down at the top to create a new observation inline (no modal).
  */
 export function ObservationList({
   sections,
@@ -41,8 +42,7 @@ export function ObservationList({
   onDelete,
   formatTime,
   formatDateHeader,
-  onRefresh,
-  refreshing,
+  onCreateObservation,
 }: ObservationListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
@@ -78,6 +78,14 @@ export function ObservationList({
     ]);
   };
 
+  // Handle creating a new observation via pull-to-create.
+  const handleCreateObservation = useCallback(async (text: string) => {
+    if (onCreateObservation) {
+      return await onCreateObservation(text);
+    }
+    return false;
+  }, [onCreateObservation]);
+
   const renderItem = ({ item: observation }: { item: Observation }) => (
     <View style={styles.item}>
       <View style={styles.textContainer}>
@@ -109,41 +117,44 @@ export function ObservationList({
 
   if (sections.length === 0) {
     return (
-      <SectionList
-        sections={[]}
-        renderItem={() => null}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>No observations yet</Text>
-            <Text style={styles.emptySubtext}>Pull down to record</Text>
-          </View>
-        }
-        contentContainerStyle={{ flex: 1 }}
-        refreshControl={
-          onRefresh ? (
-            <RefreshControl refreshing={refreshing || false} onRefresh={onRefresh} />
-          ) : undefined
-        }
-      />
+      <PullToCreate
+        itemType="observation"
+        onCreateItem={handleCreateObservation}
+        enabled={!!onCreateObservation}
+        style={styles.container}
+      >
+        <SectionList
+          sections={[]}
+          renderItem={() => null}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyText}>No observations yet</Text>
+              <Text style={styles.emptySubtext}>Pull down to add an observation</Text>
+            </View>
+          }
+          contentContainerStyle={{ flex: 1 }}
+        />
+      </PullToCreate>
     );
   }
 
   return (
     <React.Fragment>
-      <SectionList
-        sections={sections}
-        keyExtractor={(item) => item.id}
-        renderItem={renderItem}
-        renderSectionHeader={renderSectionHeader}
-        stickySectionHeadersEnabled
-        contentContainerStyle={styles.content}
+      <PullToCreate
+        itemType="observation"
+        onCreateItem={handleCreateObservation}
+        enabled={!!onCreateObservation}
         style={styles.container}
-        refreshControl={
-          onRefresh ? (
-            <RefreshControl refreshing={refreshing || false} onRefresh={onRefresh} />
-          ) : undefined
-        }
-      />
+      >
+        <SectionList
+          sections={sections}
+          keyExtractor={(item) => item.id}
+          renderItem={renderItem}
+          renderSectionHeader={renderSectionHeader}
+          stickySectionHeadersEnabled
+          contentContainerStyle={styles.content}
+        />
+      </PullToCreate>
 
       <Modal
         visible={editingId !== null}
