@@ -10,6 +10,7 @@ import { PreferencesManager } from './preferences';
 import { ClipboardManager } from './clipboardManager';
 import { ModelSize } from './modelManager';
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
+import { MobileSync } from './mobileSync';
 import {
   AudioIPCChannels,
   SetPriorityModePayload,
@@ -56,6 +57,7 @@ let clipboardManager: ClipboardManager | null = null;
 let clipboardHistoryWindow: ClipboardHistoryWindow | null = null;
 let visionModelManager: VisionModelManager | null = null;
 let visionProcessor: VisionProcessor | null = null;
+let mobileSync: MobileSync | null = null;
 
 /**
  * Create the main application window.
@@ -861,6 +863,48 @@ function setupClipboardIPCHandlers(): void {
       }
     }
   });
+
+  // =========================================================================
+  // Mobile Sync IPC Handlers - Sync iOS transcriptions to clipboard history
+  // =========================================================================
+
+  ipcMain.handle(ClipboardIPCChannels.SET_SYNC_SESSION, async (_event, accessToken: string, refreshToken: string) => {
+    if (!mobileSync) {
+      console.warn('[Main] setSyncSession: mobileSync not initialized');
+      return false;
+    }
+    await mobileSync.setSession(accessToken, refreshToken);
+    return true;
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.CLEAR_SYNC_SESSION, async () => {
+    if (mobileSync) {
+      mobileSync.clearSession();
+    }
+    return true;
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SYNC_MOBILE_TRANSCRIPTS, async () => {
+    if (!mobileSync) {
+      return 0;
+    }
+    return await mobileSync.syncTranscripts();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.GET_SYNC_ENABLED, async () => {
+    if (!mobileSync) {
+      return false;
+    }
+    return mobileSync.isSyncEnabled();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SET_SYNC_ENABLED, async (_event, enabled: boolean) => {
+    if (!mobileSync) {
+      return false;
+    }
+    mobileSync.setSyncEnabled(enabled);
+    return true;
+  });
 }
 
 
@@ -1126,6 +1170,14 @@ async function initTranscriberSystem(): Promise<void> {
   await transcriberManager.init();
   broadcastTranscribeEvents();
 
+  // Initialize mobile sync to pull iOS transcriptions into clipboard history.
+  // Uses Vite env vars passed at build time via process.env replacement.
+  mobileSync = new MobileSync(clipboardManager, preferencesManager);
+  await mobileSync.init(
+    process.env.VITE_SUPABASE_URL,
+    process.env.VITE_SUPABASE_ANON_KEY
+  );
+
   console.log('[Main] Transcription system initialized');
 }
 
@@ -1302,6 +1354,10 @@ if (!gotTheLock) {
 
   app.on('before-quit', () => {
     console.log('[Main] App quitting, cleaning up...');
+
+    if (mobileSync) {
+      mobileSync.destroy();
+    }
 
     if (transcriberManager) {
       transcriberManager.destroy();

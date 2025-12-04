@@ -13,6 +13,12 @@ const execAsync = promisify(exec);
 export type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
 
 /**
+ * Source device for clipboard items.
+ * Used to distinguish between items created on Mac vs synced from iOS.
+ */
+export type ClipboardSource = 'mac' | 'ios';
+
+/**
  * Clipboard item stored in database.
  */
 export interface ClipboardItem {
@@ -30,6 +36,7 @@ export interface ClipboardItem {
   createdAt: number;
   contentHash: string;
   stackId: string | null; // Groups items into a prompt stack for batch paste
+  source: ClipboardSource; // Device source: 'mac' for local, 'ios' for mobile synced
 }
 
 /**
@@ -52,6 +59,7 @@ export interface ClipboardQueryOptions {
   search?: string;
   limit?: number;
   offset?: number;
+  source?: ClipboardSource; // Filter by device source: 'mac', 'ios', or undefined for all
 }
 
 /**
@@ -175,6 +183,15 @@ export class ClipboardManager {
       this.db.exec(`
         ALTER TABLE clipboard_items ADD COLUMN stack_id TEXT;
         CREATE INDEX IF NOT EXISTS idx_stack_id ON clipboard_items(stack_id);
+      `);
+    });
+
+    // Migration: Add source column to distinguish Mac vs iOS items.
+    // Existing items default to 'mac' since they were created locally.
+    this.runMigration('add_source', () => {
+      this.db.exec(`
+        ALTER TABLE clipboard_items ADD COLUMN source TEXT DEFAULT 'mac';
+        CREATE INDEX IF NOT EXISTS idx_source ON clipboard_items(source);
       `);
     });
 
@@ -329,12 +346,16 @@ export class ClipboardManager {
    * @param type - Item type (text, transcript, etc.)
    * @param sourceApp - Optional source app bundle ID
    * @param stackId - Optional stack ID to group items for prompt stacking
+   * @param source - Device source: 'mac' for local, 'ios' for mobile synced (defaults to 'mac')
+   * @param createdAtOverride - Optional timestamp override (for synced items to preserve original creation time)
    */
   async storeText(
     text: string,
     type: ClipboardItemType = 'text',
     sourceApp?: string,
-    stackId?: string
+    stackId?: string,
+    source: ClipboardSource = 'mac',
+    createdAtOverride?: number
   ): Promise<number> {
     const hash = this.hashContent(text);
     
@@ -349,39 +370,41 @@ export class ClipboardManager {
       }
     }
 
-    // Get source app info if not provided
-    if (!sourceApp) {
+    // Get source app info if not provided and source is 'mac'
+    // (iOS items don't have source app info)
+    if (!sourceApp && source === 'mac') {
       sourceApp = (await this.getFrontmostApp()) || undefined;
     }
 
     const sourceAppName = sourceApp ? await this.getAppName(sourceApp) : null;
 
-    // Check ignore list
-    if (sourceApp && this.config.ignoreApps?.includes(sourceApp)) {
+    // Check ignore list (only for Mac items)
+    if (source === 'mac' && sourceApp && this.config.ignoreApps?.includes(sourceApp)) {
       return -1; // Ignored
     }
 
     const wordCount = text.split(/\s+/).filter(w => w.length > 0).length;
     const charCount = text.length;
-    const createdAt = Date.now();
+    const createdAt = createdAtOverride ?? Date.now();
 
     const stmt = this.db.prepare(`
       INSERT INTO clipboard_items (
         type, content, source_app, source_app_name,
-        word_count, char_count, created_at, content_hash, stack_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        word_count, char_count, created_at, content_hash, stack_id, source
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const result = stmt.run(
       type,
       text,
-      sourceApp,
+      sourceApp || null,
       sourceAppName,
       wordCount,
       charCount,
       createdAt,
       hash,
-      stackId || null
+      stackId || null,
+      source
     );
 
     // Cleanup old items
@@ -397,13 +420,15 @@ export class ClipboardManager {
    * @param type - Item type (image, screenshot, etc.)
    * @param sourceApp - Optional source app bundle ID
    * @param stackId - Optional stack ID to group items for prompt stacking
+   * @param source - Device source: 'mac' for local, 'ios' for mobile synced (defaults to 'mac')
    */
   async storeImage(
     image: Electron.NativeImage,
     imageBuffer: Buffer,
     type: ClipboardItemType = 'image',
     sourceApp?: string,
-    stackId?: string
+    stackId?: string,
+    source: ClipboardSource = 'mac'
   ): Promise<number> {
     const hash = this.hashContent(imageBuffer.toString('base64'));
     
@@ -418,15 +443,15 @@ export class ClipboardManager {
       }
     }
 
-    // Get source app info if not provided
-    if (!sourceApp) {
+    // Get source app info if not provided and source is 'mac'
+    if (!sourceApp && source === 'mac') {
       sourceApp = (await this.getFrontmostApp()) || undefined;
     }
 
     const sourceAppName = sourceApp ? await this.getAppName(sourceApp) : null;
 
-    // Check ignore list
-    if (sourceApp && this.config.ignoreApps?.includes(sourceApp)) {
+    // Check ignore list (only for Mac items)
+    if (source === 'mac' && sourceApp && this.config.ignoreApps?.includes(sourceApp)) {
       return -1; // Ignored
     }
 
@@ -436,8 +461,8 @@ export class ClipboardManager {
     const stmt = this.db.prepare(`
       INSERT INTO clipboard_items (
         type, image_data, image_width, image_height, image_size,
-        source_app, source_app_name, created_at, content_hash, stack_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        source_app, source_app_name, created_at, content_hash, stack_id, source
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const result = stmt.run(
@@ -446,11 +471,12 @@ export class ClipboardManager {
       size.width,
       size.height,
       imageBuffer.length,
-      sourceApp,
+      sourceApp || null,
       sourceAppName,
       createdAt,
       hash,
-      stackId || null
+      stackId || null,
+      source
     );
 
     // Cleanup old items
@@ -463,7 +489,7 @@ export class ClipboardManager {
    * Query clipboard history with optional filters.
    */
   queryItems(options: ClipboardQueryOptions = {}): ClipboardItem[] {
-    const { type, search, limit = 50, offset = 0 } = options;
+    const { type, search, limit = 50, offset = 0, source } = options;
 
     let query = 'SELECT * FROM clipboard_items';
     const conditions: string[] = [];
@@ -472,6 +498,12 @@ export class ClipboardManager {
     if (type) {
       conditions.push('type = ?');
       params.push(type);
+    }
+
+    // Filter by device source (mac/ios)
+    if (source) {
+      conditions.push('source = ?');
+      params.push(source);
     }
 
     if (search) {
@@ -527,6 +559,7 @@ export class ClipboardManager {
       createdAt: row.created_at,
       contentHash: row.content_hash,
       stackId: row.stack_id || null,
+      source: row.source || 'mac',
     })) as ClipboardItem[];
   }
 
@@ -558,6 +591,7 @@ export class ClipboardManager {
       createdAt: row.created_at,
       contentHash: row.content_hash,
       stackId: row.stack_id || null,
+      source: row.source || 'mac',
     } as ClipboardItem;
   }
 
@@ -603,6 +637,7 @@ export class ClipboardManager {
       createdAt: row.created_at,
       contentHash: row.content_hash,
       stackId: row.stack_id || null,
+      source: row.source || 'mac',
     })) as ClipboardItem[];
   }
 

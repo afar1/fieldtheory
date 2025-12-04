@@ -6,6 +6,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 
 type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
+type ClipboardSource = 'mac' | 'ios';
 
 type ClipboardItem = {
   id: number;
@@ -22,6 +23,7 @@ type ClipboardItem = {
   createdAt: number;
   contentHash: string;
   stackId: string | null;
+  source: ClipboardSource;
 };
 
 type StackInfo = {
@@ -39,6 +41,9 @@ type ListRow =
   | { type: 'stack'; stack: StackInfo; items: ClipboardItem[]; expanded: boolean };
 
 type FilterType = 'all' | 'transcript' | 'screenshot';
+
+// Source filter: which device's items to show
+type SourceFilterType = 'all' | 'mac' | 'ios';
 
 type RunningApp = {
   bundleId: string;
@@ -90,6 +95,7 @@ export default function ClipboardHistory() {
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [filter, setFilter] = useState<FilterType>('all');
+  const [sourceFilter, setSourceFilter] = useState<SourceFilterType>('all');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [isMultiSelect, setIsMultiSelect] = useState(false);
@@ -138,7 +144,10 @@ export default function ClipboardHistory() {
         offset: reset ? 0 : offset,
       };
 
-      // No filter - show all items
+      // Apply source filter (mac/ios)
+      if (sourceFilter !== 'all') {
+        queryOptions.source = sourceFilter;
+      }
 
       if (debouncedSearchQuery.trim()) {
         queryOptions.search = debouncedSearchQuery.trim();
@@ -165,7 +174,7 @@ export default function ClipboardHistory() {
     } finally {
       setLoading(false);
     }
-  }, [isMacOS, debouncedSearchQuery, offset, stacks]);
+  }, [isMacOS, debouncedSearchQuery, offset, stacks, sourceFilter]);
 
   // Debounce search query to avoid querying database on every keystroke.
   useEffect(() => {
@@ -187,13 +196,13 @@ export default function ClipboardHistory() {
     };
   }, [searchQuery]);
 
-  // Initial load and search changes.
+  // Initial load and search/filter changes.
   useEffect(() => {
     if (isVisible) {
       setOffset(0);
       loadItems(true);
     }
-  }, [isVisible, debouncedSearchQuery]);
+  }, [isVisible, debouncedSearchQuery, sourceFilter]);
 
   // When component mounts in standalone window, show immediately
   useEffect(() => {
@@ -1273,14 +1282,34 @@ export default function ClipboardHistory() {
                           style={{
                             fontSize: '10px',
                             color: '#666',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
                           }}
                         >
-                          {item.wordCount && item.charCount
-                            ? `${item.wordCount} words, ${item.charCount} chars`
-                            : ''}
-                          {item.sourceAppName && ` • ${item.sourceAppName}`}
-                          {' • '}
-                          {formatRelativeTime(item.createdAt)}
+                          {/* iOS source badge */}
+                          {item.source === 'ios' && (
+                            <span
+                              style={{
+                                fontSize: '9px',
+                                backgroundColor: '#007AFF',
+                                color: '#fff',
+                                padding: '1px 4px',
+                                borderRadius: '3px',
+                                fontWeight: 500,
+                              }}
+                            >
+                              📱 iOS
+                            </span>
+                          )}
+                          <span>
+                            {item.wordCount && item.charCount
+                              ? `${item.wordCount} words, ${item.charCount} chars`
+                              : ''}
+                            {item.sourceAppName && ` • ${item.sourceAppName}`}
+                            {' • '}
+                            {formatRelativeTime(item.createdAt)}
+                          </span>
                         </div>
                       </>
                     ) : (
@@ -1298,15 +1327,35 @@ export default function ClipboardHistory() {
                           style={{
                             fontSize: '10px',
                             color: '#666',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
                           }}
                         >
-                          {item.imageWidth && item.imageHeight
-                            ? `${item.imageWidth}×${item.imageHeight}`
-                            : ''}
-                          {item.imageSize && ` • ${formatFileSize(item.imageSize)}`}
-                          {item.sourceAppName && ` • ${item.sourceAppName}`}
-                          {' • '}
-                          {formatRelativeTime(item.createdAt)}
+                          {/* iOS source badge */}
+                          {item.source === 'ios' && (
+                            <span
+                              style={{
+                                fontSize: '9px',
+                                backgroundColor: '#007AFF',
+                                color: '#fff',
+                                padding: '1px 4px',
+                                borderRadius: '3px',
+                                fontWeight: 500,
+                              }}
+                            >
+                              📱 iOS
+                            </span>
+                          )}
+                          <span>
+                            {item.imageWidth && item.imageHeight
+                              ? `${item.imageWidth}×${item.imageHeight}`
+                              : ''}
+                            {item.imageSize && ` • ${formatFileSize(item.imageSize)}`}
+                            {item.sourceAppName && ` • ${item.sourceAppName}`}
+                            {' • '}
+                            {formatRelativeTime(item.createdAt)}
+                          </span>
                         </div>
                       </>
                     )}
@@ -1338,7 +1387,7 @@ export default function ClipboardHistory() {
         )}
       </div>
       
-      {/* Target app footer - shows which app content will be pasted into. */}
+      {/* Footer with source filter and target app info */}
       <div
         style={{
           padding: '10px 16px',
@@ -1352,6 +1401,39 @@ export default function ClipboardHistory() {
           userSelect: 'none',
         }}
       >
+        {/* Source filter toggle - All / Mac / iOS */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '2px',
+            backgroundColor: '#e8e8e8',
+            borderRadius: '6px',
+            padding: '2px',
+          }}
+        >
+          {(['all', 'mac', 'ios'] as SourceFilterType[]).map((filterOption) => (
+            <button
+              key={filterOption}
+              onClick={() => setSourceFilter(filterOption)}
+              style={{
+                padding: '4px 10px',
+                fontSize: '11px',
+                fontWeight: sourceFilter === filterOption ? 600 : 400,
+                color: sourceFilter === filterOption ? '#fff' : '#555',
+                backgroundColor: sourceFilter === filterOption ? '#007AFF' : 'transparent',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              {filterOption === 'all' ? 'All' : filterOption === 'mac' ? '💻 Mac' : '📱 iOS'}
+            </button>
+          ))}
+        </div>
+
+        {/* Target app - shows which app content will be pasted into */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <span style={{ color: '#888' }}>Paste into:</span>
           <span
@@ -1365,12 +1447,12 @@ export default function ClipboardHistory() {
           >
             {targetAppInfo.targetApp?.name || 'Select app'}
           </span>
+          {targetAppInfo.runningApps.length > 1 && (
+            <span style={{ color: '#999', fontSize: '10px' }}>
+              Tab ↹
+            </span>
+          )}
         </div>
-        {targetAppInfo.runningApps.length > 1 && (
-          <div style={{ color: '#999', fontSize: '11px' }}>
-            Tab to switch • {targetAppInfo.runningApps.length} apps
-          </div>
-        )}
       </div>
         </div>
         
