@@ -362,10 +362,17 @@ export class ClipboardManager {
     // Check if already exists (unless it's part of a stack - stacks can have duplicates)
     if (!stackId) {
       const existing = this.db
-        .prepare('SELECT id FROM clipboard_items WHERE content_hash = ?')
-        .get(hash) as { id: number } | undefined;
+        .prepare('SELECT id, source FROM clipboard_items WHERE content_hash = ?')
+        .get(hash) as { id: number; source: string } | undefined;
       
       if (existing) {
+        // If we're syncing from iOS and the existing record is marked as 'mac',
+        // update it to 'ios' since iOS is the true origin. This handles the case
+        // where text was copied to Mac clipboard before MobileSync ran.
+        if (source === 'ios' && existing.source === 'mac') {
+          this.db.prepare('UPDATE clipboard_items SET source = ? WHERE id = ?')
+            .run('ios', existing.id);
+        }
         return existing.id;
       }
     }

@@ -142,6 +142,27 @@ export default function SettingsPanel() {
     }
   };
   
+  // Force full re-sync - fixes source attribution for existing items
+  const handleForceSync = async () => {
+    if (!window.clipboardAPI?.forceSyncAll) return;
+    
+    setIsSyncing(true);
+    setSyncStatus('Re-syncing all transcripts...');
+    
+    try {
+      const count = await window.clipboardAPI.forceSyncAll();
+      setSyncStatus(count > 0 
+        ? `Fixed attribution for ${count} transcript${count === 1 ? '' : 's'}`
+        : 'All transcripts already correctly attributed'
+      );
+    } catch (err) {
+      setSyncStatus('Re-sync failed');
+      console.error('Force sync error:', err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+  
   // Helper function to build hotkey string from keyboard event (uses physical key codes)
   const buildHotkeyString = (event: KeyboardEvent): string => {
     const parts: string[] = [];
@@ -497,14 +518,22 @@ export default function SettingsPanel() {
                 >
                   {isSyncing ? 'Syncing...' : '🔄 Sync Now'}
                 </button>
-                {syncStatus && (
-                  <span style={styles.syncStatusText}>{syncStatus}</span>
-                )}
+                <button
+                  onClick={handleForceSync}
+                  disabled={isSyncing}
+                  style={styles.fixButton}
+                  title="Re-sync all transcripts and fix source attribution"
+                >
+                  🔧 Fix Attribution
+                </button>
               </div>
+              {syncStatus && (
+                <div style={styles.syncStatusText}>{syncStatus}</div>
+              )}
               
               <p style={styles.hotkeyHelp}>
                 iOS transcriptions sync automatically every 30 seconds. 
-                Use "Sync Now" to fetch immediately.
+                Use "Fix Attribution" if iOS items show as Mac.
               </p>
             </>
           ) : (
@@ -766,8 +795,19 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: '6px',
     cursor: 'pointer',
   },
+  fixButton: {
+    padding: '8px 14px',
+    fontSize: '12px',
+    fontWeight: 500,
+    color: '#6b7280',
+    backgroundColor: '#f9fafb',
+    border: '1px solid #e5e7eb',
+    borderRadius: '6px',
+    cursor: 'pointer',
+  },
   syncStatusText: {
     fontSize: '12px',
     color: '#6b7280',
+    marginTop: '8px',
   },
 };
