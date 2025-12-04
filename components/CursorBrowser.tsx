@@ -15,9 +15,9 @@ import { WebView } from 'react-native-webview';
 import { Feather } from '@expo/vector-icons';
 import * as WebBrowser from 'expo-web-browser';
 
-// Status bar height for modern iPhones with notch/Dynamic Island.
-// This pushes the nav bar below the status bar area.
-const STATUS_BAR_HEIGHT = Platform.OS === 'ios' ? 54 : 0;
+// Minimal top padding to match other pages in the app.
+// The parent container handles safe area, so we just need consistent spacing.
+const TOP_PADDING = 12;
 
 // Cursor's agent dashboard URL.
 // This is the web interface where users can interact with Cursor's AI.
@@ -161,7 +161,9 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
       ensureFresh,
     }));
 
-    // Helper function to perform the actual paste operation
+    // Helper function to perform the actual paste operation.
+    // Note: We intentionally do NOT focus the input after pasting, so the keyboard
+    // stays hidden. User can tap the input field if they want to edit.
     const performPaste = useCallback((text: string) => {
       // Escape the text for safe JavaScript injection.
       const escapedText = text
@@ -202,7 +204,7 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
           }
           
           if (input) {
-            input.focus();
+            // Scroll the input into view so user can see the pasted text.
             input.scrollIntoView({ behavior: 'smooth', block: 'center' });
             
             // For textarea or input elements - use native setter to bypass React
@@ -221,12 +223,22 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
               // Dispatch input event so React updates its state
               const inputEvent = new Event('input', { bubbles: true });
               input.dispatchEvent(inputEvent);
+              
+              // Blur the input to ensure keyboard doesn't pop up.
+              input.blur();
             } 
             // For contenteditable divs
             else if (input.contentEditable === 'true') {
-              // Use execCommand for contenteditable (works better with frameworks)
+              // Temporarily focus to insert text, then blur to hide keyboard.
+              input.focus();
               document.execCommand('selectAll', false, null);
               document.execCommand('insertText', false, '${escapedText}');
+              input.blur();
+            }
+            
+            // Remove focus from any active element to ensure keyboard is hidden.
+            if (document.activeElement) {
+              document.activeElement.blur();
             }
             
             return true;
@@ -418,7 +430,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fff',
-    paddingTop: STATUS_BAR_HEIGHT,
+    paddingTop: TOP_PADDING,
   },
   navBar: {
     flexDirection: 'row',
