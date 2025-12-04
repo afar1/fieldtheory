@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Todo, Observation, Settings, TranscriptEntry } from '../types';
+import { Todo, Observation, Settings, TranscriptEntry, TranscriptSegment } from '../types';
 
 // Normalize saved records so new fields are always present.
 const normalizeTodo = (raw: Todo): Todo => ({
@@ -12,9 +12,15 @@ const normalizeObservation = (raw: Observation): Observation => ({
   updatedAt: raw.updatedAt ?? raw.createdAt,
 });
 
+const normalizeSegment = (segment: TranscriptSegment): TranscriptSegment => ({
+  ...segment,
+  updatedAt: segment.updatedAt ?? segment.createdAt,
+});
+
 const normalizeTranscript = (raw: TranscriptEntry): TranscriptEntry => ({
   ...raw,
   updatedAt: raw.updatedAt ?? raw.createdAt,
+  stackSegments: raw.stackSegments?.map(normalizeSegment),
 });
 
 // Storage keys

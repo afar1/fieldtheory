@@ -1,7 +1,7 @@
 import { supabase } from './supabase';
 import { StorageService } from './storage';
 import { getSession } from './auth';
-import { Observation, Todo, TranscriptEntry } from '../types';
+import { Observation, Todo, TranscriptEntry, TranscriptSegment } from '../types';
 
 // Remote table column adapters -------------------------------------------------
 type TodoRow = {
@@ -30,6 +30,9 @@ type TranscriptRow = {
   client_id: string;
   client_created_at_ms: number;
   updated_at: string;
+  metadata: {
+    stackSegments?: TranscriptSegment[];
+  } | null;
 };
 
 const toLocalTodo = (row: TodoRow): Todo => ({
@@ -52,6 +55,7 @@ const toLocalTranscript = (row: TranscriptRow): TranscriptEntry => ({
   text: row.text,
   createdAt: row.client_created_at_ms,
   updatedAt: new Date(row.updated_at).getTime(),
+  stackSegments: row.metadata?.stackSegments,
 });
 
 const now = () => Date.now();
@@ -137,6 +141,7 @@ export async function syncUp() {
       text: transcript.text,
       client_id: transcript.id,
       client_created_at_ms: transcript.createdAt,
+      metadata: transcript.stackSegments ? { stackSegments: transcript.stackSegments } : {},
     }))),
   ]);
 }
