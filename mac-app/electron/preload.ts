@@ -223,6 +223,7 @@ export interface ClipboardAPI {
   onItemAdded: (callback: (id: number) => void) => () => void;
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
+  onShowSettings: (callback: () => void) => () => void;
   onDialogPosition: (callback: (position: { left: number; top: number }) => void) => () => void;
   onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number }) => void) => () => void;
   onTargetAppInfo: (callback: (info: TargetAppInfo) => void) => () => void;
@@ -506,6 +507,16 @@ const clipboardAPI: ClipboardAPI = {
     ipcRenderer.on('clipboard:showHistory', handler);
     return () => {
       ipcRenderer.removeListener('clipboard:showHistory', handler);
+    };
+  },
+
+  onShowSettings: (callback: () => void): (() => void) => {
+    const handler = () => {
+      callback();
+    };
+    ipcRenderer.on('clipboard:showSettings', handler);
+    return () => {
+      ipcRenderer.removeListener('clipboard:showSettings', handler);
     };
   },
 

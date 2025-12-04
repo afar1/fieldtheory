@@ -207,6 +207,7 @@ interface ClipboardAPI {
   onItemAdded: (callback: (id: number) => void) => () => void;
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
+  onShowSettings?: (callback: () => void) => () => void;
   onDialogPosition: (callback: (position: { left: number; top: number }) => void) => () => void;
   onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number }) => void) => () => void;
   onTargetAppInfo: (callback: (info: TargetAppInfo) => void) => () => void;
