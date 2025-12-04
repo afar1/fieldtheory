@@ -9,6 +9,8 @@ import {
   SectionList,
   Alert,
   Vibration,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { Todo } from '../types';
 import * as Clipboard from 'expo-clipboard';
@@ -29,6 +31,8 @@ interface TodoListProps {
   formatDateHeader: (timestamp: number) => string;
   // Called when user creates a new task via pull-to-create.
   onCreateTask?: (text: string) => Promise<boolean> | boolean;
+  // Called when create mode changes - parent uses this for dynamic bottom bar.
+  onCreateModeChange?: (isCreating: boolean, text: string, save: () => void, cancel: () => void) => void;
 }
 
 /**
@@ -45,6 +49,7 @@ export function TodoList({
   formatTime, 
   formatDateHeader,
   onCreateTask,
+  onCreateModeChange,
 }: TodoListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
@@ -74,10 +79,7 @@ export function TodoList({
   };
 
   const handleDelete = (id: string) => {
-    Alert.alert('Delete Todo', 'Are you sure?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: () => onDelete(id) },
-    ]);
+    onDelete(id);
   };
 
   // Handle creating a new task via pull-to-create.
@@ -138,6 +140,7 @@ export function TodoList({
         onCreateItem={handleCreateTask}
         enabled={!!onCreateTask}
         style={styles.container}
+        onCreateModeChange={onCreateModeChange}
       >
         <SectionList
           sections={[]}
@@ -161,6 +164,7 @@ export function TodoList({
         onCreateItem={handleCreateTask}
         enabled={!!onCreateTask}
         style={styles.container}
+        onCreateModeChange={onCreateModeChange}
       >
         <SectionList
           sections={sections}
@@ -179,30 +183,35 @@ export function TodoList({
         onRequestClose={handleCancel}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Edit Todo</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={editText}
-              onChangeText={setEditText}
-              autoFocus
-              multiline
-            />
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonCancel]}
-                onPress={handleCancel}
-              >
-                <Text style={styles.modalButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonSave]}
-                onPress={handleSave}
-              >
-                <Text style={[styles.modalButtonText, styles.modalButtonTextSave]}>Save</Text>
-              </TouchableOpacity>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.keyboardAvoidingView}
+          >
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Edit Todo</Text>
+              <TextInput
+                style={styles.modalInput}
+                value={editText}
+                onChangeText={setEditText}
+                autoFocus
+                multiline
+              />
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalButtonCancel]}
+                  onPress={handleCancel}
+                >
+                  <Text style={styles.modalButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalButtonSave]}
+                  onPress={handleSave}
+                >
+                  <Text style={[styles.modalButtonText, styles.modalButtonTextSave]}>Save</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </View>
       </Modal>
     </React.Fragment>
@@ -305,12 +314,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 20,
   },
+  keyboardAvoidingView: {
+    width: '100%',
+    maxWidth: 400,
+  },
   modalContent: {
     backgroundColor: '#fff',
     borderRadius: 12,
     padding: 20,
     width: '100%',
-    maxWidth: 400,
   },
   modalTitle: {
     fontSize: 20,
@@ -325,6 +337,7 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 16,
     minHeight: 100,
+    maxHeight: 200,
     textAlignVertical: 'top',
     marginBottom: 16,
   },

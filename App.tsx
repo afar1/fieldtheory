@@ -18,6 +18,8 @@ import {
   FlatList,
   RefreshControl,
   Keyboard,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -199,6 +201,18 @@ export default function App() {
   // Track which items have had tasks separated (so we show "Tasks Saved" instead of button)
   const [separatedIds, setSeparatedIds] = useState<Set<string>>(new Set());
   
+  // Track create mode state from PullToCreate - used to show dynamic bottom bar
+  const [createMode, setCreateMode] = useState<{
+    isCreating: boolean;
+    itemType: 'stack' | 'task' | 'observation' | null;
+    text: string;
+    save: (() => void) | null;
+    cancel: (() => void) | null;
+  }>({ isCreating: false, itemType: null, text: '', save: null, cancel: null });
+  
+  // Track keyboard height to position bottom bar above suggestions
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  
   // Brief flash for Tasks tab when tasks are saved
   const [tasksTabFlash, setTasksTabFlash] = useState(false);
   type PagerRef = React.ComponentRef<typeof PagerView>;
@@ -247,6 +261,27 @@ export default function App() {
       }
     }
     loadData();
+  }, []);
+
+  // Track keyboard height to position bottom bar above suggestions
+  useEffect(() => {
+    const showSubscription = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      (event) => {
+        setKeyboardHeight(event.endCoordinates.height);
+      }
+    );
+    const hideSubscription = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => {
+        setKeyboardHeight(0);
+      }
+    );
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
   }, []);
 
   useEffect(() => {
@@ -722,6 +757,19 @@ export default function App() {
     return true;
   }, [transcripts]);
 
+  // Handle create mode changes from PullToCreate - used to show dynamic bottom bar.
+  const handleStackCreateModeChange = useCallback((isCreating: boolean, text: string, save: () => void, cancel: () => void) => {
+    setCreateMode({ isCreating, itemType: 'stack', text, save, cancel });
+  }, []);
+
+  const handleTaskCreateModeChange = useCallback((isCreating: boolean, text: string, save: () => void, cancel: () => void) => {
+    setCreateMode({ isCreating, itemType: 'task', text, save, cancel });
+  }, []);
+
+  const handleObservationCreateModeChange = useCallback((isCreating: boolean, text: string, save: () => void, cancel: () => void) => {
+    setCreateMode({ isCreating, itemType: 'observation', text, save, cancel });
+  }, []);
+
   const handleToggleAutoStart = useCallback(async (value: boolean) => {
     const newSettings = { ...settings, autoStart: value };
     setSettings(newSettings);
@@ -752,28 +800,43 @@ export default function App() {
     }));
   };
 
-  const handleDeleteTranscript = (id: string) => {
-    Alert.alert('Delete transcription?', 'This removes the text from your device.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => {
-          setTranscripts((prev) => {
-            const updated = prev.filter((entry) => entry.id !== id);
-            // Save to storage when deleting
-            StorageService.saveTranscripts(updated).catch(console.error);
-            return updated;
-          });
-          setExpandedMap((prev) => {
-            const next = { ...prev };
-            delete next[id];
-            return next;
-          });
-        },
-      },
-    ]);
-  };
+  const handleDeleteTranscript = useCallback((id: string) => {
+    setTranscripts((prev) => {
+      const updated = prev.filter((entry) => entry.id !== id);
+      // Save to storage when deleting
+      StorageService.saveTranscripts(updated).catch(console.error);
+      return updated;
+    });
+    setExpandedMap((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
+
+  // Transcript editing state
+  const [editingTranscriptId, setEditingTranscriptId] = useState<string | null>(null);
+  const [editTranscriptText, setEditTranscriptText] = useState('');
+
+  const handleUpdateTranscript = useCallback(async (id: string, text: string) => {
+    const updated = transcripts.map((t) => 
+      t.id === id ? { ...t, text: text.trim(), updatedAt: Date.now() } : t
+    );
+    setTranscripts(updated);
+    await StorageService.saveTranscripts(updated);
+    setEditingTranscriptId(null);
+    setEditTranscriptText('');
+  }, [transcripts]);
+
+  const handleEditTranscript = useCallback((transcript: TranscriptEntry) => {
+    setEditingTranscriptId(transcript.id);
+    setEditTranscriptText(transcript.text);
+  }, []);
+
+  const handleCancelEditTranscript = useCallback(() => {
+    setEditingTranscriptId(null);
+    setEditTranscriptText('');
+  }, []);
 
   // Send transcribed text to Cursor's agent dashboard.
   // This pastes the text into Cursor's input field and switches to the browser view.
@@ -916,13 +979,13 @@ export default function App() {
     setSelectedIds(new Set());
   }, []);
 
-  // Delete all selected transcripts with confirmation.
+  // Delete all selected stacks with confirmation.
   // Stays in selection mode so user can continue deleting more items.
   const handleDeleteSelected = useCallback(() => {
     const count = selectedIds.size;
     Alert.alert(
-      `Delete ${count} transcript${count > 1 ? 's' : ''}?`,
-      'This removes the selected transcripts from your device.',
+      `Delete ${count} stack${count > 1 ? 's' : ''}?`,
+      'This removes the selected stacks from your device.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -1121,11 +1184,11 @@ export default function App() {
                 </TouchableOpacity>
               )}
             </View>
-            {/* Edit button - top right (placeholder for future edit functionality) */}
+            {/* Edit button - top right */}
             <TouchableOpacity
-              onPress={() => {
-                // TODO: Implement transcript editing functionality
-                console.log('Edit transcript:', item.id);
+              onPress={(e) => {
+                e.stopPropagation();
+                handleEditTranscript(item);
               }}
               hitSlop={8}
               style={[styles.editButton, selectionMode && styles.actionButtonDisabled]}
@@ -1135,13 +1198,45 @@ export default function App() {
             </TouchableOpacity>
           </View>
           
-          {/* Main text content */}
-          <Text
-            style={styles.transcriptText}
-            numberOfLines={isExpanded ? undefined : MAX_PREVIEW_LINES}
-          >
-            {item.text}
-          </Text>
+          {/* Main text content - show TextInput when editing */}
+          {editingTranscriptId === item.id ? (
+            <View style={styles.transcriptEditContainer}>
+              <TextInput
+                style={styles.transcriptEditInput}
+                value={editTranscriptText}
+                onChangeText={setEditTranscriptText}
+                multiline
+                autoFocus
+                textAlignVertical="top"
+                returnKeyType="default"
+              />
+              <View style={styles.transcriptEditActions}>
+                <TouchableOpacity
+                  onPress={handleCancelEditTranscript}
+                  style={styles.transcriptEditCancel}
+                >
+                  <Text style={styles.transcriptEditCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => handleUpdateTranscript(item.id, editTranscriptText)}
+                  style={[
+                    styles.transcriptEditSave,
+                    !editTranscriptText.trim() && styles.transcriptEditSaveDisabled,
+                  ]}
+                  disabled={!editTranscriptText.trim()}
+                >
+                  <Text style={styles.transcriptEditSaveText}>Save</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <Text
+              style={styles.transcriptText}
+              numberOfLines={isExpanded ? undefined : MAX_PREVIEW_LINES}
+            >
+              {item.text}
+            </Text>
+          )}
           
           {/* Bottom row: Action buttons on left, Expand button on right */}
           <View style={styles.transcriptFooter}>
@@ -1279,6 +1374,7 @@ export default function App() {
               onCreateItem={handleCreateTranscript}
               enabled={true}
               style={{ flex: 1 }}
+              onCreateModeChange={handleStackCreateModeChange}
             >
               {sortedTranscripts.length === 0 ? (
                 <FlatList
@@ -1286,7 +1382,7 @@ export default function App() {
                   renderItem={() => null}
                   ListEmptyComponent={
                     <View style={styles.emptyState}>
-                      <Text style={styles.emptyTitle}>No transcripts yet</Text>
+                      <Text style={styles.emptyTitle}>No stacks yet</Text>
                       <Text style={styles.emptySubtitle}>
                         Pull down to type a note, or tap Record.
                       </Text>
@@ -1309,20 +1405,6 @@ export default function App() {
           <CursorBrowser ref={cursorBrowserRef} />
         </View>
         <View key="todos" style={styles.pageContainer}>
-          <View style={styles.transcriptHeaderControls}>
-            {pageIndex === 2 && (
-              <TouchableOpacity
-                style={styles.sortButton}
-                onPress={() =>
-                  setTodosSortOrder((prev) => (prev === 'newest' ? 'oldest' : 'newest'))
-                }
-              >
-                <Text style={styles.sortButtonText}>
-                  {todosSortOrder === 'newest' ? 'Newest first' : 'Oldest first'}
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
           <TodoList
             sections={todosSections}
             onToggleComplete={handleToggleComplete}
@@ -1331,23 +1413,10 @@ export default function App() {
             formatTime={formatTime}
             formatDateHeader={formatDateHeader}
             onCreateTask={handleCreateTask}
+            onCreateModeChange={handleTaskCreateModeChange}
           />
         </View>
         <View key="observations" style={styles.pageContainer}>
-          <View style={styles.transcriptHeaderControls}>
-            {pageIndex === 3 && (
-              <TouchableOpacity
-                style={styles.sortButton}
-                onPress={() =>
-                  setObservationsSortOrder((prev) => (prev === 'newest' ? 'oldest' : 'newest'))
-                }
-              >
-                <Text style={styles.sortButtonText}>
-                  {observationsSortOrder === 'newest' ? 'Newest first' : 'Oldest first'}
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
           <ObservationList
             sections={observationsSections}
             onUpdate={handleUpdateObservation}
@@ -1355,13 +1424,46 @@ export default function App() {
             formatTime={formatTime}
             formatDateHeader={formatDateHeader}
             onCreateObservation={handleCreateObservation}
+            onCreateModeChange={handleObservationCreateModeChange}
           />
         </View>
       </PagerView>
 
-      {/* BOTTOM BAR - Changes based on selection mode */}
-      <View style={styles.bottomBar}>
-        {selectionMode ? (
+      {/* BOTTOM BAR - Changes based on mode (create > selection > normal) */}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={createMode.isCreating && Platform.OS === 'ios' ? 36 : 0} // 36px offset for iOS suggestion bar when creating
+      >
+        <View style={styles.bottomBar}>
+          {createMode.isCreating ? (
+            /* Create mode: Cancel | Save */
+            <>
+              <TouchableOpacity
+                onPress={() => createMode.cancel?.()}
+                style={styles.tabButton}
+              >
+                <Feather name="x" size={22} color="#6B7280" />
+                <Text style={styles.tabLabel}>Cancel</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                onPress={() => createMode.save?.()}
+                style={[styles.saveTabButton, !createMode.text.trim() && styles.saveTabButtonDisabled]}
+                disabled={!createMode.text.trim()}
+              >
+                <Feather 
+                  name="check" 
+                  size={22} 
+                  color={createMode.text.trim() ? '#fff' : '#9CA3AF'} 
+                />
+                <Text style={[styles.saveTabButtonText, !createMode.text.trim() && styles.saveTabButtonTextDisabled]}>
+                  {createMode.itemType === 'stack' ? 'Save Stack' : 
+                   createMode.itemType === 'task' ? 'Save Task' : 
+                   'Save Note'}
+                </Text>
+              </TouchableOpacity>
+            </>
+          ) : selectionMode ? (
           /* Selection mode: Back | Stack | Unstack | Delete */
           <>
             <TouchableOpacity
@@ -1408,18 +1510,18 @@ export default function App() {
         ) : (
           /* Normal mode: show tab navigation */
           <>
-            {/* Transcripts Tab */}
+            {/* Stacks Tab */}
             <TouchableOpacity 
               style={styles.tabButton} 
               onPress={() => pagerRef.current?.setPage(0)}
             >
               <Feather 
-                name="file-text" 
+                name="layers" 
                 size={22} 
                 color={pageIndex === 0 ? '#007AFF' : '#9CA3AF'} 
               />
               <Text style={[styles.tabLabel, pageIndex === 0 && styles.tabLabelActive]}>
-                Transcripts
+                Stacks
               </Text>
             </TouchableOpacity>
 
@@ -1508,8 +1610,9 @@ export default function App() {
               </Text>
             </TouchableOpacity>
           </>
-        )}
-      </View>
+          )}
+        </View>
+      </KeyboardAvoidingView>
 
       {/* Settings Modal */}
       <Modal
@@ -1565,8 +1668,8 @@ export default function App() {
                 <Text style={styles.settingLabel}>Auto Create Tasks and Observations</Text>
                 <Text style={styles.settingDescription}>
                   {settings.autoSeparate 
-                    ? 'Transcripts are automatically processed' 
-                    : 'Use the Create Tasks button on each transcript'}
+                    ? 'Stacks are automatically processed' 
+                    : 'Use the Create Tasks button on each stack'}
                 </Text>
               </View>
               <Switch
@@ -1795,6 +1898,30 @@ const styles = StyleSheet.create({
   },
   tabLabelDisabled: {
     color: '#D1D5DB',
+  },
+  // Save button in create mode - styled like a prominent action
+  saveTabButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#007AFF',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    marginHorizontal: 8,
+    gap: 8,
+  },
+  saveTabButtonDisabled: {
+    backgroundColor: '#E5E7EB',
+  },
+  saveTabButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  saveTabButtonTextDisabled: {
+    color: '#9CA3AF',
   },
   deleteTabLabel: {
     color: '#DC2626',
@@ -2038,6 +2165,50 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 22,
     color: '#111',
+  },
+  transcriptEditContainer: {
+    marginTop: 8,
+  },
+  transcriptEditInput: {
+    fontSize: 16,
+    lineHeight: 22,
+    color: '#111',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
+    padding: 12,
+    minHeight: 80,
+    maxHeight: 200,
+    backgroundColor: '#F9FAFB',
+  },
+  transcriptEditActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 12,
+    marginTop: 12,
+  },
+  transcriptEditCancel: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+  },
+  transcriptEditCancelText: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  transcriptEditSave: {
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+    backgroundColor: '#2563EB',
+    borderRadius: 8,
+  },
+  transcriptEditSaveDisabled: {
+    opacity: 0.5,
+  },
+  transcriptEditSaveText: {
+    fontSize: 14,
+    color: '#fff',
+    fontWeight: '600',
   },
   transcriptActions: {
     flexDirection: 'row',

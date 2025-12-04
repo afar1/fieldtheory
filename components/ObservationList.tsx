@@ -28,6 +28,8 @@ interface ObservationListProps {
   formatDateHeader: (timestamp: number) => string;
   // Called when user creates a new observation via pull-to-create.
   onCreateObservation?: (text: string) => Promise<boolean> | boolean;
+  // Called when create mode changes - parent uses this for dynamic bottom bar.
+  onCreateModeChange?: (isCreating: boolean, text: string, save: () => void, cancel: () => void) => void;
 }
 
 /**
@@ -43,6 +45,7 @@ export function ObservationList({
   formatTime,
   formatDateHeader,
   onCreateObservation,
+  onCreateModeChange,
 }: ObservationListProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
@@ -72,10 +75,7 @@ export function ObservationList({
   };
 
   const handleDelete = (id: string) => {
-    Alert.alert('Delete Observation', 'Are you sure?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: () => onDelete(id) },
-    ]);
+    onDelete(id);
   };
 
   // Handle creating a new observation via pull-to-create.
@@ -122,6 +122,7 @@ export function ObservationList({
         onCreateItem={handleCreateObservation}
         enabled={!!onCreateObservation}
         style={styles.container}
+        onCreateModeChange={onCreateModeChange}
       >
         <SectionList
           sections={[]}
@@ -145,6 +146,7 @@ export function ObservationList({
         onCreateItem={handleCreateObservation}
         enabled={!!onCreateObservation}
         style={styles.container}
+        onCreateModeChange={onCreateModeChange}
       >
         <SectionList
           sections={sections}
