@@ -4,6 +4,7 @@
 // =============================================================================
 
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import SettingsPanel from './SettingsPanel';
 
 type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
 
@@ -84,6 +85,7 @@ function truncateText(text: string, maxLength: number = 100): string {
  */
 export default function ClipboardHistory() {
   const [isVisible, setIsVisible] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [items, setItems] = useState<ClipboardItem[]>([]);
   const [stacks, setStacks] = useState<StackInfo[]>([]);
   const [expandedStacks, setExpandedStacks] = useState<Set<string>>(new Set());
@@ -233,8 +235,14 @@ export default function ClipboardHistory() {
       setSelectedIndex(0);
       setSelectedIds(new Set());
       setIsMultiSelect(false);
+      setShowSettings(false); // Reset to clipboard view when window is shown via hotkey
       // Focus input directly - this fires on every window show
       inputRef.current?.focus();
+    });
+
+    // Listen for show settings event (from menu bar "Settings" item)
+    const unsubscribeShowSettings = window.clipboardAPI.onShowSettings?.(() => {
+      setShowSettings(true);
     });
 
     // Listen for target app info (sent when window is shown).
@@ -275,6 +283,7 @@ export default function ClipboardHistory() {
       unsubscribeBounds?.();
       unsubscribePosition();
       unsubscribeShowHistory();
+      unsubscribeShowSettings?.();
       unsubscribeTargetAppInfo?.();
       unsubscribeAdded();
       unsubscribeDeleted();
@@ -749,65 +758,69 @@ export default function ClipboardHistory() {
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
-            padding: '16px',
           }}
         >
-      {/* Search input - standard input element with autoFocus */}
-      <input
-        ref={inputRef}
-        type="text"
-        value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
-        placeholder="Search clipboard history..."
-        autoFocus
-        style={{
-          width: '100%',
-          padding: '10px 14px',
-          border: '1px solid #e0e0e0',
-          borderRadius: '8px',
-          fontSize: '13px',
-          outline: 'none',
-          boxSizing: 'border-box',
-          backgroundColor: '#ffffff',
-        }}
-      />
+      {/* Conditionally show Settings or Clipboard History */}
+      {showSettings ? (
+        <SettingsPanel />
+      ) : (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '16px' }}>
+          {/* Search input - standard input element with autoFocus */}
+          <input
+            ref={inputRef}
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search clipboard history..."
+            autoFocus
+            style={{
+              width: '100%',
+              padding: '10px 14px',
+              border: '1px solid #e0e0e0',
+              borderRadius: '8px',
+              fontSize: '13px',
+              outline: 'none',
+              boxSizing: 'border-box',
+              backgroundColor: '#ffffff',
+            }}
+          />
 
-      {/* Filter tabs */}
-      <div
-        style={{
-          display: 'flex',
-          borderBottom: '1px solid #e0e0e0',
-          padding: '8px 8px 0 8px',
-          marginTop: '12px',
-        }}
-      >
-        {selectedIds.size > 0 && (
+          {/* Filter tabs */}
           <div
             style={{
-              marginLeft: 'auto',
-              padding: '8px 16px',
-              fontSize: '12px',
-              color: '#666',
+              display: 'flex',
+              borderBottom: '1px solid #e0e0e0',
+              padding: '8px 8px 0 8px',
+              marginTop: '12px',
             }}
           >
-            {selectedIds.size} selected
+            {selectedIds.size > 0 && (
+              <div
+                style={{
+                  marginLeft: 'auto',
+                  padding: '8px 16px',
+                  fontSize: '12px',
+                  color: '#666',
+                }}
+              >
+                {selectedIds.size} selected
+              </div>
+            )}
           </div>
-        )}
-      </div>
 
-      {/* Items list */}
-      <div
-        ref={listRef}
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          overflowX: 'hidden',
-          minHeight: 0,
-          marginTop: '8px',
-          borderRadius: '8px',
-          border: '1px solid #f0f0f0',
-        }}
-      >
+          {/* Items list */}
+          <div
+            ref={listRef}
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              minHeight: 0,
+              marginTop: '8px',
+              borderRadius: '8px',
+              border: '1px solid #f0f0f0',
+            }}
+          >
         {listRows.length === 0 && !loading ? (
           <div
             style={{
@@ -1318,27 +1331,29 @@ export default function ClipboardHistory() {
           })
         )}
 
-        {/* Load more */}
-        {hasMore && (
-          <button
-            onClick={handleLoadMore}
-            disabled={loading}
-            style={{
-              width: '100%',
-              padding: '12px',
-              border: 'none',
-              borderTop: '1px solid #e0e0e0',
-              backgroundColor: '#f9f9f9',
-              cursor: loading ? 'wait' : 'pointer',
-              fontSize: '12px',
-            }}
-          >
-            {loading ? 'Loading...' : 'Load More'}
-          </button>
-        )}
-      </div>
+          {/* Load more */}
+          {hasMore && (
+            <button
+              onClick={handleLoadMore}
+              disabled={loading}
+              style={{
+                width: '100%',
+                padding: '12px',
+                border: 'none',
+                borderTop: '1px solid #e0e0e0',
+                backgroundColor: '#f9f9f9',
+                cursor: loading ? 'wait' : 'pointer',
+                fontSize: '12px',
+              }}
+            >
+              {loading ? 'Loading...' : 'Load More'}
+            </button>
+          )}
+        </div>
+        </div>
+      )}
       
-      {/* Target app footer - shows which app content will be pasted into. */}
+      {/* Footer - shows target app info when in clipboard mode, or just settings toggle */}
       <div
         style={{
           padding: '10px 16px',
@@ -1352,25 +1367,67 @@ export default function ClipboardHistory() {
           userSelect: 'none',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ color: '#888' }}>Paste into:</span>
-          <span
+        {/* Left side: target app info (only in clipboard mode) */}
+        {!showSettings ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ color: '#888' }}>Paste into:</span>
+            <span
+              style={{
+                fontWeight: 500,
+                color: '#333',
+                backgroundColor: '#e8e8e8',
+                padding: '3px 8px',
+                borderRadius: '4px',
+              }}
+            >
+              {targetAppInfo.targetApp?.name || 'Select app'}
+            </span>
+          </div>
+        ) : (
+          <div style={{ flex: 1 }} />
+        )}
+
+        {/* Right side: tab hint (clipboard mode) or spacer, plus settings toggle button */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {!showSettings && targetAppInfo.runningApps.length > 1 && (
+            <div style={{ color: '#999', fontSize: '11px' }}>
+              Tab to switch • {targetAppInfo.runningApps.length} apps
+            </div>
+          )}
+          
+          {/* Settings toggle button */}
+          <button
+            onClick={() => setShowSettings(!showSettings)}
+            title={showSettings ? 'Back to Clipboard' : 'Settings'}
             style={{
-              fontWeight: 500,
-              color: '#333',
-              backgroundColor: '#e8e8e8',
-              padding: '3px 8px',
-              borderRadius: '4px',
+              width: '28px',
+              height: '28px',
+              padding: 0,
+              backgroundColor: showSettings ? '#007AFF' : 'transparent',
+              border: showSettings ? 'none' : '1px solid #d0d0d0',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'all 0.15s ease',
             }}
           >
-            {targetAppInfo.targetApp?.name || 'Select app'}
-          </span>
+            {showSettings ? (
+              // Close/back icon when settings is shown
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M18 6L6 18" />
+                <path d="M6 6l12 12" />
+              </svg>
+            ) : (
+              // Settings gear icon when clipboard is shown
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            )}
+          </button>
         </div>
-        {targetAppInfo.runningApps.length > 1 && (
-          <div style={{ color: '#999', fontSize: '11px' }}>
-            Tab to switch • {targetAppInfo.runningApps.length} apps
-          </div>
-        )}
       </div>
         </div>
         
