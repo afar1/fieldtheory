@@ -1,0 +1,501 @@
+// =============================================================================
+// SettingsPanel - Consolidated settings UI for the clipboard history window.
+// Shows audio, transcription, vision, and clipboard settings in one view.
+// Styled consistently with the clipboard history window's design language.
+// =============================================================================
+
+import { useEffect, useState, useCallback } from 'react';
+import AudioSettingsPanel from './AudioSettingsPanel';
+import TranscriptionSettings from './TranscriptionSettings';
+import VisionSettings from './VisionSettings';
+
+/**
+ * SettingsPanel - Settings content designed to live inside the clipboard history window.
+ * Keeps the same functionality as the original App.tsx settings, but styled for the
+ * clipboard history context.
+ */
+export default function SettingsPanel() {
+  // Permissions state
+  const [permissions, setPermissions] = useState<{ accessibilityGranted: boolean } | null>(null);
+  const [showPermissionsGate, setShowPermissionsGate] = useState(false);
+  
+  // Clipboard hotkey configuration
+  const [clipboardHotkeys, setClipboardHotkeys] = useState<{ screenshot?: string; history?: string }>({
+    screenshot: 'CommandOrControl+Shift+4',
+    history: 'CommandOrControl+Shift+V',
+  });
+  const [isCapturingScreenshotHotkey, setIsCapturingScreenshotHotkey] = useState(false);
+  const [isCapturingHistoryHotkey, setIsCapturingHistoryHotkey] = useState(false);
+  const [hotkeyError, setHotkeyError] = useState<string | null>(null);
+  
+  // Load clipboard hotkeys on mount
+  useEffect(() => {
+    if (window.clipboardAPI) {
+      window.clipboardAPI.getHotkeys().then(hotkeys => {
+        setClipboardHotkeys(hotkeys);
+      });
+    }
+  }, []);
+  
+  // Helper function to build hotkey string from keyboard event (uses physical key codes)
+  const buildHotkeyString = (event: KeyboardEvent): string => {
+    const parts: string[] = [];
+    if (event.metaKey) parts.push('Command');
+    if (event.ctrlKey) parts.push('Control');
+    if (event.altKey) parts.push('Alt');
+    if (event.shiftKey) parts.push('Shift');
+
+    // Use physical key code to avoid locale-specific characters
+    let key = event.code;
+
+    if (key.startsWith('Key')) {
+      key = key.substring(3).toUpperCase();
+    } else if (key.startsWith('Digit')) {
+      key = key.substring(5);
+    } else {
+      const codeMap: Record<string, string> = {
+        'Space': 'Space',
+        'Backquote': '`',
+        'Backslash': '\\',
+        'BracketLeft': '[',
+        'BracketRight': ']',
+        'Comma': ',',
+        'Equal': '=',
+        'Minus': '-',
+        'Period': '.',
+        'Quote': "'",
+        'Semicolon': ';',
+        'Slash': '/',
+        'CapsLock': 'CapsLock',
+        'Escape': 'Escape',
+        'Enter': 'Enter',
+        'Tab': 'Tab',
+        'Backspace': 'Backspace',
+        'Delete': 'Delete',
+        'ArrowUp': 'Up',
+        'ArrowDown': 'Down',
+        'ArrowLeft': 'Left',
+        'ArrowRight': 'Right',
+        'PageUp': 'PageUp',
+        'PageDown': 'PageDown',
+        'Home': 'Home',
+        'End': 'End',
+        'Insert': 'Insert',
+        'F1': 'F1', 'F2': 'F2', 'F3': 'F3', 'F4': 'F4',
+        'F5': 'F5', 'F6': 'F6', 'F7': 'F7', 'F8': 'F8',
+        'F9': 'F9', 'F10': 'F10', 'F11': 'F11', 'F12': 'F12',
+      };
+      if (codeMap[key]) {
+        key = codeMap[key];
+      } else {
+        const fallback = event.key;
+        if (fallback && fallback.length === 1 && fallback.charCodeAt(0) < 128) {
+          key = fallback.toUpperCase();
+        } else {
+          console.warn(`[Hotkey] Unsupported key: ${event.code} (key: ${event.key})`);
+          return '';
+        }
+      }
+    }
+
+    if (key === 'Meta' || key === 'Control' || key === 'Alt' || key === 'Shift') {
+      return '';
+    }
+
+    return parts.length > 0 ? `${parts.join('+')}+${key}` : key;
+  };
+
+  const isModifierOnly = (s: string) => {
+    return s === 'Command' || s === 'Control' || s === 'Alt' || s === 'Shift';
+  };
+  
+  // Handler for setting screenshot hotkey
+  const handleSetScreenshotHotkey = useCallback(async (hotkeyString: string) => {
+    setIsCapturingScreenshotHotkey(false);
+    setHotkeyError(null);
+    
+    if (!window.clipboardAPI) return;
+    
+    if (!hotkeyString || isModifierOnly(hotkeyString)) {
+      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+      return;
+    }
+
+    try {
+      const success = await window.clipboardAPI.setHotkeys({ screenshot: hotkeyString });
+      if (!success) {
+        setHotkeyError('Failed to register screenshot hotkey. It may be in use by another application.');
+      } else {
+        setClipboardHotkeys(prev => ({ ...prev, screenshot: hotkeyString }));
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set screenshot hotkey');
+      console.error('Failed to set screenshot hotkey:', err);
+    }
+  }, []);
+  
+  // Handler for setting history hotkey
+  const handleSetHistoryHotkey = useCallback(async (hotkeyString: string) => {
+    setIsCapturingHistoryHotkey(false);
+    setHotkeyError(null);
+    
+    if (!window.clipboardAPI) return;
+    
+    if (!hotkeyString || isModifierOnly(hotkeyString)) {
+      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+      return;
+    }
+
+    try {
+      const success = await window.clipboardAPI.setHotkeys({ history: hotkeyString });
+      if (!success) {
+        setHotkeyError('Failed to register history hotkey. It may be in use by another application.');
+      } else {
+        setClipboardHotkeys(prev => ({ ...prev, history: hotkeyString }));
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set history hotkey');
+      console.error('Failed to set history hotkey:', err);
+    }
+  }, []);
+  
+  // Capture hotkey when user is setting screenshot or history shortcut.
+  useEffect(() => {
+    const capturing = isCapturingScreenshotHotkey ? 'screenshot' : isCapturingHistoryHotkey ? 'history' : null;
+    if (!capturing) return;
+    
+    const handleKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const hotkeyString = buildHotkeyString(event);
+      if (hotkeyString) {
+        capturing === 'screenshot' ? handleSetScreenshotHotkey(hotkeyString) : handleSetHistoryHotkey(hotkeyString);
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isCapturingScreenshotHotkey, isCapturingHistoryHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey]);
+
+  // Check permissions on mount and when status changes
+  useEffect(() => {
+    const permissionsAPI = window.permissionsAPI;
+    if (!permissionsAPI) {
+      console.log('[SettingsPanel] permissionsAPI not available, assuming permissions granted');
+      setPermissions({ accessibilityGranted: true });
+      setShowPermissionsGate(false);
+      return;
+    }
+
+    const checkPermissions = async () => {
+      try {
+        const status = await permissionsAPI.check();
+        setPermissions(status);
+        setShowPermissionsGate(!status.accessibilityGranted);
+      } catch (error) {
+        console.error('Failed to check permissions:', error);
+        setPermissions({ accessibilityGranted: true });
+        setShowPermissionsGate(false);
+      }
+    };
+
+    checkPermissions();
+
+    const unsubscribeStatus = permissionsAPI.onStatusChanged((status: { accessibilityGranted: boolean }) => {
+      setPermissions(status);
+      setShowPermissionsGate(!status.accessibilityGranted);
+    });
+
+    const unsubscribeRevoked = permissionsAPI.onRevoked(() => {
+      setShowPermissionsGate(true);
+      checkPermissions();
+    });
+
+    let pollInterval: ReturnType<typeof setInterval> | null = null;
+    if (showPermissionsGate) {
+      pollInterval = setInterval(() => {
+        checkPermissions();
+      }, 2000);
+    }
+
+    return () => {
+      unsubscribeStatus?.();
+      unsubscribeRevoked?.();
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
+    };
+  }, [showPermissionsGate]);
+
+  // Show loading state while checking permissions
+  if (permissions === null) {
+    return (
+      <div style={styles.loading}>
+        <div style={styles.loadingText}>Loading...</div>
+      </div>
+    );
+  }
+
+  // Permissions gate - show inline warning instead of blocking the whole UI
+  const permissionsWarning = showPermissionsGate && permissions && !permissions.accessibilityGranted && (
+    <div style={styles.permissionsWarning}>
+      <div style={styles.permissionsContent}>
+        <h3 style={styles.permissionsTitle}>⚠️ Accessibility Permission Required</h3>
+        <p style={styles.permissionsText}>
+          Oscar needs Accessibility permission to paste clipboard items.
+        </p>
+        <button
+          onClick={() => {
+            window.open('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility', '_blank');
+          }}
+          style={styles.permissionsButton}
+        >
+          Open Settings
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={styles.container}>
+      <h2 style={styles.title}>Settings</h2>
+
+      {permissionsWarning}
+
+      <div style={styles.section}>
+        <h3 style={styles.sectionTitle}>Audio</h3>
+        <AudioSettingsPanel />
+      </div>
+
+      <div style={styles.section}>
+        <h3 style={styles.sectionTitle}>Transcription</h3>
+        <TranscriptionSettings />
+      </div>
+
+      <div style={styles.section}>
+        <h3 style={styles.sectionTitle}>Vision</h3>
+        <VisionSettings />
+      </div>
+
+      <div style={styles.section}>
+        <h3 style={styles.sectionTitle}>Clipboard History</h3>
+        <p style={styles.sectionDescription}>
+          Configure hotkeys for clipboard history features.
+        </p>
+        
+        <div style={styles.hotkeyCard}>
+          <h4 style={styles.hotkeyTitle}>Hotkey Configuration</h4>
+          
+          {/* Screenshot Hotkey */}
+          <div style={styles.hotkeyRow}>
+            <label style={styles.hotkeyLabel}>Screenshot Hotkey</label>
+            <div style={styles.hotkeyButtonRow}>
+              <button
+                onClick={() => {
+                  setIsCapturingScreenshotHotkey(true);
+                  setHotkeyError(null);
+                }}
+                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey}
+                style={{
+                  ...styles.hotkeyButton,
+                  ...(isCapturingScreenshotHotkey ? styles.hotkeyButtonActive : {}),
+                }}
+              >
+                {isCapturingScreenshotHotkey ? 'Press key combination...' : `Change (${clipboardHotkeys.screenshot || 'Not set'})`}
+              </button>
+              {isCapturingScreenshotHotkey && (
+                <button
+                  onClick={() => {
+                    setIsCapturingScreenshotHotkey(false);
+                    setHotkeyError(null);
+                  }}
+                  style={styles.cancelButton}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          </div>
+          
+          {/* History Hotkey */}
+          <div style={styles.hotkeyRow}>
+            <label style={styles.hotkeyLabel}>History Hotkey</label>
+            <div style={styles.hotkeyButtonRow}>
+              <button
+                onClick={() => {
+                  setIsCapturingHistoryHotkey(true);
+                  setHotkeyError(null);
+                }}
+                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey}
+                style={{
+                  ...styles.hotkeyButton,
+                  ...(isCapturingHistoryHotkey ? styles.hotkeyButtonActive : {}),
+                }}
+              >
+                {isCapturingHistoryHotkey ? 'Press key combination...' : `Change (${clipboardHotkeys.history || 'Not set'})`}
+              </button>
+              {isCapturingHistoryHotkey && (
+                <button
+                  onClick={() => {
+                    setIsCapturingHistoryHotkey(false);
+                    setHotkeyError(null);
+                  }}
+                  style={styles.cancelButton}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          </div>
+          
+          {hotkeyError && (
+            <p style={styles.hotkeyError}>{hotkeyError}</p>
+          )}
+          
+          <p style={styles.hotkeyHelp}>
+            Supports 2-3 modifier keys + primary key (e.g., Command+Shift+Control+Space). 
+            Screenshot hotkey captures selected area and adds to prompt stack.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Styles consistent with ClipboardHistory styling
+const styles: Record<string, React.CSSProperties> = {
+  container: {
+    padding: '16px',
+    overflowY: 'auto',
+    height: '100%',
+    boxSizing: 'border-box',
+  },
+  loading: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: '100%',
+  },
+  loadingText: {
+    color: '#666',
+    fontSize: '13px',
+  },
+  title: {
+    fontSize: '18px',
+    fontWeight: 600,
+    marginTop: 0,
+    marginBottom: '20px',
+    color: '#111',
+  },
+  section: {
+    marginBottom: '24px',
+  },
+  sectionTitle: {
+    fontSize: '14px',
+    fontWeight: 600,
+    color: '#374151',
+    marginTop: 0,
+    marginBottom: '12px',
+  },
+  sectionDescription: {
+    fontSize: '13px',
+    color: '#6b7280',
+    marginTop: 0,
+    marginBottom: '12px',
+  },
+  permissionsWarning: {
+    backgroundColor: '#fff3e0',
+    border: '1px solid #ff9800',
+    borderRadius: '8px',
+    padding: '16px',
+    marginBottom: '20px',
+  },
+  permissionsContent: {
+    textAlign: 'center',
+  },
+  permissionsTitle: {
+    fontSize: '14px',
+    fontWeight: 600,
+    marginTop: 0,
+    marginBottom: '8px',
+    color: '#e65100',
+  },
+  permissionsText: {
+    fontSize: '13px',
+    color: '#666',
+    marginBottom: '12px',
+  },
+  permissionsButton: {
+    padding: '8px 16px',
+    backgroundColor: '#007AFF',
+    color: 'white',
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontSize: '13px',
+    fontWeight: 500,
+  },
+  hotkeyCard: {
+    padding: '16px',
+    borderRadius: '8px',
+    backgroundColor: '#f9fafb',
+    border: '1px solid #e5e7eb',
+  },
+  hotkeyTitle: {
+    marginTop: 0,
+    marginBottom: '16px',
+    fontSize: '14px',
+    fontWeight: 600,
+    color: '#374151',
+  },
+  hotkeyRow: {
+    marginBottom: '12px',
+  },
+  hotkeyLabel: {
+    display: 'block',
+    marginBottom: '6px',
+    fontSize: '13px',
+    color: '#6b7280',
+  },
+  hotkeyButtonRow: {
+    display: 'flex',
+    gap: '8px',
+    alignItems: 'center',
+  },
+  hotkeyButton: {
+    padding: '6px 12px',
+    fontSize: '12px',
+    fontWeight: 500,
+    color: '#374151',
+    backgroundColor: '#fff',
+    border: '1px solid #d1d5db',
+    borderRadius: '6px',
+    cursor: 'pointer',
+  },
+  hotkeyButtonActive: {
+    backgroundColor: '#3b82f6',
+    color: '#fff',
+    borderColor: '#3b82f6',
+  },
+  cancelButton: {
+    padding: '6px 12px',
+    fontSize: '12px',
+    color: '#6b7280',
+    backgroundColor: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+  },
+  hotkeyError: {
+    marginTop: '8px',
+    marginBottom: 0,
+    fontSize: '12px',
+    color: '#ef4444',
+  },
+  hotkeyHelp: {
+    marginTop: '12px',
+    marginBottom: 0,
+    fontSize: '11px',
+    color: '#6b7280',
+    lineHeight: '1.5',
+  },
+};
