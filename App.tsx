@@ -1057,23 +1057,38 @@ export default function App() {
             </TouchableOpacity>
           )}
           
-          {/* Top row: Time/Copied on left, Expand on right */}
+          {/* Top row: Time + Stack badge on left, Edit button on right */}
           <View style={styles.transcriptHeader}>
-            <Text style={[styles.transcriptTime, isCopied && styles.transcriptTimeCopied]}>
-              {isCopied ? 'Copied!' : formatTime(item.createdAt)}
-            </Text>
-            {/* Expand/Collapse - simple text with caret */}
-            {shouldShowExpand && (
-              <TouchableOpacity
-                onPress={handleExpandPress}
-                hitSlop={8}
-                style={styles.expandButton}
-              >
-                <Text style={styles.expandButtonText}>
-                  {isExpanded ? 'Collapse ▲' : 'Expand ▼'}
-                </Text>
-              </TouchableOpacity>
-            )}
+            <View style={styles.transcriptHeaderLeft}>
+              <Text style={[styles.transcriptTime, isCopied && styles.transcriptTimeCopied]}>
+                {isCopied ? 'Copied!' : formatTime(item.createdAt)}
+              </Text>
+              {/* Stack badge - next to time */}
+              {isStacked && (
+                <TouchableOpacity
+                  onLongPress={handleStackBadgeLongPress}
+                  delayLongPress={85}
+                  style={styles.stackBadge}
+                  hitSlop={8}
+                  disabled={selectionMode}
+                >
+                  <Feather name="layers" size={12} color={selectionMode ? '#9CA3AF' : '#1D4ED8'} />
+                  <Text style={[styles.stackBadgeText, selectionMode && styles.stackBadgeTextDisabled]}>{stackCount}</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            {/* Edit button - top right (placeholder for future edit functionality) */}
+            <TouchableOpacity
+              onPress={() => {
+                // TODO: Implement transcript editing functionality
+                console.log('Edit transcript:', item.id);
+              }}
+              hitSlop={8}
+              style={[styles.editButton, selectionMode && styles.actionButtonDisabled]}
+              disabled={selectionMode}
+            >
+              <Feather name="edit-2" size={14} color={selectionMode ? '#9CA3AF' : '#6B7280'} />
+            </TouchableOpacity>
           </View>
           
           {/* Main text content */}
@@ -1084,7 +1099,7 @@ export default function App() {
             {item.text}
           </Text>
           
-          {/* Bottom row: Action buttons on left, Stack badge on right */}
+          {/* Bottom row: Action buttons on left, Expand button on right */}
           <View style={styles.transcriptFooter}>
             <View style={styles.transcriptActions}>
               {/* Send to Cursor button - only shown when Cursor tab is enabled */}
@@ -1135,17 +1150,16 @@ export default function App() {
                 )
               )}
             </View>
-            {/* Stack badge in bottom right - long press to unstack */}
-            {isStacked && (
+            {/* Expand/Collapse button - bottom right */}
+            {shouldShowExpand && (
               <TouchableOpacity
-                onLongPress={handleStackBadgeLongPress}
-                delayLongPress={85}
-                style={styles.stackBadge}
+                onPress={handleExpandPress}
                 hitSlop={8}
-                disabled={selectionMode}
+                style={styles.expandButton}
               >
-                <Feather name="layers" size={12} color={selectionMode ? '#9CA3AF' : '#1D4ED8'} />
-                <Text style={[styles.stackBadgeText, selectionMode && styles.stackBadgeTextDisabled]}>{stackCount}</Text>
+                <Text style={styles.expandButtonText}>
+                  {isExpanded ? 'Collapse ▲' : 'Expand ▼'}
+                </Text>
               </TouchableOpacity>
             )}
           </View>
@@ -1904,6 +1918,14 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 8,
+  },
+  transcriptHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  editButton: {
+    padding: 4,
   },
   transcriptFooter: {
     flexDirection: 'row',
