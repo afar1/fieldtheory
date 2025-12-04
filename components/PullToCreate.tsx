@@ -6,9 +6,7 @@ import {
   StyleSheet,
   Animated,
   Keyboard,
-  TouchableOpacity,
   Vibration,
-  Platform,
   NativeSyntheticEvent,
   NativeScrollEvent,
 } from 'react-native';
@@ -17,8 +15,8 @@ import { Feather } from '@expo/vector-icons';
 // How far the user must pull (overscroll) to activate the create card.
 const PULL_THRESHOLD = 80;
 
-// Height of the new item card when fully revealed.
-const CARD_HEIGHT = 140;
+// Minimum height of the new item card (just the input, no header).
+const CARD_HEIGHT = 56;
 
 export type ItemType = 'transcript' | 'task' | 'observation';
 
@@ -37,6 +35,9 @@ interface PullToCreateProps {
   
   // Style for the container.
   style?: any;
+  
+  // Called when create mode changes - parent can use this to show/hide bottom bar.
+  onCreateModeChange?: (isCreating: boolean, text: string, save: () => void, cancel: () => void) => void;
 }
 
 /**
@@ -55,6 +56,7 @@ export function PullToCreate({
   enabled = true,
   children,
   style,
+  onCreateModeChange,
 }: PullToCreateProps) {
   // Track whether the create card is actively shown.
   const [isCreating, setIsCreating] = useState(false);
@@ -74,6 +76,9 @@ export function PullToCreate({
   // Reference to the text input for auto-focus.
   const inputRef = useRef<TextInput>(null);
   
+  // Track if we just submitted via keyboard to prevent double-save on blur.
+  const justSubmitted = useRef(false);
+  
   // Track if user is currently dragging.
   const isDragging = useRef(false);
   
@@ -87,7 +92,7 @@ export function PullToCreate({
   const getPlaceholder = () => {
     switch (itemType) {
       case 'transcript':
-        return 'Type your note...';
+        return 'Add to stack...';
       case 'task':
         return 'Add a new task...';
       case 'observation':
@@ -117,6 +122,7 @@ export function PullToCreate({
     if (!trimmedText || isSaving) return;
     
     setIsSaving(true);
+    justSubmitted.current = true;
     Keyboard.dismiss();
     
     try {
@@ -130,12 +136,17 @@ export function PullToCreate({
       console.error('Failed to create item:', error);
     } finally {
       setIsSaving(false);
+      // Reset flag after a short delay to allow blur to check it
+      setTimeout(() => {
+        justSubmitted.current = false;
+      }, 100);
     }
   }, [newItemText, isSaving, onCreateItem]);
 
   // Handle canceling the create action.
   const handleCancel = useCallback(() => {
     Keyboard.dismiss();
+    justSubmitted.current = false;
     
     // Animate card closed.
     Animated.spring(cardHeight, {
@@ -149,9 +160,20 @@ export function PullToCreate({
     });
   }, [cardHeight]);
 
+  // Notify parent when create mode changes so it can update the bottom bar.
+  // Include handleSave and handleCancel in dependencies so parent always has current function references.
+  useEffect(() => {
+    if (onCreateModeChange) {
+      onCreateModeChange(isCreating, newItemText, handleSave, handleCancel);
+    }
+  }, [isCreating, newItemText, onCreateModeChange, handleSave, handleCancel]);
+
   // Open the create card (called when user pulls past threshold and releases).
   const openCreateCard = useCallback(() => {
     if (isCreating) return;
+    
+    // Reset pull indicator immediately so it doesn't stay visible.
+    pullProgress.setValue(0);
     
     setIsCreating(true);
     hasTriggeredCreate.current = true;
@@ -167,7 +189,7 @@ export function PullToCreate({
       // Focus the input after animation completes.
       setTimeout(() => inputRef.current?.focus(), 100);
     });
-  }, [cardHeight, isCreating]);
+  }, [cardHeight, isCreating, pullProgress]);
 
   // Handle scroll events to detect overscroll (iOS bounce).
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -243,10 +265,12 @@ export function PullToCreate({
     extrapolate: 'clamp',
   });
 
-  // Card container height animation.
+  // Card container - no longer animated height, let it size naturally.
+  // We still animate cardHeight for the initial reveal, but the container
+  // uses 'auto' height once open.
   const cardContainerHeight = cardHeight.interpolate({
     inputRange: [0, CARD_HEIGHT],
-    outputRange: [0, CARD_HEIGHT + 16],
+    outputRange: [0, CARD_HEIGHT],
     extrapolate: 'clamp',
   });
 
@@ -279,6 +303,9 @@ export function PullToCreate({
     });
   });
 
+  // Ensure accentColor is valid (fallback to blue if undefined)
+  const safeAccentColor = accentColor || '#2563EB';
+
   return (
     <View style={[styles.container, style]}>
       {/* Pull indicator - shows while pulling before card opens */}
@@ -296,48 +323,17 @@ export function PullToCreate({
           ]}
           pointerEvents="none"
         >
-          <Feather name="plus-circle" size={28} color={accentColor} />
-          <Text style={[styles.pullIndicatorText, { color: accentColor }]}>
+          <Feather name="plus-circle" size={28} color={safeAccentColor} />
+          <Text style={[styles.pullIndicatorText, { color: safeAccentColor }]}>
             Release to create
           </Text>
         </Animated.View>
       )}
 
-      {/* New item card - animates in when user pulls past threshold */}
+      {/* New item card - minimal, just the input */}
       <Animated.View style={[styles.cardContainer, { height: cardContainerHeight }]}>
         {isCreating && (
-          <View style={[styles.card, { borderColor: accentColor }]}>
-            {/* Card header with type indicator and actions */}
-            <View style={styles.cardHeader}>
-              <View style={[styles.typeIndicator, { backgroundColor: accentColor }]}>
-                <Feather
-                  name={
-                    itemType === 'task'
-                      ? 'check-square'
-                      : itemType === 'observation'
-                      ? 'eye'
-                      : 'file-text'
-                  }
-                  size={12}
-                  color="#fff"
-                />
-                <Text style={styles.typeIndicatorText}>
-                  New {itemType === 'task' ? 'Task' : itemType === 'observation' ? 'Note' : 'Transcript'}
-                </Text>
-              </View>
-              
-              <View style={styles.cardActions}>
-                <TouchableOpacity
-                  onPress={handleCancel}
-                  style={styles.cancelButton}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Feather name="x" size={18} color="#9CA3AF" />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Text input area */}
+          <View style={[styles.card, { borderColor: safeAccentColor }]}>
             <TextInput
               ref={inputRef}
               style={styles.input}
@@ -347,29 +343,10 @@ export function PullToCreate({
               onChangeText={setNewItemText}
               multiline
               autoFocus
-              textAlignVertical="top"
-              returnKeyType="done"
-              blurOnSubmit
-              onSubmitEditing={handleSave}
+              scrollEnabled={false}
+              returnKeyType="default"
+              blurOnSubmit={false}
             />
-
-            {/* Save button */}
-            <View style={styles.cardFooter}>
-              <TouchableOpacity
-                onPress={handleSave}
-                style={[
-                  styles.saveButton,
-                  { backgroundColor: accentColor },
-                  (!newItemText.trim() || isSaving) && styles.saveButtonDisabled,
-                ]}
-                disabled={!newItemText.trim() || isSaving}
-              >
-                <Feather name="check" size={16} color="#fff" />
-                <Text style={styles.saveButtonText}>
-                  {isSaving ? 'Saving...' : 'Save'}
-                </Text>
-              </TouchableOpacity>
-            </View>
           </View>
         )}
       </Animated.View>
@@ -383,6 +360,7 @@ export function PullToCreate({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    position: 'relative',
   },
   
   // Pull indicator shown while dragging down.
@@ -408,11 +386,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   
-  // The new item card.
+  // The new item card - minimal, just wraps the input.
   card: {
     backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 12,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     marginTop: 8,
     borderWidth: 2,
     shadowColor: '#000',
@@ -422,64 +401,12 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   
-  // Card header with type badge and close button.
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  typeIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    gap: 4,
-  },
-  typeIndicatorText: {
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  cardActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  cancelButton: {
-    padding: 4,
-  },
-  
-  // Text input inside the card.
+  // Text input inside the card - single line initially, expands with content.
   input: {
     fontSize: 16,
     color: '#111',
-    minHeight: 50,
-    maxHeight: 70,
-    paddingVertical: 4,
+    paddingVertical: 0,
     lineHeight: 22,
-  },
-  
-  // Footer with save button.
-  cardFooter: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    marginTop: 8,
-  },
-  saveButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
-    gap: 4,
-  },
-  saveButtonDisabled: {
-    opacity: 0.5,
-  },
-  saveButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
+    textAlignVertical: 'top',
   },
 });

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { app, globalShortcut, clipboard } from 'electron';
+import { app, globalShortcut, clipboard, Notification } from 'electron';
 import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import { exec } from 'child_process';
@@ -631,11 +631,14 @@ export class TranscriberManager extends EventEmitter {
       await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
       console.log('[TranscriberManager] Text pasted successfully');
     } catch (error) {
-      // If paste fails (e.g., accessibility denied), text is still in clipboard
+      // If paste fails (e.g., no input field selected), text is still in clipboard
       const errorMsg = error instanceof Error ? error.message : String(error);
-      console.warn('[TranscriberManager] Failed to paste text (accessibility may be denied):', errorMsg);
-      // Emit a warning but don't throw - clipboard fallback is acceptable
-      this.emit('error', new Error(`Failed to paste text. Text is in clipboard. Error: ${errorMsg}`));
+      console.warn('[TranscriberManager] Failed to paste text (no input field selected):', errorMsg);
+      // Show friendly notification instead of error - user can manually paste with Cmd+V
+      new Notification({
+        title: 'Transcription Ready',
+        body: 'Saved to clipboard - paste with Cmd+V',
+      }).show();
     }
   }
 
