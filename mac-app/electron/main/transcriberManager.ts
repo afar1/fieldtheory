@@ -14,6 +14,23 @@ import { ClipboardManager, ClipboardItem } from './clipboardManager';
 const execAsync = promisify(exec);
 
 /**
+ * Play a sound file using the system's audio player.
+ * On macOS, uses `afplay` command.
+ */
+function playSound(soundFile: string): void {
+  const soundPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'sounds', soundFile)
+    : path.join(__dirname, '../../public/sounds', soundFile);
+  
+  // Use afplay on macOS to play the sound asynchronously
+  exec(`afplay "${soundPath}"`, (error) => {
+    if (error) {
+      console.warn(`[TranscriberManager] Failed to play sound ${soundFile}:`, error.message);
+    }
+  });
+}
+
+/**
  * Transcription status states.
  */
 export type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
@@ -215,6 +232,9 @@ export class TranscriberManager extends EventEmitter {
       // Register escape key to cancel recording
       this.registerEscapeKey();
       
+      // Play start recording sound
+      playSound('click.wav');
+      
       await this.nativeHelper.startRecording();
       console.log('[TranscriberManager] Recording started');
     } catch (error) {
@@ -238,6 +258,9 @@ export class TranscriberManager extends EventEmitter {
     try {
       // Unregister escape key
       this.unregisterEscapeKey();
+      
+      // Play stop recording sound
+      playSound('click.wav');
       
       // Stop recording and get WAV file path
       const wavPath = await this.nativeHelper.stopRecording();
