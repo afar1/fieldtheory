@@ -27,6 +27,13 @@ export const ClipboardIPCChannels = {
   UPDATE_STACK_ID: 'clipboard:updateStackId',
   START_DRAG: 'clipboard:startDrag',
 
+  // Mobile sync operations
+  SET_SYNC_SESSION: 'clipboard:setSyncSession',
+  CLEAR_SYNC_SESSION: 'clipboard:clearSyncSession',
+  SYNC_MOBILE_TRANSCRIPTS: 'clipboard:syncMobileTranscripts',
+  GET_SYNC_ENABLED: 'clipboard:getSyncEnabled',
+  SET_SYNC_ENABLED: 'clipboard:setSyncEnabled',
+
   // Main -> Renderer (send pattern)
   ITEM_ADDED: 'clipboard:itemAdded',
   ITEM_DELETED: 'clipboard:itemDeleted',
@@ -49,6 +56,11 @@ export interface RunningApp {
 export type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
 
 /**
+ * Source device for clipboard items.
+ */
+export type ClipboardSource = 'mac' | 'ios';
+
+/**
  * Clipboard item (serialized for IPC).
  */
 export interface ClipboardItem {
@@ -66,6 +78,7 @@ export interface ClipboardItem {
   createdAt: number;
   contentHash: string;
   stackId: string | null; // Groups items into a prompt stack for batch paste
+  source: ClipboardSource; // Device source: 'mac' for local, 'ios' for mobile synced
 }
 
 /**
@@ -88,6 +101,7 @@ export interface ClipboardQueryOptions {
   search?: string;
   limit?: number;
   offset?: number;
+  source?: ClipboardSource; // Filter by device source: 'mac', 'ios', or undefined for all
 }
 
 /**

@@ -101,6 +101,7 @@ type VisionModelInfo = {
 };
 
 type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
+type ClipboardSource = 'mac' | 'ios';
 
 type ClipboardItem = {
   id: number;
@@ -117,6 +118,7 @@ type ClipboardItem = {
   createdAt: number;
   contentHash: string;
   stackId: string | null;
+  source: ClipboardSource;
 };
 
 type StackInfo = {
@@ -139,6 +141,7 @@ type ClipboardQueryOptions = {
   search?: string;
   limit?: number;
   offset?: number;
+  source?: ClipboardSource;
 };
 
 type ClipboardHotkeys = {
@@ -231,6 +234,13 @@ export interface ClipboardAPI {
   getUniqueStacks: () => Promise<StackInfo[]>;
   updateStackId: (itemIds: number[], stackId: string | null) => Promise<void>;
   startDrag: (stackId: string) => Promise<void>;
+  
+  // Mobile sync operations - sync iOS transcriptions to clipboard history
+  setSyncSession: (accessToken: string, refreshToken: string) => Promise<boolean>;
+  clearSyncSession: () => Promise<boolean>;
+  syncMobileTranscripts: () => Promise<number>;
+  getSyncEnabled: () => Promise<boolean>;
+  setSyncEnabled: (enabled: boolean) => Promise<boolean>;
 }
 
 export interface PermissionsAPI {
@@ -553,6 +563,27 @@ const clipboardAPI: ClipboardAPI = {
 
   startDrag: async (stackId: string): Promise<void> => {
     return ipcRenderer.invoke('clipboard:startDrag', stackId);
+  },
+
+  // Mobile sync operations - sync iOS transcriptions to clipboard history
+  setSyncSession: async (accessToken: string, refreshToken: string): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:setSyncSession', accessToken, refreshToken);
+  },
+
+  clearSyncSession: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:clearSyncSession');
+  },
+
+  syncMobileTranscripts: async (): Promise<number> => {
+    return ipcRenderer.invoke('clipboard:syncMobileTranscripts');
+  },
+
+  getSyncEnabled: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:getSyncEnabled');
+  },
+
+  setSyncEnabled: async (enabled: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:setSyncEnabled', enabled);
   },
 };
 

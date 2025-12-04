@@ -113,6 +113,11 @@ interface VisionAPI {
 type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
 
 /**
+ * Source device for clipboard items.
+ */
+type ClipboardSource = 'mac' | 'ios';
+
+/**
  * Clipboard item.
  */
 interface ClipboardItem {
@@ -129,6 +134,8 @@ interface ClipboardItem {
   charCount: number | null;
   createdAt: number;
   contentHash: string;
+  stackId: string | null;
+  source: ClipboardSource;
 }
 
 /**
@@ -139,6 +146,7 @@ interface ClipboardQueryOptions {
   search?: string;
   limit?: number;
   offset?: number;
+  source?: ClipboardSource;
 }
 
 /**
@@ -163,6 +171,18 @@ interface RunningApp {
 interface TargetAppInfo {
   targetApp: RunningApp | null;
   runningApps: RunningApp[];
+}
+
+/**
+ * Stack info for prompt stacking feature.
+ */
+interface StackInfo {
+  stackId: string;
+  itemCount: number;
+  imageCount: number;
+  textCount: number;
+  createdAt: number;
+  firstTextPreview: string | null;
 }
 
 /**
@@ -193,6 +213,17 @@ interface ClipboardAPI {
   saveBounds: (bounds: { x: number; y: number; width: number; height: number }) => Promise<void>;
   onKeyEvent: (callback: (event: { characters: string; keyCode: number; modifiers: string[] }) => void) => () => void;
   closeWindow: () => Promise<void>;
+  // Stack operations for prompt stacking feature
+  queryItemsByStackId?: (stackId: string) => Promise<ClipboardItem[]>;
+  getUniqueStacks?: () => Promise<StackInfo[]>;
+  updateStackId?: (itemIds: number[], stackId: string | null) => Promise<void>;
+  startDrag?: (stackId: string) => Promise<void>;
+  // Mobile sync operations - sync iOS transcriptions to clipboard history
+  setSyncSession?: (accessToken: string, refreshToken: string) => Promise<boolean>;
+  clearSyncSession?: () => Promise<boolean>;
+  syncMobileTranscripts?: () => Promise<number>;
+  getSyncEnabled?: () => Promise<boolean>;
+  setSyncEnabled?: (enabled: boolean) => Promise<boolean>;
 }
 
 /**
