@@ -129,6 +129,19 @@ interface ClipboardItem {
   charCount: number | null;
   createdAt: number;
   contentHash: string;
+  stackId: string | null;
+}
+
+/**
+ * Stack info for grouped clipboard items.
+ */
+interface StackInfo {
+  stackId: string;
+  itemCount: number;
+  imageCount: number;
+  textCount: number;
+  createdAt: number;
+  firstTextPreview: string | null;
 }
 
 /**
@@ -187,12 +200,18 @@ interface ClipboardAPI {
   onItemAdded: (callback: (id: number) => void) => () => void;
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
+  onShowSettings?: (callback: () => void) => () => void;
   onDialogPosition: (callback: (position: { left: number; top: number }) => void) => () => void;
   onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number }) => void) => () => void;
   onTargetAppInfo: (callback: (info: TargetAppInfo) => void) => () => void;
   saveBounds: (bounds: { x: number; y: number; width: number; height: number }) => Promise<void>;
   onKeyEvent: (callback: (event: { characters: string; keyCode: number; modifiers: string[] }) => void) => () => void;
   closeWindow: () => Promise<void>;
+  // Stack operations for prompt stacking feature
+  queryItemsByStackId?: (stackId: string) => Promise<ClipboardItem[]>;
+  getUniqueStacks?: () => Promise<StackInfo[]>;
+  updateStackId?: (itemIds: number[], stackId: string | null) => Promise<void>;
+  startDrag?: (stackId: string) => Promise<void>;
 }
 
 /**
