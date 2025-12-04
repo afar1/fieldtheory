@@ -62,5 +62,12 @@ target 'littleai' do
         end
       end
     end
+
+    # React Native 0.76+ requires C++20 for JSI and other native modules.
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
+        config.build_settings['CLANG_CXX_LANGUAGE_STANDARD'] = 'c++20'
+      end
+    end
   end
 end

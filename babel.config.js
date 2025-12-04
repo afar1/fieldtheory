@@ -6,8 +6,8 @@ module.exports = function(api) {
       ['inline-dotenv', {
         path: '.env.local',
       }],
+      // Reanimated plugin must be listed last.
+      'react-native-reanimated/plugin',
     ],
   };
 };
-
-
