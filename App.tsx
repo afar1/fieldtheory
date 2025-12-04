@@ -79,6 +79,7 @@ class ErrorBoundary extends Component<
 }
 
 const MAX_PREVIEW_CHARS = 160; // Max chars to show before truncation
+const MAX_PREVIEW_LINES = 3; // Max lines to show before truncation
 const ENDING_WORD_COUNT = 4; // Number of words to show from the end
 const dateHeaderFormatter = new Intl.DateTimeFormat('en-US', {
   weekday: 'short',
