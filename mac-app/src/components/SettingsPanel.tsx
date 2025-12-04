@@ -8,6 +8,8 @@ import { useEffect, useState, useCallback } from 'react';
 import AudioSettingsPanel from './AudioSettingsPanel';
 import TranscriptionSettings from './TranscriptionSettings';
 import VisionSettings from './VisionSettings';
+import { supabase } from '../supabaseClient';
+import type { Session } from '@supabase/supabase-js';
 
 /**
  * SettingsPanel - Settings content designed to live inside the clipboard history window.
@@ -28,6 +30,15 @@ export default function SettingsPanel() {
   const [isCapturingHistoryHotkey, setIsCapturingHistoryHotkey] = useState(false);
   const [hotkeyError, setHotkeyError] = useState<string | null>(null);
   
+  // Mobile sync state - for syncing iOS transcriptions to clipboard history
+  const [session, setSession] = useState<Session | null>(null);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  
   // Load clipboard hotkeys on mount
   useEffect(() => {
     if (window.clipboardAPI) {
@@ -36,6 +47,100 @@ export default function SettingsPanel() {
       });
     }
   }, []);
+  
+  // Check Supabase auth state on mount and listen for changes.
+  // When authenticated, pass session to main process for mobile sync.
+  useEffect(() => {
+    // Get initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) {
+        // Pass session to main process for MobileSync
+        window.clipboardAPI?.setSyncSession?.(
+          session.access_token,
+          session.refresh_token
+        );
+      }
+    });
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) {
+        window.clipboardAPI?.setSyncSession?.(
+          session.access_token,
+          session.refresh_token
+        );
+      } else {
+        window.clipboardAPI?.clearSyncSession?.();
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+  
+  // Handle email/password login
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthError(null);
+    
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: authEmail,
+        password: authPassword,
+      });
+      
+      if (error) {
+        setAuthError(error.message);
+      } else {
+        // Clear form on success
+        setAuthEmail('');
+        setAuthPassword('');
+        setSyncStatus('Logged in! Syncing transcripts...');
+        // Trigger initial sync
+        handleManualSync();
+      }
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Login failed');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+  
+  // Handle sign out
+  const handleSignOut = async () => {
+    setAuthLoading(true);
+    try {
+      await supabase.auth.signOut();
+      setSyncStatus(null);
+    } catch (err) {
+      console.error('Sign out error:', err);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+  
+  // Handle manual sync trigger
+  const handleManualSync = async () => {
+    if (!window.clipboardAPI?.syncMobileTranscripts) return;
+    
+    setIsSyncing(true);
+    setSyncStatus('Syncing...');
+    
+    try {
+      const count = await window.clipboardAPI.syncMobileTranscripts();
+      setSyncStatus(count > 0 
+        ? `Synced ${count} new transcript${count === 1 ? '' : 's'} from iOS`
+        : 'Already up to date'
+      );
+    } catch (err) {
+      setSyncStatus('Sync failed');
+      console.error('Sync error:', err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
   
   // Helper function to build hotkey string from keyboard event (uses physical key codes)
   const buildHotkeyString = (event: KeyboardEvent): string => {
@@ -358,6 +463,92 @@ export default function SettingsPanel() {
           </p>
         </div>
       </div>
+
+      {/* Mobile Sync Section - Sync iOS transcriptions to clipboard history */}
+      <div style={styles.section}>
+        <h3 style={styles.sectionTitle}>📱 Mobile Sync</h3>
+        <p style={styles.sectionDescription}>
+          Sync transcriptions from your iOS device to this Mac's clipboard history.
+        </p>
+        
+        <div style={styles.hotkeyCard}>
+          {session ? (
+            // Logged in state - show user info and sync controls
+            <>
+              <div style={styles.syncUserInfo}>
+                <div style={styles.syncUserEmail}>
+                  <span style={styles.syncUserIcon}>✓</span>
+                  {session.user.email}
+                </div>
+                <button
+                  onClick={handleSignOut}
+                  disabled={authLoading}
+                  style={styles.signOutButton}
+                >
+                  {authLoading ? 'Signing out...' : 'Sign Out'}
+                </button>
+              </div>
+              
+              <div style={styles.syncControls}>
+                <button
+                  onClick={handleManualSync}
+                  disabled={isSyncing}
+                  style={styles.syncButton}
+                >
+                  {isSyncing ? 'Syncing...' : '🔄 Sync Now'}
+                </button>
+                {syncStatus && (
+                  <span style={styles.syncStatusText}>{syncStatus}</span>
+                )}
+              </div>
+              
+              <p style={styles.hotkeyHelp}>
+                iOS transcriptions sync automatically every 30 seconds. 
+                Use "Sync Now" to fetch immediately.
+              </p>
+            </>
+          ) : (
+            // Logged out state - show login form
+            <>
+              <h4 style={styles.hotkeyTitle}>Sign in to sync</h4>
+              <p style={{ ...styles.hotkeyHelp, marginTop: 0, marginBottom: '12px' }}>
+                Use the same account as your iOS app to sync transcriptions.
+              </p>
+              
+              <form onSubmit={handleLogin} style={styles.loginForm}>
+                <input
+                  type="email"
+                  placeholder="Email"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  disabled={authLoading}
+                  style={styles.loginInput}
+                  required
+                />
+                <input
+                  type="password"
+                  placeholder="Password"
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  disabled={authLoading}
+                  style={styles.loginInput}
+                  required
+                />
+                {authError && (
+                  <p style={styles.hotkeyError}>{authError}</p>
+                )}
+                <button
+                  type="submit"
+                  disabled={authLoading || !authEmail || !authPassword}
+                  style={styles.loginButton}
+                >
+                  {authLoading ? 'Signing in...' : 'Sign In'}
+                </button>
+              </form>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -497,5 +688,86 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '11px',
     color: '#6b7280',
     lineHeight: '1.5',
+  },
+  // Mobile sync styles
+  loginForm: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '10px',
+  },
+  loginInput: {
+    padding: '10px 12px',
+    fontSize: '13px',
+    border: '1px solid #d1d5db',
+    borderRadius: '6px',
+    outline: 'none',
+    width: '100%',
+    boxSizing: 'border-box' as const,
+  },
+  loginButton: {
+    padding: '10px 16px',
+    fontSize: '13px',
+    fontWeight: 500,
+    color: '#fff',
+    backgroundColor: '#007AFF',
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    marginTop: '4px',
+  },
+  syncUserInfo: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: '16px',
+  },
+  syncUserEmail: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    fontSize: '13px',
+    fontWeight: 500,
+    color: '#374151',
+  },
+  syncUserIcon: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '20px',
+    height: '20px',
+    backgroundColor: '#10b981',
+    color: '#fff',
+    borderRadius: '50%',
+    fontSize: '11px',
+    fontWeight: 600,
+  },
+  signOutButton: {
+    padding: '6px 12px',
+    fontSize: '12px',
+    color: '#6b7280',
+    backgroundColor: 'transparent',
+    border: '1px solid #d1d5db',
+    borderRadius: '6px',
+    cursor: 'pointer',
+  },
+  syncControls: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    marginBottom: '12px',
+  },
+  syncButton: {
+    padding: '8px 14px',
+    fontSize: '12px',
+    fontWeight: 500,
+    color: '#374151',
+    backgroundColor: '#fff',
+    border: '1px solid #d1d5db',
+    borderRadius: '6px',
+    cursor: 'pointer',
+  },
+  syncStatusText: {
+    fontSize: '12px',
+    color: '#6b7280',
   },
 };
