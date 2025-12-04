@@ -161,6 +161,41 @@ function showMainWindow(): void {
 }
 
 /**
+ * Show settings in the clipboard history window.
+ * Opens the clipboard history window with the settings panel visible.
+ * This is called from the tray menu "Settings..." item.
+ */
+function showSettingsInClipboardWindow(): void {
+  // Ensure clipboard history window is initialized
+  if (!clipboardHistoryWindow) {
+    clipboardHistoryWindow = new ClipboardHistoryWindow();
+  }
+  
+  // Load saved bounds from preferences
+  const prefs = preferencesManager?.get();
+  const savedBounds = prefs?.clipboardHistoryBounds;
+  const currentDisplayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
+  
+  // Only use saved bounds if display config matches
+  let boundsToUse: { x: number; y: number; width: number; height: number } | undefined;
+  if (savedBounds && savedBounds.displayConfig === currentDisplayConfig) {
+    const displays = screen.getAllDisplays();
+    const minX = Math.min(...displays.map((d: Display) => d.bounds.x));
+    const minY = Math.min(...displays.map((d: Display) => d.bounds.y));
+    
+    boundsToUse = {
+      x: savedBounds.x - minX,
+      y: savedBounds.y - minY,
+      width: savedBounds.width,
+      height: savedBounds.height,
+    };
+  }
+  
+  // Show window with settings mode enabled
+  clipboardHistoryWindow.show(boundsToUse, true);
+}
+
+/**
  * Show clipboard history window when app becomes active.
  * Called from app 'activate' event handler.
  */
@@ -979,7 +1014,7 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   await audioManager.init();
 
   trayManager = new TrayManager(audioManager);
-  trayManager.init(showMainWindow, checkForUpdatesCallback);
+  trayManager.init(showSettingsInClipboardWindow, checkForUpdatesCallback);
 
   console.log('[Main] Audio system initialized');
 }
