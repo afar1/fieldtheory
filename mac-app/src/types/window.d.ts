@@ -223,6 +223,7 @@ interface ClipboardAPI {
   setSyncSession?: (accessToken: string, refreshToken: string) => Promise<boolean>;
   clearSyncSession?: () => Promise<boolean>;
   syncMobileTranscripts?: () => Promise<number>;
+  forceSyncAll?: () => Promise<number>;
   getSyncEnabled?: () => Promise<boolean>;
   setSyncEnabled?: (enabled: boolean) => Promise<boolean>;
 }

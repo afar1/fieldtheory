@@ -240,6 +240,7 @@ export interface ClipboardAPI {
   setSyncSession: (accessToken: string, refreshToken: string) => Promise<boolean>;
   clearSyncSession: () => Promise<boolean>;
   syncMobileTranscripts: () => Promise<number>;
+  forceSyncAll: () => Promise<number>;
   getSyncEnabled: () => Promise<boolean>;
   setSyncEnabled: (enabled: boolean) => Promise<boolean>;
 }
@@ -587,6 +588,10 @@ const clipboardAPI: ClipboardAPI = {
 
   syncMobileTranscripts: async (): Promise<number> => {
     return ipcRenderer.invoke('clipboard:syncMobileTranscripts');
+  },
+
+  forceSyncAll: async (): Promise<number> => {
+    return ipcRenderer.invoke('clipboard:forceSyncAll');
   },
 
   getSyncEnabled: async (): Promise<boolean> => {

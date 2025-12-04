@@ -926,6 +926,15 @@ function setupClipboardIPCHandlers(): void {
     return await mobileSync.syncTranscripts();
   });
 
+  // Force full re-sync - clears cache and re-syncs all transcripts.
+  // This fixes source attribution for items that were synced before the fix.
+  ipcMain.handle(ClipboardIPCChannels.FORCE_SYNC_ALL, async () => {
+    if (!mobileSync) {
+      return 0;
+    }
+    return await mobileSync.forceSyncAll();
+  });
+
   ipcMain.handle(ClipboardIPCChannels.GET_SYNC_ENABLED, async () => {
     if (!mobileSync) {
       return false;
