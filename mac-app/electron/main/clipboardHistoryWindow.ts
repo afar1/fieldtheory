@@ -98,8 +98,9 @@ export class ClipboardHistoryWindow {
    * Window takes focus like Alfred - uses standard keyboard input.
    * Shows window immediately, then fetches app data in background for instant UX.
    * @param savedBounds Optional saved bounds to restore position/size
+   * @param showSettingsMode If true, open the window with settings panel visible
    */
-  show(savedBounds?: { x: number; y: number; width: number; height: number }): void {
+  show(savedBounds?: { x: number; y: number; width: number; height: number }, showSettingsMode: boolean = false): void {
     // If window exists, show it immediately with cached data, then refresh in background
     if (this.window && !this.window.isDestroyed()) {
       // Show window immediately with cached/stale data
@@ -109,6 +110,10 @@ export class ClipboardHistoryWindow {
       this.sendDialogBounds(savedBounds);
       // Notify renderer to reset search query and send target app info (with cached data)
       this.window.webContents.send('clipboard:showHistory');
+      // If settings mode requested, send that event too
+      if (showSettingsMode) {
+        this.window.webContents.send('clipboard:showSettings');
+      }
       this.sendTargetAppInfo();
       
       // Fetch fresh app data in background and update when ready
@@ -118,7 +123,7 @@ export class ClipboardHistoryWindow {
     
     // For new window creation, create window immediately, fetch app data in background.
     // This avoids blocking on AppleScript calls.
-    this.createWindow(savedBounds);
+    this.createWindow(savedBounds, showSettingsMode);
     
     // Fetch app data in background (don't await)
     this.refreshAppDataInBackground();
@@ -127,8 +132,10 @@ export class ClipboardHistoryWindow {
   /**
    * Create the clipboard history window.
    * Separated from show() to allow non-blocking window creation.
+   * @param savedBounds Optional saved bounds for position/size
+   * @param showSettingsMode If true, send settings mode event after content loads
    */
-  private createWindow(savedBounds?: { x: number; y: number; width: number; height: number }): void {
+  private createWindow(savedBounds?: { x: number; y: number; width: number; height: number }, showSettingsMode: boolean = false): void {
 
     // Calculate union of all displays for full-screen overlay
     const displays = screen.getAllDisplays();
@@ -220,6 +227,10 @@ export class ClipboardHistoryWindow {
         this.sendDialogBounds(savedBounds);
         // Notify renderer to reset search query
         this.window.webContents.send('clipboard:showHistory');
+        // If settings mode requested, send that event too
+        if (showSettingsMode) {
+          this.window.webContents.send('clipboard:showSettings');
+        }
         // Send target app info
         this.sendTargetAppInfo();
       }
