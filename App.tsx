@@ -16,6 +16,13 @@ import {
   AppState,
   TextInput,
   RefreshControl,
+  SafeAreaView,
+  PanResponder,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
+  LayoutChangeEvent,
+  LayoutRectangle,
+  useWindowDimensions,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useWhisperRecording } from './hooks/useWhisperRecording';
@@ -28,7 +35,7 @@ import { ObservationList } from './components/ObservationList';
 import { CursorBrowser, CursorBrowserHandle } from './components/CursorBrowser';
 import { StorageService } from './services/storage';
 import { processTranscription } from './services/llm';
-import { Todo, Observation, Settings, TranscriptEntry } from './types';
+import { Todo, Observation, Settings, TranscriptEntry, TranscriptSegment } from './types';
 import { requestOtp, verifyOtp, getSession, signOut as supabaseSignOut } from './services/auth';
 import { syncAll, seedRemoteFromLocal } from './services/sync';
 import { supabase } from './services/supabase';
@@ -93,6 +100,31 @@ const getDateKey = (timestamp: number) => {
 const formatDateHeader = (timestamp: number) => dateHeaderFormatter.format(new Date(timestamp));
 const formatTime = (timestamp: number) => timeFormatter.format(new Date(timestamp));
 
+type LayoutBox = { x: number; y: number; width: number; height: number };
+type StackDragState = {
+  source: TranscriptEntry;
+  position: { x: number; y: number };
+  offset: { x: number; y: number };
+};
+
+const STACK_SEPARATOR = '\n\n';
+
+const createSegmentFromEntry = (entry: TranscriptEntry): TranscriptSegment => ({
+  id: entry.id,
+  text: entry.text,
+  createdAt: entry.createdAt,
+  updatedAt: entry.updatedAt,
+});
+
+const getSegmentsForEntry = (entry: TranscriptEntry): TranscriptSegment[] =>
+  entry.stackSegments?.map((segment) => ({
+    ...segment,
+    updatedAt: segment.updatedAt ?? segment.createdAt,
+  })) ?? [createSegmentFromEntry(entry)];
+
+const buildStackText = (segments: TranscriptSegment[]) =>
+  segments.map((segment) => segment.text).join(STACK_SEPARATOR);
+
 export default function App() {
   console.log('[App] Component rendering');
   
@@ -123,6 +155,12 @@ export default function App() {
   const [expandedMap, setExpandedMap] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [dragState, setDragState] = useState<StackDragState | null>(null);
+  const [activeDropTargetId, setActiveDropTargetId] = useState<string | null>(null);
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const transcriptLayoutsRef = useRef<Record<string, LayoutBox>>({});
+  const listLayoutRef = useRef<LayoutRectangle>({ x: 0, y: 0, width: 0, height: 0 });
+  const scrollOffsetRef = useRef(0);
   type PagerRef = React.ComponentRef<typeof PagerView>;
   const pagerRef = useRef<PagerRef>(null);
   const cursorBrowserRef = useRef<CursorBrowserHandle>(null);
@@ -206,6 +244,16 @@ export default function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    const validIds = new Set(transcripts.map((entry) => entry.id));
+    const layoutMap = transcriptLayoutsRef.current;
+    Object.keys(layoutMap).forEach((id) => {
+      if (!validIds.has(id)) {
+        delete layoutMap[id];
+      }
+    });
+  }, [transcripts]);
 
   useEffect(() => {
     pagerRef.current?.setPage(pageIndex);
@@ -699,10 +747,191 @@ export default function App() {
     Vibration.vibrate();
   }, []);
 
+  // Keep a rolling map of card bounds so we can detect where the user is dropping.
+  const registerTranscriptLayout = useCallback((id: string, layout: LayoutRectangle) => {
+    transcriptLayoutsRef.current[id] = {
+      x: layout.x,
+      y: layout.y,
+      width: layout.width,
+      height: layout.height,
+    };
+  }, []);
+
+  // Track the viewport for the SectionList so we can translate touch coordinates.
+  const handleTranscriptsLayout = useCallback((event: LayoutChangeEvent) => {
+    listLayoutRef.current = event.nativeEvent.layout;
+  }, []);
+
+  const handleTranscriptsScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    scrollOffsetRef.current = event.nativeEvent.contentOffset.y;
+  }, []);
+
+  // Translate the finger position into list-space and return whichever card sits under it.
+  const findDropTarget = useCallback((x: number, y: number, sourceId: string) => {
+    const listLayout = listLayoutRef.current;
+    const contentX = x - listLayout.x;
+    const contentY = y - listLayout.y + scrollOffsetRef.current;
+
+    for (const [id, box] of Object.entries(transcriptLayoutsRef.current)) {
+      if (id === sourceId) continue;
+      const withinX = contentX >= box.x && contentX <= box.x + box.width;
+      const withinY = contentY >= box.y && contentY <= box.y + box.height;
+      if (withinX && withinY) {
+        return id;
+      }
+    }
+
+    return null;
+  }, []);
+
+  const updateDragPosition = useCallback((x: number, y: number) => {
+    setDragState((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      const targetId = findDropTarget(x, y, prev.source.id);
+      setActiveDropTargetId(targetId);
+      return {
+        ...prev,
+        position: { x, y },
+      };
+    });
+  }, [findDropTarget]);
+
+  // Merge two transcripts together so the drop target becomes the parent stack.
+  const stackTranscripts = useCallback((sourceId: string, targetId: string) => {
+    if (sourceId === targetId) {
+      return;
+    }
+
+    setTranscripts((prev) => {
+      const sourceEntry = prev.find((entry) => entry.id === sourceId);
+      const targetEntry = prev.find((entry) => entry.id === targetId);
+
+      if (!sourceEntry || !targetEntry) {
+        return prev;
+      }
+
+      const sourceSegments = getSegmentsForEntry(sourceEntry);
+      const targetSegments = getSegmentsForEntry(targetEntry);
+      // Combine both sides and order them chronologically so the stack reads naturally.
+      const mergedSegments = [...targetSegments, ...sourceSegments].sort(
+        (a, b) => a.createdAt - b.createdAt,
+      );
+      const updatedTarget: TranscriptEntry = {
+        ...targetEntry,
+        text: buildStackText(mergedSegments),
+        stackSegments: mergedSegments,
+        updatedAt: Date.now(),
+      };
+      const updatedList = prev
+        .filter((entry) => entry.id !== sourceId)
+        .map((entry) => (entry.id === targetId ? updatedTarget : entry));
+
+      StorageService.saveTranscripts(updatedList).catch(console.error);
+
+      setExpandedMap((prevExpanded) => {
+        const next = { ...prevExpanded };
+        delete next[sourceId];
+        if (mergedSegments.length > 1) {
+          next[targetId] = true;
+        }
+        return next;
+      });
+
+      setCopiedId((prevCopied) => (prevCopied === sourceId ? null : prevCopied));
+
+      return updatedList;
+    });
+  }, [setExpandedMap, setCopiedId]);
+
+  const finalizeDrag = useCallback((x: number, y: number) => {
+    setDragState((current) => {
+      if (!current) {
+        return null;
+      }
+
+      const dropTargetId = findDropTarget(x, y, current.source.id);
+      if (dropTargetId) {
+        stackTranscripts(current.source.id, dropTargetId);
+      }
+
+      setActiveDropTargetId(null);
+      return null;
+    });
+  }, [findDropTarget, stackTranscripts]);
+
+  const handleStartStackDrag = useCallback((entry: TranscriptEntry, event: GestureResponderEvent) => {
+    if (dragState || transcripts.length < 2) {
+      return;
+    }
+
+    const { pageX, pageY, locationX, locationY } = event.nativeEvent;
+    setDragState({
+      source: entry,
+      position: { x: pageX, y: pageY },
+      offset: { x: locationX, y: locationY },
+    });
+    setActiveDropTargetId(null);
+    Vibration.vibrate(10);
+  }, [dragState, transcripts.length]);
+
+  // Restore every segment back into standalone transcripts if the user made a mistake.
+  const handleUnstackTranscript = useCallback((id: string) => {
+    setTranscripts((prev) => {
+      const entry = prev.find((item) => item.id === id);
+      if (!entry?.stackSegments || entry.stackSegments.length <= 1) {
+        return prev;
+      }
+
+      const restoredEntries: TranscriptEntry[] = entry.stackSegments.map((segment) => ({
+        id: segment.id,
+        text: segment.text,
+        createdAt: segment.createdAt,
+        updatedAt: segment.updatedAt ?? segment.createdAt,
+      }));
+
+      const withoutParent = prev.filter((item) => item.id !== id);
+      const updatedList = [...withoutParent, ...restoredEntries];
+
+      StorageService.saveTranscripts(updatedList).catch(console.error);
+
+      setExpandedMap((prevExpanded) => {
+        const next = { ...prevExpanded };
+        delete next[id];
+        return next;
+      });
+
+      return updatedList;
+    });
+  }, [setExpandedMap]);
+
+  const dragPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: () => Boolean(dragState),
+        onMoveShouldSetPanResponderCapture: () => Boolean(dragState),
+        onPanResponderMove: (_event, gestureState) => {
+          updateDragPosition(gestureState.moveX, gestureState.moveY);
+        },
+        onPanResponderRelease: (_event, gestureState) => {
+          finalizeDrag(gestureState.moveX, gestureState.moveY);
+        },
+        onPanResponderTerminate: (_event, gestureState) => {
+          finalizeDrag(gestureState.moveX, gestureState.moveY);
+        },
+      }),
+    [dragState, finalizeDrag, updateDragPosition],
+  );
+
   const renderTranscriptItem = ({ item }: { item: TranscriptEntry }) => {
     const isExpanded = Boolean(expandedMap[item.id]);
     const isCopied = copiedId === item.id;
     const shouldShowExpand = item.text.length > 160 || item.text.includes('\n');
+    const stackCount = item.stackSegments?.length ?? 1;
+    const isStacked = stackCount > 1;
+    const isDragSource = dragState?.source.id === item.id;
+    const isDropTarget = activeDropTargetId === item.id;
 
     const handleExpandPress = (event: GestureResponderEvent) => {
       event.stopPropagation();
@@ -714,20 +943,49 @@ export default function App() {
       handleSendToCursor(item.text);
     };
 
+    const handleDeletePress = (event: GestureResponderEvent) => {
+      event.stopPropagation();
+      handleDeleteTranscript(item.id);
+    };
+
+    const handleUnstackPress = (event: GestureResponderEvent) => {
+      event.stopPropagation();
+      handleUnstackTranscript(item.id);
+    };
+
+    const handlePressOut = (event: GestureResponderEvent) => {
+      if (dragState?.source.id === item.id) {
+        finalizeDrag(event.nativeEvent.pageX, event.nativeEvent.pageY);
+      }
+    };
+
     return (
       <Pressable
         onPress={() => handleCopyTranscript(item)}
-        onLongPress={() => handleDeleteTranscript(item.id)}
+        onLongPress={(event) => handleStartStackDrag(item, event)}
+        delayLongPress={250}
         android_ripple={{ color: '#E2E8F0' }}
+        onLayout={(event) => registerTranscriptLayout(item.id, event.nativeEvent.layout)}
+        onPressOut={handlePressOut}
         style={({ pressed }) => [
           styles.transcriptCard,
           pressed && styles.transcriptCardPressed,
           isCopied && styles.transcriptCardCopied,
+          isDropTarget && styles.transcriptCardDropTarget,
+          isDragSource && styles.transcriptCardDragging,
         ]}
       >
         <View style={styles.transcriptHeader}>
           <Text style={styles.transcriptTime}>{formatTime(item.createdAt)}</Text>
-          {isCopied && <Text style={styles.copiedLabel}>Copied</Text>}
+          <View style={styles.transcriptHeaderRight}>
+            {isStacked && (
+              <View style={styles.stackBadge}>
+                <Feather name="layers" size={12} color="#1D4ED8" />
+                <Text style={styles.stackBadgeText}>{stackCount}</Text>
+              </View>
+            )}
+            {isCopied && <Text style={styles.copiedLabel}>Copied</Text>}
+          </View>
         </View>
         <Text
           style={styles.transcriptText}
@@ -753,6 +1011,24 @@ export default function App() {
             <Feather name="terminal" size={14} color="#059669" />
             <Text style={styles.sendToCursorText}>Send to Cursor</Text>
           </TouchableOpacity>
+          {isStacked && (
+            <TouchableOpacity
+              onPress={handleUnstackPress}
+              hitSlop={8}
+              style={styles.unstackButton}
+            >
+              <Feather name="shuffle" size={14} color="#7C3AED" />
+              <Text style={styles.unstackButtonText}>Unstack</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            onPress={handleDeletePress}
+            hitSlop={8}
+            style={styles.deleteButton}
+          >
+            <Feather name="trash-2" size={14} color="#DC2626" />
+            <Text style={styles.deleteButtonText}>Delete</Text>
+          </TouchableOpacity>
         </View>
       </Pressable>
     );
@@ -773,8 +1049,9 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <View style={styles.container}>
-        <StatusBar style="auto" />
+      <SafeAreaView style={styles.safeArea} {...dragPanResponder.panHandlers}>
+        <View style={styles.container}>
+          <StatusBar style="auto" />
 
       {/* Header removed - moved settings to bottom tab */}
 
@@ -832,6 +1109,7 @@ export default function App() {
               </TouchableOpacity>
             )}
           </View>
+        <View style={styles.transcriptListWrapper} onLayout={handleTranscriptsLayout}>
           {sections.length === 0 ? (
             <View style={styles.emptyState}>
               <Text style={styles.emptyTitle}>No transcripts yet</Text>
@@ -857,8 +1135,12 @@ export default function App() {
                   onRefresh={handlePullToRecord}
                 />
               }
+              onScroll={handleTranscriptsScroll}
+              scrollEnabled={!dragState}
+              scrollEventThrottle={16}
             />
           )}
+        </View>
         </View>
         <View key="todos" style={styles.pageContainer}>
           <View style={styles.transcriptHeaderControls}>
@@ -1126,12 +1408,47 @@ export default function App() {
           </View>
         </View>
       </Modal>
-      </View>
+        {dragState && (
+          <>
+            <View style={styles.stackHint} pointerEvents="none">
+              <Feather name="move" size={14} color="#2563EB" />
+              <Text style={styles.stackHintText}>Drag onto another note to stack</Text>
+            </View>
+            <View
+              pointerEvents="none"
+              style={[
+                styles.dragOverlay,
+                {
+                  top: Math.min(
+                    Math.max(dragState.position.y - dragState.offset.y, 0),
+                    windowHeight - 80,
+                  ),
+                  left: Math.min(
+                    Math.max(dragState.position.x - dragState.offset.x, 0),
+                    windowWidth - 120,
+                  ),
+                },
+              ]}
+            >
+              <View style={styles.dragOverlayCard}>
+                <Text style={styles.dragOverlayText} numberOfLines={4}>
+                  {dragState.source.text}
+                </Text>
+              </View>
+            </View>
+          </>
+        )}
+        </View>
+      </SafeAreaView>
     </ErrorBoundary>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#F5F5F5',
+  },
   container: {
     flex: 1,
     backgroundColor: '#F5F5F5',
@@ -1172,6 +1489,9 @@ const styles = StyleSheet.create({
   transcriptContainer: {
     flex: 1,
     backgroundColor: '#F4F5F7',
+  },
+  transcriptListWrapper: {
+    flex: 1,
   },
   pageContainer: {
     flex: 1,
@@ -1380,15 +1700,41 @@ const styles = StyleSheet.create({
   transcriptCardCopied: {
     borderColor: '#2563EB',
   },
+  transcriptCardDropTarget: {
+    borderColor: '#2563EB',
+    borderWidth: 2,
+  },
+  transcriptCardDragging: {
+    opacity: 0.6,
+  },
   transcriptHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 8,
   },
+  transcriptHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   transcriptTime: {
     fontSize: 13,
     color: '#6B7280',
+  },
+  stackBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    backgroundColor: '#DBEAFE',
+    gap: 4,
+  },
+  stackBadgeText: {
+    fontSize: 12,
+    color: '#1D4ED8',
+    fontWeight: '600',
   },
   copiedLabel: {
     fontSize: 12,
@@ -1405,6 +1751,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 10,
     gap: 8,
+    flexWrap: 'wrap',
   },
   expandButton: {
     alignSelf: 'flex-start',
@@ -1431,6 +1778,34 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#059669',
+  },
+  unstackButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: '#F5F3FF',
+    gap: 5,
+  },
+  unstackButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#7C3AED',
+  },
+  deleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: '#FEF2F2',
+    gap: 5,
+  },
+  deleteButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#DC2626',
   },
   errorBoundaryContainer: {
     flex: 1,
@@ -1472,5 +1847,51 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 16,
     color: '#666',
+  },
+  stackHint: {
+    position: 'absolute',
+    top: 16,
+    left: 0,
+    right: 0,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 999,
+    gap: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 6,
+    borderWidth: 1,
+    borderColor: '#E0E7FF',
+  },
+  stackHintText: {
+    fontSize: 13,
+    color: '#1D4ED8',
+    fontWeight: '600',
+  },
+  dragOverlay: {
+    position: 'absolute',
+    zIndex: 20,
+    maxWidth: '85%',
+  },
+  dragOverlayCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  dragOverlayText: {
+    fontSize: 16,
+    lineHeight: 22,
+    color: '#111',
   },
 });
