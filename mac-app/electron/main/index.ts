@@ -975,6 +975,23 @@ function setupClipboardIPCHandlers(): void {
     }
     clipboardManager.setContinuousContextEnabled(enabled);
     await preferencesManager.save({ continuousContextEnabled: enabled });
+    
+    // Register/unregister the hotkey callback when enabling/disabling
+    if (enabled) {
+      clipboardManager.registerContinuousContextHotkey(async () => {
+        if (!clipboardManager) return;
+        
+        const state = clipboardManager.getContinuousContextState();
+        if (state.active) {
+          // If already active, stop it
+          clipboardManager.stopContinuousContext();
+        } else {
+          // Start continuous context mode
+          await clipboardManager.startContinuousContext();
+        }
+      });
+    }
+    
     return true;
   });
 
@@ -992,6 +1009,22 @@ function setupClipboardIPCHandlers(): void {
     const success = clipboardManager.setContinuousContextHotkey(hotkey);
     if (success) {
       await preferencesManager.save({ continuousContextHotkey: hotkey });
+      
+      // Re-register the hotkey with the callback if continuous context is enabled
+      if (clipboardManager.isContinuousContextEnabled()) {
+        clipboardManager.registerContinuousContextHotkey(async () => {
+          if (!clipboardManager) return;
+          
+          const state = clipboardManager.getContinuousContextState();
+          if (state.active) {
+            // If already active, stop it
+            clipboardManager.stopContinuousContext();
+          } else {
+            // Start continuous context mode
+            await clipboardManager.startContinuousContext();
+          }
+        });
+      }
     }
     return success;
   });
