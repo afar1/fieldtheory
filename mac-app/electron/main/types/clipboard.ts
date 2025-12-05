@@ -27,8 +27,18 @@ export const ClipboardIPCChannels = {
   UPDATE_STACK_ID: 'clipboard:updateStackId',
   START_DRAG: 'clipboard:startDrag',
   
-  // Engineer feature - refine prompts using AI
+// Engineer feature - refine prompts using AI
   ENGINEER_STACK: 'clipboard:engineerStack',
+  
+  // Continuous Context mode - allows multi-screenshot capture sessions
+  GET_CONTINUOUS_CONTEXT_STATE: 'clipboard:getContinuousContextState',
+  SET_CONTINUOUS_CONTEXT_ENABLED: 'clipboard:setContinuousContextEnabled',
+  GET_CONTINUOUS_CONTEXT_ENABLED: 'clipboard:getContinuousContextEnabled',
+  SET_CONTINUOUS_CONTEXT_HOTKEY: 'clipboard:setContinuousContextHotkey',
+  GET_CONTINUOUS_CONTEXT_HOTKEY: 'clipboard:getContinuousContextHotkey',
+  START_CONTINUOUS_CONTEXT: 'clipboard:startContinuousContext',
+  STOP_CONTINUOUS_CONTEXT: 'clipboard:stopContinuousContext',
+  CONTINUOUS_CONTEXT_CHANGED: 'clipboard:continuousContextChanged',
 
   // Mobile sync operations
   SET_SYNC_SESSION: 'clipboard:setSyncSession',
@@ -123,6 +133,16 @@ export interface ClipboardQueryOptions {
 export interface ClipboardHotkeys {
   screenshot?: string;
   history?: string;
+  continuousContext?: string;
+}
+
+/**
+ * Continuous Context mode state.
+ */
+export interface ContinuousContextState {
+  active: boolean;
+  stackId: string | null;
+  screenshotCount: number;
 }
 
 /**

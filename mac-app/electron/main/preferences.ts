@@ -43,6 +43,10 @@ interface Preferences {
   priorityDeviceId?: string | null;
   clipboardHistoryBounds?: ClipboardHistoryBounds;
   anthropicApiKey?: string; // API key for cloud features like Engineer
+  
+  // Continuous Context feature - allows continuous screenshotting with stacked results
+  continuousContextEnabled?: boolean;
+  continuousContextHotkey?: string;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
@@ -51,6 +55,8 @@ const DEFAULT_PREFERENCES: Preferences = {
   overlayStyle: 'rectangle',
   clipboardScreenshotHotkey: 'Alt+1',
   clipboardHistoryHotkey: 'Control+Alt+Space',
+  continuousContextEnabled: false,
+  continuousContextHotkey: 'Shift+Alt+1', // Default: Shift + screenshot hotkey
 };
 
 /**

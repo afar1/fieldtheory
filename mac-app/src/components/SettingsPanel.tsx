@@ -30,6 +30,11 @@ export default function SettingsPanel() {
   const [isCapturingHistoryHotkey, setIsCapturingHistoryHotkey] = useState(false);
   const [hotkeyError, setHotkeyError] = useState<string | null>(null);
   
+  // Continuous Context configuration
+  const [continuousContextEnabled, setContinuousContextEnabled] = useState(false);
+  const [continuousContextHotkey, setContinuousContextHotkey] = useState('Shift+Alt+1');
+  const [isCapturingContinuousContextHotkey, setIsCapturingContinuousContextHotkey] = useState(false);
+  
   // Mobile sync state - for syncing iOS transcriptions to clipboard history
   const [session, setSession] = useState<Session | null>(null);
   const [authEmail, setAuthEmail] = useState('');
@@ -45,8 +50,32 @@ export default function SettingsPanel() {
       window.clipboardAPI.getHotkeys().then(hotkeys => {
         setClipboardHotkeys(hotkeys);
       });
+      
+      // Load continuous context settings
+      window.clipboardAPI.getContinuousContextEnabled?.().then(enabled => {
+        setContinuousContextEnabled(enabled);
+      });
+      window.clipboardAPI.getContinuousContextHotkey?.().then(hotkey => {
+        if (hotkey) {
+          setContinuousContextHotkey(hotkey);
+        }
+      });
     }
   }, []);
+  
+  // Handler for toggling continuous context enabled state
+  const handleToggleContinuousContext = async (enabled: boolean) => {
+    if (!window.clipboardAPI?.setContinuousContextEnabled) return;
+    
+    try {
+      const success = await window.clipboardAPI.setContinuousContextEnabled(enabled);
+      if (success) {
+        setContinuousContextEnabled(enabled);
+      }
+    } catch (err) {
+      console.error('Failed to toggle continuous context:', err);
+    }
+  };
   
   // Check Supabase auth state on mount and listen for changes.
   // When authenticated, pass session to main process for mobile sync.
@@ -285,9 +314,37 @@ export default function SettingsPanel() {
     }
   }, []);
   
-  // Capture hotkey when user is setting screenshot or history shortcut.
+  // Handler for setting continuous context hotkey
+  const handleSetContinuousContextHotkey = useCallback(async (hotkeyString: string) => {
+    setIsCapturingContinuousContextHotkey(false);
+    setHotkeyError(null);
+    
+    if (!window.clipboardAPI?.setContinuousContextHotkey) return;
+    
+    if (!hotkeyString || isModifierOnly(hotkeyString)) {
+      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+      return;
+    }
+
+    try {
+      const success = await window.clipboardAPI.setContinuousContextHotkey(hotkeyString);
+      if (!success) {
+        setHotkeyError('Failed to register continuous context hotkey. It may be in use by another application.');
+      } else {
+        setContinuousContextHotkey(hotkeyString);
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set continuous context hotkey');
+      console.error('Failed to set continuous context hotkey:', err);
+    }
+  }, []);
+  
+  // Capture hotkey when user is setting screenshot, history, or continuous context shortcut.
   useEffect(() => {
-    const capturing = isCapturingScreenshotHotkey ? 'screenshot' : isCapturingHistoryHotkey ? 'history' : null;
+    const capturing = isCapturingScreenshotHotkey ? 'screenshot' 
+      : isCapturingHistoryHotkey ? 'history' 
+      : isCapturingContinuousContextHotkey ? 'continuousContext' 
+      : null;
     if (!capturing) return;
     
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -295,13 +352,19 @@ export default function SettingsPanel() {
       event.stopPropagation();
       const hotkeyString = buildHotkeyString(event);
       if (hotkeyString) {
-        capturing === 'screenshot' ? handleSetScreenshotHotkey(hotkeyString) : handleSetHistoryHotkey(hotkeyString);
+        if (capturing === 'screenshot') {
+          handleSetScreenshotHotkey(hotkeyString);
+        } else if (capturing === 'history') {
+          handleSetHistoryHotkey(hotkeyString);
+        } else if (capturing === 'continuousContext') {
+          handleSetContinuousContextHotkey(hotkeyString);
+        }
       }
     };
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isCapturingScreenshotHotkey, isCapturingHistoryHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey]);
+  }, [isCapturingScreenshotHotkey, isCapturingHistoryHotkey, isCapturingContinuousContextHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetContinuousContextHotkey]);
 
   // Check permissions on mount and when status changes
   useEffect(() => {
@@ -421,7 +484,7 @@ export default function SettingsPanel() {
                   setIsCapturingScreenshotHotkey(true);
                   setHotkeyError(null);
                 }}
-                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey}
+                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey}
                 style={{
                   ...styles.hotkeyButton,
                   ...(isCapturingScreenshotHotkey ? styles.hotkeyButtonActive : {}),
@@ -452,7 +515,7 @@ export default function SettingsPanel() {
                   setIsCapturingHistoryHotkey(true);
                   setHotkeyError(null);
                 }}
-                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey}
+                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey}
                 style={{
                   ...styles.hotkeyButton,
                   ...(isCapturingHistoryHotkey ? styles.hotkeyButtonActive : {}),
@@ -474,6 +537,64 @@ export default function SettingsPanel() {
             </div>
           </div>
           
+          {/* Continuous Context Enable/Disable */}
+          <div style={styles.hotkeyRow}>
+            <div>
+              <label style={styles.hotkeyLabel}>Continuous Context Mode</label>
+              <p style={{ fontSize: '11px', color: '#6b7280', margin: '2px 0 0 0' }}>
+                Take multiple screenshots in a row, grouped together
+              </p>
+            </div>
+            <button
+              onClick={() => handleToggleContinuousContext(!continuousContextEnabled)}
+              style={{
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontWeight: 500,
+                color: continuousContextEnabled ? '#fff' : '#374151',
+                backgroundColor: continuousContextEnabled ? '#10b981' : '#fff',
+                border: `1px solid ${continuousContextEnabled ? '#10b981' : '#d1d5db'}`,
+                borderRadius: '6px',
+                cursor: 'pointer',
+                minWidth: '50px',
+              }}
+            >
+              {continuousContextEnabled ? 'On' : 'Off'}
+            </button>
+          </div>
+          
+          {/* Continuous Context Hotkey */}
+          <div style={{ ...styles.hotkeyRow, opacity: continuousContextEnabled ? 1 : 0.5 }}>
+            <label style={styles.hotkeyLabel}>Continuous Context Hotkey</label>
+            <div style={styles.hotkeyButtonRow}>
+              <button
+                onClick={() => {
+                  setIsCapturingContinuousContextHotkey(true);
+                  setHotkeyError(null);
+                }}
+                disabled={!continuousContextEnabled || isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey}
+                style={{
+                  ...styles.hotkeyButton,
+                  ...(isCapturingContinuousContextHotkey ? styles.hotkeyButtonActive : {}),
+                  cursor: continuousContextEnabled ? 'pointer' : 'not-allowed',
+                }}
+              >
+                {isCapturingContinuousContextHotkey ? 'Press key combination...' : `Change (${continuousContextHotkey || 'Not set'})`}
+              </button>
+              {isCapturingContinuousContextHotkey && (
+                <button
+                  onClick={() => {
+                    setIsCapturingContinuousContextHotkey(false);
+                    setHotkeyError(null);
+                  }}
+                  style={styles.cancelButton}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          </div>
+          
           {hotkeyError && (
             <p style={styles.hotkeyError}>{hotkeyError}</p>
           )}
@@ -481,6 +602,7 @@ export default function SettingsPanel() {
           <p style={styles.hotkeyHelp}>
             Supports 2-3 modifier keys + primary key (e.g., Command+Shift+Control+Space). 
             Screenshot hotkey captures selected area and adds to prompt stack.
+            Continuous Context hotkey starts multi-screenshot capture mode (press Escape to stop).
           </p>
         </div>
       </div>
