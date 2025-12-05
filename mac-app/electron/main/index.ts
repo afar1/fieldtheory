@@ -29,6 +29,7 @@ import {
 import { ClipboardItem } from './clipboardManager';
 import { VisionModelManager, VisionModelSize } from './visionModelManager';
 import { VisionProcessor } from './visionProcessor';
+import { engineerStack, setApiKey as setEngineerApiKey } from './promptEngineer';
 
 // Override userData path for experimental builds to isolate data from production.
 // This must happen before app.whenReady() and before any code calls app.getPath('userData').
@@ -882,6 +883,45 @@ function setupClipboardIPCHandlers(): void {
       }
     } catch (error) {
       console.error('[Main] startDrag error:', error);
+    }
+  });
+
+  // Engineer feature - refine prompts using AI.
+  // Takes a stack of content and returns a well-structured prompt.
+  ipcMain.handle(ClipboardIPCChannels.ENGINEER_STACK, async (_event, stackId: string) => {
+    try {
+      if (!clipboardManager) {
+        return { success: false, error: 'Clipboard manager not initialized' };
+      }
+
+      // Set API key from preferences if available
+      const prefs = preferencesManager?.get();
+      if (prefs?.anthropicApiKey) {
+        setEngineerApiKey(prefs.anthropicApiKey);
+      }
+
+      // Get all items in the stack
+      const items = clipboardManager.queryItemsByStackId(stackId);
+      if (items.length === 0) {
+        return { success: false, error: 'No items found in stack' };
+      }
+
+      // Transform to the format expected by engineerStack
+      const stackItems = items.map(item => ({
+        content: item.content,
+        type: item.type,
+        imageWidth: item.imageWidth ?? undefined,
+        imageHeight: item.imageHeight ?? undefined,
+      }));
+
+      const result = await engineerStack(stackItems);
+      return result;
+    } catch (error) {
+      console.error('[Main] engineerStack error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error occurred',
+      };
     }
   });
 

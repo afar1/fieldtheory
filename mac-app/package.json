@@ -75,6 +75,10 @@
         {
           "from": "../build-whisper/bin/whisper-cli",
           "to": "whisper-cli"
+        },
+        {
+          "from": "electron/main/prompts",
+          "to": "prompts"
         }
       ]
     },
