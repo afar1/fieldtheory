@@ -895,10 +895,10 @@ function setupClipboardIPCHandlers(): void {
         return { success: false, error: 'Clipboard manager not initialized' };
       }
 
-      // Set API key from preferences if available
-      const prefs = preferencesManager?.get();
-      if (prefs?.anthropicApiKey) {
-        setEngineerApiKey(prefs.anthropicApiKey);
+      // Set API key from preferences if available (securely stored via safeStorage).
+      const apiKey = preferencesManager?.getApiKey();
+      if (apiKey) {
+        setEngineerApiKey(apiKey);
       }
 
       // Get all items in the stack
@@ -922,6 +922,55 @@ function setupClipboardIPCHandlers(): void {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error occurred',
+      };
+    }
+  });
+
+  // =========================================================================
+  // API Key Management - Securely stored via OS keychain (safeStorage)
+  // =========================================================================
+
+  // Check if API key is set (without exposing the key itself).
+  ipcMain.handle(ClipboardIPCChannels.GET_API_KEY_STATUS, async () => {
+    return {
+      hasKey: preferencesManager?.hasApiKey() ?? false,
+    };
+  });
+
+  // Set API key securely.
+  ipcMain.handle(ClipboardIPCChannels.SET_API_KEY, async (_event, apiKey: string) => {
+    try {
+      if (!preferencesManager) {
+        return { success: false, error: 'Preferences not initialized' };
+      }
+      await preferencesManager.setApiKey(apiKey);
+      
+      // Update the engineer service with the new key
+      setEngineerApiKey(apiKey);
+      
+      return { success: true };
+    } catch (error) {
+      console.error('[Main] setApiKey error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to save API key',
+      };
+    }
+  });
+
+  // Clear the stored API key.
+  ipcMain.handle(ClipboardIPCChannels.CLEAR_API_KEY, async () => {
+    try {
+      if (!preferencesManager) {
+        return { success: false, error: 'Preferences not initialized' };
+      }
+      await preferencesManager.clearApiKey();
+      return { success: true };
+    } catch (error) {
+      console.error('[Main] clearApiKey error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to clear API key',
       };
     }
   });

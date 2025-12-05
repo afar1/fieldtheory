@@ -64,6 +64,11 @@ const ClipboardIPCChannels = {
   DIALOG_BOUNDS: 'clipboard:dialogBounds',
   TARGET_APP_INFO: 'clipboard:targetAppInfo',
   
+  // API key management (stored securely via OS keychain)
+  GET_API_KEY_STATUS: 'clipboard:getApiKeyStatus',
+  SET_API_KEY: 'clipboard:setApiKey',
+  CLEAR_API_KEY: 'clipboard:clearApiKey',
+  
   // Continuous Context mode
   GET_CONTINUOUS_CONTEXT_STATE: 'clipboard:getContinuousContextState',
   SET_CONTINUOUS_CONTEXT_ENABLED: 'clipboard:setContinuousContextEnabled',
@@ -261,6 +266,11 @@ export interface ClipboardAPI {
   
   // Engineer feature - refine prompts using AI
   engineerStack: (stackId: string) => Promise<EngineerResult>;
+  
+  // API key management (stored securely via OS keychain)
+  getApiKeyStatus: () => Promise<{ hasKey: boolean }>;
+  setApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>;
+  clearApiKey: () => Promise<{ success: boolean; error?: string }>;
   
   // Mobile sync operations - sync iOS transcriptions to clipboard history
   setSyncSession: (accessToken: string, refreshToken: string) => Promise<boolean>;
@@ -616,6 +626,19 @@ const clipboardAPI: ClipboardAPI = {
   // Engineer feature - refine prompts using AI
   engineerStack: async (stackId: string): Promise<EngineerResult> => {
     return ipcRenderer.invoke('clipboard:engineerStack', stackId);
+  },
+
+  // API key management (stored securely via OS keychain)
+  getApiKeyStatus: async (): Promise<{ hasKey: boolean }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_API_KEY_STATUS);
+  },
+
+  setApiKey: async (apiKey: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SET_API_KEY, apiKey);
+  },
+
+  clearApiKey: async (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.CLEAR_API_KEY);
   },
 
   // Mobile sync operations - sync iOS transcriptions to clipboard history
