@@ -86,6 +86,45 @@ function truncateText(text: string, maxLength: number = 100): string {
 }
 
 /**
+ * Detect if text contains a valid color value (hex or RGB) and return the color string.
+ * Returns null if no valid color is found.
+ * Checks if the entire text is a color, or finds the first color value in the text.
+ */
+function detectColor(text: string | null): string | null {
+  if (!text) return null;
+  
+  const trimmed = text.trim();
+  
+  // First check if the entire text is a hex color: #RGB, #RRGGBB, #RRGGBBAA
+  const hexPattern = /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
+  if (hexPattern.test(trimmed)) {
+    return trimmed;
+  }
+  
+  // Check if the entire text is RGB/RGBA: rgb(255, 87, 51) or rgba(255, 87, 51, 0.5)
+  const rgbPattern = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*[\d.]+)?\s*\)$/i;
+  if (rgbPattern.test(trimmed)) {
+    return trimmed;
+  }
+  
+  // If not the entire text, search for hex colors within the text
+  const hexInTextPattern = /#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})\b/;
+  const hexMatch = trimmed.match(hexInTextPattern);
+  if (hexMatch) {
+    return hexMatch[0];
+  }
+  
+  // Search for RGB/RGBA within the text
+  const rgbInTextPattern = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*[\d.]+)?\s*\)/i;
+  const rgbInTextMatch = trimmed.match(rgbInTextPattern);
+  if (rgbInTextMatch) {
+    return rgbInTextMatch[0];
+  }
+  
+  return null;
+}
+
+/**
  * ClipboardHistory component - Alfred-style popup for clipboard history.
  */
 export default function ClipboardHistory() {
@@ -1167,11 +1206,33 @@ export default function ClipboardHistory() {
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
                           whiteSpace: 'nowrap',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
                         }}>
-                          {item.type === 'text' || item.type === 'transcript' 
-                            ? truncateText(item.content || 'Empty', 80)
-                            : `Screenshot ${item.imageWidth}×${item.imageHeight}`
-                          }
+                          {item.type === 'text' || item.type === 'transcript' ? (
+                            <>
+                              {/* Color preview square */}
+                              {detectColor(item.content) && (
+                                <div
+                                  style={{
+                                    width: '16px',
+                                    height: '16px',
+                                    borderRadius: '3px',
+                                    backgroundColor: detectColor(item.content) || '#000',
+                                    border: '1px solid #e0e0e0',
+                                    flexShrink: 0,
+                                  }}
+                                  title={detectColor(item.content) || ''}
+                                />
+                              )}
+                              <span style={{ flex: 1 }}>
+                                {truncateText(item.content || 'Empty', 80)}
+                              </span>
+                            </>
+                          ) : (
+                            `Screenshot ${item.imageWidth}×${item.imageHeight}`
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1280,16 +1341,40 @@ export default function ClipboardHistory() {
                             fontSize: '12px',
                             fontWeight: '500',
                             marginBottom: '4px',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            display: '-webkit-box',
-                            WebkitLineClamp: 2,
-                            WebkitBoxOrient: 'vertical' as const,
-                            wordBreak: 'break-word',
-                            whiteSpace: 'normal',
+                            display: 'flex',
+                            alignItems: 'flex-start',
+                            gap: '8px',
                           }}
                         >
-                          {item.content || 'Empty'}
+                          {/* Color preview square */}
+                          {detectColor(item.content) && (
+                            <div
+                              style={{
+                                width: '20px',
+                                height: '20px',
+                                borderRadius: '4px',
+                                backgroundColor: detectColor(item.content) || '#000',
+                                border: '1px solid #e0e0e0',
+                                flexShrink: 0,
+                                marginTop: '1px',
+                              }}
+                              title={detectColor(item.content) || ''}
+                            />
+                          )}
+                          <span
+                            style={{
+                              flex: 1,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical' as const,
+                              wordBreak: 'break-word',
+                              whiteSpace: 'normal',
+                            }}
+                          >
+                            {item.content || 'Empty'}
+                          </span>
                         </div>
                         <div
                           style={{
