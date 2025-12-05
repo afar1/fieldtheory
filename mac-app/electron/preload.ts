@@ -63,6 +63,16 @@ const ClipboardIPCChannels = {
   DIALOG_POSITION: 'clipboard:dialogPosition',
   DIALOG_BOUNDS: 'clipboard:dialogBounds',
   TARGET_APP_INFO: 'clipboard:targetAppInfo',
+  
+  // Continuous Context mode
+  GET_CONTINUOUS_CONTEXT_STATE: 'clipboard:getContinuousContextState',
+  SET_CONTINUOUS_CONTEXT_ENABLED: 'clipboard:setContinuousContextEnabled',
+  GET_CONTINUOUS_CONTEXT_ENABLED: 'clipboard:getContinuousContextEnabled',
+  SET_CONTINUOUS_CONTEXT_HOTKEY: 'clipboard:setContinuousContextHotkey',
+  GET_CONTINUOUS_CONTEXT_HOTKEY: 'clipboard:getContinuousContextHotkey',
+  START_CONTINUOUS_CONTEXT: 'clipboard:startContinuousContext',
+  STOP_CONTINUOUS_CONTEXT: 'clipboard:stopContinuousContext',
+  CONTINUOUS_CONTEXT_CHANGED: 'clipboard:continuousContextChanged',
 } as const;
 
 // Types (only for TypeScript checking, not runtime)
@@ -147,6 +157,13 @@ type ClipboardQueryOptions = {
 type ClipboardHotkeys = {
   screenshot?: string;
   history?: string;
+  continuousContext?: string;
+};
+
+type ContinuousContextState = {
+  active: boolean;
+  stackId: string | null;
+  screenshotCount: number;
 };
 
 type RunningApp = {
@@ -243,6 +260,16 @@ export interface ClipboardAPI {
   forceSyncAll: () => Promise<number>;
   getSyncEnabled: () => Promise<boolean>;
   setSyncEnabled: (enabled: boolean) => Promise<boolean>;
+  
+  // Continuous Context mode - multi-screenshot capture sessions
+  getContinuousContextState: () => Promise<ContinuousContextState>;
+  getContinuousContextEnabled: () => Promise<boolean>;
+  setContinuousContextEnabled: (enabled: boolean) => Promise<boolean>;
+  getContinuousContextHotkey: () => Promise<string>;
+  setContinuousContextHotkey: (hotkey: string) => Promise<boolean>;
+  startContinuousContext: () => Promise<void>;
+  stopContinuousContext: () => Promise<void>;
+  onContinuousContextChanged: (callback: (state: ContinuousContextState) => void) => () => void;
 }
 
 export interface PermissionsAPI {
@@ -600,6 +627,45 @@ const clipboardAPI: ClipboardAPI = {
 
   setSyncEnabled: async (enabled: boolean): Promise<boolean> => {
     return ipcRenderer.invoke('clipboard:setSyncEnabled', enabled);
+  },
+
+  // Continuous Context mode - multi-screenshot capture sessions
+  getContinuousContextState: async (): Promise<ContinuousContextState> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_CONTINUOUS_CONTEXT_STATE);
+  },
+
+  getContinuousContextEnabled: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_CONTINUOUS_CONTEXT_ENABLED);
+  },
+
+  setContinuousContextEnabled: async (enabled: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SET_CONTINUOUS_CONTEXT_ENABLED, enabled);
+  },
+
+  getContinuousContextHotkey: async (): Promise<string> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_CONTINUOUS_CONTEXT_HOTKEY);
+  },
+
+  setContinuousContextHotkey: async (hotkey: string): Promise<boolean> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SET_CONTINUOUS_CONTEXT_HOTKEY, hotkey);
+  },
+
+  startContinuousContext: async (): Promise<void> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.START_CONTINUOUS_CONTEXT);
+  },
+
+  stopContinuousContext: async (): Promise<void> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.STOP_CONTINUOUS_CONTEXT);
+  },
+
+  onContinuousContextChanged: (callback: (state: ContinuousContextState) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: ContinuousContextState) => {
+      callback(state);
+    };
+    ipcRenderer.on(ClipboardIPCChannels.CONTINUOUS_CONTEXT_CHANGED, handler);
+    return () => {
+      ipcRenderer.removeListener(ClipboardIPCChannels.CONTINUOUS_CONTEXT_CHANGED, handler);
+    };
   },
 };
 

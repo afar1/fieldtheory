@@ -139,6 +139,27 @@ interface ClipboardItem {
 }
 
 /**
+ * Summary info for a stack of items.
+ */
+interface StackInfo {
+  stackId: string;
+  itemCount: number;
+  imageCount: number;
+  textCount: number;
+  createdAt: number;
+  firstTextPreview: string | null;
+}
+
+/**
+ * Continuous Context mode state.
+ */
+interface ContinuousContextState {
+  active: boolean;
+  stackId: string | null;
+  screenshotCount: number;
+}
+
+/**
  * Clipboard query options.
  */
 interface ClipboardQueryOptions {
@@ -155,6 +176,7 @@ interface ClipboardQueryOptions {
 interface ClipboardHotkeys {
   screenshot?: string;
   history?: string;
+  continuousContext?: string;
 }
 
 /**
@@ -214,11 +236,13 @@ interface ClipboardAPI {
   saveBounds: (bounds: { x: number; y: number; width: number; height: number }) => Promise<void>;
   onKeyEvent: (callback: (event: { characters: string; keyCode: number; modifiers: string[] }) => void) => () => void;
   closeWindow: () => Promise<void>;
+  
   // Stack operations for prompt stacking feature
   queryItemsByStackId?: (stackId: string) => Promise<ClipboardItem[]>;
   getUniqueStacks?: () => Promise<StackInfo[]>;
   updateStackId?: (itemIds: number[], stackId: string | null) => Promise<void>;
   startDrag?: (stackId: string) => Promise<void>;
+  
   // Mobile sync operations - sync iOS transcriptions to clipboard history
   setSyncSession?: (accessToken: string, refreshToken: string) => Promise<boolean>;
   clearSyncSession?: () => Promise<boolean>;
@@ -226,6 +250,16 @@ interface ClipboardAPI {
   forceSyncAll?: () => Promise<number>;
   getSyncEnabled?: () => Promise<boolean>;
   setSyncEnabled?: (enabled: boolean) => Promise<boolean>;
+  
+  // Continuous Context mode - multi-screenshot capture sessions
+  getContinuousContextState?: () => Promise<ContinuousContextState>;
+  getContinuousContextEnabled?: () => Promise<boolean>;
+  setContinuousContextEnabled?: (enabled: boolean) => Promise<boolean>;
+  getContinuousContextHotkey?: () => Promise<string>;
+  setContinuousContextHotkey?: (hotkey: string) => Promise<boolean>;
+  startContinuousContext?: () => Promise<void>;
+  stopContinuousContext?: () => Promise<void>;
+  onContinuousContextChanged?: (callback: (state: ContinuousContextState) => void) => () => void;
 }
 
 /**

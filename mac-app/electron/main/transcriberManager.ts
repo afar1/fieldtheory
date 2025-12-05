@@ -297,13 +297,19 @@ export class TranscriberManager extends EventEmitter {
         return;
       }
       
-      // Store transcription in clipboard history (with stackId if in stacking mode)
+      // Store transcription in clipboard history (with stackId if in stacking mode or continuous context)
       if (this.clipboardManager) {
+        // Check if continuous context mode is active - if so, use its stackId
+        const continuousContextState = this.clipboardManager.getContinuousContextState();
+        const effectiveStackId = continuousContextState.active && continuousContextState.stackId
+          ? continuousContextState.stackId
+          : (this.currentStackId || undefined);
+        
         const itemId = await this.clipboardManager.storeText(
           trimmedText,
           'transcript',
           undefined, // sourceApp - let it auto-detect
-          this.currentStackId || undefined
+          effectiveStackId
         );
         if (itemId > 0) {
           this.currentStack.push(itemId);
