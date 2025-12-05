@@ -80,6 +80,17 @@ const ClipboardIPCChannels = {
   CONTINUOUS_CONTEXT_CHANGED: 'clipboard:continuousContextChanged',
 } as const;
 
+const OnboardingIPCChannels = {
+  GET_PERMISSION_STATUS: 'onboarding:getPermissionStatus',
+  REQUEST_MICROPHONE: 'onboarding:requestMicrophone',
+  OPEN_ACCESSIBILITY_SETTINGS: 'onboarding:openAccessibilitySettings',
+  GET_ONBOARDING_STATE: 'onboarding:getState',
+  SET_ONBOARDING_STEP: 'onboarding:setStep',
+  COMPLETE_ONBOARDING: 'onboarding:complete',
+  SKIP_ONBOARDING: 'onboarding:skip',
+  CHECK_MODEL_STATUS: 'onboarding:checkModelStatus',
+} as const;
+
 // Types (only for TypeScript checking, not runtime)
 type AudioState = {
   devices: Array<{
@@ -175,6 +186,18 @@ type ContinuousContextState = {
   active: boolean;
   stackId: string | null;
   screenshotCount: number;
+};
+
+type PermissionStatus = {
+  microphone: 'granted' | 'denied' | 'not-determined';
+  accessibility: boolean;
+};
+
+type OnboardingState = {
+  isComplete: boolean;
+  currentStep: number;
+  permissions: PermissionStatus;
+  modelDownloaded: boolean;
 };
 
 type RunningApp = {
@@ -798,10 +821,59 @@ const permissionsAPI: PermissionsAPI = {
   },
 };
 
+// ==========================================================================
+// Onboarding API - First-run wizard functionality
+// ==========================================================================
+
+const onboardingAPI = {
+  // Get current permission status for all required permissions.
+  getPermissionStatus: async (): Promise<PermissionStatus> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.GET_PERMISSION_STATUS);
+  },
+
+  // Request microphone permission - shows system dialog if not determined.
+  requestMicrophone: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.REQUEST_MICROPHONE);
+  },
+
+  // Open System Settings to Accessibility pane.
+  openAccessibilitySettings: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.OPEN_ACCESSIBILITY_SETTINGS);
+  },
+
+  // Get current onboarding state (complete, step, permissions, model).
+  getState: async (): Promise<OnboardingState> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.GET_ONBOARDING_STATE);
+  },
+
+  // Update current onboarding step (for resume capability).
+  setStep: async (step: number): Promise<boolean> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.SET_ONBOARDING_STEP, step);
+  },
+
+  // Mark onboarding as complete and open main window.
+  complete: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.COMPLETE_ONBOARDING);
+  },
+
+  // Skip onboarding (set up later).
+  skip: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.SKIP_ONBOARDING);
+  },
+
+  // Check if model is downloaded.
+  checkModelStatus: async (): Promise<{ downloaded: boolean }> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.CHECK_MODEL_STATUS);
+  },
+};
+
+type OnboardingAPI = typeof onboardingAPI;
+
 contextBridge.exposeInMainWorld('audioAPI', audioAPI);
 contextBridge.exposeInMainWorld('transcribeAPI', transcribeAPI);
 contextBridge.exposeInMainWorld('clipboardAPI', clipboardAPI);
 contextBridge.exposeInMainWorld('permissionsAPI', permissionsAPI);
+contextBridge.exposeInMainWorld('onboardingAPI', onboardingAPI);
 
 contextBridge.exposeInMainWorld('platform', {
   isMacOS: process.platform === 'darwin',
@@ -816,6 +888,7 @@ declare global {
     clipboardAPI: ClipboardAPI;
     visionAPI: VisionAPI;
     permissionsAPI: PermissionsAPI;
+    onboardingAPI: OnboardingAPI;
     platform: {
       isMacOS: boolean;
       isWindows: boolean;

@@ -47,6 +47,10 @@ interface Preferences {
   // Never store plain text API keys - use getApiKey/setApiKey methods.
   anthropicApiKeyEncrypted?: string;
   
+  // Onboarding state - tracks whether user has completed first-run setup.
+  onboardingComplete?: boolean;
+  onboardingStep?: number; // For resuming interrupted onboarding
+  
   // Continuous Context feature - allows continuous screenshotting with stacked results
   continuousContextEnabled?: boolean;
   continuousContextHotkey?: string;

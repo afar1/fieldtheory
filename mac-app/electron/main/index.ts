@@ -31,6 +31,8 @@ import { ClipboardItem } from './clipboardManager';
 import { VisionModelManager, VisionModelSize } from './visionModelManager';
 import { VisionProcessor } from './visionProcessor';
 import { engineerStack, setApiKey as setEngineerApiKey } from './promptEngineer';
+import { OnboardingWindow, OnboardingStep } from './onboardingWindow';
+import { OnboardingIPCChannels } from './types/onboarding';
 
 // Override userData path for experimental builds to isolate data from production.
 // This must happen before app.whenReady() and before any code calls app.getPath('userData').
@@ -60,6 +62,7 @@ let clipboardHistoryWindow: ClipboardHistoryWindow | null = null;
 let visionModelManager: VisionModelManager | null = null;
 let visionProcessor: VisionProcessor | null = null;
 let mobileSync: MobileSync | null = null;
+let onboardingWindow: OnboardingWindow | null = null;
 
 /**
  * Create the main application window.
@@ -1135,6 +1138,98 @@ function setupClipboardIPCHandlers(): void {
 
 
 /**
+ * Set up IPC handlers for onboarding wizard.
+ */
+function setupOnboardingIPCHandlers(): void {
+  // Get current permission status for all required permissions.
+  ipcMain.handle(OnboardingIPCChannels.GET_PERMISSION_STATUS, async () => {
+    if (!onboardingWindow) {
+      onboardingWindow = new OnboardingWindow();
+    }
+    return await onboardingWindow.getPermissionStatus();
+  });
+
+  // Request microphone permission - shows system dialog if not determined.
+  ipcMain.handle(OnboardingIPCChannels.REQUEST_MICROPHONE, async () => {
+    if (!onboardingWindow) {
+      onboardingWindow = new OnboardingWindow();
+    }
+    return await onboardingWindow.requestMicrophonePermission();
+  });
+
+  // Open System Settings to Accessibility pane.
+  ipcMain.handle(OnboardingIPCChannels.OPEN_ACCESSIBILITY_SETTINGS, async () => {
+    if (!onboardingWindow) {
+      onboardingWindow = new OnboardingWindow();
+    }
+    onboardingWindow.openAccessibilitySettings();
+    return true;
+  });
+
+  // Get current onboarding state (complete, step, permissions, model).
+  ipcMain.handle(OnboardingIPCChannels.GET_ONBOARDING_STATE, async () => {
+    const prefs = preferencesManager?.get();
+    const permissions = onboardingWindow 
+      ? await onboardingWindow.getPermissionStatus()
+      : { microphone: 'not-determined' as const, accessibility: false };
+    
+    // Check if default model is downloaded.
+    const modelDownloaded = transcriberManager?.modelManager 
+      ? await transcriberManager.modelManager.isModelAvailable()
+      : false;
+    
+    return {
+      isComplete: prefs?.onboardingComplete ?? false,
+      currentStep: prefs?.onboardingStep ?? 0,
+      permissions,
+      modelDownloaded,
+    };
+  });
+
+  // Update current onboarding step (for resume capability).
+  ipcMain.handle(OnboardingIPCChannels.SET_ONBOARDING_STEP, async (_event, step: number) => {
+    if (!preferencesManager) return false;
+    await preferencesManager.save({ onboardingStep: step });
+    return true;
+  });
+
+  // Mark onboarding as complete.
+  ipcMain.handle(OnboardingIPCChannels.COMPLETE_ONBOARDING, async () => {
+    if (!preferencesManager) return false;
+    await preferencesManager.save({ onboardingComplete: true });
+    
+    // Close onboarding window and show main window.
+    if (onboardingWindow) {
+      onboardingWindow.close();
+    }
+    showMainWindow();
+    return true;
+  });
+
+  // Skip onboarding (set up later).
+  ipcMain.handle(OnboardingIPCChannels.SKIP_ONBOARDING, async () => {
+    if (!preferencesManager) return false;
+    await preferencesManager.save({ onboardingComplete: true });
+    
+    // Close onboarding window.
+    if (onboardingWindow) {
+      onboardingWindow.close();
+    }
+    return true;
+  });
+
+  // Check if model is downloaded (for model download step).
+  ipcMain.handle(OnboardingIPCChannels.CHECK_MODEL_STATUS, async () => {
+    if (!transcriberManager?.modelManager) {
+      return { downloaded: false, size: 0 };
+    }
+    const isAvailable = await transcriberManager.modelManager.isModelAvailable();
+    return { downloaded: isAvailable };
+  });
+}
+
+
+/**
  * Check permissions and return status.
  */
 async function checkPermissions(): Promise<{ accessibilityGranted: boolean; inputMonitoringGranted: boolean }> {
@@ -1529,6 +1624,7 @@ if (!gotTheLock) {
     setupTranscribeIPCHandlers();
     setupVisionIPCHandlers();
     setupClipboardIPCHandlers();
+    setupOnboardingIPCHandlers();
 
     // Manual update check function for tray menu.
     function checkForUpdatesManual(): void {
@@ -1606,6 +1702,15 @@ if (!gotTheLock) {
       mainWindow.webContents.once('did-finish-load', () => {
         mainWindow?.webContents.send('permissions-status', permissions);
       });
+    }
+    
+    // First-run check: Show onboarding wizard if not completed.
+    const prefs = preferencesManager?.get();
+    if (!prefs?.onboardingComplete) {
+      console.log('[Main] First run detected, showing onboarding wizard');
+      onboardingWindow = new OnboardingWindow();
+      const startStep = prefs?.onboardingStep ?? OnboardingStep.WELCOME;
+      onboardingWindow.show(startStep);
     }
     // createWindow(); // Commented out for testing - app runs in background, opens manually
 
