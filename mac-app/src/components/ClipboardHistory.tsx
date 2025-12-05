@@ -180,12 +180,11 @@ export default function ClipboardHistory() {
 
     setLoading(true);
     try {
-      const queryOptions: any = {
+      const queryOptions: ClipboardQueryOptions = {
         limit: ITEMS_PER_PAGE,
         offset: reset ? 0 : offset,
       };
 
-      // Apply source filter (mac/ios)
       if (sourceFilter !== 'all') {
         queryOptions.source = sourceFilter;
       }
