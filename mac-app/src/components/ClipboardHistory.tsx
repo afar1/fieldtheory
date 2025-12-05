@@ -149,6 +149,13 @@ export default function ClipboardHistory() {
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [resizeStart, setResizeStart] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   
+  // Engineer feature - track loading state and result per stack
+  const [engineeringStackId, setEngineeringStackId] = useState<string | null>(null);
+  const [engineerResult, setEngineerResult] = useState<{
+    stackId: string;
+    refinedPrompt: string;
+  } | null>(null);
+  
   // Target app for pasting - the app content will be pasted into.
   // Combined into single state object to batch updates and reduce re-renders.
   const [targetAppInfo, setTargetAppInfo] = useState<{
@@ -1088,7 +1095,7 @@ export default function ClipboardHistory() {
                   {/* Expanded stack actions and items */}
                   {expanded && (
                     <>
-                      {/* Unstack actions */}
+                      {/* Stack actions */}
                       <div
                         style={{
                           padding: '8px 16px 8px 48px',
@@ -1099,6 +1106,44 @@ export default function ClipboardHistory() {
                           fontSize: '11px',
                         }}
                       >
+                        {/* Engineer button - refine prompt using AI */}
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            setEngineeringStackId(stack.stackId);
+                            setEngineerResult(null);
+                            try {
+                              const result = await window.clipboardAPI?.engineerStack?.(stack.stackId);
+                              if (result?.success && result.refinedPrompt) {
+                                setEngineerResult({
+                                  stackId: stack.stackId,
+                                  refinedPrompt: result.refinedPrompt,
+                                });
+                              } else {
+                                // Show error briefly
+                                console.error('[Engineer] Failed:', result?.error || 'Unknown error');
+                              }
+                            } catch (err) {
+                              console.error('[Engineer] Error:', err);
+                            } finally {
+                              setEngineeringStackId(null);
+                            }
+                          }}
+                          disabled={engineeringStackId === stack.stackId}
+                          style={{
+                            padding: '4px 12px',
+                            fontSize: '10px',
+                            fontWeight: 600,
+                            backgroundColor: engineeringStackId === stack.stackId ? '#e0e0e0' : '#007AFF',
+                            color: engineeringStackId === stack.stackId ? '#888' : '#fff',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: engineeringStackId === stack.stackId ? 'wait' : 'pointer',
+                          }}
+                        >
+                          {engineeringStackId === stack.stackId ? 'Engineering...' : '✨ Engineer'}
+                        </button>
+                        
                         <button
                           onClick={async (e) => {
                             e.stopPropagation();
@@ -1165,6 +1210,88 @@ export default function ClipboardHistory() {
                           </button>
                         )}
                       </div>
+                      
+                      {/* Engineered result display */}
+                      {engineerResult?.stackId === stack.stackId && (
+                        <div
+                          style={{
+                            padding: '12px 16px 12px 48px',
+                            backgroundColor: '#f0f8ff',
+                            borderBottom: '1px solid #007AFF',
+                            borderLeft: '3px solid #007AFF',
+                          }}
+                        >
+                          <div style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginBottom: '8px',
+                          }}>
+                            <span style={{
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              color: '#007AFF',
+                            }}>
+                              ✨ Engineered Prompt
+                            </span>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  // Copy to clipboard
+                                  navigator.clipboard.writeText(engineerResult.refinedPrompt);
+                                }}
+                                style={{
+                                  padding: '3px 8px',
+                                  fontSize: '10px',
+                                  backgroundColor: '#007AFF',
+                                  color: '#fff',
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Copy
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEngineerResult(null);
+                                }}
+                                style={{
+                                  padding: '3px 8px',
+                                  fontSize: '10px',
+                                  backgroundColor: '#fff',
+                                  color: '#666',
+                                  border: '1px solid #ddd',
+                                  borderRadius: '4px',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Dismiss
+                              </button>
+                            </div>
+                          </div>
+                          <pre
+                            style={{
+                              fontSize: '11px',
+                              color: '#333',
+                              whiteSpace: 'pre-wrap',
+                              wordBreak: 'break-word',
+                              margin: 0,
+                              fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+                              maxHeight: '300px',
+                              overflowY: 'auto',
+                              backgroundColor: '#fff',
+                              padding: '12px',
+                              borderRadius: '6px',
+                              border: '1px solid #e0e0e0',
+                            }}
+                          >
+                            {engineerResult.refinedPrompt}
+                          </pre>
+                        </div>
+                      )}
                     </>
                   )}
 
