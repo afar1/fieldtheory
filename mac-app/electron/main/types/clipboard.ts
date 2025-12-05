@@ -30,6 +30,11 @@ export const ClipboardIPCChannels = {
 // Engineer feature - refine prompts using AI
   ENGINEER_STACK: 'clipboard:engineerStack',
   
+  // API key management (stored securely via OS keychain)
+  GET_API_KEY_STATUS: 'clipboard:getApiKeyStatus',
+  SET_API_KEY: 'clipboard:setApiKey',
+  CLEAR_API_KEY: 'clipboard:clearApiKey',
+  
   // Continuous Context mode - allows multi-screenshot capture sessions
   GET_CONTINUOUS_CONTEXT_STATE: 'clipboard:getContinuousContextState',
   SET_CONTINUOUS_CONTEXT_ENABLED: 'clipboard:setContinuousContextEnabled',

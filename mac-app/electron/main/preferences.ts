@@ -1,4 +1,4 @@
-import { app } from 'electron';
+import { app, safeStorage } from 'electron';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -42,7 +42,10 @@ interface Preferences {
   clipboardHistoryHotkey?: string;
   priorityDeviceId?: string | null;
   clipboardHistoryBounds?: ClipboardHistoryBounds;
-  anthropicApiKey?: string; // API key for cloud features like Engineer
+  
+  // API key stored as encrypted base64 string via safeStorage (OS keychain).
+  // Never store plain text API keys - use getApiKey/setApiKey methods.
+  anthropicApiKeyEncrypted?: string;
   
   // Continuous Context feature - allows continuous screenshotting with stacked results
   continuousContextEnabled?: boolean;
@@ -114,6 +117,63 @@ export class PreferencesManager {
    */
   getPreference<K extends keyof Preferences>(key: K): Preferences[K] {
     return this.preferences[key];
+  }
+
+  /**
+   * Securely store an API key using OS keychain via Electron safeStorage.
+   * The key is encrypted and stored as base64 in preferences.
+   */
+  async setApiKey(plainTextKey: string): Promise<void> {
+    if (!safeStorage.isEncryptionAvailable()) {
+      console.warn('[PreferencesManager] safeStorage not available, falling back to plain storage');
+      // Fallback for systems without keychain - still better than nothing
+      await this.save({ anthropicApiKeyEncrypted: Buffer.from(plainTextKey).toString('base64') });
+      return;
+    }
+
+    const encrypted = safeStorage.encryptString(plainTextKey);
+    const encryptedBase64 = encrypted.toString('base64');
+    await this.save({ anthropicApiKeyEncrypted: encryptedBase64 });
+    console.log('[PreferencesManager] API key securely stored');
+  }
+
+  /**
+   * Retrieve the API key, decrypting from OS keychain.
+   * Returns null if no key is stored or decryption fails.
+   */
+  getApiKey(): string | null {
+    const encryptedBase64 = this.preferences.anthropicApiKeyEncrypted;
+    if (!encryptedBase64) {
+      return null;
+    }
+
+    try {
+      if (!safeStorage.isEncryptionAvailable()) {
+        // Fallback: decode base64 if safeStorage wasn't available when storing
+        return Buffer.from(encryptedBase64, 'base64').toString('utf-8');
+      }
+
+      const encryptedBuffer = Buffer.from(encryptedBase64, 'base64');
+      return safeStorage.decryptString(encryptedBuffer);
+    } catch (error) {
+      console.error('[PreferencesManager] Failed to decrypt API key:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Check if an API key is stored.
+   */
+  hasApiKey(): boolean {
+    return !!this.preferences.anthropicApiKeyEncrypted;
+  }
+
+  /**
+   * Remove the stored API key.
+   */
+  async clearApiKey(): Promise<void> {
+    await this.save({ anthropicApiKeyEncrypted: undefined });
+    console.log('[PreferencesManager] API key cleared');
   }
 }
 
