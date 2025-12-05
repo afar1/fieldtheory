@@ -42,6 +42,7 @@ interface Preferences {
   clipboardHistoryHotkey?: string;
   priorityDeviceId?: string | null;
   clipboardHistoryBounds?: ClipboardHistoryBounds;
+  anthropicApiKey?: string; // API key for cloud features like Engineer
 }
 
 const DEFAULT_PREFERENCES: Preferences = {

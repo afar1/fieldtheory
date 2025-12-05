@@ -130,6 +130,12 @@ type StackInfo = {
   firstTextPreview: string | null;
 };
 
+type EngineerResult = {
+  success: boolean;
+  refinedPrompt?: string;
+  error?: string;
+};
+
 type StackingModeState = {
   active: boolean;
   stackId: string | null;
@@ -235,6 +241,9 @@ export interface ClipboardAPI {
   getUniqueStacks: () => Promise<StackInfo[]>;
   updateStackId: (itemIds: number[], stackId: string | null) => Promise<void>;
   startDrag: (stackId: string) => Promise<void>;
+  
+  // Engineer feature - refine prompts using AI
+  engineerStack: (stackId: string) => Promise<EngineerResult>;
   
   // Mobile sync operations - sync iOS transcriptions to clipboard history
   setSyncSession: (accessToken: string, refreshToken: string) => Promise<boolean>;
@@ -575,6 +584,11 @@ const clipboardAPI: ClipboardAPI = {
 
   startDrag: async (stackId: string): Promise<void> => {
     return ipcRenderer.invoke('clipboard:startDrag', stackId);
+  },
+
+  // Engineer feature - refine prompts using AI
+  engineerStack: async (stackId: string): Promise<EngineerResult> => {
+    return ipcRenderer.invoke('clipboard:engineerStack', stackId);
   },
 
   // Mobile sync operations - sync iOS transcriptions to clipboard history

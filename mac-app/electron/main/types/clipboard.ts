@@ -26,6 +26,9 @@ export const ClipboardIPCChannels = {
   GET_UNIQUE_STACKS: 'clipboard:getUniqueStacks',
   UPDATE_STACK_ID: 'clipboard:updateStackId',
   START_DRAG: 'clipboard:startDrag',
+  
+  // Engineer feature - refine prompts using AI
+  ENGINEER_STACK: 'clipboard:engineerStack',
 
   // Mobile sync operations
   SET_SYNC_SESSION: 'clipboard:setSyncSession',
@@ -95,6 +98,15 @@ export interface StackInfo {
 }
 
 /**
+ * Result from the engineer prompt operation.
+ */
+export interface EngineerResult {
+  success: boolean;
+  refinedPrompt?: string;
+  error?: string;
+}
+
+/**
  * Options for querying clipboard history.
  */
 export interface ClipboardQueryOptions {
@@ -135,5 +147,8 @@ export interface ClipboardAPI {
   getUniqueStacks: () => Promise<StackInfo[]>;
   updateStackId: (itemIds: number[], stackId: string | null) => Promise<void>;
   startDrag: (stackId: string) => Promise<void>;
+  
+  // Engineer feature - refine prompts using AI
+  engineerStack: (stackId: string) => Promise<EngineerResult>;
 }
 
