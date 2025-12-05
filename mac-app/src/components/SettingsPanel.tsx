@@ -44,6 +44,13 @@ export default function SettingsPanel() {
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   
+  // API key state - for Engineer feature (Anthropic API)
+  const [hasApiKey, setHasApiKey] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
+  const [apiKeySaving, setApiKeySaving] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
+  
   // Load clipboard hotkeys on mount
   useEffect(() => {
     if (window.clipboardAPI) {
@@ -60,8 +67,51 @@ export default function SettingsPanel() {
           setContinuousContextHotkey(hotkey);
         }
       });
+      
+      // Load API key status
+      window.clipboardAPI.getApiKeyStatus?.().then(status => {
+        setHasApiKey(status.hasKey);
+      });
     }
   }, []);
+  
+  // Handler for saving API key
+  const handleSaveApiKey = async () => {
+    if (!window.clipboardAPI?.setApiKey || !apiKeyInput.trim()) return;
+    
+    setApiKeySaving(true);
+    setApiKeyError(null);
+    
+    try {
+      const result = await window.clipboardAPI.setApiKey(apiKeyInput.trim());
+      if (result.success) {
+        setHasApiKey(true);
+        setApiKeyInput('');
+        setShowApiKey(false);
+      } else {
+        setApiKeyError(result.error || 'Failed to save API key');
+      }
+    } catch (err) {
+      setApiKeyError(err instanceof Error ? err.message : 'Failed to save API key');
+    } finally {
+      setApiKeySaving(false);
+    }
+  };
+  
+  // Handler for clearing API key
+  const handleClearApiKey = async () => {
+    if (!window.clipboardAPI?.clearApiKey) return;
+    
+    try {
+      const result = await window.clipboardAPI.clearApiKey();
+      if (result.success) {
+        setHasApiKey(false);
+        setApiKeyInput('');
+      }
+    } catch (err) {
+      console.error('Failed to clear API key:', err);
+    }
+  };
   
   // Handler for toggling continuous context enabled state
   const handleToggleContinuousContext = async (enabled: boolean) => {
@@ -464,6 +514,106 @@ export default function SettingsPanel() {
       <div style={styles.section}>
         <h3 style={styles.sectionTitle}>Vision</h3>
         <VisionSettings />
+      </div>
+
+      <div style={styles.section}>
+        <h3 style={styles.sectionTitle}>AI Features</h3>
+        <p style={styles.sectionDescription}>
+          Configure API keys for AI-powered features like the Engineer prompt refinement.
+        </p>
+        
+        <div style={styles.hotkeyCard}>
+          <h4 style={styles.hotkeyTitle}>Anthropic API Key</h4>
+          <p style={{ fontSize: '12px', color: '#6b7280', marginBottom: '12px' }}>
+            Required for the Engineer feature. Your key is stored securely in the system keychain.
+          </p>
+          
+          {hasApiKey ? (
+            <div style={styles.hotkeyRow}>
+              <div>
+                <span style={{ color: '#10b981', fontWeight: 500 }}>✓ API Key Configured</span>
+                <p style={{ fontSize: '11px', color: '#6b7280', margin: '2px 0 0 0' }}>
+                  Engineer feature is ready to use
+                </p>
+              </div>
+              <button
+                onClick={handleClearApiKey}
+                style={{
+                  ...styles.cancelButton,
+                  backgroundColor: '#fef2f2',
+                  color: '#dc2626',
+                  borderColor: '#fecaca',
+                }}
+              >
+                Remove Key
+              </button>
+            </div>
+          ) : (
+            <div>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                <input
+                  type={showApiKey ? 'text' : 'password'}
+                  value={apiKeyInput}
+                  onChange={(e) => setApiKeyInput(e.target.value)}
+                  placeholder="sk-ant-..."
+                  style={{
+                    flex: 1,
+                    padding: '8px 12px',
+                    fontSize: '13px',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '6px',
+                    fontFamily: 'monospace',
+                  }}
+                />
+                <button
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  style={{
+                    padding: '8px 12px',
+                    fontSize: '12px',
+                    color: '#374151',
+                    backgroundColor: '#f9fafb',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {showApiKey ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button
+                  onClick={handleSaveApiKey}
+                  disabled={apiKeySaving || !apiKeyInput.trim()}
+                  style={{
+                    padding: '8px 16px',
+                    fontSize: '12px',
+                    fontWeight: 500,
+                    color: '#fff',
+                    backgroundColor: apiKeySaving || !apiKeyInput.trim() ? '#9ca3af' : '#3b82f6',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: apiKeySaving || !apiKeyInput.trim() ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {apiKeySaving ? 'Saving...' : 'Save API Key'}
+                </button>
+                <a
+                  href="https://console.anthropic.com/settings/keys"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ fontSize: '12px', color: '#3b82f6' }}
+                >
+                  Get an API key →
+                </a>
+              </div>
+              {apiKeyError && (
+                <p style={{ color: '#dc2626', fontSize: '12px', marginTop: '8px' }}>
+                  {apiKeyError}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       <div style={styles.section}>
