@@ -31,6 +31,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@electron/notarize": "^2.3.2",
     "@types/node": "^20.11.19",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.0",
@@ -51,6 +52,7 @@
       "owner": "afar1",
       "repo": "littleai"
     },
+    "afterSign": "scripts/notarize.js",
     "mac": {
       "category": "public.app-category.productivity",
       "minimumSystemVersion": "13.0",
