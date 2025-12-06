@@ -214,6 +214,14 @@ interface ClipboardAPI {
   queryItems: (options?: ClipboardQueryOptions) => Promise<ClipboardItem[]>;
   getItem: (id: number) => Promise<ClipboardItem | null>;
   deleteItem: (id: number) => Promise<void>;
+  restoreItem?: (item: ClipboardItem) => Promise<number>;
+  pasteText?: (text: string, targetBundleId?: string) => Promise<void>;
+  engineerStack?: (stackId: string) => Promise<{ success: boolean; refinedPrompt?: string; error?: string }>;
+  
+  // All-time stats for footer display
+  getAllTimeStats?: () => Promise<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>;
+  incrementImprovedCount?: () => Promise<number>;
+  
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
   getHotkeys: () => Promise<ClipboardHotkeys>;

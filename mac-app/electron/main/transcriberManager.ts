@@ -90,6 +90,14 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
+   * Check if the recording overlay is currently visible.
+   * Used to prevent hiding the overlay when closing other windows.
+   */
+  isRecordingOverlayVisible(): boolean {
+    return this.overlay.isVisible();
+  }
+
+  /**
    * Initialize the transcriber manager.
    * Loads preferences and registers the global hotkey.
    */
