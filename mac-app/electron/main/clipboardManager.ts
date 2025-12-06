@@ -328,13 +328,9 @@ export class ClipboardManager extends EventEmitter {
             // Item already exists, just update lastContentHash to avoid checking again
             this.lastContentHash = hash;
           } else {
-            // New item, store it
-            const id = await this.storeText(text);
+            // New item, store it (storeText will notify listeners)
+            await this.storeText(text);
             this.lastContentHash = hash;
-            // Notify listeners of new item
-            if (id > 0 && this.onItemAddedCallback) {
-              this.onItemAddedCallback(id);
-            }
           }
         }
         return;
@@ -356,12 +352,9 @@ export class ClipboardManager extends EventEmitter {
             this.lastContentHash = hash;
           } else {
             // New item, store it
-            const id = await this.storeImage(image, imageBuffer);
+            // storeImage will notify listeners
+            await this.storeImage(image, imageBuffer);
             this.lastContentHash = hash;
-            // Notify listeners of new item
-            if (id > 0 && this.onItemAddedCallback) {
-              this.onItemAddedCallback(id);
-            }
           }
         }
       }
@@ -448,7 +441,14 @@ export class ClipboardManager extends EventEmitter {
     // Cleanup old items
     this.cleanupOldItems();
 
-    return result.lastInsertRowid as number;
+    const id = result.lastInsertRowid as number;
+    
+    // Notify listeners of new item (so UI can refresh immediately)
+    if (id > 0 && this.onItemAddedCallback) {
+      this.onItemAddedCallback(id);
+    }
+    
+    return id;
   }
 
   /**
@@ -520,7 +520,14 @@ export class ClipboardManager extends EventEmitter {
     // Cleanup old items
     this.cleanupOldItems();
 
-    return result.lastInsertRowid as number;
+    const id = result.lastInsertRowid as number;
+    
+    // Notify listeners of new item (so UI can refresh immediately)
+    if (id > 0 && this.onItemAddedCallback) {
+      this.onItemAddedCallback(id);
+    }
+    
+    return id;
   }
 
   /**
@@ -641,6 +648,59 @@ export class ClipboardManager extends EventEmitter {
   }
 
   /**
+   * Restore a deleted clipboard item.
+   * Used for undo functionality.
+   * @param item - The serialized ClipboardItem from renderer (imageData is base64 string)
+   */
+  async restoreItem(item: { 
+    id: number;
+    type: ClipboardItemType;
+    content: string | null;
+    imageData: string | null; // base64 encoded
+    imageWidth: number | null;
+    imageHeight: number | null;
+    imageSize: number | null;
+    sourceApp: string | null;
+    sourceAppName: string | null;
+    wordCount: number | null;
+    charCount: number | null;
+    createdAt: number;
+    contentHash: string;
+    stackId: string | null;
+    source: ClipboardSource;
+  }): Promise<number> {
+    if (item.type === 'text' || item.type === 'transcript') {
+      // Restore text item
+      return await this.storeText(
+        item.content || '',
+        item.type,
+        item.sourceApp || undefined,
+        item.stackId || undefined,
+        item.source,
+        item.createdAt
+      );
+    } else if (item.type === 'image' || item.type === 'screenshot') {
+      // Restore image item
+      if (!item.imageData) {
+        throw new Error('Cannot restore image item without image data');
+      }
+      // item.imageData is a base64 string from IPC, convert to Buffer
+      const imageBuffer = Buffer.from(item.imageData, 'base64');
+      const restoredImage = nativeImage.createFromBuffer(imageBuffer);
+      return await this.storeImage(
+        restoredImage,
+        imageBuffer,
+        item.type,
+        item.sourceApp || undefined,
+        item.stackId || undefined,
+        item.source
+      );
+    } else {
+      throw new Error(`Unknown item type: ${item.type}`);
+    }
+  }
+
+  /**
    * Clear all clipboard history.
    */
   clearAll(): void {
@@ -714,6 +774,47 @@ export class ClipboardManager extends EventEmitter {
           : row.first_text_preview) 
         : null,
     }));
+  }
+
+  /**
+   * Get all-time statistics for the clipboard history.
+   * Returns counts of stacks, transcriptions, screenshots, and total words transcribed.
+   */
+  getAllTimeStats(): { stacks: number; transcriptions: number; screenshots: number; words: number } {
+    // Count unique stacks (groups of items combined together)
+    const stacksRow = this.db.prepare(`
+      SELECT COUNT(DISTINCT stack_id) as count 
+      FROM clipboard_items 
+      WHERE stack_id IS NOT NULL
+    `).get() as { count: number };
+
+    // Count all transcriptions (voice recordings)
+    const transcriptionsRow = this.db.prepare(`
+      SELECT COUNT(*) as count 
+      FROM clipboard_items 
+      WHERE type = 'transcript'
+    `).get() as { count: number };
+
+    // Count all screenshots
+    const screenshotsRow = this.db.prepare(`
+      SELECT COUNT(*) as count 
+      FROM clipboard_items 
+      WHERE type = 'screenshot'
+    `).get() as { count: number };
+
+    // Sum total words from all transcriptions
+    const wordsRow = this.db.prepare(`
+      SELECT COALESCE(SUM(word_count), 0) as count 
+      FROM clipboard_items 
+      WHERE type = 'transcript' AND word_count IS NOT NULL
+    `).get() as { count: number };
+
+    return {
+      stacks: stacksRow.count,
+      transcriptions: transcriptionsRow.count,
+      screenshots: screenshotsRow.count,
+      words: wordsRow.count,
+    };
   }
 
   /**

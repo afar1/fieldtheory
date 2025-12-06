@@ -6,12 +6,14 @@ export const ClipboardIPCChannels = {
   QUERY_ITEMS: 'clipboard:queryItems',
   GET_ITEM: 'clipboard:getItem',
   DELETE_ITEM: 'clipboard:deleteItem',
+  RESTORE_ITEM: 'clipboard:restoreItem',
   CLEAR_ALL: 'clipboard:clearAll',
   CAPTURE_SCREENSHOT: 'clipboard:captureScreenshot',
   GET_HOTKEYS: 'clipboard:getHotkeys',
   SET_HOTKEYS: 'clipboard:setHotkeys',
   PASTE_ITEM: 'clipboard:pasteItem',
   PASTE_STACK: 'clipboard:pasteStack',
+  PASTE_TEXT: 'clipboard:pasteText',
   SEPARATE_INTO_TASKS: 'clipboard:separateIntoTasks',
   SAVE_BOUNDS: 'clipboard:saveBounds',
   
@@ -29,6 +31,10 @@ export const ClipboardIPCChannels = {
   
 // Engineer feature - refine prompts using AI
   ENGINEER_STACK: 'clipboard:engineerStack',
+  
+  // All-time stats for footer display
+  GET_ALL_TIME_STATS: 'clipboard:getAllTimeStats',
+  INCREMENT_IMPROVED_COUNT: 'clipboard:incrementImprovedCount',
   
   // API key management (stored securely via OS keychain)
   GET_API_KEY_STATUS: 'clipboard:getApiKeyStatus',

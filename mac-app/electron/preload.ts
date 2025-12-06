@@ -46,12 +46,14 @@ const ClipboardIPCChannels = {
   QUERY_ITEMS: 'clipboard:queryItems',
   GET_ITEM: 'clipboard:getItem',
   DELETE_ITEM: 'clipboard:deleteItem',
+  RESTORE_ITEM: 'clipboard:restoreItem',
   CLEAR_ALL: 'clipboard:clearAll',
   CAPTURE_SCREENSHOT: 'clipboard:captureScreenshot',
   GET_HOTKEYS: 'clipboard:getHotkeys',
   SET_HOTKEYS: 'clipboard:setHotkeys',
   PASTE_ITEM: 'clipboard:pasteItem',
   PASTE_STACK: 'clipboard:pasteStack',
+  PASTE_TEXT: 'clipboard:pasteText',
   SEPARATE_INTO_TASKS: 'clipboard:separateIntoTasks',
   SAVE_BOUNDS: 'clipboard:saveBounds',
   GET_TARGET_APP: 'clipboard:getTargetApp',
@@ -88,6 +90,7 @@ const OnboardingIPCChannels = {
   SET_ONBOARDING_STEP: 'onboarding:setStep',
   COMPLETE_ONBOARDING: 'onboarding:complete',
   SKIP_ONBOARDING: 'onboarding:skip',
+  RESET_ONBOARDING: 'onboarding:reset',
   CHECK_MODEL_STATUS: 'onboarding:checkModelStatus',
 } as const;
 
@@ -259,12 +262,14 @@ export interface ClipboardAPI {
   queryItems: (options?: ClipboardQueryOptions) => Promise<ClipboardItem[]>;
   getItem: (id: number) => Promise<ClipboardItem | null>;
   deleteItem: (id: number) => Promise<void>;
+  restoreItem: (item: ClipboardItem) => Promise<number>;
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
   pasteItem: (id: number, targetBundleId?: string) => Promise<void>;
   pasteStack: (ids: number[]) => Promise<void>;
+  pasteText: (text: string, targetBundleId?: string) => Promise<void>;
   separateIntoTasks: (id: number) => Promise<void>;
   // Target app management.
   getTargetApp: () => Promise<RunningApp | null>;
@@ -289,6 +294,10 @@ export interface ClipboardAPI {
   
   // Engineer feature - refine prompts using AI
   engineerStack: (stackId: string) => Promise<EngineerResult>;
+  
+  // All-time stats for footer display
+  getAllTimeStats: () => Promise<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>;
+  incrementImprovedCount: () => Promise<number>;
   
   // API key management (stored securely via OS keychain)
   getApiKeyStatus: () => Promise<{ hasKey: boolean }>;
@@ -505,6 +514,10 @@ const clipboardAPI: ClipboardAPI = {
     return ipcRenderer.invoke(ClipboardIPCChannels.DELETE_ITEM, id);
   },
 
+  restoreItem: async (item: ClipboardItem): Promise<number> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.RESTORE_ITEM, item);
+  },
+
   clearAll: async (): Promise<void> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.CLEAR_ALL);
   },
@@ -527,6 +540,10 @@ const clipboardAPI: ClipboardAPI = {
 
   pasteStack: async (ids: number[]): Promise<void> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.PASTE_STACK, ids);
+  },
+
+  pasteText: async (text: string, targetBundleId?: string): Promise<void> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.PASTE_TEXT, text, targetBundleId);
   },
 
   separateIntoTasks: async (id: number): Promise<void> => {
@@ -649,6 +666,15 @@ const clipboardAPI: ClipboardAPI = {
   // Engineer feature - refine prompts using AI
   engineerStack: async (stackId: string): Promise<EngineerResult> => {
     return ipcRenderer.invoke('clipboard:engineerStack', stackId);
+  },
+
+  // All-time stats for footer display
+  getAllTimeStats: async (): Promise<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }> => {
+    return ipcRenderer.invoke('clipboard:getAllTimeStats');
+  },
+
+  incrementImprovedCount: async (): Promise<number> => {
+    return ipcRenderer.invoke('clipboard:incrementImprovedCount');
   },
 
   // API key management (stored securely via OS keychain)
@@ -859,6 +885,12 @@ const onboardingAPI = {
   // Skip onboarding (set up later).
   skip: async (): Promise<boolean> => {
     return ipcRenderer.invoke(OnboardingIPCChannels.SKIP_ONBOARDING);
+  },
+
+  // Reset onboarding state - clears completion and shows wizard from start.
+  // Useful for testing and development.
+  reset: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.RESET_ONBOARDING);
   },
 
   // Check if model is downloaded.

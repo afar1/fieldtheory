@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import os from 'os';
@@ -547,6 +547,20 @@ function setupClipboardIPCHandlers(): void {
     }
   });
 
+  ipcMain.handle(ClipboardIPCChannels.RESTORE_ITEM, async (_event, item: any) => {
+    if (clipboardManager) {
+      const id = await clipboardManager.restoreItem(item);
+      // Notify listeners of restored item
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
+        }
+      });
+      return id;
+    }
+    return -1;
+  });
+
   ipcMain.handle(ClipboardIPCChannels.CLEAR_ALL, async () => {
     if (clipboardManager) {
       clipboardManager.clearAll();
@@ -722,6 +736,38 @@ function setupClipboardIPCHandlers(): void {
     }
   });
 
+  // Paste arbitrary text (used for pasting improved prompts)
+  ipcMain.handle(ClipboardIPCChannels.PASTE_TEXT, async (_event, text: string, targetBundleId?: string) => {
+    try {
+      if (!text) {
+        console.error('[Main] pasteText: no text provided');
+        return;
+      }
+      
+      // Put text on clipboard first
+      clipboard.writeText(text);
+      
+      // Hide window first
+      if (clipboardHistoryWindow) {
+        clipboardHistoryWindow.hide();
+      }
+      
+      const { exec } = require('child_process');
+      const { promisify } = require('util');
+      const execAsync = promisify(exec);
+      
+      // If a specific target app was provided, activate it and paste there
+      if (targetBundleId && clipboardHistoryWindow) {
+        await clipboardHistoryWindow.pasteToApp(targetBundleId);
+      } else {
+        // Default behavior: paste to previous app
+        await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+      }
+    } catch (error) {
+      console.error('[Main] pasteText error:', error);
+    }
+  });
+
   ipcMain.handle(ClipboardIPCChannels.SEPARATE_INTO_TASKS, async (_event, id: number) => {
     if (!transcriberManager) {
       throw new Error('TranscriberManager not initialized');
@@ -812,6 +858,26 @@ function setupClipboardIPCHandlers(): void {
       return [];
     }
     return clipboardManager.getUniqueStacks();
+  });
+
+  // All-time stats for footer display
+  ipcMain.handle(ClipboardIPCChannels.GET_ALL_TIME_STATS, async () => {
+    if (!clipboardManager || !preferencesManager) {
+      return { stacks: 0, transcriptions: 0, screenshots: 0, improved: 0, words: 0 };
+    }
+    const dbStats = clipboardManager.getAllTimeStats();
+    const improved = preferencesManager.getPreference('improvedPromptsCount') ?? 0;
+    return { ...dbStats, improved };
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.INCREMENT_IMPROVED_COUNT, async () => {
+    if (!preferencesManager) {
+      return 0;
+    }
+    const current = preferencesManager.getPreference('improvedPromptsCount') ?? 0;
+    const newCount = current + 1;
+    await preferencesManager.save({ improvedPromptsCount: newCount });
+    return newCount;
   });
 
   ipcMain.handle(ClipboardIPCChannels.UPDATE_STACK_ID, async (_event, itemIds: number[], stackId: string | null) => {
@@ -1174,8 +1240,8 @@ function setupOnboardingIPCHandlers(): void {
       : { microphone: 'not-determined' as const, accessibility: false };
     
     // Check if default model is downloaded.
-    const modelDownloaded = transcriberManager?.modelManager 
-      ? await transcriberManager.modelManager.isModelAvailable()
+    const modelDownloaded = transcriberManager?.getModelManager()
+      ? await transcriberManager.getModelManager().isModelAvailable()
       : false;
     
     return {
@@ -1220,11 +1286,36 @@ function setupOnboardingIPCHandlers(): void {
 
   // Check if model is downloaded (for model download step).
   ipcMain.handle(OnboardingIPCChannels.CHECK_MODEL_STATUS, async () => {
-    if (!transcriberManager?.modelManager) {
+    if (!transcriberManager?.getModelManager()) {
       return { downloaded: false, size: 0 };
     }
-    const isAvailable = await transcriberManager.modelManager.isModelAvailable();
+    const isAvailable = await transcriberManager.getModelManager().isModelAvailable();
     return { downloaded: isAvailable };
+  });
+
+  // Reset onboarding state - clears completion flag and shows onboarding window again.
+  // Useful for testing and development.
+  ipcMain.handle(OnboardingIPCChannels.RESET_ONBOARDING, async () => {
+    if (!preferencesManager) return false;
+    
+    // Clear onboarding state.
+    await preferencesManager.save({ 
+      onboardingComplete: false,
+      onboardingStep: undefined,
+    });
+    
+    // Close any existing onboarding window.
+    if (onboardingWindow) {
+      onboardingWindow.close();
+      onboardingWindow = null;
+    }
+    
+    // Show onboarding window from the beginning.
+    onboardingWindow = new OnboardingWindow();
+    onboardingWindow.show(OnboardingStep.WELCOME);
+    
+    console.log('[Main] Onboarding reset - showing wizard from start');
+    return true;
   });
 }
 
@@ -1530,7 +1621,9 @@ async function initTranscriberSystem(): Promise<void> {
       clipboardHistoryWindow.show(boundsToUse);
     } else {
       // Hide window and restore focus to previous app
-      clipboardHistoryWindow.hide();
+      // Don't hide the entire app if recording overlay is visible (e.g., user is recording)
+      const overlayVisible = transcriberManager?.isRecordingOverlayVisible() ?? false;
+      clipboardHistoryWindow.hide(!overlayVisible);
     }
   });
 
@@ -1625,6 +1718,26 @@ if (!gotTheLock) {
     setupVisionIPCHandlers();
     setupClipboardIPCHandlers();
     setupOnboardingIPCHandlers();
+
+    // Register keyboard shortcut to reset onboarding (Cmd+Shift+R).
+    // Useful for testing and development.
+    globalShortcut.register('Command+Shift+R', async () => {
+      console.log('[Main] Reset onboarding shortcut triggered');
+      if (!preferencesManager) return;
+      
+      await preferencesManager.save({ 
+        onboardingComplete: false,
+        onboardingStep: undefined,
+      });
+      
+      if (onboardingWindow) {
+        onboardingWindow.close();
+        onboardingWindow = null;
+      }
+      
+      onboardingWindow = new OnboardingWindow();
+      onboardingWindow.show(OnboardingStep.WELCOME);
+    });
 
     // Manual update check function for tray menu.
     function checkForUpdatesManual(): void {

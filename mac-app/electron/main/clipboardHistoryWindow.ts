@@ -259,15 +259,19 @@ export class ClipboardHistoryWindow {
   /**
    * Hide the clipboard history window.
    * Restores focus to the previous app (including exact input field).
+   * @param hideApp - Whether to hide the entire app. Set to false when other windows (like recording overlay) should remain visible.
    */
-  hide(): void {
+  hide(hideApp: boolean = true): void {
     if (this.window && !this.window.isDestroyed()) {
       this.window.hide();
     }
 
     // Hide entire app to guarantee focus returns to previous app
     // This ensures the exact input field that was active gets focus back
-    app.hide();
+    // Skip app.hide() if other windows need to stay visible (e.g., recording overlay)
+    if (hideApp) {
+      app.hide();
+    }
     this.previouslyFocusedWindow = null;
   }
 
