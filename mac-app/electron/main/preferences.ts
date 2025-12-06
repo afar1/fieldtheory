@@ -54,6 +54,9 @@ interface Preferences {
   // Continuous Context feature - allows continuous screenshotting with stacked results
   continuousContextEnabled?: boolean;
   continuousContextHotkey?: string;
+  
+  // All-time statistics tracking
+  improvedPromptsCount?: number;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
