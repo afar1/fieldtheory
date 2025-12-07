@@ -1,11 +1,14 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import ClipboardHistory from './components/ClipboardHistory';
+import { ThemeProvider } from './contexts/ThemeContext';
 
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 root.render(
   <React.StrictMode>
-    <ClipboardHistory />
+    <ThemeProvider>
+      <ClipboardHistory />
+    </ThemeProvider>
   </React.StrictMode>
 );
 

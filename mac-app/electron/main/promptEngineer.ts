@@ -108,7 +108,7 @@ export interface EngineerResult {
 
 /**
  * Engineer a prompt by sending it to Anthropic's API with the system prompt.
- * Uses Claude claude-sonnet-4-20250514 for thinking capability.
+ * Uses Claude Sonnet 4.5 for prompt refinement.
  * 
  * @param rawInput - The raw text to refine (can be messy transcripts, notes, etc.)
  * @returns The refined, structured prompt
@@ -141,8 +141,8 @@ export async function engineerPrompt(rawInput: string): Promise<EngineerResult> 
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        // Use Sonnet for fast, high-quality prompt refinement
-        model: 'claude-sonnet-4-20250514',
+        // Use Sonnet 4.5 for fast, high-quality prompt refinement
+        model: 'claude-sonnet-4-5-20250929',
         max_tokens: 4096,
         system: systemPrompt,
         messages: [
