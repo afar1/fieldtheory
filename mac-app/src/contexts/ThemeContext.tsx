@@ -29,8 +29,8 @@ const lightTheme: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   border: '#e0e0e0',
   accent: '#007AFF',
   accentHover: '#0051D5',
-  selectedBg: '#fef3c7',  // Warm amber for X-selected items
-  selectedBorder: '#d97706',  // Amber border
+  selectedBg: 'rgba(20, 184, 166, 0.08)',  // Light teal for X-selected items
+  selectedBorder: '#5eead4',  // Muted teal border (less bright than J/K)
   inputBg: '#ffffff',
   inputBorder: '#e0e0e0',
 };
@@ -43,8 +43,8 @@ const darkThemeSolid: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   border: 'rgba(255, 255, 255, 0.1)',
   accent: '#0A84FF',
   accentHover: '#409CFF',
-  selectedBg: 'rgba(217, 119, 6, 0.2)',  // Warm amber for X-selected items
-  selectedBorder: '#f59e0b',  // Amber border
+  selectedBg: 'rgba(45, 212, 191, 0.12)',  // Light teal for X-selected items
+  selectedBorder: '#5eead4',  // Muted teal border (less bright than J/K)
   inputBg: '#2d2d2d',
   inputBorder: 'rgba(255, 255, 255, 0.15)',
 };
@@ -57,8 +57,8 @@ const darkThemeGlass: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   border: 'rgba(255, 255, 255, 0.1)',
   accent: '#0A84FF',
   accentHover: '#409CFF',
-  selectedBg: 'rgba(217, 119, 6, 0.2)',  // Warm amber for X-selected items
-  selectedBorder: '#f59e0b',  // Amber border
+  selectedBg: 'rgba(45, 212, 191, 0.12)',  // Light teal for X-selected items
+  selectedBorder: '#5eead4',  // Muted teal border (less bright than J/K)
   inputBg: 'rgba(45, 45, 45, 0.9)',
   inputBorder: 'rgba(255, 255, 255, 0.15)',
 };
