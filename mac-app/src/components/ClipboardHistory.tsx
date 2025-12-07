@@ -1298,7 +1298,7 @@ export default function ClipboardHistory() {
           height: '100%',
           boxSizing: 'border-box',
           backgroundColor: theme.bg,  // Use theme background color.
-          borderRadius: '12px',
+          // Native window roundedCorners handles the border radius.
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
@@ -1314,7 +1314,7 @@ export default function ClipboardHistory() {
           // @ts-ignore - webkit vendor prefix for Electron draggable region
           WebkitAppRegion: 'drag',
           cursor: 'grab',
-          borderRadius: '12px 12px 0 0',
+          // Native window roundedCorners handles the border radius.
         }}
       />
       
