@@ -51,6 +51,7 @@ if (!process.env.ELECTRON_START_URL) {
   autoUpdater.setFeedURL({ provider: 'github', owner: 'afar1', repo: 'littleai' });
 }
 
+let mainWindow: BrowserWindow | null = null;
 let nativeHelper: NativeHelper | null = null;
 let audioManager: AudioManager | null = null;
 let trayManager: TrayManager | null = null;
@@ -62,6 +63,109 @@ let visionModelManager: VisionModelManager | null = null;
 let visionProcessor: VisionProcessor | null = null;
 let mobileSync: MobileSync | null = null;
 let onboardingWindow: OnboardingWindow | null = null;
+
+/**
+ * Create the main application window.
+ */
+function createWindow(): void {
+  // Determine the preload script path.
+  // In both dev and production, use the compiled .js file
+  const preloadPath = path.join(__dirname, '../preload.js');
+
+  // Load saved window state from preferences
+  const savedState = preferencesManager?.get().windowState;
+  const defaultWidth = 800;
+  const defaultHeight = 600;
+
+  mainWindow = new BrowserWindow({
+    width: savedState?.width || defaultWidth,
+    height: savedState?.height || defaultHeight,
+    x: savedState?.x,
+    y: savedState?.y,
+    minWidth: 500,  // Settings panel doesn't need to be too wide
+    minHeight: 400, // More compact for settings
+    backgroundColor: '#f5f5f5',
+    titleBarStyle: 'hiddenInset', // Modern macOS style with traffic lights in content.
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: preloadPath,
+      // Enable DevTools in development to debug renderer issues
+      devTools: process.env.NODE_ENV !== 'production',
+      // Allow loading local files (needed for file:// protocol with ES modules)
+      webSecurity: true, // Keep security enabled, but ensure file:// works
+    },
+  });
+
+  // Save window state on resize/move (debounced)
+  let saveTimeout: NodeJS.Timeout | null = null;
+  const saveWindowState = () => {
+    if (saveTimeout) clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed() && preferencesManager) {
+        const bounds = mainWindow.getBounds();
+        preferencesManager.save({
+          windowState: {
+            width: bounds.width,
+            height: bounds.height,
+            x: bounds.x,
+            y: bounds.y,
+          },
+        }).catch((error) => {
+          console.error('[Main] Failed to save window state:', error);
+        });
+      }
+    }, 500); // Debounce saves to avoid excessive disk writes
+  };
+
+  mainWindow.on('resized', saveWindowState);
+  mainWindow.on('moved', saveWindowState);
+
+  // Load the app - either from Vite dev server or built files.
+  const startUrl = process.env.ELECTRON_START_URL;
+  if (startUrl) {
+    mainWindow.loadURL(startUrl);
+  } else {
+    // Use absolute path via app.getAppPath() to ensure correct resolution
+    // regardless of working directory (important for npm start vs packaged app)
+    // Use loadURL with file:// protocol to properly support ES modules
+    const htmlPath = path.join(app.getAppPath(), 'dist', 'index.html');
+    const fileUrl = `file://${htmlPath}`;
+    console.log('[Main] Loading HTML from:', fileUrl);
+    mainWindow.loadURL(fileUrl);
+    
+    // Add error handlers to debug loading issues
+    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+      console.error('[Main] Failed to load:', errorCode, errorDescription, validatedURL);
+    });
+    
+    mainWindow.webContents.once('did-finish-load', () => {
+      console.log('[Main] Window content loaded successfully');
+      // Log any console messages from renderer for debugging
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+          console.log(`[Renderer ${level}]:`, message);
+        });
+      }
+    });
+  }
+
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
+}
+
+/**
+ * Show the main window, creating it if needed.
+ */
+function showMainWindow(): void {
+  if (mainWindow) {
+    mainWindow.show();
+    mainWindow.focus();
+  } else {
+    createWindow();
+  }
+}
 
 /**
  * Handle display changes - move clipboard history window if its display is removed.
@@ -1781,68 +1885,81 @@ if (!gotTheLock) {
     await initTranscriberSystem();
     await initVisionSystem();
 
-    // Auto-updater event handlers with manual consent dialogs.
+    // Auto-updater event handlers - send to renderer for in-app notification UI.
     autoUpdater.on('checking-for-update', () => {
       console.log('[Updater] Checking for updates...');
     });
 
-    autoUpdater.on('update-available', async (info) => {
+    autoUpdater.on('update-available', (info) => {
       console.log('[Updater] Update available:', info.version);
-      const { response } = await dialog.showMessageBox({
-        type: 'info',
-        buttons: ['Update', 'Later'],
-        defaultId: 0,
-        cancelId: 1,
-        title: 'Update Available',
-        message: `Oscar ${info.version} is available.`,
-        detail: 'Would you like to download it now?',
-      });
-      if (response === 0) {
-        autoUpdater.downloadUpdate();
-      }
-    });
-
-    autoUpdater.on('update-not-available', async () => {
-      console.log('[Updater] No update available. Current version is up to date.');
-      await dialog.showMessageBox({
-        type: 'info',
-        title: 'Up to Date',
-        message: 'You have the latest version of Oscar.',
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send('updater:updateAvailable', { version: info.version });
+        }
       });
     });
 
-    autoUpdater.on('error', async (err) => {
-      console.error('[Updater] Error checking for updates:', err.message);
-      await dialog.showMessageBox({
-        type: 'error',
-        title: 'Update Error',
-        message: 'Could not check for updates.',
-        detail: err.message,
+    autoUpdater.on('update-not-available', () => {
+      console.log('[Updater] No update available.');
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send('updater:updateNotAvailable');
+        }
+      });
+    });
+
+    autoUpdater.on('error', (err) => {
+      console.error('[Updater] Error:', err.message);
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send('updater:error', err.message);
+        }
       });
     });
 
     autoUpdater.on('download-progress', (progress) => {
-      console.log(`[Updater] Download progress: ${Math.round(progress.percent)}%`);
-    });
-
-    autoUpdater.on('update-downloaded', async (info) => {
-      console.log('[Updater] Update downloaded:', info.version);
-      const { response } = await dialog.showMessageBox({
-        type: 'info',
-        buttons: ['Install and Restart', 'Later'],
-        defaultId: 0,
-        cancelId: 1,
-        title: 'Update Ready',
-        message: `Oscar ${info.version} is ready to install.`,
-        detail: 'The app will restart to complete the update.',
+      const percent = Math.round(progress.percent);
+      console.log(`[Updater] Download progress: ${percent}%`);
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send('updater:downloadProgress', percent);
+        }
       });
-      if (response === 0) {
-        autoUpdater.quitAndInstall();
-      }
     });
 
-    // Check permissions on startup (used by onboarding flow).
-    await checkPermissions();
+    autoUpdater.on('update-downloaded', (info) => {
+      console.log('[Updater] Update downloaded:', info.version);
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send('updater:updateDownloaded', { version: info.version });
+        }
+      });
+    });
+
+    // Updater IPC handlers.
+    ipcMain.handle('updater:checkForUpdates', () => {
+      autoUpdater.checkForUpdates();
+    });
+
+    ipcMain.handle('updater:downloadUpdate', () => {
+      autoUpdater.downloadUpdate();
+    });
+
+    ipcMain.handle('updater:installUpdate', () => {
+      autoUpdater.quitAndInstall();
+    });
+
+    ipcMain.handle('updater:dismissUpdate', () => {
+      // No-op, just acknowledges the dismiss action.
+    });
+
+    // Check permissions on startup and notify main window
+    const permissions = await checkPermissions();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.once('did-finish-load', () => {
+        mainWindow?.webContents.send('permissions-status', permissions);
+      });
+    }
     
     // First-run check: Show onboarding wizard if not completed.
     const prefs = preferencesManager?.get();
@@ -1852,6 +1969,7 @@ if (!gotTheLock) {
       const startStep = prefs?.onboardingStep ?? OnboardingStep.WELCOME;
       onboardingWindow.show(startStep);
     }
+    // createWindow(); // Commented out for testing - app runs in background, opens manually
 
     app.on('activate', () => {
       // Always show clipboard history when app becomes active.
