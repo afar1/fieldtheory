@@ -100,6 +100,80 @@ function combineStackText(items: ClipboardItem[]): string {
 }
 
 /**
+ * Get the last N words from a text string.
+ * Used to show a preview of the ending when text is truncated.
+ */
+function getLastWords(text: string, wordCount: number = 8): string {
+  const words = text.trim().split(/\s+/);
+  if (words.length <= wordCount) return '';
+  return words.slice(-wordCount).join(' ');
+}
+
+/**
+ * Create a truncated preview with beginning and ending.
+ * Format: "[first ~200 chars]... ...[last 8 words]"
+ * Returns null if text doesn't need truncation.
+ */
+function createTruncatedPreview(text: string, maxChars: number = 200): string | null {
+  if (!text || text.length <= maxChars) return null;
+  
+  const lastWords = getLastWords(text, 8);
+  if (!lastWords) return null;
+  
+  // Calculate how much space we need for the ending
+  const endingPart = `... ...${lastWords}`;
+  const availableForStart = maxChars - endingPart.length;
+  
+  if (availableForStart < 50) {
+    // Not enough room, just show truncated start
+    return text.slice(0, maxChars) + '...';
+  }
+  
+  // Find a good break point (word boundary) near the limit
+  let breakPoint = availableForStart;
+  while (breakPoint > 0 && text[breakPoint] !== ' ') {
+    breakPoint--;
+  }
+  if (breakPoint < availableForStart * 0.7) {
+    // Couldn't find a good break, just cut at limit
+    breakPoint = availableForStart;
+  }
+  
+  const startPart = text.slice(0, breakPoint).trim();
+  return `${startPart}... ...${lastWords}`;
+}
+
+/**
+ * KeyCap component - renders a keyboard key with 3D styling.
+ * Used for displaying keyboard shortcuts with a visual key appearance.
+ */
+function KeyCap({ children, small = false }: { children: React.ReactNode; small?: boolean }) {
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minWidth: small ? '10px' : '12px',
+        height: small ? '10px' : '12px',
+        padding: '0 3px',
+        fontSize: small ? '7px' : '8px',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
+        fontWeight: 500,
+        color: '#666',
+        backgroundColor: '#f0f0f0',
+        border: '1px solid #ccc',
+        borderRadius: '2px',
+        boxShadow: '0 1px 0 #aaa',
+        marginRight: '2px',
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+/**
  * Detect if text contains a valid color value (hex or RGB) and return the color string.
  * Returns null if no valid color is found.
  * Checks if the entire text is a color, or finds the first color value in the text.
@@ -161,11 +235,6 @@ export default function ClipboardHistory() {
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [dialogBounds, setDialogBounds] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [isResizing, setIsResizing] = useState(false);
-  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
-  const [resizeStart, setResizeStart] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   
   // Improve feature - track loading state and result per stack
   const [improvingStackId, setImprovingStackId] = useState<string | null>(null);
@@ -179,6 +248,24 @@ export default function ClipboardHistory() {
   // Hover states for UI interactions
   const [hoveredImageId, setHoveredImageId] = useState<number | null>(null);
   const [previewImage, setPreviewImage] = useState<{data: string, width: number, height: number} | null>(null);
+  const [previewClosing, setPreviewClosing] = useState(false);
+  
+  // Helper to dismiss preview with scale-down animation
+  const dismissPreview = () => {
+    if (!previewImage || previewClosing) return;
+    setPreviewClosing(true);
+    // Wait for animation to complete before removing
+    setTimeout(() => {
+      setPreviewImage(null);
+      setPreviewClosing(false);
+    }, 150); // Match animation duration
+  };
+  
+  // Recording state - shows indicator when recording is in progress
+  const [isRecording, setIsRecording] = useState(false);
+  
+  // Stats tooltip state
+  
   
   // All-time stats from database
   const [allTimeStats, setAllTimeStats] = useState<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>({
@@ -196,9 +283,43 @@ export default function ClipboardHistory() {
     });
   }, [isVisible]);
 
+  // Listen for recording state changes to show indicator
+  useEffect(() => {
+    if (!window.transcribeAPI?.onStatusChanged) return;
+    
+    const cleanup = window.transcribeAPI.onStatusChanged((status) => {
+      setIsRecording(status === 'recording');
+    });
+    
+    return cleanup;
+  }, []);
+
   // Rotating stats display - click to cycle through stats
   const [currentStatIndex, setCurrentStatIndex] = useState(0);
   const [statFading, setStatFading] = useState(false);
+  
+  // Time interval for stats - click "all time" to cycle through intervals
+  const timeIntervals = ['all time', 'last 30 days', 'last 15 days', 'last 7 days', 'last 24 hours'] as const;
+  const [currentIntervalIndex, setCurrentIntervalIndex] = useState(0);
+  const nextInterval = useCallback(() => {
+    setCurrentIntervalIndex(prev => (prev + 1) % timeIntervals.length);
+  }, []);
+  
+  // Hover state for recording tooltip
+  const [showRecordingTooltip, setShowRecordingTooltip] = useState(false);
+  
+  // Keyboard navigation state - disables hover selection when using arrow keys
+  const [keyboardNavActive, setKeyboardNavActive] = useState(false);
+  
+  // Flash state for newly created stacks (shows brief highlight)
+  const [recentlyStackedId, setRecentlyStackedId] = useState<string | null>(null);
+  
+  // Pending selection after stack/unstack operations
+  const [pendingStackSelection, setPendingStackSelection] = useState<string | null>(null);
+  const [pendingItemSelection, setPendingItemSelection] = useState<number | null>(null);
+  
+  // Shortcuts modal state
+  const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   // Format numbers with commas (e.g., 16,000)
   const formatNumber = (num: number): string => num.toLocaleString();
 
@@ -244,9 +365,6 @@ export default function ClipboardHistory() {
   const dialogRef = useRef<HTMLDivElement>(null);
   const searchDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ITEMS_PER_PAGE = 50;
-  
-  const MIN_WIDTH = 400;
-  const MIN_HEIGHT = 300;
 
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
 
@@ -322,58 +440,37 @@ export default function ClipboardHistory() {
     }
   }, [isVisible, debouncedSearchQuery, sourceFilter]);
 
-  // When component mounts in standalone window, show immediately
+  // When component mounts in standalone window, show immediately.
   useEffect(() => {
     if (!isMacOS || !window.clipboardAPI) {
       return;
     }
 
-    // In standalone window mode, show immediately when mounted
+    // In standalone window mode, show immediately when mounted.
     setIsVisible(true);
     setSelectedIndex(0);
     setSelectedIds(new Set());
     setIsMultiSelect(false);
-    // Search will be reset via onShowHistory event from main process
 
-    // Listen for dialog bounds from Electron
-    const unsubscribeBounds = window.clipboardAPI.onDialogBounds?.((bounds) => {
-      setDialogBounds(bounds);
-    });
-    
-    // Also listen for old position format for backward compatibility
-    const unsubscribePosition = window.clipboardAPI.onDialogPosition((position) => {
-      // Convert old position format to bounds (use default size)
-      if (!dialogBounds) {
-        setDialogBounds({
-          x: position.left,
-          y: position.top,
-          width: 900,
-          height: 600,
-        });
-      }
-    });
-
-    // Listen for window show event to reset search and focus input
+    // Listen for window show event to reset search and focus input.
     const unsubscribeShowHistory = window.clipboardAPI.onShowHistory(() => {
       setSearchQuery('');
-      setDebouncedSearchQuery(''); // Also reset debounced value immediately
+      setDebouncedSearchQuery('');
       setSelectedIndex(0);
       setSelectedIds(new Set());
       setIsMultiSelect(false);
-      setShowSettings(false); // Reset to clipboard view when window is shown via hotkey
-      // Focus input directly - this fires on every window show
-      inputRef.current?.focus();
+      setShowSettings(false);
+      // Don't auto-focus search - let user navigate with J/K immediately
+      // User can press / to focus search when needed
     });
 
-    // Listen for show settings event (from menu bar "Settings" item)
+    // Listen for show settings event (from menu bar "Settings" item).
     const unsubscribeShowSettings = window.clipboardAPI.onShowSettings?.(() => {
       setShowSettings(true);
     });
 
     // Listen for target app info (sent when window is shown).
-    // Batched into single state update to reduce re-renders.
     const unsubscribeTargetAppInfo = window.clipboardAPI.onTargetAppInfo?.((info) => {
-      // Find index of target app in running apps list.
       let targetAppIndex = 0;
       if (info.targetApp && info.runningApps.length > 0) {
         const idx = info.runningApps.findIndex(
@@ -382,7 +479,6 @@ export default function ClipboardHistory() {
         targetAppIndex = idx >= 0 ? idx : 0;
       }
       
-      // Single state update batches all changes together
       setTargetAppInfo({
         targetApp: info.targetApp,
         runningApps: info.runningApps,
@@ -390,7 +486,7 @@ export default function ClipboardHistory() {
       });
     });
 
-    // Listen for item additions
+    // Listen for item additions.
     const unsubscribeAdded = window.clipboardAPI.onItemAdded((id) => {
       loadItems(true);
     });
@@ -405,8 +501,6 @@ export default function ClipboardHistory() {
     });
 
     return () => {
-      unsubscribeBounds?.();
-      unsubscribePosition();
       unsubscribeShowHistory();
       unsubscribeShowSettings?.();
       unsubscribeTargetAppInfo?.();
@@ -459,12 +553,48 @@ export default function ClipboardHistory() {
   // Memoize listRows so it's available in keyboard handler
   const listRows = useMemo(() => buildListRows(), [buildListRows]);
 
+  // Handle pending selection after stack/unstack operations
+  useEffect(() => {
+    if (pendingStackSelection) {
+      const stackIndex = listRows.findIndex(
+        row => row.type === 'stack' && row.stack.stackId === pendingStackSelection
+      );
+      if (stackIndex !== -1) {
+        setSelectedIndex(stackIndex);
+        setPendingStackSelection(null);
+      }
+    }
+    if (pendingItemSelection) {
+      const itemIndex = listRows.findIndex(
+        row => row.type === 'item' && row.item.id === pendingItemSelection
+      );
+      if (itemIndex !== -1) {
+        setSelectedIndex(itemIndex);
+        setPendingItemSelection(null);
+      }
+    }
+  }, [listRows, pendingStackSelection, pendingItemSelection]);
+
   // Helper function to check if an element is fully visible in the container
   const isElementFullyVisible = useCallback((element: HTMLElement, container: HTMLElement): boolean => {
     const containerRect = container.getBoundingClientRect();
     const elementRect = element.getBoundingClientRect();
     return elementRect.top >= containerRect.top && elementRect.bottom <= containerRect.bottom;
   }, []);
+
+  // Reset keyboard nav state when mouse moves (re-enables hover selection)
+  useEffect(() => {
+    if (!isVisible) return;
+    
+    const handleMouseMove = () => {
+      if (keyboardNavActive) {
+        setKeyboardNavActive(false);
+      }
+    };
+    
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, [isVisible, keyboardNavActive]);
 
   // Handle keyboard input via standard DOM events (window is focusable).
   useEffect(() => {
@@ -486,23 +616,114 @@ export default function ClipboardHistory() {
       }
 
       // Prevent default for navigation keys (except Tab when input is focused)
-      if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Enter' || key === 'Escape') {
+      if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Enter' || key === 'Escape' || 
+          key === 'j' || key === 'k' || key === 'u' || key === '?') {
+        if (!document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
+          e.preventDefault();
+        }
+      }
+      
+      // Shift+? - Show shortcuts modal
+      if (key === '?' && hasShift) {
         e.preventDefault();
+        setShowShortcutsModal(true);
+        return;
+      }
+      
+      // / - Focus search input (like Gmail, Google)
+      if (key === '/' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+        // Skip if already typing in input
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        e.preventDefault();
+        inputRef.current?.focus();
+        return;
+      }
+      
+      // S - Stack selected items (when multiple items are selected)
+      if (key === 's' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+        // Skip if typing in input
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        
+        if (selectedIds.size > 1) {
+          e.preventDefault();
+          // Create a new stack from selected items
+          const newStackId = crypto.randomUUID();
+          window.clipboardAPI?.updateStackId?.(Array.from(selectedIds), newStackId).then(() => {
+            setSelectedIds(new Set());
+            setIsMultiSelect(false);
+            // Flash the newly created stack and select it
+            setRecentlyStackedId(newStackId);
+            setPendingStackSelection(newStackId);
+            setTimeout(() => setRecentlyStackedId(null), 1500);
+            loadItems(true);
+          });
+        }
+        return;
+      }
+      
+      // X - Toggle selection on current item (Gmail-style)
+      if (key === 'x' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+        // Skip if typing in input
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        e.preventDefault();
+        
+        const selectedRow = listRows[selectedIndex];
+        if (!selectedRow) return;
+        
+        // Get item IDs to toggle (single item or all items in stack)
+        const itemIdsToToggle: number[] = [];
+        if (selectedRow.type === 'item') {
+          itemIdsToToggle.push(selectedRow.item.id);
+        } else if (selectedRow.type === 'stack') {
+          selectedRow.items.forEach(i => itemIdsToToggle.push(i.id));
+        }
+        
+        // Toggle selection on current item
+        setSelectedIds(prev => {
+          const next = new Set(prev);
+          const allSelected = itemIdsToToggle.every(id => next.has(id));
+          if (allSelected) {
+            // Deselect
+            itemIdsToToggle.forEach(id => next.delete(id));
+          } else {
+            // Select
+            itemIdsToToggle.forEach(id => next.add(id));
+          }
+          return next;
+        });
+        setLastClickedIndex(selectedIndex);
+        setIsMultiSelect(true);
+        return;
       }
 
       if (key === 'Escape') {
+        // If shortcuts modal is open, close it
+        if (showShortcutsModal) {
+          setShowShortcutsModal(false);
+          return;
+        }
+        // If search input is focused, blur it and select first item instead of closing
+        if (document.activeElement === inputRef.current) {
+          e.preventDefault();
+          inputRef.current?.blur();
+          setSelectedIndex(0);
+          return;
+        }
         window.clipboardAPI?.closeWindow();
         return;
       }
 
-      if (key === 'ArrowDown') {
+      // J/ArrowDown - Move selection down (Gmail-style)
+      if (key === 'ArrowDown' || (key === 'j' && !hasMeta && !hasCtrl && !hasAlt)) {
+        // Skip if typing in input
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        
+        setKeyboardNavActive(true); // Disable hover selection
         const newIndex = Math.min(selectedIndex + 1, listRows.length - 1);
         const element = listRef.current?.children[newIndex] as HTMLElement;
         const container = listRef.current;
         if (element && container) {
-          // Scroll item into view if needed, then highlight it
           element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-          // Use requestAnimationFrame to ensure scroll happens before highlighting
           requestAnimationFrame(() => {
             setSelectedIndex(newIndex);
           });
@@ -512,20 +733,80 @@ export default function ClipboardHistory() {
         return;
       }
 
-      if (key === 'ArrowUp') {
+      // K/ArrowUp - Move selection up (Gmail-style)
+      if (key === 'ArrowUp' || (key === 'k' && !hasMeta && !hasCtrl && !hasAlt)) {
+        // Skip if typing in input
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        
+        setKeyboardNavActive(true); // Disable hover selection
         const newIndex = Math.max(selectedIndex - 1, 0);
         const element = listRef.current?.children[newIndex] as HTMLElement;
         const container = listRef.current;
         if (element && container) {
-          // Scroll item into view if needed, then highlight it
           element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-          // Use requestAnimationFrame to ensure scroll happens before highlighting
           requestAnimationFrame(() => {
             setSelectedIndex(newIndex);
           });
         } else {
           setSelectedIndex(newIndex);
         }
+        return;
+      }
+      
+      // U - Unstack the selected stack
+      if (key === 'u' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+        // Skip if typing in input
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        
+        const selectedRow = listRows[selectedIndex];
+        if (selectedRow?.type === 'stack' && selectedRow.items.length > 1) {
+          e.preventDefault();
+          const itemIds = selectedRow.items.map(i => i.id);
+          // After unstack, select the first (most recent) item from the stack
+          const firstItemId = selectedRow.items[0]?.id;
+          window.clipboardAPI?.updateStackId?.(itemIds, null).then(() => {
+            if (firstItemId) {
+              setPendingItemSelection(firstItemId);
+            }
+            loadItems(true);
+          });
+        }
+        return;
+      }
+      
+      // Delete key - Delete selected item (same as Cmd+Backspace)
+      if (key === 'Delete' || key === 'Backspace') {
+        // Skip if typing in input, unless Cmd/Ctrl is held
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/) && !hasMeta && !hasCtrl) return;
+        
+        // Only Delete key works without modifier, Backspace needs Cmd/Ctrl
+        if (key === 'Backspace' && !hasMeta && !hasCtrl) return;
+        
+        e.preventDefault();
+        const selectedRow = listRows[selectedIndex];
+        (async () => {
+          if (selectedRow?.type === 'item') {
+            const item = await window.clipboardAPI?.getItem(selectedRow.item.id);
+            if (item) {
+              setDeletedItems([item]);
+            }
+            await window.clipboardAPI?.deleteItem(selectedRow.item.id);
+            loadItems(true);
+          } else if (selectedRow?.type === 'stack') {
+            const itemsToDelete: ClipboardItem[] = [];
+            for (const stackItem of selectedRow.items) {
+              const item = await window.clipboardAPI?.getItem(stackItem.id);
+              if (item) {
+                itemsToDelete.push(item);
+              }
+            }
+            setDeletedItems(itemsToDelete);
+            for (const item of selectedRow.items) {
+              await window.clipboardAPI?.deleteItem(item.id);
+            }
+            loadItems(true);
+          }
+        })();
         return;
       }
 
@@ -690,37 +971,7 @@ export default function ClipboardHistory() {
         return;
       }
 
-      if (key === 'Backspace' && (hasMeta || hasCtrl)) {
-        // Delete selected item or stack
-        const selectedRow = listRows[selectedIndex];
-        (async () => {
-          if (selectedRow?.type === 'item') {
-            // Store for undo
-            const item = await window.clipboardAPI?.getItem(selectedRow.item.id);
-            if (item) {
-              setDeletedItems([item]);
-            }
-            await window.clipboardAPI?.deleteItem(selectedRow.item.id);
-            loadItems(true);
-          } else if (selectedRow?.type === 'stack') {
-            // Store all items for undo
-            const itemsToDelete: ClipboardItem[] = [];
-            for (const stackItem of selectedRow.items) {
-              const item = await window.clipboardAPI?.getItem(stackItem.id);
-              if (item) {
-                itemsToDelete.push(item);
-              }
-            }
-            setDeletedItems(itemsToDelete);
-            // Delete all items in the stack
-            for (const item of selectedRow.items) {
-              await window.clipboardAPI?.deleteItem(item.id);
-            }
-            loadItems(true);
-          }
-        })();
-        return;
-      }
+      // Note: Delete/Backspace handling moved above with J/K handlers
 
       // Tab cycles through running apps (target app selection).
       // Works anywhere in the window.
@@ -760,8 +1011,44 @@ export default function ClipboardHistory() {
       // Escape key - close preview modal if open
       if (e.key === 'Escape' && previewImage) {
         e.preventDefault();
-        setPreviewImage(null);
+        dismissPreview();
         return;
+      }
+      
+      // Spacebar - Quick Look style preview (only when hovering image or preview open)
+      // Don't intercept if user is typing in an input field
+      if (e.key === ' ') {
+        const activeElement = document.activeElement;
+        const isTypingInInput = activeElement?.tagName === 'INPUT' || 
+                                activeElement?.tagName === 'TEXTAREA' ||
+                                (activeElement as HTMLElement)?.isContentEditable;
+        
+        // If typing in an input, let spacebar work normally
+        if (isTypingInInput) {
+          return;
+        }
+        
+        // If preview is open, dismiss it
+        if (previewImage) {
+          e.preventDefault();
+          dismissPreview();
+          return;
+        }
+        
+        // If hovering over an image, open preview for it
+        if (hoveredImageId !== null) {
+          e.preventDefault();
+          const hoveredItem = items.find(item => item.id === hoveredImageId);
+          if (hoveredItem?.imageData) {
+            setPreviewImage({
+              data: hoveredItem.imageData,
+              width: hoveredItem.imageWidth || 0,
+              height: hoveredItem.imageHeight || 0,
+            });
+          }
+          return;
+        }
+        // Otherwise, let spacebar work normally (scroll)
       }
     };
 
@@ -769,7 +1056,7 @@ export default function ClipboardHistory() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, previewImage]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, previewImage, hoveredImageId, dismissPreview]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
 
@@ -884,119 +1171,14 @@ export default function ClipboardHistory() {
     loadItems(true);
   };
 
-  // Handle click anywhere to close (Alfred-like behavior)
-  const handleOverlayClick = () => {
-    window.clipboardAPI?.closeWindow();
-  };
-
-  // Prevent clicks inside dialog from closing the window
-  const handleDialogClick = (event: React.MouseEvent) => {
-    event.stopPropagation();
-  };
-
-  // Handle drag start
-  const handleDragStart = (e: React.MouseEvent) => {
-    if (!dialogBounds) return;
-    setIsDragging(true);
-    setDragStart({
-      x: e.clientX - dialogBounds.x,
-      y: e.clientY - dialogBounds.y,
-    });
-    e.preventDefault();
-  };
-
-  // Handle resize start
-  const handleResizeStart = (e: React.MouseEvent) => {
-    if (!dialogBounds) return;
-    setIsResizing(true);
-    setResizeStart({
-      x: e.clientX,
-      y: e.clientY,
-      width: dialogBounds.width,
-      height: dialogBounds.height,
-    });
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  // Handle mouse move for drag/resize
-  useEffect(() => {
-    if (!isDragging && !isResizing) return;
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (isDragging && dragStart && dialogBounds) {
-        const newX = e.clientX - dragStart.x;
-        const newY = e.clientY - dragStart.y;
-        
-        // Clamp to viewport bounds
-        const clampedX = Math.max(0, Math.min(newX, window.innerWidth - dialogBounds.width));
-        const clampedY = Math.max(0, Math.min(newY, window.innerHeight - dialogBounds.height));
-        
-        setDialogBounds({
-          ...dialogBounds,
-          x: clampedX,
-          y: clampedY,
-        });
-      } else if (isResizing && resizeStart && dialogBounds) {
-        const deltaX = e.clientX - resizeStart.x;
-        const deltaY = e.clientY - resizeStart.y;
-        
-        let newWidth = resizeStart.width + deltaX;
-        let newHeight = resizeStart.height + deltaY;
-        
-        // Enforce minimum size
-        newWidth = Math.max(MIN_WIDTH, newWidth);
-        newHeight = Math.max(MIN_HEIGHT, newHeight);
-        
-        // Clamp to viewport bounds
-        const maxWidth = window.innerWidth - dialogBounds.x;
-        const maxHeight = window.innerHeight - dialogBounds.y;
-        newWidth = Math.min(newWidth, maxWidth);
-        newHeight = Math.min(newHeight, maxHeight);
-        
-        setDialogBounds({
-          ...dialogBounds,
-          width: newWidth,
-          height: newHeight,
-        });
-      }
-    };
-
-    const handleMouseUp = () => {
-      if (isDragging || isResizing) {
-        // Save bounds when drag/resize ends
-        if (dialogBounds && window.clipboardAPI?.saveBounds) {
-          // Convert overlay-relative coordinates to screen coordinates
-          // We need to get the overlay window's position
-          // For now, we'll save the overlay-relative coordinates and let main process handle conversion
-          window.clipboardAPI.saveBounds(dialogBounds).catch((err) => {
-            console.error('Failed to save bounds:', err);
-          });
-        }
-      }
-      setIsDragging(false);
-      setIsResizing(false);
-      setDragStart(null);
-      setResizeStart(null);
-    };
-
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isDragging, isResizing, dragStart, resizeStart, dialogBounds]);
-
   if (!isVisible) {
     return null;
   }
 
-  // All items are shown (no filtering)
+  // All items are shown (no filtering).
   const filteredItems = items;
 
-  // Toggle stack expansion
+  // Toggle stack expansion.
   const toggleStackExpanded = (stackId: string) => {
     setExpandedStacks(prev => {
       const next = new Set(prev);
@@ -1009,7 +1191,7 @@ export default function ClipboardHistory() {
     });
   };
 
-  // Toggle individual item expansion
+  // Toggle individual item expansion.
   const toggleItemExpanded = (itemId: number) => {
     setExpandedItems(prev => {
       const next = new Set(prev);
@@ -1022,94 +1204,80 @@ export default function ClipboardHistory() {
     });
   };
 
-  // Calculate dialog bounds: use received bounds or fallback to centered
-  const dialogStyle: React.CSSProperties = dialogBounds
-    ? {
-        position: 'absolute',
-        left: `${dialogBounds.x}px`,
-        top: `${dialogBounds.y}px`,
-        width: `${dialogBounds.width}px`,
-        height: `${dialogBounds.height}px`,
-      }
-    : {
-        position: 'absolute',
-        left: '50%',
-        top: '80px',
-        transform: 'translateX(-50%)',
-        width: '900px',
-        height: '600px',
-      };
-
+  // Window fills the entire BrowserWindow now (no overlay).
+  // Native macOS vibrancy handles the blur effect at the window level.
   return (
-    <div
-      onClick={handleOverlayClick}
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        width: '100%',
-        height: '100%',
-        backgroundColor: 'rgba(0, 0, 0, 0.1)',
-        cursor: 'default',
-      }}
-    >
+    <>
+      {/* CSS keyframes for animations */}
+      <style>{`
+        @keyframes pulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.5; transform: scale(1.1); }
+        }
+        @keyframes previewFadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        @keyframes previewFadeOut {
+          from { opacity: 1; }
+          to { opacity: 0; }
+        }
+        @keyframes previewScaleIn {
+          from { transform: scale(0.9); opacity: 0; }
+          to { transform: scale(1); opacity: 1; }
+        }
+        @keyframes previewScaleOut {
+          from { transform: scale(1); opacity: 1; }
+          to { transform: scale(0.9); opacity: 0; }
+        }
+      `}</style>
       <div
         ref={dialogRef}
-        onClick={handleDialogClick}
         style={{
-          ...dialogStyle,
-          maxWidth: '90vw',
-          maxHeight: '80vh',
+          width: '100%',
+          height: '100%',
           boxSizing: 'border-box',
-          backgroundColor: theme.bg,
-          backdropFilter: theme.isDark && theme.glassEnabled ? 'blur(20px)' : 'none',
+          backgroundColor: theme.bg,  // Use theme background color.
           borderRadius: '12px',
-          boxShadow: theme.isDark 
-            ? '0 20px 45px rgba(0, 0, 0, 0.5)' 
-            : '0 20px 45px rgba(0, 0, 0, 0.25)',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
           cursor: 'default',
-          position: 'relative',
         }}
       >
-        {/* Content area */}
-        <div
-          style={{
-            flex: 1,
-            display: 'flex',
-            flexDirection: 'column',
-            overflow: 'hidden',
-          }}
-        >
+      {/* Draggable header area - allows window to be moved */}
+      <div
+        style={{
+          height: '28px',
+          minHeight: '28px',
+          // @ts-ignore - webkit vendor prefix for Electron draggable region
+          WebkitAppRegion: 'drag',
+          cursor: 'grab',
+          borderRadius: '12px 12px 0 0',
+        }}
+      />
+      
       {/* Conditionally show Settings or Clipboard History */}
       {showSettings ? (
         <SettingsPanel />
       ) : (
         <div 
-          onMouseDown={handleDragStart}
           style={{ 
             flex: 1, 
             display: 'flex', 
             flexDirection: 'column', 
             overflow: 'hidden', 
-            padding: '16px',
-            cursor: isDragging ? 'grabbing' : 'default',
+            padding: '0 16px 16px 16px',
           }}
         >
-          {/* Search input - standard input element with autoFocus */}
+          {/* Search input */}
           <input
             ref={inputRef}
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search clipboard history..."
-            autoFocus
-            onMouseDown={(e) => e.stopPropagation()}
+            placeholder="Search clipboard history... (press / to focus)"
             style={{
               width: '100%',
               padding: '10px 14px',
@@ -1120,12 +1288,13 @@ export default function ClipboardHistory() {
               boxSizing: 'border-box',
               backgroundColor: theme.inputBg,
               color: theme.text,
+              // @ts-ignore - prevent drag on input
+              WebkitAppRegion: 'no-drag',
             }}
           />
 
-            {/* Filter tabs */}
+          {/* Selection actions bar */}
           <div
-            onMouseDown={(e) => e.stopPropagation()}
             style={{
               display: 'flex',
               padding: '8px 8px 0 8px',
@@ -1146,6 +1315,8 @@ export default function ClipboardHistory() {
               >
                 <span>{selectedIds.size} selected</span>
                 <button
+                  tabIndex={-1}
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={handleDeleteSelected}
                   style={{
                     padding: '4px 12px',
@@ -1162,6 +1333,8 @@ export default function ClipboardHistory() {
                 </button>
                 {selectedIds.size > 1 && (
                   <button
+                    tabIndex={-1}
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={async () => {
                       const newStackId = crypto.randomUUID();
                       await window.clipboardAPI?.updateStackId?.(Array.from(selectedIds), newStackId);
@@ -1185,6 +1358,8 @@ export default function ClipboardHistory() {
                   </button>
                 )}
                 <button
+                  tabIndex={-1}
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={() => {
                     setSelectedIds(new Set());
                     setIsMultiSelect(false);
@@ -1286,6 +1461,8 @@ export default function ClipboardHistory() {
                     onDrop={handleStackDrop}
                     onDragOver={handleStackDragOver}
                     onMouseEnter={(e) => {
+                      // Skip if keyboard nav is active (prevents jumping back on hover)
+                      if (keyboardNavActive) return;
                       // Only highlight if the item is fully visible (prevents jumping)
                       const element = e.currentTarget;
                       const container = listRef.current;
@@ -1380,249 +1557,302 @@ export default function ClipboardHistory() {
                     }}
                     style={{
                       padding: '12px 16px',
-                      backgroundColor: stackItems.some(item => selectedIds.has(item.id)) 
-                        ? theme.selectedBg 
-                        : selectedIndex === index 
-                          ? theme.bgSecondary 
-                          : 'transparent',
+                      backgroundColor: recentlyStackedId === stack.stackId
+                        ? theme.isDark ? 'rgba(45, 212, 191, 0.2)' : 'rgba(20, 184, 166, 0.15)'
+                        : stackItems.some(item => selectedIds.has(item.id)) 
+                          ? theme.selectedBg 
+                          : selectedIndex === index 
+                            ? theme.bgSecondary 
+                            : 'transparent',
                       borderBottom: `1px solid ${theme.border}`,
-                      borderLeft: stackItems.some(item => selectedIds.has(item.id)) 
-                        ? `3px solid ${theme.selectedBorder}` 
+                      borderLeft: recentlyStackedId === stack.stackId
+                        ? `3px solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
+                        : stackItems.some(item => selectedIds.has(item.id)) 
+                          ? `3px solid ${theme.selectedBorder}` 
+                          : selectedIndex === index
+                            ? `2px solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
+                            : '2px solid transparent',
+                      boxShadow: selectedIndex === index && !stackItems.some(item => selectedIds.has(item.id))
+                        ? theme.isDark 
+                          ? 'inset 0 0 0 1px rgba(255,255,255,0.05), 0 1px 3px rgba(0,0,0,0.2)' 
+                          : 'inset 0 0 0 1px rgba(0,0,0,0.02), 0 1px 3px rgba(0,0,0,0.05)'
                         : 'none',
+                      transition: 'background-color 0.3s ease, border-left 0.3s ease, box-shadow 0.3s ease',
                       cursor: 'pointer',
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-                      {/* Content area */}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        {/* Inline image thumbnails - horizontal row */}
-                        {stackImages.length > 0 && (
-                          <div style={{ 
-                            display: 'flex', 
-                            gap: '8px', 
-                            marginBottom: combinedText ? '8px' : '4px',
-                            flexWrap: 'wrap',
-                          }}>
-                            {stackImages.map((item) => (
-                              <div
-                                key={item.id}
-                                onMouseEnter={() => setHoveredImageId(item.id)}
-                                onMouseLeave={() => setHoveredImageId(null)}
-                                style={{ position: 'relative' }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (item.imageData) {
-                                    setPreviewImage({
-                                      data: item.imageData,
-                                      width: item.imageWidth || 0,
-                                      height: item.imageHeight || 0,
-                                    });
-                                  }
-                                }}
-                              >
-                                <img
-                                  src={`data:image/png;base64,${item.imageData}`}
-                                  alt="Screenshot preview"
-                                  style={{
-                                    height: '50px',
-                                    width: 'auto',
-                                    borderRadius: '4px',
-                                    border: '1px solid #e0e0e0',
-                                    cursor: 'pointer',
-                                  }}
-                                />
-                                {/* Preview button overlay on hover */}
-                                {hoveredImageId === item.id && (
-                                  <div
-                                    style={{
-                                      position: 'absolute',
-                                      top: '50%',
-                                      left: '50%',
-                                      transform: 'translate(-50%, -50%)',
-                                      backgroundColor: 'rgba(0, 0, 0, 0.7)',
-                                      color: '#fff',
-                                      padding: '4px 8px',
-                                      borderRadius: '4px',
-                                      fontSize: '10px',
-                                      fontWeight: 600,
-                                      pointerEvents: 'none',
-                                    }}
-                                  >
-                                    Preview
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        {/* Combined text - show improved if available and expanded */}
-                        {combinedText && (
-                          <div
-                            style={{
-                              fontSize: '12px',
-                              fontWeight: '500',
-                              color: theme.text,
-                              lineHeight: '1.5',
-                              whiteSpace: expanded ? 'pre-wrap' : 'nowrap',
-                              overflow: expanded ? 'visible' : 'hidden',
-                              textOverflow: expanded ? 'clip' : 'ellipsis',
-                              marginBottom: '4px',
-                            }}
-                          >
-                            {expanded && improveResult?.stackId === stack.stackId 
-                              ? improveResult.refinedPrompt 
-                              : expanded 
-                                ? combinedText 
-                                : truncateText(combinedText, 100)}
-                          </div>
-                        )}
-                        
-                        {/* Improved badge - shown when there's an improved version */}
-                        {improveResult?.stackId === stack.stackId && !expanded && (
-                          <span style={{
-                            display: 'inline-block',
-                            fontSize: '9px',
-                            fontWeight: 600,
-                            color: '#34C759',
-                            backgroundColor: '#e8f5e9',
-                            padding: '2px 6px',
-                            borderRadius: '3px',
-                            marginBottom: '4px',
-                          }}>
-                            ✨ Improved version available
-                          </span>
-                        )}
-                        
-                        {/* Show more/less button - only show if text would benefit from expansion OR if there's an improved result */}
-                        {combinedText && (textNeedsExpansion || improveResult?.stackId === stack.stackId) && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleStackExpanded(stack.stackId);
-                            }}
-                            style={{
-                              background: 'none',
-                              border: 'none',
-                              padding: 0,
-                              marginTop: '4px',
-                              fontSize: '10px',
-                              color: '#888',
-                              cursor: 'pointer',
-                            }}
-                          >
-                            {expanded ? 'Show less' : (improveResult?.stackId === stack.stackId ? 'Show improved' : 'Show more')}
-                          </button>
-                        )}
-
-                        {/* Footer */}
-                        <div style={{ fontSize: '10px', color: improveResult?.stackId === stack.stackId ? '#34C759' : '#999' }}>
-                          {formatRelativeTime(stack.createdAt)} • {improveResult?.stackId === stack.stackId ? '✨ improved • ' : ''}click to paste into {targetAppName}
-                        </div>
-                      </div>
-
-                      {/* Button area - dedicated space so content doesn't shift */}
-                      <div style={{ 
-                        width: '160px', 
-                        display: 'flex', 
-                        gap: '8px', 
-                        justifyContent: 'flex-end',
-                        flexShrink: 0,
-                        alignItems: 'flex-start',
-                        paddingTop: stackImages.length > 0 ? '2px' : '0',
-                      }}>
-                        {/* Buttons shown when row is selected (via keyboard or mouse) */}
-                        {selectedIndex === index && (
-                          <>
-                            {/* Unstack button - only for multi-item stacks */}
-                            {stackItems.length > 1 && (
-                              <button
-                                onClick={async (e) => {
-                                  e.stopPropagation();
-                                  const itemIds = stackItems.map(i => i.id);
-                                  await window.clipboardAPI?.updateStackId?.(itemIds, null);
-                                  loadItems(true);
-                                }}
+                    {/* Content section - full width */}
+                    <div>
+                      {/* Inline image thumbnails - horizontal row */}
+                      {stackImages.length > 0 && (
+                        <div style={{ 
+                          display: 'flex', 
+                          gap: '8px', 
+                          marginBottom: combinedText ? '8px' : '4px',
+                          flexWrap: 'wrap',
+                        }}>
+                          {stackImages.map((item) => (
+                            <div
+                              key={item.id}
+                              onMouseEnter={() => setHoveredImageId(item.id)}
+                              onMouseLeave={() => setHoveredImageId(null)}
+                              style={{ position: 'relative' }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (item.imageData) {
+                                  setPreviewImage({
+                                    data: item.imageData,
+                                    width: item.imageWidth || 0,
+                                    height: item.imageHeight || 0,
+                                  });
+                                }
+                              }}
+                            >
+                              <img
+                                src={`data:image/png;base64,${item.imageData}`}
+                                alt="Screenshot preview"
                                 style={{
-                                  padding: '4px 12px',
-                                  fontSize: '10px',
-                                  fontWeight: 600,
-                                  backgroundColor: 'transparent',
-                                  color: theme.textSecondary,
-                                  border: `1px solid ${theme.border}`,
+                                  height: '50px',
+                                  width: 'auto',
                                   borderRadius: '4px',
+                                  border: '1px solid #e0e0e0',
                                   cursor: 'pointer',
                                 }}
-                              >
-                                Unstack
-                              </button>
-                            )}
-                            {/* Improve button - only if stack has text */}
-                            {hasText && (
-                              <button
-                                onClick={async (e) => {
-                                  e.stopPropagation();
-                                  setImprovingStackId(stack.stackId);
-                                  setImproveResult(null);
-                                  try {
-                                    // Only send text items for improvement, ignore images
-                                    const textItems = stackItems.filter(i => 
-                                      (i.type === 'text' || i.type === 'transcript') && i.content
-                                    );
-                                    if (textItems.length === 0) {
-                                      console.error('[Improve] No text items to improve');
-                                      return;
-                                    }
-                                    
-                                    // Create a temporary stack ID for just the text items
-                                    const tempStackId = crypto.randomUUID();
-                                    const textItemIds = textItems.map(i => i.id);
-                                    await window.clipboardAPI?.updateStackId?.(textItemIds, tempStackId);
-                                    
-                                    const result = await window.clipboardAPI?.engineerStack?.(tempStackId);
-                                    
-                                    // Restore original stack IDs
-                                    await window.clipboardAPI?.updateStackId?.(textItemIds, stack.stackId);
-                                    
-                                    if (result?.success && result.refinedPrompt) {
-                                      setImproveResult({
-                                        stackId: stack.stackId,
-                                        refinedPrompt: result.refinedPrompt,
-                                      });
-                                      window.clipboardAPI?.incrementImprovedCount?.().then(count => {
-                                        setAllTimeStats(prev => ({ ...prev, improved: count }));
-                                      });
-                                    } else {
-                                      console.error('[Improve] Failed:', result?.error || 'Unknown error');
-                                    }
-                                  } catch (err) {
-                                    console.error('[Improve] Error:', err);
-                                  } finally {
-                                    setImprovingStackId(null);
-                                  }
-                                }}
-                                disabled={improvingStackId === stack.stackId}
-                                style={{
-                                  padding: '4px 12px',
-                                  fontSize: '10px',
-                                  fontWeight: 600,
-                                  backgroundColor: improvingStackId === stack.stackId ? '#34C759' : theme.accent,
-                                  color: '#fff',
-                                  border: 'none',
-                                  borderRadius: '4px',
-                                  cursor: improvingStackId === stack.stackId ? 'wait' : 'pointer',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '4px',
-                                }}
-                              >
-                                {improvingStackId === stack.stackId ? 'Improving...' : (
-                                  <>Improve <span style={{ opacity: 0.7, fontSize: '9px' }}>⌘↵</span></>
-                                )}
-                              </button>
-                            )}
-                          </>
+                              />
+                              {/* Preview button overlay on hover - spacebar to open */}
+                              {hoveredImageId === item.id && (
+                                <div
+                                  style={{
+                                    position: 'absolute',
+                                    top: '50%',
+                                    left: '50%',
+                                    transform: 'translate(-50%, -50%)',
+                                    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                                    color: '#fff',
+                                    padding: '4px 8px',
+                                    borderRadius: '4px',
+                                    fontSize: '10px',
+                                    fontWeight: 600,
+                                    pointerEvents: 'none',
+                                  }}
+                                >
+                                  Preview <KeyCap small>⎵</KeyCap>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Combined text - show improved if available and expanded */}
+                      {combinedText && (
+                        <div
+                          style={{
+                            fontSize: '12px',
+                            fontWeight: '500',
+                            color: theme.text,
+                            lineHeight: '1.5',
+                            marginBottom: '4px',
+                            ...(expanded ? {
+                              whiteSpace: 'pre-wrap',
+                              overflow: 'visible',
+                            } : {
+                              // 3-line clamp for collapsed state
+                              display: '-webkit-box',
+                              WebkitLineClamp: 3,
+                              WebkitBoxOrient: 'vertical' as const,
+                              overflow: 'hidden',
+                            }),
+                          }}
+                        >
+                          {expanded && improveResult?.stackId === stack.stackId 
+                            ? improveResult.refinedPrompt 
+                            : (textNeedsExpansion && createTruncatedPreview(combinedText)) || combinedText}
+                        </div>
+                      )}
+                      
+                      {/* Improved badge - shown when there's an improved version */}
+                      {improveResult?.stackId === stack.stackId && !expanded && (
+                        <span style={{
+                          display: 'inline-block',
+                          fontSize: '9px',
+                          fontWeight: 600,
+                          color: '#34C759',
+                          backgroundColor: '#e8f5e9',
+                          padding: '2px 6px',
+                          borderRadius: '3px',
+                          marginBottom: '4px',
+                        }}>
+                          ✨ Improved version available
+                        </span>
+                      )}
+                      
+                      {/* Show more/less button - only show if text would benefit from expansion OR if there's an improved result */}
+                      {combinedText && (textNeedsExpansion || improveResult?.stackId === stack.stackId) && (
+                        <button
+                          tabIndex={-1}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleStackExpanded(stack.stackId);
+                          }}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            padding: 0,
+                            marginTop: '4px',
+                            fontSize: '10px',
+                            color: '#888',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {expanded ? 'Show less' : (improveResult?.stackId === stack.stackId ? 'Show improved' : 'Show more')}
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Footer row - metadata left, buttons right (buttons always reserve space) */}
+                    <div style={{ 
+                      display: 'flex', 
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginTop: '4px',
+                    }}>
+                      {/* Metadata - left side with stack icon */}
+                      <div style={{ fontSize: '10px', color: improveResult?.stackId === stack.stackId ? '#34C759' : '#999', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        {/* Stack icon - layered rectangles */}
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="4" y="4" width="16" height="6" rx="1" />
+                          <rect x="4" y="14" width="16" height="6" rx="1" />
+                        </svg>
+                        <span>{stackItems.length} items • {formatRelativeTime(stack.createdAt)}{improveResult?.stackId === stack.stackId ? ' • ✨ improved' : ''}</span>
+                      </div>
+
+                      {/* Buttons - right side (always reserve space with visibility) */}
+                      <div style={{ 
+                        display: 'flex', 
+                        gap: '4px',
+                        visibility: selectedIndex === index ? 'visible' : 'hidden',
+                      }}>
+                        {/* Unstack button - leftmost, only for multi-item stacks */}
+                        {stackItems.length > 1 && (
+                          <button
+                            tabIndex={-1}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              const itemIds = stackItems.map(i => i.id);
+                              const firstItemId = stackItems[0]?.id;
+                              await window.clipboardAPI?.updateStackId?.(itemIds, null);
+                              if (firstItemId) {
+                                setPendingItemSelection(firstItemId);
+                              }
+                              loadItems(true);
+                            }}
+                            style={{
+                              padding: '4px 6px',
+                              fontSize: '10px',
+                              fontWeight: 500,
+                              backgroundColor: 'transparent',
+                              color: theme.textSecondary,
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              transition: 'background-color 0.15s ease',
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                          >
+                            <KeyCap>u</KeyCap> unstack
+                          </button>
                         )}
+                        {/* Improve hint button - middle, only if stack has text */}
+                        {hasText && (
+                          <button
+                            tabIndex={-1}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              setImprovingStackId(stack.stackId);
+                              setImproveResult(null);
+                              try {
+                                const textItems = stackItems.filter(i => 
+                                  (i.type === 'text' || i.type === 'transcript') && i.content
+                                );
+                                if (textItems.length === 0) {
+                                  return;
+                                }
+                                const tempStackId = crypto.randomUUID();
+                                const textItemIds = textItems.map(i => i.id);
+                                await window.clipboardAPI?.updateStackId?.(textItemIds, tempStackId);
+                                const result = await window.clipboardAPI?.engineerStack?.(tempStackId);
+                                await window.clipboardAPI?.updateStackId?.(textItemIds, stack.stackId);
+                                if (result?.success && result.refinedPrompt) {
+                                  setImproveResult({
+                                    stackId: stack.stackId,
+                                    refinedPrompt: result.refinedPrompt,
+                                  });
+                                  window.clipboardAPI?.incrementImprovedCount?.().then(count => {
+                                    setAllTimeStats(prev => ({ ...prev, improved: count }));
+                                  });
+                                }
+                              } catch (err) {
+                                // Error handled silently
+                              } finally {
+                                setImprovingStackId(null);
+                              }
+                            }}
+                            disabled={improvingStackId === stack.stackId}
+                            style={{
+                              padding: '4px 6px',
+                              fontSize: '10px',
+                              fontWeight: 500,
+                              backgroundColor: 'transparent',
+                              color: theme.textSecondary,
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: improvingStackId === stack.stackId ? 'wait' : 'pointer',
+                              transition: 'background-color 0.15s ease',
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                          >
+                            <KeyCap>⌘</KeyCap><KeyCap>↵</KeyCap> {improvingStackId === stack.stackId ? 'improving...' : 'improve'}
+                          </button>
+                        )}
+                        {/* Paste hint button - rightmost */}
+                        <button
+                          tabIndex={-1}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            // Paste stack content
+                            if (improveResult?.stackId === stack.stackId) {
+                              const targetBundleId = targetAppInfo.targetApp?.bundleId;
+                              window.clipboardAPI?.pasteText?.(improveResult.refinedPrompt, targetBundleId);
+                              window.clipboardAPI?.closeWindow();
+                            } else {
+                              const itemIds = stackItems.map(i => i.id);
+                              window.clipboardAPI?.pasteStack(itemIds);
+                              window.clipboardAPI?.closeWindow();
+                            }
+                          }}
+                          style={{
+                            padding: '4px 6px',
+                            fontSize: '10px',
+                            fontWeight: 500,
+                            backgroundColor: 'transparent',
+                            color: theme.textSecondary,
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            transition: 'background-color 0.15s ease',
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        >
+                          <KeyCap>↵</KeyCap> paste ({targetAppName})
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -1682,6 +1912,8 @@ export default function ClipboardHistory() {
                     onDrop={handleItemDrop}
                     onDragOver={handleItemDragOver}
                     onMouseEnter={(e) => {
+                      // Skip if keyboard nav is active (prevents jumping back on hover)
+                      if (keyboardNavActive) return;
                       // Only highlight if the item is fully visible (prevents jumping)
                       const element = e.currentTarget;
                       const container = listRef.current;
@@ -1692,40 +1924,33 @@ export default function ClipboardHistory() {
                     onClick={(e) => handleItemClick(item, index, e)}
                     style={{
                       padding: '12px 16px',
-                      backgroundColor: isInStack ? theme.selectedBg : isSelected ? theme.bgSecondary : 'transparent',
+                      backgroundColor: isInStack ? theme.selectedBg : isRowSelected ? theme.bgSecondary : 'transparent',
                       borderBottom: `1px solid ${theme.border}`,
-                      borderLeft: isInStack ? `3px solid ${theme.selectedBorder}` : 'none',
+                      borderLeft: isInStack 
+                        ? `3px solid ${theme.selectedBorder}` 
+                        : isRowSelected 
+                          ? `2px solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}` 
+                          : '2px solid transparent',
+                      boxShadow: isRowSelected && !isInStack
+                        ? theme.isDark 
+                          ? 'inset 0 0 0 1px rgba(255,255,255,0.05), 0 1px 3px rgba(0,0,0,0.2)' 
+                          : 'inset 0 0 0 1px rgba(0,0,0,0.02), 0 1px 3px rgba(0,0,0,0.05)'
+                        : 'none',
+                      transition: 'background-color 0.1s ease, border-left 0.1s ease, box-shadow 0.1s ease',
                       cursor: 'grab',
                       display: 'flex',
-                      alignItems: 'center',
-                      gap: '12px',
+                      flexDirection: 'column',
                     }}
                   >
-                  {/* Screenshot thumbnail */}
-                  {(item.type === 'screenshot' || item.type === 'image') && item.imageData && (
-                    <img
-                      src={`data:image/png;base64,${item.imageData}`}
-                      alt="Screenshot preview"
-                      style={{
-                        width: '48px',
-                        height: 'auto',
-                        borderRadius: '4px',
-                        border: '1px solid #e0e0e0',
-                        flexShrink: 0,
-                        objectFit: 'cover',
-                      }}
-                    />
-                  )}
-
-                  {/* Item preview */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
+                  {/* Content section - full width */}
+                  <div>
                     {item.type === 'text' || item.type === 'transcript' ? (
                       <>
                         <div
                           style={{
                             fontSize: '12px',
                             fontWeight: '500',
-                            marginBottom: '4px',
+                            marginBottom: itemExpanded ? '4px' : '0',
                             display: 'flex',
                             alignItems: 'flex-start',
                             gap: '8px',
@@ -1749,18 +1974,21 @@ export default function ClipboardHistory() {
                           <span
                             style={{
                               flex: 1,
-                              overflow: itemExpanded ? 'visible' : 'hidden',
-                              textOverflow: itemExpanded ? 'clip' : 'ellipsis',
-                              display: itemExpanded ? 'block' : '-webkit-box',
-                              WebkitLineClamp: itemExpanded ? undefined : 2,
-                              WebkitBoxOrient: 'vertical' as const,
                               wordBreak: 'break-word',
-                              whiteSpace: itemExpanded ? 'pre-wrap' : 'normal',
+                              ...(itemExpanded ? {
+                                whiteSpace: 'pre-wrap',
+                              } : {
+                                // 3-line clamp for collapsed state
+                                display: '-webkit-box',
+                                WebkitLineClamp: 3,
+                                WebkitBoxOrient: 'vertical' as const,
+                                overflow: 'hidden',
+                              }),
                             }}
                           >
                             {itemExpanded && improveResult?.stackId === `item-${item.id}`
                               ? improveResult.refinedPrompt
-                              : item.content || 'Empty'}
+                              : (itemTextNeedsExpansion && item.content && createTruncatedPreview(item.content)) || item.content || 'Empty'}
                           </span>
                         </div>
                         {/* Improved badge - shown when there's an improved version */}
@@ -1781,6 +2009,8 @@ export default function ClipboardHistory() {
                         {/* Show more/less button - only show if text would benefit from expansion OR if there's an improved result */}
                         {(itemTextNeedsExpansion || improveResult?.stackId === `item-${item.id}`) && (
                           <button
+                            tabIndex={-1}
+                            onMouseDown={(e) => e.preventDefault()}
                             onClick={(e) => {
                               e.stopPropagation();
                               toggleItemExpanded(item.id);
@@ -1799,31 +2029,107 @@ export default function ClipboardHistory() {
                             {itemExpanded ? 'Show less' : (improveResult?.stackId === `item-${item.id}` ? 'Show improved' : 'Show more')}
                           </button>
                         )}
-                        <div
-                          style={{
-                            fontSize: '10px',
-                            color: '#666',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                          }}
-                        >
-                          {/* iOS source badge */}
-                          {item.source === 'ios' && (
-                            <span
-                              style={{
-                                fontSize: '9px',
-                                backgroundColor: '#007AFF',
-                                color: '#fff',
-                                padding: '1px 4px',
-                                borderRadius: '3px',
-                                fontWeight: 500,
+                      </>
+                    ) : (
+                      <>
+                        {/* Screenshot thumbnail with preview */}
+                        <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                          {item.imageData && (
+                            <div
+                              style={{ position: 'relative', flexShrink: 0 }}
+                              onMouseEnter={() => setHoveredImageId(item.id)}
+                              onMouseLeave={() => setHoveredImageId(null)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPreviewImage({
+                                  data: item.imageData!,
+                                  width: item.imageWidth || 0,
+                                  height: item.imageHeight || 0,
+                                });
                               }}
                             >
-                              📱 iOS
-                            </span>
+                              <img
+                                src={`data:image/png;base64,${item.imageData}`}
+                                alt="Screenshot preview"
+                                style={{
+                                  height: '50px',
+                                  width: 'auto',
+                                  borderRadius: '4px',
+                                  border: `1px solid ${theme.border}`,
+                                  cursor: 'pointer',
+                                }}
+                              />
+                              {/* Preview button overlay on hover - spacebar to open */}
+                              {hoveredImageId === item.id && (
+                                <div
+                                  style={{
+                                    position: 'absolute',
+                                    inset: 0,
+                                    backgroundColor: 'rgba(0,0,0,0.5)',
+                                    borderRadius: '4px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <span style={{ color: '#fff', fontSize: '10px', fontWeight: 500 }}>
+                                    Preview <KeyCap small>⎵</KeyCap>
+                                  </span>
+                                </div>
+                              )}
+                            </div>
                           )}
-                          <span>
+                          <div style={{ flex: 1 }}>
+                            <div
+                              style={{
+                                fontSize: '12px',
+                                fontWeight: '500',
+                              }}
+                            >
+                              Screenshot
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Footer row - metadata left, buttons right (buttons always reserve space) */}
+                  <div style={{ 
+                    display: 'flex', 
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginTop: '4px',
+                  }}>
+                    {/* Metadata - left side */}
+                    <div
+                      style={{
+                        fontSize: '10px',
+                        color: '#666',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                    >
+                      {/* iOS source badge */}
+                      {item.source === 'ios' && (
+                        <span
+                          style={{
+                            fontSize: '9px',
+                            backgroundColor: '#007AFF',
+                            color: '#fff',
+                            padding: '1px 4px',
+                            borderRadius: '3px',
+                            fontWeight: 500,
+                          }}
+                        >
+                          📱 iOS
+                        </span>
+                      )}
+                      <span>
+                        {item.type === 'text' || item.type === 'transcript' ? (
+                          <>
                             {item.wordCount && item.charCount
                               ? `${item.wordCount} words, ${item.charCount} chars`
                               : ''}
@@ -1833,45 +2139,9 @@ export default function ClipboardHistory() {
                             {improveResult?.stackId === `item-${item.id}` && (
                               <span style={{ color: '#34C759', marginLeft: '4px' }}>• ✨ improved</span>
                             )}
-                          </span>
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <div
-                          style={{
-                            fontSize: '12px',
-                            fontWeight: '500',
-                            marginBottom: '4px',
-                          }}
-                        >
-                          Screenshot
-                        </div>
-                        <div
-                          style={{
-                            fontSize: '10px',
-                            color: '#666',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                          }}
-                        >
-                          {/* iOS source badge */}
-                          {item.source === 'ios' && (
-                            <span
-                              style={{
-                                fontSize: '9px',
-                                backgroundColor: '#007AFF',
-                                color: '#fff',
-                                padding: '1px 4px',
-                                borderRadius: '3px',
-                                fontWeight: 500,
-                              }}
-                            >
-                              📱 iOS
-                            </span>
-                          )}
-                          <span>
+                          </>
+                        ) : (
+                          <>
                             {item.imageWidth && item.imageHeight
                               ? `${item.imageWidth}×${item.imageHeight}`
                               : ''}
@@ -1879,77 +2149,89 @@ export default function ClipboardHistory() {
                             {item.sourceAppName && ` • ${item.sourceAppName}`}
                             {' • '}
                             {formatRelativeTime(item.createdAt)}
-                          </span>
-                        </div>
-                      </>
-                    )}
-                  </div>
+                          </>
+                        )}
+                      </span>
+                    </div>
 
-                  {/* Button area - dedicated space so content doesn't shift */}
-                  <div style={{ 
-                    width: '80px', 
-                    display: 'flex', 
-                    gap: '8px', 
-                    justifyContent: 'flex-end',
-                    flexShrink: 0,
-                    alignItems: 'center',
-                  }}>
-                    {/* Improve button - shown when selected, only if item has text and not in multi-select mode */}
-                    {isRowSelected && hasText && selectedIds.size === 0 && (
-                      <button
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          // Create a temporary stack with just this item for improvement
-                          const tempStackId = crypto.randomUUID();
-                          await window.clipboardAPI?.updateStackId?.([item.id], tempStackId);
-                          
-                          setImprovingStackId(`item-${item.id}`);
-                          setImproveResult(null);
-                          try {
-                            const result = await window.clipboardAPI?.engineerStack?.(tempStackId);
-                            
-                            // Restore original stack ID (might be null if it was a single item)
-                            await window.clipboardAPI?.updateStackId?.([item.id], item.stackId || null);
-                            
-                            if (result?.success && result.refinedPrompt) {
-                              setImproveResult({
-                                stackId: `item-${item.id}`,
-                                refinedPrompt: result.refinedPrompt,
-                              });
-                              window.clipboardAPI?.incrementImprovedCount?.().then(count => {
-                                setAllTimeStats(prev => ({ ...prev, improved: count }));
-                              });
-                            } else {
-                              console.error('[Improve] Failed:', result?.error || 'Unknown error');
+                    {/* Buttons - right side (always reserve space with visibility) */}
+                    <div style={{ 
+                      display: 'flex', 
+                      gap: '4px',
+                      visibility: isRowSelected && selectedIds.size === 0 ? 'visible' : 'hidden',
+                    }}>
+                      {/* Improve hint button - only if item has text */}
+                      {hasText && (
+                        <button
+                          tabIndex={-1}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            const tempStackId = crypto.randomUUID();
+                            await window.clipboardAPI?.updateStackId?.([item.id], tempStackId);
+                            setImprovingStackId(`item-${item.id}`);
+                            setImproveResult(null);
+                            try {
+                              const result = await window.clipboardAPI?.engineerStack?.(tempStackId);
+                              await window.clipboardAPI?.updateStackId?.([item.id], item.stackId || null);
+                              if (result?.success && result.refinedPrompt) {
+                                setImproveResult({
+                                  stackId: `item-${item.id}`,
+                                  refinedPrompt: result.refinedPrompt,
+                                });
+                                window.clipboardAPI?.incrementImprovedCount?.().then(count => {
+                                  setAllTimeStats(prev => ({ ...prev, improved: count }));
+                                });
+                              }
+                            } catch (err) {
+                              await window.clipboardAPI?.updateStackId?.([item.id], item.stackId || null);
+                            } finally {
+                              setImprovingStackId(null);
                             }
-                          } catch (err) {
-                            console.error('[Improve] Error:', err);
-                            // Restore original stack ID on error
-                            await window.clipboardAPI?.updateStackId?.([item.id], item.stackId || null);
-                          } finally {
-                            setImprovingStackId(null);
-                          }
+                          }}
+                          disabled={improvingStackId === `item-${item.id}`}
+                          style={{
+                            padding: '4px 6px',
+                            fontSize: '10px',
+                            fontWeight: 500,
+                            backgroundColor: 'transparent',
+                            color: theme.textSecondary,
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: improvingStackId === `item-${item.id}` ? 'wait' : 'pointer',
+                            transition: 'background-color 0.15s ease',
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        >
+                          <KeyCap>⌘</KeyCap><KeyCap>↵</KeyCap> {improvingStackId === `item-${item.id}` ? 'improving...' : 'improve'}
+                        </button>
+                      )}
+                      {/* Paste hint button with target app - rightmost */}
+                      <button
+                        tabIndex={-1}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleItemClick(item, index, e as unknown as React.MouseEvent);
                         }}
-                        disabled={improvingStackId === `item-${item.id}`}
                         style={{
-                          padding: '4px 12px',
+                          padding: '4px 6px',
                           fontSize: '10px',
-                          fontWeight: 600,
-                                  backgroundColor: improvingStackId === `item-${item.id}` ? '#34C759' : theme.accent,
-                          color: '#fff',
+                          fontWeight: 500,
+                          backgroundColor: 'transparent',
+                          color: theme.textSecondary,
                           border: 'none',
                           borderRadius: '4px',
-                          cursor: improvingStackId === `item-${item.id}` ? 'wait' : 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '4px',
+                          cursor: 'pointer',
+                          transition: 'background-color 0.15s ease',
                         }}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                       >
-                        {improvingStackId === `item-${item.id}` ? 'Improving...' : (
-                          <>Improve <span style={{ opacity: 0.7, fontSize: '9px' }}>⌘↵</span></>
-                        )}
+                        <KeyCap>↵</KeyCap> paste ({targetAppInfo.targetApp?.name || 'app'})
                       </button>
-                    )}
+                    </div>
                   </div>
                   </div>
                 </div>
@@ -1981,7 +2263,7 @@ export default function ClipboardHistory() {
         </div>
       )}
       
-      {/* Footer - simplified, dense, consistent styling */}
+      {/* Footer - three-column layout: left=stats, center=recording, right=controls */}
       <div
         style={{
           padding: '8px 16px',
@@ -1997,51 +2279,129 @@ export default function ClipboardHistory() {
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         }}
       >
-        {/* Left side: Rotating all-time stats (click to cycle) */}
+        {/* Left side: Stats - icon + "X words transcribed (all time)" format */}
+        {/* Click icon/stat to cycle stat type, click interval to cycle time range */}
         {!showSettings && statItems.length > 0 ? (
           <div
-            onClick={nextStat}
             style={{
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
-              fontSize: '11px',
+              fontSize: '9px',
               color: theme.textSecondary,
-              cursor: statItems.length > 1 ? 'pointer' : 'default',
               userSelect: 'none',
+              flex: 1,
             }}
-            title={statItems.length > 1 ? 'Click to see more stats' : undefined}
+            onClick={nextStat}
           >
-            <span style={{ opacity: 0.7 }}>all time:</span>
+            {/* Stats icon - line graph trending up */}
+            <svg 
+              width="14" 
+              height="14" 
+              viewBox="0 0 24 24" 
+              fill="none" 
+              stroke={theme.textSecondary} 
+              strokeWidth="2" 
+              strokeLinecap="round" 
+              strokeLinejoin="round"
+              style={{ cursor: 'pointer', flexShrink: 0 }}
+            >
+              <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
+              <polyline points="17 6 23 6 23 12" />
+            </svg>
             <span
               style={{
                 opacity: statFading ? 0 : 1,
                 transition: 'opacity 0.15s ease',
+                cursor: 'pointer',
               }}
             >
               {formatNumber(statItems[currentStatIndex]?.value ?? 0)} {statItems[currentStatIndex]?.value === 1 
                 ? statItems[currentStatIndex]?.singular 
                 : statItems[currentStatIndex]?.plural}
             </span>
+            <span 
+              onClick={(e) => {
+                e.stopPropagation();
+                nextInterval();
+              }}
+              style={{ fontSize: '10px', cursor: 'pointer' }}
+            >
+              ({timeIntervals[currentIntervalIndex]})
+            </span>
           </div>
         ) : (
           <div style={{ flex: 1 }} />
         )}
 
-        {/* Right side: target app info and controls */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '11px' }}>
-          {!showSettings && (
+        {/* Center: Recording state indicator with tooltip */}
+        <div 
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', position: 'relative' }}
+          onMouseEnter={() => isRecording && setShowRecordingTooltip(true)}
+          onMouseLeave={() => setShowRecordingTooltip(false)}
+        >
+          {isRecording && (
             <>
-              <span style={{ color: theme.textSecondary, opacity: 0.7 }}>Switch paste target (tab):</span>
               <span
                 style={{
-                  fontWeight: 500,
-                  color: theme.text,
+                  width: '8px',
+                  height: '8px',
+                  backgroundColor: '#ef4444',
+                  borderRadius: '50%',
+                  animation: 'pulse 1.5s ease-in-out infinite',
                 }}
-              >
-                {targetAppInfo.targetApp?.name || 'Select app'}
-              </span>
+              />
+              <span style={{ fontWeight: 500, color: '#ef4444', cursor: 'help' }}>Recording</span>
+              {/* Tooltip explaining escape behavior */}
+              {showRecordingTooltip && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    bottom: '100%',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    marginBottom: '8px',
+                    backgroundColor: '#1a1a1a',
+                    color: '#fff',
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    fontSize: '11px',
+                    lineHeight: 1.4,
+                    whiteSpace: 'nowrap',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                    zIndex: 100,
+                    maxWidth: '280px',
+                  }}
+                >
+                  <div style={{ fontWeight: 600, marginBottom: '4px' }}>Escape key behavior:</div>
+                  <div style={{ opacity: 0.9 }}>• Window open: closes window, keeps recording</div>
+                  <div style={{ opacity: 0.9 }}>• Window closed: abandons recording</div>
+                  {/* Tooltip caret */}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: '100%',
+                      left: '50%',
+                      transform: 'translateX(-50%)',
+                      width: 0,
+                      height: 0,
+                      borderLeft: '6px solid transparent',
+                      borderRight: '6px solid transparent',
+                      borderTop: '6px solid #1a1a1a',
+                    }}
+                  />
+                </div>
+              )}
             </>
+          )}
+        </div>
+
+        {/* Right side: target app info and controls */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '10px', fontSize: '9px', flex: 1 }}>
+          {!showSettings && (
+            <span style={{ color: theme.textSecondary, opacity: 0.7, display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <KeyCap small>tab</KeyCap> to switch target ({targetAppInfo.targetApp?.name || 'app'})
+            </span>
           )}
           
           {/* Dark mode toggle */}
@@ -2115,40 +2475,150 @@ export default function ClipboardHistory() {
           </button>
         </div>
       </div>
-        </div>
-        
-        {/* Resize handle */}
-        <div
-          onMouseDown={handleResizeStart}
-          style={{
-            position: 'absolute',
-            bottom: 0,
-            right: 0,
-            width: '16px',
-            height: '16px',
-            cursor: 'nwse-resize',
-            background: 'linear-gradient(135deg, transparent 0%, transparent 40%, #ccc 40%, #ccc 45%, transparent 45%, transparent 55%, #ccc 55%, #ccc 60%, transparent 60%)',
-            borderRadius: '0 0 12px 0',
-          }}
-        />
-      </div>
       
-      {/* Image preview modal - Quick Look style */}
-      {previewImage && (
+      {/* Keyboard shortcuts modal */}
+      {showShortcutsModal && (
         <div
-          onClick={() => setPreviewImage(null)}
+          onClick={() => setShowShortcutsModal(false)}
           style={{
             position: 'fixed',
             top: 0,
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.9)',
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            backdropFilter: 'blur(4px)',
+            WebkitBackdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10001,
+            cursor: 'pointer',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: theme.bg,
+              borderRadius: '12px',
+              padding: '24px',
+              maxWidth: '400px',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+              cursor: 'default',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: theme.text }}>Keyboard Shortcuts</h3>
+              <button
+                onClick={() => setShowShortcutsModal(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '4px',
+                  color: theme.textSecondary,
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M18 6L6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '13px' }}>
+              {/* Navigation */}
+              <div style={{ color: theme.textSecondary, fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', marginTop: '8px' }}>Navigation</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: theme.text }}>Move down</span>
+                <div><KeyCap>↓</KeyCap> or <KeyCap>j</KeyCap></div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: theme.text }}>Move up</span>
+                <div><KeyCap>↑</KeyCap> or <KeyCap>k</KeyCap></div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: theme.text }}>Search</span>
+                <div><KeyCap>/</KeyCap></div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: theme.text }}>Switch paste target</span>
+                <div><KeyCap>tab</KeyCap></div>
+              </div>
+              
+              {/* Actions */}
+              <div style={{ color: theme.textSecondary, fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', marginTop: '8px' }}>Actions</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: theme.text }}>Paste</span>
+                <div><KeyCap>↵</KeyCap></div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: theme.text }}>Improve with AI</span>
+                <div><KeyCap>⌘</KeyCap><KeyCap>↵</KeyCap></div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: theme.text }}>Unstack</span>
+                <div><KeyCap>u</KeyCap></div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: theme.text }}>Delete</span>
+                <div><KeyCap>delete</KeyCap> or <KeyCap>⌘</KeyCap><KeyCap>⌫</KeyCap></div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: theme.text }}>Undo delete</span>
+                <div><KeyCap>⌘</KeyCap><KeyCap>z</KeyCap></div>
+              </div>
+              
+              {/* Preview */}
+              <div style={{ color: theme.textSecondary, fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', marginTop: '8px' }}>Preview</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: theme.text }}>Preview image</span>
+                <div><KeyCap>⎵</KeyCap></div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: theme.text }}>Close preview / window</span>
+                <div><KeyCap>esc</KeyCap></div>
+              </div>
+              
+              {/* Multi-select */}
+              <div style={{ color: theme.textSecondary, fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', marginTop: '8px' }}>Multi-select</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: theme.text }}>Toggle selection</span>
+                <div><KeyCap>x</KeyCap></div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ color: theme.text }}>Stack selected items</span>
+                <div><KeyCap>s</KeyCap></div>
+              </div>
+            </div>
+            
+            <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: `1px solid ${theme.border}`, textAlign: 'center' }}>
+              <span style={{ color: theme.textSecondary, fontSize: '11px' }}>
+                Press <KeyCap>?</KeyCap> anytime to show this help
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Image preview modal - Quick Look style with scale animation */}
+      {previewImage && (
+        <div
+          onClick={dismissPreview}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.4)',
+            backdropFilter: 'blur(4px)',
+            WebkitBackdropFilter: 'blur(4px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 10000,
             cursor: 'pointer',
+            animation: previewClosing ? 'previewFadeOut 0.15s ease-in forwards' : 'previewFadeIn 0.15s ease-out',
           }}
         >
           <img
@@ -2160,12 +2630,15 @@ export default function ClipboardHistory() {
               maxHeight: '90vh',
               objectFit: 'contain',
               borderRadius: '8px',
-              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+              animation: previewClosing ? 'previewScaleOut 0.15s ease-in forwards' : 'previewScaleIn 0.15s ease-out',
+              cursor: 'default',
             }}
           />
         </div>
       )}
     </div>
+    </>
   );
 }
 

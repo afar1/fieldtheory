@@ -239,7 +239,7 @@ interface ClipboardAPI {
   onShowHistory: (callback: () => void) => () => void;
   onShowSettings?: (callback: () => void) => () => void;
   onDialogPosition: (callback: (position: { left: number; top: number }) => void) => () => void;
-  onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number }) => void) => () => void;
+  onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number; overlayWidth: number; overlayHeight: number }) => void) => () => void;
   onTargetAppInfo: (callback: (info: TargetAppInfo) => void) => () => void;
   saveBounds: (bounds: { x: number; y: number; width: number; height: number }) => Promise<void>;
   onKeyEvent: (callback: (event: { characters: string; keyCode: number; modifiers: string[] }) => void) => () => void;
