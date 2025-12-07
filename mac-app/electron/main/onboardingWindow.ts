@@ -42,7 +42,12 @@ export class OnboardingWindow {
    */
   async getPermissionStatus(): Promise<PermissionStatus> {
     // Check microphone permission status.
-    const micStatus = systemPreferences.getMediaAccessStatus('microphone');
+    // Map "restricted" and "unknown" to "denied" to match our interface.
+    const micStatusRaw = systemPreferences.getMediaAccessStatus('microphone');
+    const micStatus: 'granted' | 'denied' | 'not-determined' = 
+      micStatusRaw === 'granted' || micStatusRaw === 'denied' || micStatusRaw === 'not-determined'
+        ? micStatusRaw
+        : 'denied';
     
     // Check accessibility permission (needed for simulating keyboard input).
     const accessibilityStatus = systemPreferences.isTrustedAccessibilityClient(false);

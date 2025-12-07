@@ -12,6 +12,7 @@ export const OnboardingIPCChannels = {
   SET_ONBOARDING_STEP: 'onboarding:setStep',
   COMPLETE_ONBOARDING: 'onboarding:complete',
   SKIP_ONBOARDING: 'onboarding:skip',
+  RESET_ONBOARDING: 'onboarding:reset',
   
   // Model download (reuses existing model download infrastructure)
   CHECK_MODEL_STATUS: 'onboarding:checkModelStatus',
