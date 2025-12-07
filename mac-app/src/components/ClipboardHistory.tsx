@@ -264,6 +264,12 @@ export default function ClipboardHistory() {
   const [priorityDeviceId, setPriorityDeviceId] = useState<string | null>(null);
   const [showMicDropdown, setShowMicDropdown] = useState(false);
   
+  // Update notification state (Cursor-style in-app card).
+  type UpdateStatus = 'idle' | 'available' | 'downloading' | 'ready';
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  
   const [allTimeStats, setAllTimeStats] = useState<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>({
     stacks: 0, transcriptions: 0, screenshots: 0, improved: 0, words: 0,
   });
@@ -326,6 +332,34 @@ export default function ClipboardHistory() {
     document.addEventListener('click', handleClickOutside);
     return () => document.removeEventListener('click', handleClickOutside);
   }, [showMicDropdown]);
+  
+  // Subscribe to update events for in-app notification.
+  useEffect(() => {
+    if (!window.updaterAPI) return;
+    
+    const cleanups = [
+      window.updaterAPI.onUpdateAvailable((info) => {
+        setUpdateStatus('available');
+        setUpdateVersion(info.version);
+      }),
+      window.updaterAPI.onDownloadProgress((percent) => {
+        setUpdateStatus('downloading');
+        setDownloadProgress(percent);
+      }),
+      window.updaterAPI.onUpdateDownloaded((info) => {
+        setUpdateStatus('ready');
+        setUpdateVersion(info.version);
+      }),
+      window.updaterAPI.onUpdateNotAvailable(() => {
+        setUpdateStatus('idle');
+      }),
+      window.updaterAPI.onError(() => {
+        setUpdateStatus('idle');
+      }),
+    ];
+    
+    return () => cleanups.forEach(cleanup => cleanup());
+  }, []);
 
   const [currentStatIndex, setCurrentStatIndex] = useState(0);
   const [statFading, setStatFading] = useState(false);
@@ -1610,6 +1644,87 @@ export default function ClipboardHistory() {
               </div>
             )}
           </div>
+          
+          {/* Update notification card */}
+          {updateStatus !== 'idle' && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '8px 12px',
+              marginBottom: '8px',
+              backgroundColor: theme.isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.1)',
+              border: `1px solid ${theme.isDark ? 'rgba(59, 130, 246, 0.3)' : 'rgba(59, 130, 246, 0.2)'}`,
+              borderRadius: '8px',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={theme.isDark ? '#60a5fa' : '#3b82f6'} strokeWidth="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                <span style={{ fontSize: '11px', color: theme.text }}>
+                  {updateStatus === 'available' && `Version ${updateVersion} available`}
+                  {updateStatus === 'downloading' && `Downloading... ${downloadProgress}%`}
+                  {updateStatus === 'ready' && `Version ${updateVersion} ready to install`}
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                {updateStatus === 'available' && (
+                  <button
+                    onClick={() => window.updaterAPI?.downloadUpdate()}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '10px',
+                      fontWeight: 500,
+                      color: '#fff',
+                      backgroundColor: '#3b82f6',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Update
+                  </button>
+                )}
+                {updateStatus === 'ready' && (
+                  <button
+                    onClick={() => window.updaterAPI?.installUpdate()}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '10px',
+                      fontWeight: 500,
+                      color: '#fff',
+                      backgroundColor: '#22c55e',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Restart
+                  </button>
+                )}
+                {updateStatus !== 'downloading' && (
+                  <button
+                    onClick={() => {
+                      setUpdateStatus('idle');
+                      window.updaterAPI?.dismissUpdate();
+                    }}
+                    style={{
+                      padding: '4px 6px',
+                      fontSize: '10px',
+                      color: theme.textSecondary,
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Selection actions bar - slides in when active */}
           <div

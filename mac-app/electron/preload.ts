@@ -94,6 +94,18 @@ const OnboardingIPCChannels = {
   CHECK_MODEL_STATUS: 'onboarding:checkModelStatus',
 } as const;
 
+const UpdaterIPCChannels = {
+  CHECK_FOR_UPDATES: 'updater:checkForUpdates',
+  DOWNLOAD_UPDATE: 'updater:downloadUpdate',
+  INSTALL_UPDATE: 'updater:installUpdate',
+  DISMISS_UPDATE: 'updater:dismissUpdate',
+  UPDATE_AVAILABLE: 'updater:updateAvailable',
+  UPDATE_NOT_AVAILABLE: 'updater:updateNotAvailable',
+  DOWNLOAD_PROGRESS: 'updater:downloadProgress',
+  UPDATE_DOWNLOADED: 'updater:updateDownloaded',
+  UPDATE_ERROR: 'updater:error',
+} as const;
+
 // Types (only for TypeScript checking, not runtime)
 type AudioState = {
   devices: Array<{
@@ -901,11 +913,68 @@ const onboardingAPI = {
 
 type OnboardingAPI = typeof onboardingAPI;
 
+// ==========================================================================
+// Updater API - In-app update notifications (Cursor-style)
+// ==========================================================================
+
+type UpdateInfo = { version: string; releaseNotes?: string };
+
+const updaterAPI = {
+  checkForUpdates: async (): Promise<void> => {
+    return ipcRenderer.invoke(UpdaterIPCChannels.CHECK_FOR_UPDATES);
+  },
+
+  downloadUpdate: async (): Promise<void> => {
+    return ipcRenderer.invoke(UpdaterIPCChannels.DOWNLOAD_UPDATE);
+  },
+
+  installUpdate: async (): Promise<void> => {
+    return ipcRenderer.invoke(UpdaterIPCChannels.INSTALL_UPDATE);
+  },
+
+  dismissUpdate: async (): Promise<void> => {
+    return ipcRenderer.invoke(UpdaterIPCChannels.DISMISS_UPDATE);
+  },
+
+  onUpdateAvailable: (callback: (info: UpdateInfo) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, info: UpdateInfo) => callback(info);
+    ipcRenderer.on(UpdaterIPCChannels.UPDATE_AVAILABLE, handler);
+    return () => ipcRenderer.removeListener(UpdaterIPCChannels.UPDATE_AVAILABLE, handler);
+  },
+
+  onUpdateNotAvailable: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on(UpdaterIPCChannels.UPDATE_NOT_AVAILABLE, handler);
+    return () => ipcRenderer.removeListener(UpdaterIPCChannels.UPDATE_NOT_AVAILABLE, handler);
+  },
+
+  onDownloadProgress: (callback: (percent: number) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, percent: number) => callback(percent);
+    ipcRenderer.on(UpdaterIPCChannels.DOWNLOAD_PROGRESS, handler);
+    return () => ipcRenderer.removeListener(UpdaterIPCChannels.DOWNLOAD_PROGRESS, handler);
+  },
+
+  onUpdateDownloaded: (callback: (info: UpdateInfo) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, info: UpdateInfo) => callback(info);
+    ipcRenderer.on(UpdaterIPCChannels.UPDATE_DOWNLOADED, handler);
+    return () => ipcRenderer.removeListener(UpdaterIPCChannels.UPDATE_DOWNLOADED, handler);
+  },
+
+  onError: (callback: (error: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, error: string) => callback(error);
+    ipcRenderer.on(UpdaterIPCChannels.UPDATE_ERROR, handler);
+    return () => ipcRenderer.removeListener(UpdaterIPCChannels.UPDATE_ERROR, handler);
+  },
+};
+
+type UpdaterAPI = typeof updaterAPI;
+
 contextBridge.exposeInMainWorld('audioAPI', audioAPI);
 contextBridge.exposeInMainWorld('transcribeAPI', transcribeAPI);
 contextBridge.exposeInMainWorld('clipboardAPI', clipboardAPI);
 contextBridge.exposeInMainWorld('permissionsAPI', permissionsAPI);
 contextBridge.exposeInMainWorld('onboardingAPI', onboardingAPI);
+contextBridge.exposeInMainWorld('updaterAPI', updaterAPI);
 
 contextBridge.exposeInMainWorld('platform', {
   isMacOS: process.platform === 'darwin',
@@ -921,6 +990,7 @@ declare global {
     visionAPI: VisionAPI;
     permissionsAPI: PermissionsAPI;
     onboardingAPI: OnboardingAPI;
+    updaterAPI: UpdaterAPI;
     platform: {
       isMacOS: boolean;
       isWindows: boolean;
