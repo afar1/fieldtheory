@@ -920,6 +920,10 @@ type OnboardingAPI = typeof onboardingAPI;
 type UpdateInfo = { version: string; releaseNotes?: string };
 
 const updaterAPI = {
+  getVersion: (): string => {
+    return ipcRenderer.sendSync('app:getVersion');
+  },
+
   checkForUpdates: async (): Promise<void> => {
     return ipcRenderer.invoke(UpdaterIPCChannels.CHECK_FOR_UPDATES);
   },
