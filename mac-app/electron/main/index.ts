@@ -1936,6 +1936,11 @@ if (!gotTheLock) {
       });
     });
 
+    // App version (sync for immediate access).
+    ipcMain.on('app:getVersion', (event) => {
+      event.returnValue = app.getVersion();
+    });
+
     // Updater IPC handlers.
     ipcMain.handle('updater:checkForUpdates', () => {
       autoUpdater.checkForUpdates();
