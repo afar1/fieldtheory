@@ -224,6 +224,7 @@ export default function ClipboardHistory() {
   const [expandedStacks, setExpandedStacks] = useState<Set<string>>(new Set());
   const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [filter, setFilter] = useState<FilterType>('all');
   const [sourceFilter, setSourceFilter] = useState<SourceFilterType>('all');
@@ -307,6 +308,9 @@ export default function ClipboardHistory() {
   
   // Keyboard navigation state - disables hover selection when using arrow keys
   const [keyboardNavActive, setKeyboardNavActive] = useState(false);
+  
+  // Track hovered row for showing action buttons on mouse hover
+  const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null);
   
   // Flash state for newly created stacks (shows brief highlight)
   const [recentlyStackedId, setRecentlyStackedId] = useState<string | null>(null);
@@ -704,6 +708,13 @@ export default function ClipboardHistory() {
           e.preventDefault();
           inputRef.current?.blur();
           setSelectedIndex(0);
+          return;
+        }
+        // If items are X-selected, clear selection first (before closing window)
+        if (selectedIds.size > 0) {
+          e.preventDefault();
+          setSelectedIds(new Set());
+          setIsMultiSelect(false);
           return;
         }
         window.clipboardAPI?.closeWindow();
@@ -1266,65 +1277,112 @@ export default function ClipboardHistory() {
             padding: '0 16px 16px 16px',
           }}
         >
-          {/* Search input */}
-          <input
-            ref={inputRef}
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search clipboard history... (press / to focus)"
-            style={{
-              width: '100%',
-              padding: '10px 14px',
-              border: `1px solid ${theme.inputBorder}`,
-              borderRadius: '8px',
-              fontSize: '13px',
-              outline: 'none',
-              boxSizing: 'border-box',
-              backgroundColor: theme.inputBg,
-              color: theme.text,
-              // @ts-ignore - prevent drag on input
-              WebkitAppRegion: 'no-drag',
-            }}
-          />
+          {/* Search input with custom placeholder */}
+          <div style={{ 
+            position: 'relative',
+            marginBottom: selectedIds.size > 0 ? '0' : '8px',
+            transition: 'margin-bottom 0.15s ease',
+          }}>
+            <input
+              ref={inputRef}
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => setSearchFocused(false)}
+              placeholder=""
+              style={{
+                width: '100%',
+                padding: `6px 10px 6px ${!searchQuery && !searchFocused ? '32px' : '10px'}`,
+                border: `1px solid ${theme.inputBorder}`,
+                borderRadius: '6px',
+                fontSize: '11px',
+                outline: 'none',
+                boxSizing: 'border-box',
+                backgroundColor: theme.inputBg,
+                color: theme.text,
+                transition: 'padding-left 0.1s ease',
+                // @ts-ignore - prevent drag on input
+                WebkitAppRegion: 'no-drag',
+              }}
+            />
+            {/* Custom placeholder with KeyCap - hide when focused or has content */}
+            {!searchQuery && !searchFocused && (
+              <div style={{
+                position: 'absolute',
+                left: '10px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                pointerEvents: 'none',
+                color: theme.textSecondary,
+                fontSize: '11px',
+              }}>
+                <span style={{ 
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: '14px',
+                  height: '14px',
+                  fontSize: '9px',
+                  fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
+                  fontWeight: 500,
+                  color: '#666',
+                  backgroundColor: '#f0f0f0',
+                  border: '1px solid #ccc',
+                  borderRadius: '2px',
+                  boxShadow: '0 1px 0 #aaa',
+                }}>/</span>
+                <span>search...</span>
+              </div>
+            )}
+          </div>
 
-          {/* Selection actions bar */}
+          {/* Selection actions bar - slides in when active */}
           <div
             style={{
               display: 'flex',
-              padding: '8px 8px 0 8px',
-              marginTop: '12px',
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              padding: '0 8px',
+              height: selectedIds.size > 0 ? '24px' : '0',
+              marginBottom: selectedIds.size > 0 ? '4px' : '0',
+              transition: 'height 0.15s ease, margin-bottom 0.15s ease',
+              overflow: 'hidden',
             }}
           >
             {selectedIds.size > 0 && (
               <div
                 style={{
-                  marginLeft: 'auto',
-                  padding: '8px 16px',
-                  fontSize: '12px',
+                  fontSize: '11px',
                   color: theme.textSecondary,
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '12px',
+                  gap: '8px',
                 }}
               >
-                <span>{selectedIds.size} selected</span>
+                <span style={{ fontWeight: 500 }}>{selectedIds.size} selected</span>
+                <span style={{ color: theme.border }}>•</span>
                 <button
                   tabIndex={-1}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={handleDeleteSelected}
                   style={{
-                    padding: '4px 12px',
+                    padding: '2px 6px',
                     fontSize: '10px',
-                    fontWeight: 600,
-                    backgroundColor: '#ff3b30',
-                    color: '#fff',
+                    backgroundColor: 'transparent',
+                    color: theme.textSecondary,
                     border: 'none',
                     borderRadius: '4px',
                     cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
                   }}
                 >
-                  Delete
+                  <KeyCap small>⌫</KeyCap> delete
                 </button>
                 {selectedIds.size > 1 && (
                   <button
@@ -1336,20 +1394,25 @@ export default function ClipboardHistory() {
                       setSelectedIds(new Set());
                       setIsMultiSelect(false);
                       setLastClickedIndex(null);
+                      setRecentlyStackedId(newStackId);
+                      setPendingStackSelection(newStackId);
+                      setTimeout(() => setRecentlyStackedId(null), 1500);
                       loadItems(true);
                     }}
                     style={{
-                      padding: '4px 12px',
+                      padding: '2px 6px',
                       fontSize: '10px',
-                      fontWeight: 600,
-                      backgroundColor: theme.accent,
-                      color: '#fff',
+                      backgroundColor: 'transparent',
+                      color: theme.textSecondary,
                       border: 'none',
                       borderRadius: '4px',
                       cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
                     }}
                   >
-                    Stack Selected
+                    <KeyCap small>s</KeyCap> stack
                   </button>
                 )}
                 <button
@@ -1361,16 +1424,19 @@ export default function ClipboardHistory() {
                     setLastClickedIndex(null);
                   }}
                   style={{
-                    padding: '4px 8px',
+                    padding: '2px 6px',
                     fontSize: '10px',
                     backgroundColor: 'transparent',
                     color: theme.textSecondary,
-                    border: `1px solid ${theme.border}`,
+                    border: 'none',
                     borderRadius: '4px',
                     cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
                   }}
                 >
-                  Clear
+                  <KeyCap small>esc</KeyCap> clear
                 </button>
               </div>
             )}
@@ -1384,9 +1450,8 @@ export default function ClipboardHistory() {
               overflowY: 'auto',
               overflowX: 'hidden',
               minHeight: 0,
-              marginTop: '8px',
               borderRadius: '8px',
-              border: '1px solid #f0f0f0',
+              border: `1px solid ${theme.border}`,
             }}
           >
         {listRows.length === 0 && !loading ? (
@@ -1456,7 +1521,9 @@ export default function ClipboardHistory() {
                     onDrop={handleStackDrop}
                     onDragOver={handleStackDragOver}
                     onMouseEnter={(e) => {
-                      // Skip if keyboard nav is active (prevents jumping back on hover)
+                      // Always track hover for button visibility
+                      setHoveredRowIndex(index);
+                      // Skip selection update if keyboard nav is active
                       if (keyboardNavActive) return;
                       // Only highlight if the item is fully visible (prevents jumping)
                       const element = e.currentTarget;
@@ -1465,6 +1532,7 @@ export default function ClipboardHistory() {
                         setSelectedIndex(index);
                       }
                     }}
+                    onMouseLeave={() => setHoveredRowIndex(null)}
                     onClick={(e) => {
                       const hasShift = e.shiftKey;
                       const hasMeta = e.metaKey || e.ctrlKey; // Cmd on Mac, Ctrl on Windows
@@ -1559,18 +1627,20 @@ export default function ClipboardHistory() {
                           : selectedIndex === index 
                             ? theme.bgSecondary 
                             : 'transparent',
-                      borderBottom: `1px solid ${theme.border}`,
-                      borderLeft: recentlyStackedId === stack.stackId
-                        ? `3px solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
+                      // J/K highlight gets darker gray borders for definition
+                      borderTop: selectedIndex === index ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
+                      borderBottom: selectedIndex === index ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : `1px solid ${theme.border}`,
+                      borderRight: selectedIndex === index ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
+                      // J/K = bright teal (4px if over X-selected, else 2px), X-selection = muted teal 2px
+                      borderLeft: recentlyStackedId === stack.stackId || selectedIndex === index
+                        ? `${stackItems.some(item => selectedIds.has(item.id)) ? '4px' : '2px'} solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
                         : stackItems.some(item => selectedIds.has(item.id)) 
-                          ? `3px solid ${theme.selectedBorder}` 
-                          : selectedIndex === index
-                            ? `2px solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
-                            : '2px solid transparent',
-                      boxShadow: selectedIndex === index && !stackItems.some(item => selectedIds.has(item.id))
+                          ? `2px solid ${theme.selectedBorder}` 
+                          : '2px solid transparent',
+                      boxShadow: selectedIndex === index
                         ? theme.isDark 
-                          ? 'inset 0 0 0 1px rgba(255,255,255,0.05), 0 1px 3px rgba(0,0,0,0.2)' 
-                          : 'inset 0 0 0 1px rgba(0,0,0,0.02), 0 1px 3px rgba(0,0,0,0.05)'
+                          ? '0 2px 8px rgba(0,0,0,0.3)' 
+                          : '0 2px 8px rgba(0,0,0,0.08)'
                         : 'none',
                       transition: 'background-color 0.3s ease, border-left 0.3s ease, box-shadow 0.3s ease',
                       cursor: 'pointer',
@@ -1723,11 +1793,11 @@ export default function ClipboardHistory() {
                         <span>{stackItems.length} items • {formatRelativeTime(stack.createdAt)}{improveResult?.stackId === stack.stackId ? ' • ✨ improved' : ''}</span>
                       </div>
 
-                      {/* Buttons - right side (always reserve space with visibility) */}
+                      {/* Buttons - right side (show on J/K focus or mouse hover) */}
                       <div style={{ 
                         display: 'flex', 
                         gap: '4px',
-                        visibility: selectedIndex === index ? 'visible' : 'hidden',
+                        visibility: selectedIndex === index || hoveredRowIndex === index ? 'visible' : 'hidden',
                       }}>
                         {/* Unstack button - leftmost, only for multi-item stacks */}
                         {stackItems.length > 1 && (
@@ -1907,7 +1977,9 @@ export default function ClipboardHistory() {
                     onDrop={handleItemDrop}
                     onDragOver={handleItemDragOver}
                     onMouseEnter={(e) => {
-                      // Skip if keyboard nav is active (prevents jumping back on hover)
+                      // Always track hover for button visibility
+                      setHoveredRowIndex(index);
+                      // Skip selection update if keyboard nav is active
                       if (keyboardNavActive) return;
                       // Only highlight if the item is fully visible (prevents jumping)
                       const element = e.currentTarget;
@@ -1916,20 +1988,25 @@ export default function ClipboardHistory() {
                         setSelectedIndex(index);
                       }
                     }}
+                    onMouseLeave={() => setHoveredRowIndex(null)}
                     onClick={(e) => handleItemClick(item, index, e)}
                     style={{
                       padding: '12px 16px',
                       backgroundColor: isInStack ? theme.selectedBg : isRowSelected ? theme.bgSecondary : 'transparent',
-                      borderBottom: `1px solid ${theme.border}`,
-                      borderLeft: isInStack 
-                        ? `3px solid ${theme.selectedBorder}` 
-                        : isRowSelected 
-                          ? `2px solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}` 
+                      // J/K highlight gets darker gray borders for definition
+                      borderTop: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
+                      borderBottom: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : `1px solid ${theme.border}`,
+                      borderRight: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
+                      // J/K = bright teal (4px if over X-selected, else 2px), X-selection = muted teal 2px
+                      borderLeft: isRowSelected
+                        ? `${isInStack ? '4px' : '2px'} solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
+                        : isInStack 
+                          ? `2px solid ${theme.selectedBorder}` 
                           : '2px solid transparent',
-                      boxShadow: isRowSelected && !isInStack
+                      boxShadow: isRowSelected
                         ? theme.isDark 
-                          ? 'inset 0 0 0 1px rgba(255,255,255,0.05), 0 1px 3px rgba(0,0,0,0.2)' 
-                          : 'inset 0 0 0 1px rgba(0,0,0,0.02), 0 1px 3px rgba(0,0,0,0.05)'
+                          ? '0 2px 8px rgba(0,0,0,0.3)' 
+                          : '0 2px 8px rgba(0,0,0,0.08)'
                         : 'none',
                       transition: 'background-color 0.1s ease, border-left 0.1s ease, box-shadow 0.1s ease',
                       cursor: 'grab',
@@ -2149,11 +2226,11 @@ export default function ClipboardHistory() {
                       </span>
                     </div>
 
-                    {/* Buttons - right side (always reserve space with visibility) */}
+                    {/* Buttons - right side (show on J/K focus or mouse hover) */}
                     <div style={{ 
                       display: 'flex', 
                       gap: '4px',
-                      visibility: isRowSelected && selectedIds.size === 0 ? 'visible' : 'hidden',
+                      visibility: isRowSelected || hoveredRowIndex === index ? 'visible' : 'hidden',
                     }}>
                       {/* Improve hint button - only if item has text */}
                       {hasText && (

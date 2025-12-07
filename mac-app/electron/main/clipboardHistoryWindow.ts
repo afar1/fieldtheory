@@ -268,6 +268,8 @@ export class ClipboardHistoryWindow {
       alwaysOnTop: true,
       skipTaskbar: true,
       resizable: true,
+      minWidth: 400,
+      minHeight: 300,
       movable: true,
       focusable: true,
       fullscreenable: false,
