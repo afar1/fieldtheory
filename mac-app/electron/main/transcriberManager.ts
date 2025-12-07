@@ -71,6 +71,9 @@ export class TranscriberManager extends EventEmitter {
   private targetAppBundleId: string | null = null;
   private currentStackId: string | null = null;
   private stackingHotkeyRegistered: boolean = false;
+  
+  // Clipboard history visibility checker - allows escape key to dismiss clipboard history first
+  private clipboardHistoryVisibilityChecker: (() => boolean) | null = null;
 
   constructor(nativeHelper: NativeHelper, preferences: PreferencesManager, clipboardManager?: ClipboardManager) {
     super();
@@ -95,6 +98,14 @@ export class TranscriberManager extends EventEmitter {
    */
   isRecordingOverlayVisible(): boolean {
     return this.overlay.isVisible();
+  }
+
+  /**
+   * Set a callback to check if clipboard history window is visible.
+   * Used for escape key priority: dismiss clipboard history before canceling recording.
+   */
+  setClipboardHistoryVisibilityChecker(checker: () => boolean): void {
+    this.clipboardHistoryVisibilityChecker = checker;
   }
 
   /**
@@ -385,6 +396,7 @@ export class TranscriberManager extends EventEmitter {
   
   /**
    * Register escape key to cancel recording.
+   * If clipboard history is visible, dismiss it first instead of canceling recording.
    */
   private registerEscapeKey(): void {
     if (this.escapeKeyRegistered) {
@@ -392,6 +404,12 @@ export class TranscriberManager extends EventEmitter {
     }
     
     const registered = globalShortcut.register('Escape', () => {
+      // If clipboard history is visible, dismiss it instead of canceling recording
+      if (this.clipboardHistoryVisibilityChecker?.()) {
+        console.log('[TranscriberManager] Escape: dismissing clipboard history (recording continues)');
+        this.emit('dismiss-clipboard-history');
+        return;
+      }
       this.cancelRecording();
     });
     

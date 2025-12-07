@@ -65,6 +65,7 @@ export const ClipboardIPCChannels = {
   DIALOG_POSITION: 'clipboard:dialogPosition',
   DIALOG_BOUNDS: 'clipboard:dialogBounds',
   TARGET_APP_INFO: 'clipboard:targetAppInfo',
+  RECORDING_STATE: 'clipboard:recordingState', // Broadcasts recording state to clipboard history
 } as const;
 
 /**

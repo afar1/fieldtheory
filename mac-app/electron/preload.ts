@@ -617,8 +617,8 @@ const clipboardAPI: ClipboardAPI = {
     };
   },
 
-  onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, bounds: { x: number; y: number; width: number; height: number }) => {
+  onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number; overlayWidth: number; overlayHeight: number }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, bounds: { x: number; y: number; width: number; height: number; overlayWidth: number; overlayHeight: number }) => {
       callback(bounds);
     };
     ipcRenderer.on(ClipboardIPCChannels.DIALOG_BOUNDS, handler);
