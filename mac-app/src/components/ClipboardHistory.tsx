@@ -1406,6 +1406,10 @@ export default function ClipboardHistory() {
           from { opacity: 1; }
           to { opacity: 0; }
         }
+        @keyframes shimmer {
+          0% { background-position: -100% 0; }
+          100% { background-position: 200% 0; }
+        }
       `}</style>
       <div
         ref={dialogRef}
@@ -2684,17 +2688,30 @@ export default function ClipboardHistory() {
           updateStatus !== 'idle' ? (
             // Update notification (replaces version + stats)
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1 }}>
-              {/* Gift icon */}
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="20 12 20 22 4 22 4 12"/>
-                <rect x="2" y="7" width="20" height="5"/>
-                <line x1="12" y1="22" x2="12" y2="7"/>
-                <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/>
-                <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>
-              </svg>
-              <span style={{ fontSize: '10px', color: theme.text }}>
-                {updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'New update ready' : 'New update available'}
-              </span>
+              {/* Gift icon + text with shimmer effect */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                background: updateStatus !== 'downloading' 
+                  ? `linear-gradient(90deg, ${theme.text} 0%, ${theme.text} 40%, ${theme.isDark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.3)'} 50%, ${theme.text} 60%, ${theme.text} 100%)`
+                  : 'none',
+                backgroundSize: '200% 100%',
+                WebkitBackgroundClip: updateStatus !== 'downloading' ? 'text' : undefined,
+                WebkitTextFillColor: updateStatus !== 'downloading' ? 'transparent' : undefined,
+                animation: updateStatus !== 'downloading' ? 'shimmer 3s ease-in-out infinite' : 'none',
+              }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 12 20 22 4 22 4 12"/>
+                  <rect x="2" y="7" width="20" height="5"/>
+                  <line x1="12" y1="22" x2="12" y2="7"/>
+                  <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/>
+                  <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>
+                </svg>
+                <span style={{ fontSize: '9px' }}>
+                  {updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'New update ready' : 'New update available'}
+                </span>
+              </div>
               {updateStatus !== 'downloading' && (
                 <>
                   <button
@@ -2703,8 +2720,8 @@ export default function ClipboardHistory() {
                       setUpdateStatus('idle');
                     }}
                     style={{
-                      padding: '2px 6px',
-                      fontSize: '10px',
+                      padding: '2px 5px',
+                      fontSize: '9px',
                       color: theme.textSecondary,
                       backgroundColor: 'transparent',
                       border: 'none',
@@ -2723,8 +2740,8 @@ export default function ClipboardHistory() {
                       }
                     }}
                     style={{
-                      padding: '2px 8px',
-                      fontSize: '10px',
+                      padding: '2px 6px',
+                      fontSize: '9px',
                       color: theme.text,
                       backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
                       border: `1px solid ${theme.border}`,
@@ -2782,7 +2799,7 @@ export default function ClipboardHistory() {
 
         {/* Center: Recording state indicator with tooltip */}
         <div 
-          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', position: 'relative' }}
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', position: 'relative' }}
           onMouseEnter={() => isRecording && setShowRecordingTooltip(true)}
           onMouseLeave={() => setShowRecordingTooltip(false)}
         >
@@ -2790,14 +2807,14 @@ export default function ClipboardHistory() {
             <>
               <span
                 style={{
-                  width: '8px',
-                  height: '8px',
+                  width: '6px',
+                  height: '6px',
                   backgroundColor: '#ef4444',
                   borderRadius: '50%',
                   animation: 'pulse 1.5s ease-in-out infinite',
                 }}
               />
-              <span style={{ fontWeight: 500, color: '#ef4444', cursor: 'help' }}>Recording</span>
+              <span style={{ fontSize: '9px', fontWeight: 500, color: '#ef4444', cursor: 'help' }}>Recording</span>
               {/* Tooltip explaining escape behavior */}
               {showRecordingTooltip && (
                 <div
