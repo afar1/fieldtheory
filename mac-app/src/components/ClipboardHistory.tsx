@@ -242,8 +242,8 @@ export default function ClipboardHistory() {
     stackId: string;
     refinedPrompt: string;
   } | null>(null);
-  const [improvedIds, setImprovedIds] = useState<Set<string>>(new Set()); // Track which items have been improved
-  const [showImproveResult, setShowImproveResult] = useState<string | null>(null); // Which result to show
+  const [improvedIds, setImprovedIds] = useState<Set<string>>(new Set());
+  const [showImproveResult, setShowImproveResult] = useState<string | null>(null);
   
   // Hover states for UI interactions
   const [hoveredImageId, setHoveredImageId] = useState<number | null>(null);
@@ -263,9 +263,6 @@ export default function ClipboardHistory() {
   
   // Recording state - shows indicator when recording is in progress
   const [isRecording, setIsRecording] = useState(false);
-  
-  // Stats tooltip state
-  
   
   // All-time stats from database
   const [allTimeStats, setAllTimeStats] = useState<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>({
@@ -970,8 +967,6 @@ export default function ClipboardHistory() {
         })();
         return;
       }
-
-      // Note: Delete/Backspace handling moved above with J/K handlers
 
       // Tab cycles through running apps (target app selection).
       // Works anywhere in the window.
@@ -1797,7 +1792,7 @@ export default function ClipboardHistory() {
                                   });
                                 }
                               } catch (err) {
-                                // Error handled silently
+                                console.error('[Improve] Error:', err);
                               } finally {
                                 setImprovingStackId(null);
                               }
