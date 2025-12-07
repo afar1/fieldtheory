@@ -324,6 +324,7 @@ interface UpdateInfo {
  * The updater API for in-app update notifications.
  */
 interface UpdaterAPI {
+  getVersion: () => string;
   checkForUpdates: () => Promise<void>;
   downloadUpdate: () => Promise<void>;
   installUpdate: () => Promise<void>;
