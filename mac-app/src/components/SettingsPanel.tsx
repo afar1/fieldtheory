@@ -10,6 +10,7 @@ import TranscriptionSettings from './TranscriptionSettings';
 import VisionSettings from './VisionSettings';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
+import { useTheme } from '../contexts/ThemeContext';
 
 /**
  * SettingsPanel - Settings content designed to live inside the clipboard history window.
@@ -17,6 +18,7 @@ import type { Session } from '@supabase/supabase-js';
  * clipboard history context.
  */
 export default function SettingsPanel() {
+  const { theme, toggleGlass } = useTheme();
   // Permissions state
   const [permissions, setPermissions] = useState<{ accessibilityGranted: boolean } | null>(null);
   const [showPermissionsGate, setShowPermissionsGate] = useState(false);
@@ -754,6 +756,41 @@ export default function SettingsPanel() {
             Screenshot hotkey captures selected area and adds to prompt stack.
             Continuous Context hotkey starts multi-screenshot capture mode (press Escape to stop).
           </p>
+        </div>
+      </div>
+
+      {/* Appearance Section */}
+      <div style={styles.section}>
+        <h3 style={styles.sectionTitle}>Appearance</h3>
+        <p style={styles.sectionDescription}>
+          Customize the visual appearance of the clipboard history window.
+        </p>
+        
+        <div style={styles.hotkeyCard}>
+          <div style={styles.hotkeyRow}>
+            <div>
+              <label style={styles.hotkeyLabel}>Glass Effect</label>
+              <p style={{ fontSize: '11px', color: '#6b7280', margin: '2px 0 0 0' }}>
+                Enable blur effect for dark mode (may impact performance)
+              </p>
+            </div>
+            <button
+              onClick={toggleGlass}
+              style={{
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontWeight: 500,
+                color: theme.glassEnabled ? '#fff' : '#374151',
+                backgroundColor: theme.glassEnabled ? theme.accent : '#fff',
+                border: `1px solid ${theme.glassEnabled ? theme.accent : '#d1d5db'}`,
+                borderRadius: '6px',
+                cursor: 'pointer',
+                minWidth: '50px',
+              }}
+            >
+              {theme.glassEnabled ? 'On' : 'Off'}
+            </button>
+          </div>
         </div>
       </div>
 
