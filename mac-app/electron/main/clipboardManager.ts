@@ -140,6 +140,8 @@ export class ClipboardManager extends EventEmitter {
   private continuousContextEnabled: boolean = false;
   private continuousContextCallback: (() => void) | null = null;
   private screencaptureProcess: ChildProcess | null = null;
+  private continuousContextEscapeRegistered: boolean = false;
+  private continuousContextPausedForCommand: boolean = false;
 
   constructor(config: Partial<ClipboardConfig> = {}) {
     super();
@@ -1141,6 +1143,7 @@ export class ClipboardManager extends EventEmitter {
   /**
    * Start continuous context mode.
    * Creates a new stack ID and begins the first screenshot capture.
+   * Registers a global Escape key to stop the mode at any time.
    */
   async startContinuousContext(): Promise<void> {
     if (this.continuousContextActive) {
@@ -1154,6 +1157,19 @@ export class ClipboardManager extends EventEmitter {
     this.continuousContextStackId = crypto.randomUUID();
     this.continuousContextActive = true;
     this.continuousContextScreenshotCount = 0;
+
+    // Register global Escape key to stop continuous context at any time.
+    // This allows user to exit even when not in the screenshot selection UI.
+    if (!this.continuousContextEscapeRegistered) {
+      const registered = globalShortcut.register('Escape', () => {
+        console.log('[ClipboardManager] Escape pressed - stopping continuous context');
+        this.stopContinuousContext();
+      });
+      this.continuousContextEscapeRegistered = registered;
+      if (registered) {
+        console.log('[ClipboardManager] Registered Escape key for continuous context');
+      }
+    }
 
     this.emit('continuousContextChanged', this.getContinuousContextState());
 
@@ -1171,6 +1187,13 @@ export class ClipboardManager extends EventEmitter {
     }
 
     console.log(`[ClipboardManager] Stopping continuous context mode. Screenshots taken: ${this.continuousContextScreenshotCount}`);
+    
+    // Unregister the global Escape key we registered for continuous context.
+    if (this.continuousContextEscapeRegistered) {
+      globalShortcut.unregister('Escape');
+      this.continuousContextEscapeRegistered = false;
+      console.log('[ClipboardManager] Unregistered Escape key for continuous context');
+    }
     
     // Kill any running screencapture process
     if (this.screencaptureProcess && !this.screencaptureProcess.killed) {
@@ -1202,13 +1225,52 @@ export class ClipboardManager extends EventEmitter {
   }
 
   /**
+   * Check if Command key is currently held (macOS only).
+   * Used to pause continuous screenshot when user wants to interact with apps.
+   */
+  private isCommandKeyPressed(): boolean {
+    if (process.platform !== 'darwin') {
+      return false;
+    }
+    try {
+      const { execSync } = require('child_process');
+      const result = execSync(
+        `osascript -e 'tell application "System Events" to return command down'`,
+        { timeout: 500 }
+      ).toString().trim();
+      return result === 'true';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Capture a screenshot in continuous context mode.
    * After the screenshot is taken, automatically triggers another capture
-   * unless the mode has been stopped.
+   * unless the mode has been stopped. Pauses when Command key is held
+   * to allow user interaction with apps.
    */
   private async captureContinuousScreenshot(): Promise<void> {
     if (!this.continuousContextActive) {
       return;
+    }
+
+    // Check if Command key is held - pause to allow user interaction.
+    // This lets users scroll, click, etc. without triggering screenshot UI.
+    if (this.isCommandKeyPressed()) {
+      if (!this.continuousContextPausedForCommand) {
+        this.continuousContextPausedForCommand = true;
+        console.log('[ClipboardManager] Command key held - pausing continuous screenshots');
+      }
+      // Check again after a short delay
+      setTimeout(() => this.captureContinuousScreenshot(), 100);
+      return;
+    }
+    
+    // Resume logging if we were paused
+    if (this.continuousContextPausedForCommand) {
+      this.continuousContextPausedForCommand = false;
+      console.log('[ClipboardManager] Command key released - resuming continuous screenshots');
     }
 
     try {

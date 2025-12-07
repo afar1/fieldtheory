@@ -168,37 +168,199 @@ function showMainWindow(): void {
 }
 
 /**
+ * Handle display changes - move clipboard history window if its display is removed.
+ */
+function handleDisplayRemoved(_event: Electron.Event, removedDisplay: Electron.Display): void {
+  if (!clipboardHistoryWindow || !clipboardHistoryWindow.isVisible()) {
+    return;
+  }
+
+  if (!preferencesManager) {
+    return;
+  }
+
+  const prefs = preferencesManager.get();
+  const savedBounds = prefs?.clipboardHistoryBounds;
+  if (!savedBounds || !savedBounds.displayId) {
+    return;
+  }
+
+  // Check if the removed display matches the saved display ID.
+  const removedDisplayId = ClipboardHistoryWindow.getDisplayId(removedDisplay);
+  if (removedDisplayId === savedBounds.displayId) {
+    console.log('[ClipboardHistoryWindow] Display removed, moving window to primary display');
+    
+    // Move window to primary display (absolute coordinates).
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const primaryBounds = primaryDisplay.bounds;
+    
+    const newBounds = {
+      x: primaryBounds.x + primaryBounds.width / 2 - savedBounds.width / 2,
+      y: primaryBounds.y + 80,
+      width: savedBounds.width,
+      height: savedBounds.height,
+    };
+    
+    // Update saved bounds to primary display.
+    const displayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
+    const primaryDisplayId = ClipboardHistoryWindow.getDisplayId(primaryDisplay);
+    const primaryRelative = ClipboardHistoryWindow.convertToDisplayRelative(newBounds.x, newBounds.y);
+    
+    preferencesManager.save({
+      clipboardHistoryBounds: {
+        relativeX: primaryRelative.relativeX,
+        relativeY: primaryRelative.relativeY,
+        width: savedBounds.width,
+        height: savedBounds.height,
+        displayId: primaryDisplayId,
+        displayConfig,
+      },
+    }).catch((err) => {
+      console.error('[ClipboardHistoryWindow] Failed to update bounds:', err);
+    });
+    
+    // Reposition window immediately.
+    clipboardHistoryWindow.show(newBounds);
+  }
+}
+
+/**
+ * Handle display metrics changes - recalculate window position if needed.
+ * When a display's resolution or position changes, we need to update the window position.
+ */
+function handleDisplayMetricsChanged(_event: Electron.Event, _changedDisplay: Electron.Display): void {
+  if (!clipboardHistoryWindow || !clipboardHistoryWindow.isVisible()) {
+    return;
+  }
+
+  if (!preferencesManager) {
+    return;
+  }
+
+  console.log('[ClipboardHistoryWindow] Display metrics changed, repositioning window');
+  
+  // Recalculate position - restoreClipboardHistoryBounds will handle finding the correct display
+  // or falling back to primary if the saved display ID no longer matches
+  const boundsToUse = restoreClipboardHistoryBounds();
+  if (boundsToUse) {
+    clipboardHistoryWindow.show(boundsToUse);
+  } else {
+    // If no saved bounds, window will use default position (cursor display)
+    // which is already handled by show() when called without bounds
+    clipboardHistoryWindow.show();
+  }
+}
+
+/**
+ * Set up display change event listeners.
+ */
+function setupDisplayListeners(): void {
+  screen.on('display-removed', handleDisplayRemoved);
+  screen.on('display-metrics-changed', handleDisplayMetricsChanged);
+  console.log('[Main] Display change listeners registered');
+}
+
+/**
+ * Restore clipboard history window bounds from saved preferences.
+ * Handles both old format (absolute x, y) and new format (display-relative).
+ * Returns absolute screen coordinates for use with the native vibrancy window.
+ */
+function restoreClipboardHistoryBounds(): { x: number; y: number; width: number; height: number } | undefined {
+  if (!preferencesManager) {
+    return undefined;
+  }
+
+  const prefs = preferencesManager.get();
+  const savedBounds = prefs?.clipboardHistoryBounds;
+  if (!savedBounds) {
+    return undefined;
+  }
+
+  // Try new format first: display-relative coordinates.
+  if (savedBounds.relativeX !== undefined && savedBounds.relativeY !== undefined && savedBounds.displayId) {
+    const absolutePos = ClipboardHistoryWindow.convertToAbsolute(
+      savedBounds.relativeX,
+      savedBounds.relativeY,
+      savedBounds.displayId
+    );
+
+    if (absolutePos) {
+      // Return absolute screen coordinates directly.
+      return {
+        x: absolutePos.x,
+        y: absolutePos.y,
+        width: savedBounds.width,
+        height: savedBounds.height,
+      };
+    } else {
+      // Display not found - fall back to primary display centered.
+      console.log('[ClipboardHistoryWindow] Saved display not found, using primary display');
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const primaryBounds = primaryDisplay.bounds;
+      return {
+        x: primaryBounds.x + primaryBounds.width / 2 - savedBounds.width / 2,
+        y: primaryBounds.y + 80,
+        width: savedBounds.width,
+        height: savedBounds.height,
+      };
+    }
+  }
+
+  // Fall back to old format: absolute coordinates.
+  if (savedBounds.x !== undefined && savedBounds.y !== undefined) {
+    const currentDisplayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
+    if (savedBounds.displayConfig === currentDisplayConfig) {
+      return {
+        x: savedBounds.x,
+        y: savedBounds.y,
+        width: savedBounds.width,
+        height: savedBounds.height,
+      };
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Initialize clipboard history window with bounds change callback.
+ */
+function initClipboardHistoryWindow(): ClipboardHistoryWindow {
+  const window = new ClipboardHistoryWindow();
+  
+  // Set up callback to save bounds when window is moved/resized.
+  window.setOnBoundsChanged(async (bounds) => {
+    if (!preferencesManager) return;
+    
+    const displayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
+    const displayRelative = ClipboardHistoryWindow.convertToDisplayRelative(bounds.x, bounds.y);
+    
+    await preferencesManager.save({
+      clipboardHistoryBounds: {
+        relativeX: displayRelative.relativeX,
+        relativeY: displayRelative.relativeY,
+        width: bounds.width,
+        height: bounds.height,
+        displayId: displayRelative.displayId,
+        displayConfig,
+      },
+    });
+  });
+  
+  return window;
+}
+
+/**
  * Show settings in the clipboard history window.
  * Opens the clipboard history window with the settings panel visible.
  * This is called from the tray menu "Settings..." item.
  */
 function showSettingsInClipboardWindow(): void {
-  // Ensure clipboard history window is initialized
   if (!clipboardHistoryWindow) {
-    clipboardHistoryWindow = new ClipboardHistoryWindow();
+    clipboardHistoryWindow = initClipboardHistoryWindow();
   }
   
-  // Load saved bounds from preferences
-  const prefs = preferencesManager?.get();
-  const savedBounds = prefs?.clipboardHistoryBounds;
-  const currentDisplayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
-  
-  // Only use saved bounds if display config matches
-  let boundsToUse: { x: number; y: number; width: number; height: number } | undefined;
-  if (savedBounds && savedBounds.displayConfig === currentDisplayConfig) {
-    const displays = screen.getAllDisplays();
-    const minX = Math.min(...displays.map((d: Display) => d.bounds.x));
-    const minY = Math.min(...displays.map((d: Display) => d.bounds.y));
-    
-    boundsToUse = {
-      x: savedBounds.x - minX,
-      y: savedBounds.y - minY,
-      width: savedBounds.width,
-      height: savedBounds.height,
-    };
-  }
-  
-  // Show window with settings mode enabled
+  const boundsToUse = restoreClipboardHistoryBounds();
   clipboardHistoryWindow.show(boundsToUse, true);
 }
 
@@ -207,33 +369,12 @@ function showSettingsInClipboardWindow(): void {
  * Called from app 'activate' event handler.
  */
 function showClipboardHistoryOnActivate(): void {
-  // Ensure clipboard history window is initialized
   if (!clipboardHistoryWindow) {
-    clipboardHistoryWindow = new ClipboardHistoryWindow();
+    clipboardHistoryWindow = initClipboardHistoryWindow();
   }
   
-  // Only show if not already visible
   if (!clipboardHistoryWindow.isVisible()) {
-    // Load saved bounds from preferences
-    const prefs = preferencesManager?.get();
-    const savedBounds = prefs?.clipboardHistoryBounds;
-    const currentDisplayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
-    
-    // Only use saved bounds if display config matches
-    let boundsToUse: { x: number; y: number; width: number; height: number } | undefined;
-    if (savedBounds && savedBounds.displayConfig === currentDisplayConfig) {
-      const displays = screen.getAllDisplays();
-      const minX = Math.min(...displays.map((d: Display) => d.bounds.x));
-      const minY = Math.min(...displays.map((d: Display) => d.bounds.y));
-      
-      boundsToUse = {
-        x: savedBounds.x - minX,
-        y: savedBounds.y - minY,
-        width: savedBounds.width,
-        height: savedBounds.height,
-      };
-    }
-    
+    const boundsToUse = restoreClipboardHistoryBounds();
     clipboardHistoryWindow.show(boundsToUse);
   }
 }
@@ -775,25 +916,25 @@ function setupClipboardIPCHandlers(): void {
     await transcriberManager.separateIntoTasks(id);
   });
 
+  // Save bounds handler - now receives absolute screen coordinates directly.
+  // Called when window is hidden or on explicit save request.
   ipcMain.handle(ClipboardIPCChannels.SAVE_BOUNDS, async (_event, bounds: { x: number; y: number; width: number; height: number }) => {
     if (!preferencesManager) {
       return;
     }
     
-    // Generate current display config hash
     const displayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
     
-    const displays = screen.getAllDisplays();
-    const minX = Math.min(...displays.map((d: Display) => d.bounds.x));
-    const minY = Math.min(...displays.map((d: Display) => d.bounds.y));
+    // Convert absolute coords to display-relative for persistence.
+    const displayRelative = ClipboardHistoryWindow.convertToDisplayRelative(bounds.x, bounds.y);
     
-    // Save bounds with display config (in screen coordinates)
     await preferencesManager.save({
       clipboardHistoryBounds: {
-        x: bounds.x + minX,
-        y: bounds.y + minY,
+        relativeX: displayRelative.relativeX,
+        relativeY: displayRelative.relativeY,
         width: bounds.width,
         height: bounds.height,
+        displayId: displayRelative.displayId,
         displayConfig,
       },
     });
@@ -1264,11 +1405,11 @@ function setupOnboardingIPCHandlers(): void {
     if (!preferencesManager) return false;
     await preferencesManager.save({ onboardingComplete: true });
     
-    // Close onboarding window and show main window.
+    // Close onboarding window and show clipboard history.
     if (onboardingWindow) {
       onboardingWindow.close();
     }
-    showMainWindow();
+    showClipboardHistoryOnActivate();
     return true;
   });
 
@@ -1347,6 +1488,10 @@ function broadcastTranscribeEvents(): void {
         window.webContents.send(TranscribeIPCChannels.STATUS_CHANGED, status);
       }
     });
+    
+    // Update clipboard history window's recording state
+    // This ensures blur event doesn't hide the app when recording is active
+    clipboardHistoryWindow?.setRecordingActive(status === 'recording');
   });
 
   transcriberManager.on('result', (text) => {
@@ -1586,42 +1731,20 @@ async function initTranscriberSystem(): Promise<void> {
     lastHistoryToggleAt = now;
 
     if (!clipboardHistoryWindow) {
-      clipboardHistoryWindow = new ClipboardHistoryWindow();
+      clipboardHistoryWindow = initClipboardHistoryWindow();
     }
 
     const visible = clipboardHistoryWindow.isVisible();
 
     if (!visible) {
       // Capture the frontmost app BEFORE showing our window.
-      // Once show() takes focus, Oscar becomes frontmost and we'd lose track of the real previous app.
       await clipboardHistoryWindow.capturePreviousAppBeforeShow();
       
-      // Load saved bounds from preferences
-      const prefs = preferencesManager?.get();
-      const savedBounds = prefs?.clipboardHistoryBounds;
-      const currentDisplayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
-      
-      // Only use saved bounds if display config matches
-      let boundsToUse: { x: number; y: number; width: number; height: number } | undefined;
-      if (savedBounds && savedBounds.displayConfig === currentDisplayConfig) {
-        const displays = screen.getAllDisplays();
-        const minX = Math.min(...displays.map((d: Display) => d.bounds.x));
-        const minY = Math.min(...displays.map((d: Display) => d.bounds.y));
-        
-        boundsToUse = {
-          x: savedBounds.x - minX,
-          y: savedBounds.y - minY,
-          width: savedBounds.width,
-          height: savedBounds.height,
-        };
-      }
-      
-      // Show window and take focus (like Alfred)
-      // show() is now synchronous - window appears immediately, app data loads in background.
+      const boundsToUse = restoreClipboardHistoryBounds();
       clipboardHistoryWindow.show(boundsToUse);
     } else {
-      // Hide window and restore focus to previous app
-      // Don't hide the entire app if recording overlay is visible (e.g., user is recording)
+      // Hide window and restore focus to previous app.
+      // Don't hide the entire app if recording overlay is visible.
       const overlayVisible = transcriberManager?.isRecordingOverlayVisible() ?? false;
       clipboardHistoryWindow.hide(!overlayVisible);
     }
@@ -1630,6 +1753,16 @@ async function initTranscriberSystem(): Promise<void> {
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager);
   await transcriberManager.init();
   broadcastTranscribeEvents();
+
+  // Set up escape key priority: dismiss clipboard history before canceling recording
+  transcriberManager.setClipboardHistoryVisibilityChecker(() => {
+    return clipboardHistoryWindow?.isVisible() ?? false;
+  });
+  
+  // Listen for dismiss event from escape key handler
+  transcriberManager.on('dismiss-clipboard-history', () => {
+    clipboardHistoryWindow?.hide(false); // false = don't hide the app (recording continues)
+  });
 
   // Initialize mobile sync to pull iOS transcriptions into clipboard history.
   // Uses Vite env vars passed at build time via process.env replacement.
@@ -1707,7 +1840,8 @@ if (!gotTheLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    showMainWindow();
+    // Show clipboard history when user tries to launch app again
+    showClipboardHistoryOnActivate();
   });
 
   app.whenReady().then(async () => {
@@ -1718,6 +1852,7 @@ if (!gotTheLock) {
     setupVisionIPCHandlers();
     setupClipboardIPCHandlers();
     setupOnboardingIPCHandlers();
+    setupDisplayListeners();
 
     // Register keyboard shortcut to reset onboarding (Cmd+Shift+R).
     // Useful for testing and development.
@@ -1828,12 +1963,10 @@ if (!gotTheLock) {
     // createWindow(); // Commented out for testing - app runs in background, opens manually
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow();
-      } else {
-        // When app becomes active, show clipboard history window
-        showClipboardHistoryOnActivate();
-      }
+      // Always show clipboard history when app becomes active.
+      // We no longer create the old main/settings window - the app is a background app
+      // that primarily operates through the clipboard history window and tray.
+      showClipboardHistoryOnActivate();
     });
   });
 

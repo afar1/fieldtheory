@@ -16,12 +16,20 @@ interface WindowState {
 
 /**
  * Clipboard history dialog bounds for persistence.
+ * Supports both old format (x, y in absolute screen coordinates) and new format
+ * (relativeX, relativeY relative to display, with displayId for matching).
  */
 interface ClipboardHistoryBounds {
-  x: number;
-  y: number;
+  // Legacy absolute coordinates (for backward compatibility)
+  x?: number;
+  y?: number;
+  // New display-relative coordinates
+  relativeX?: number;
+  relativeY?: number;
   width: number;
   height: number;
+  // Display identifier (e.g., "1920x1080@0,0") for matching displays
+  displayId?: string;
   displayConfig: string; // Hash of display arrangement to detect changes
 }
 

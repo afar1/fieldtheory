@@ -3,7 +3,7 @@
 // with glass effect toggle for performance
 // =============================================================================
 
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useState, ReactNode } from 'react';
 
 type Theme = {
   isDark: boolean;
@@ -29,8 +29,8 @@ const lightTheme: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   border: '#e0e0e0',
   accent: '#007AFF',
   accentHover: '#0051D5',
-  selectedBg: '#e3f2fd',
-  selectedBorder: '#007AFF',
+  selectedBg: '#fef3c7',  // Warm amber for X-selected items
+  selectedBorder: '#d97706',  // Amber border
   inputBg: '#ffffff',
   inputBorder: '#e0e0e0',
 };
@@ -43,8 +43,8 @@ const darkThemeSolid: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   border: 'rgba(255, 255, 255, 0.1)',
   accent: '#0A84FF',
   accentHover: '#409CFF',
-  selectedBg: 'rgba(10, 132, 255, 0.2)',
-  selectedBorder: '#0A84FF',
+  selectedBg: 'rgba(217, 119, 6, 0.2)',  // Warm amber for X-selected items
+  selectedBorder: '#f59e0b',  // Amber border
   inputBg: '#2d2d2d',
   inputBorder: 'rgba(255, 255, 255, 0.15)',
 };
@@ -57,8 +57,8 @@ const darkThemeGlass: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   border: 'rgba(255, 255, 255, 0.1)',
   accent: '#0A84FF',
   accentHover: '#409CFF',
-  selectedBg: 'rgba(10, 132, 255, 0.2)',
-  selectedBorder: '#0A84FF',
+  selectedBg: 'rgba(217, 119, 6, 0.2)',  // Warm amber for X-selected items
+  selectedBorder: '#f59e0b',  // Amber border
   inputBg: 'rgba(45, 45, 45, 0.9)',
   inputBorder: 'rgba(255, 255, 255, 0.15)',
 };
@@ -84,7 +84,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   });
 
   const [glassEnabled, setGlassEnabled] = useState(() => {
-    // Default to enabled, can be overridden by preferences
+    // Default to enabled, check localStorage for saved preference.
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('glassEffect');
+      if (saved !== null) {
+        return saved === 'true';
+      }
+    }
     return true;
   });
 
@@ -93,14 +99,6 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setIsDark(newValue);
     localStorage.setItem('darkMode', String(newValue));
   };
-
-  // Load glass preference from localStorage
-  useEffect(() => {
-    const saved = localStorage.getItem('glassEffect');
-    if (saved !== null) {
-      setGlassEnabled(saved === 'true');
-    }
-  }, []);
 
   const toggleGlass = () => {
     const newValue = !glassEnabled;

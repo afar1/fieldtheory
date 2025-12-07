@@ -59,6 +59,12 @@ export class ClipboardHistoryWindow {
   
   private readonly DIALOG_WIDTH = 900;
   private readonly DIALOG_HEIGHT = 600;
+  
+  // Callback for when window bounds change (for persistence).
+  private onBoundsChanged: ((bounds: { x: number; y: number; width: number; height: number }) => void) | null = null;
+  
+  // Track if recording is active - used to keep overlay visible when dismissing clipboard history
+  private isRecordingActive: boolean = false;
 
   /**
    * Generate a display configuration hash to detect display arrangement changes.
@@ -72,6 +78,80 @@ export class ClipboardHistoryWindow {
     const totalWidth = maxX - minX;
     const totalHeight = maxY - minY;
     return `${displays.length}-${totalWidth}x${totalHeight}`;
+  }
+
+  /**
+   * Generate a display identifier from a display's bounds.
+   * Format: "widthxheight@x,y" (e.g., "1920x1080@0,0" or "2560x1440@1920,0")
+   */
+  static getDisplayId(display: Electron.Display): string {
+    const bounds = display.bounds;
+    return `${bounds.width}x${bounds.height}@${bounds.x},${bounds.y}`;
+  }
+
+  /**
+   * Find a display by its identifier.
+   * Returns null if no matching display is found.
+   */
+  static findDisplayById(displayId: string): Electron.Display | null {
+    const displays = screen.getAllDisplays();
+    for (const display of displays) {
+      if (this.getDisplayId(display) === displayId) {
+        return display;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Find which display contains a given point (in screen coordinates).
+   * Returns the primary display if no display contains the point.
+   */
+  static getDisplayForPoint(x: number, y: number): Electron.Display {
+    const displays = screen.getAllDisplays();
+    for (const display of displays) {
+      const bounds = display.bounds;
+      if (
+        x >= bounds.x &&
+        x < bounds.x + bounds.width &&
+        y >= bounds.y &&
+        y < bounds.y + bounds.height
+      ) {
+        return display;
+      }
+    }
+    // Fallback to primary display if point is outside all displays
+    return screen.getPrimaryDisplay();
+  }
+
+  /**
+   * Convert absolute screen coordinates to display-relative coordinates.
+   * Returns the relative position and the display ID.
+   */
+  static convertToDisplayRelative(x: number, y: number): { relativeX: number; relativeY: number; displayId: string } {
+    const display = this.getDisplayForPoint(x, y);
+    const bounds = display.bounds;
+    return {
+      relativeX: x - bounds.x,
+      relativeY: y - bounds.y,
+      displayId: this.getDisplayId(display),
+    };
+  }
+
+  /**
+   * Convert display-relative coordinates to absolute screen coordinates.
+   * Returns null if the display ID doesn't match any current display.
+   */
+  static convertToAbsolute(relativeX: number, relativeY: number, displayId: string): { x: number; y: number } | null {
+    const display = this.findDisplayById(displayId);
+    if (!display) {
+      return null;
+    }
+    const bounds = display.bounds;
+    return {
+      x: bounds.x + relativeX,
+      y: bounds.y + relativeY,
+    };
   }
 
   /**
@@ -97,105 +177,104 @@ export class ClipboardHistoryWindow {
    * Show the clipboard history window.
    * Window takes focus like Alfred - uses standard keyboard input.
    * Shows window immediately, then fetches app data in background for instant UX.
-   * @param savedBounds Optional saved bounds to restore position/size
+   * @param savedBounds Optional saved bounds to restore position/size (absolute screen coords)
    * @param showSettingsMode If true, open the window with settings panel visible
    */
   show(savedBounds?: { x: number; y: number; width: number; height: number }, showSettingsMode: boolean = false): void {
-    // If window exists, show it immediately with cached data, then refresh in background
+    // If window exists, reposition and show it.
     if (this.window && !this.window.isDestroyed()) {
-      // Show window immediately with cached/stale data
+      // Reposition window if bounds provided.
+      if (savedBounds) {
+        this.window.setBounds({
+          x: savedBounds.x,
+          y: savedBounds.y,
+          width: savedBounds.width,
+          height: savedBounds.height,
+        });
+      }
+      
       this.window.show();
       this.window.focus();
-      // Recalculate and send dialog bounds
-      this.sendDialogBounds(savedBounds);
-      // Notify renderer to reset search query and send target app info (with cached data)
+      
+      // Notify renderer to reset search query.
       this.window.webContents.send('clipboard:showHistory');
-      // If settings mode requested, send that event too
       if (showSettingsMode) {
         this.window.webContents.send('clipboard:showSettings');
       }
       this.sendTargetAppInfo();
       
-      // Fetch fresh app data in background and update when ready
+      // Fetch fresh app data in background.
       this.refreshAppDataInBackground();
       return;
     }
     
-    // For new window creation, create window immediately, fetch app data in background.
-    // This avoids blocking on AppleScript calls.
+    // Create new window.
     this.createWindow(savedBounds, showSettingsMode);
     
-    // Fetch app data in background (don't await)
+    // Fetch app data in background (don't await).
     this.refreshAppDataInBackground();
   }
   
   /**
    * Create the clipboard history window.
-   * Separated from show() to allow non-blocking window creation.
-   * @param savedBounds Optional saved bounds for position/size
+   * Uses native macOS vibrancy for blur effect (like Alfred/Spotlight).
+   * Window is sized to dialog dimensions, not full-screen overlay.
+   * @param savedBounds Optional saved bounds for position/size (absolute screen coords)
    * @param showSettingsMode If true, send settings mode event after content loads
    */
   private createWindow(savedBounds?: { x: number; y: number; width: number; height: number }, showSettingsMode: boolean = false): void {
-
-    // Calculate union of all displays for full-screen overlay
-    const displays = screen.getAllDisplays();
-    const minX = Math.min(...displays.map(d => d.bounds.x));
-    const minY = Math.min(...displays.map(d => d.bounds.y));
-    const maxX = Math.max(...displays.map(d => d.bounds.x + d.bounds.width));
-    const maxY = Math.max(...displays.map(d => d.bounds.y + d.bounds.height));
-    const allDisplaysWidth = maxX - minX;
-    const allDisplaysHeight = maxY - minY;
-
-    // Use saved bounds if provided, otherwise calculate default position
-    // Note: savedBounds are already in overlay-relative coordinates (converted in index.ts)
-    let dialogLeft: number;
-    let dialogTop: number;
-    let dialogWidth: number;
-    let dialogHeight: number;
+    // Calculate window position/size.
+    // savedBounds are now in absolute screen coordinates (simpler than old overlay-relative).
+    let windowX: number;
+    let windowY: number;
+    let windowWidth: number;
+    let windowHeight: number;
 
     if (savedBounds) {
-      dialogLeft = savedBounds.x;
-      dialogTop = savedBounds.y;
-      dialogWidth = savedBounds.width;
-      dialogHeight = savedBounds.height;
-      
-      // Clamp to ensure dialog stays within overlay bounds
-      dialogLeft = Math.max(0, Math.min(dialogLeft, allDisplaysWidth - dialogWidth));
-      dialogTop = Math.max(0, Math.min(dialogTop, allDisplaysHeight - dialogHeight));
+      windowX = savedBounds.x;
+      windowY = savedBounds.y;
+      windowWidth = savedBounds.width;
+      windowHeight = savedBounds.height;
     } else {
-      // Calculate default position: 80px from top, centered horizontally on active display
+      // Default position: 80px from top, centered horizontally on active display.
       const cursorPoint = screen.getCursorScreenPoint();
       const activeDisplay = screen.getDisplayNearestPoint(cursorPoint);
       const displayBounds = activeDisplay.bounds;
       
-      dialogLeft = (displayBounds.x + displayBounds.width / 2 - this.DIALOG_WIDTH / 2) - minX;
-      dialogTop = 80 + (displayBounds.y - minY);
-      dialogWidth = this.DIALOG_WIDTH;
-      dialogHeight = this.DIALOG_HEIGHT;
-      
-      // Clamp position to ensure dialog stays within overlay bounds
-      dialogLeft = Math.max(0, Math.min(dialogLeft, allDisplaysWidth - dialogWidth));
-      dialogTop = Math.max(0, Math.min(dialogTop, allDisplaysHeight - dialogHeight));
+      windowX = displayBounds.x + displayBounds.width / 2 - this.DIALOG_WIDTH / 2;
+      windowY = displayBounds.y + 80;
+      windowWidth = this.DIALOG_WIDTH;
+      windowHeight = this.DIALOG_HEIGHT;
     }
 
+    // Clamp to ensure window stays on screen.
+    const cursorPoint = screen.getCursorScreenPoint();
+    const activeDisplay = screen.getDisplayNearestPoint(cursorPoint);
+    const displayBounds = activeDisplay.bounds;
+    windowX = Math.max(displayBounds.x, Math.min(windowX, displayBounds.x + displayBounds.width - windowWidth));
+    windowY = Math.max(displayBounds.y, Math.min(windowY, displayBounds.y + displayBounds.height - windowHeight));
+
+    // Native vibrancy window options.
+    // Key difference from old approach: window IS the dialog (not a full-screen overlay).
     const options: BrowserWindowConstructorOptions = {
-      width: allDisplaysWidth,
-      height: allDisplaysHeight,
-      x: minX,
-      y: minY,
-      frame: false,
-      transparent: true,
+      width: windowWidth,
+      height: windowHeight,
+      x: windowX,
+      y: windowY,
+      frame: false,                 // No native frame (no traffic lights).
+      transparent: false,
+      vibrancy: 'under-window',     // Blur what's behind the window.
+      visualEffectState: 'active',
       alwaysOnTop: true,
       skipTaskbar: true,
-      resizable: false,
-      movable: false,
+      resizable: true,
+      movable: true,
       focusable: true,
       fullscreenable: false,
       simpleFullscreen: false,
       show: false,
-      backgroundColor: '#00000000',
-      hasShadow: false,
-      roundedCorners: false,
+      hasShadow: true,
+      roundedCorners: true,
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
@@ -212,44 +291,52 @@ export class ClipboardHistoryWindow {
       this.window = null;
     });
 
+    // Dismiss when window loses focus (Alfred behavior).
+    // Pass hideApp=false when recording is active to keep recording overlay visible.
+    this.window.on('blur', () => {
+      console.log('[ClipboardHistoryWindow] Window lost focus, hiding');
+      this.hide(!this.isRecordingActive);
+    });
+    
+    // Save bounds when window is moved or resized (for persistence).
+    this.window.on('moved', () => {
+      this.emitBoundsChanged();
+    });
+    this.window.on('resized', () => {
+      this.emitBoundsChanged();
+    });
+
     this.window.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
       console.error('[ClipboardHistoryWindow] Load failed:', errorCode, errorDescription);
     });
 
-    // Show window only after content loads to avoid blank screen
-    // Show and take focus (like Alfred)
+    // Show window only after content loads to avoid blank screen.
     this.window.webContents.once('did-finish-load', () => {
       console.log('[ClipboardHistoryWindow] Content loaded');
       if (this.window && !this.window.isDestroyed()) {
         this.window.show();
         this.window.focus();
-        // Send dialog bounds to renderer
-        this.sendDialogBounds(savedBounds);
-        // Notify renderer to reset search query
+        // Notify renderer to reset search query.
         this.window.webContents.send('clipboard:showHistory');
-        // If settings mode requested, send that event too
+        // If settings mode requested, send that event too.
         if (showSettingsMode) {
           this.window.webContents.send('clipboard:showSettings');
         }
-        // Send target app info
+        // Send target app info.
         this.sendTargetAppInfo();
       }
     });
 
-    // Load clipboard history HTML
+    // Load clipboard history HTML.
     const startUrl = process.env.ELECTRON_START_URL;
     if (startUrl) {
-      // Ensure URL has trailing slash
       const url = startUrl.endsWith('/') ? startUrl : `${startUrl}/`;
       this.window.loadURL(`${url}clipboard-history.html`);
     } else {
-      // Use absolute path via app.getAppPath() to ensure correct resolution
-      // regardless of working directory (important for npm start vs packaged app)
       const htmlPath = path.join(app.getAppPath(), 'dist', 'clipboard-history.html');
       console.log('[ClipboardHistoryWindow] Loading HTML from:', htmlPath);
       this.window.loadFile(htmlPath);
       
-      // Add error handler to debug loading issues
       this.window.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
         console.error('[ClipboardHistoryWindow] Failed to load:', errorCode, errorDescription, validatedURL);
       });
@@ -306,63 +393,38 @@ export class ClipboardHistoryWindow {
   }
 
   /**
-   * Send dialog bounds to renderer.
+   * Get current window bounds (absolute screen coordinates).
+   * Used for saving position/size to preferences.
    */
-  private sendDialogBounds(savedBounds?: { x: number; y: number; width: number; height: number }): void {
+  getBounds(): { x: number; y: number; width: number; height: number } | null {
     if (!this.window || this.window.isDestroyed()) {
-      return;
+      return null;
     }
+    return this.window.getBounds();
+  }
 
-    const displays = screen.getAllDisplays();
-    const minX = Math.min(...displays.map(d => d.bounds.x));
-    const minY = Math.min(...displays.map(d => d.bounds.y));
-    const maxX = Math.max(...displays.map(d => d.bounds.x + d.bounds.width));
-    const maxY = Math.max(...displays.map(d => d.bounds.y + d.bounds.height));
-    const allDisplaysWidth = maxX - minX;
-    const allDisplaysHeight = maxY - minY;
+  /**
+   * Set callback for bounds changes (called after move/resize).
+   */
+  setOnBoundsChanged(callback: (bounds: { x: number; y: number; width: number; height: number }) => void): void {
+    this.onBoundsChanged = callback;
+  }
 
-    let dialogLeft: number;
-    let dialogTop: number;
-    let dialogWidth: number;
-    let dialogHeight: number;
-
-    if (savedBounds) {
-      // savedBounds are already in overlay-relative coordinates (converted in index.ts)
-      dialogLeft = savedBounds.x;
-      dialogTop = savedBounds.y;
-      dialogWidth = savedBounds.width;
-      dialogHeight = savedBounds.height;
-      
-      // Clamp to ensure dialog stays within overlay bounds
-      dialogLeft = Math.max(0, Math.min(dialogLeft, allDisplaysWidth - dialogWidth));
-      dialogTop = Math.max(0, Math.min(dialogTop, allDisplaysHeight - dialogHeight));
-    } else {
-      // Calculate default position: 80px from top, centered horizontally on active display
-      const cursorPoint = screen.getCursorScreenPoint();
-      const activeDisplay = screen.getDisplayNearestPoint(cursorPoint);
-      const displayBounds = activeDisplay.bounds;
-      
-      dialogLeft = (displayBounds.x + displayBounds.width / 2 - this.DIALOG_WIDTH / 2) - minX;
-      dialogTop = 80 + (displayBounds.y - minY);
-      dialogWidth = this.DIALOG_WIDTH;
-      dialogHeight = this.DIALOG_HEIGHT;
-      
-      // Clamp position to ensure dialog stays within overlay bounds
-      dialogLeft = Math.max(0, Math.min(dialogLeft, allDisplaysWidth - dialogWidth));
-      dialogTop = Math.max(0, Math.min(dialogTop, allDisplaysHeight - dialogHeight));
+  /**
+   * Emit bounds changed event (internal).
+   */
+  private emitBoundsChanged(): void {
+    if (this.onBoundsChanged && this.window && !this.window.isDestroyed()) {
+      this.onBoundsChanged(this.window.getBounds());
     }
+  }
 
-    // Send both old format (for backward compatibility) and new format
-    this.window.webContents.send('clipboard:dialogPosition', {
-      left: dialogLeft,
-      top: dialogTop,
-    });
-    this.window.webContents.send('clipboard:dialogBounds', {
-      x: dialogLeft,
-      y: dialogTop,
-      width: dialogWidth,
-      height: dialogHeight,
-    });
+  /**
+   * Set recording state - used to decide whether to hide the entire app when dismissing.
+   * When recording is active, we want to keep the recording overlay visible.
+   */
+  setRecordingActive(active: boolean): void {
+    this.isRecordingActive = active;
   }
 
   /**
