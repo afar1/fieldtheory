@@ -269,8 +269,7 @@ export default function ClipboardHistory() {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
   
-  // Footer: toggle between stats and version display.
-  const [showVersion, setShowVersion] = useState(false);
+  // App version for footer display.
   const [appVersion] = useState(() => window.updaterAPI?.getVersion?.() || '0.0.0');
   
   const [allTimeStats, setAllTimeStats] = useState<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>({
@@ -2680,11 +2679,11 @@ export default function ClipboardHistory() {
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         }}
       >
-        {/* Left side: Update notification OR Stats/Version toggle */}
+        {/* Left side: Update notification OR Version + Stats */}
         {!showSettings ? (
           updateStatus !== 'idle' ? (
-            // Update notification (replaces stats when update available)
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
+            // Update notification (replaces version + stats)
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1 }}>
               {/* Gift icon */}
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="20 12 20 22 4 22 4 12"/>
@@ -2694,9 +2693,8 @@ export default function ClipboardHistory() {
                 <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>
               </svg>
               <span style={{ fontSize: '10px', color: theme.text }}>
-                {updateStatus === 'downloading' ? 'Downloading...' : 'New update available'}
+                {updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'New update ready' : 'New update available'}
               </span>
-              {/* Buttons */}
               {updateStatus !== 'downloading' && (
                 <>
                   <button
@@ -2705,13 +2703,13 @@ export default function ClipboardHistory() {
                       setUpdateStatus('idle');
                     }}
                     style={{
-                      padding: '2px 8px',
+                      padding: '2px 6px',
                       fontSize: '10px',
                       color: theme.textSecondary,
                       backgroundColor: 'transparent',
                       border: 'none',
                       cursor: 'pointer',
-                      marginLeft: 'auto',
+                      opacity: 0.75,
                     }}
                   >
                     Later
@@ -2725,12 +2723,11 @@ export default function ClipboardHistory() {
                       }
                     }}
                     style={{
-                      padding: '3px 10px',
+                      padding: '2px 8px',
                       fontSize: '10px',
-                      fontWeight: 500,
-                      color: '#fff',
-                      backgroundColor: theme.accent,
-                      border: 'none',
+                      color: theme.text,
+                      backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                      border: `1px solid ${theme.border}`,
                       borderRadius: '4px',
                       cursor: 'pointer',
                     }}
@@ -2741,59 +2738,22 @@ export default function ClipboardHistory() {
               )}
             </div>
           ) : (
-            // Stats or Version display (click icon to toggle)
+            // Version + Stats (both visible when no update)
             <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: '6px',
+                gap: '8px',
                 fontSize: '9px',
                 color: theme.textSecondary,
                 userSelect: 'none',
                 flex: 1,
               }}
             >
-              {/* Icon toggles between stats and version */}
-              {showVersion ? (
-                <svg 
-                  width="14" 
-                  height="14" 
-                  viewBox="0 0 24 24" 
-                  fill="none" 
-                  stroke={theme.textSecondary} 
-                  strokeWidth="2" 
-                  strokeLinecap="round" 
-                  strokeLinejoin="round"
-                  style={{ cursor: 'pointer', flexShrink: 0 }}
-                  onClick={() => setShowVersion(false)}
-                >
-                  <circle cx="12" cy="12" r="10"/>
-                  <line x1="12" y1="16" x2="12" y2="12"/>
-                  <line x1="12" y1="8" x2="12.01" y2="8"/>
-                </svg>
-              ) : (
-                <svg 
-                  width="14" 
-                  height="14" 
-                  viewBox="0 0 24 24" 
-                  fill="none" 
-                  stroke={theme.textSecondary} 
-                  strokeWidth="2" 
-                  strokeLinecap="round" 
-                  strokeLinejoin="round"
-                  style={{ cursor: 'pointer', flexShrink: 0 }}
-                  onClick={() => setShowVersion(true)}
-                >
-                  <polyline points="23 6 13.5 15.5 8.5 10.5 1 18" />
-                  <polyline points="17 6 23 6 23 12" />
-                </svg>
-              )}
-              {showVersion ? (
-                <span style={{ cursor: 'pointer' }} onClick={() => setShowVersion(false)}>
-                  v{appVersion}
-                </span>
-              ) : statItems.length > 0 ? (
+              <span>v{appVersion}</span>
+              {statItems.length > 0 && (
                 <>
+                  <span style={{ opacity: 0.4 }}>·</span>
                   <span
                     style={{
                       opacity: statFading ? 0 : 1,
@@ -2813,7 +2773,7 @@ export default function ClipboardHistory() {
                     ({timeIntervals[currentIntervalIndex]})
                   </span>
                 </>
-              ) : null}
+              )}
             </div>
           )
         ) : (
