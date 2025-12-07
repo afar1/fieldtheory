@@ -180,8 +180,6 @@ export default function ClipboardHistory() {
   const [stacks, setStacks] = useState<StackInfo[]>([]);
   const [expandedStacks, setExpandedStacks] = useState<Set<string>>(new Set());
   const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
-  // Track which text elements are actually overflowing (truncated).
-  // Key is a unique identifier (stackId or "item-{id}"), value is whether it overflows.
   const [overflowingTexts, setOverflowingTexts] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
@@ -209,14 +207,12 @@ export default function ClipboardHistory() {
   // Hover states for UI interactions
   const [hoveredImageId, setHoveredImageId] = useState<number | null>(null);
   
-  // Preview state - can be image or text
   type PreviewContent = 
     | { type: 'image'; data: string; width: number; height: number }
     | { type: 'text'; content: string };
   const [preview, setPreview] = useState<PreviewContent | null>(null);
   const [previewClosing, setPreviewClosing] = useState(false);
   
-  // Helper to dismiss preview with fade-out animation.
   const dismissPreview = () => {
     if (!preview || previewClosing) return;
     setPreviewClosing(true);
@@ -226,7 +222,6 @@ export default function ClipboardHistory() {
     }, 150);
   };
   
-  // Helper to get preview content for a row
   const getPreviewForRow = (row: ListRow): PreviewContent | null => {
     if (row.type === 'item') {
       if (row.item.imageData) {
@@ -261,16 +256,11 @@ export default function ClipboardHistory() {
     return null;
   };
   
-  
-  // Recording state - shows indicator when recording is in progress
   const [isRecording, setIsRecording] = useState(false);
-  
-  // All-time stats from database
   const [allTimeStats, setAllTimeStats] = useState<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>({
     stacks: 0, transcriptions: 0, screenshots: 0, improved: 0, words: 0,
   });
 
-  // Load all-time stats when component mounts or window becomes visible
   useEffect(() => {
     if (!isVisible || !window.clipboardAPI?.getAllTimeStats) return;
     
@@ -281,7 +271,6 @@ export default function ClipboardHistory() {
     });
   }, [isVisible]);
 
-  // Listen for recording state changes to show indicator
   useEffect(() => {
     if (!window.transcribeAPI?.onStatusChanged) return;
     
@@ -292,34 +281,20 @@ export default function ClipboardHistory() {
     return cleanup;
   }, []);
 
-  // Rotating stats display - click to cycle through stats
   const [currentStatIndex, setCurrentStatIndex] = useState(0);
   const [statFading, setStatFading] = useState(false);
-  
-  // Time interval for stats - click "all time" to cycle through intervals
   const timeIntervals = ['all time', 'last 30 days', 'last 15 days', 'last 7 days', 'last 24 hours'] as const;
   const [currentIntervalIndex, setCurrentIntervalIndex] = useState(0);
   const nextInterval = useCallback(() => {
     setCurrentIntervalIndex(prev => (prev + 1) % timeIntervals.length);
   }, []);
   
-  // Hover state for recording tooltip
   const [showRecordingTooltip, setShowRecordingTooltip] = useState(false);
-  
-  // Keyboard navigation state - disables hover selection when using arrow keys
   const [keyboardNavActive, setKeyboardNavActive] = useState(false);
-  
-  // Track hovered row for showing action buttons on mouse hover
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null);
-  
-  // Flash state for newly created stacks (shows brief highlight)
   const [recentlyStackedId, setRecentlyStackedId] = useState<string | null>(null);
-  
-  // Pending selection after stack/unstack operations
   const [pendingStackSelection, setPendingStackSelection] = useState<string | null>(null);
   const [pendingItemSelection, setPendingItemSelection] = useState<number | null>(null);
-  
-  // Shortcuts modal state
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   // Format numbers with commas (e.g., 16,000)
   const formatNumber = (num: number): string => num.toLocaleString();
@@ -332,7 +307,6 @@ export default function ClipboardHistory() {
     { label: 'Screenshots', value: allTimeStats.screenshots, singular: 'screenshot', plural: 'screenshots' },
   ].filter(item => item.value > 0), [allTimeStats]);
 
-  // Click to rotate stats with fade transition
   const nextStat = useCallback(() => {
     if (statItems.length <= 1) return;
     setStatFading(true);
@@ -342,15 +316,12 @@ export default function ClipboardHistory() {
     }, 150);
   }, [statItems.length]);
 
-  // Reset stat index when items change
   useEffect(() => {
     if (currentStatIndex >= statItems.length) {
       setCurrentStatIndex(0);
     }
   }, [statItems.length, currentStatIndex]);
   
-  // Target app for pasting - the app content will be pasted into.
-  // Combined into single state object to batch updates and reduce re-renders.
   const [targetAppInfo, setTargetAppInfo] = useState<{
     targetApp: RunningApp | null;
     runningApps: RunningApp[];
@@ -390,7 +361,6 @@ export default function ClipboardHistory() {
         queryOptions.search = debouncedSearchQuery.trim();
       }
 
-      // Load items and stacks in parallel
       const [newItems, stacksData] = await Promise.all([
         window.clipboardAPI.queryItems(queryOptions),
         reset ? window.clipboardAPI.getUniqueStacks?.() : Promise.resolve(stacks),
@@ -413,19 +383,15 @@ export default function ClipboardHistory() {
     }
   }, [isMacOS, debouncedSearchQuery, offset, stacks, sourceFilter]);
 
-  // Debounce search query to avoid querying database on every keystroke.
   useEffect(() => {
-    // Clear existing timer
     if (searchDebounceTimerRef.current) {
       clearTimeout(searchDebounceTimerRef.current);
     }
     
-    // Set new timer to update debounced value after 150ms of no typing
     searchDebounceTimerRef.current = setTimeout(() => {
       setDebouncedSearchQuery(searchQuery);
     }, 150);
     
-    // Cleanup on unmount or when searchQuery changes
     return () => {
       if (searchDebounceTimerRef.current) {
         clearTimeout(searchDebounceTimerRef.current);
@@ -441,19 +407,16 @@ export default function ClipboardHistory() {
     }
   }, [isVisible, debouncedSearchQuery, sourceFilter]);
 
-  // When component mounts in standalone window, show immediately.
   useEffect(() => {
     if (!isMacOS || !window.clipboardAPI) {
       return;
     }
 
-    // In standalone window mode, show immediately when mounted.
     setIsVisible(true);
     setSelectedIndex(0);
     setSelectedIds(new Set());
     setIsMultiSelect(false);
 
-    // Listen for window show event to reset search and focus input.
     const unsubscribeShowHistory = window.clipboardAPI.onShowHistory(() => {
       setSearchQuery('');
       setDebouncedSearchQuery('');
@@ -461,16 +424,12 @@ export default function ClipboardHistory() {
       setSelectedIds(new Set());
       setIsMultiSelect(false);
       setShowSettings(false);
-      // Don't auto-focus search - let user navigate with J/K immediately
-      // User can press / to focus search when needed
     });
 
-    // Listen for show settings event (from menu bar "Settings" item).
     const unsubscribeShowSettings = window.clipboardAPI.onShowSettings?.(() => {
       setShowSettings(true);
     });
 
-    // Listen for target app info (sent when window is shown).
     const unsubscribeTargetAppInfo = window.clipboardAPI.onTargetAppInfo?.((info) => {
       let targetAppIndex = 0;
       if (info.targetApp && info.runningApps.length > 0) {
@@ -487,7 +446,6 @@ export default function ClipboardHistory() {
       });
     });
 
-    // Listen for item additions.
     const unsubscribeAdded = window.clipboardAPI.onItemAdded((id) => {
       loadItems(true);
     });
@@ -1294,11 +1252,8 @@ export default function ClipboardHistory() {
     });
   };
   
-  // Ref callback to detect if a text element is actually overflowing (truncated).
-  // Updates the overflowingTexts set so "Show more" only appears when needed.
   const checkTextOverflow = (id: string) => (el: HTMLElement | null) => {
     if (!el) return;
-    // Use requestAnimationFrame to ensure layout is complete.
     requestAnimationFrame(() => {
       const isOverflowing = el.scrollHeight > el.clientHeight;
       setOverflowingTexts(prev => {
