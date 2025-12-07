@@ -257,6 +257,13 @@ export default function ClipboardHistory() {
   };
   
   const [isRecording, setIsRecording] = useState(false);
+  
+  // Audio state for Priority Mic dropdown.
+  type AudioDevice = { id: string; name: string; isInput: boolean };
+  const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
+  const [priorityDeviceId, setPriorityDeviceId] = useState<string | null>(null);
+  const [showMicDropdown, setShowMicDropdown] = useState(false);
+  
   const [allTimeStats, setAllTimeStats] = useState<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>({
     stacks: 0, transcriptions: 0, screenshots: 0, improved: 0, words: 0,
   });
@@ -280,6 +287,45 @@ export default function ClipboardHistory() {
     
     return cleanup;
   }, []);
+
+  // Fetch and subscribe to audio state for Priority Mic dropdown.
+  useEffect(() => {
+    if (!window.audioAPI) return;
+    
+    const fetchAudioState = async () => {
+      try {
+        const state = await window.audioAPI!.getState();
+        setAudioDevices(state.devices.filter((d: AudioDevice) => d.isInput));
+        setPriorityDeviceId(state.priorityDeviceId);
+      } catch (err) {
+        console.error('[ClipboardHistory] Failed to load audio state:', err);
+      }
+    };
+    
+    fetchAudioState();
+    
+    const cleanup = window.audioAPI.onStateChanged((state) => {
+      setAudioDevices(state.devices.filter((d: AudioDevice) => d.isInput));
+      setPriorityDeviceId(state.priorityDeviceId);
+    });
+    
+    return cleanup;
+  }, []);
+  
+  // Close mic dropdown when clicking outside.
+  useEffect(() => {
+    if (!showMicDropdown) return;
+    
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('[data-mic-dropdown]')) {
+        setShowMicDropdown(false);
+      }
+    };
+    
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [showMicDropdown]);
 
   const [currentStatIndex, setCurrentStatIndex] = useState(0);
   const [statFading, setStatFading] = useState(false);
@@ -687,7 +733,18 @@ export default function ClipboardHistory() {
 
       // J/ArrowDown - Move selection down (Gmail-style)
       if (key === 'ArrowDown' || (key === 'j' && !hasMeta && !hasCtrl && !hasAlt)) {
-        // Skip if typing in input
+        // If search input is focused, blur it and focus first list item (Alfred-style).
+        if (document.activeElement === inputRef.current) {
+          e.preventDefault();
+          inputRef.current?.blur();
+          setSelectedIndex(0);
+          setKeyboardNavActive(true);
+          // Scroll first item into view.
+          const element = listRef.current?.children[0] as HTMLElement;
+          element?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          return;
+        }
+        // Skip if typing in other inputs (not the search input).
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
         
         e.preventDefault();
@@ -718,10 +775,17 @@ export default function ClipboardHistory() {
 
       // K/ArrowUp - Move selection up (Gmail-style)
       if (key === 'ArrowUp' || (key === 'k' && !hasMeta && !hasCtrl && !hasAlt)) {
-        // Skip if typing in input
+        // Skip if typing in input.
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
         
         e.preventDefault();
+        
+        // If at first item, focus search input (Alfred-style cycle).
+        if (selectedIndex === 0) {
+          inputRef.current?.focus();
+          return;
+        }
+        
         setKeyboardNavActive(true);
         const newIndex = Math.max(selectedIndex - 1, 0);
         
@@ -1306,17 +1370,170 @@ export default function ClipboardHistory() {
           cursor: 'default',
         }}
       >
-      {/* Draggable header area - allows window to be moved */}
+      {/* Draggable header area */}
       <div
         style={{
           height: '28px',
           minHeight: '28px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-start',
+          paddingLeft: '72px', // Leave space for traffic lights
+          paddingRight: '16px',
           // @ts-ignore - webkit vendor prefix for Electron draggable region
           WebkitAppRegion: 'drag',
           cursor: 'grab',
           // Native window roundedCorners handles the border radius.
         }}
-      />
+      >
+        <span style={{ 
+          fontSize: '12px', 
+          fontWeight: 600, 
+          color: theme.textSecondary,
+          letterSpacing: '0.5px',
+          marginRight: 'auto',
+        }}>
+          Fields
+        </span>
+        
+        {/* Mic Lock dropdown */}
+        {!showSettings && audioDevices.length > 0 && (
+          <div 
+            style={{ 
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              // @ts-ignore - prevent drag on dropdown
+              WebkitAppRegion: 'no-drag',
+            }} 
+            data-mic-dropdown
+          >
+            <span style={{ 
+              fontSize: '10px', 
+              color: theme.textSecondary,
+              opacity: 0.7,
+            }}>
+              Mic Lock:
+            </span>
+            <button
+              onClick={() => setShowMicDropdown(!showMicDropdown)}
+              title="Priority Microphone"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '3px 8px',
+                fontSize: '10px',
+                color: theme.textSecondary,
+                backgroundColor: 'transparent',
+                border: `1px solid ${theme.border}`,
+                borderRadius: '4px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                maxWidth: '140px',
+                overflow: 'hidden',
+              }}
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                <line x1="12" y1="19" x2="12" y2="23"/>
+                <line x1="8" y1="23" x2="16" y2="23"/>
+              </svg>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {priorityDeviceId 
+                  ? audioDevices.find(d => d.id === priorityDeviceId)?.name?.replace(/^(Built-in |MacBook )/, '') || 'Mic'
+                  : 'System'}
+              </span>
+              <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+            
+            {/* Dropdown menu */}
+            {showMicDropdown && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '100%',
+                  right: 0,
+                  marginTop: '4px',
+                  backgroundColor: theme.isDark ? '#2a2a2a' : '#fff',
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '6px',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                  zIndex: 200,
+                  minWidth: '180px',
+                  maxWidth: '240px',
+                  padding: '4px 0',
+                }}
+              >
+                {/* System Default option */}
+                <button
+                  onClick={() => {
+                    window.audioAPI?.setPriorityDevice(null);
+                    setShowMicDropdown(false);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    width: '100%',
+                    padding: '6px 10px',
+                    fontSize: '11px',
+                    color: !priorityDeviceId ? theme.accent : theme.text,
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                >
+                  {!priorityDeviceId && <span style={{ color: theme.accent }}>✓</span>}
+                  <span style={{ marginLeft: !priorityDeviceId ? 0 : '16px' }}>System Default</span>
+                </button>
+                
+                <div style={{ height: '1px', backgroundColor: theme.border, margin: '4px 0' }} />
+                
+                {/* Device list */}
+                {audioDevices.map(device => (
+                  <button
+                    key={device.id}
+                    onClick={() => {
+                      window.audioAPI?.setPriorityDevice(device.id);
+                      setShowMicDropdown(false);
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      width: '100%',
+                      padding: '6px 10px',
+                      fontSize: '11px',
+                      color: priorityDeviceId === device.id ? theme.accent : theme.text,
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    {priorityDeviceId === device.id && <span style={{ color: theme.accent }}>✓</span>}
+                    <span style={{ 
+                      marginLeft: priorityDeviceId === device.id ? 0 : '16px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {device.name}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
       
       {/* Conditionally show Settings or Clipboard History */}
       {showSettings ? (
