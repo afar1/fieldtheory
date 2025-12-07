@@ -99,49 +99,6 @@ function combineStackText(items: ClipboardItem[]): string {
   return textParts.join('\n\n');
 }
 
-/**
- * Get the last N words from a text string.
- * Used to show a preview of the ending when text is truncated.
- */
-function getLastWords(text: string, wordCount: number = 8): string {
-  const words = text.trim().split(/\s+/);
-  if (words.length <= wordCount) return '';
-  return words.slice(-wordCount).join(' ');
-}
-
-/**
- * Create a truncated preview with beginning and ending.
- * Format: "[first ~200 chars]... ...[last 8 words]"
- * Returns null if text doesn't need truncation.
- */
-function createTruncatedPreview(text: string, maxChars: number = 200): string | null {
-  if (!text || text.length <= maxChars) return null;
-  
-  const lastWords = getLastWords(text, 8);
-  if (!lastWords) return null;
-  
-  // Calculate how much space we need for the ending
-  const endingPart = `... ...${lastWords}`;
-  const availableForStart = maxChars - endingPart.length;
-  
-  if (availableForStart < 50) {
-    // Not enough room, just show truncated start
-    return text.slice(0, maxChars) + '...';
-  }
-  
-  // Find a good break point (word boundary) near the limit
-  let breakPoint = availableForStart;
-  while (breakPoint > 0 && text[breakPoint] !== ' ') {
-    breakPoint--;
-  }
-  if (breakPoint < availableForStart * 0.7) {
-    // Couldn't find a good break, just cut at limit
-    breakPoint = availableForStart;
-  }
-  
-  const startPart = text.slice(0, breakPoint).trim();
-  return `${startPart}... ...${lastWords}`;
-}
 
 /**
  * KeyCap component - renders a keyboard key with 3D styling.
@@ -223,6 +180,9 @@ export default function ClipboardHistory() {
   const [stacks, setStacks] = useState<StackInfo[]>([]);
   const [expandedStacks, setExpandedStacks] = useState<Set<string>>(new Set());
   const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
+  // Track which text elements are actually overflowing (truncated).
+  // Key is a unique identifier (stackId or "item-{id}"), value is whether it overflows.
+  const [overflowingTexts, setOverflowingTexts] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
@@ -248,19 +208,59 @@ export default function ClipboardHistory() {
   
   // Hover states for UI interactions
   const [hoveredImageId, setHoveredImageId] = useState<number | null>(null);
-  const [previewImage, setPreviewImage] = useState<{data: string, width: number, height: number} | null>(null);
+  
+  // Preview state - can be image or text
+  type PreviewContent = 
+    | { type: 'image'; data: string; width: number; height: number }
+    | { type: 'text'; content: string };
+  const [preview, setPreview] = useState<PreviewContent | null>(null);
   const [previewClosing, setPreviewClosing] = useState(false);
   
-  // Helper to dismiss preview with scale-down animation
+  // Helper to dismiss preview with fade-out animation.
   const dismissPreview = () => {
-    if (!previewImage || previewClosing) return;
+    if (!preview || previewClosing) return;
     setPreviewClosing(true);
-    // Wait for animation to complete before removing
     setTimeout(() => {
-      setPreviewImage(null);
+      setPreview(null);
       setPreviewClosing(false);
-    }, 150); // Match animation duration
+    }, 150);
   };
+  
+  // Helper to get preview content for a row
+  const getPreviewForRow = (row: ListRow): PreviewContent | null => {
+    if (row.type === 'item') {
+      if (row.item.imageData) {
+        return {
+          type: 'image',
+          data: row.item.imageData,
+          width: row.item.imageWidth || 0,
+          height: row.item.imageHeight || 0,
+        };
+      } else if (row.item.content) {
+        return { type: 'text', content: row.item.content };
+      }
+    } else if (row.type === 'stack') {
+      const imageItem = row.items.find(i => i.imageData);
+      if (imageItem?.imageData) {
+        return {
+          type: 'image',
+          data: imageItem.imageData,
+          width: imageItem.imageWidth || 0,
+          height: imageItem.imageHeight || 0,
+        };
+      } else {
+        const combinedText = row.items
+          .filter(i => i.content)
+          .map(i => i.content)
+          .join('\n\n');
+        if (combinedText) {
+          return { type: 'text', content: combinedText };
+        }
+      }
+    }
+    return null;
+  };
+  
   
   // Recording state - shows indicator when recording is in progress
   const [isRecording, setIsRecording] = useState(false);
@@ -618,7 +618,7 @@ export default function ClipboardHistory() {
 
       // Prevent default for navigation keys (except Tab when input is focused)
       if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Enter' || key === 'Escape' || 
-          key === 'j' || key === 'k' || key === 'u' || key === '?') {
+          key === 'j' || key === 'k' || key === 'u' || key === 'h' || key === '?') {
         if (!document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
           e.preventDefault();
         }
@@ -698,6 +698,12 @@ export default function ClipboardHistory() {
       }
 
       if (key === 'Escape') {
+        // If preview is open, dismiss it first
+        if (preview) {
+          e.preventDefault();
+          dismissPreview();
+          return;
+        }
         // If shortcuts modal is open, close it
         if (showShortcutsModal) {
           setShowShortcutsModal(false);
@@ -726,8 +732,19 @@ export default function ClipboardHistory() {
         // Skip if typing in input
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
         
-        setKeyboardNavActive(true); // Disable hover selection
+        e.preventDefault();
+        setKeyboardNavActive(true);
         const newIndex = Math.min(selectedIndex + 1, listRows.length - 1);
+        
+        // If preview is open, update preview for new item.
+        if (preview && newIndex !== selectedIndex) {
+          const newRow = listRows[newIndex];
+          if (newRow) {
+            const newContent = getPreviewForRow(newRow);
+            if (newContent) setPreview(newContent);
+          }
+        }
+        
         const element = listRef.current?.children[newIndex] as HTMLElement;
         const container = listRef.current;
         if (element && container) {
@@ -746,8 +763,19 @@ export default function ClipboardHistory() {
         // Skip if typing in input
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
         
-        setKeyboardNavActive(true); // Disable hover selection
+        e.preventDefault();
+        setKeyboardNavActive(true);
         const newIndex = Math.max(selectedIndex - 1, 0);
+        
+        // If preview is open, update preview for new item.
+        if (preview && newIndex !== selectedIndex) {
+          const newRow = listRows[newIndex];
+          if (newRow) {
+            const newContent = getPreviewForRow(newRow);
+            if (newContent) setPreview(newContent);
+          }
+        }
+        
         const element = listRef.current?.children[newIndex] as HTMLElement;
         const container = listRef.current;
         if (element && container) {
@@ -778,6 +806,23 @@ export default function ClipboardHistory() {
             }
             loadItems(true);
           });
+        }
+        return;
+      }
+      
+      // H - Toggle "Show more" / "Hide" expansion on selected row
+      if (key === 'h' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+        // Skip if typing in input
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        
+        const selectedRow = listRows[selectedIndex];
+        if (!selectedRow) return;
+        
+        e.preventDefault();
+        if (selectedRow.type === 'stack') {
+          toggleStackExpanded(selectedRow.stack.stackId);
+        } else if (selectedRow.type === 'item') {
+          toggleItemExpanded(selectedRow.item.id);
         }
         return;
       }
@@ -1021,8 +1066,7 @@ export default function ClipboardHistory() {
         return;
       }
       
-      // Spacebar - Quick Look style preview (only when hovering image or preview open)
-      // Don't intercept if user is typing in an input field
+      // Spacebar - Quick Look style preview (images or text)
       if (e.key === ' ') {
         const activeElement = document.activeElement;
         const isTypingInInput = activeElement?.tagName === 'INPUT' || 
@@ -1035,7 +1079,7 @@ export default function ClipboardHistory() {
         }
         
         // If preview is open, dismiss it
-        if (previewImage) {
+        if (preview) {
           e.preventDefault();
           dismissPreview();
           return;
@@ -1046,7 +1090,8 @@ export default function ClipboardHistory() {
           e.preventDefault();
           const hoveredItem = items.find(item => item.id === hoveredImageId);
           if (hoveredItem?.imageData) {
-            setPreviewImage({
+            setPreview({
+              type: 'image',
               data: hoveredItem.imageData,
               width: hoveredItem.imageWidth || 0,
               height: hoveredItem.imageHeight || 0,
@@ -1054,7 +1099,46 @@ export default function ClipboardHistory() {
           }
           return;
         }
-        // Otherwise, let spacebar work normally (scroll)
+        
+        // Preview J/K selected row (image or text)
+        const selectedRow = listRows[selectedIndex];
+        if (selectedRow) {
+          e.preventDefault();
+          
+          if (selectedRow.type === 'item') {
+            if (selectedRow.item.imageData) {
+              setPreview({
+                type: 'image',
+                data: selectedRow.item.imageData,
+                width: selectedRow.item.imageWidth || 0,
+                height: selectedRow.item.imageHeight || 0,
+              });
+            } else if (selectedRow.item.content) {
+              setPreview({ type: 'text', content: selectedRow.item.content });
+            }
+          } else if (selectedRow.type === 'stack') {
+            // Check for image first, then text
+            const imageItem = selectedRow.items.find(i => i.imageData);
+            if (imageItem?.imageData) {
+              setPreview({
+                type: 'image',
+                data: imageItem.imageData,
+                width: imageItem.imageWidth || 0,
+                height: imageItem.imageHeight || 0,
+              });
+            } else {
+              // Combine text from stack
+              const combinedText = selectedRow.items
+                .filter(i => i.content)
+                .map(i => i.content)
+                .join('\n\n');
+              if (combinedText) {
+                setPreview({ type: 'text', content: combinedText });
+              }
+            }
+          }
+          return;
+        }
       }
     };
 
@@ -1062,7 +1146,7 @@ export default function ClipboardHistory() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, previewImage, hoveredImageId, dismissPreview]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
 
@@ -1209,6 +1293,29 @@ export default function ClipboardHistory() {
       return next;
     });
   };
+  
+  // Ref callback to detect if a text element is actually overflowing (truncated).
+  // Updates the overflowingTexts set so "Show more" only appears when needed.
+  const checkTextOverflow = (id: string) => (el: HTMLElement | null) => {
+    if (!el) return;
+    // Use requestAnimationFrame to ensure layout is complete.
+    requestAnimationFrame(() => {
+      const isOverflowing = el.scrollHeight > el.clientHeight;
+      setOverflowingTexts(prev => {
+        const hadOverflow = prev.has(id);
+        if (isOverflowing && !hadOverflow) {
+          const next = new Set(prev);
+          next.add(id);
+          return next;
+        } else if (!isOverflowing && hadOverflow) {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        }
+        return prev;
+      });
+    });
+  };
 
   // Window fills the entire BrowserWindow now (no overlay).
   // Native macOS vibrancy handles the blur effect at the window level.
@@ -1227,14 +1334,6 @@ export default function ClipboardHistory() {
         @keyframes previewFadeOut {
           from { opacity: 1; }
           to { opacity: 0; }
-        }
-        @keyframes previewScaleIn {
-          from { transform: scale(0.9); opacity: 0; }
-          to { transform: scale(1); opacity: 1; }
-        }
-        @keyframes previewScaleOut {
-          from { transform: scale(1); opacity: 1; }
-          to { transform: scale(0.9); opacity: 0; }
         }
       `}</style>
       <div
@@ -1509,8 +1608,8 @@ export default function ClipboardHistory() {
               const combinedText = combineStackText(stackItems);
               const hasText = combinedText.length > 0;
               const targetAppName = targetAppInfo.targetApp?.name || 'app';
-              // Only show "Show more" if text is actually long enough to benefit from expansion (> 100 chars)
-              const textNeedsExpansion = combinedText.length > 100;
+              // "Show more" is controlled by actual overflow detection, not character count.
+              const textIsOverflowing = overflowingTexts.has(stack.stackId);
 
               return (
                 <div key={`stack-${stack.stackId}`}>
@@ -1665,7 +1764,8 @@ export default function ClipboardHistory() {
                               onClick={(e) => {
                                 e.stopPropagation();
                                 if (item.imageData) {
-                                  setPreviewImage({
+                                  setPreview({
+                                    type: 'image',
                                     data: item.imageData,
                                     width: item.imageWidth || 0,
                                     height: item.imageHeight || 0,
@@ -1712,6 +1812,7 @@ export default function ClipboardHistory() {
                       {/* Combined text - show improved if available and expanded */}
                       {combinedText && (
                         <div
+                          ref={expanded ? undefined : checkTextOverflow(stack.stackId)}
                           style={{
                             fontSize: '12px',
                             fontWeight: '500',
@@ -1732,7 +1833,7 @@ export default function ClipboardHistory() {
                         >
                           {expanded && improveResult?.stackId === stack.stackId 
                             ? improveResult.refinedPrompt 
-                            : (textNeedsExpansion && createTruncatedPreview(combinedText)) || combinedText}
+                            : combinedText}
                         </div>
                       )}
                       
@@ -1752,8 +1853,8 @@ export default function ClipboardHistory() {
                         </span>
                       )}
                       
-                      {/* Show more/less button - only show if text would benefit from expansion OR if there's an improved result */}
-                      {combinedText && (textNeedsExpansion || improveResult?.stackId === stack.stackId) && (
+                      {/* Show more/less button - only when text is actually truncated or has improved result */}
+                      {combinedText && (textIsOverflowing || expanded || improveResult?.stackId === stack.stackId) && (
                         <button
                           tabIndex={-1}
                           onMouseDown={(e) => e.preventDefault()}
@@ -1966,8 +2067,9 @@ export default function ClipboardHistory() {
               const hasText = (item.type === 'text' || item.type === 'transcript') && item.content;
               const isRowSelected = selectedIndex === index;
               const itemExpanded = expandedItems.has(item.id);
-              // Only show "Show more" if text is actually long enough to benefit from expansion (> 100 chars)
-              const itemTextNeedsExpansion = hasText && item.content && item.content.length > 100;
+              // "Show more" is controlled by actual overflow detection, not character count.
+              const itemTextId = `item-${item.id}`;
+              const itemTextIsOverflowing = overflowingTexts.has(itemTextId);
               
               return (
                 <div key={item.id}>
@@ -2044,6 +2146,7 @@ export default function ClipboardHistory() {
                             />
                           )}
                           <span
+                            ref={itemExpanded ? undefined : checkTextOverflow(itemTextId)}
                             style={{
                               flex: 1,
                               wordBreak: 'break-word',
@@ -2060,7 +2163,7 @@ export default function ClipboardHistory() {
                           >
                             {itemExpanded && improveResult?.stackId === `item-${item.id}`
                               ? improveResult.refinedPrompt
-                              : (itemTextNeedsExpansion && item.content && createTruncatedPreview(item.content)) || item.content || 'Empty'}
+                              : item.content || 'Empty'}
                           </span>
                         </div>
                         {/* Improved badge - shown when there's an improved version */}
@@ -2078,8 +2181,8 @@ export default function ClipboardHistory() {
                             ✨ Improved version available
                           </span>
                         )}
-                        {/* Show more/less button - only show if text would benefit from expansion OR if there's an improved result */}
-                        {(itemTextNeedsExpansion || improveResult?.stackId === `item-${item.id}`) && (
+                        {/* Show more/less button - only when text is actually truncated or has improved result */}
+                        {(itemTextIsOverflowing || itemExpanded || improveResult?.stackId === `item-${item.id}`) && (
                           <button
                             tabIndex={-1}
                             onMouseDown={(e) => e.preventDefault()}
@@ -2113,7 +2216,8 @@ export default function ClipboardHistory() {
                               onMouseLeave={() => setHoveredImageId(null)}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setPreviewImage({
+                                setPreview({
+                                  type: 'image',
                                   data: item.imageData!,
                                   width: item.imageWidth || 0,
                                   height: item.imageHeight || 0,
@@ -2548,7 +2652,7 @@ export default function ClipboardHistory() {
         </div>
       </div>
       
-      {/* Keyboard shortcuts modal */}
+      {/* Keyboard shortcuts modal - compact 2-column design */}
       {showShortcutsModal && (
         <div
           onClick={() => setShowShortcutsModal(false)}
@@ -2558,122 +2662,69 @@ export default function ClipboardHistory() {
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            backgroundColor: 'rgba(0, 0, 0, 0.4)',
             backdropFilter: 'blur(4px)',
             WebkitBackdropFilter: 'blur(4px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 10001,
-            cursor: 'pointer',
           }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
               backgroundColor: theme.bg,
-              borderRadius: '12px',
-              padding: '24px',
-              maxWidth: '400px',
+              borderRadius: '10px',
+              padding: '16px 20px',
               boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
-              cursor: 'default',
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: theme.text }}>Keyboard Shortcuts</h3>
-              <button
-                onClick={() => setShowShortcutsModal(false)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  padding: '4px',
-                  color: theme.textSecondary,
-                }}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M18 6L6 18M6 6l12 12" />
-                </svg>
-              </button>
+            <div style={{ 
+              fontSize: '12px', 
+              fontWeight: 600, 
+              color: theme.textSecondary, 
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+              marginBottom: '14px',
+            }}>
+              Shortcuts
             </div>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '13px' }}>
-              {/* Navigation */}
-              <div style={{ color: theme.textSecondary, fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', marginTop: '8px' }}>Navigation</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: theme.text }}>Move down</span>
-                <div><KeyCap>↓</KeyCap> or <KeyCap>j</KeyCap></div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: theme.text }}>Move up</span>
-                <div><KeyCap>↑</KeyCap> or <KeyCap>k</KeyCap></div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: theme.text }}>Search</span>
-                <div><KeyCap>/</KeyCap></div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: theme.text }}>Switch paste target</span>
-                <div><KeyCap>tab</KeyCap></div>
-              </div>
+            {/* Two column grid of shortcuts */}
+            <div style={{ 
+              display: 'grid', 
+              gridTemplateColumns: 'auto auto', 
+              gap: '10px 32px',
+              fontSize: '13px',
+              color: theme.textSecondary,
+            }}>
+              <span><KeyCap>esc</KeyCap> close</span>
+              <span><KeyCap>⌫</KeyCap> delete</span>
               
-              {/* Actions */}
-              <div style={{ color: theme.textSecondary, fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', marginTop: '8px' }}>Actions</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: theme.text }}>Paste</span>
-                <div><KeyCap>↵</KeyCap></div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: theme.text }}>Improve with AI</span>
-                <div><KeyCap>⌘</KeyCap><KeyCap>↵</KeyCap></div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: theme.text }}>Unstack</span>
-                <div><KeyCap>u</KeyCap></div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: theme.text }}>Delete</span>
-                <div><KeyCap>delete</KeyCap> or <KeyCap>⌘</KeyCap><KeyCap>⌫</KeyCap></div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: theme.text }}>Undo delete</span>
-                <div><KeyCap>⌘</KeyCap><KeyCap>z</KeyCap></div>
-              </div>
+              <span><KeyCap>↓</KeyCap><KeyCap>j</KeyCap> down</span>
+              <span><KeyCap>?</KeyCap> help</span>
               
-              {/* Preview */}
-              <div style={{ color: theme.textSecondary, fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', marginTop: '8px' }}>Preview</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: theme.text }}>Preview image</span>
-                <div><KeyCap>⎵</KeyCap></div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: theme.text }}>Close preview / window</span>
-                <div><KeyCap>esc</KeyCap></div>
-              </div>
+              <span><KeyCap>⌘</KeyCap><KeyCap>↵</KeyCap> improve</span>
+              <span><KeyCap>↵</KeyCap> paste</span>
               
-              {/* Multi-select */}
-              <div style={{ color: theme.textSecondary, fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', marginTop: '8px' }}>Multi-select</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: theme.text }}>Toggle selection</span>
-                <div><KeyCap>x</KeyCap></div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: theme.text }}>Stack selected items</span>
-                <div><KeyCap>s</KeyCap></div>
-              </div>
-            </div>
-            
-            <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: `1px solid ${theme.border}`, textAlign: 'center' }}>
-              <span style={{ color: theme.textSecondary, fontSize: '11px' }}>
-                Press <KeyCap>?</KeyCap> anytime to show this help
-              </span>
+              <span><KeyCap>⎵</KeyCap> preview</span>
+              <span><KeyCap>/</KeyCap> search</span>
+              
+              <span><KeyCap>x</KeyCap> select</span>
+              <span><KeyCap>s</KeyCap> stack</span>
+              
+              <span><KeyCap>tab</KeyCap> target</span>
+              <span><KeyCap>⌘</KeyCap><KeyCap>z</KeyCap> undo</span>
+              
+              <span><KeyCap>u</KeyCap> unstack</span>
+              <span><KeyCap>↑</KeyCap><KeyCap>k</KeyCap> up</span>
             </div>
           </div>
         </div>
       )}
 
-      {/* Image preview modal - Quick Look style with scale animation */}
-      {previewImage && (
+      {/* Preview modal - Quick Look style for images and text */}
+      {preview && (
         <div
           onClick={dismissPreview}
           style={{
@@ -2693,20 +2744,47 @@ export default function ClipboardHistory() {
             animation: previewClosing ? 'previewFadeOut 0.15s ease-in forwards' : 'previewFadeIn 0.15s ease-out',
           }}
         >
-          <img
-            src={`data:image/png;base64,${previewImage.data}`}
-            alt="Preview"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              maxWidth: '90vw',
-              maxHeight: '90vh',
-              objectFit: 'contain',
-              borderRadius: '8px',
-              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
-              animation: previewClosing ? 'previewScaleOut 0.15s ease-in forwards' : 'previewScaleIn 0.15s ease-out',
-              cursor: 'default',
-            }}
-          />
+          {preview.type === 'image' ? (
+            <img
+              src={`data:image/png;base64,${preview.data}`}
+              alt="Preview"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                maxWidth: '90vw',
+                maxHeight: '90vh',
+                objectFit: 'contain',
+                borderRadius: '8px',
+                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+                cursor: 'default',
+              }}
+            />
+          ) : (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                maxWidth: '80vw',
+                maxHeight: '80vh',
+                backgroundColor: theme.bg,
+                borderRadius: '12px',
+                padding: '24px',
+                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+                cursor: 'default',
+                overflow: 'auto',
+              }}
+            >
+              <pre style={{
+                margin: 0,
+                fontSize: '14px',
+                lineHeight: 1.6,
+                color: theme.text,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+              }}>
+                {preview.content}
+              </pre>
+            </div>
+          )}
         </div>
       )}
     </div>
