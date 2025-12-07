@@ -1407,8 +1407,8 @@ export default function ClipboardHistory() {
           to { opacity: 0; }
         }
         @keyframes shimmer {
-          0% { background-position: 200% 0; }
-          100% { background-position: -100% 0; }
+          0% { transform: translateX(-100%); }
+          100% { transform: translateX(100%); }
         }
       `}</style>
       <div
@@ -2688,18 +2688,13 @@ export default function ClipboardHistory() {
           updateStatus !== 'idle' ? (
             // Update notification (replaces version + stats)
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1 }}>
-              {/* Gift icon + text with shimmer effect */}
+              {/* Gift icon + text with shimmer overlay */}
               <div style={{
+                position: 'relative',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '4px',
-                background: updateStatus !== 'downloading' 
-                  ? `linear-gradient(90deg, ${theme.text} 0%, ${theme.text} 40%, ${theme.isDark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.3)'} 50%, ${theme.text} 60%, ${theme.text} 100%)`
-                  : 'none',
-                backgroundSize: '200% 100%',
-                WebkitBackgroundClip: updateStatus !== 'downloading' ? 'text' : undefined,
-                WebkitTextFillColor: updateStatus !== 'downloading' ? 'transparent' : undefined,
-                animation: updateStatus !== 'downloading' ? 'shimmer 4.25s ease-in-out infinite' : 'none',
+                overflow: 'hidden',
               }}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="20 12 20 22 4 22 4 12"/>
@@ -2708,9 +2703,22 @@ export default function ClipboardHistory() {
                   <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/>
                   <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>
                 </svg>
-                <span style={{ fontSize: '9px' }}>
+                <span style={{ fontSize: '9px', color: theme.text }}>
                   {updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'New update ready' : 'New update available'}
                 </span>
+                {/* Shimmer overlay */}
+                {updateStatus !== 'downloading' && (
+                  <div style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: `linear-gradient(90deg, transparent 0%, ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.6)'} 50%, transparent 100%)`,
+                    animation: 'shimmer 4.25s ease-in-out infinite',
+                    pointerEvents: 'none',
+                  }} />
+                )}
               </div>
               {updateStatus !== 'downloading' && (
                 <>
