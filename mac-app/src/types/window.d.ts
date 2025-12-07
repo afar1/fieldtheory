@@ -313,6 +313,29 @@ interface ModelInfo {
 }
 
 /**
+ * Update information.
+ */
+interface UpdateInfo {
+  version: string;
+  releaseNotes?: string;
+}
+
+/**
+ * The updater API for in-app update notifications.
+ */
+interface UpdaterAPI {
+  checkForUpdates: () => Promise<void>;
+  downloadUpdate: () => Promise<void>;
+  installUpdate: () => Promise<void>;
+  dismissUpdate: () => Promise<void>;
+  onUpdateAvailable: (callback: (info: UpdateInfo) => void) => () => void;
+  onUpdateNotAvailable: (callback: () => void) => () => void;
+  onDownloadProgress: (callback: (percent: number) => void) => () => void;
+  onUpdateDownloaded: (callback: (info: UpdateInfo) => void) => () => void;
+  onError: (callback: (error: string) => void) => () => void;
+}
+
+/**
  * Extend the Window interface with our custom APIs.
  */
 declare global {
@@ -323,6 +346,7 @@ declare global {
     visionAPI?: VisionAPI;
     permissionsAPI?: PermissionsAPI;
     electronAPI?: ElectronAPI;
+    updaterAPI?: UpdaterAPI;
     platform?: PlatformInfo;
   }
 }
