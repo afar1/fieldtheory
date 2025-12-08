@@ -1633,7 +1633,7 @@ export default function ClipboardHistory() {
                 WebkitAppRegion: 'no-drag',
               }}
             />
-            {/* Custom placeholder with KeyCap - hide when focused or has content */}
+            {/* Custom placeholder - hide when focused or has content */}
             {!searchQuery && !searchFocused && (
               <div style={{
                 position: 'absolute',
@@ -1647,21 +1647,6 @@ export default function ClipboardHistory() {
                 color: theme.textSecondary,
                 fontSize: '11px',
               }}>
-                <span style={{ 
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: '14px',
-                  height: '14px',
-                  fontSize: '9px',
-                  fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
-                  fontWeight: 500,
-                  color: '#666',
-                  backgroundColor: '#f0f0f0',
-                  border: '1px solid #ccc',
-                  borderRadius: '2px',
-                  boxShadow: '0 1px 0 #aaa',
-                }}>/</span>
                 <span>search...</span>
               </div>
             )}
@@ -3001,9 +2986,12 @@ export default function ClipboardHistory() {
               <span><KeyCap>↵</KeyCap> paste</span>
               
               <span><KeyCap>⎵</KeyCap> preview</span>
-              <span><KeyCap>/</KeyCap> search</span>
+              <span><KeyCap>⌥</KeyCap><KeyCap>␣</KeyCap> record audio</span>
               
               <span><KeyCap>x</KeyCap> select</span>
+              <span><KeyCap>⌥</KeyCap><KeyCap>1</KeyCap> screenshot</span>
+              
+              <span><KeyCap>/</KeyCap> search</span>
               <span><KeyCap>s</KeyCap> stack</span>
               
               <span><KeyCap>tab</KeyCap> target</span>
