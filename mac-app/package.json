@@ -50,7 +50,7 @@
     "publish": {
       "provider": "github",
       "owner": "afar1",
-      "repo": "littleai"
+      "repo": "oscar"
     },
     "afterSign": "scripts/notarize.js",
     "mac": {
