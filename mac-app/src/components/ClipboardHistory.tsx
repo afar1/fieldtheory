@@ -2703,7 +2703,7 @@ export default function ClipboardHistory() {
                   <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/>
                   <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>
                 </svg>
-                <span style={{ fontSize: '9px', color: theme.text }}>
+                <span style={{ fontSize: '10px', color: theme.text }}>
                   {updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'New update ready' : 'New update available'}
                 </span>
                 {/* Shimmer overlay */}
@@ -2715,7 +2715,7 @@ export default function ClipboardHistory() {
                     right: 0,
                     bottom: 0,
                     background: `linear-gradient(90deg, transparent 0%, ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.6)'} 50%, transparent 100%)`,
-                    animation: 'shimmer 4.25s ease-in-out infinite',
+                    animation: 'shimmer 3.7s ease-in-out infinite',
                     pointerEvents: 'none',
                   }} />
                 )}
@@ -2734,7 +2734,7 @@ export default function ClipboardHistory() {
                       backgroundColor: 'transparent',
                       border: 'none',
                       cursor: 'pointer',
-                      opacity: 0.75,
+                      opacity: 0.6,
                     }}
                   >
                     Later
