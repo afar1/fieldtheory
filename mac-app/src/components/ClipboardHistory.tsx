@@ -2113,7 +2113,7 @@ export default function ClipboardHistory() {
                       marginTop: '4px',
                     }}>
                       {/* Metadata - left side with stack icon */}
-                      <div style={{ fontSize: '10px', color: improveResult?.stackId === stack.stackId ? '#34C759' : '#999', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <div style={{ fontSize: '10px', color: improveResult?.stackId === stack.stackId ? '#34C759' : (theme.isDark ? '#2dd4bf' : '#14b8a6'), display: 'flex', alignItems: 'center', gap: '4px' }}>
                         {/* Stack icon - layered rectangles */}
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <rect x="4" y="4" width="16" height="6" rx="1" />
@@ -2706,19 +2706,17 @@ export default function ClipboardHistory() {
                 <span style={{ fontSize: '10px', color: theme.text }}>
                   {updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'New update ready' : 'New update available'}
                 </span>
-                {/* Shimmer overlay */}
-                {updateStatus !== 'downloading' && (
-                  <div style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    background: `linear-gradient(90deg, transparent 0%, ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.6)'} 50%, transparent 100%)`,
-                    animation: 'shimmer 3.7s ease-in-out infinite',
-                    pointerEvents: 'none',
-                  }} />
-                )}
+                {/* Shimmer overlay - always show during update sequence */}
+                <div style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  background: `linear-gradient(90deg, transparent 0%, ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.6)'} 50%, transparent 100%)`,
+                  animation: 'shimmer 3.7s ease-in-out infinite',
+                  pointerEvents: 'none',
+                }} />
               </div>
               {updateStatus !== 'downloading' && (
                 <>

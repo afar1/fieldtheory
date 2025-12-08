@@ -1737,9 +1737,9 @@ async function initTranscriberSystem(): Promise<void> {
     const visible = clipboardHistoryWindow.isVisible();
 
     if (!visible) {
-      // Capture frontmost app in parallel (don't block window appearance).
-      // Window appears instantly, target app label updates ~100ms later.
-      clipboardHistoryWindow.capturePreviousAppBeforeShow();
+      // Capture frontmost app before showing window.
+      // Must await to ensure target app is correct when sendTargetAppInfo() is called.
+      await clipboardHistoryWindow.capturePreviousAppBeforeShow();
       
       const boundsToUse = restoreClipboardHistoryBounds();
       clipboardHistoryWindow.show(boundsToUse);
