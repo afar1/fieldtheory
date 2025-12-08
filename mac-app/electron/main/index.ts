@@ -48,7 +48,7 @@ if (process.env.EXPERIMENTAL === 'true') {
 // Configure autoUpdater for manual update flow (only in production builds).
 if (!process.env.ELECTRON_START_URL) {
   autoUpdater.autoDownload = false;
-  autoUpdater.setFeedURL({ provider: 'github', owner: 'afar1', repo: 'littleai' });
+  autoUpdater.setFeedURL({ provider: 'github', owner: 'afar1', repo: 'oscar' });
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -1884,6 +1884,14 @@ if (!gotTheLock) {
     await initAudioSystem(checkForUpdatesManual);
     await initTranscriberSystem();
     await initVisionSystem();
+
+    // Check for updates on startup (production only, after 5s delay to not block UI).
+    if (!process.env.ELECTRON_START_URL) {
+      setTimeout(() => {
+        console.log('[Updater] Checking for updates on startup...');
+        autoUpdater.checkForUpdates();
+      }, 5000);
+    }
 
     // Auto-updater event handlers - send to renderer for in-app notification UI.
     autoUpdater.on('checking-for-update', () => {
