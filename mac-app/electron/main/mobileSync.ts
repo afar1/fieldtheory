@@ -1,15 +1,35 @@
 /**
- * MobileSync - Syncs mobile transcriptions from Supabase to local clipboard history.
+ * MobileSync - Syncs mobile data (transcriptions, todos) from Supabase.
  * 
- * When a user records a transcription on their iOS device, it syncs to Supabase.
- * This module fetches those transcriptions and adds them to the Mac clipboard history
- * with source='ios', so they appear in the clipboard timeline ordered by their
- * original recording timestamp.
+ * Transcriptions: Synced to clipboard history with source='ios'.
+ * Todos: Synced bidirectionally - changes on Mac push back to Supabase.
  */
 
-import { createClient, SupabaseClient, Session } from '@supabase/supabase-js';
+import { createClient, SupabaseClient, Session, SupportedStorage } from '@supabase/supabase-js';
 import { ClipboardManager } from './clipboardManager';
 import { PreferencesManager } from './preferences';
+import { EventEmitter } from 'events';
+
+/**
+ * Simple in-memory storage adapter for Supabase auth in the main process.
+ * This is needed for OTP verification to work - the Supabase client needs
+ * to persist state between the OTP request and verification steps.
+ */
+class MemoryStorage implements SupportedStorage {
+  private storage: Map<string, string> = new Map();
+
+  async getItem(key: string): Promise<string | null> {
+    return this.storage.get(key) ?? null;
+  }
+
+  async setItem(key: string, value: string): Promise<void> {
+    this.storage.set(key, value);
+  }
+
+  async removeItem(key: string): Promise<void> {
+    this.storage.delete(key);
+  }
+}
 
 /**
  * Row from the Supabase transcripts table.
@@ -24,6 +44,32 @@ interface TranscriptRow {
 }
 
 /**
+ * Row from the Supabase todos table.
+ */
+interface TodoRow {
+  id: string;
+  user_id: string;
+  text: string;
+  completed: boolean;
+  client_id: string;
+  client_created_at_ms: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Local todo representation for the Mac app.
+ */
+export interface Todo {
+  id: string;           // Supabase UUID
+  clientId: string;     // Client-generated ID for deduplication
+  text: string;
+  completed: boolean;
+  createdAt: number;    // client_created_at_ms
+  updatedAt: number;    // Parsed from updated_at
+}
+
+/**
  * Preferences for mobile sync feature.
  */
 interface MobileSyncConfig {
@@ -34,11 +80,11 @@ interface MobileSyncConfig {
 }
 
 /**
- * Manages syncing mobile transcriptions to local clipboard history.
- * Periodically fetches new transcripts from Supabase and inserts them
- * as 'transcript' type items with source='ios'.
+ * Manages syncing mobile data to/from Supabase.
+ * - Transcriptions: One-way sync (iOS → Mac clipboard history)
+ * - Todos: Bidirectional sync (iOS ↔ Mac)
  */
-export class MobileSync {
+export class MobileSync extends EventEmitter {
   private clipboardManager: ClipboardManager;
   private preferences: PreferencesManager;
   private supabase: SupabaseClient | null = null;
@@ -48,11 +94,13 @@ export class MobileSync {
   private syncEnabled: boolean = true;
 
   // Track which client_ids we've already synced to avoid duplicates.
-  // The content hash in clipboard also prevents true duplicates, but this
-  // lets us skip the DB call entirely for known items.
   private syncedClientIds: Set<string> = new Set();
 
+  // Local cache of todos for the UI.
+  private todos: Todo[] = [];
+
   constructor(clipboardManager: ClipboardManager, preferences: PreferencesManager) {
+    super();
     this.clipboardManager = clipboardManager;
     this.preferences = preferences;
   }
@@ -71,10 +119,14 @@ export class MobileSync {
       return;
     }
 
+    // Use in-memory storage for auth state - required for OTP verification to work.
+    // The Supabase client needs storage to track state between OTP request and verify.
     this.supabase = createClient(url, anonKey, {
       auth: {
-        persistSession: false, // Main process doesn't persist sessions; we get them from renderer.
+        storage: new MemoryStorage(),
         autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: false,
       },
     });
 
@@ -135,6 +187,182 @@ export class MobileSync {
    */
   isSyncEnabled(): boolean {
     return this.syncEnabled;
+  }
+
+  // ===========================================================================
+  // Password Authentication - Simple email/password sign-in.
+  // ===========================================================================
+
+  /**
+   * Sign in with email and password.
+   * Users create accounts on iOS first, then sign in here.
+   */
+  async signInWithPassword(email: string, password: string): Promise<{ error: string | null; session: Session | null }> {
+    if (!this.supabase) {
+      return { error: 'Supabase not initialized', session: null };
+    }
+
+    console.log('[MobileSync] Signing in with password for:', email);
+
+    try {
+      const { data, error } = await this.supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        console.error('[MobileSync] Sign in failed:', error);
+        return { error: error.message, session: null };
+      }
+
+      if (data.session) {
+        this.session = data.session;
+        console.log('[MobileSync] Signed in, session established for:', data.session.user?.email);
+        this.startPeriodicSync();
+        return { error: null, session: data.session };
+      }
+
+      return { error: 'No session returned', session: null };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      console.error('[MobileSync] Sign in exception:', message);
+      return { error: message, session: null };
+    }
+  }
+
+  /**
+   * Send a password reset email.
+   * User clicks the link in the email, which opens a web page to set their password.
+   * After setting password, user returns to app and signs in.
+   */
+  async resetPasswordForEmail(email: string): Promise<{ error: string | null }> {
+    if (!this.supabase) {
+      return { error: 'Supabase not initialized' };
+    }
+
+    console.log('[MobileSync] Sending password reset email to:', email);
+
+    try {
+      // Redirect to our browser-based password reset page.
+      // This page handles the token and lets users set their password in a regular browser.
+      const { error } = await this.supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: 'http://localhost:5173/reset-password.html',
+      });
+
+      if (error) {
+        console.error('[MobileSync] Password reset email failed:', error);
+        return { error: error.message };
+      }
+
+      console.log('[MobileSync] Password reset email sent to:', email);
+      return { error: null };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      console.error('[MobileSync] Password reset exception:', message);
+      return { error: message };
+    }
+  }
+
+  /**
+   * Set a new password (used after clicking reset link).
+   * The session must already be established from the recovery token.
+   */
+  async updatePassword(newPassword: string): Promise<{ error: string | null }> {
+    if (!this.supabase) {
+      return { error: 'Supabase not initialized' };
+    }
+
+    if (!this.session) {
+      return { error: 'No active session - click the reset link in your email first' };
+    }
+
+    console.log('[MobileSync] Updating password...');
+
+    try {
+      const { error } = await this.supabase.auth.updateUser({
+        password: newPassword,
+      });
+
+      if (error) {
+        console.error('[MobileSync] Password update failed:', error);
+        return { error: error.message };
+      }
+
+      console.log('[MobileSync] Password updated successfully');
+      return { error: null };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      console.error('[MobileSync] Password update exception:', message);
+      return { error: message };
+    }
+  }
+
+  /**
+   * Set session from a recovery token (from password reset email link).
+   * The URL contains #access_token=...&refresh_token=...
+   */
+  async setSessionFromUrl(accessToken: string, refreshToken: string): Promise<{ error: string | null; session: Session | null }> {
+    if (!this.supabase) {
+      return { error: 'Supabase not initialized', session: null };
+    }
+
+    console.log('[MobileSync] Setting session from recovery token...');
+
+    try {
+      const { data, error } = await this.supabase.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      });
+
+      if (error) {
+        console.error('[MobileSync] Failed to set session from token:', error);
+        return { error: error.message, session: null };
+      }
+
+      if (data.session) {
+        this.session = data.session;
+        console.log('[MobileSync] Session established from recovery token for:', data.session.user?.email);
+        return { error: null, session: data.session };
+      }
+
+      return { error: 'No session returned', session: null };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      console.error('[MobileSync] Set session exception:', message);
+      return { error: message, session: null };
+    }
+  }
+
+  /**
+   * Sign out the current user.
+   */
+  async signOut(): Promise<{ error: string | null }> {
+    if (!this.supabase) {
+      return { error: 'Supabase not initialized' };
+    }
+
+    try {
+      const { error } = await this.supabase.auth.signOut();
+      
+      if (error) {
+        console.error('[MobileSync] Sign out failed:', error);
+        return { error: error.message };
+      }
+
+      this.clearSession();
+      return { error: null };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      console.error('[MobileSync] Sign out exception:', message);
+      return { error: message };
+    }
+  }
+
+  /**
+   * Get the current session (if any).
+   */
+  getSession(): Session | null {
+    return this.session;
   }
 
   /**
@@ -270,12 +498,316 @@ export class MobileSync {
     return this.syncTranscripts();
   }
 
+  // ==========================================================================
+  // Todo Sync - Bidirectional sync with Supabase
+  // ==========================================================================
+
+  /**
+   * Get all todos from local cache.
+   */
+  getTodos(): Todo[] {
+    return [...this.todos];
+  }
+
+  /**
+   * Check if authenticated (has valid session).
+   */
+  isAuthenticated(): boolean {
+    return !!(this.supabase && this.session);
+  }
+
+  /**
+   * Fetch todos from Supabase and update local cache.
+   * Emits 'todosChanged' event when todos are updated.
+   */
+  async syncTodos(): Promise<Todo[]> {
+    if (!this.supabase) {
+      console.warn('[MobileSync] syncTodos: Supabase not initialized');
+      return this.todos;
+    }
+    
+    if (!this.session) {
+      console.warn('[MobileSync] syncTodos: No session - user needs to log in via Settings → Mobile Sync');
+      return this.todos;
+    }
+
+    try {
+      console.log('[MobileSync] Fetching todos from Supabase...');
+      const { data: rows, error } = await this.supabase
+        .from('todos')
+        .select('*')
+        .order('client_created_at_ms', { ascending: false });
+
+      if (error) {
+        console.error('[MobileSync] Supabase query error:', error);
+        throw error;
+      }
+
+      if (!rows) {
+        console.log('[MobileSync] No todos returned from Supabase');
+        return this.todos;
+      }
+
+      // Convert rows to local Todo format.
+      this.todos = (rows as TodoRow[]).map(row => ({
+        id: row.id,
+        clientId: row.client_id,
+        text: row.text,
+        completed: row.completed,
+        createdAt: row.client_created_at_ms,
+        updatedAt: new Date(row.updated_at).getTime(),
+      }));
+
+      console.log(`[MobileSync] Synced ${this.todos.length} todos from Supabase`);
+      this.emit('todosChanged', this.todos);
+      return this.todos;
+    } catch (error) {
+      console.error('[MobileSync] Failed to sync todos:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Create a new todo and sync to Supabase.
+   */
+  async createTodo(text: string): Promise<Todo | null> {
+    if (!this.supabase || !this.session) {
+      console.warn('[MobileSync] Cannot create todo - not authenticated');
+      return null;
+    }
+
+    const clientId = crypto.randomUUID();
+    const now = Date.now();
+
+    try {
+      const { data, error } = await this.supabase
+        .from('todos')
+        .insert({
+          user_id: this.session.user.id,
+          text,
+          completed: false,
+          client_id: clientId,
+          client_created_at_ms: now,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      const newTodo: Todo = {
+        id: data.id,
+        clientId: data.client_id,
+        text: data.text,
+        completed: data.completed,
+        createdAt: data.client_created_at_ms,
+        updatedAt: new Date(data.updated_at).getTime(),
+      };
+
+      // Add to local cache at the beginning (newest first).
+      this.todos.unshift(newTodo);
+      this.emit('todosChanged', this.todos);
+
+      console.log(`[MobileSync] Created todo: ${text.substring(0, 30)}...`);
+      return newTodo;
+    } catch (error) {
+      console.error('[MobileSync] Failed to create todo:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Update a todo's text and sync to Supabase.
+   */
+  async updateTodo(id: string, text: string): Promise<Todo | null> {
+    if (!this.supabase || !this.session) {
+      console.warn('[MobileSync] Cannot update todo - not authenticated');
+      return null;
+    }
+
+    try {
+      const { data, error } = await this.supabase
+        .from('todos')
+        .update({ text })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      // Update local cache.
+      const index = this.todos.findIndex(t => t.id === id);
+      if (index !== -1) {
+        this.todos[index] = {
+          ...this.todos[index],
+          text: data.text,
+          updatedAt: new Date(data.updated_at).getTime(),
+        };
+        this.emit('todosChanged', this.todos);
+      }
+
+      console.log(`[MobileSync] Updated todo: ${id}`);
+      return this.todos[index] || null;
+    } catch (error) {
+      console.error('[MobileSync] Failed to update todo:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Toggle a todo's completed status and sync to Supabase.
+   */
+  async toggleTodo(id: string): Promise<Todo | null> {
+    if (!this.supabase || !this.session) {
+      console.warn('[MobileSync] Cannot toggle todo - not authenticated');
+      return null;
+    }
+
+    // Find current state.
+    const todo = this.todos.find(t => t.id === id);
+    if (!todo) {
+      console.warn(`[MobileSync] Todo not found: ${id}`);
+      return null;
+    }
+
+    try {
+      const { data, error } = await this.supabase
+        .from('todos')
+        .update({ completed: !todo.completed })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      // Update local cache.
+      const index = this.todos.findIndex(t => t.id === id);
+      if (index !== -1) {
+        this.todos[index] = {
+          ...this.todos[index],
+          completed: data.completed,
+          updatedAt: new Date(data.updated_at).getTime(),
+        };
+        this.emit('todosChanged', this.todos);
+      }
+
+      console.log(`[MobileSync] Toggled todo ${id} to ${data.completed ? 'complete' : 'incomplete'}`);
+      return this.todos[index] || null;
+    } catch (error) {
+      console.error('[MobileSync] Failed to toggle todo:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete a todo and sync to Supabase.
+   */
+  async deleteTodo(id: string): Promise<boolean> {
+    if (!this.supabase || !this.session) {
+      console.warn('[MobileSync] Cannot delete todo - not authenticated');
+      return false;
+    }
+
+    try {
+      const { error } = await this.supabase
+        .from('todos')
+        .delete()
+        .eq('id', id);
+
+      if (error) {
+        throw error;
+      }
+
+      // Remove from local cache.
+      this.todos = this.todos.filter(t => t.id !== id);
+      this.emit('todosChanged', this.todos);
+
+      console.log(`[MobileSync] Deleted todo: ${id}`);
+      return true;
+    } catch (error) {
+      console.error('[MobileSync] Failed to delete todo:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete multiple todos at once.
+   */
+  async deleteTodos(ids: string[]): Promise<boolean> {
+    if (!this.supabase || !this.session) {
+      console.warn('[MobileSync] Cannot delete todos - not authenticated');
+      return false;
+    }
+
+    try {
+      const { error } = await this.supabase
+        .from('todos')
+        .delete()
+        .in('id', ids);
+
+      if (error) {
+        throw error;
+      }
+
+      // Remove from local cache.
+      const idSet = new Set(ids);
+      this.todos = this.todos.filter(t => !idSet.has(t.id));
+      this.emit('todosChanged', this.todos);
+
+      console.log(`[MobileSync] Deleted ${ids.length} todos`);
+      return true;
+    } catch (error) {
+      console.error('[MobileSync] Failed to delete todos:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Mark multiple todos as complete.
+   */
+  async completeTodos(ids: string[]): Promise<boolean> {
+    if (!this.supabase || !this.session) {
+      console.warn('[MobileSync] Cannot complete todos - not authenticated');
+      return false;
+    }
+
+    try {
+      const { error } = await this.supabase
+        .from('todos')
+        .update({ completed: true })
+        .in('id', ids);
+
+      if (error) {
+        throw error;
+      }
+
+      // Update local cache.
+      const idSet = new Set(ids);
+      this.todos = this.todos.map(t => 
+        idSet.has(t.id) ? { ...t, completed: true, updatedAt: Date.now() } : t
+      );
+      this.emit('todosChanged', this.todos);
+
+      console.log(`[MobileSync] Marked ${ids.length} todos as complete`);
+      return true;
+    } catch (error) {
+      console.error('[MobileSync] Failed to complete todos:', error);
+      throw error;
+    }
+  }
+
   /**
    * Cleanup resources.
    */
   destroy(): void {
     this.stopPeriodicSync();
     this.session = null;
+    this.removeAllListeners();
     console.log('[MobileSync] Destroyed');
   }
 }

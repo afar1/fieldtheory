@@ -63,6 +63,9 @@ interface Preferences {
   continuousContextEnabled?: boolean;
   continuousContextHotkey?: string;
   
+  // Todo hotkey - opens clipboard history in todo view mode
+  todoHotkey?: string;
+  
   // All-time statistics tracking
   improvedPromptsCount?: number;
   
@@ -79,6 +82,7 @@ const DEFAULT_PREFERENCES: Preferences = {
   clipboardHistoryHotkey: 'Control+Alt+Space',
   continuousContextEnabled: false,
   continuousContextHotkey: 'Shift+Alt+1', // Default: Shift + screenshot hotkey
+  todoHotkey: 'Command+Shift+T', // Default: Cmd+Shift+T for todo list
 };
 
 /**

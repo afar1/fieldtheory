@@ -1,11 +1,16 @@
 // =============================================================================
 // ClipboardHistory - Alfred-style clipboard history popup.
 // Shows local clipboard history with fuzzy search and multi-select.
+// Also supports todo view mode (switched via Cmd+Shift+T hotkey).
 // =============================================================================
 
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import SettingsPanel from './SettingsPanel';
+import TodoView from './TodoView';
 import { useTheme } from '../contexts/ThemeContext';
+
+// View mode: clipboard history or todo list.
+type ViewMode = 'clipboard' | 'todo';
 
 type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
 type ClipboardSource = 'mac' | 'ios';
@@ -177,6 +182,7 @@ export default function ClipboardHistory() {
   const { theme, toggleDarkMode } = useTheme();
   const [isVisible, setIsVisible] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>('clipboard');
   const [items, setItems] = useState<ClipboardItem[]>([]);
   const [stacks, setStacks] = useState<StackInfo[]>([]);
   const [expandedStacks, setExpandedStacks] = useState<Set<string>>(new Set());
@@ -350,6 +356,14 @@ export default function ClipboardHistory() {
   useEffect(() => {
     if (!window.updaterAPI) return;
     
+    // Query current update status on mount (in case we missed the IPC event).
+    window.updaterAPI.getStatus().then((info) => {
+      if (info) {
+        setUpdateStatus(info.status);
+        setUpdateVersion(info.version);
+      }
+    });
+    
     const cleanups = [
       window.updaterAPI.onUpdateAvailable((info) => {
         setUpdateStatus('available');
@@ -516,10 +530,18 @@ export default function ClipboardHistory() {
       setSelectedIds(new Set());
       setIsMultiSelect(false);
       setShowSettings(false);
+      setViewMode('clipboard');
     });
 
     const unsubscribeShowSettings = window.clipboardAPI.onShowSettings?.(() => {
       setShowSettings(true);
+    });
+
+    // Listen for todo view hotkey (Cmd+Shift+T).
+    // Toggles between todo and clipboard view.
+    const unsubscribeShowTodos = window.todoAPI?.onShowTodos?.(() => {
+      setShowSettings(false);
+      setViewMode(prev => prev === 'todo' ? 'clipboard' : 'todo');
     });
 
     const unsubscribeTargetAppInfo = window.clipboardAPI.onTargetAppInfo?.((info) => {
@@ -554,6 +576,7 @@ export default function ClipboardHistory() {
     return () => {
       unsubscribeShowHistory();
       unsubscribeShowSettings?.();
+      unsubscribeShowTodos?.();
       unsubscribeTargetAppInfo?.();
       unsubscribeAdded();
       unsubscribeDeleted();
@@ -1460,7 +1483,7 @@ export default function ClipboardHistory() {
           letterSpacing: '0.5px',
           marginRight: 'auto',
         }}>
-          Fields
+          Field Theory
         </span>
         
         {/* Mic Lock dropdown */}
@@ -1602,9 +1625,11 @@ export default function ClipboardHistory() {
         )}
       </div>
       
-      {/* Conditionally show Settings or Clipboard History */}
+      {/* Conditionally show Settings, Todo View, or Clipboard History */}
       {showSettings ? (
         <SettingsPanel />
+      ) : viewMode === 'todo' ? (
+        <TodoView onSwitchToClipboard={() => setViewMode('clipboard')} />
       ) : (
         <div 
           style={{ 
@@ -2109,7 +2134,7 @@ export default function ClipboardHistory() {
                       marginTop: '4px',
                     }}>
                       {/* Metadata - left side with stack icon */}
-                      <div style={{ fontSize: '10px', color: improveResult?.stackId === stack.stackId ? '#34C759' : (theme.isDark ? '#2dd4bf' : '#14b8a6'), display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <div style={{ fontSize: '10px', color: improveResult?.stackId === stack.stackId ? '#34C759' : '#FBBF24', display: 'flex', alignItems: 'center', gap: '4px' }}>
                         {/* Stack icon - layered rectangles */}
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <rect x="4" y="4" width="16" height="6" rx="1" />
