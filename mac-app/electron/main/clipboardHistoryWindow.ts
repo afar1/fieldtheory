@@ -272,6 +272,7 @@ export class ClipboardHistoryWindow {
       minHeight: 500,  // Ensures settings and controls remain visible.
       movable: true,
       focusable: true,
+      acceptFirstMouse: true,       // Accept mouse events immediately (needed for drag with panels).
       fullscreenable: false,
       simpleFullscreen: false,
       show: false,
