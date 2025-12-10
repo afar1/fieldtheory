@@ -82,6 +82,10 @@ interface TranscribeAPI {
   setHotkey: (hotkey: string) => Promise<boolean>;
   getOverlayStyle: () => Promise<'rectangle' | 'top-emerging'>;
   setOverlayStyle: (style: 'rectangle' | 'top-emerging') => Promise<void>;
+  getAbandonHotkey?: () => Promise<string>;
+  setAbandonHotkey?: (hotkey: string) => Promise<boolean>;
+  getAbandonConfirmation?: () => Promise<boolean>;
+  setAbandonConfirmation?: (enabled: boolean) => Promise<void>;
   getStackCount: () => Promise<number>;
   onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
   onResult: (callback: (text: string) => void) => () => void;

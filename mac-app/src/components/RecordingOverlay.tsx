@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from 'react';
 
-type OverlayState = 'recording' | 'transcribing' | 'dismiss' | 'stacking-idle';
+type OverlayState = 'recording' | 'transcribing' | 'dismiss' | 'stacking-idle' | 'confirmation';
 type OverlayStyle = 'rectangle' | 'top-emerging';
 
 export default function RecordingOverlay() {
@@ -46,6 +46,81 @@ export default function RecordingOverlay() {
       unsubscribe?.();
     };
   }, []);
+  
+  // Handle confirmation state - show abandon confirmation UI.
+  if (state === 'confirmation') {
+    return (
+      <div style={{
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '8px',
+        padding: '12px 16px',
+        background: 'rgba(0, 0, 0, 0.9)',
+        borderRadius: '12px',
+        backdropFilter: 'blur(20px)',
+      }}>
+        {/* Warning message */}
+        <div style={{
+          fontSize: '12px',
+          fontWeight: 500,
+          color: '#fff',
+          textAlign: 'center',
+        }}>
+          Abandon recording?
+        </div>
+        
+        {/* Action buttons */}
+        <div style={{
+          display: 'flex',
+          gap: '8px',
+        }}>
+          <button
+            onClick={() => window.overlayAPI?.confirmAbandon?.()}
+            style={{
+              padding: '4px 12px',
+              fontSize: '11px',
+              fontWeight: 600,
+              color: '#fff',
+              backgroundColor: '#ff3b30',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+            }}
+          >
+            Abandon
+          </button>
+          <button
+            onClick={() => window.overlayAPI?.cancelAbandon?.()}
+            style={{
+              padding: '4px 12px',
+              fontSize: '11px',
+              fontWeight: 600,
+              color: '#fff',
+              backgroundColor: 'rgba(255, 255, 255, 0.2)',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+            }}
+          >
+            Continue
+          </button>
+        </div>
+        
+        {/* Hint */}
+        <div style={{
+          fontSize: '9px',
+          color: 'rgba(255, 255, 255, 0.6)',
+          marginTop: '2px',
+        }}>
+          Press Esc again to abandon, any other key to continue
+        </div>
+      </div>
+    );
+  }
 
   // In stacking mode, always use top-emerging style look
   const isTopEmerging = style === 'top-emerging' || isStackingMode;
@@ -155,6 +230,8 @@ declare global {
       onStateChange: (cb: (s: OverlayState) => void) => void;
       onStyleChange?: (cb: (s: OverlayStyle) => void) => void;
       onStackingModeChange?: (cb: (active: boolean) => void) => void;
+      confirmAbandon?: () => void;
+      cancelAbandon?: () => void;
       removeAllListeners: (c: string) => void;
     };
   }

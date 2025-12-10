@@ -1,4 +1,5 @@
-import { app, BrowserWindow, screen } from 'electron';
+import { app, BrowserWindow, screen, ipcMain } from 'electron';
+import { EventEmitter } from 'events';
 import path from 'path';
 import { OverlayStyle } from './preferences';
 
@@ -6,11 +7,13 @@ import { OverlayStyle } from './preferences';
  * Manages the recording indicator overlay window.
  * Shows a small, always-on-top window with live waveform animation.
  * Supports stacking mode with persistent "stacking" indicator.
+ * Supports confirmation dialogs for abandoning recordings.
  */
-export class RecordingOverlay {
+export class RecordingOverlay extends EventEmitter {
   private window: BrowserWindow | null = null;
   private overlayStyle: OverlayStyle = 'rectangle';
   private isStackingMode: boolean = false;
+  private isShowingConfirmation: boolean = false;
   
   // Rectangle style dimensions
   private readonly RECTANGLE_WIDTH = 100;
@@ -23,6 +26,23 @@ export class RecordingOverlay {
   // Stacking mode dimensions (slightly wider to fit "stacking" label)
   private readonly STACKING_WIDTH = 140;
   private readonly STACKING_HEIGHT = 44;
+  
+  // Confirmation dimensions (wider to fit message)
+  private readonly CONFIRMATION_WIDTH = 280;
+  private readonly CONFIRMATION_HEIGHT = 60;
+  
+  constructor() {
+    super();
+    
+    // Listen for confirmation responses from the overlay renderer.
+    ipcMain.on('overlay-abandon-confirmed', () => {
+      this.emit('abandon-confirmed');
+    });
+    
+    ipcMain.on('overlay-abandon-cancelled', () => {
+      this.emit('abandon-cancelled');
+    });
+  }
 
   /**
    * Set the overlay style preference.
@@ -244,7 +264,7 @@ export class RecordingOverlay {
     }, 300);
   }
 
-  private sendState(state: 'recording' | 'transcribing' | 'dismiss' | 'stacking-idle'): void {
+  private sendState(state: 'recording' | 'transcribing' | 'dismiss' | 'stacking-idle' | 'confirmation'): void {
     if (this.window && !this.window.isDestroyed()) {
       this.window.webContents.send('overlay-state', state);
     }
@@ -262,6 +282,68 @@ export class RecordingOverlay {
     }
   }
 
+  /**
+   * Show confirmation dialog for abandoning recording.
+   * Expands the overlay to show a confirmation message.
+   */
+  showConfirmation(): void {
+    if (!this.window || this.window.isDestroyed()) {
+      return;
+    }
+    
+    this.isShowingConfirmation = true;
+    
+    // Resize window to fit confirmation message.
+    const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
+    const newX = Math.floor((screenWidth - this.CONFIRMATION_WIDTH) / 2);
+    
+    this.window.setBounds({
+      x: newX,
+      y: 8,
+      width: this.CONFIRMATION_WIDTH,
+      height: this.CONFIRMATION_HEIGHT,
+    });
+    
+    this.sendState('confirmation');
+    console.log('[RecordingOverlay] Showing abandon confirmation');
+  }
+  
+  /**
+   * Hide confirmation dialog and return to recording state.
+   */
+  hideConfirmation(): void {
+    if (!this.window || this.window.isDestroyed() || !this.isShowingConfirmation) {
+      return;
+    }
+    
+    this.isShowingConfirmation = false;
+    
+    // Resize window back to normal recording size.
+    const isTopEmerging = this.overlayStyle === 'top-emerging';
+    const width = isTopEmerging ? this.TOP_EMERGING_WIDTH : this.RECTANGLE_WIDTH;
+    const height = isTopEmerging ? this.TOP_EMERGING_HEIGHT : this.RECTANGLE_HEIGHT;
+    const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
+    const newX = Math.floor((screenWidth - width) / 2);
+    const y = isTopEmerging ? 8 : 50;
+    
+    this.window.setBounds({
+      x: newX,
+      y,
+      width,
+      height,
+    });
+    
+    this.sendState('recording');
+    console.log('[RecordingOverlay] Hiding abandon confirmation');
+  }
+  
+  /**
+   * Check if confirmation dialog is currently showing.
+   */
+  isConfirmationShowing(): boolean {
+    return this.isShowingConfirmation;
+  }
+
   isVisible(): boolean {
     return this.window !== null && !this.window.isDestroyed() && this.window.isVisible();
   }
@@ -271,5 +353,9 @@ export class RecordingOverlay {
       this.window.close();
       this.window = null;
     }
+    
+    // Remove IPC listeners.
+    ipcMain.removeAllListeners('overlay-abandon-confirmed');
+    ipcMain.removeAllListeners('overlay-abandon-cancelled');
   }
 }
