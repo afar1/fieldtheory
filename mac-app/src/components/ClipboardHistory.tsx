@@ -2036,7 +2036,6 @@ export default function ClipboardHistory() {
                     }}
                     onMouseLeave={() => setHoveredRowIndex(null)}
                     onClick={(e) => {
-                      // dnd-kit handles drag vs click distinction via activation constraint.
                       const hasShift = e.shiftKey;
                       const hasMeta = e.metaKey || e.ctrlKey; // Cmd on Mac, Ctrl on Windows
                       
@@ -2570,10 +2569,7 @@ export default function ClipboardHistory() {
                       }
                     }}
                     onMouseLeave={() => setHoveredRowIndex(null)}
-                    onClick={(e) => {
-                      // dnd-kit handles drag vs click distinction via activation constraint.
-                      handleItemClick(item, index, e);
-                    }}
+                    onClick={(e) => handleItemClick(item, index, e)}
                     style={{
                       padding: '12px 16px',
                       backgroundColor: isInStack ? theme.selectedBg : isRowSelected ? theme.bgSecondary : 'transparent',
