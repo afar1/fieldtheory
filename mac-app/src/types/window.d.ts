@@ -321,10 +321,44 @@ interface UpdateInfo {
 }
 
 /**
+ * Permission status for onboarding.
+ */
+interface OnboardingPermissionStatus {
+  microphone: 'granted' | 'denied' | 'not-determined';
+  accessibility: boolean;
+}
+
+/**
+ * Onboarding state.
+ */
+interface OnboardingState {
+  isComplete: boolean;
+  currentStep: number;
+  permissions: OnboardingPermissionStatus;
+  modelDownloaded: boolean;
+}
+
+/**
+ * The onboarding API for first-run wizard.
+ */
+interface OnboardingAPI {
+  getPermissionStatus: () => Promise<OnboardingPermissionStatus>;
+  requestMicrophone: () => Promise<boolean>;
+  openAccessibilitySettings: () => Promise<boolean>;
+  getState: () => Promise<OnboardingState>;
+  setStep: (step: number) => Promise<boolean>;
+  complete: () => Promise<boolean>;
+  skip: () => Promise<boolean>;
+  reset: () => Promise<boolean>;
+  checkModelStatus: () => Promise<{ downloaded: boolean }>;
+}
+
+/**
  * The updater API for in-app update notifications.
  */
 interface UpdaterAPI {
   getVersion: () => string;
+  getStatus: () => Promise<{ status: 'available' | 'downloading' | 'ready'; version: string } | null>;
   checkForUpdates: () => Promise<void>;
   downloadUpdate: () => Promise<void>;
   installUpdate: () => Promise<void>;
@@ -334,6 +368,47 @@ interface UpdaterAPI {
   onDownloadProgress: (callback: (percent: number) => void) => () => void;
   onUpdateDownloaded: (callback: (info: UpdateInfo) => void) => () => void;
   onError: (callback: (error: string) => void) => () => void;
+}
+
+/**
+ * Todo item synced from Supabase.
+ */
+interface Todo {
+  id: string;
+  clientId: string;
+  text: string;
+  completed: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * The todo API for bidirectional sync with Supabase.
+ */
+interface TodoAPI {
+  isAuthenticated: () => Promise<boolean>;
+  getTodos: () => Promise<Todo[]>;
+  syncTodos: () => Promise<Todo[]>;
+  createTodo: (text: string) => Promise<Todo | null>;
+  updateTodo: (id: string, text: string) => Promise<Todo | null>;
+  toggleTodo: (id: string) => Promise<Todo | null>;
+  deleteTodo: (id: string) => Promise<boolean>;
+  deleteTodos: (ids: string[]) => Promise<boolean>;
+  completeTodos: (ids: string[]) => Promise<boolean>;
+  getHotkey: () => Promise<string>;
+  setHotkey: (hotkey: string) => Promise<boolean>;
+  onTodosChanged: (callback: (todos: Todo[]) => void) => () => void;
+  onShowTodos: (callback: () => void) => () => void;
+}
+
+/**
+ * Auth API for OTP authentication via main process (avoids CORS).
+ */
+interface AuthAPI {
+  requestOtp: (email: string) => Promise<{ error: string | null }>;
+  verifyOtp: (email: string, token: string) => Promise<{ error: string | null; session: any | null }>;
+  signOut: () => Promise<{ error: string | null }>;
+  getSession: () => Promise<any | null>;
 }
 
 /**
@@ -348,6 +423,9 @@ declare global {
     permissionsAPI?: PermissionsAPI;
     electronAPI?: ElectronAPI;
     updaterAPI?: UpdaterAPI;
+    onboardingAPI?: OnboardingAPI;
+    todoAPI?: TodoAPI;
+    authAPI?: AuthAPI;
     platform?: PlatformInfo;
   }
 }
