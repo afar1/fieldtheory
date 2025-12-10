@@ -8,6 +8,18 @@ import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import SettingsPanel from './SettingsPanel';
 import TodoView from './TodoView';
 import { useTheme } from '../contexts/ThemeContext';
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragStartEvent,
+  DragOverEvent,
+  DragEndEvent,
+  useDraggable,
+  useDroppable,
+} from '@dnd-kit/core';
 
 // View mode: clipboard history or todo list.
 type ViewMode = 'clipboard' | 'todo';
@@ -141,6 +153,48 @@ function combineStackText(items: ClipboardItem[]): string {
   return textParts.join('\n\n');
 }
 
+
+/**
+ * DraggableDroppableRow - wrapper that makes a row both draggable and a drop target.
+ * Uses dnd-kit's useDraggable and useDroppable hooks.
+ */
+function DraggableDroppableRow({
+  id,
+  children,
+  style,
+  isOver,
+  isDragging,
+  ...props
+}: {
+  id: string;
+  children: React.ReactNode;
+  style?: React.CSSProperties;
+  isOver?: boolean;
+  isDragging?: boolean;
+} & React.HTMLAttributes<HTMLDivElement>) {
+  const { attributes, listeners, setNodeRef: setDragRef } = useDraggable({ id });
+  const { setNodeRef: setDropRef } = useDroppable({ id });
+
+  return (
+    <div
+      ref={(node) => {
+        setDragRef(node);
+        setDropRef(node);
+      }}
+      {...attributes}
+      {...listeners}
+      {...props}
+      style={{
+        ...style,
+        opacity: isDragging ? 0.5 : 1,
+        outline: isOver ? '2px solid #2dd4bf' : 'none',
+        outlineOffset: '-2px',
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
 /**
  * KeyCap component - renders a keyboard key with 3D styling.
@@ -438,6 +492,21 @@ export default function ClipboardHistory() {
   const [pendingStackSelection, setPendingStackSelection] = useState<string | null>(null);
   const [pendingItemSelection, setPendingItemSelection] = useState<number | null>(null);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+
+  // dnd-kit drag state - tracks what's being dragged.
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [overDropId, setOverDropId] = useState<string | null>(null);
+
+  // Pointer sensor with distance activation - must move 5px before drag starts.
+  // This distinguishes clicks from drags.
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 5,
+      },
+    })
+  );
+
   // Format numbers with commas (e.g., 16,000)
   const formatNumber = (num: number): string => num.toLocaleString();
 
@@ -662,6 +731,62 @@ export default function ClipboardHistory() {
   
   // Memoize listRows so it's available in keyboard handler
   const listRows = useMemo(() => buildListRows(), [buildListRows]);
+
+  // ---------------------------------------------------------------------------
+  // dnd-kit drag handlers.
+  // Uses pointer events internally, works with NSPanel (type: 'panel').
+  // ---------------------------------------------------------------------------
+
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    setActiveDragId(event.active.id as string);
+  }, []);
+
+  const handleDragOver = useCallback((event: DragOverEvent) => {
+    setOverDropId(event.over?.id as string ?? null);
+  }, []);
+
+  const handleDragEnd = useCallback(async (event: DragEndEvent) => {
+    const { active, over } = event;
+    setActiveDragId(null);
+    setOverDropId(null);
+
+    if (!over || active.id === over.id) return;
+
+    // Parse drag IDs: "stack:uuid" or "item:123"
+    const [activeType, activeId] = (active.id as string).split(':');
+    const [overType, overId] = (over.id as string).split(':');
+
+    if (activeType === 'item') {
+      const draggedItemId = parseInt(activeId, 10);
+      if (overType === 'stack') {
+        // Item dropped on stack -> add to stack.
+        await window.clipboardAPI?.updateStackId?.([draggedItemId], overId);
+      } else if (overType === 'item') {
+        const targetItemId = parseInt(overId, 10);
+        if (draggedItemId !== targetItemId) {
+          // Item dropped on item -> create new stack.
+          const newStackId = crypto.randomUUID();
+          await window.clipboardAPI?.updateStackId?.([draggedItemId, targetItemId], newStackId);
+        }
+      }
+    } else if (activeType === 'stack') {
+      const draggedStackId = activeId;
+      if (overType === 'stack' && draggedStackId !== overId) {
+        // Stack dropped on stack -> merge stacks.
+        const otherItems = await window.clipboardAPI?.queryItemsByStackId?.(draggedStackId);
+        if (otherItems?.length) {
+          const itemIds = otherItems.map((i: ClipboardItem) => i.id);
+          await window.clipboardAPI?.updateStackId?.(itemIds, overId);
+        }
+      } else if (overType === 'item') {
+        // Stack dropped on item -> add item to the dragged stack.
+        const targetItemId = parseInt(overId, 10);
+        await window.clipboardAPI?.updateStackId?.([targetItemId], draggedStackId);
+      }
+    }
+
+    loadItems(true);
+  }, [loadItems]);
 
   // Handle pending selection after stack/unstack operations
   useEffect(() => {
@@ -1842,6 +1967,12 @@ export default function ClipboardHistory() {
           </div>
 
           {/* Items list */}
+          <DndContext
+            sensors={sensors}
+            onDragStart={handleDragStart}
+            onDragOver={handleDragOver}
+            onDragEnd={handleDragEnd}
+          >
           <div
             ref={listRef}
             style={{
@@ -1868,40 +1999,6 @@ export default function ClipboardHistory() {
             if (row.type === 'stack') {
               // Render a prompt stack row
               const { stack, items: stackItems, expanded } = row;
-              
-              // Handle drag start for stack (in-app combining only - no OS drag)
-              const handleStackDragStart = (e: React.DragEvent) => {
-                e.dataTransfer.setData('text/plain', stack.stackId);
-                e.dataTransfer.effectAllowed = 'copy';
-              };
-
-              // Handle drop on stack (merge stacks or add item)
-              const handleStackDrop = async (e: React.DragEvent) => {
-                e.preventDefault();
-                const data = e.dataTransfer.getData('text/plain');
-                
-                if (data.startsWith('item:')) {
-                  // An item dropped on this stack - add to stack
-                  const droppedItemId = parseInt(data.replace('item:', ''), 10);
-                  await window.clipboardAPI?.updateStackId?.([droppedItemId], stack.stackId);
-                  loadItems(true);
-                } else if (data && data !== stack.stackId) {
-                  // Another stack dropped on this stack - merge them
-                  const otherStackId = data;
-                  // Get items from other stack and add to this stack
-                  const otherStackItems = await window.clipboardAPI?.queryItemsByStackId?.(otherStackId);
-                  if (otherStackItems && otherStackItems.length > 0) {
-                    const itemIds = otherStackItems.map((i: ClipboardItem) => i.id);
-                    await window.clipboardAPI?.updateStackId?.(itemIds, stack.stackId);
-                    loadItems(true);
-                  }
-                }
-              };
-
-              const handleStackDragOver = (e: React.DragEvent) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = 'copy';
-              };
 
               // Get images and text separately for rendering
               const stackImages = stackItems.filter(i => (i.type === 'image' || i.type === 'screenshot') && i.imageData);
@@ -1911,14 +2008,17 @@ export default function ClipboardHistory() {
               // "Show more" is controlled by actual overflow detection, not character count.
               const textIsOverflowing = overflowingTexts.has(stack.stackId);
 
+              const stackDragId = `stack:${stack.stackId}`;
+              const isStackDragging = activeDragId === stackDragId;
+              const isStackOver = overDropId === stackDragId;
+
               return (
                 <div key={`stack-${stack.stackId}`}>
-                  {/* Stack row - draggable and droppable */}
-                  <div
-                    draggable
-                    onDragStart={handleStackDragStart}
-                    onDrop={handleStackDrop}
-                    onDragOver={handleStackDragOver}
+                  {/* Stack row - dnd-kit handles drag */}
+                  <DraggableDroppableRow
+                    id={stackDragId}
+                    isDragging={isStackDragging}
+                    isOver={isStackOver && !isStackDragging}
                     onMouseEnter={(e) => {
                       // Always track hover for button visibility
                       setHoveredRowIndex(index);
@@ -1933,6 +2033,7 @@ export default function ClipboardHistory() {
                     }}
                     onMouseLeave={() => setHoveredRowIndex(null)}
                     onClick={(e) => {
+                      // dnd-kit handles drag vs click distinction via activation constraint.
                       const hasShift = e.shiftKey;
                       const hasMeta = e.metaKey || e.ctrlKey; // Cmd on Mac, Ctrl on Windows
                       
@@ -2042,7 +2143,8 @@ export default function ClipboardHistory() {
                           : '0 2px 8px rgba(0,0,0,0.08)'
                         : 'none',
                       transition: 'background-color 0.3s ease, border-left 0.3s ease, box-shadow 0.3s ease',
-                      cursor: 'pointer',
+                      cursor: activeDragId ? 'grabbing' : 'grab',
+                      userSelect: 'none',
                     }}
                   >
                     {/* Content section - full width */}
@@ -2425,7 +2527,7 @@ export default function ClipboardHistory() {
                         </button>
                       </div>
                     </div>
-                  </div>
+                  </DraggableDroppableRow>
 
                 </div>
               );
@@ -2435,53 +2537,23 @@ export default function ClipboardHistory() {
               const isSelected = selectedIndex === index;
               const isInStack = selectedIds.has(item.id);
 
-              // Handle drag start for individual item
-              const handleItemDragStart = (e: React.DragEvent) => {
-                e.dataTransfer.setData('text/plain', `item:${item.id}`);
-                e.dataTransfer.effectAllowed = 'copy';
-              };
-
-              // Handle drop on item (create/join stack)
-              const handleItemDrop = async (e: React.DragEvent) => {
-                e.preventDefault();
-                const data = e.dataTransfer.getData('text/plain');
-                
-                if (data.startsWith('item:')) {
-                  // Another item dropped on this item - create a new stack
-                  const droppedItemId = parseInt(data.replace('item:', ''), 10);
-                  if (droppedItemId !== item.id) {
-                    // Generate a new stack ID and add both items
-                    const newStackId = crypto.randomUUID();
-                    await window.clipboardAPI?.updateStackId?.([droppedItemId, item.id], newStackId);
-                    loadItems(true);
-                  }
-                } else if (data && !data.startsWith('item:')) {
-                  // A stack dropped on this item - add item to stack
-                  const stackId = data;
-                  await window.clipboardAPI?.updateStackId?.([item.id], stackId);
-                  loadItems(true);
-                }
-              };
-
-              const handleItemDragOver = (e: React.DragEvent) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = 'copy';
-              };
-
               const hasText = (item.type === 'text' || item.type === 'transcript') && item.content;
               const isRowSelected = selectedIndex === index;
               const itemExpanded = expandedItems.has(item.id);
               // "Show more" is controlled by actual overflow detection, not character count.
               const itemTextId = `item-${item.id}`;
               const itemTextIsOverflowing = overflowingTexts.has(itemTextId);
+
+              const itemDragId = `item:${item.id}`;
+              const isItemDragging = activeDragId === itemDragId;
+              const isItemOver = overDropId === itemDragId;
               
               return (
                 <div key={item.id}>
-                  <div
-                    draggable
-                    onDragStart={handleItemDragStart}
-                    onDrop={handleItemDrop}
-                    onDragOver={handleItemDragOver}
+                  <DraggableDroppableRow
+                    id={itemDragId}
+                    isDragging={isItemDragging}
+                    isOver={isItemOver && !isItemDragging}
                     onMouseEnter={(e) => {
                       // Always track hover for button visibility
                       setHoveredRowIndex(index);
@@ -2495,7 +2567,10 @@ export default function ClipboardHistory() {
                       }
                     }}
                     onMouseLeave={() => setHoveredRowIndex(null)}
-                    onClick={(e) => handleItemClick(item, index, e)}
+                    onClick={(e) => {
+                      // dnd-kit handles drag vs click distinction via activation constraint.
+                      handleItemClick(item, index, e);
+                    }}
                     style={{
                       padding: '12px 16px',
                       backgroundColor: isInStack ? theme.selectedBg : isRowSelected ? theme.bgSecondary : 'transparent',
@@ -2515,9 +2590,10 @@ export default function ClipboardHistory() {
                           : '0 2px 8px rgba(0,0,0,0.08)'
                         : 'none',
                       transition: 'background-color 0.1s ease, border-left 0.1s ease, box-shadow 0.1s ease',
-                      cursor: 'grab',
+                      cursor: activeDragId ? 'grabbing' : 'grab',
                       display: 'flex',
                       flexDirection: 'column',
+                      userSelect: 'none',
                     }}
                   >
                   {/* Content section - full width */}
@@ -3003,7 +3079,7 @@ export default function ClipboardHistory() {
                       </button>
                     </div>
                   </div>
-                  </div>
+                  </DraggableDroppableRow>
                 </div>
               );
             }
@@ -3030,6 +3106,27 @@ export default function ClipboardHistory() {
           </button>
         )}
         </div>
+
+        {/* Drag overlay - shows ghost element while dragging */}
+        <DragOverlay>
+          {activeDragId ? (
+            <div
+              style={{
+                padding: '6px 10px',
+                backgroundColor: theme.bgSecondary,
+                border: `1px solid ${theme.border}`,
+                borderRadius: '6px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                fontSize: '12px',
+                color: theme.text,
+                opacity: 0.9,
+              }}
+            >
+              {activeDragId.startsWith('stack:') ? 'Stack' : 'Item'}
+            </div>
+          ) : null}
+        </DragOverlay>
+        </DndContext>
         </div>
       )}
       
