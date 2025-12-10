@@ -257,6 +257,7 @@ export class ClipboardHistoryWindow {
     // Native vibrancy window options.
     // Key difference from old approach: window IS the dialog (not a full-screen overlay).
     const options: BrowserWindowConstructorOptions = {
+      type: 'panel',                // NSPanel for Alfred-like behavior over full-screen apps.
       width: windowWidth,
       height: windowHeight,
       x: windowX,
@@ -265,7 +266,6 @@ export class ClipboardHistoryWindow {
       transparent: false,
       vibrancy: 'under-window',     // Blur what's behind the window.
       visualEffectState: 'active',
-      alwaysOnTop: true,
       skipTaskbar: true,
       resizable: true,
       minWidth: 750,   // Minimum to fit all components including recording UI.
@@ -288,6 +288,10 @@ export class ClipboardHistoryWindow {
     this.previouslyFocusedWindow = BrowserWindow.getFocusedWindow() || null;
 
     this.window = new BrowserWindow(options);
+
+    // Appear over full-screen apps (like Alfred/Spotlight).
+    this.window.setAlwaysOnTop(true, 'screen-saver', 1);
+    this.window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
     this.window.on('closed', () => {
       this.window = null;
