@@ -75,6 +75,16 @@ const ClipboardIPCChannels = {
   SET_API_KEY: 'clipboard:setApiKey',
   CLEAR_API_KEY: 'clipboard:clearApiKey',
   
+  // System prompt customization for Engineer feature
+  GET_SYSTEM_PROMPT: 'clipboard:getSystemPrompt',
+  SET_SYSTEM_PROMPT: 'clipboard:setSystemPrompt',
+  RESET_SYSTEM_PROMPT: 'clipboard:resetSystemPrompt',
+  GET_DEFAULT_SYSTEM_PROMPT: 'clipboard:getDefaultSystemPrompt',
+  
+  // Improved content management
+  SAVE_IMPROVED_CONTENT: 'clipboard:saveImprovedContent',
+  CLEAR_IMPROVED_CONTENT: 'clipboard:clearImprovedContent',
+  
   // Continuous Context mode
   GET_CONTINUOUS_CONTEXT_STATE: 'clipboard:getContinuousContextState',
   SET_CONTINUOUS_CONTEXT_ENABLED: 'clipboard:setContinuousContextEnabled',
@@ -96,6 +106,22 @@ const OnboardingIPCChannels = {
   SKIP_ONBOARDING: 'onboarding:skip',
   RESET_ONBOARDING: 'onboarding:reset',
   CHECK_MODEL_STATUS: 'onboarding:checkModelStatus',
+} as const;
+
+// Todo IPC channels for bidirectional sync with Supabase.
+const TodoIPCChannels = {
+  GET_TODOS: 'todo:getTodos',
+  SYNC_TODOS: 'todo:syncTodos',
+  CREATE_TODO: 'todo:createTodo',
+  UPDATE_TODO: 'todo:updateTodo',
+  TOGGLE_TODO: 'todo:toggleTodo',
+  DELETE_TODO: 'todo:deleteTodo',
+  DELETE_TODOS: 'todo:deleteTodos',
+  COMPLETE_TODOS: 'todo:completeTodos',
+  TODOS_CHANGED: 'todo:todosChanged',
+  SHOW_TODOS: 'todo:showTodos',
+  GET_TODO_HOTKEY: 'todo:getHotkey',
+  SET_TODO_HOTKEY: 'todo:setHotkey',
 } as const;
 
 const UpdaterIPCChannels = {
@@ -152,6 +178,7 @@ type ClipboardItem = {
   id: number;
   type: ClipboardItemType;
   content: string | null;
+  improvedContent: string | null; // Improved version from Engineer feature
   imageData: string | null;
   imageWidth: number | null;
   imageHeight: number | null;
@@ -205,6 +232,16 @@ type ContinuousContextState = {
   active: boolean;
   stackId: string | null;
   screenshotCount: number;
+};
+
+// Todo type for bidirectional sync with Supabase.
+type Todo = {
+  id: string;           // Supabase UUID
+  clientId: string;     // Client-generated ID for deduplication
+  text: string;
+  completed: boolean;
+  createdAt: number;    // client_created_at_ms
+  updatedAt: number;    // Parsed from updated_at
 };
 
 type PermissionStatus = {
@@ -323,6 +360,16 @@ export interface ClipboardAPI {
   getApiKeyStatus: () => Promise<{ hasKey: boolean }>;
   setApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>;
   clearApiKey: () => Promise<{ success: boolean; error?: string }>;
+  
+  // System prompt customization for Engineer feature
+  getSystemPrompt: () => Promise<{ prompt: string; isCustom: boolean }>;
+  setSystemPrompt: (prompt: string) => Promise<{ success: boolean; error?: string }>;
+  resetSystemPrompt: () => Promise<{ success: boolean; error?: string }>;
+  getDefaultSystemPrompt: () => Promise<{ prompt: string }>;
+  
+  // Improved content management - store/clear improved versions of transcriptions
+  saveImprovedContent: (itemId: number, improvedContent: string) => Promise<{ success: boolean; error?: string }>;
+  clearImprovedContent: (itemId: number) => Promise<{ success: boolean; error?: string }>;
   
   // Mobile sync operations - sync iOS transcriptions to clipboard history
   setSyncSession: (accessToken: string, refreshToken: string) => Promise<boolean>;
@@ -726,6 +773,32 @@ const clipboardAPI: ClipboardAPI = {
     return ipcRenderer.invoke(ClipboardIPCChannels.CLEAR_API_KEY);
   },
 
+  // System prompt customization for Engineer feature
+  getSystemPrompt: async (): Promise<{ prompt: string; isCustom: boolean }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_SYSTEM_PROMPT);
+  },
+
+  setSystemPrompt: async (prompt: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SET_SYSTEM_PROMPT, prompt);
+  },
+
+  resetSystemPrompt: async (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.RESET_SYSTEM_PROMPT);
+  },
+
+  getDefaultSystemPrompt: async (): Promise<{ prompt: string }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_DEFAULT_SYSTEM_PROMPT);
+  },
+
+  // Improved content management - store/clear improved versions of transcriptions
+  saveImprovedContent: async (itemId: number, improvedContent: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SAVE_IMPROVED_CONTENT, itemId, improvedContent);
+  },
+
+  clearImprovedContent: async (itemId: number): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.CLEAR_IMPROVED_CONTENT, itemId);
+  },
+
   // Mobile sync operations - sync iOS transcriptions to clipboard history
   setSyncSession: async (accessToken: string, refreshToken: string): Promise<boolean> => {
     return ipcRenderer.invoke('clipboard:setSyncSession', accessToken, refreshToken);
@@ -948,6 +1021,10 @@ const updaterAPI = {
     return ipcRenderer.sendSync('app:getVersion');
   },
 
+  getStatus: async (): Promise<{ status: 'available' | 'downloading' | 'ready'; version: string } | null> => {
+    return ipcRenderer.invoke('updater:getStatus');
+  },
+
   checkForUpdates: async (): Promise<void> => {
     return ipcRenderer.invoke(UpdaterIPCChannels.CHECK_FOR_UPDATES);
   },
@@ -997,12 +1074,129 @@ const updaterAPI = {
 
 type UpdaterAPI = typeof updaterAPI;
 
+// ==========================================================================
+// Todo API - Bidirectional sync with Supabase for iOS todos
+// ==========================================================================
+
+const todoAPI = {
+  // Check if user is authenticated for sync.
+  isAuthenticated: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('todo:isAuthenticated');
+  },
+
+  // Get all cached todos (call syncTodos first for fresh data).
+  getTodos: async (): Promise<Todo[]> => {
+    return ipcRenderer.invoke(TodoIPCChannels.GET_TODOS);
+  },
+
+  // Fetch todos from Supabase and update cache.
+  syncTodos: async (): Promise<Todo[]> => {
+    return ipcRenderer.invoke(TodoIPCChannels.SYNC_TODOS);
+  },
+
+  // Create a new todo.
+  createTodo: async (text: string): Promise<Todo | null> => {
+    return ipcRenderer.invoke(TodoIPCChannels.CREATE_TODO, text);
+  },
+
+  // Update a todo's text.
+  updateTodo: async (id: string, text: string): Promise<Todo | null> => {
+    return ipcRenderer.invoke(TodoIPCChannels.UPDATE_TODO, id, text);
+  },
+
+  // Toggle a todo's completed status.
+  toggleTodo: async (id: string): Promise<Todo | null> => {
+    return ipcRenderer.invoke(TodoIPCChannels.TOGGLE_TODO, id);
+  },
+
+  // Delete a single todo.
+  deleteTodo: async (id: string): Promise<boolean> => {
+    return ipcRenderer.invoke(TodoIPCChannels.DELETE_TODO, id);
+  },
+
+  // Delete multiple todos.
+  deleteTodos: async (ids: string[]): Promise<boolean> => {
+    return ipcRenderer.invoke(TodoIPCChannels.DELETE_TODOS, ids);
+  },
+
+  // Mark multiple todos as complete.
+  completeTodos: async (ids: string[]): Promise<boolean> => {
+    return ipcRenderer.invoke(TodoIPCChannels.COMPLETE_TODOS, ids);
+  },
+
+  // Get the todo hotkey.
+  getHotkey: async (): Promise<string> => {
+    return ipcRenderer.invoke(TodoIPCChannels.GET_TODO_HOTKEY);
+  },
+
+  // Set the todo hotkey.
+  setHotkey: async (hotkey: string): Promise<boolean> => {
+    return ipcRenderer.invoke(TodoIPCChannels.SET_TODO_HOTKEY, hotkey);
+  },
+
+  // Listen for todos changed events (from sync or other windows).
+  onTodosChanged: (callback: (todos: Todo[]) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, todos: Todo[]) => {
+      callback(todos);
+    };
+    ipcRenderer.on(TodoIPCChannels.TODOS_CHANGED, handler);
+    return () => {
+      ipcRenderer.removeListener(TodoIPCChannels.TODOS_CHANGED, handler);
+    };
+  },
+
+  // Listen for show todos event (triggered by hotkey).
+  onShowTodos: (callback: () => void): (() => void) => {
+    const handler = () => {
+      callback();
+    };
+    ipcRenderer.on(TodoIPCChannels.SHOW_TODOS, handler);
+    return () => {
+      ipcRenderer.removeListener(TodoIPCChannels.SHOW_TODOS, handler);
+    };
+  },
+};
+
+type TodoAPI = typeof todoAPI;
+
+// =============================================================================
+// Auth API - Password authentication via main process
+// =============================================================================
+
+const authAPI = {
+  // Sign in with email and password.
+  signInWithPassword: (email: string, password: string) => 
+    ipcRenderer.invoke('auth:signInWithPassword', email, password),
+  
+  // Send password reset email.
+  resetPasswordForEmail: (email: string) => 
+    ipcRenderer.invoke('auth:resetPasswordForEmail', email),
+  
+  // Update password (after clicking reset link).
+  updatePassword: (newPassword: string) => 
+    ipcRenderer.invoke('auth:updatePassword', newPassword),
+  
+  // Set session from recovery token in URL.
+  setSessionFromUrl: (accessToken: string, refreshToken: string) =>
+    ipcRenderer.invoke('auth:setSessionFromUrl', accessToken, refreshToken),
+  
+  // Sign out.
+  signOut: () => ipcRenderer.invoke('auth:signOut'),
+  
+  // Get current session.
+  getSession: () => ipcRenderer.invoke('auth:getSession'),
+};
+
+type AuthAPI = typeof authAPI;
+
 contextBridge.exposeInMainWorld('audioAPI', audioAPI);
 contextBridge.exposeInMainWorld('transcribeAPI', transcribeAPI);
 contextBridge.exposeInMainWorld('clipboardAPI', clipboardAPI);
 contextBridge.exposeInMainWorld('permissionsAPI', permissionsAPI);
 contextBridge.exposeInMainWorld('onboardingAPI', onboardingAPI);
 contextBridge.exposeInMainWorld('updaterAPI', updaterAPI);
+contextBridge.exposeInMainWorld('todoAPI', todoAPI);
+contextBridge.exposeInMainWorld('authAPI', authAPI);
 
 contextBridge.exposeInMainWorld('platform', {
   isMacOS: process.platform === 'darwin',
@@ -1019,6 +1213,8 @@ declare global {
     permissionsAPI: PermissionsAPI;
     onboardingAPI: OnboardingAPI;
     updaterAPI: UpdaterAPI;
+    todoAPI: TodoAPI;
+    authAPI: AuthAPI;
     platform: {
       isMacOS: boolean;
       isWindows: boolean;

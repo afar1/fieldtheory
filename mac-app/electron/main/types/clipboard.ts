@@ -41,6 +41,16 @@ export const ClipboardIPCChannels = {
   SET_API_KEY: 'clipboard:setApiKey',
   CLEAR_API_KEY: 'clipboard:clearApiKey',
   
+  // System prompt customization for Engineer feature
+  GET_SYSTEM_PROMPT: 'clipboard:getSystemPrompt',
+  SET_SYSTEM_PROMPT: 'clipboard:setSystemPrompt',
+  RESET_SYSTEM_PROMPT: 'clipboard:resetSystemPrompt',
+  GET_DEFAULT_SYSTEM_PROMPT: 'clipboard:getDefaultSystemPrompt',
+  
+  // Improved content management
+  SAVE_IMPROVED_CONTENT: 'clipboard:saveImprovedContent',
+  CLEAR_IMPROVED_CONTENT: 'clipboard:clearImprovedContent',
+  
   // Continuous Context mode - allows multi-screenshot capture sessions
   GET_CONTINUOUS_CONTEXT_STATE: 'clipboard:getContinuousContextState',
   SET_CONTINUOUS_CONTEXT_ENABLED: 'clipboard:setContinuousContextEnabled',
@@ -93,6 +103,7 @@ export interface ClipboardItem {
   id: number;
   type: ClipboardItemType;
   content: string | null;
+  improvedContent: string | null; // Improved version from Engineer feature
   imageData: string | null; // base64 encoded
   imageWidth: number | null;
   imageHeight: number | null;

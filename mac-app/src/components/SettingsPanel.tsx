@@ -8,6 +8,7 @@ import { useEffect, useState, useCallback } from 'react';
 import AudioSettingsPanel from './AudioSettingsPanel';
 import TranscriptionSettings from './TranscriptionSettings';
 import VisionSettings from './VisionSettings';
+import PromptSettings from './PromptSettings';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
 import { useTheme } from '../contexts/ThemeContext';
@@ -37,7 +38,12 @@ export default function SettingsPanel() {
   const [continuousContextHotkey, setContinuousContextHotkey] = useState('Shift+Alt+1');
   const [isCapturingContinuousContextHotkey, setIsCapturingContinuousContextHotkey] = useState(false);
   
-  // Mobile sync state - for syncing iOS transcriptions to clipboard history
+  // Todo hotkey configuration
+  const [todoHotkey, setTodoHotkey] = useState('Command+Shift+T');
+  const [isCapturingTodoHotkey, setIsCapturingTodoHotkey] = useState(false);
+  
+  // Mobile sync state - for syncing iOS transcriptions to clipboard history.
+  // Uses email/password authentication. Users create accounts on iOS first.
   const [session, setSession] = useState<Session | null>(null);
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
@@ -45,6 +51,10 @@ export default function SettingsPanel() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  
+  // Password reset flow state.
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [resetEmailSent, setResetEmailSent] = useState(false);
   
   // API key state - for Engineer feature (Anthropic API)
   const [hasApiKey, setHasApiKey] = useState(false);
@@ -73,6 +83,15 @@ export default function SettingsPanel() {
       // Load API key status
       window.clipboardAPI.getApiKeyStatus?.().then(status => {
         setHasApiKey(status.hasKey);
+      });
+    }
+    
+    // Load todo hotkey
+    if (window.todoAPI) {
+      window.todoAPI.getHotkey().then(hotkey => {
+        if (hotkey) {
+          setTodoHotkey(hotkey);
+        }
       });
     }
   }, []);
@@ -129,6 +148,7 @@ export default function SettingsPanel() {
     }
   };
   
+  
   // Check Supabase auth state on mount and listen for changes.
   // When authenticated, pass session to main process for mobile sync.
   useEffect(() => {
@@ -160,41 +180,80 @@ export default function SettingsPanel() {
     return () => subscription.unsubscribe();
   }, []);
   
-  // Handle email/password login
-  const handleLogin = async (e: React.FormEvent) => {
+  // Handle sign in with email and password.
+  const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
+    const email = authEmail.toLowerCase().trim();
+    const password = authPassword;
+    
+    if (!email || !password) {
+      setAuthError('Please enter your email and password');
+      return;
+    }
+    
     setAuthLoading(true);
     setAuthError(null);
     
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email: authEmail,
-        password: authPassword,
-      });
+      const result = await window.authAPI?.signInWithPassword(email, password);
       
-      if (error) {
-        setAuthError(error.message);
-      } else {
-        // Clear form on success
+      if (result?.error) {
+        setAuthError(result.error);
+      } else if (result?.session) {
+        setSession(result.session);
         setAuthEmail('');
         setAuthPassword('');
-        setSyncStatus('Logged in! Syncing transcripts...');
-        // Trigger initial sync
+        setSyncStatus('Signed in! Syncing...');
         handleManualSync();
+      } else {
+        setAuthError('Sign in failed - no session returned');
       }
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Login failed');
+      setAuthError(err instanceof Error ? err.message : 'Sign in failed');
     } finally {
       setAuthLoading(false);
     }
   };
   
-  // Handle sign out
+  // Handle forgot password - sends reset email.
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const email = authEmail.toLowerCase().trim();
+    
+    if (!email) {
+      setAuthError('Please enter your email address');
+      return;
+    }
+    
+    setAuthLoading(true);
+    setAuthError(null);
+    
+    try {
+      const result = await window.authAPI?.resetPasswordForEmail(email);
+      
+      if (result?.error) {
+        setAuthError(result.error);
+      } else {
+        setResetEmailSent(true);
+        setSyncStatus('Reset link sent! Check your email.');
+      }
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Failed to send reset email');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+  
+  
+  // Handle sign out.
   const handleSignOut = async () => {
     setAuthLoading(true);
     try {
+      await window.authAPI?.signOut();
       await supabase.auth.signOut();
       setSyncStatus(null);
+      setAuthEmail('');
+      setAuthPassword('');
     } catch (err) {
       console.error('Sign out error:', err);
     } finally {
@@ -202,17 +261,36 @@ export default function SettingsPanel() {
     }
   };
   
-  // Handle manual sync trigger
+  // Handle manual sync trigger - syncs both transcripts and todos.
   const handleManualSync = async () => {
-    if (!window.clipboardAPI?.syncMobileTranscripts) return;
-    
     setIsSyncing(true);
     setSyncStatus('Syncing...');
     
     try {
-      const count = await window.clipboardAPI.syncMobileTranscripts();
-      setSyncStatus(count > 0 
-        ? `Synced ${count} new transcript${count === 1 ? '' : 's'} from iOS`
+      // Sync transcripts.
+      let transcriptCount = 0;
+      if (window.clipboardAPI?.syncMobileTranscripts) {
+        transcriptCount = await window.clipboardAPI.syncMobileTranscripts();
+      }
+      
+      // Sync todos.
+      let todoCount = 0;
+      if (window.todoAPI?.syncTodos) {
+        const todos = await window.todoAPI.syncTodos();
+        todoCount = todos.length;
+      }
+      
+      // Build status message.
+      const parts: string[] = [];
+      if (transcriptCount > 0) {
+        parts.push(`${transcriptCount} transcript${transcriptCount === 1 ? '' : 's'}`);
+      }
+      if (todoCount > 0) {
+        parts.push(`${todoCount} task${todoCount === 1 ? '' : 's'}`);
+      }
+      
+      setSyncStatus(parts.length > 0 
+        ? `Synced ${parts.join(' and ')} from iOS`
         : 'Already up to date'
       );
     } catch (err) {
@@ -390,12 +468,38 @@ export default function SettingsPanel() {
       console.error('Failed to set continuous context hotkey:', err);
     }
   }, []);
+
+  // Handler for setting todo hotkey
+  const handleSetTodoHotkey = useCallback(async (hotkeyString: string) => {
+    setIsCapturingTodoHotkey(false);
+    setHotkeyError(null);
+    
+    if (!window.todoAPI?.setHotkey) return;
+    
+    if (!hotkeyString || isModifierOnly(hotkeyString)) {
+      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+      return;
+    }
+
+    try {
+      const success = await window.todoAPI.setHotkey(hotkeyString);
+      if (!success) {
+        setHotkeyError('Failed to register todo hotkey. It may be in use by another application.');
+      } else {
+        setTodoHotkey(hotkeyString);
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set todo hotkey');
+      console.error('Failed to set todo hotkey:', err);
+    }
+  }, []);
   
-  // Capture hotkey when user is setting screenshot, history, or continuous context shortcut.
+  // Capture hotkey when user is setting screenshot, history, continuous context, or todo shortcut.
   useEffect(() => {
     const capturing = isCapturingScreenshotHotkey ? 'screenshot' 
       : isCapturingHistoryHotkey ? 'history' 
-      : isCapturingContinuousContextHotkey ? 'continuousContext' 
+      : isCapturingContinuousContextHotkey ? 'continuousContext'
+      : isCapturingTodoHotkey ? 'todo'
       : null;
     if (!capturing) return;
     
@@ -410,13 +514,15 @@ export default function SettingsPanel() {
           handleSetHistoryHotkey(hotkeyString);
         } else if (capturing === 'continuousContext') {
           handleSetContinuousContextHotkey(hotkeyString);
+        } else if (capturing === 'todo') {
+          handleSetTodoHotkey(hotkeyString);
         }
       }
     };
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isCapturingScreenshotHotkey, isCapturingHistoryHotkey, isCapturingContinuousContextHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetContinuousContextHotkey]);
+  }, [isCapturingScreenshotHotkey, isCapturingHistoryHotkey, isCapturingContinuousContextHotkey, isCapturingTodoHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetContinuousContextHotkey, handleSetTodoHotkey]);
 
   // Check permissions on mount and when status changes
   useEffect(() => {
@@ -618,6 +724,15 @@ export default function SettingsPanel() {
         </div>
       </div>
 
+      {/* Prompt Settings - Expandable section for system prompt customization */}
+      <div style={styles.section}>
+        <h3 style={styles.sectionTitle}>Prompt Improvement Settings</h3>
+        <p style={styles.sectionDescription}>
+          Customize how your transcriptions are improved by the Engineer feature.
+        </p>
+        <PromptSettings />
+      </div>
+
       <div style={styles.section}>
         <h3 style={styles.sectionTitle}>Clipboard History</h3>
         <p style={styles.sectionDescription}>
@@ -636,7 +751,7 @@ export default function SettingsPanel() {
                   setIsCapturingScreenshotHotkey(true);
                   setHotkeyError(null);
                 }}
-                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey}
+                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey}
                 style={{
                   ...styles.hotkeyButton,
                   ...(isCapturingScreenshotHotkey ? styles.hotkeyButtonActive : {}),
@@ -667,7 +782,7 @@ export default function SettingsPanel() {
                   setIsCapturingHistoryHotkey(true);
                   setHotkeyError(null);
                 }}
-                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey}
+                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey}
                 style={{
                   ...styles.hotkeyButton,
                   ...(isCapturingHistoryHotkey ? styles.hotkeyButtonActive : {}),
@@ -724,7 +839,7 @@ export default function SettingsPanel() {
                   setIsCapturingContinuousContextHotkey(true);
                   setHotkeyError(null);
                 }}
-                disabled={!continuousContextEnabled || isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey}
+                disabled={!continuousContextEnabled || isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey}
                 style={{
                   ...styles.hotkeyButton,
                   ...(isCapturingContinuousContextHotkey ? styles.hotkeyButtonActive : {}),
@@ -747,6 +862,42 @@ export default function SettingsPanel() {
             </div>
           </div>
           
+          {/* Todo List Hotkey */}
+          <div style={styles.hotkeyRow}>
+            <div>
+              <label style={styles.hotkeyLabel}>Todo List Hotkey</label>
+              <p style={{ fontSize: '11px', color: '#6b7280', margin: '2px 0 0 0' }}>
+                Open tasks synced from your iOS device
+              </p>
+            </div>
+            <div style={styles.hotkeyButtonRow}>
+              <button
+                onClick={() => {
+                  setIsCapturingTodoHotkey(true);
+                  setHotkeyError(null);
+                }}
+                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey}
+                style={{
+                  ...styles.hotkeyButton,
+                  ...(isCapturingTodoHotkey ? styles.hotkeyButtonActive : {}),
+                }}
+              >
+                {isCapturingTodoHotkey ? 'Press key combination...' : `Change (${todoHotkey || 'Not set'})`}
+              </button>
+              {isCapturingTodoHotkey && (
+                <button
+                  onClick={() => {
+                    setIsCapturingTodoHotkey(false);
+                    setHotkeyError(null);
+                  }}
+                  style={styles.cancelButton}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          </div>
+          
           {hotkeyError && (
             <p style={styles.hotkeyError}>{hotkeyError}</p>
           )}
@@ -755,6 +906,7 @@ export default function SettingsPanel() {
             Supports 2-3 modifier keys + primary key (e.g., Command+Shift+Control+Space). 
             Screenshot hotkey captures selected area and adds to prompt stack.
             Continuous Context hotkey starts multi-screenshot capture mode (press Escape to stop).
+            Todo List hotkey opens your synced tasks from iOS.
           </p>
         </div>
       </div>
@@ -794,11 +946,11 @@ export default function SettingsPanel() {
         </div>
       </div>
 
-      {/* Mobile Sync Section - Sync iOS transcriptions to clipboard history */}
+      {/* Mobile Sync Section - Sync iOS transcriptions and todos to Mac */}
       <div style={styles.section}>
         <h3 style={styles.sectionTitle}>📱 Mobile Sync</h3>
         <p style={styles.sectionDescription}>
-          Sync transcriptions from your iOS device to this Mac's clipboard history.
+          Sync transcriptions and tasks from your iOS device. Sign in with your iOS app account.
         </p>
         
         <div style={styles.hotkeyCard}>
@@ -845,15 +997,92 @@ export default function SettingsPanel() {
                 Use "Fix Attribution" if iOS items show as Mac.
               </p>
             </>
+          ) : showForgotPassword ? (
+            // Forgot password flow - send reset email.
+            <>
+              <h4 style={styles.hotkeyTitle}>Reset Password</h4>
+              <p style={{ ...styles.hotkeyHelp, marginTop: 0, marginBottom: '12px' }}>
+                Enter your email and we'll send a reset link. The link will open in your browser where you can set a new password.
+              </p>
+              
+              {resetEmailSent ? (
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ 
+                    padding: '12px', 
+                    background: 'rgba(74, 222, 128, 0.1)', 
+                    borderRadius: '6px',
+                    border: '1px solid rgba(74, 222, 128, 0.2)',
+                    marginBottom: '12px'
+                  }}>
+                    <p style={{ margin: 0, color: '#4ade80', fontWeight: 500 }}>
+                      ✓ Reset link sent!
+                    </p>
+                    <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: 'rgba(255,255,255,0.7)' }}>
+                      Check your email and click the link to reset your password.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowForgotPassword(false);
+                      setResetEmailSent(false);
+                      setAuthError(null);
+                    }}
+                    style={styles.loginButton}
+                  >
+                    Back to Sign In
+                  </button>
+                </div>
+              ) : (
+                <form onSubmit={handleForgotPassword} style={styles.loginForm}>
+                  <input
+                    type="email"
+                    placeholder="Email"
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    disabled={authLoading}
+                    style={styles.loginInput}
+                    required
+                    autoFocus
+                  />
+                  {authError && (
+                    <p style={styles.hotkeyError}>{authError}</p>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={authLoading || !authEmail.trim()}
+                    style={styles.loginButton}
+                  >
+                    {authLoading ? 'Sending...' : 'Send Reset Link'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowForgotPassword(false);
+                      setAuthError(null);
+                    }}
+                    style={{ 
+                      ...styles.loginButton, 
+                      marginTop: '8px',
+                      background: '#f3f4f6', 
+                      border: '1px solid #d1d5db',
+                      color: '#374151'
+                    }}
+                  >
+                    Back to Sign In
+                  </button>
+                </form>
+              )}
+            </>
           ) : (
-            // Logged out state - show login form
+            // Normal sign-in form.
             <>
               <h4 style={styles.hotkeyTitle}>Sign in to sync</h4>
               <p style={{ ...styles.hotkeyHelp, marginTop: 0, marginBottom: '12px' }}>
-                Use the same account as your iOS app to sync transcriptions.
+                Use the same email and password as your iOS app.
               </p>
               
-              <form onSubmit={handleLogin} style={styles.loginForm}>
+              <form onSubmit={handleSignIn} style={styles.loginForm}>
                 <input
                   type="email"
                   placeholder="Email"
@@ -861,6 +1090,7 @@ export default function SettingsPanel() {
                   onChange={(e) => setAuthEmail(e.target.value)}
                   disabled={authLoading}
                   style={styles.loginInput}
+                  tabIndex={1}
                   required
                 />
                 <input
@@ -870,6 +1100,7 @@ export default function SettingsPanel() {
                   onChange={(e) => setAuthPassword(e.target.value)}
                   disabled={authLoading}
                   style={styles.loginInput}
+                  tabIndex={2}
                   required
                 />
                 {authError && (
@@ -877,10 +1108,28 @@ export default function SettingsPanel() {
                 )}
                 <button
                   type="submit"
-                  disabled={authLoading || !authEmail || !authPassword}
+                  disabled={authLoading || !authEmail.trim() || !authPassword}
                   style={styles.loginButton}
                 >
                   {authLoading ? 'Signing in...' : 'Sign In'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowForgotPassword(true);
+                    setAuthError(null);
+                  }}
+                  style={{ 
+                    marginTop: '8px',
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#60a5fa',
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    textDecoration: 'underline'
+                  }}
+                >
+                  Forgot password?
                 </button>
               </form>
             </>

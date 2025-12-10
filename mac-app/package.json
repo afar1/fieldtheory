@@ -1,6 +1,6 @@
 {
   "name": "littleai-mac",
-  "version": "0.1.12",
+  "version": "0.1.15-field-release",
   "private": true,
   "main": "electron-dist/main/index.js",
   "scripts": {
@@ -23,7 +23,7 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.45.3",
+    "@supabase/supabase-js": "^2.84.0",
     "@types/better-sqlite3": "^7.6.13",
     "better-sqlite3": "^12.5.0",
     "electron-updater": "^6.6.2",
@@ -50,7 +50,7 @@
     "publish": {
       "provider": "github",
       "owner": "afar1",
-      "repo": "oscar"
+      "repo": "field-releases"
     },
     "afterSign": "scripts/notarize.js",
     "mac": {

@@ -26,6 +26,7 @@ export interface ClipboardItem {
   id: number;
   type: ClipboardItemType;
   content: string | null;
+  improvedContent: string | null; // Improved version from Engineer feature
   imageData: Buffer | null;
   imageWidth: number | null;
   imageHeight: number | null;
@@ -225,6 +226,15 @@ export class ClipboardManager extends EventEmitter {
       this.db.exec(`
         ALTER TABLE clipboard_items ADD COLUMN source TEXT DEFAULT 'mac';
         CREATE INDEX IF NOT EXISTS idx_source ON clipboard_items(source);
+      `);
+    });
+
+    // Migration: Add improved_content column for storing improved prompts.
+    // When the Engineer feature improves a transcription, the result is stored here
+    // while the original content is preserved in the 'content' column.
+    this.runMigration('add_improved_content', () => {
+      this.db.exec(`
+        ALTER TABLE clipboard_items ADD COLUMN improved_content TEXT;
       `);
     });
 
@@ -595,6 +605,7 @@ export class ClipboardManager extends EventEmitter {
       id: row.id,
       type: row.type,
       content: row.content,
+      improvedContent: row.improved_content || null,
       imageData: row.image_data ? Buffer.from(row.image_data) : null,
       imageWidth: row.image_width,
       imageHeight: row.image_height,
@@ -627,6 +638,7 @@ export class ClipboardManager extends EventEmitter {
       id: row.id,
       type: row.type,
       content: row.content,
+      improvedContent: row.improved_content || null,
       imageData: row.image_data ? Buffer.from(row.image_data) : null,
       imageWidth: row.image_width,
       imageHeight: row.image_height,
@@ -726,6 +738,7 @@ export class ClipboardManager extends EventEmitter {
       id: row.id,
       type: row.type,
       content: row.content,
+      improvedContent: row.improved_content || null,
       imageData: row.image_data ? Buffer.from(row.image_data) : null,
       imageWidth: row.image_width,
       imageHeight: row.image_height,
@@ -845,18 +858,28 @@ export class ClipboardManager extends EventEmitter {
   updateItemContent(itemId: number, content: string): void {
     const stmt = this.db.prepare('UPDATE clipboard_items SET content = ? WHERE id = ?');
     stmt.run(content, itemId);
-    
-    // Update word and character counts
-    const wordCount = content.split(/\s+/).filter(w => w.length > 0).length;
-    const charCount = content.length;
-    const countStmt = this.db.prepare('UPDATE clipboard_items SET word_count = ?, char_count = ? WHERE id = ?');
-    countStmt.run(wordCount, charCount, itemId);
-    
-    // Update FTS index
-    this.db.prepare('DELETE FROM clipboard_fts WHERE rowid = ?').run(itemId);
-    this.db.prepare('INSERT INTO clipboard_fts(rowid, content) VALUES (?, ?)').run(itemId, content);
-    
-    console.log(`[ClipboardManager] Updated content for item ${itemId}`);
+  }
+
+  /**
+   * Save an improved version of text content for an item.
+   * The original content is preserved; only the improved_content column is updated.
+   * @param itemId - ID of the item to update
+   * @param improvedContent - The improved text from the Engineer feature
+   */
+  saveImprovedContent(itemId: number, improvedContent: string): void {
+    const stmt = this.db.prepare('UPDATE clipboard_items SET improved_content = ? WHERE id = ?');
+    stmt.run(improvedContent, itemId);
+    console.log(`[ClipboardManager] Saved improved content for item ${itemId}`);
+  }
+
+  /**
+   * Clear the improved content for an item (revert to original only).
+   * @param itemId - ID of the item to clear improved content from
+   */
+  clearImprovedContent(itemId: number): void {
+    const stmt = this.db.prepare('UPDATE clipboard_items SET improved_content = NULL WHERE id = ?');
+    stmt.run(itemId);
+    console.log(`[ClipboardManager] Cleared improved content for item ${itemId}`);
   }
 
   /**

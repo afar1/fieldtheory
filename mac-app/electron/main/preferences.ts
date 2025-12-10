@@ -63,12 +63,19 @@ interface Preferences {
   continuousContextEnabled?: boolean;
   continuousContextHotkey?: string;
   
+  // Todo hotkey - opens clipboard history in todo view mode
+  todoHotkey?: string;
+  
   // All-time statistics tracking
   improvedPromptsCount?: number;
   
   // Abandon recording settings - hotkey to cancel recording and whether to confirm
   abandonRecordingHotkey?: string;
   abandonRecordingConfirmation?: boolean;
+  
+  // Custom system prompt for the Engineer feature.
+  // If set, overrides the default prompt loaded from file.
+  customSystemPrompt?: string;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
@@ -81,6 +88,7 @@ const DEFAULT_PREFERENCES: Preferences = {
   continuousContextHotkey: 'Shift+Alt+1', // Default: Shift + screenshot hotkey
   abandonRecordingHotkey: 'Escape', // Default: Escape key to cancel recording
   abandonRecordingConfirmation: true, // Default: confirm before abandoning if there's audio
+  todoHotkey: 'Command+Shift+T', // Default: Cmd+Shift+T for todo list
 };
 
 /**
