@@ -71,6 +71,16 @@ const ClipboardIPCChannels = {
   SET_API_KEY: 'clipboard:setApiKey',
   CLEAR_API_KEY: 'clipboard:clearApiKey',
   
+  // System prompt customization for Engineer feature
+  GET_SYSTEM_PROMPT: 'clipboard:getSystemPrompt',
+  SET_SYSTEM_PROMPT: 'clipboard:setSystemPrompt',
+  RESET_SYSTEM_PROMPT: 'clipboard:resetSystemPrompt',
+  GET_DEFAULT_SYSTEM_PROMPT: 'clipboard:getDefaultSystemPrompt',
+  
+  // Improved content management
+  SAVE_IMPROVED_CONTENT: 'clipboard:saveImprovedContent',
+  CLEAR_IMPROVED_CONTENT: 'clipboard:clearImprovedContent',
+  
   // Continuous Context mode
   GET_CONTINUOUS_CONTEXT_STATE: 'clipboard:getContinuousContextState',
   SET_CONTINUOUS_CONTEXT_ENABLED: 'clipboard:setContinuousContextEnabled',
@@ -148,6 +158,7 @@ type ClipboardItem = {
   id: number;
   type: ClipboardItemType;
   content: string | null;
+  improvedContent: string | null; // Improved version from Engineer feature
   imageData: string | null;
   imageWidth: number | null;
   imageHeight: number | null;
@@ -315,6 +326,16 @@ export interface ClipboardAPI {
   getApiKeyStatus: () => Promise<{ hasKey: boolean }>;
   setApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>;
   clearApiKey: () => Promise<{ success: boolean; error?: string }>;
+  
+  // System prompt customization for Engineer feature
+  getSystemPrompt: () => Promise<{ prompt: string; isCustom: boolean }>;
+  setSystemPrompt: (prompt: string) => Promise<{ success: boolean; error?: string }>;
+  resetSystemPrompt: () => Promise<{ success: boolean; error?: string }>;
+  getDefaultSystemPrompt: () => Promise<{ prompt: string }>;
+  
+  // Improved content management - store/clear improved versions of transcriptions
+  saveImprovedContent: (itemId: number, improvedContent: string) => Promise<{ success: boolean; error?: string }>;
+  clearImprovedContent: (itemId: number) => Promise<{ success: boolean; error?: string }>;
   
   // Mobile sync operations - sync iOS transcriptions to clipboard history
   setSyncSession: (accessToken: string, refreshToken: string) => Promise<boolean>;
@@ -700,6 +721,32 @@ const clipboardAPI: ClipboardAPI = {
 
   clearApiKey: async (): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.CLEAR_API_KEY);
+  },
+
+  // System prompt customization for Engineer feature
+  getSystemPrompt: async (): Promise<{ prompt: string; isCustom: boolean }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_SYSTEM_PROMPT);
+  },
+
+  setSystemPrompt: async (prompt: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SET_SYSTEM_PROMPT, prompt);
+  },
+
+  resetSystemPrompt: async (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.RESET_SYSTEM_PROMPT);
+  },
+
+  getDefaultSystemPrompt: async (): Promise<{ prompt: string }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_DEFAULT_SYSTEM_PROMPT);
+  },
+
+  // Improved content management - store/clear improved versions of transcriptions
+  saveImprovedContent: async (itemId: number, improvedContent: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SAVE_IMPROVED_CONTENT, itemId, improvedContent);
+  },
+
+  clearImprovedContent: async (itemId: number): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.CLEAR_IMPROVED_CONTENT, itemId);
   },
 
   // Mobile sync operations - sync iOS transcriptions to clipboard history

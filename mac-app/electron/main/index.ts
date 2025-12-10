@@ -30,7 +30,13 @@ import {
 import { ClipboardItem } from './clipboardManager';
 import { VisionModelManager, VisionModelSize } from './visionModelManager';
 import { VisionProcessor } from './visionProcessor';
-import { engineerStack, setApiKey as setEngineerApiKey } from './promptEngineer';
+import { 
+  engineerStack, 
+  setApiKey as setEngineerApiKey,
+  setCustomSystemPrompt,
+  getActiveSystemPrompt,
+  loadDefaultSystemPrompt,
+} from './promptEngineer';
 import { OnboardingWindow, OnboardingStep } from './onboardingWindow';
 import { OnboardingIPCChannels } from './types/onboarding';
 
@@ -1181,6 +1187,112 @@ function setupClipboardIPCHandlers(): void {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to clear API key',
+      };
+    }
+  });
+
+  // =========================================================================
+  // System Prompt Customization - User can modify how transcriptions are improved
+  // =========================================================================
+
+  // Get the currently active system prompt (custom if set, otherwise default).
+  ipcMain.handle(ClipboardIPCChannels.GET_SYSTEM_PROMPT, async () => {
+    // First load any saved custom prompt from preferences.
+    const customPrompt = preferencesManager?.getPreference('customSystemPrompt');
+    if (customPrompt) {
+      setCustomSystemPrompt(customPrompt);
+    }
+    return {
+      prompt: getActiveSystemPrompt(),
+      isCustom: !!customPrompt,
+    };
+  });
+
+  // Set a custom system prompt.
+  ipcMain.handle(ClipboardIPCChannels.SET_SYSTEM_PROMPT, async (_event, prompt: string) => {
+    try {
+      if (!preferencesManager) {
+        return { success: false, error: 'Preferences not initialized' };
+      }
+      
+      // Save to preferences for persistence.
+      await preferencesManager.save({ customSystemPrompt: prompt });
+      
+      // Update the in-memory prompt.
+      setCustomSystemPrompt(prompt);
+      
+      return { success: true };
+    } catch (error) {
+      console.error('[Main] setSystemPrompt error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to save system prompt',
+      };
+    }
+  });
+
+  // Reset to the default system prompt.
+  ipcMain.handle(ClipboardIPCChannels.RESET_SYSTEM_PROMPT, async () => {
+    try {
+      if (!preferencesManager) {
+        return { success: false, error: 'Preferences not initialized' };
+      }
+      
+      // Clear from preferences.
+      await preferencesManager.save({ customSystemPrompt: undefined });
+      
+      // Clear in-memory custom prompt.
+      setCustomSystemPrompt(null);
+      
+      return { success: true };
+    } catch (error) {
+      console.error('[Main] resetSystemPrompt error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to reset system prompt',
+      };
+    }
+  });
+
+  // Get the default system prompt (for showing in UI before user customizes).
+  ipcMain.handle(ClipboardIPCChannels.GET_DEFAULT_SYSTEM_PROMPT, async () => {
+    return { prompt: loadDefaultSystemPrompt() };
+  });
+
+  // =========================================================================
+  // Improved Content Management - Save/clear improved versions of transcriptions
+  // =========================================================================
+
+  // Save improved content for a specific item.
+  ipcMain.handle(ClipboardIPCChannels.SAVE_IMPROVED_CONTENT, async (_event, itemId: number, improvedContent: string) => {
+    try {
+      if (!clipboardManager) {
+        return { success: false, error: 'Clipboard manager not initialized' };
+      }
+      clipboardManager.saveImprovedContent(itemId, improvedContent);
+      return { success: true };
+    } catch (error) {
+      console.error('[Main] saveImprovedContent error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to save improved content',
+      };
+    }
+  });
+
+  // Clear improved content for a specific item (revert to original only).
+  ipcMain.handle(ClipboardIPCChannels.CLEAR_IMPROVED_CONTENT, async (_event, itemId: number) => {
+    try {
+      if (!clipboardManager) {
+        return { success: false, error: 'Clipboard manager not initialized' };
+      }
+      clipboardManager.clearImprovedContent(itemId);
+      return { success: true };
+    } catch (error) {
+      console.error('[Main] clearImprovedContent error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to clear improved content',
       };
     }
   });
