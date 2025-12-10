@@ -1090,6 +1090,7 @@ export default function SettingsPanel() {
                   onChange={(e) => setAuthEmail(e.target.value)}
                   disabled={authLoading}
                   style={styles.loginInput}
+                  tabIndex={1}
                   required
                 />
                 <input
@@ -1099,6 +1100,7 @@ export default function SettingsPanel() {
                   onChange={(e) => setAuthPassword(e.target.value)}
                   disabled={authLoading}
                   style={styles.loginInput}
+                  tabIndex={2}
                   required
                 />
                 {authError && (
