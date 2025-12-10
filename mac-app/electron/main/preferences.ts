@@ -65,6 +65,10 @@ interface Preferences {
   
   // All-time statistics tracking
   improvedPromptsCount?: number;
+  
+  // Custom system prompt for the Engineer feature.
+  // If set, overrides the default prompt loaded from file.
+  customSystemPrompt?: string;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {

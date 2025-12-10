@@ -8,6 +8,7 @@ import { useEffect, useState, useCallback } from 'react';
 import AudioSettingsPanel from './AudioSettingsPanel';
 import TranscriptionSettings from './TranscriptionSettings';
 import VisionSettings from './VisionSettings';
+import PromptSettings from './PromptSettings';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
 import { useTheme } from '../contexts/ThemeContext';
@@ -616,6 +617,15 @@ export default function SettingsPanel() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Prompt Settings - Expandable section for system prompt customization */}
+      <div style={styles.section}>
+        <h3 style={styles.sectionTitle}>Prompt Improvement Settings</h3>
+        <p style={styles.sectionDescription}>
+          Customize how your transcriptions are improved by the Engineer feature.
+        </p>
+        <PromptSettings />
       </div>
 
       <div style={styles.section}>

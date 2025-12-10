@@ -124,6 +124,7 @@ interface ClipboardItem {
   id: number;
   type: ClipboardItemType;
   content: string | null;
+  improvedContent: string | null; // Improved version from Engineer feature
   imageData: string | null;
   imageWidth: number | null;
   imageHeight: number | null;
@@ -251,6 +252,21 @@ interface ClipboardAPI {
   updateStackId?: (itemIds: number[], stackId: string | null) => Promise<void>;
   startDrag?: (stackId: string) => Promise<void>;
   
+  // API key management (stored securely via OS keychain)
+  getApiKeyStatus?: () => Promise<{ hasKey: boolean }>;
+  setApiKey?: (apiKey: string) => Promise<{ success: boolean; error?: string }>;
+  clearApiKey?: () => Promise<{ success: boolean; error?: string }>;
+  
+  // System prompt customization for Engineer feature
+  getSystemPrompt?: () => Promise<{ prompt: string; isCustom: boolean }>;
+  setSystemPrompt?: (prompt: string) => Promise<{ success: boolean; error?: string }>;
+  resetSystemPrompt?: () => Promise<{ success: boolean; error?: string }>;
+  getDefaultSystemPrompt?: () => Promise<{ prompt: string }>;
+  
+  // Improved content management - store/clear improved versions of transcriptions
+  saveImprovedContent?: (itemId: number, improvedContent: string) => Promise<{ success: boolean; error?: string }>;
+  clearImprovedContent?: (itemId: number) => Promise<{ success: boolean; error?: string }>;
+  
   // Mobile sync operations - sync iOS transcriptions to clipboard history
   setSyncSession?: (accessToken: string, refreshToken: string) => Promise<boolean>;
   clearSyncSession?: () => Promise<boolean>;
@@ -337,6 +353,53 @@ interface UpdaterAPI {
 }
 
 /**
+ * Permission status from onboarding.
+ */
+interface PermissionStatus {
+  microphone: 'granted' | 'denied' | 'not-determined';
+  accessibility: boolean;
+}
+
+/**
+ * Onboarding state.
+ */
+interface OnboardingState {
+  isComplete: boolean;
+  currentStep: number;
+  permissions: PermissionStatus;
+  modelDownloaded: boolean;
+}
+
+/**
+ * The onboarding API exposed by the preload script.
+ */
+interface OnboardingAPI {
+  getPermissionStatus: () => Promise<PermissionStatus>;
+  requestMicrophone: () => Promise<boolean>;
+  openAccessibilitySettings: () => Promise<boolean>;
+  getState: () => Promise<OnboardingState>;
+  setStep: (step: number) => Promise<boolean>;
+  complete: () => Promise<boolean>;
+  skip: () => Promise<boolean>;
+  reset: () => Promise<boolean>;
+  checkModelStatus: () => Promise<{ downloaded: boolean }>;
+}
+
+/**
+ * Theme type for theming.
+ */
+interface Theme {
+  isDark: boolean;
+  bg: string;
+  text: string;
+  textSecondary: string;
+  border: string;
+  accent: string;
+  cardBg: string;
+  glassEnabled: boolean;
+}
+
+/**
  * Extend the Window interface with our custom APIs.
  */
 declare global {
@@ -348,6 +411,7 @@ declare global {
     permissionsAPI?: PermissionsAPI;
     electronAPI?: ElectronAPI;
     updaterAPI?: UpdaterAPI;
+    onboardingAPI?: OnboardingAPI;
     platform?: PlatformInfo;
   }
 }

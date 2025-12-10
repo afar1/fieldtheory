@@ -3,6 +3,9 @@
  * 
  * Takes raw text (prompts, transcripts, notes) and refines them into
  * well-structured, actionable prompts using the Anthropic API.
+ * 
+ * Users can customize the system prompt via Settings to control how
+ * their transcriptions are refined.
  */
 
 import fs from 'fs';
@@ -10,6 +13,10 @@ import path from 'path';
 
 // API key is provided at runtime from preferences or environment.
 let anthropicApiKey: string | null = null;
+
+// Custom system prompt (set from preferences at runtime).
+// If null, use the default system prompt from file.
+let customSystemPrompt: string | null = null;
 
 /**
  * Set the Anthropic API key for the engineer service.
@@ -26,10 +33,27 @@ function getApiKey(): string | null {
 }
 
 /**
- * Load the system prompt from the markdown file.
- * We read it at runtime so users could theoretically customize it.
+ * Set a custom system prompt to use instead of the default.
+ * Pass null to reset to the default prompt.
  */
-function loadSystemPrompt(): string {
+export function setCustomSystemPrompt(prompt: string | null): void {
+  customSystemPrompt = prompt;
+  console.log('[PromptEngineer] Custom system prompt', prompt ? 'set' : 'cleared');
+}
+
+/**
+ * Get the currently active system prompt.
+ * Returns custom prompt if set, otherwise loads the default.
+ */
+export function getActiveSystemPrompt(): string {
+  return customSystemPrompt || loadDefaultSystemPrompt();
+}
+
+/**
+ * Load the default system prompt from the markdown file.
+ * Reads from file at runtime to allow easy updates.
+ */
+export function loadDefaultSystemPrompt(): string {
   try {
     // In development, read from source. In production, read from resources.
     const devPath = path.join(__dirname, 'prompts', 'engineer-system-prompt.md');
@@ -47,6 +71,13 @@ function loadSystemPrompt(): string {
   
   // Fallback to embedded prompt if file not found
   return getDefaultSystemPrompt();
+}
+
+/**
+ * Load the system prompt - uses custom if set, otherwise default from file.
+ */
+function loadSystemPrompt(): string {
+  return getActiveSystemPrompt();
 }
 
 /**
