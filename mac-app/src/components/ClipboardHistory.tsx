@@ -79,11 +79,47 @@ function formatFileSize(bytes: number): string {
 }
 
 /**
- * Truncate text preview.
+ * Truncate text preview (legacy - simple truncation).
  */
 function truncateText(text: string, maxLength: number = 100): string {
   if (text.length <= maxLength) return text;
   return text.substring(0, maxLength) + '...';
+}
+
+/**
+ * Smart truncation that shows beginning and end of text.
+ * Returns an object with firstPart, lastPart, and whether truncation was needed.
+ * When truncated, shows first ~5-10 words and last ~5-10 words.
+ */
+function smartTruncateText(text: string, targetWords: number = 8): { 
+  firstPart: string; 
+  lastPart: string; 
+  needsTruncation: boolean;
+  fullText: string;
+} {
+  const trimmed = text.trim();
+  const words = trimmed.split(/\s+/).filter(w => w.length > 0);
+  
+  // If text is short enough (less than double the target words), no truncation needed.
+  if (words.length <= targetWords * 2 + 2) {
+    return { 
+      firstPart: trimmed, 
+      lastPart: '', 
+      needsTruncation: false,
+      fullText: trimmed,
+    };
+  }
+  
+  // Get first N words and last N words.
+  const firstWords = words.slice(0, targetWords);
+  const lastWords = words.slice(-targetWords);
+  
+  return {
+    firstPart: firstWords.join(' '),
+    lastPart: lastWords.join(' '),
+    needsTruncation: true,
+    fullText: trimmed,
+  };
 }
 
 /**
@@ -1134,7 +1170,7 @@ export default function ClipboardHistory() {
       }
       
       // Escape key - close preview modal if open
-      if (e.key === 'Escape' && previewImage) {
+      if (e.key === 'Escape' && preview) {
         e.preventDefault();
         dismissPreview();
         return;
@@ -2023,35 +2059,130 @@ export default function ClipboardHistory() {
                       )}
 
                       {/* Combined text - show improved if available and expanded */}
-                      {combinedText && (
-                        <div
-                          ref={expanded ? undefined : checkTextOverflow(stack.stackId)}
-                          style={{
-                            fontSize: '12px',
-                            fontWeight: '500',
-                            color: theme.text,
-                            lineHeight: '1.5',
-                            marginBottom: '4px',
-                            ...(expanded ? {
-                              whiteSpace: 'pre-wrap',
-                              overflow: 'visible',
-                            } : {
-                              // 3-line clamp for collapsed state
+                      {combinedText && (() => {
+                        // Use smart truncation to show beginning and end of text.
+                        const displayText = expanded && improveResult?.stackId === stack.stackId 
+                          ? improveResult.refinedPrompt 
+                          : combinedText;
+                        const truncated = smartTruncateText(displayText, 8);
+                        const showSmartTruncation = !expanded && truncated.needsTruncation;
+                        
+                        if (expanded) {
+                          // Expanded state: show full text.
+                          return (
+                            <div
+                              style={{
+                                fontSize: '12px',
+                                fontWeight: '500',
+                                color: theme.text,
+                                lineHeight: '1.5',
+                                marginBottom: '4px',
+                                whiteSpace: 'pre-wrap',
+                                overflow: 'visible',
+                              }}
+                            >
+                              {displayText}
+                            </div>
+                          );
+                        }
+                        
+                        if (showSmartTruncation) {
+                          // Smart truncation: show first words ... [expand] ... last words.
+                          return (
+                            <div style={{ marginBottom: '4px' }}>
+                              {/* First part */}
+                              <span
+                                style={{
+                                  fontSize: '12px',
+                                  fontWeight: '500',
+                                  color: theme.text,
+                                  lineHeight: '1.5',
+                                }}
+                              >
+                                {truncated.firstPart}
+                              </span>
+                              <span style={{ color: theme.textSecondary, fontSize: '12px' }}> … </span>
+                              
+                              {/* Expand button in the middle */}
+                              <button
+                                tabIndex={-1}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleStackExpanded(stack.stackId);
+                                }}
+                                style={{
+                                  background: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
+                                  border: 'none',
+                                  padding: '2px 8px',
+                                  fontSize: '10px',
+                                  fontWeight: 500,
+                                  color: theme.textSecondary,
+                                  cursor: 'pointer',
+                                  borderRadius: '4px',
+                                  margin: '0 4px',
+                                  verticalAlign: 'middle',
+                                }}
+                              >
+                                {improveResult?.stackId === stack.stackId ? 'show improved' : 'expand'}
+                              </button>
+                              
+                              <span style={{ color: theme.textSecondary, fontSize: '12px' }}> … </span>
+                              {/* Last part */}
+                              <span
+                                style={{
+                                  fontSize: '12px',
+                                  fontWeight: '500',
+                                  color: theme.text,
+                                  lineHeight: '1.5',
+                                }}
+                              >
+                                {truncated.lastPart}
+                              </span>
+                              
+                              {/* Improved badge inline */}
+                              {improveResult?.stackId === stack.stackId && (
+                                <span style={{
+                                  display: 'inline-block',
+                                  fontSize: '9px',
+                                  fontWeight: 600,
+                                  color: '#34C759',
+                                  backgroundColor: '#e8f5e9',
+                                  padding: '2px 6px',
+                                  borderRadius: '3px',
+                                  marginLeft: '8px',
+                                  verticalAlign: 'middle',
+                                }}>
+                                  ✨ improved
+                                </span>
+                              )}
+                            </div>
+                          );
+                        }
+                        
+                        // Short text that doesn't need truncation: show full text.
+                        return (
+                          <div
+                            ref={checkTextOverflow(stack.stackId)}
+                            style={{
+                              fontSize: '12px',
+                              fontWeight: '500',
+                              color: theme.text,
+                              lineHeight: '1.5',
+                              marginBottom: '4px',
                               display: '-webkit-box',
                               WebkitLineClamp: 3,
                               WebkitBoxOrient: 'vertical' as const,
                               overflow: 'hidden',
-                            }),
-                          }}
-                        >
-                          {expanded && improveResult?.stackId === stack.stackId 
-                            ? improveResult.refinedPrompt 
-                            : combinedText}
-                        </div>
-                      )}
+                            }}
+                          >
+                            {displayText}
+                          </div>
+                        );
+                      })()}
                       
-                      {/* Improved badge - shown when there's an improved version */}
-                      {improveResult?.stackId === stack.stackId && !expanded && (
+                      {/* Improved badge - shown for short text that doesn't use smart truncation */}
+                      {combinedText && !smartTruncateText(combinedText, 8).needsTruncation && improveResult?.stackId === stack.stackId && !expanded && (
                         <span style={{
                           display: 'inline-block',
                           fontSize: '9px',
@@ -2066,8 +2197,8 @@ export default function ClipboardHistory() {
                         </span>
                       )}
                       
-                      {/* Show more/less button - only when text is actually truncated or has improved result */}
-                      {combinedText && (textIsOverflowing || expanded || improveResult?.stackId === stack.stackId) && (
+                      {/* Show less button - only when expanded */}
+                      {combinedText && expanded && (
                         <button
                           tabIndex={-1}
                           onMouseDown={(e) => e.preventDefault()}
@@ -2085,7 +2216,7 @@ export default function ClipboardHistory() {
                             cursor: 'pointer',
                           }}
                         >
-                          {expanded ? 'Show less' : (improveResult?.stackId === stack.stackId ? 'Show improved' : 'Show more')}
+                          Show less
                         </button>
                       )}
                     </div>
@@ -2333,54 +2464,186 @@ export default function ClipboardHistory() {
                   <div>
                     {item.type === 'text' || item.type === 'transcript' ? (
                       <>
-                        <div
-                          style={{
-                            fontSize: '12px',
-                            fontWeight: '500',
-                            marginBottom: itemExpanded ? '4px' : '0',
-                            display: 'flex',
-                            alignItems: 'flex-start',
-                            gap: '8px',
-                          }}
-                        >
-                          {/* Color preview square */}
-                          {detectColor(item.content) && (
+                        {(() => {
+                          // Use smart truncation to show beginning and end of text.
+                          const displayText = itemExpanded && improveResult?.stackId === `item-${item.id}`
+                            ? improveResult.refinedPrompt
+                            : item.content || 'Empty';
+                          const truncated = smartTruncateText(displayText, 8);
+                          const showSmartTruncation = !itemExpanded && truncated.needsTruncation;
+                          const colorValue = detectColor(item.content);
+                          
+                          if (itemExpanded) {
+                            // Expanded state: show full text with color preview.
+                            return (
+                              <div
+                                style={{
+                                  fontSize: '12px',
+                                  fontWeight: '500',
+                                  marginBottom: '4px',
+                                  display: 'flex',
+                                  alignItems: 'flex-start',
+                                  gap: '8px',
+                                }}
+                              >
+                                {colorValue && (
+                                  <div
+                                    style={{
+                                      width: '20px',
+                                      height: '20px',
+                                      borderRadius: '4px',
+                                      backgroundColor: colorValue,
+                                      border: '1px solid #e0e0e0',
+                                      flexShrink: 0,
+                                      marginTop: '1px',
+                                    }}
+                                    title={colorValue}
+                                  />
+                                )}
+                                <span style={{ flex: 1, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>
+                                  {displayText}
+                                </span>
+                              </div>
+                            );
+                          }
+                          
+                          if (showSmartTruncation) {
+                            // Smart truncation: show first words ... [expand] ... last words.
+                            return (
+                              <div style={{ marginBottom: '4px' }}>
+                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                                  {colorValue && (
+                                    <div
+                                      style={{
+                                        width: '20px',
+                                        height: '20px',
+                                        borderRadius: '4px',
+                                        backgroundColor: colorValue,
+                                        border: '1px solid #e0e0e0',
+                                        flexShrink: 0,
+                                        marginTop: '1px',
+                                      }}
+                                      title={colorValue}
+                                    />
+                                  )}
+                                  <span style={{ flex: 1 }}>
+                                    {/* First part */}
+                                    <span
+                                      style={{
+                                        fontSize: '12px',
+                                        fontWeight: '500',
+                                        color: theme.text,
+                                        lineHeight: '1.5',
+                                      }}
+                                    >
+                                      {truncated.firstPart}
+                                    </span>
+                                    <span style={{ color: theme.textSecondary, fontSize: '12px' }}> … </span>
+                                    
+                                    {/* Expand button in the middle */}
+                                    <button
+                                      tabIndex={-1}
+                                      onMouseDown={(e) => e.preventDefault()}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        toggleItemExpanded(item.id);
+                                      }}
+                                      style={{
+                                        background: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
+                                        border: 'none',
+                                        padding: '2px 8px',
+                                        fontSize: '10px',
+                                        fontWeight: 500,
+                                        color: theme.textSecondary,
+                                        cursor: 'pointer',
+                                        borderRadius: '4px',
+                                        margin: '0 4px',
+                                        verticalAlign: 'middle',
+                                      }}
+                                    >
+                                      {improveResult?.stackId === `item-${item.id}` ? 'show improved' : 'expand'}
+                                    </button>
+                                    
+                                    <span style={{ color: theme.textSecondary, fontSize: '12px' }}> … </span>
+                                    {/* Last part */}
+                                    <span
+                                      style={{
+                                        fontSize: '12px',
+                                        fontWeight: '500',
+                                        color: theme.text,
+                                        lineHeight: '1.5',
+                                      }}
+                                    >
+                                      {truncated.lastPart}
+                                    </span>
+                                    
+                                    {/* Improved badge inline */}
+                                    {improveResult?.stackId === `item-${item.id}` && (
+                                      <span style={{
+                                        display: 'inline-block',
+                                        fontSize: '9px',
+                                        fontWeight: 600,
+                                        color: '#34C759',
+                                        backgroundColor: '#e8f5e9',
+                                        padding: '2px 6px',
+                                        borderRadius: '3px',
+                                        marginLeft: '8px',
+                                        verticalAlign: 'middle',
+                                      }}>
+                                        ✨ improved
+                                      </span>
+                                    )}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          }
+                          
+                          // Short text that doesn't need truncation: show full text with line clamp.
+                          return (
                             <div
                               style={{
-                                width: '20px',
-                                height: '20px',
-                                borderRadius: '4px',
-                                backgroundColor: detectColor(item.content) || '#000',
-                                border: '1px solid #e0e0e0',
-                                flexShrink: 0,
-                                marginTop: '1px',
+                                fontSize: '12px',
+                                fontWeight: '500',
+                                marginBottom: '0',
+                                display: 'flex',
+                                alignItems: 'flex-start',
+                                gap: '8px',
                               }}
-                              title={detectColor(item.content) || ''}
-                            />
-                          )}
-                          <span
-                            ref={itemExpanded ? undefined : checkTextOverflow(itemTextId)}
-                            style={{
-                              flex: 1,
-                              wordBreak: 'break-word',
-                              ...(itemExpanded ? {
-                                whiteSpace: 'pre-wrap',
-                              } : {
-                                // 3-line clamp for collapsed state
-                                display: '-webkit-box',
-                                WebkitLineClamp: 3,
-                                WebkitBoxOrient: 'vertical' as const,
-                                overflow: 'hidden',
-                              }),
-                            }}
-                          >
-                            {itemExpanded && improveResult?.stackId === `item-${item.id}`
-                              ? improveResult.refinedPrompt
-                              : item.content || 'Empty'}
-                          </span>
-                        </div>
-                        {/* Improved badge - shown when there's an improved version */}
-                        {improveResult?.stackId === `item-${item.id}` && !itemExpanded && (
+                            >
+                              {colorValue && (
+                                <div
+                                  style={{
+                                    width: '20px',
+                                    height: '20px',
+                                    borderRadius: '4px',
+                                    backgroundColor: colorValue,
+                                    border: '1px solid #e0e0e0',
+                                    flexShrink: 0,
+                                    marginTop: '1px',
+                                  }}
+                                  title={colorValue}
+                                />
+                              )}
+                              <span
+                                ref={checkTextOverflow(itemTextId)}
+                                style={{
+                                  flex: 1,
+                                  wordBreak: 'break-word',
+                                  display: '-webkit-box',
+                                  WebkitLineClamp: 3,
+                                  WebkitBoxOrient: 'vertical' as const,
+                                  overflow: 'hidden',
+                                }}
+                              >
+                                {displayText}
+                              </span>
+                            </div>
+                          );
+                        })()}
+                        
+                        {/* Improved badge - shown for short text that doesn't use smart truncation */}
+                        {item.content && !smartTruncateText(item.content, 8).needsTruncation && improveResult?.stackId === `item-${item.id}` && !itemExpanded && (
                           <span style={{
                             display: 'inline-block',
                             fontSize: '9px',
@@ -2394,8 +2657,9 @@ export default function ClipboardHistory() {
                             ✨ Improved version available
                           </span>
                         )}
-                        {/* Show more/less button - only when text is actually truncated or has improved result */}
-                        {(itemTextIsOverflowing || itemExpanded || improveResult?.stackId === `item-${item.id}`) && (
+                        
+                        {/* Show less button - only when expanded */}
+                        {itemExpanded && (
                           <button
                             tabIndex={-1}
                             onMouseDown={(e) => e.preventDefault()}
@@ -2414,7 +2678,7 @@ export default function ClipboardHistory() {
                               cursor: 'pointer',
                             }}
                           >
-                            {itemExpanded ? 'Show less' : (improveResult?.stackId === `item-${item.id}` ? 'Show improved' : 'Show more')}
+                            Show less
                           </button>
                         )}
                       </>

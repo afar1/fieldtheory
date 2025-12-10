@@ -15,6 +15,10 @@ export const TranscribeIPCChannels = {
   SET_HOTKEY: 'transcribe:setHotkey',
   GET_OVERLAY_STYLE: 'transcribe:getOverlayStyle',
   SET_OVERLAY_STYLE: 'transcribe:setOverlayStyle',
+  GET_ABANDON_HOTKEY: 'transcribe:getAbandonHotkey',
+  SET_ABANDON_HOTKEY: 'transcribe:setAbandonHotkey',
+  GET_ABANDON_CONFIRMATION: 'transcribe:getAbandonConfirmation',
+  SET_ABANDON_CONFIRMATION: 'transcribe:setAbandonConfirmation',
 
   // Main -> Renderer (send pattern)
   STATUS_CHANGED: 'transcribe:statusChanged',
@@ -60,6 +64,10 @@ export interface TranscribeAPI {
   setHotkey: (hotkey: string) => Promise<boolean>;
   getOverlayStyle: () => Promise<'rectangle' | 'top-emerging'>;
   setOverlayStyle: (style: 'rectangle' | 'top-emerging') => Promise<void>;
+  getAbandonHotkey: () => Promise<string>;
+  setAbandonHotkey: (hotkey: string) => Promise<boolean>;
+  getAbandonConfirmation: () => Promise<boolean>;
+  setAbandonConfirmation: (enabled: boolean) => Promise<void>;
   onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
   onResult: (callback: (text: string) => void) => () => void;
   onError: (callback: (error: string) => void) => () => void;

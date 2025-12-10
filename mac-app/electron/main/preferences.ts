@@ -65,6 +65,10 @@ interface Preferences {
   
   // All-time statistics tracking
   improvedPromptsCount?: number;
+  
+  // Abandon recording settings - hotkey to cancel recording and whether to confirm
+  abandonRecordingHotkey?: string;
+  abandonRecordingConfirmation?: boolean;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
@@ -75,6 +79,8 @@ const DEFAULT_PREFERENCES: Preferences = {
   clipboardHistoryHotkey: 'Control+Alt+Space',
   continuousContextEnabled: false,
   continuousContextHotkey: 'Shift+Alt+1', // Default: Shift + screenshot hotkey
+  abandonRecordingHotkey: 'Escape', // Default: Escape key to cancel recording
+  abandonRecordingConfirmation: true, // Default: confirm before abandoning if there's audio
 };
 
 /**

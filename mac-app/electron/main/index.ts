@@ -551,6 +551,35 @@ function setupTranscribeIPCHandlers(): void {
     await transcriberManager.setOverlayStyle(style as 'rectangle' | 'top-emerging');
   });
 
+  // Abandon recording hotkey settings.
+  ipcMain.handle(TranscribeIPCChannels.GET_ABANDON_HOTKEY, () => {
+    if (!transcriberManager) {
+      return 'Escape';
+    }
+    return transcriberManager.getAbandonHotkey();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_ABANDON_HOTKEY, async (_event, hotkey: string) => {
+    if (!transcriberManager) {
+      throw new Error('TranscriberManager not initialized');
+    }
+    return await transcriberManager.setAbandonHotkey(hotkey);
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_ABANDON_CONFIRMATION, () => {
+    if (!transcriberManager) {
+      return true;
+    }
+    return transcriberManager.getAbandonConfirmation();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_ABANDON_CONFIRMATION, async (_event, enabled: boolean) => {
+    if (!transcriberManager) {
+      throw new Error('TranscriberManager not initialized');
+    }
+    await transcriberManager.setAbandonConfirmation(enabled);
+  });
+
   ipcMain.handle('transcribe:getStackCount', () => {
     if (!transcriberManager) {
       return 0;
