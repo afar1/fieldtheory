@@ -14,6 +14,7 @@ export default function App() {
   const [permissions, setPermissions] = useState<{ accessibilityGranted: boolean } | null>(null);
   const [showPermissionsGate, setShowPermissionsGate] = useState(false);
   
+  
   // Clipboard hotkey configuration
   const [clipboardHotkeys, setClipboardHotkeys] = useState<{ screenshot?: string; history?: string }>({
     screenshot: 'CommandOrControl+Shift+4',
@@ -32,6 +33,7 @@ export default function App() {
     stackId: null,
     screenshotCount: 0,
   });
+  
   
   // Load clipboard hotkeys on mount
   useEffect(() => {
@@ -446,7 +448,6 @@ export default function App() {
 
   return (
     <>
-      {/* Draggable region for window movement */}
       <div style={styles.draggableRegion}></div>
       <div 
         style={{

@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, 
 import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import os from 'os';
+import fs from 'fs';
 import { NativeHelper } from './nativeHelper';
 import { AudioManager } from './audioManager';
 import { TrayManager } from './trayManager';
@@ -30,9 +31,75 @@ import {
 import { ClipboardItem } from './clipboardManager';
 import { VisionModelManager, VisionModelSize } from './visionModelManager';
 import { VisionProcessor } from './visionProcessor';
-import { engineerStack, setApiKey as setEngineerApiKey } from './promptEngineer';
+import { 
+  engineerStack, 
+  setApiKey as setEngineerApiKey,
+  setCustomSystemPrompt,
+  getActiveSystemPrompt,
+  loadDefaultSystemPrompt,
+} from './promptEngineer';
 import { OnboardingWindow, OnboardingStep } from './onboardingWindow';
 import { OnboardingIPCChannels } from './types/onboarding';
+import { TodoIPCChannels } from './types/todo';
+
+// Load environment variables from .env.local for Supabase credentials.
+// In development, the file is in the mac-app directory.
+// In production, we use the bundled values or fall back to hardcoded ones.
+function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
+  // First check if already set (e.g., via Vite define or process.env)
+  if (process.env.VITE_SUPABASE_URL && process.env.VITE_SUPABASE_ANON_KEY) {
+    return {
+      supabaseUrl: process.env.VITE_SUPABASE_URL,
+      supabaseAnonKey: process.env.VITE_SUPABASE_ANON_KEY,
+    };
+  }
+
+  // Try to load from .env.local file
+  // In development: __dirname is electron-dist/main, so ../../ goes to mac-app/
+  // In production: app.getAppPath() points to the app bundle
+  const envPaths = [
+    path.join(__dirname, '../../.env.local'),    // Dev: electron-dist/main -> mac-app/.env.local
+    path.join(process.cwd(), '.env.local'),      // Dev: current working directory
+    path.join(process.cwd(), 'mac-app/.env.local'), // Dev: if running from repo root
+    path.join(app.getAppPath(), '.env.local'),   // Production: inside app bundle
+    path.join(app.getAppPath(), '../.env.local'), // Production: next to app bundle
+  ];
+  
+  console.log('[Main] Looking for .env.local in:', envPaths);
+
+  for (const envPath of envPaths) {
+    try {
+      if (fs.existsSync(envPath)) {
+        const content = fs.readFileSync(envPath, 'utf-8');
+        const lines = content.split('\n');
+        const env: Record<string, string> = {};
+        
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed && !trimmed.startsWith('#')) {
+            const [key, ...valueParts] = trimmed.split('=');
+            if (key && valueParts.length > 0) {
+              env[key.trim()] = valueParts.join('=').trim();
+            }
+          }
+        }
+        
+        if (env.VITE_SUPABASE_URL && env.VITE_SUPABASE_ANON_KEY) {
+          console.log('[Main] Loaded Supabase credentials from:', envPath);
+          return {
+            supabaseUrl: env.VITE_SUPABASE_URL,
+            supabaseAnonKey: env.VITE_SUPABASE_ANON_KEY,
+          };
+        }
+      }
+    } catch (err) {
+      // Ignore errors, try next path
+    }
+  }
+
+  console.warn('[Main] Could not load Supabase credentials from .env.local');
+  return {};
+}
 
 // Override userData path for experimental builds to isolate data from production.
 // This must happen before app.whenReady() and before any code calls app.getPath('userData').
@@ -48,7 +115,7 @@ if (process.env.EXPERIMENTAL === 'true') {
 // Configure autoUpdater for manual update flow (only in production builds).
 if (!process.env.ELECTRON_START_URL) {
   autoUpdater.autoDownload = false;
-  autoUpdater.setFeedURL({ provider: 'github', owner: 'afar1', repo: 'oscar' });
+  autoUpdater.setFeedURL({ provider: 'github', owner: 'afar1', repo: 'field-releases' });
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -63,6 +130,9 @@ let visionModelManager: VisionModelManager | null = null;
 let visionProcessor: VisionProcessor | null = null;
 let mobileSync: MobileSync | null = null;
 let onboardingWindow: OnboardingWindow | null = null;
+
+// Track pending update state so windows can query it when they open.
+let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
 
 /**
  * Create the main application window.
@@ -1214,6 +1284,112 @@ function setupClipboardIPCHandlers(): void {
     }
   });
 
+  // =========================================================================
+  // System Prompt Customization - User can modify how transcriptions are improved
+  // =========================================================================
+
+  // Get the currently active system prompt (custom if set, otherwise default).
+  ipcMain.handle(ClipboardIPCChannels.GET_SYSTEM_PROMPT, async () => {
+    // First load any saved custom prompt from preferences.
+    const customPrompt = preferencesManager?.getPreference('customSystemPrompt');
+    if (customPrompt) {
+      setCustomSystemPrompt(customPrompt);
+    }
+    return {
+      prompt: getActiveSystemPrompt(),
+      isCustom: !!customPrompt,
+    };
+  });
+
+  // Set a custom system prompt.
+  ipcMain.handle(ClipboardIPCChannels.SET_SYSTEM_PROMPT, async (_event, prompt: string) => {
+    try {
+      if (!preferencesManager) {
+        return { success: false, error: 'Preferences not initialized' };
+      }
+      
+      // Save to preferences for persistence.
+      await preferencesManager.save({ customSystemPrompt: prompt });
+      
+      // Update the in-memory prompt.
+      setCustomSystemPrompt(prompt);
+      
+      return { success: true };
+    } catch (error) {
+      console.error('[Main] setSystemPrompt error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to save system prompt',
+      };
+    }
+  });
+
+  // Reset to the default system prompt.
+  ipcMain.handle(ClipboardIPCChannels.RESET_SYSTEM_PROMPT, async () => {
+    try {
+      if (!preferencesManager) {
+        return { success: false, error: 'Preferences not initialized' };
+      }
+      
+      // Clear from preferences.
+      await preferencesManager.save({ customSystemPrompt: undefined });
+      
+      // Clear in-memory custom prompt.
+      setCustomSystemPrompt(null);
+      
+      return { success: true };
+    } catch (error) {
+      console.error('[Main] resetSystemPrompt error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to reset system prompt',
+      };
+    }
+  });
+
+  // Get the default system prompt (for showing in UI before user customizes).
+  ipcMain.handle(ClipboardIPCChannels.GET_DEFAULT_SYSTEM_PROMPT, async () => {
+    return { prompt: loadDefaultSystemPrompt() };
+  });
+
+  // =========================================================================
+  // Improved Content Management - Save/clear improved versions of transcriptions
+  // =========================================================================
+
+  // Save improved content for a specific item.
+  ipcMain.handle(ClipboardIPCChannels.SAVE_IMPROVED_CONTENT, async (_event, itemId: number, improvedContent: string) => {
+    try {
+      if (!clipboardManager) {
+        return { success: false, error: 'Clipboard manager not initialized' };
+      }
+      clipboardManager.saveImprovedContent(itemId, improvedContent);
+      return { success: true };
+    } catch (error) {
+      console.error('[Main] saveImprovedContent error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to save improved content',
+      };
+    }
+  });
+
+  // Clear improved content for a specific item (revert to original only).
+  ipcMain.handle(ClipboardIPCChannels.CLEAR_IMPROVED_CONTENT, async (_event, itemId: number) => {
+    try {
+      if (!clipboardManager) {
+        return { success: false, error: 'Clipboard manager not initialized' };
+      }
+      clipboardManager.clearImprovedContent(itemId);
+      return { success: true };
+    } catch (error) {
+      console.error('[Main] clearImprovedContent error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to clear improved content',
+      };
+    }
+  });
+
   // Clean up temp files on app quit
   app.on('will-quit', () => {
     const fs = require('fs');
@@ -1277,6 +1453,164 @@ function setupClipboardIPCHandlers(): void {
     }
     mobileSync.setSyncEnabled(enabled);
     return true;
+  });
+
+  // =========================================================================
+  // Password Authentication IPC Handlers
+  // =========================================================================
+
+  ipcMain.handle('auth:signInWithPassword', async (_event, email: string, password: string) => {
+    if (!mobileSync) {
+      return { error: 'Mobile sync not initialized', session: null };
+    }
+    return await mobileSync.signInWithPassword(email, password);
+  });
+
+  ipcMain.handle('auth:resetPasswordForEmail', async (_event, email: string) => {
+    if (!mobileSync) {
+      return { error: 'Mobile sync not initialized' };
+    }
+    return await mobileSync.resetPasswordForEmail(email);
+  });
+
+  ipcMain.handle('auth:updatePassword', async (_event, newPassword: string) => {
+    if (!mobileSync) {
+      return { error: 'Mobile sync not initialized' };
+    }
+    return await mobileSync.updatePassword(newPassword);
+  });
+
+  ipcMain.handle('auth:setSessionFromUrl', async (_event, accessToken: string, refreshToken: string) => {
+    if (!mobileSync) {
+      return { error: 'Mobile sync not initialized', session: null };
+    }
+    return await mobileSync.setSessionFromUrl(accessToken, refreshToken);
+  });
+
+  ipcMain.handle('auth:signOut', async () => {
+    if (!mobileSync) {
+      return { error: 'Mobile sync not initialized' };
+    }
+    return await mobileSync.signOut();
+  });
+
+  ipcMain.handle('auth:getSession', async () => {
+    if (!mobileSync) {
+      return null;
+    }
+    return mobileSync.getSession();
+  });
+
+  // =========================================================================
+  // Todo IPC Handlers - Bidirectional sync with Supabase
+  // =========================================================================
+
+  ipcMain.handle('todo:isAuthenticated', async () => {
+    if (!mobileSync) {
+      return false;
+    }
+    return mobileSync.isAuthenticated();
+  });
+
+  ipcMain.handle(TodoIPCChannels.GET_TODOS, async () => {
+    if (!mobileSync) {
+      return [];
+    }
+    return mobileSync.getTodos();
+  });
+
+  ipcMain.handle(TodoIPCChannels.SYNC_TODOS, async () => {
+    if (!mobileSync) {
+      return [];
+    }
+    return await mobileSync.syncTodos();
+  });
+
+  ipcMain.handle(TodoIPCChannels.CREATE_TODO, async (_event, text: string) => {
+    if (!mobileSync) {
+      return null;
+    }
+    return await mobileSync.createTodo(text);
+  });
+
+  ipcMain.handle(TodoIPCChannels.UPDATE_TODO, async (_event, id: string, text: string) => {
+    if (!mobileSync) {
+      return null;
+    }
+    return await mobileSync.updateTodo(id, text);
+  });
+
+  ipcMain.handle(TodoIPCChannels.TOGGLE_TODO, async (_event, id: string) => {
+    if (!mobileSync) {
+      return null;
+    }
+    return await mobileSync.toggleTodo(id);
+  });
+
+  ipcMain.handle(TodoIPCChannels.DELETE_TODO, async (_event, id: string) => {
+    if (!mobileSync) {
+      return false;
+    }
+    return await mobileSync.deleteTodo(id);
+  });
+
+  ipcMain.handle(TodoIPCChannels.DELETE_TODOS, async (_event, ids: string[]) => {
+    if (!mobileSync) {
+      return false;
+    }
+    return await mobileSync.deleteTodos(ids);
+  });
+
+  ipcMain.handle(TodoIPCChannels.COMPLETE_TODOS, async (_event, ids: string[]) => {
+    if (!mobileSync) {
+      return false;
+    }
+    return await mobileSync.completeTodos(ids);
+  });
+
+  // Todo hotkey management - stored in preferences.
+  ipcMain.handle(TodoIPCChannels.GET_TODO_HOTKEY, async () => {
+    if (!preferencesManager) {
+      return 'Command+Shift+T';
+    }
+    const prefs = await preferencesManager.load();
+    return prefs.todoHotkey || 'Command+Shift+T';
+  });
+
+  ipcMain.handle(TodoIPCChannels.SET_TODO_HOTKEY, async (_event, hotkey: string) => {
+    if (!preferencesManager || !clipboardManager) {
+      return false;
+    }
+    
+    // Unregister old hotkey and register new one.
+    const prefs = await preferencesManager.load();
+    const oldHotkey = prefs.todoHotkey || 'Command+Shift+T';
+    
+    try {
+      globalShortcut.unregister(oldHotkey);
+    } catch {
+      // Ignore if old hotkey wasn't registered.
+    }
+    
+    try {
+      const success = globalShortcut.register(hotkey, () => {
+        // Show clipboard history window in todo view mode.
+        if (clipboardHistoryWindow) {
+          clipboardHistoryWindow.show();
+          // Send event to switch to todo view.
+          clipboardHistoryWindow.getWindow()?.webContents.send(TodoIPCChannels.SHOW_TODOS);
+        }
+      });
+      
+      if (success) {
+        await preferencesManager.save({ todoHotkey: hotkey });
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error('[Main] Failed to register todo hotkey:', err);
+      return false;
+    }
   });
 
   // =========================================================================
@@ -1795,12 +2129,58 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   // Initialize mobile sync to pull iOS transcriptions into clipboard history.
-  // Uses Vite env vars passed at build time via process.env replacement.
+  // Load Supabase credentials from .env.local file.
+  const envVars = loadEnvVars();
   mobileSync = new MobileSync(clipboardManager, preferencesManager);
-  await mobileSync.init(
-    process.env.VITE_SUPABASE_URL,
-    process.env.VITE_SUPABASE_ANON_KEY
-  );
+  await mobileSync.init(envVars.supabaseUrl, envVars.supabaseAnonKey);
+
+  // Forward todosChanged events to all renderer windows.
+  mobileSync.on('todosChanged', (todos) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(TodoIPCChannels.TODOS_CHANGED, todos);
+      }
+    });
+  });
+
+  // Register todo hotkey (Cmd+Shift+T by default).
+  // This hotkey toggles between todo view and clipboard view.
+  const todoHotkey = prefs.todoHotkey || 'Command+Shift+T';
+  let lastTodoToggleAt = 0;
+  
+  try {
+    globalShortcut.register(todoHotkey, () => {
+      // Debounce to avoid repeated toggles when the hotkey auto-repeats.
+      const now = Date.now();
+      if (now - lastTodoToggleAt < 250) return;
+      lastTodoToggleAt = now;
+
+      if (!clipboardHistoryWindow) {
+        clipboardHistoryWindow = initClipboardHistoryWindow();
+      }
+
+      const visible = clipboardHistoryWindow.isVisible();
+
+      if (!visible) {
+        // Show window in todo view mode.
+        clipboardHistoryWindow.capturePreviousAppBeforeShow().then(() => {
+          const boundsToUse = restoreClipboardHistoryBounds();
+          clipboardHistoryWindow!.show(boundsToUse);
+          // Switch to todo view after window is shown.
+          setTimeout(() => {
+            clipboardHistoryWindow?.getWindow()?.webContents.send(TodoIPCChannels.SHOW_TODOS);
+          }, 50);
+        });
+      } else {
+        // If already visible, toggle between todo and clipboard view.
+        // Send SHOW_TODOS event - the renderer will toggle if already in todo view.
+        clipboardHistoryWindow.getWindow()?.webContents.send(TodoIPCChannels.SHOW_TODOS);
+      }
+    });
+    console.log(`[Main] Registered todo hotkey: ${todoHotkey}`);
+  } catch (err) {
+    console.error('[Main] Failed to register todo hotkey:', err);
+  }
 
   console.log('[Main] Transcription system initialized');
 }
@@ -1907,19 +2287,30 @@ if (!gotTheLock) {
     // Manual update check function for tray menu.
     function checkForUpdatesManual(): void {
       console.log('[Updater] Manual update check triggered');
-      autoUpdater.checkForUpdates();
+      console.log('[Updater] Feed URL config:', { provider: 'github', owner: 'afar1', repo: 'field-releases' });
+      console.log('[Updater] Current app version:', app.getVersion());
+      autoUpdater.checkForUpdates().catch((err) => {
+        console.error('[Updater] Check failed:', err);
+      });
     }
 
     await initAudioSystem(checkForUpdatesManual);
     await initTranscriberSystem();
     await initVisionSystem();
 
-    // Check for updates on startup (production only, after 5s delay to not block UI).
+    // Check for updates on startup and periodically (production only).
     if (!process.env.ELECTRON_START_URL) {
+      // Initial check after 5s delay to not block UI.
       setTimeout(() => {
         console.log('[Updater] Checking for updates on startup...');
         autoUpdater.checkForUpdates();
       }, 5000);
+
+      // Periodic check every 30 minutes.
+      setInterval(() => {
+        console.log('[Updater] Periodic update check...');
+        autoUpdater.checkForUpdates();
+      }, 30 * 60 * 1000);
     }
 
     // Auto-updater event handlers - send to renderer for in-app notification UI.
@@ -1929,6 +2320,7 @@ if (!gotTheLock) {
 
     autoUpdater.on('update-available', (info) => {
       console.log('[Updater] Update available:', info.version);
+      pendingUpdateInfo = { status: 'available', version: info.version };
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send('updater:updateAvailable', { version: info.version });
@@ -1947,6 +2339,7 @@ if (!gotTheLock) {
 
     autoUpdater.on('error', (err) => {
       console.error('[Updater] Error:', err.message);
+      console.error('[Updater] Full error:', err);
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send('updater:error', err.message);
@@ -1957,6 +2350,9 @@ if (!gotTheLock) {
     autoUpdater.on('download-progress', (progress) => {
       const percent = Math.round(progress.percent);
       console.log(`[Updater] Download progress: ${percent}%`);
+      if (pendingUpdateInfo) {
+        pendingUpdateInfo.status = 'downloading';
+      }
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send('updater:downloadProgress', percent);
@@ -1966,6 +2362,7 @@ if (!gotTheLock) {
 
     autoUpdater.on('update-downloaded', (info) => {
       console.log('[Updater] Update downloaded:', info.version);
+      pendingUpdateInfo = { status: 'ready', version: info.version };
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send('updater:updateDownloaded', { version: info.version });
@@ -1992,7 +2389,13 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('updater:dismissUpdate', () => {
-      // No-op, just acknowledges the dismiss action.
+      // Clear pending update state so notification doesn't reappear.
+      pendingUpdateInfo = null;
+    });
+
+    ipcMain.handle('updater:getStatus', () => {
+      // Return current update state so windows can query it on open.
+      return pendingUpdateInfo;
     });
 
     // Check permissions on startup and notify main window
