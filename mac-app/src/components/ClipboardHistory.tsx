@@ -1027,9 +1027,12 @@ export default function ClipboardHistory() {
         
         e.preventDefault();
         
-        // If at first item, focus search input (Alfred-style cycle).
+        // If at first item, focus search input - but only for ArrowUp, not 'k'.
+        // This lets users stay in the list with vim keys while arrows can exit.
         if (selectedIndex === 0) {
-          inputRef.current?.focus();
+          if (key === 'ArrowUp') {
+            inputRef.current?.focus();
+          }
           return;
         }
         
@@ -3107,24 +3110,46 @@ export default function ClipboardHistory() {
         )}
         </div>
 
-        {/* Drag overlay - shows ghost element while dragging */}
+        {/* Drag overlay - shows ghost element matching original row size */}
         <DragOverlay>
-          {activeDragId ? (
-            <div
-              style={{
-                padding: '6px 10px',
-                backgroundColor: theme.bgSecondary,
-                border: `1px solid ${theme.border}`,
-                borderRadius: '6px',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                fontSize: '12px',
-                color: theme.text,
-                opacity: 0.9,
-              }}
-            >
-              {activeDragId.startsWith('stack:') ? 'Stack' : 'Item'}
-            </div>
-          ) : null}
+          {activeDragId ? (() => {
+            // Find the dragged item/stack to show a content preview.
+            const [type, id] = activeDragId.split(':');
+            const row = listRows.find(r => 
+              type === 'stack' 
+                ? r.type === 'stack' && r.stack.stackId === id
+                : r.type === 'item' && r.item.id === parseInt(id, 10)
+            );
+            
+            // Build preview text from the row content.
+            let previewText = type === 'stack' ? 'Stack' : 'Item';
+            if (row?.type === 'stack') {
+              previewText = combineStackText(row.items).slice(0, 80) || 'Stack';
+            } else if (row?.type === 'item') {
+              previewText = row.item.content?.slice(0, 80) || 'Item';
+            }
+            
+            return (
+              <div
+                style={{
+                  width: '320px',
+                  padding: '12px 16px',
+                  backgroundColor: theme.bgSecondary,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '6px',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                  fontSize: '12px',
+                  color: theme.text,
+                  opacity: 0.9,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {previewText}
+              </div>
+            );
+          })() : null}
         </DragOverlay>
         </DndContext>
         </div>
