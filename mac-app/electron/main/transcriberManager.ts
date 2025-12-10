@@ -61,7 +61,8 @@ export class TranscriberManager extends EventEmitter {
   private hotkey: string = 'Alt+Space'; // Option+Space on macOS
   private registeredHotkey: string | null = null; // Track currently registered transcription hotkey
   private whisperProcess: ChildProcess | null = null;
-  private escapeKeyRegistered: boolean = false;
+  private abandonHotkeyRegistered: boolean = false;
+  private registeredAbandonHotkey: string = 'Escape'; // Track currently registered abandon hotkey
   
   // Current stack of items (transcriptions + screenshots) for prompt stacking
   private currentStack: number[] = [];
@@ -74,6 +75,14 @@ export class TranscriberManager extends EventEmitter {
   
   // Clipboard history visibility checker - allows escape key to dismiss clipboard history first
   private clipboardHistoryVisibilityChecker: (() => boolean) | null = null;
+  
+  // Track if audio content has been recorded (non-silence detected).
+  // Used to determine whether to show confirmation on abandon.
+  private hasAudioContent: boolean = false;
+  private audioLevelThreshold: number = 0.02; // Minimum level to consider as "content"
+  
+  // Confirmation state for abandoning recording
+  private pendingAbandonConfirmation: boolean = false;
 
   constructor(nativeHelper: NativeHelper, preferences: PreferencesManager, clipboardManager?: ClipboardManager) {
     super();
@@ -84,11 +93,27 @@ export class TranscriberManager extends EventEmitter {
     this.modelManager = new ModelManager();
     this.overlay = new RecordingOverlay();
     
-    // Listen for audio levels from native helper
+    // Listen for audio levels from native helper.
+    // Track if we've detected any significant audio content.
     this.nativeHelper.on('audioLevel', (level: number) => {
       if (this.status === 'recording') {
         this.overlay.updateAudioLevel(level);
+        // Check if this level indicates actual audio content.
+        if (level > this.audioLevelThreshold) {
+          this.hasAudioContent = true;
+        }
       }
+    });
+    
+    // Listen for confirmation responses from overlay.
+    this.overlay.on('abandon-confirmed', () => {
+      this.pendingAbandonConfirmation = false;
+      this.cancelRecording();
+    });
+    
+    this.overlay.on('abandon-cancelled', () => {
+      this.pendingAbandonConfirmation = false;
+      this.overlay.hideConfirmation();
     });
   }
 
@@ -245,11 +270,15 @@ export class TranscriberManager extends EventEmitter {
     try {
       this.setStatus('recording');
       
+      // Reset audio content tracking for new recording.
+      this.hasAudioContent = false;
+      this.pendingAbandonConfirmation = false;
+      
       // Show overlay
       this.overlay.showRecording();
       
-      // Register escape key to cancel recording
-      this.registerEscapeKey();
+      // Register abandon hotkey (configurable, default: Escape) to cancel recording.
+      this.registerAbandonHotkey();
       
       // Play start recording sound
       playSound('click.wav');
@@ -260,7 +289,7 @@ export class TranscriberManager extends EventEmitter {
       console.error('[TranscriberManager] Failed to start recording:', error);
       this.setStatus('idle');
       this.overlay.dismiss();
-      this.unregisterEscapeKey();
+      this.unregisterAbandonHotkey();
       this.emit('error', error as Error);
     }
   }
@@ -275,8 +304,8 @@ export class TranscriberManager extends EventEmitter {
     }
 
     try {
-      // Unregister escape key
-      this.unregisterEscapeKey();
+      // Unregister abandon hotkey.
+      this.unregisterAbandonHotkey();
       
       // Play stop recording sound
       playSound('click.wav');
@@ -373,7 +402,7 @@ export class TranscriberManager extends EventEmitter {
   }
   
   /**
-   * Cancel recording (called by escape key).
+   * Cancel recording (called by abandon hotkey).
    */
   private async cancelRecording(): Promise<void> {
     if (this.status !== 'recording') {
@@ -381,57 +410,128 @@ export class TranscriberManager extends EventEmitter {
     }
 
     try {
-      console.log('[TranscriberManager] Cancelling recording (escape pressed)');
+      console.log('[TranscriberManager] Cancelling recording (abandon hotkey pressed)');
+      // Play error sound to indicate recording was abandoned.
+      playSound('error.wav');
       await this.nativeHelper.cancelRecording();
       this.setStatus('idle');
+      this.hasAudioContent = false;
       this.overlay.dismiss();
-      this.unregisterEscapeKey();
+      this.unregisterAbandonHotkey();
     } catch (error) {
       console.error('[TranscriberManager] Failed to cancel recording:', error);
       this.setStatus('idle');
+      this.hasAudioContent = false;
       this.overlay.dismiss();
-      this.unregisterEscapeKey();
+      this.unregisterAbandonHotkey();
     }
   }
   
   /**
-   * Register escape key to cancel recording.
+   * Register abandon recording hotkey (configurable, default: Escape).
    * If clipboard history is visible, dismiss it first instead of canceling recording.
    */
-  private registerEscapeKey(): void {
-    if (this.escapeKeyRegistered) {
+  private registerAbandonHotkey(): void {
+    if (this.abandonHotkeyRegistered) {
       return;
     }
     
-    const registered = globalShortcut.register('Escape', () => {
-      // If clipboard history is visible, dismiss it instead of canceling recording
+    const abandonHotkey = this.preferences.getPreference('abandonRecordingHotkey') || 'Escape';
+    this.registeredAbandonHotkey = abandonHotkey;
+    
+    const registered = globalShortcut.register(abandonHotkey, () => {
+      // If confirmation dialog is showing, treat this as confirmation.
+      if (this.pendingAbandonConfirmation) {
+        this.pendingAbandonConfirmation = false;
+        this.overlay.hideConfirmation();
+        this.cancelRecording();
+        return;
+      }
+      
+      // If clipboard history is visible, dismiss it instead of canceling recording.
       if (this.clipboardHistoryVisibilityChecker?.()) {
-        console.log('[TranscriberManager] Escape: dismissing clipboard history (recording continues)');
+        console.log(`[TranscriberManager] ${abandonHotkey}: dismissing clipboard history (recording continues)`);
         this.emit('dismiss-clipboard-history');
         return;
       }
+      
+      // Check if confirmation is required.
+      const confirmationEnabled = this.preferences.getPreference('abandonRecordingConfirmation') ?? true;
+      
+      if (confirmationEnabled && this.hasAudioContent) {
+        // Show confirmation dialog.
+        console.log('[TranscriberManager] Showing abandon confirmation (audio content detected)');
+        this.pendingAbandonConfirmation = true;
+        this.overlay.showConfirmation();
+        return;
+      }
+      
+      // No confirmation needed - cancel immediately.
       this.cancelRecording();
     });
     
     if (registered) {
-      this.escapeKeyRegistered = true;
-      console.log('[TranscriberManager] Escape key registered for cancel');
+      this.abandonHotkeyRegistered = true;
+      console.log(`[TranscriberManager] Abandon hotkey (${abandonHotkey}) registered for cancel`);
     } else {
-      console.warn('[TranscriberManager] Failed to register escape key');
+      console.warn(`[TranscriberManager] Failed to register abandon hotkey: ${abandonHotkey}`);
     }
   }
   
   /**
-   * Unregister escape key.
+   * Unregister abandon recording hotkey.
    */
-  private unregisterEscapeKey(): void {
-    if (!this.escapeKeyRegistered) {
+  private unregisterAbandonHotkey(): void {
+    if (!this.abandonHotkeyRegistered) {
       return;
     }
     
-    globalShortcut.unregister('Escape');
-    this.escapeKeyRegistered = false;
-    console.log('[TranscriberManager] Escape key unregistered');
+    globalShortcut.unregister(this.registeredAbandonHotkey);
+    this.abandonHotkeyRegistered = false;
+    this.pendingAbandonConfirmation = false;
+    console.log(`[TranscriberManager] Abandon hotkey (${this.registeredAbandonHotkey}) unregistered`);
+  }
+  
+  /**
+   * Set the abandon recording hotkey and save to preferences.
+   */
+  async setAbandonHotkey(hotkey: string): Promise<boolean> {
+    // Unregister old hotkey if currently recording.
+    if (this.abandonHotkeyRegistered) {
+      this.unregisterAbandonHotkey();
+    }
+    
+    await this.preferences.save({ abandonRecordingHotkey: hotkey });
+    
+    // Re-register if we're currently recording.
+    if (this.status === 'recording') {
+      this.registerAbandonHotkey();
+    }
+    
+    console.log(`[TranscriberManager] Abandon hotkey changed to: ${hotkey}`);
+    return true;
+  }
+  
+  /**
+   * Get the current abandon recording hotkey.
+   */
+  getAbandonHotkey(): string {
+    return this.preferences.getPreference('abandonRecordingHotkey') || 'Escape';
+  }
+  
+  /**
+   * Set whether to show confirmation when abandoning a recording with content.
+   */
+  async setAbandonConfirmation(enabled: boolean): Promise<void> {
+    await this.preferences.save({ abandonRecordingConfirmation: enabled });
+    console.log(`[TranscriberManager] Abandon confirmation ${enabled ? 'enabled' : 'disabled'}`);
+  }
+  
+  /**
+   * Get whether confirmation is enabled for abandoning recordings.
+   */
+  getAbandonConfirmation(): boolean {
+    return this.preferences.getPreference('abandonRecordingConfirmation') ?? true;
   }
 
   // =========================================================================
@@ -837,7 +937,7 @@ export class TranscriberManager extends EventEmitter {
    * Cleanup resources.
    */
   destroy(): void {
-    this.unregisterEscapeKey();
+    this.unregisterAbandonHotkey();
     this.unregisterStackingHotkey();
     
     // Unregister transcription hotkey

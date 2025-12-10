@@ -22,6 +22,10 @@ const TranscribeIPCChannels = {
   SET_HOTKEY: 'transcribe:setHotkey',
   GET_OVERLAY_STYLE: 'transcribe:getOverlayStyle',
   SET_OVERLAY_STYLE: 'transcribe:setOverlayStyle',
+  GET_ABANDON_HOTKEY: 'transcribe:getAbandonHotkey',
+  SET_ABANDON_HOTKEY: 'transcribe:setAbandonHotkey',
+  GET_ABANDON_CONFIRMATION: 'transcribe:getAbandonConfirmation',
+  SET_ABANDON_CONFIRMATION: 'transcribe:setAbandonConfirmation',
   STATUS_CHANGED: 'transcribe:statusChanged',
   RESULT: 'transcribe:result',
   ERROR: 'transcribe:error',
@@ -246,6 +250,10 @@ export interface TranscribeAPI {
   setHotkey: (hotkey: string) => Promise<boolean>;
   getOverlayStyle: () => Promise<'rectangle' | 'top-emerging'>;
   setOverlayStyle: (style: 'rectangle' | 'top-emerging') => Promise<void>;
+  getAbandonHotkey: () => Promise<string>;
+  setAbandonHotkey: (hotkey: string) => Promise<boolean>;
+  getAbandonConfirmation: () => Promise<boolean>;
+  setAbandonConfirmation: (enabled: boolean) => Promise<void>;
   getStackCount: () => Promise<number>;
   getStackingMode: () => Promise<StackingModeState>;
   onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
@@ -418,6 +426,22 @@ const transcribeAPI: TranscribeAPI = {
 
   setOverlayStyle: async (style: 'rectangle' | 'top-emerging'): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_OVERLAY_STYLE, style);
+  },
+
+  getAbandonHotkey: async (): Promise<string> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_ABANDON_HOTKEY);
+  },
+
+  setAbandonHotkey: async (hotkey: string): Promise<boolean> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_ABANDON_HOTKEY, hotkey);
+  },
+
+  getAbandonConfirmation: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_ABANDON_CONFIRMATION);
+  },
+
+  setAbandonConfirmation: async (enabled: boolean): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_ABANDON_CONFIRMATION, enabled);
   },
 
   onStatusChanged: (callback: (status: TranscriptionStatus) => void): (() => void) => {

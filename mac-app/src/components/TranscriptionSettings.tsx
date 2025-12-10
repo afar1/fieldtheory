@@ -34,6 +34,12 @@ export default function TranscriptionSettings() {
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [deletingModel, setDeletingModel] = useState<string | null>(null);
   const [modelDownloadProgress, setModelDownloadProgress] = useState<Record<string, { downloaded: number; total: number }>>({});
+  
+  // Abandon recording settings.
+  const [abandonHotkey, setAbandonHotkey] = useState<string>('Escape');
+  const [isCapturingAbandonHotkey, setIsCapturingAbandonHotkey] = useState(false);
+  const [abandonHotkeyError, setAbandonHotkeyError] = useState<string | null>(null);
+  const [abandonConfirmation, setAbandonConfirmation] = useState(true);
 
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
 
@@ -45,7 +51,7 @@ export default function TranscriptionSettings() {
 
     const fetchStatus = async () => {
       try {
-        const [currentStatus, currentModelStatus, currentHotkey, models, currentSelectedModel, downloadStatus, currentOverlayStyle] = await Promise.all([
+        const [currentStatus, currentModelStatus, currentHotkey, models, currentSelectedModel, downloadStatus, currentOverlayStyle, currentAbandonHotkey, currentAbandonConfirmation] = await Promise.all([
           window.transcribeAPI!.getStatus(),
           window.transcribeAPI!.getModelStatus(),
           window.transcribeAPI!.getHotkey(),
@@ -53,6 +59,8 @@ export default function TranscriptionSettings() {
           window.transcribeAPI!.getSelectedModel(),
           window.transcribeAPI!.getModelDownloadStatus(),
           window.transcribeAPI!.getOverlayStyle(),
+          window.transcribeAPI!.getAbandonHotkey?.() ?? 'Escape',
+          window.transcribeAPI!.getAbandonConfirmation?.() ?? true,
         ]);
         setStatus(currentStatus);
         setModelStatus(currentModelStatus);
@@ -61,6 +69,8 @@ export default function TranscriptionSettings() {
         setSelectedModel(currentSelectedModel);
         setModelDownloadStatus(downloadStatus);
         setOverlayStyle(currentOverlayStyle);
+        setAbandonHotkey(currentAbandonHotkey);
+        setAbandonConfirmation(currentAbandonConfirmation);
       } catch (err) {
         console.error('Failed to fetch transcription status:', err);
       }
@@ -229,6 +239,38 @@ export default function TranscriptionSettings() {
       setError(err instanceof Error ? err.message : 'Failed to change overlay style');
     }
   }, []);
+  
+  // Handler for setting abandon recording hotkey.
+  const handleSetAbandonHotkey = useCallback(async (newHotkey: string) => {
+    if (!window.transcribeAPI?.setAbandonHotkey) return;
+
+    setIsCapturingAbandonHotkey(false);
+    setAbandonHotkeyError(null);
+
+    try {
+      const success = await window.transcribeAPI.setAbandonHotkey(newHotkey);
+      if (success) {
+        setAbandonHotkey(newHotkey);
+      } else {
+        setAbandonHotkeyError('Failed to register hotkey. It may be in use by another application.');
+      }
+    } catch (err) {
+      setAbandonHotkeyError(err instanceof Error ? err.message : 'Failed to set abandon hotkey');
+      console.error('Failed to set abandon hotkey:', err);
+    }
+  }, []);
+  
+  // Handler for changing abandon confirmation setting.
+  const handleAbandonConfirmationChange = useCallback(async (enabled: boolean) => {
+    if (!window.transcribeAPI?.setAbandonConfirmation) return;
+    
+    setAbandonConfirmation(enabled);
+    try {
+      await window.transcribeAPI.setAbandonConfirmation(enabled);
+    } catch (err) {
+      console.error('Failed to change abandon confirmation setting:', err);
+    }
+  }, []);
 
   // Handler for capturing hotkey.
   const handleStartCaptureHotkey = useCallback(() => {
@@ -254,9 +296,10 @@ export default function TranscriptionSettings() {
     }
   }, []);
 
-  // Handler for keydown events when capturing hotkey.
+  // Handler for keydown events when capturing hotkey (transcription or abandon).
   useEffect(() => {
-    if (!isCapturingHotkey) return;
+    const capturing = isCapturingHotkey ? 'transcription' : isCapturingAbandonHotkey ? 'abandon' : null;
+    if (!capturing) return;
 
     const handleKeyDown = (event: KeyboardEvent) => {
       event.preventDefault();
@@ -331,14 +374,18 @@ export default function TranscriptionSettings() {
         hotkeyString = key;
       }
 
-      handleSetHotkey(hotkeyString);
+      if (capturing === 'transcription') {
+        handleSetHotkey(hotkeyString);
+      } else if (capturing === 'abandon') {
+        handleSetAbandonHotkey(hotkeyString);
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isCapturingHotkey, handleSetHotkey]);
+  }, [isCapturingHotkey, isCapturingAbandonHotkey, handleSetHotkey, handleSetAbandonHotkey]);
 
   // If not on macOS, show a message.
   if (!isMacOS) {
@@ -453,6 +500,74 @@ export default function TranscriptionSettings() {
             <option value="top-emerging">Top Emerging (Dynamic Island style)</option>
           </select>
         </div>
+      </div>
+
+      {/* Abandon Recording Settings */}
+      <div style={styles.controlsSection}>
+        <h3 style={styles.subheading}>Abandon Recording</h3>
+        <p style={styles.helpText}>
+          Configure the hotkey to cancel a recording in progress. When confirmation is enabled,
+          you'll be asked to confirm before abandoning a recording that has captured audio content.
+        </p>
+
+        {/* Abandon hotkey configuration */}
+        <div style={styles.hotkeyContainer}>
+          <button
+            onClick={() => {
+              setIsCapturingAbandonHotkey(true);
+              setAbandonHotkeyError(null);
+            }}
+            disabled={isCapturingAbandonHotkey || isCapturingHotkey}
+            style={{
+              ...styles.hotkeyButton,
+              ...(isCapturingAbandonHotkey ? styles.hotkeyButtonActive : {}),
+            }}
+          >
+            {isCapturingAbandonHotkey ? 'Press your key combination...' : `Abandon Hotkey: ${abandonHotkey}`}
+          </button>
+          {isCapturingAbandonHotkey && (
+            <button
+              onClick={() => {
+                setIsCapturingAbandonHotkey(false);
+                setAbandonHotkeyError(null);
+              }}
+              style={styles.cancelButton}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+
+        {abandonHotkeyError && (
+          <p style={styles.hotkeyErrorText}>{abandonHotkeyError}</p>
+        )}
+
+        {/* Confirmation toggle */}
+        <div style={styles.toggleRow}>
+          <div style={styles.toggleInfo}>
+            <span style={styles.toggleLabel}>Confirm before abandoning</span>
+            <span style={styles.toggleDescription}>
+              Ask for confirmation when audio content has been recorded
+            </span>
+          </div>
+          <button
+            onClick={() => handleAbandonConfirmationChange(!abandonConfirmation)}
+            style={{
+              ...styles.toggleButton,
+              backgroundColor: abandonConfirmation ? '#22c55e' : '#d1d5db',
+            }}
+          >
+            <span style={{
+              ...styles.toggleKnob,
+              transform: abandonConfirmation ? 'translateX(20px)' : 'translateX(2px)',
+            }} />
+          </button>
+        </div>
+
+        <p style={{ ...styles.helpText, fontSize: '12px', marginTop: '12px' }}>
+          When confirmation is off, the recording will be cancelled immediately without warning.
+          Enable confirmation to prevent accidental loss of recordings.
+        </p>
       </div>
 
       {/* Error display */}
@@ -848,6 +963,48 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid #d1d5db',
     borderRadius: '6px',
     cursor: 'pointer',
+  },
+  toggleRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '12px 0',
+    marginTop: '12px',
+    borderTop: '1px solid #e5e7eb',
+  },
+  toggleInfo: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+  },
+  toggleLabel: {
+    fontSize: '14px',
+    fontWeight: 500,
+    color: '#111827',
+  },
+  toggleDescription: {
+    fontSize: '12px',
+    color: '#6b7280',
+  },
+  toggleButton: {
+    position: 'relative' as const,
+    width: '44px',
+    height: '24px',
+    borderRadius: '12px',
+    border: 'none',
+    cursor: 'pointer',
+    transition: 'background-color 0.2s ease',
+    padding: 0,
+  },
+  toggleKnob: {
+    position: 'absolute' as const,
+    top: '2px',
+    width: '20px',
+    height: '20px',
+    borderRadius: '10px',
+    backgroundColor: '#fff',
+    boxShadow: '0 1px 3px rgba(0, 0, 0, 0.2)',
+    transition: 'transform 0.2s ease',
   },
 };
 
