@@ -12,6 +12,8 @@ import { ClipboardManager } from './clipboardManager';
 import { ModelSize } from './modelManager';
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
 import { MobileSync } from './mobileSync';
+import { TeamClipboardSync, TeamClipboardQueryOptions } from './teamClipboardSync';
+import { TeamClipboardIPCChannels } from './types/clipboard';
 import {
   AudioIPCChannels,
   SetPriorityModePayload,
@@ -129,6 +131,7 @@ let clipboardHistoryWindow: ClipboardHistoryWindow | null = null;
 let visionModelManager: VisionModelManager | null = null;
 let visionProcessor: VisionProcessor | null = null;
 let mobileSync: MobileSync | null = null;
+let teamClipboardSync: TeamClipboardSync | null = null;
 let onboardingWindow: OnboardingWindow | null = null;
 
 // Track pending update state so windows can query it when they open.
@@ -1704,6 +1707,101 @@ function setupClipboardIPCHandlers(): void {
     }
     clipboardManager.stopContinuousContext();
   });
+
+  // =========================================================================
+  // Team Clipboard IPC Handlers - Shared clipboard for team collaboration
+  // =========================================================================
+
+  ipcMain.handle(TeamClipboardIPCChannels.QUERY_TEAM_ITEMS, async (_event, options?: TeamClipboardQueryOptions) => {
+    if (!teamClipboardSync) {
+      return [];
+    }
+    return await teamClipboardSync.queryItems(options);
+  });
+
+  ipcMain.handle(TeamClipboardIPCChannels.GET_TEAM_ITEM, async (_event, id: string) => {
+    if (!teamClipboardSync) {
+      return null;
+    }
+    return await teamClipboardSync.getItem(id);
+  });
+
+  ipcMain.handle(TeamClipboardIPCChannels.SHARE_TO_TEAM, async (_event, localItemId: number) => {
+    if (!teamClipboardSync) {
+      return null;
+    }
+    const teamItem = await teamClipboardSync.shareToTeam(localItemId);
+    
+    // Broadcast to all windows that a team item was added.
+    if (teamItem) {
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(TeamClipboardIPCChannels.TEAM_ITEM_ADDED, teamItem);
+        }
+      });
+    }
+    
+    return teamItem;
+  });
+
+  ipcMain.handle(TeamClipboardIPCChannels.SHARE_STACK_TO_TEAM, async (_event, localItemIds: number[]) => {
+    if (!teamClipboardSync) {
+      return null;
+    }
+    return await teamClipboardSync.shareStackToTeam(localItemIds);
+  });
+
+  ipcMain.handle(TeamClipboardIPCChannels.DELETE_TEAM_ITEM, async (_event, id: string) => {
+    if (!teamClipboardSync) {
+      return false;
+    }
+    const success = await teamClipboardSync.deleteItem(id);
+    
+    if (success) {
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(TeamClipboardIPCChannels.TEAM_ITEM_DELETED, id);
+        }
+      });
+    }
+    
+    return success;
+  });
+
+  ipcMain.handle(TeamClipboardIPCChannels.UPDATE_TEAM_STACK_ID, async (_event, itemIds: string[], stackId: string | null) => {
+    if (!teamClipboardSync) {
+      return false;
+    }
+    return await teamClipboardSync.updateStackId(itemIds, stackId);
+  });
+
+  ipcMain.handle(TeamClipboardIPCChannels.COPY_TO_PERSONAL, async (_event, teamItemId: string) => {
+    if (!teamClipboardSync) {
+      return null;
+    }
+    return await teamClipboardSync.copyToPersonal(teamItemId);
+  });
+
+  ipcMain.handle(TeamClipboardIPCChannels.COPY_STACK_TO_PERSONAL, async (_event, teamStackId: string) => {
+    if (!teamClipboardSync) {
+      return [];
+    }
+    return await teamClipboardSync.copyStackToPersonal(teamStackId);
+  });
+
+  ipcMain.handle(TeamClipboardIPCChannels.GET_TEAM_STACKS, async () => {
+    if (!teamClipboardSync) {
+      return [];
+    }
+    return await teamClipboardSync.getStacks();
+  });
+
+  ipcMain.handle(TeamClipboardIPCChannels.CREATE_TEAM_STACK, async () => {
+    // Creating a team stack is implicit - when items are assigned a stack_id,
+    // a stack record is created automatically in updateStackId.
+    // This handler is here for future extensibility (e.g., creating named stacks).
+    return null;
+  });
 }
 
 
@@ -2134,6 +2232,29 @@ async function initTranscriberSystem(): Promise<void> {
   mobileSync = new MobileSync(clipboardManager, preferencesManager);
   await mobileSync.init(envVars.supabaseUrl, envVars.supabaseAnonKey);
 
+  // Initialize team clipboard sync - shares Supabase client with mobileSync.
+  // This enables collaborative clipboard sharing between team members.
+  teamClipboardSync = new TeamClipboardSync(clipboardManager);
+  
+  // Set the Supabase client from mobileSync once a session is established.
+  // The client is shared to avoid duplicate connections.
+  // When mobileSync sets a session, we forward it to teamClipboardSync.
+  const originalSetSession = mobileSync.setSession.bind(mobileSync);
+  mobileSync.setSession = async (accessToken: string, refreshToken: string) => {
+    await originalSetSession(accessToken, refreshToken);
+    // Forward session to teamClipboardSync.
+    const session = mobileSync!.getSession();
+    if (session && teamClipboardSync) {
+      // The Supabase client is available on mobileSync after init.
+      // We need to share it with teamClipboardSync.
+      // @ts-ignore - Access internal supabase client.
+      if (mobileSync!['supabase']) {
+        teamClipboardSync.setSupabaseClient(mobileSync!['supabase']);
+      }
+      teamClipboardSync.setSession(session);
+    }
+  };
+
   // Forward todosChanged events to all renderer windows.
   mobileSync.on('todosChanged', (todos) => {
     BrowserWindow.getAllWindows().forEach((window) => {
@@ -2435,6 +2556,10 @@ if (!gotTheLock) {
 
     if (mobileSync) {
       mobileSync.destroy();
+    }
+
+    if (teamClipboardSync) {
+      teamClipboardSync.destroy();
     }
 
     if (transcriberManager) {

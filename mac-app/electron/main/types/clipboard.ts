@@ -168,6 +168,91 @@ export interface ContinuousContextState {
   screenshotCount: number;
 }
 
+// =============================================================================
+// Team Clipboard Types - Shared clipboard items for team collaboration.
+// =============================================================================
+
+/**
+ * Team clipboard item stored in Supabase.
+ * Similar to ClipboardItem but with team-specific fields.
+ */
+export interface TeamClipboardItem {
+  id: string; // UUID from Supabase.
+  userId: string; // Who shared this item.
+  sharedByEmail: string | null; // Display name of who shared it.
+  type: ClipboardItemType;
+  content: string | null;
+  imageData: string | null; // base64 encoded for IPC.
+  imageWidth: number | null;
+  imageHeight: number | null;
+  imageSize: number | null;
+  improvedContent: string | null;
+  stackId: string | null;
+  sourceApp: string | null;
+  sourceAppName: string | null;
+  wordCount: number | null;
+  charCount: number | null;
+  clientId: string; // For deduplication.
+  clientCreatedAtMs: number; // Original creation timestamp.
+  createdAt: number; // When shared to team.
+  updatedAt: number;
+}
+
+/**
+ * Summary info for a team stack.
+ */
+export interface TeamStackInfo {
+  stackId: string;
+  name: string | null;
+  itemCount: number;
+  imageCount: number;
+  textCount: number;
+  createdByEmail: string | null;
+  createdAt: number;
+  firstTextPreview: string | null;
+}
+
+/**
+ * Options for querying team clipboard.
+ */
+export interface TeamClipboardQueryOptions {
+  type?: ClipboardItemType;
+  search?: string;
+  limit?: number;
+  offset?: number;
+  stackId?: string; // Filter to items in a specific stack.
+}
+
+/**
+ * IPC channels for team clipboard functionality.
+ */
+export const TeamClipboardIPCChannels = {
+  // Query team items.
+  QUERY_TEAM_ITEMS: 'teamClipboard:queryItems',
+  GET_TEAM_ITEM: 'teamClipboard:getItem',
+  
+  // Share to team.
+  SHARE_TO_TEAM: 'teamClipboard:shareItem',
+  SHARE_STACK_TO_TEAM: 'teamClipboard:shareStack',
+  
+  // Modify team items (collaborative).
+  DELETE_TEAM_ITEM: 'teamClipboard:deleteItem',
+  UPDATE_TEAM_STACK_ID: 'teamClipboard:updateStackId',
+  
+  // Copy to personal clipboard.
+  COPY_TO_PERSONAL: 'teamClipboard:copyToPersonal',
+  COPY_STACK_TO_PERSONAL: 'teamClipboard:copyStackToPersonal',
+  
+  // Stack operations.
+  GET_TEAM_STACKS: 'teamClipboard:getStacks',
+  CREATE_TEAM_STACK: 'teamClipboard:createStack',
+  
+  // Real-time events (future).
+  TEAM_ITEM_ADDED: 'teamClipboard:itemAdded',
+  TEAM_ITEM_DELETED: 'teamClipboard:itemDeleted',
+  TEAM_ITEM_UPDATED: 'teamClipboard:itemUpdated',
+} as const;
+
 /**
  * Clipboard API exposed to renderer.
  */
