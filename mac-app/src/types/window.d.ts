@@ -429,6 +429,78 @@ interface AuthAPI {
   verifyOtp: (email: string, token: string) => Promise<{ error: string | null; session: any | null }>;
   signOut: () => Promise<{ error: string | null }>;
   getSession: () => Promise<any | null>;
+  // Password authentication methods
+  signInWithPassword?: (email: string, password: string) => Promise<{ error: string | null; session: any | null }>;
+  resetPasswordForEmail?: (email: string) => Promise<{ error: string | null }>;
+  updatePassword?: (newPassword: string) => Promise<{ error: string | null }>;
+  setSessionFromUrl?: (accessToken: string, refreshToken: string) => Promise<{ error: string | null; session: any | null }>;
+}
+
+/**
+ * Team clipboard item from Supabase.
+ */
+interface TeamClipboardItem {
+  id: string;
+  userId: string;
+  sharedByEmail: string | null;
+  type: ClipboardItemType;
+  content: string | null;
+  imageData: string | null;
+  imageWidth: number | null;
+  imageHeight: number | null;
+  imageSize: number | null;
+  improvedContent: string | null;
+  stackId: string | null;
+  sourceApp: string | null;
+  sourceAppName: string | null;
+  wordCount: number | null;
+  charCount: number | null;
+  clientId: string;
+  clientCreatedAtMs: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * Team stack info.
+ */
+interface TeamStackInfo {
+  stackId: string;
+  name: string | null;
+  itemCount: number;
+  imageCount: number;
+  textCount: number;
+  createdByEmail: string | null;
+  createdAt: number;
+  firstTextPreview: string | null;
+}
+
+/**
+ * Team clipboard query options.
+ */
+interface TeamClipboardQueryOptions {
+  type?: ClipboardItemType;
+  search?: string;
+  limit?: number;
+  offset?: number;
+  stackId?: string;
+}
+
+/**
+ * Team Clipboard API for shared clipboard.
+ */
+interface TeamClipboardAPI {
+  queryItems: (options?: TeamClipboardQueryOptions) => Promise<TeamClipboardItem[]>;
+  getItem: (id: string) => Promise<TeamClipboardItem | null>;
+  shareToTeam: (localItemId: number) => Promise<TeamClipboardItem | null>;
+  shareStackToTeam: (localItemIds: number[]) => Promise<string | null>;
+  deleteItem: (id: string) => Promise<boolean>;
+  updateStackId: (itemIds: string[], stackId: string | null) => Promise<boolean>;
+  copyToPersonal: (teamItemId: string) => Promise<number | null>;
+  copyStackToPersonal: (teamStackId: string) => Promise<number[]>;
+  getStacks: () => Promise<TeamStackInfo[]>;
+  onTeamItemAdded?: (callback: (item: TeamClipboardItem) => void) => () => void;
+  onTeamItemDeleted?: (callback: (id: string) => void) => () => void;
 }
 
 /**
@@ -446,6 +518,7 @@ declare global {
     onboardingAPI?: OnboardingAPI;
     todoAPI?: TodoAPI;
     authAPI?: AuthAPI;
+    teamClipboardAPI?: TeamClipboardAPI;
     platform?: PlatformInfo;
   }
 }
