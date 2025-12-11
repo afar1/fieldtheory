@@ -21,10 +21,49 @@ import {
   useDroppable,
 } from '@dnd-kit/core';
 
-// View mode: clipboard history or todo list.
-type ViewMode = 'clipboard' | 'todo';
+// View mode: clipboard history, todo list, or team clipboard.
+type ViewMode = 'clipboard' | 'todo' | 'team';
 
 type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
+
+// Team clipboard item from Supabase.
+type TeamClipboardItem = {
+  id: string;
+  userId: string;
+  sharedByEmail: string | null;
+  type: ClipboardItemType;
+  content: string | null;
+  imageData: string | null;
+  imageWidth: number | null;
+  imageHeight: number | null;
+  imageSize: number | null;
+  improvedContent: string | null;
+  stackId: string | null;
+  sourceApp: string | null;
+  sourceAppName: string | null;
+  wordCount: number | null;
+  charCount: number | null;
+  clientId: string;
+  clientCreatedAtMs: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+type TeamStackInfo = {
+  stackId: string;
+  name: string | null;
+  itemCount: number;
+  imageCount: number;
+  textCount: number;
+  createdByEmail: string | null;
+  createdAt: number;
+  firstTextPreview: string | null;
+};
+
+// A row in the team view can be either a single item or a grouped stack.
+type TeamListRow = 
+  | { type: 'item'; item: TeamClipboardItem }
+  | { type: 'stack'; stack: TeamStackInfo; items: TeamClipboardItem[]; expanded: boolean };
 type ClipboardSource = 'mac' | 'ios';
 
 type ClipboardItem = {
@@ -64,6 +103,15 @@ type FilterType = 'all' | 'transcript' | 'screenshot';
 
 // Source filter: which device's items to show
 type SourceFilterType = 'all' | 'mac' | 'ios';
+
+// Query options for clipboard API
+type ClipboardQueryOptions = {
+  type?: ClipboardItemType;
+  search?: string;
+  limit?: number;
+  offset?: number;
+  source?: ClipboardSource;
+};
 
 type RunningApp = {
   bundleId: string;
@@ -291,6 +339,14 @@ export default function ClipboardHistory() {
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
+  
+  // Team clipboard state
+  const [teamItems, setTeamItems] = useState<TeamClipboardItem[]>([]);
+  const [teamStacks, setTeamStacks] = useState<TeamStackInfo[]>([]);
+  const [teamLoading, setTeamLoading] = useState(false);
+  const [expandedTeamStacks, setExpandedTeamStacks] = useState<Set<string>>(new Set());
+  const [sharingToTeam, setSharingToTeam] = useState<number | null>(null); // ID of item being shared
+  const [copyingToPersonal, setCopyingToPersonal] = useState<string | null>(null); // ID of team item being copied
   
   // Improve feature - track loading state and result per stack
   const [improvingStackId, setImprovingStackId] = useState<string | null>(null);
@@ -594,6 +650,104 @@ export default function ClipboardHistory() {
     }
   }, [isMacOS, debouncedSearchQuery, offset, stacks, sourceFilter]);
 
+  // Load team clipboard items from Supabase.
+  const loadTeamItems = useCallback(async () => {
+    if (!window.teamClipboardAPI) {
+      return;
+    }
+
+    setTeamLoading(true);
+    try {
+      const [items, stacks] = await Promise.all([
+        window.teamClipboardAPI.queryItems({ limit: 100 }),
+        window.teamClipboardAPI.getStacks(),
+      ]);
+      
+      setTeamItems(items);
+      setTeamStacks(stacks);
+    } catch (error) {
+      console.error('Failed to load team clipboard items:', error);
+    } finally {
+      setTeamLoading(false);
+    }
+  }, []);
+
+  // Share an item to the team clipboard.
+  const shareToTeam = useCallback(async (localItemId: number) => {
+    if (!window.teamClipboardAPI) {
+      return;
+    }
+
+    setSharingToTeam(localItemId);
+    try {
+      const teamItem = await window.teamClipboardAPI.shareToTeam(localItemId);
+      if (teamItem) {
+        // Refresh team items if we're in team view
+        if (viewMode === 'team') {
+          await loadTeamItems();
+        }
+      }
+    } catch (error) {
+      console.error('Failed to share to team:', error);
+    } finally {
+      setSharingToTeam(null);
+    }
+  }, [viewMode, loadTeamItems]);
+
+  // Share a stack to the team clipboard.
+  const shareStackToTeam = useCallback(async (itemIds: number[]) => {
+    if (!window.teamClipboardAPI) {
+      return;
+    }
+
+    try {
+      await window.teamClipboardAPI.shareStackToTeam(itemIds);
+      // Refresh team items if we're in team view
+      if (viewMode === 'team') {
+        await loadTeamItems();
+      }
+    } catch (error) {
+      console.error('Failed to share stack to team:', error);
+    }
+  }, [viewMode, loadTeamItems]);
+
+  // Copy a team item to personal clipboard.
+  const copyToPersonal = useCallback(async (teamItemId: string) => {
+    if (!window.teamClipboardAPI) {
+      return;
+    }
+
+    setCopyingToPersonal(teamItemId);
+    try {
+      const localId = await window.teamClipboardAPI.copyToPersonal(teamItemId);
+      if (localId) {
+        // Refresh local items to show the new copy
+        await loadItems(true);
+      }
+    } catch (error) {
+      console.error('Failed to copy to personal:', error);
+    } finally {
+      setCopyingToPersonal(null);
+    }
+  }, [loadItems]);
+
+  // Copy a team stack to personal clipboard.
+  const copyStackToPersonal = useCallback(async (teamStackId: string) => {
+    if (!window.teamClipboardAPI) {
+      return;
+    }
+
+    try {
+      const localIds = await window.teamClipboardAPI.copyStackToPersonal(teamStackId);
+      if (localIds.length > 0) {
+        // Refresh local items to show the new copies
+        await loadItems(true);
+      }
+    } catch (error) {
+      console.error('Failed to copy stack to personal:', error);
+    }
+  }, [loadItems]);
+
   useEffect(() => {
     if (searchDebounceTimerRef.current) {
       clearTimeout(searchDebounceTimerRef.current);
@@ -617,6 +771,37 @@ export default function ClipboardHistory() {
       loadItems(true);
     }
   }, [isVisible, debouncedSearchQuery, sourceFilter]);
+
+  // Load team items when switching to team view.
+  useEffect(() => {
+    if (isVisible && viewMode === 'team') {
+      loadTeamItems();
+    }
+  }, [isVisible, viewMode, loadTeamItems]);
+
+  // Subscribe to team clipboard events.
+  useEffect(() => {
+    if (!window.teamClipboardAPI) {
+      return;
+    }
+
+    const unsubscribeAdded = window.teamClipboardAPI.onTeamItemAdded?.(() => {
+      // Refresh team items when a new item is added.
+      if (viewMode === 'team') {
+        loadTeamItems();
+      }
+    });
+
+    const unsubscribeDeleted = window.teamClipboardAPI.onTeamItemDeleted?.((id) => {
+      // Remove the item from local state.
+      setTeamItems(prev => prev.filter(item => item.id !== id));
+    });
+
+    return () => {
+      unsubscribeAdded?.();
+      unsubscribeDeleted?.();
+    };
+  }, [viewMode, loadTeamItems]);
 
   useEffect(() => {
     if (!isMacOS || !window.clipboardAPI) {
@@ -1804,11 +1989,187 @@ export default function ClipboardHistory() {
         )}
       </div>
       
-      {/* Conditionally show Settings, Todo View, or Clipboard History */}
+      {/* View mode tabs - only show when not in settings */}
+      {!showSettings && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '2px',
+          padding: '0 16px',
+          marginBottom: '8px',
+        }}>
+          {(['clipboard', 'team', 'todo'] as ViewMode[]).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => setViewMode(mode)}
+              tabIndex={-1}
+              style={{
+                padding: '4px 10px',
+                fontSize: '10px',
+                fontWeight: viewMode === mode ? 600 : 400,
+                backgroundColor: viewMode === mode ? theme.accent : 'transparent',
+                color: viewMode === mode ? '#fff' : theme.textSecondary,
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              {mode === 'clipboard' ? 'My Clipboard' : mode === 'team' ? 'Team' : 'Todos'}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Conditionally show Settings, Todo View, Team View, or Clipboard History */}
       {showSettings ? (
         <SettingsPanel />
       ) : viewMode === 'todo' ? (
         <TodoView onSwitchToClipboard={() => setViewMode('clipboard')} />
+      ) : viewMode === 'team' ? (
+        // Team Clipboard View
+        <div 
+          style={{ 
+            flex: 1, 
+            display: 'flex', 
+            flexDirection: 'column', 
+            overflow: 'hidden', 
+            padding: '0 16px 16px 16px',
+          }}
+        >
+          {/* Team clipboard header */}
+          <div style={{ 
+            marginBottom: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}>
+            <span style={{ fontSize: '12px', color: theme.textSecondary }}>
+              Shared with your team
+            </span>
+            {teamLoading && (
+              <span style={{ fontSize: '10px', color: theme.textSecondary }}>Loading...</span>
+            )}
+          </div>
+
+          {/* Team items list */}
+          <div
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              minHeight: 0,
+              borderRadius: '8px',
+              border: `1px solid ${theme.border}`,
+            }}
+          >
+            {teamItems.length === 0 && !teamLoading ? (
+              <div
+                style={{
+                  padding: '40px',
+                  textAlign: 'center',
+                  color: theme.textSecondary,
+                }}
+              >
+                <div style={{ marginBottom: '8px', fontSize: '13px' }}>No team items yet</div>
+                <div style={{ fontSize: '11px' }}>
+                  Share items from your clipboard using the "Share to Team" button
+                </div>
+              </div>
+            ) : (
+              teamItems.map((item) => {
+                const isImage = item.type === 'image' || item.type === 'screenshot';
+                const isCopying = copyingToPersonal === item.id;
+                
+                return (
+                  <div
+                    key={item.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      padding: '10px 12px',
+                      borderBottom: `1px solid ${theme.border}`,
+                      backgroundColor: theme.bgSecondary,
+                      gap: '10px',
+                    }}
+                  >
+                    {/* Image thumbnail */}
+                    {isImage && item.imageData && (
+                      <img
+                        src={`data:image/png;base64,${item.imageData}`}
+                        alt=""
+                        style={{
+                          width: '48px',
+                          height: '48px',
+                          objectFit: 'cover',
+                          borderRadius: '4px',
+                          flexShrink: 0,
+                        }}
+                      />
+                    )}
+                    
+                    {/* Content */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {/* Text content */}
+                      {item.content && (
+                        <div
+                          style={{
+                            fontSize: '12px',
+                            color: theme.text,
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            marginBottom: '4px',
+                          }}
+                        >
+                          {item.content}
+                        </div>
+                      )}
+                      
+                      {/* Metadata */}
+                      <div style={{ 
+                        fontSize: '10px', 
+                        color: theme.textSecondary,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                      }}>
+                        <span>{item.sharedByEmail || 'Unknown'}</span>
+                        <span>•</span>
+                        <span>{formatRelativeTime(item.clientCreatedAtMs)}</span>
+                        {item.type === 'transcript' && (
+                          <>
+                            <span>•</span>
+                            <span style={{ color: '#10b981' }}>🎙 Transcript</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {/* Copy to Personal button */}
+                    <button
+                      onClick={() => copyToPersonal(item.id)}
+                      disabled={isCopying}
+                      style={{
+                        padding: '4px 8px',
+                        fontSize: '10px',
+                        backgroundColor: isCopying ? theme.border : theme.accent,
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: isCopying ? 'default' : 'pointer',
+                        opacity: isCopying ? 0.7 : 1,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {isCopying ? 'Copying...' : 'Copy to My Clipboard'}
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
       ) : (
         <div 
           style={{ 
@@ -1910,6 +2271,40 @@ export default function ClipboardHistory() {
                   }}
                 >
                   <KeyCap small>⌫</KeyCap> delete
+                </button>
+                {/* Share to Team button */}
+                <button
+                  tabIndex={-1}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={async () => {
+                    // Share selected items to team
+                    if (selectedIds.size === 1) {
+                      // Single item - share directly
+                      const itemId = Array.from(selectedIds)[0];
+                      await shareToTeam(itemId);
+                    } else {
+                      // Multiple items - share as a stack
+                      await shareStackToTeam(Array.from(selectedIds));
+                    }
+                    setSelectedIds(new Set());
+                    setIsMultiSelect(false);
+                    setLastClickedIndex(null);
+                  }}
+                  disabled={sharingToTeam !== null}
+                  style={{
+                    padding: '2px 6px',
+                    fontSize: '10px',
+                    backgroundColor: 'transparent',
+                    color: sharingToTeam !== null ? theme.border : theme.accent,
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: sharingToTeam !== null ? 'default' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}
+                >
+                  {sharingToTeam !== null ? 'Sharing...' : '↑ share to team'}
                 </button>
                 {selectedIds.size > 1 && (
                   <button

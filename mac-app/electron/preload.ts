@@ -234,6 +234,67 @@ type ContinuousContextState = {
   screenshotCount: number;
 };
 
+// =============================================================================
+// Team Clipboard Types - Shared clipboard for team collaboration
+// =============================================================================
+
+type TeamClipboardItem = {
+  id: string;
+  userId: string;
+  sharedByEmail: string | null;
+  type: ClipboardItemType;
+  content: string | null;
+  imageData: string | null;
+  imageWidth: number | null;
+  imageHeight: number | null;
+  imageSize: number | null;
+  improvedContent: string | null;
+  stackId: string | null;
+  sourceApp: string | null;
+  sourceAppName: string | null;
+  wordCount: number | null;
+  charCount: number | null;
+  clientId: string;
+  clientCreatedAtMs: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+type TeamStackInfo = {
+  stackId: string;
+  name: string | null;
+  itemCount: number;
+  imageCount: number;
+  textCount: number;
+  createdByEmail: string | null;
+  createdAt: number;
+  firstTextPreview: string | null;
+};
+
+type TeamClipboardQueryOptions = {
+  type?: ClipboardItemType;
+  search?: string;
+  limit?: number;
+  offset?: number;
+  stackId?: string;
+};
+
+const TeamClipboardIPCChannels = {
+  QUERY_TEAM_ITEMS: 'teamClipboard:queryItems',
+  GET_TEAM_ITEM: 'teamClipboard:getItem',
+  SHARE_TO_TEAM: 'teamClipboard:shareItem',
+  SHARE_STACK_TO_TEAM: 'teamClipboard:shareStack',
+  DELETE_TEAM_ITEM: 'teamClipboard:deleteItem',
+  UPDATE_TEAM_STACK_ID: 'teamClipboard:updateStackId',
+  COPY_TO_PERSONAL: 'teamClipboard:copyToPersonal',
+  COPY_STACK_TO_PERSONAL: 'teamClipboard:copyStackToPersonal',
+  GET_TEAM_STACKS: 'teamClipboard:getStacks',
+  CREATE_TEAM_STACK: 'teamClipboard:createStack',
+  TEAM_ITEM_ADDED: 'teamClipboard:itemAdded',
+  TEAM_ITEM_DELETED: 'teamClipboard:itemDeleted',
+  TEAM_ITEM_UPDATED: 'teamClipboard:itemUpdated',
+} as const;
+
 // Todo type for bidirectional sync with Supabase.
 type Todo = {
   id: string;           // Supabase UUID
@@ -1189,6 +1250,81 @@ const authAPI = {
 
 type AuthAPI = typeof authAPI;
 
+// =============================================================================
+// Team Clipboard API - Shared clipboard for team collaboration
+// =============================================================================
+
+const teamClipboardAPI = {
+  // Query team items with optional filters.
+  queryItems: async (options?: TeamClipboardQueryOptions): Promise<TeamClipboardItem[]> => {
+    return ipcRenderer.invoke(TeamClipboardIPCChannels.QUERY_TEAM_ITEMS, options);
+  },
+
+  // Get a single team item by ID.
+  getItem: async (id: string): Promise<TeamClipboardItem | null> => {
+    return ipcRenderer.invoke(TeamClipboardIPCChannels.GET_TEAM_ITEM, id);
+  },
+
+  // Share a local clipboard item to the team.
+  shareToTeam: async (localItemId: number): Promise<TeamClipboardItem | null> => {
+    return ipcRenderer.invoke(TeamClipboardIPCChannels.SHARE_TO_TEAM, localItemId);
+  },
+
+  // Share a stack of local items to the team.
+  shareStackToTeam: async (localItemIds: number[]): Promise<string | null> => {
+    return ipcRenderer.invoke(TeamClipboardIPCChannels.SHARE_STACK_TO_TEAM, localItemIds);
+  },
+
+  // Delete a team item (only owner can delete).
+  deleteItem: async (id: string): Promise<boolean> => {
+    return ipcRenderer.invoke(TeamClipboardIPCChannels.DELETE_TEAM_ITEM, id);
+  },
+
+  // Update stack ID for team items (move between stacks).
+  updateStackId: async (itemIds: string[], stackId: string | null): Promise<boolean> => {
+    return ipcRenderer.invoke(TeamClipboardIPCChannels.UPDATE_TEAM_STACK_ID, itemIds, stackId);
+  },
+
+  // Copy a team item to personal clipboard.
+  copyToPersonal: async (teamItemId: string): Promise<number | null> => {
+    return ipcRenderer.invoke(TeamClipboardIPCChannels.COPY_TO_PERSONAL, teamItemId);
+  },
+
+  // Copy a team stack to personal clipboard.
+  copyStackToPersonal: async (teamStackId: string): Promise<number[]> => {
+    return ipcRenderer.invoke(TeamClipboardIPCChannels.COPY_STACK_TO_PERSONAL, teamStackId);
+  },
+
+  // Get all team stacks with summary info.
+  getStacks: async (): Promise<TeamStackInfo[]> => {
+    return ipcRenderer.invoke(TeamClipboardIPCChannels.GET_TEAM_STACKS);
+  },
+
+  // Listen for team item added events.
+  onTeamItemAdded: (callback: (item: TeamClipboardItem) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, item: TeamClipboardItem) => {
+      callback(item);
+    };
+    ipcRenderer.on(TeamClipboardIPCChannels.TEAM_ITEM_ADDED, handler);
+    return () => {
+      ipcRenderer.removeListener(TeamClipboardIPCChannels.TEAM_ITEM_ADDED, handler);
+    };
+  },
+
+  // Listen for team item deleted events.
+  onTeamItemDeleted: (callback: (id: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, id: string) => {
+      callback(id);
+    };
+    ipcRenderer.on(TeamClipboardIPCChannels.TEAM_ITEM_DELETED, handler);
+    return () => {
+      ipcRenderer.removeListener(TeamClipboardIPCChannels.TEAM_ITEM_DELETED, handler);
+    };
+  },
+};
+
+type TeamClipboardAPI = typeof teamClipboardAPI;
+
 contextBridge.exposeInMainWorld('audioAPI', audioAPI);
 contextBridge.exposeInMainWorld('transcribeAPI', transcribeAPI);
 contextBridge.exposeInMainWorld('clipboardAPI', clipboardAPI);
@@ -1197,6 +1333,7 @@ contextBridge.exposeInMainWorld('onboardingAPI', onboardingAPI);
 contextBridge.exposeInMainWorld('updaterAPI', updaterAPI);
 contextBridge.exposeInMainWorld('todoAPI', todoAPI);
 contextBridge.exposeInMainWorld('authAPI', authAPI);
+contextBridge.exposeInMainWorld('teamClipboardAPI', teamClipboardAPI);
 
 contextBridge.exposeInMainWorld('platform', {
   isMacOS: process.platform === 'darwin',
@@ -1215,6 +1352,7 @@ declare global {
     updaterAPI: UpdaterAPI;
     todoAPI: TodoAPI;
     authAPI: AuthAPI;
+    teamClipboardAPI: TeamClipboardAPI;
     platform: {
       isMacOS: boolean;
       isWindows: boolean;
