@@ -1,19 +1,54 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0a0a0a;
-  --foreground: #ededed;
+  --background: #f5f5f5;
+  --foreground: #1a1a1a;
+  --muted: #666666;
+  --border: #e0e0e0;
+  --accent: #2d5016;
 }
 
 body {
   color: var(--foreground);
   background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: Georgia, 'Times New Roman', serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  line-height: 1.7;
+}
+
+/* Utility classes for the minimal design. */
+.text-muted {
+  color: var(--muted);
+}
+
+.border-subtle {
+  border-color: var(--border);
+}
+
+/* Code blocks with subtle styling. */
+pre, code {
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+  font-size: 0.9rem;
+}
+
+pre {
+  background: #fafafa;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1rem;
+  overflow-x: auto;
+}
+
+/* Highlighted/callout boxes. */
+.callout {
+  background: #fafafa;
+  border-left: 3px solid var(--accent);
+  padding: 1rem 1.25rem;
+  margin: 1.5rem 0;
 }
 
 @theme {
-  --color-brand: #fff;
-  --color-brand-foreground: #000;
+  --color-brand: #1a1a1a;
+  --color-brand-foreground: #f5f5f5;
 }

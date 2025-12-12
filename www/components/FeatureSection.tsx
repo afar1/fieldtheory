@@ -1,75 +1,45 @@
-'use client';
-
-import { motion } from 'framer-motion';
-import { cn } from '@/lib/utils';
-import { LucideIcon } from 'lucide-react';
-
 interface FeatureSectionProps {
   title: string;
+  problem?: string;
   description: string;
-  imageLeft?: boolean;
-  icon?: LucideIcon;
-  gradient: string;
-  videoSrc?: string; // Optional video
-  children?: React.ReactNode; // Optional custom content for the visual side
+  visual?: React.ReactNode;
+  reversed?: boolean;
 }
 
 export default function FeatureSection({ 
   title, 
+  problem,
   description, 
-  imageLeft = false, 
-  gradient,
-  videoSrc,
-  children
+  visual,
+  reversed = false
 }: FeatureSectionProps) {
   return (
-    <section className="py-24 overflow-hidden">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className={cn(
-          "flex flex-col md:items-center gap-12 md:gap-24",
-          imageLeft ? "md:flex-row" : "md:flex-row-reverse"
-        )}>
-          {/* Visual Side */}
-          <motion.div 
-            initial={{ opacity: 0, x: imageLeft ? -50 : 50 }}
-            whileInView={{ opacity: 1, x: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.7 }}
-            className="flex-1 w-full"
-          >
-            <div className={cn(
-              "relative rounded-2xl p-1 bg-gradient-to-br",
-              gradient
-            )}>
-              <div className="relative rounded-xl overflow-hidden bg-black aspect-[4/3] border border-white/5">
-                {videoSrc ? (
-                  <div className="absolute inset-0 flex items-center justify-center text-gray-700">
-                    [Video: {videoSrc}]
-                  </div>
-                ) : children ? (
-                  children
-                ) : (
-                   <div className="absolute inset-0 bg-gray-900/50" />
-                )}
+    <section className="py-12 border-t border-subtle">
+      <div className="max-w-5xl mx-auto px-6">
+        <div className={`flex flex-col ${reversed ? 'md:flex-row-reverse' : 'md:flex-row'} gap-8 md:gap-12 items-start`}>
+          
+          {/* Text side. */}
+          <div className="flex-1">
+            <h2 className="text-2xl font-bold mb-4">{title}</h2>
+            
+            {problem && (
+              <div className="callout mb-4">
+                <p className="text-sm font-semibold text-muted mb-1">Problem</p>
+                <p>{problem}</p>
+              </div>
+            )}
+            
+            <p className="text-muted leading-relaxed">{description}</p>
+          </div>
+
+          {/* Visual side. */}
+          {visual && (
+            <div className="flex-1 w-full">
+              <div className="bg-[#fafafa] border border-subtle rounded p-4 font-mono text-sm">
+                {visual}
               </div>
             </div>
-          </motion.div>
-
-          {/* Text Side */}
-          <motion.div 
-            initial={{ opacity: 0, x: imageLeft ? 50 : -50 }}
-            whileInView={{ opacity: 1, x: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.7, delay: 0.2 }}
-            className="flex-1"
-          >
-            <h2 className="text-3xl md:text-4xl font-bold text-white mb-6">
-              {title}
-            </h2>
-            <p className="text-lg text-gray-400 leading-relaxed">
-              {description}
-            </p>
-          </motion.div>
+          )}
         </div>
       </div>
     </section>

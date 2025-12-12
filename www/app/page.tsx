@@ -3,52 +3,69 @@ import FeatureSection from '@/components/FeatureSection';
 
 export default function Home() {
   return (
-    <div className="flex flex-col gap-10">
+    <div>
       <Hero />
       
       <FeatureSection
-        title="Privacy by Default"
-        description="Your voice data never leaves your device. Field Theory runs a local instance of Whisper on your Mac and iPhone, ensuring your conversations remain private. No cloud processing, no data mining."
-        imageLeft={true}
-        gradient="from-blue-600 via-purple-600 to-indigo-600"
-      >
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
-           <span className="text-gray-500 font-mono">Local Processing Visualization</span>
-        </div>
-      </FeatureSection>
+        title="Local Transcription"
+        problem="Cloud transcription services see everything you say. That's a privacy nightmare for sensitive work."
+        description="Field Theory runs Whisper locally on your Mac and iPhone. Your voice data never leaves your device. No cloud processing, no data mining, no monthly API bills."
+        visual={
+          <div className="text-[var(--muted)]">
+            <div className="mb-2 text-xs text-muted">whisper.local</div>
+            <div>→ Audio captured</div>
+            <div>→ Processed on-device</div>
+            <div>→ Text stored locally</div>
+            <div className="mt-2 text-[var(--accent)]">✓ Never leaves your Mac</div>
+          </div>
+        }
+      />
 
       <FeatureSection
-        title="Total Recall"
-        description="A clipboard manager that actually remembers. Every text snippet, link, and image you copy is indexed and searchable. Recall that one link from three weeks ago in milliseconds."
-        imageLeft={false}
-        gradient="from-orange-500 via-red-500 to-pink-500"
-      >
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
-           <span className="text-gray-500 font-mono">Clipboard Search UI</span>
-        </div>
-      </FeatureSection>
-
-      <FeatureSection
-        title="Encrypted Sync"
-        description="Seamlessly hand off between your Mac and iPhone. Your data is end-to-end encrypted, meaning only you hold the keys. We couldn't read your data even if we wanted to."
-        imageLeft={true}
-        gradient="from-emerald-500 via-teal-500 to-cyan-500"
-      >
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
-           <span className="text-gray-500 font-mono">Sync Animation</span>
-        </div>
-      </FeatureSection>
+        title="Clipboard History"
+        problem="You copied something important an hour ago. Now it's gone forever."
+        description="Every text snippet, link, and image you copy is indexed and searchable. Recall that one link from three weeks ago in milliseconds. It's Total Recall for your clipboard."
+        reversed
+        visual={
+          <div className="text-[var(--muted)]">
+            <div className="mb-2 text-xs text-muted">clipboard.db</div>
+            <div>001: https://example.com/...</div>
+            <div>002: const data = fetch(...</div>
+            <div>003: Meeting notes from...</div>
+            <div className="mt-2">⌘+Shift+V to search</div>
+          </div>
+        }
+      />
 
       <FeatureSection
         title="Prompt Stacking"
-        description="Build context like a pro. Stack screenshots, code snippets, and text to create rich prompts for your AI workflows. It's context window management, reimagined."
-        imageLeft={false}
-        gradient="from-rose-500 via-fuchsia-500 to-purple-500"
-      >
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
-           <span className="text-gray-500 font-mono">Stacking Interface</span>
-        </div>
-      </FeatureSection>
+        problem="Building context for AI prompts is tedious. Screenshots, code, notes—scattered everywhere."
+        description="Stack screenshots, code snippets, and text to create rich prompts for your AI workflows. Select multiple items, combine them, paste into Cursor or ChatGPT. Context window management, reimagined."
+        visual={
+          <div className="text-[var(--muted)]">
+            <div className="mb-2 text-xs text-muted">stack.json</div>
+            <div>[1] screenshot.png</div>
+            <div>[2] error_log.txt</div>
+            <div>[3] "Fix this bug..."</div>
+            <div className="mt-2">→ Combined prompt ready</div>
+          </div>
+        }
+      />
+
+      <FeatureSection
+        title="Mac ↔ iPhone Sync"
+        problem="Voice notes on your phone. Work on your Mac. No easy way to connect them."
+        description="Capture voice notes on your iPhone during your commute. They appear in your Mac clipboard history automatically. End-to-end encrypted—we can't read your data even if we wanted to."
+        reversed
+        visual={
+          <div className="text-[var(--muted)]">
+            <div className="mb-2 text-xs text-muted">sync</div>
+            <div>iPhone → encrypted → Mac</div>
+            <div className="mt-2 text-[var(--accent)]">✓ E2E encrypted</div>
+            <div className="text-[var(--accent)]">✓ Automatic</div>
+          </div>
+        }
+      />
     </div>
   );
 }
