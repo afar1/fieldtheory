@@ -78,7 +78,8 @@ function formatRelativeTime(timestamp: number): string {
 }
 
 // Smart truncation that shows beginning and end of text.
-function smartTruncateText(text: string, targetWords: number = 8): {
+// Shows first ~15 words and last ~15 words for better context.
+function smartTruncateText(text: string, targetWords: number = 15): {
   firstPart: string;
   lastPart: string;
   needsTruncation: boolean;
@@ -218,11 +219,28 @@ export default function TeamView() {
   const [addMemberEmail, setAddMemberEmail] = useState('');
   const [addMemberError, setAddMemberError] = useState<string | null>(null);
   const [addingMember, setAddingMember] = useState(false);
-  const [showMembers, setShowMembers] = useState(false);
+  
+  // Initialize showMembers from localStorage so panel stays hidden if user closed it.
+  const [showMembers, setShowMembers] = useState(() => {
+    const saved = localStorage.getItem('teamMembersVisible');
+    return saved === 'true';
+  });
 
   // Team items state.
-  const [teamItems, setTeamItems] = useState<TeamClipboardItem[]>([]);
+  // Initialize from localStorage cache for instant display.
+  const [teamItems, setTeamItems] = useState<TeamClipboardItem[]>(() => {
+    try {
+      const cached = localStorage.getItem('teamItemsCache');
+      if (cached) {
+        return JSON.parse(cached);
+      }
+    } catch (e) {
+      // Ignore parse errors, start fresh.
+    }
+    return [];
+  });
   const [itemsLoading, setItemsLoading] = useState(false);
+  const [backgroundSyncing, setBackgroundSyncing] = useState(false);
   const [copyingToPersonal, setCopyingToPersonal] = useState<string | null>(null);
 
   // Selection and navigation state (matching ClipboardHistory).
@@ -239,6 +257,9 @@ export default function TeamView() {
   
   // Undo state for delete operations.
   const [deletedItems, setDeletedItems] = useState<TeamClipboardItem[]>([]);
+  
+  // Track which item is being unshared for visual feedback.
+  const [unsharingId, setUnsharingId] = useState<string | null>(null);
 
   // Image hover and preview state (matching ClipboardHistory).
   const [hoveredImageId, setHoveredImageId] = useState<string | null>(null);
@@ -450,10 +471,6 @@ export default function TeamView() {
     const members = await window.teamClipboardAPI.getTeamMembers();
     setTeamMembers(members);
     setMembersLoading(false);
-    // Auto-expand team panel if no teammates yet.
-    if (members.length === 0) {
-      setShowMembers(true);
-    }
   }, []);
 
   const handleAddMember = async (e: React.FormEvent) => {
@@ -493,12 +510,28 @@ export default function TeamView() {
   // Team Items
   // ---------------------------------------------------------------------------
 
-  const loadTeamItems = useCallback(async () => {
+  const loadTeamItems = useCallback(async (isBackgroundSync: boolean = false) => {
     if (!window.teamClipboardAPI) return;
-    setItemsLoading(true);
+    
+    // If we have cached items, show background sync indicator instead of blocking loading.
+    if (isBackgroundSync) {
+      setBackgroundSyncing(true);
+    } else {
+      setItemsLoading(true);
+    }
+    
     const items = await window.teamClipboardAPI.queryItems({ limit: 100 });
     setTeamItems(items);
+    
+    // Save to localStorage cache for next time.
+    try {
+      localStorage.setItem('teamItemsCache', JSON.stringify(items));
+    } catch (e) {
+      // Ignore storage errors (quota exceeded, etc.).
+    }
+    
     setItemsLoading(false);
+    setBackgroundSyncing(false);
   }, []);
 
   const copyToPersonal = useCallback(async (teamItemId: string) => {
@@ -557,6 +590,9 @@ export default function TeamView() {
 
   // Delete a team item.
   const deleteTeamItem = useCallback(async (itemId: string) => {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:deleteTeamItem',message:'deleteTeamItem called',data:{itemId,hasAPI:!!window.teamClipboardAPI},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
     if (!window.teamClipboardAPI) return;
     
     // Find the item to save for undo.
@@ -566,6 +602,9 @@ export default function TeamView() {
     }
     
     const success = await window.teamClipboardAPI.deleteItem(itemId);
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:deleteTeamItem',message:'deleteItem result',data:{itemId,success},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
     if (success) {
       // Remove from local state immediately.
       setTeamItems(prev => prev.filter(i => i.id !== itemId));
@@ -591,14 +630,23 @@ export default function TeamView() {
 
   // Unstack a team stack (remove stack_id from all items).
   const unstackTeamItems = useCallback(async (stackId: string) => {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:unstackTeamItems',message:'unstackTeamItems called',data:{stackId,hasAPI:!!window.teamClipboardAPI,teamItemsCount:teamItems.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C,E'})}).catch(()=>{});
+    // #endregion
     if (!window.teamClipboardAPI) return;
     
     // Get all item IDs in this stack.
     const stackItems = teamItems.filter(i => i.stackId === stackId);
     const itemIds = stackItems.map(i => i.id);
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:unstackTeamItems',message:'stack items found',data:{stackId,itemIds,stackItemsCount:stackItems.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'E'})}).catch(()=>{});
+    // #endregion
     
     // Update stack_id to null for all items.
     const success = await window.teamClipboardAPI.updateStackId(itemIds, null);
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:unstackTeamItems',message:'updateStackId result',data:{stackId,success,itemIds},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
     if (success) {
       // Update local state.
       setTeamItems(prev => prev.map(i => 
@@ -627,6 +675,9 @@ export default function TeamView() {
   const buildListRows = useCallback((): TeamListRow[] => {
     const rows: TeamListRow[] = [];
     const seenStackIds = new Set<string>();
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:buildListRows',message:'building list rows',data:{teamItemsCount:teamItems.length,itemsWithStackId:teamItems.filter(i=>i.stackId).length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'E'})}).catch(()=>{});
+    // #endregion
 
     for (const item of teamItems) {
       if (item.stackId) {
@@ -670,12 +721,16 @@ export default function TeamView() {
   const listRows = useMemo(() => buildListRows(), [buildListRows]);
 
   // Load data when authenticated.
+  // Use background sync if we have cached items for instant display.
   useEffect(() => {
     if (session) {
       loadTeamMembers();
-      loadTeamItems();
+      // If we have cached items, do a background sync. Otherwise, show loading.
+      const hasCachedItems = teamItems.length > 0;
+      loadTeamItems(hasCachedItems);
     }
-  }, [session, loadTeamMembers, loadTeamItems]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, loadTeamMembers]);
 
   // Reset selection when list rows change.
   useEffect(() => {
@@ -686,11 +741,19 @@ export default function TeamView() {
     }
   }, [listRows.length, selectedIndex]);
 
+  // Persist showMembers panel state to localStorage.
+  useEffect(() => {
+    localStorage.setItem('teamMembersVisible', String(showMembers));
+  }, [showMembers]);
+
   // ---------------------------------------------------------------------------
   // Keyboard Navigation
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:693',message:'useEffect keyboard setup',data:{hasSession:!!session,listRowsLength:listRows.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     if (!session || listRows.length === 0) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -700,10 +763,17 @@ export default function TeamView() {
       const hasCtrl = e.ctrlKey;
       const hasAlt = e.altKey;
 
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:handleKeyDown',message:'key pressed',data:{key,hasMeta,hasShift,hasCtrl,hasAlt,activeElement:document.activeElement?.tagName,selectedIndex},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,D'})}).catch(()=>{});
+      // #endregion
+
       // Skip if typing in input.
       if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
 
       const selectedRow = listRows[selectedIndex];
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:handleKeyDown',message:'selectedRow check',data:{selectedRowType:selectedRow?.type,selectedRowExists:!!selectedRow,selectedIndex,listRowsLength:listRows.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
 
       // Escape: Dismiss preview, clear selection, or close window.
       if (key === 'Escape') {
@@ -727,6 +797,9 @@ export default function TeamView() {
       // X - Toggle selection on current item (Gmail-style).
       if (key === 'x' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         e.preventDefault();
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:x-key',message:'x key pressed',data:{selectedRowType:selectedRow?.type,selectedRowExists:!!selectedRow},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
         
         // Get item IDs to toggle (single item or all items in stack).
         const itemIdsToToggle: string[] = [];
@@ -735,6 +808,9 @@ export default function TeamView() {
         } else if (selectedRow?.type === 'stack') {
           selectedRow.items.forEach(i => itemIdsToToggle.push(i.id));
         }
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:x-key',message:'itemIdsToToggle',data:{itemIdsToToggle,count:itemIdsToToggle.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
         
         // Toggle selection.
         setSelectedIds(prev => {
@@ -926,6 +1002,41 @@ export default function TeamView() {
         }
         return;
       }
+
+      // s: Stack selected items (when multiple items are selected via x key).
+      if (key === 's' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+        if (selectedIds.size > 1) {
+          e.preventDefault();
+          // Create a new stack from selected items.
+          const newStackId = crypto.randomUUID();
+          const itemIds = Array.from(selectedIds);
+          (async () => {
+            const success = await window.teamClipboardAPI?.updateStackId(itemIds, newStackId);
+            if (success) {
+              // Update local state to reflect the new stack.
+              setTeamItems(prev => prev.map(i => 
+                itemIds.includes(i.id) ? { ...i, stackId: newStackId } : i
+              ));
+              setSelectedIds(new Set());
+              setIsMultiSelect(false);
+            }
+          })();
+        }
+        return;
+      }
+
+      // t: Unshare from team (delete the selected team item or stack).
+      if (key === 't' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+        e.preventDefault();
+        (async () => {
+          if (selectedRow?.type === 'item') {
+            await deleteTeamItem(selectedRow.item.id);
+          } else if (selectedRow?.type === 'stack') {
+            await deleteTeamItems(selectedRow.items.map(i => i.id));
+          }
+        })();
+        return;
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -1066,8 +1177,22 @@ export default function TeamView() {
                   style={{
                     ...buttonStyle,
                     opacity: authLoading || !authEmail.trim() || !authPassword ? 0.6 : 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
                   }}
                 >
+                  {authLoading && (
+                    <span style={{
+                      width: '14px',
+                      height: '14px',
+                      border: '2px solid rgba(255,255,255,0.3)',
+                      borderTopColor: '#fff',
+                      borderRadius: '50%',
+                      animation: 'spin 0.8s linear infinite',
+                    }} />
+                  )}
                   {authLoading ? 'Signing in...' : 'Sign In'}
                 </button>
               </form>
@@ -1206,7 +1331,7 @@ export default function TeamView() {
         padding: '0 16px 16px 16px',
       }}
     >
-      {/* Header with user info and team members toggle */}
+      {/* Header with sync indicator and team members toggle */}
       <div
         style={{
           marginBottom: '12px',
@@ -1215,10 +1340,28 @@ export default function TeamView() {
           justifyContent: 'space-between',
         }}
       >
+        {/* Background sync indicator */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '12px', color: theme.textSecondary }}>
-            Signed in as {session?.user?.email}
-          </span>
+          {backgroundSyncing && (
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              fontSize: '10px',
+              color: theme.textSecondary,
+              opacity: 0.7,
+            }}>
+              <span style={{
+                width: '8px',
+                height: '8px',
+                border: '1.5px solid rgba(128,128,128,0.3)',
+                borderTopColor: theme.accent,
+                borderRadius: '50%',
+                animation: 'spin 0.8s linear infinite',
+              }} />
+              syncing
+            </span>
+          )}
         </div>
         <button
           onClick={() => setShowMembers(!showMembers)}
@@ -1232,7 +1375,7 @@ export default function TeamView() {
             cursor: 'pointer',
           }}
         >
-          {showMembers ? 'Hide' : `Team${teamMembers.length > 0 ? ` (${teamMembers.length})` : ''}`}
+          {showMembers ? 'Hide' : 'Invite Others'}
         </button>
       </div>
 
@@ -1390,11 +1533,12 @@ export default function TeamView() {
               const stackImages = stackItems.filter(i => (i.type === 'image' || i.type === 'screenshot'));
               const combinedText = combineStackText(stackItems);
               const hasText = combinedText.length > 0;
-              const truncated = hasText ? smartTruncateText(combinedText, 8) : null;
+              const truncated = hasText ? smartTruncateText(combinedText, 15) : null;
 
               return (
                 <div
                   key={`stack-${stack.stackId}`}
+                  className="team-item-row"
                   onMouseEnter={() => {
                     setHoveredRowIndex(index);
                     if (!keyboardNavActive) setSelectedIndex(index);
@@ -1497,7 +1641,7 @@ export default function TeamView() {
                               }}
                             >
                               <span style={{ color: '#fff', fontSize: '10px', fontWeight: 500 }}>
-                                Preview <KeyCap small>⎵</KeyCap>
+                                Preview <KeyCap small>space</KeyCap>
                               </span>
                             </div>
                           )}
@@ -1522,17 +1666,104 @@ export default function TeamView() {
                     </div>
                   )}
 
-                  {/* Stack text content */}
+                  {/* Stack text content - match ClipboardHistory expand button design */}
                   {hasText && truncated && (
-                    <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
-                      {truncated.needsTruncation ? (
-                        <>
-                          {truncated.firstPart}
-                          <span style={{ color: theme.textSecondary }}> … </span>
-                          {truncated.lastPart}
-                        </>
-                      ) : combinedText}
-                    </div>
+                    <>
+                      {expanded ? (
+                        // Expanded state: show full text with "show less" button.
+                        <div style={{ marginBottom: '4px' }}>
+                          <div
+                            style={{
+                              fontSize: '12px',
+                              fontWeight: '500',
+                              color: theme.text,
+                              lineHeight: '1.5',
+                              marginBottom: '4px',
+                              whiteSpace: 'pre-wrap',
+                              overflow: 'visible',
+                            }}
+                          >
+                            {combinedText}
+                          </div>
+                          <button
+                            tabIndex={-1}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleStackExpanded(stack.stackId);
+                            }}
+                            style={{
+                              background: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
+                              border: 'none',
+                              padding: '2px 8px',
+                              fontSize: '10px',
+                              fontWeight: 500,
+                              color: theme.textSecondary,
+                              cursor: 'pointer',
+                              borderRadius: '4px',
+                            }}
+                          >
+                            show less
+                          </button>
+                        </div>
+                      ) : truncated.needsTruncation ? (
+                        // Smart truncation: show first words ... [expand] ... last words.
+                        <div style={{ marginBottom: '4px' }}>
+                          <span
+                            style={{
+                              fontSize: '12px',
+                              fontWeight: '500',
+                              color: theme.text,
+                              lineHeight: '1.5',
+                            }}
+                          >
+                            {truncated.firstPart}
+                          </span>
+                          <span style={{ color: theme.textSecondary, fontSize: '12px' }}> … </span>
+                          
+                          {/* Expand button in the middle */}
+                          <button
+                            tabIndex={-1}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleStackExpanded(stack.stackId);
+                            }}
+                            style={{
+                              background: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
+                              border: 'none',
+                              padding: '2px 8px',
+                              fontSize: '10px',
+                              fontWeight: 500,
+                              color: theme.textSecondary,
+                              cursor: 'pointer',
+                              borderRadius: '4px',
+                              margin: '0 4px',
+                              verticalAlign: 'middle',
+                            }}
+                          >
+                            expand
+                          </button>
+                          
+                          <span style={{ color: theme.textSecondary, fontSize: '12px' }}> … </span>
+                          <span
+                            style={{
+                              fontSize: '12px',
+                              fontWeight: '500',
+                              color: theme.text,
+                              lineHeight: '1.5',
+                            }}
+                          >
+                            {truncated.lastPart}
+                          </span>
+                        </div>
+                      ) : (
+                        // Short text: no truncation needed.
+                        <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
+                          {combinedText}
+                        </div>
+                      )}
+                    </>
                   )}
 
                   {/* Expanded: show all items in the stack */}
@@ -1578,10 +1809,45 @@ export default function TeamView() {
                   {/* Footer row */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
                     <div style={{ fontSize: '10px', color: theme.textSecondary, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      {/* Cumulative word count for stack */}
+                      {(() => {
+                        const totalWords = stackItems.reduce((sum, item) => sum + (item.wordCount || 0), 0);
+                        return totalWords > 0 ? (
+                          <>
+                            <span>{totalWords} words</span>
+                            <span>•</span>
+                          </>
+                        ) : null;
+                      })()}
                       <span>{formatRelativeTime(stack.createdAt)}</span>
                       <InitialsBadge email={stack.createdByEmail} />
                     </div>
                     <div style={{ display: 'flex', gap: '4px', visibility: isRowSelected || isHovered ? 'visible' : 'hidden' }}>
+                      <button
+                        tabIndex={-1}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const itemIds = stackItems.map(i => i.id);
+                          setUnsharingId(stack.stackId);
+                          deleteTeamItems(itemIds).then(() => {
+                            setTimeout(() => setUnsharingId(null), 300);
+                          });
+                        }}
+                        disabled={unsharingId === stack.stackId}
+                        style={{
+                          padding: '4px 6px',
+                          fontSize: '10px',
+                          fontWeight: 500,
+                          backgroundColor: 'transparent',
+                          color: theme.textSecondary,
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: unsharingId === stack.stackId ? 'wait' : 'pointer',
+                        }}
+                      >
+                        <KeyCap>t</KeyCap> {unsharingId === stack.stackId ? 'unsharing...' : 'unshare'}
+                      </button>
                       <button
                         tabIndex={-1}
                         onMouseDown={(e) => e.preventDefault()}
@@ -1613,12 +1879,13 @@ export default function TeamView() {
             const isText = item.type === 'text' || item.type === 'transcript';
             const isCopying = copyingToPersonal === item.id;
             const isExpanded = expandedItems.has(item.id);
-            const truncated = isText && item.content ? smartTruncateText(item.content, 8) : null;
+            const truncated = isText && item.content ? smartTruncateText(item.content, 15) : null;
             const showSmartTruncation = truncated && truncated.needsTruncation && !isExpanded;
 
             return (
               <div
                 key={item.id}
+                className="team-item-row"
                 onMouseEnter={() => {
                   setHoveredRowIndex(index);
                   if (!keyboardNavActive) setSelectedIndex(index);
@@ -1689,7 +1956,7 @@ export default function TeamView() {
                             }}
                           >
                             <span style={{ color: '#fff', fontSize: '10px', fontWeight: 500 }}>
-                              Preview <KeyCap small>⎵</KeyCap>
+                              Preview <KeyCap small>space</KeyCap>
                             </span>
                           </div>
                         )}
@@ -1743,9 +2010,9 @@ export default function TeamView() {
                 {/* Footer row */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
                   <div style={{ fontSize: '10px', color: theme.textSecondary, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    {isText && item.wordCount && item.charCount && (
+                    {isText && item.wordCount && (
                       <>
-                        <span>{item.wordCount} words, {item.charCount} chars</span>
+                        <span>{item.wordCount} words</span>
                         <span>•</span>
                       </>
                     )}
@@ -1772,6 +2039,30 @@ export default function TeamView() {
                   </div>
 
                   <div style={{ display: 'flex', gap: '4px', visibility: isRowSelected || isHovered ? 'visible' : 'hidden' }}>
+                    <button
+                      tabIndex={-1}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setUnsharingId(item.id);
+                        deleteTeamItem(item.id).then(() => {
+                          setTimeout(() => setUnsharingId(null), 300);
+                        });
+                      }}
+                      disabled={unsharingId === item.id}
+                      style={{
+                        padding: '4px 6px',
+                        fontSize: '10px',
+                        fontWeight: 500,
+                        backgroundColor: 'transparent',
+                        color: theme.textSecondary,
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: unsharingId === item.id ? 'wait' : 'pointer',
+                      }}
+                    >
+                      <KeyCap>t</KeyCap> {unsharingId === item.id ? 'unsharing...' : 'unshare'}
+                    </button>
                     <button
                       tabIndex={-1}
                       onMouseDown={(e) => e.preventDefault()}
@@ -1815,7 +2106,30 @@ export default function TeamView() {
         )}
       </div>
 
-      {/* CSS animations for preview */}
+      {/* Keyboard shortcuts bar - matches TodoView style */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '6px 16px',
+        borderTop: `1px solid ${theme.border}`,
+        fontSize: '10px',
+        color: theme.textSecondary,
+      }}>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <span><KeyCap small>j</KeyCap><KeyCap small>k</KeyCap> navigate</span>
+          <span><KeyCap small>x</KeyCap> select</span>
+          <span><KeyCap small>t</KeyCap> unshare</span>
+          <span><KeyCap small>c</KeyCap> copy</span>
+        </div>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <span><KeyCap small>space</KeyCap> preview</span>
+          <span><KeyCap small>↵</KeyCap> paste</span>
+          <span><KeyCap small>tab</KeyCap> view</span>
+        </div>
+      </div>
+
+      {/* CSS animations for preview, loading spinner, and item transitions */}
       <style>{`
         @keyframes previewFadeIn {
           from { opacity: 0; }
@@ -1824,6 +2138,16 @@ export default function TeamView() {
         @keyframes previewFadeOut {
           from { opacity: 1; }
           to { opacity: 0; }
+        }
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+        @keyframes itemFadeIn {
+          from { opacity: 0; transform: translateY(-4px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .team-item-row {
+          animation: itemFadeIn 0.15s ease-out;
         }
       `}</style>
 

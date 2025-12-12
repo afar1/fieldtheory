@@ -9,6 +9,8 @@ import SettingsPanel from './SettingsPanel';
 import TodoView from './TodoView';
 import TeamView from './TeamView';
 import { useTheme } from '../contexts/ThemeContext';
+import { supabase } from '../supabaseClient';
+import type { Session } from '@supabase/supabase-js';
 import {
   DndContext,
   DragOverlay,
@@ -117,9 +119,9 @@ function truncateText(text: string, maxLength: number = 100): string {
 /**
  * Smart truncation that shows beginning and end of text.
  * Returns an object with firstPart, lastPart, and whether truncation was needed.
- * When truncated, shows first ~5-10 words and last ~5-10 words.
+ * When truncated, shows first ~15 words and last ~15 words for better context.
  */
-function smartTruncateText(text: string, targetWords: number = 8): { 
+function smartTruncateText(text: string, targetWords: number = 15): { 
   firstPart: string; 
   lastPart: string; 
   needsTruncation: boolean;
@@ -279,10 +281,18 @@ function detectColor(text: string | null): string | null {
  * ClipboardHistory component - Alfred-style popup for clipboard history.
  */
 export default function ClipboardHistory() {
-  const { theme, toggleDarkMode } = useTheme();
+  const { theme } = useTheme();
   const [isVisible, setIsVisible] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [viewMode, setViewMode] = useState<ViewMode>('clipboard');
+  
+  // Initialize viewMode from localStorage, defaulting to 'clipboard'.
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    const saved = localStorage.getItem('fieldTheoryView');
+    if (saved === 'clipboard' || saved === 'team' || saved === 'todo') {
+      return saved;
+    }
+    return 'clipboard';
+  });
   const [items, setItems] = useState<ClipboardItem[]>([]);
   const [stacks, setStacks] = useState<StackInfo[]>([]);
   const [expandedStacks, setExpandedStacks] = useState<Set<string>>(new Set());
@@ -305,6 +315,9 @@ export default function ClipboardHistory() {
   // Team clipboard state (sharing to team from clipboard view).
   const [sharingToTeam, setSharingToTeam] = useState<number | null>(null);
   const [sharedToTeamId, setSharedToTeamId] = useState<string | null>(null); // For success flash.
+  
+  // Auth session state for showing "Signed in as..." in header.
+  const [authSession, setAuthSession] = useState<Session | null>(null);
   
   // Improve feature - track loading state and result per stack
   const [improvingStackId, setImprovingStackId] = useState<string | null>(null);
@@ -392,6 +405,7 @@ export default function ClipboardHistory() {
   
   // App version for footer display.
   const [appVersion] = useState(() => window.updaterAPI?.getVersion?.() || '0.0.0');
+  const [versionHovered, setVersionHovered] = useState(false);
   
   const [allTimeStats, setAllTimeStats] = useState<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>({
     stacks: 0, transcriptions: 0, screenshots: 0, improved: 0, words: 0,
@@ -628,6 +642,25 @@ export default function ClipboardHistory() {
     setTimeout(() => setSharedToTeamId(null), 1500);
   }, []);
 
+  // Persist viewMode to localStorage when it changes.
+  useEffect(() => {
+    localStorage.setItem('fieldTheoryView', viewMode);
+  }, [viewMode]);
+
+  // Check auth session for "Signed in as..." display in header.
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setAuthSession(session);
+    });
+
+    // Listen for auth state changes.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthSession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
   useEffect(() => {
     if (searchDebounceTimerRef.current) {
       clearTimeout(searchDebounceTimerRef.current);
@@ -669,7 +702,7 @@ export default function ClipboardHistory() {
       setSelectedIds(new Set());
       setIsMultiSelect(false);
       setShowSettings(false);
-      setViewMode('clipboard');
+      // Don't reset viewMode - let localStorage persistence work.
     });
 
     const unsubscribeShowSettings = window.clipboardAPI.onShowSettings?.(() => {
@@ -1169,8 +1202,9 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // s: Share to Team - share selected items, stack, or multi-selected items
-      if (key === 's' && !hasMeta && !hasCtrl && !hasShift) {
+      // t: Share to Team - share selected items, stack, or multi-selected items.
+      // Using 't' for team to avoid conflict with 's' for stacking.
+      if (key === 't' && !hasMeta && !hasCtrl && !hasShift) {
         // Skip if typing in input.
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
 
@@ -1205,6 +1239,10 @@ export default function ClipboardHistory() {
 
       // Cmd+Enter: Improve the selected item/stack
       if (key === 'Enter' && hasMeta && !hasShift && selectedIds.size === 0) {
+        // Skip if user is typing in an input field.
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
+          return;
+        }
         e.preventDefault();
         const selectedRow = listRows[selectedIndex];
         if (!selectedRow) return;
@@ -1294,6 +1332,11 @@ export default function ClipboardHistory() {
       }
 
       if (key === 'Enter' && !hasShift && !hasMeta) {
+        // Skip if user is typing in an input field - let Enter submit forms naturally.
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
+          return;
+        }
+        
         // Get the target bundle ID if user selected a specific target.
         const targetBundleId = targetAppInfo.targetApp?.bundleId;
         
@@ -1331,6 +1374,10 @@ export default function ClipboardHistory() {
       }
 
       if (key === 'Enter' && hasShift) {
+        // Skip if user is typing in an input field.
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
+          return;
+        }
         // Toggle multi-select mode
         setIsMultiSelect(true);
         const selectedRow = listRows[selectedIndex];
@@ -1381,7 +1428,11 @@ export default function ClipboardHistory() {
 
       // Tab/Shift+Tab cycles through view modes.
       // Option+Tab cycles through target apps.
+      // Skip if user is typing in an input field - let Tab work naturally for form navigation.
       if (key === 'Tab' && !hasCtrl && !hasMeta) {
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
+          return; // Let Tab navigate between form fields naturally.
+        }
         e.preventDefault();
 
         if (hasAlt) {
@@ -1718,7 +1769,7 @@ export default function ClipboardHistory() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'flex-start',
-          paddingLeft: '72px', // Leave space for traffic lights
+          paddingLeft: '16px',
           paddingRight: '16px',
           // @ts-ignore - webkit vendor prefix for Electron draggable region
           WebkitAppRegion: 'drag',
@@ -1735,6 +1786,25 @@ export default function ClipboardHistory() {
         }}>
           Field Theory
         </span>
+        
+        {/* Signed in indicator - clickable to open settings */}
+        {!showSettings && authSession?.user?.email && (
+          <span
+            onClick={() => setShowSettings(true)}
+            style={{
+              fontSize: '9px',
+              color: theme.textSecondary,
+              opacity: 0.7,
+              cursor: 'pointer',
+              marginRight: '12px',
+              // @ts-ignore - prevent drag
+              WebkitAppRegion: 'no-drag',
+            }}
+            title="Click to open Settings"
+          >
+            {authSession.user.email}
+          </span>
+        )}
         
         {/* Mic Lock dropdown */}
         {!showSettings && audioDevices.length > 0 && (
@@ -1754,7 +1824,7 @@ export default function ClipboardHistory() {
               color: theme.textSecondary,
               opacity: 0.7,
             }}>
-              Mic Lock:
+              Priority Microphone:
             </span>
             <button
               onClick={() => setShowMicDropdown(!showMicDropdown)}
@@ -1901,7 +1971,7 @@ export default function ClipboardHistory() {
                 transition: 'all 0.15s ease',
               }}
             >
-              {mode === 'clipboard' ? 'My Clipboard' : mode === 'team' ? 'Team' : 'Tasks'}
+              {mode === 'clipboard' ? 'My Fields' : mode === 'team' ? 'Team Fields' : 'Tasks'}
             </button>
           ))}
         </div>
@@ -2039,7 +2109,7 @@ export default function ClipboardHistory() {
                     padding: '2px 6px',
                     fontSize: '10px',
                     backgroundColor: 'transparent',
-                    color: sharingToTeam !== null ? theme.border : theme.accent,
+                    color: sharingToTeam !== null ? theme.border : theme.textSecondary,
                     border: 'none',
                     borderRadius: '4px',
                     cursor: sharingToTeam !== null ? 'default' : 'pointer',
@@ -2048,7 +2118,7 @@ export default function ClipboardHistory() {
                     gap: '4px',
                   }}
                 >
-                  <KeyCap>s</KeyCap> {sharingToTeam !== null ? 'Sharing...' : 'share to team'}
+                  <KeyCap>t</KeyCap> {sharingToTeam !== null ? 'Sharing...' : 'share to team'}
                 </button>
                 {selectedIds.size > 1 && (
                   <button
@@ -2344,7 +2414,7 @@ export default function ClipboardHistory() {
                                     pointerEvents: 'none',
                                   }}
                                 >
-                                  Preview <KeyCap small>⎵</KeyCap>
+                                  Preview <KeyCap small>space</KeyCap>
                                 </div>
                               )}
                             </div>
@@ -2670,7 +2740,7 @@ export default function ClipboardHistory() {
                           {sharedToTeamId === `stack-${stackItems.map(i => i.id).join(',')}` ? (
                             <>✓ shared</>
                           ) : (
-                            <><KeyCap>s</KeyCap> share</>
+                            <><KeyCap>t</KeyCap> share</>
                           )}
                         </button>
                         {/* Paste hint button - rightmost */}
@@ -3080,7 +3150,7 @@ export default function ClipboardHistory() {
                                   }}
                                 >
                                   <span style={{ color: '#fff', fontSize: '10px', fontWeight: 500 }}>
-                                    Preview <KeyCap small>⎵</KeyCap>
+                                    Preview <KeyCap small>space</KeyCap>
                                   </span>
                                 </div>
                               )}
@@ -3136,8 +3206,8 @@ export default function ClipboardHistory() {
                       <span>
                         {item.type === 'text' || item.type === 'transcript' ? (
                           <>
-                            {item.wordCount && item.charCount
-                              ? `${item.wordCount} words, ${item.charCount} chars`
+                            {item.wordCount
+                              ? `${item.wordCount} words`
                               : ''}
                             {item.sourceAppName && ` • ${item.sourceAppName}`}
                             {' • '}
@@ -3267,7 +3337,7 @@ export default function ClipboardHistory() {
                         {sharedToTeamId === `item-${item.id}` ? (
                           <>✓ shared</>
                         ) : (
-                          <><KeyCap>s</KeyCap> {sharingToTeam === item.id ? 'sharing...' : 'share'}</>
+                          <><KeyCap>t</KeyCap> {sharingToTeam === item.id ? 'sharing...' : 'share'}</>
                         )}
                       </button>
                       {/* Paste hint button with target app - rightmost */}
@@ -3366,6 +3436,33 @@ export default function ClipboardHistory() {
           })() : null}
         </DragOverlay>
         </DndContext>
+        </div>
+      )}
+
+      {/* Keyboard shortcuts bar - only show for clipboard view, not settings */}
+      {viewMode === 'clipboard' && !showSettings && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '6px 16px',
+          borderTop: `1px solid ${theme.border}`,
+          fontSize: '10px',
+          color: theme.textSecondary,
+          backgroundColor: theme.bg,
+        }}>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <span><KeyCap small>j</KeyCap><KeyCap small>k</KeyCap> navigate</span>
+            <span><KeyCap small>x</KeyCap> select</span>
+            <span><KeyCap small>s</KeyCap> stack</span>
+            <span><KeyCap small>t</KeyCap> team</span>
+            <span><KeyCap small>/</KeyCap> search</span>
+          </div>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <span><KeyCap small>space</KeyCap> preview</span>
+            <span><KeyCap small>↵</KeyCap> paste</span>
+            <span><KeyCap small>tab</KeyCap> view</span>
+          </div>
         </div>
       )}
       
@@ -3475,7 +3572,15 @@ export default function ClipboardHistory() {
                 flex: 1,
               }}
             >
-              <span>v{appVersion}</span>
+              <span
+                onMouseEnter={() => setVersionHovered(true)}
+                onMouseLeave={() => setVersionHovered(false)}
+                onClick={() => window.updaterAPI?.checkForUpdates?.()}
+                style={{ cursor: 'pointer' }}
+                title="Check for updates"
+              >
+                {versionHovered ? 'Check for updates' : `v${appVersion}`}
+              </span>
               {statItems.length > 0 && (
                 <>
                   <span style={{ opacity: 0.4 }}>·</span>
@@ -3491,10 +3596,7 @@ export default function ClipboardHistory() {
                       ? statItems[currentStatIndex]?.singular 
                       : statItems[currentStatIndex]?.plural}
                   </span>
-                  <span 
-                    onClick={nextInterval}
-                    style={{ fontSize: '10px', cursor: 'pointer' }}
-                  >
+                  <span style={{ fontSize: '10px' }}>
                     ({timeIntervals[currentIntervalIndex]})
                   </span>
                 </>
@@ -3568,51 +3670,12 @@ export default function ClipboardHistory() {
         </div>
 
         {/* Right side: target app info and controls */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '10px', fontSize: '9px', flex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '12px', fontSize: '9px', flex: 1 }}>
           {!showSettings && (
             <span style={{ color: theme.textSecondary, opacity: 0.7, display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <KeyCap small>tab</KeyCap> switch view <KeyCap small>shift</KeyCap><KeyCap small>tab</KeyCap> target ({targetAppInfo.targetApp?.name || 'app'})
+              <KeyCap small>option</KeyCap><KeyCap small>tab</KeyCap> target ({targetAppInfo.targetApp?.name || 'app'})
             </span>
           )}
-          
-          {/* Dark mode toggle */}
-          <button
-            onClick={toggleDarkMode}
-            title={theme.isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-            style={{
-              width: '20px',
-              height: '20px',
-              padding: 0,
-              backgroundColor: 'transparent',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              transition: 'opacity 0.15s ease',
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.opacity = '0.7'}
-            onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
-          >
-            {theme.isDark ? (
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="5"/>
-                <line x1="12" y1="1" x2="12" y2="3"/>
-                <line x1="12" y1="21" x2="12" y2="23"/>
-                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-                <line x1="1" y1="12" x2="3" y2="12"/>
-                <line x1="21" y1="12" x2="23" y2="12"/>
-                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-              </svg>
-            ) : (
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-              </svg>
-            )}
-          </button>
           
           {/* Settings toggle button */}
           <button
@@ -3702,15 +3765,16 @@ export default function ClipboardHistory() {
               <span><KeyCap>⌘</KeyCap><KeyCap>↵</KeyCap> improve</span>
               <span><KeyCap>↵</KeyCap> paste</span>
               
-              <span><KeyCap>⎵</KeyCap> preview</span>
-              <span><KeyCap>⌥</KeyCap><KeyCap>␣</KeyCap> record audio</span>
+              <span><KeyCap>space</KeyCap> preview</span>
+              <span><KeyCap>option</KeyCap><KeyCap>space</KeyCap> record audio</span>
               
               <span><KeyCap>x</KeyCap> select</span>
-              <span><KeyCap>⌥</KeyCap><KeyCap>1</KeyCap> screenshot</span>
+              <span><KeyCap>option</KeyCap><KeyCap>1</KeyCap> screenshot</span>
               
               <span><KeyCap>/</KeyCap> search</span>
               <span><KeyCap>s</KeyCap> stack</span>
               
+              <span><KeyCap>t</KeyCap> team share</span>
               <span><KeyCap>tab</KeyCap> view</span>
               <span><KeyCap>⌘</KeyCap><KeyCap>z</KeyCap> undo</span>
               

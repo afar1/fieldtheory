@@ -70,12 +70,23 @@ interface TodoViewProps {
 export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
   const { theme } = useTheme();
   
-  // Core state.
-  const [todos, setTodos] = useState<Todo[]>([]);
+  // Core state - initialize from localStorage cache for instant display.
+  const [todos, setTodos] = useState<Todo[]>(() => {
+    try {
+      const cached = localStorage.getItem('todosCache');
+      if (cached) {
+        return JSON.parse(cached);
+      }
+    } catch (e) {
+      console.error('[TodoView] Failed to parse cached todos:', e);
+    }
+    return [];
+  });
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [backgroundSyncing, setBackgroundSyncing] = useState(false);
   const [showCompleted, setShowCompleted] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   
@@ -110,11 +121,16 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
   // Data Loading
   // ==========================================================================
 
-  const loadTodos = useCallback(async () => {
+  const loadTodos = useCallback(async (isBackgroundSync = false) => {
     if (!window.todoAPI) return;
     
     try {
-      setSyncing(true);
+      // Use background syncing if we have cached data, otherwise show loading state.
+      if (isBackgroundSync) {
+        setBackgroundSyncing(true);
+      } else {
+        setSyncing(true);
+      }
       
       // Ensure session is passed to main process (in case it wasn't on app start).
       // This handles the case where user was already logged in from a previous session.
@@ -133,23 +149,34 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
       if (!authed) {
         setLoading(false);
         setSyncing(false);
+        setBackgroundSyncing(false);
         return;
       }
       
       const data = await window.todoAPI.syncTodos();
       setTodos(data);
+      
+      // Save to localStorage for future instant display.
+      try {
+        localStorage.setItem('todosCache', JSON.stringify(data));
+      } catch (e) {
+        console.error('[TodoView] Failed to cache todos:', e);
+      }
     } catch (err) {
       console.error('[TodoView] Failed to sync todos:', err);
     } finally {
       setLoading(false);
       setSyncing(false);
+      setBackgroundSyncing(false);
     }
   }, []);
 
-  // Initial load.
+  // Initial load - use background sync if we have cached data.
   useEffect(() => {
-    loadTodos();
-  }, [loadTodos]);
+    const hasCachedData = todos.length > 0;
+    loadTodos(hasCachedData);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Listen for todo changes from other windows or sync.
   useEffect(() => {
@@ -549,6 +576,26 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
               syncing...
             </span>
           )}
+          {backgroundSyncing && !syncing && (
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '4px',
+              fontSize: '10px',
+              color: theme.textSecondary,
+              opacity: 0.7,
+            }}>
+              <span style={{
+                width: '8px',
+                height: '8px',
+                border: '1.5px solid rgba(128,128,128,0.3)',
+                borderTopColor: theme.accent,
+                borderRadius: '50%',
+                animation: 'spin 0.8s linear infinite',
+              }} />
+              syncing
+            </span>
+          )}
         </div>
         
         {/* Show/hide completed toggle */}
@@ -867,6 +914,13 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
           <span><KeyCap small>tab</KeyCap> clipboard</span>
         </div>
       </div>
+
+      {/* CSS for spin animation */}
+      <style>{`
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 }
