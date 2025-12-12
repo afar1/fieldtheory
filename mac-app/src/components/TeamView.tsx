@@ -555,7 +555,7 @@ export default function TeamView() {
     });
   }, []);
 
-  // Delete a team item (only works for items you own).
+  // Delete a team item.
   const deleteTeamItem = useCallback(async (itemId: string) => {
     if (!window.teamClipboardAPI) return;
     
