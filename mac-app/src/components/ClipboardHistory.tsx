@@ -304,6 +304,7 @@ export default function ClipboardHistory() {
   
   // Team clipboard state (sharing to team from clipboard view).
   const [sharingToTeam, setSharingToTeam] = useState<number | null>(null);
+  const [sharedToTeamId, setSharedToTeamId] = useState<string | null>(null); // For success flash.
   
   // Improve feature - track loading state and result per stack
   const [improvingStackId, setImprovingStackId] = useState<string | null>(null);
@@ -613,12 +614,18 @@ export default function ClipboardHistory() {
     setSharingToTeam(localItemId);
     await window.teamClipboardAPI.shareToTeam(localItemId);
     setSharingToTeam(null);
+    // Show success flash.
+    setSharedToTeamId(`item-${localItemId}`);
+    setTimeout(() => setSharedToTeamId(null), 1500);
   }, []);
 
   // Share a stack to the team clipboard.
   const shareStackToTeam = useCallback(async (itemIds: number[]) => {
     if (!window.teamClipboardAPI) return;
     await window.teamClipboardAPI.shareStackToTeam(itemIds);
+    // Show success flash.
+    setSharedToTeamId(`stack-${itemIds.join(',')}`);
+    setTimeout(() => setSharedToTeamId(null), 1500);
   }, []);
 
   useEffect(() => {
@@ -1162,16 +1169,30 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // s: Share to Team - share the selected item/stack
+      // s: Share to Team - share selected items, stack, or multi-selected items
       if (key === 's' && !hasMeta && !hasCtrl && !hasShift) {
         // Skip if typing in input.
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
 
-        const selectedRow = listRows[selectedIndex];
-        if (!selectedRow) return;
-
         e.preventDefault();
         (async () => {
+          // If items are multi-selected, share them.
+          if (selectedIds.size > 0) {
+            if (selectedIds.size === 1) {
+              const itemId = Array.from(selectedIds)[0];
+              await shareToTeam(itemId);
+            } else {
+              await shareStackToTeam(Array.from(selectedIds));
+            }
+            setSelectedIds(new Set());
+            setIsMultiSelect(false);
+            return;
+          }
+
+          // Otherwise share the J/K selected row.
+          const selectedRow = listRows[selectedIndex];
+          if (!selectedRow) return;
+
           if (selectedRow.type === 'item') {
             await shareToTeam(selectedRow.item.id);
           } else if (selectedRow.type === 'stack') {
@@ -1358,13 +1379,13 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // Tab cycles through view modes (clipboard, team, tasks).
-      // Shift+Tab cycles through target apps.
-      if (key === 'Tab' && !hasCtrl && !hasMeta && !hasAlt) {
+      // Tab/Shift+Tab cycles through view modes.
+      // Option+Tab cycles through target apps.
+      if (key === 'Tab' && !hasCtrl && !hasMeta) {
         e.preventDefault();
-        
-        if (hasShift) {
-          // Shift+Tab - cycle through target apps.
+
+        if (hasAlt) {
+          // Option+Tab - cycle through target apps.
           if (targetAppInfo.runningApps.length === 0) {
             return;
           }
@@ -1376,8 +1397,16 @@ export default function ClipboardHistory() {
             targetAppIndex: nextIndex,
           }));
           window.clipboardAPI?.setTargetApp(newApp);
+        } else if (hasShift) {
+          // Shift+Tab - cycle backwards: clipboard ← team ← todo ← clipboard.
+          setShowSettings(false);
+          setViewMode(prev => {
+            if (prev === 'clipboard') return 'todo';
+            if (prev === 'todo') return 'team';
+            return 'clipboard';
+          });
         } else {
-          // Tab - cycle through view modes: clipboard → team → todo → clipboard.
+          // Tab - cycle forwards: clipboard → team → todo → clipboard.
           setShowSettings(false);
           setViewMode(prev => {
             if (prev === 'clipboard') return 'team';
@@ -2019,7 +2048,7 @@ export default function ClipboardHistory() {
                     gap: '4px',
                   }}
                 >
-                  {sharingToTeam !== null ? 'Sharing...' : '↑ share to team'}
+                  <KeyCap>s</KeyCap> {sharingToTeam !== null ? 'Sharing...' : 'share to team'}
                 </button>
                 {selectedIds.size > 1 && (
                   <button
@@ -2617,17 +2646,32 @@ export default function ClipboardHistory() {
                             padding: '4px 6px',
                             fontSize: '10px',
                             fontWeight: 500,
-                            backgroundColor: 'transparent',
-                            color: theme.textSecondary,
+                            backgroundColor: sharedToTeamId === `stack-${stackItems.map(i => i.id).join(',')}`
+                              ? (theme.isDark ? 'rgba(16, 185, 129, 0.2)' : 'rgba(16, 185, 129, 0.15)')
+                              : 'transparent',
+                            color: sharedToTeamId === `stack-${stackItems.map(i => i.id).join(',')}`
+                              ? '#10b981' : theme.textSecondary,
                             border: 'none',
                             borderRadius: '4px',
                             cursor: 'pointer',
-                            transition: 'background-color 0.15s ease',
+                            transition: 'background-color 0.3s ease, color 0.3s ease',
                           }}
-                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
-                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                          onMouseEnter={(e) => {
+                            if (sharedToTeamId !== `stack-${stackItems.map(i => i.id).join(',')}`) {
+                              e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (sharedToTeamId !== `stack-${stackItems.map(i => i.id).join(',')}`) {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                            }
+                          }}
                         >
-                          <KeyCap>s</KeyCap> share
+                          {sharedToTeamId === `stack-${stackItems.map(i => i.id).join(',')}` ? (
+                            <>✓ shared</>
+                          ) : (
+                            <><KeyCap>s</KeyCap> share</>
+                          )}
                         </button>
                         {/* Paste hint button - rightmost */}
                         <button
@@ -3200,17 +3244,31 @@ export default function ClipboardHistory() {
                           padding: '4px 6px',
                           fontSize: '10px',
                           fontWeight: 500,
-                          backgroundColor: 'transparent',
-                          color: theme.textSecondary,
+                          backgroundColor: sharedToTeamId === `item-${item.id}` 
+                            ? (theme.isDark ? 'rgba(16, 185, 129, 0.2)' : 'rgba(16, 185, 129, 0.15)')
+                            : 'transparent',
+                          color: sharedToTeamId === `item-${item.id}` ? '#10b981' : theme.textSecondary,
                           border: 'none',
                           borderRadius: '4px',
                           cursor: sharingToTeam === item.id ? 'wait' : 'pointer',
-                          transition: 'background-color 0.15s ease',
+                          transition: 'background-color 0.3s ease, color 0.3s ease',
                         }}
-                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
-                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        onMouseEnter={(e) => {
+                          if (sharedToTeamId !== `item-${item.id}`) {
+                            e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          if (sharedToTeamId !== `item-${item.id}`) {
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                          }
+                        }}
                       >
-                        <KeyCap>s</KeyCap> {sharingToTeam === item.id ? 'sharing...' : 'share'}
+                        {sharedToTeamId === `item-${item.id}` ? (
+                          <>✓ shared</>
+                        ) : (
+                          <><KeyCap>s</KeyCap> {sharingToTeam === item.id ? 'sharing...' : 'share'}</>
+                        )}
                       </button>
                       {/* Paste hint button with target app - rightmost */}
                       <button
