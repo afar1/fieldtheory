@@ -8,6 +8,18 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { supabase } from '../supabaseClient';
 import { Session } from '@supabase/supabase-js';
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragStartEvent,
+  DragOverEvent,
+  DragEndEvent,
+  useDraggable,
+  useDroppable,
+} from '@dnd-kit/core';
 
 // =============================================================================
 // Types
@@ -120,6 +132,49 @@ function combineStackText(items: TeamClipboardItem[]): string {
     .map(item => item.content || '')
     .filter(Boolean)
     .join('\n\n');
+}
+
+// =============================================================================
+// DraggableDroppableRow - wrapper that makes a row both draggable and a drop target.
+// Uses dnd-kit's useDraggable and useDroppable hooks.
+// =============================================================================
+
+function DraggableDroppableRow({
+  id,
+  children,
+  style,
+  isOver,
+  isDragging,
+  ...props
+}: {
+  id: string;
+  children: React.ReactNode;
+  style?: React.CSSProperties;
+  isOver?: boolean;
+  isDragging?: boolean;
+} & React.HTMLAttributes<HTMLDivElement>) {
+  const { attributes, listeners, setNodeRef: setDragRef } = useDraggable({ id });
+  const { setNodeRef: setDropRef } = useDroppable({ id });
+
+  return (
+    <div
+      ref={(node) => {
+        setDragRef(node);
+        setDropRef(node);
+      }}
+      {...attributes}
+      {...listeners}
+      {...props}
+      style={{
+        ...style,
+        opacity: isDragging ? 0.5 : 1,
+        outline: isOver ? '2px solid #2dd4bf' : 'none',
+        outlineOffset: '-2px',
+      }}
+    >
+      {children}
+    </div>
+  );
 }
 
 // =============================================================================
@@ -261,6 +316,27 @@ export default function TeamView() {
   // Track which item is being unshared for visual feedback.
   const [unsharingId, setUnsharingId] = useState<string | null>(null);
 
+  // dnd-kit drag state - tracks what's being dragged.
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [overDropId, setOverDropId] = useState<string | null>(null);
+
+  // Search state.
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  const searchDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Pointer sensor with distance activation - must move 5px before drag starts.
+  // This distinguishes clicks from drags.
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 5,
+      },
+    })
+  );
+
   // Image hover and preview state (matching ClipboardHistory).
   const [hoveredImageId, setHoveredImageId] = useState<string | null>(null);
   type PreviewContent =
@@ -269,6 +345,36 @@ export default function TeamView() {
   const [preview, setPreview] = useState<PreviewContent | null>(null);
   const [previewClosing, setPreviewClosing] = useState(false);
 
+  // Stack preview navigation - tracks position within a stack's preview items.
+  // For stacks: images are shown individually, text is combined into one item at the end.
+  const [stackPreviewIndex, setStackPreviewIndex] = useState(0);
+  const [stackPreviewItems, setStackPreviewItems] = useState<PreviewContent[]>([]);
+
+  // Build the preview sequence for a stack: [image1, image2, ..., combinedText].
+  const getStackPreviewItems = useCallback((items: TeamClipboardItem[]): PreviewContent[] => {
+    const previewItems: PreviewContent[] = [];
+
+    // Add each image as a separate preview item.
+    for (const item of items) {
+      if (item.imageUrl || item.imageData) {
+        previewItems.push({
+          type: 'image',
+          url: item.imageUrl || `data:image/png;base64,${item.imageData}`,
+          width: item.imageWidth || 0,
+          height: item.imageHeight || 0,
+        });
+      }
+    }
+
+    // Combine all text into one preview item at the end.
+    const combinedText = combineStackText(items);
+    if (combinedText) {
+      previewItems.push({ type: 'text', content: combinedText });
+    }
+
+    return previewItems;
+  }, []);
+
   // Dismiss preview with fade-out animation.
   const dismissPreview = useCallback(() => {
     if (!preview || previewClosing) return;
@@ -276,6 +382,8 @@ export default function TeamView() {
     setTimeout(() => {
       setPreview(null);
       setPreviewClosing(false);
+      setStackPreviewIndex(0);
+      setStackPreviewItems([]);
     }, 150);
   }, [preview, previewClosing]);
 
@@ -534,6 +642,60 @@ export default function TeamView() {
     setBackgroundSyncing(false);
   }, []);
 
+  // ---------------------------------------------------------------------------
+  // dnd-kit drag handlers.
+  // Uses pointer events internally, works with NSPanel (type: 'panel').
+  // ---------------------------------------------------------------------------
+
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    setActiveDragId(event.active.id as string);
+  }, []);
+
+  const handleDragOver = useCallback((event: DragOverEvent) => {
+    setOverDropId(event.over?.id as string ?? null);
+  }, []);
+
+  const handleDragEnd = useCallback(async (event: DragEndEvent) => {
+    const { active, over } = event;
+    setActiveDragId(null);
+    setOverDropId(null);
+
+    if (!over || active.id === over.id) return;
+
+    // Parse drag IDs: "stack:uuid" or "item:uuid"
+    const [activeType, activeId] = (active.id as string).split(':');
+    const [overType, overId] = (over.id as string).split(':');
+
+    if (activeType === 'item') {
+      const draggedItemId = activeId;
+      if (overType === 'stack') {
+        // Item dropped on stack -> add to stack.
+        await window.teamClipboardAPI?.updateStackId([draggedItemId], overId);
+      } else if (overType === 'item') {
+        if (draggedItemId !== overId) {
+          // Item dropped on item -> create new stack.
+          const newStackId = crypto.randomUUID();
+          await window.teamClipboardAPI?.updateStackId([draggedItemId, overId], newStackId);
+        }
+      }
+    } else if (activeType === 'stack') {
+      const draggedStackId = activeId;
+      if (overType === 'stack' && draggedStackId !== overId) {
+        // Stack dropped on stack -> merge stacks.
+        const stackItems = teamItems.filter(i => i.stackId === draggedStackId);
+        if (stackItems.length) {
+          const itemIds = stackItems.map(i => i.id);
+          await window.teamClipboardAPI?.updateStackId(itemIds, overId);
+        }
+      } else if (overType === 'item') {
+        // Stack dropped on item -> add item to the dragged stack.
+        await window.teamClipboardAPI?.updateStackId([overId], draggedStackId);
+      }
+    }
+
+    loadTeamItems(true);
+  }, [loadTeamItems, teamItems]);
+
   const copyToPersonal = useCallback(async (teamItemId: string) => {
     if (!window.teamClipboardAPI) return;
     setCopyingToPersonal(teamItemId);
@@ -679,14 +841,27 @@ export default function TeamView() {
     fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:buildListRows',message:'building list rows',data:{teamItemsCount:teamItems.length,itemsWithStackId:teamItems.filter(i=>i.stackId).length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'E'})}).catch(()=>{});
     // #endregion
 
-    for (const item of teamItems) {
+    // Filter items by search query if present.
+    const searchLower = debouncedSearchQuery.toLowerCase().trim();
+    const filteredItems = searchLower
+      ? teamItems.filter(item => {
+          // Match against content or improved content.
+          if (item.content?.toLowerCase().includes(searchLower)) return true;
+          if (item.improvedContent?.toLowerCase().includes(searchLower)) return true;
+          // Match against sharer's email.
+          if (item.sharedByEmail?.toLowerCase().includes(searchLower)) return true;
+          return false;
+        })
+      : teamItems;
+
+    for (const item of filteredItems) {
       if (item.stackId) {
         // This item belongs to a stack.
         if (!seenStackIds.has(item.stackId)) {
           seenStackIds.add(item.stackId);
 
-          // Get all items in this stack.
-          const stackItems = teamItems.filter(i => i.stackId === item.stackId);
+          // Get all items in this stack (from filtered items so search works within stacks).
+          const stackItems = filteredItems.filter(i => i.stackId === item.stackId);
           const imageCount = stackItems.filter(i => i.type === 'image' || i.type === 'screenshot').length;
           const textCount = stackItems.filter(i => i.type === 'text' || i.type === 'transcript').length;
           
@@ -715,7 +890,7 @@ export default function TeamView() {
     }
 
     return rows;
-  }, [teamItems, expandedStacks]);
+  }, [teamItems, expandedStacks, debouncedSearchQuery]);
 
   // Memoize list rows.
   const listRows = useMemo(() => buildListRows(), [buildListRows]);
@@ -746,6 +921,23 @@ export default function TeamView() {
     localStorage.setItem('teamMembersVisible', String(showMembers));
   }, [showMembers]);
 
+  // Debounce search query to avoid excessive filtering.
+  useEffect(() => {
+    if (searchDebounceTimerRef.current) {
+      clearTimeout(searchDebounceTimerRef.current);
+    }
+    
+    searchDebounceTimerRef.current = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 150);
+    
+    return () => {
+      if (searchDebounceTimerRef.current) {
+        clearTimeout(searchDebounceTimerRef.current);
+      }
+    };
+  }, [searchQuery]);
+
   // ---------------------------------------------------------------------------
   // Keyboard Navigation
   // ---------------------------------------------------------------------------
@@ -767,7 +959,16 @@ export default function TeamView() {
       fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:handleKeyDown',message:'key pressed',data:{key,hasMeta,hasShift,hasCtrl,hasAlt,activeElement:document.activeElement?.tagName,selectedIndex},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,D'})}).catch(()=>{});
       // #endregion
 
-      // Skip if typing in input.
+      // / - Focus search input (like Gmail, Google). Works from anywhere.
+      if (key === '/' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+        // Skip if already typing in input.
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        e.preventDefault();
+        inputRef.current?.focus();
+        return;
+      }
+
+      // Skip if typing in input (for all other shortcuts).
       if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
 
       const selectedRow = listRows[selectedIndex];
@@ -792,6 +993,52 @@ export default function TeamView() {
         // Otherwise close the window.
         window.clipboardAPI?.closeWindow();
         return;
+      }
+
+      // Arrow keys - navigate within stack preview when preview is open.
+      // →/↓ go forward through stack items, then move to next row when at end.
+      // ←/↑ go back through stack items (stop at first item).
+      if (preview && stackPreviewItems.length > 1) {
+        if (key === 'ArrowRight' || key === 'ArrowDown') {
+          e.preventDefault();
+          if (stackPreviewIndex < stackPreviewItems.length - 1) {
+            // Still more items in this stack - advance within stack.
+            setStackPreviewIndex(stackPreviewIndex + 1);
+            setPreview(stackPreviewItems[stackPreviewIndex + 1]);
+          } else {
+            // At the end of stack - move to next row in list.
+            const nextRowIndex = Math.min(selectedIndex + 1, listRows.length - 1);
+            if (nextRowIndex !== selectedIndex) {
+              setSelectedIndex(nextRowIndex);
+              const nextRow = listRows[nextRowIndex];
+              if (nextRow) {
+                if (nextRow.type === 'stack') {
+                  const previewItems = getStackPreviewItems(nextRow.items);
+                  if (previewItems.length > 0) {
+                    setStackPreviewItems(previewItems);
+                    setStackPreviewIndex(0);
+                    setPreview(previewItems[0]);
+                  }
+                } else {
+                  setStackPreviewItems([]);
+                  setStackPreviewIndex(0);
+                  const newContent = getPreviewForRow(nextRow);
+                  if (newContent) setPreview(newContent);
+                }
+              }
+            }
+          }
+          return;
+        }
+        if (key === 'ArrowLeft' || key === 'ArrowUp') {
+          e.preventDefault();
+          const prevIndex = Math.max(stackPreviewIndex - 1, 0);
+          if (prevIndex !== stackPreviewIndex) {
+            setStackPreviewIndex(prevIndex);
+            setPreview(stackPreviewItems[prevIndex]);
+          }
+          return;
+        }
       }
 
       // X - Toggle selection on current item (Gmail-style).
@@ -896,11 +1143,21 @@ export default function TeamView() {
         return;
       }
 
-      // H - Toggle expand/collapse on selected row.
-      if (key === 'h' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+      // E or H - Toggle expand/collapse on selected row(s).
+      if ((key === 'e' || key === 'h') && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+        e.preventDefault();
+        
+        // If multi-select is active, expand all selected items.
+        if (selectedIds.size > 0) {
+          selectedIds.forEach(itemId => {
+            toggleItemExpanded(itemId);
+          });
+          return;
+        }
+        
+        // Otherwise expand the currently selected row.
         if (!selectedRow) return;
         
-        e.preventDefault();
         if (selectedRow.type === 'stack') {
           toggleStackExpanded(selectedRow.stack.stackId);
         } else if (selectedRow.type === 'item') {
@@ -910,18 +1167,32 @@ export default function TeamView() {
       }
 
       // Navigation: j/k or ArrowDown/ArrowUp.
+      // Note: Arrow keys are handled separately when preview is open for stack navigation.
       if (key === 'j' || key === 'ArrowDown') {
         e.preventDefault();
         setKeyboardNavActive(true);
         const newIndex = Math.min(selectedIndex + 1, listRows.length - 1);
         setSelectedIndex(newIndex);
         
-        // Update preview if open.
+        // If preview is open, update preview for new row and reset stack index.
         if (preview && newIndex !== selectedIndex) {
           const newRow = listRows[newIndex];
           if (newRow) {
-            const newContent = getPreviewForRow(newRow);
-            if (newContent) setPreview(newContent);
+            if (newRow.type === 'stack') {
+              // Initialize stack preview for the new row.
+              const previewItems = getStackPreviewItems(newRow.items);
+              if (previewItems.length > 0) {
+                setStackPreviewItems(previewItems);
+                setStackPreviewIndex(0);
+                setPreview(previewItems[0]);
+              }
+            } else {
+              // Single item - clear stack state.
+              setStackPreviewItems([]);
+              setStackPreviewIndex(0);
+              const newContent = getPreviewForRow(newRow);
+              if (newContent) setPreview(newContent);
+            }
           }
         }
         return;
@@ -933,12 +1204,25 @@ export default function TeamView() {
         const newIndex = Math.max(selectedIndex - 1, 0);
         setSelectedIndex(newIndex);
         
-        // Update preview if open.
+        // If preview is open, update preview for new row and reset stack index.
         if (preview && newIndex !== selectedIndex) {
           const newRow = listRows[newIndex];
           if (newRow) {
-            const newContent = getPreviewForRow(newRow);
-            if (newContent) setPreview(newContent);
+            if (newRow.type === 'stack') {
+              // Initialize stack preview for the new row.
+              const previewItems = getStackPreviewItems(newRow.items);
+              if (previewItems.length > 0) {
+                setStackPreviewItems(previewItems);
+                setStackPreviewIndex(0);
+                setPreview(previewItems[0]);
+              }
+            } else {
+              // Single item - clear stack state.
+              setStackPreviewItems([]);
+              setStackPreviewIndex(0);
+              const newContent = getPreviewForRow(newRow);
+              if (newContent) setPreview(newContent);
+            }
           }
         }
         return;
@@ -959,16 +1243,19 @@ export default function TeamView() {
       if (key === ' ' || key === 'Spacebar') {
         e.preventDefault();
 
-        // If preview is open, dismiss it.
+        // If preview is open, dismiss it (spacebar toggles preview on/off).
+        // Arrow keys are used to navigate within stack items.
         if (preview) {
           dismissPreview();
           return;
         }
 
-        // If hovering over an image, open preview for it.
+        // If hovering over an image, open preview for it (single item, no stack nav).
         if (hoveredImageId !== null) {
           const hoveredItem = teamItems.find(item => item.id === hoveredImageId);
           if (hoveredItem && (hoveredItem.imageUrl || hoveredItem.imageData)) {
+            setStackPreviewItems([]);
+            setStackPreviewIndex(0);
             setPreview({
               type: 'image',
               url: hoveredItem.imageUrl || `data:image/png;base64,${hoveredItem.imageData}`,
@@ -981,9 +1268,22 @@ export default function TeamView() {
 
         // Preview J/K selected row (image or text).
         if (selectedRow) {
-          const previewContent = getPreviewForRow(selectedRow);
-          if (previewContent) {
-            setPreview(previewContent);
+          if (selectedRow.type === 'item') {
+            // Single item - no stack navigation needed.
+            setStackPreviewItems([]);
+            setStackPreviewIndex(0);
+            const previewContent = getPreviewForRow(selectedRow);
+            if (previewContent) {
+              setPreview(previewContent);
+            }
+          } else if (selectedRow.type === 'stack') {
+            // Stack - build preview sequence and start at first item.
+            const previewItems = getStackPreviewItems(selectedRow.items);
+            if (previewItems.length > 0) {
+              setStackPreviewItems(previewItems);
+              setStackPreviewIndex(0);
+              setPreview(previewItems[0]);
+            }
           }
         }
         return;
@@ -1477,7 +1777,61 @@ export default function TeamView() {
         </div>
       )}
 
+      {/* Search input with custom placeholder */}
+      <div style={{ 
+        position: 'relative',
+        marginBottom: selectedIds.size > 0 ? '0' : '8px',
+        transition: 'margin-bottom 0.15s ease',
+      }}>
+        <input
+          ref={inputRef}
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          onFocus={() => setSearchFocused(true)}
+          onBlur={() => setSearchFocused(false)}
+          placeholder=""
+          style={{
+            width: '100%',
+            padding: `6px 10px 6px ${!searchQuery && !searchFocused ? '32px' : '10px'}`,
+            border: `1px solid ${theme.inputBorder}`,
+            borderRadius: '6px',
+            fontSize: '11px',
+            outline: 'none',
+            boxSizing: 'border-box',
+            backgroundColor: theme.inputBg,
+            color: theme.text,
+            transition: 'padding-left 0.1s ease',
+            // @ts-ignore - prevent drag on input
+            WebkitAppRegion: 'no-drag',
+          }}
+        />
+        {/* Custom placeholder - hide when focused or has content */}
+        {!searchQuery && !searchFocused && (
+          <div style={{
+            position: 'absolute',
+            left: '10px',
+            top: '50%',
+            transform: 'translateY(-50%)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            pointerEvents: 'none',
+            color: theme.textSecondary,
+            fontSize: '11px',
+          }}>
+            <span>search...</span>
+          </div>
+        )}
+      </div>
+
       {/* Team items list */}
+      <DndContext
+        sensors={sensors}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragEnd={handleDragEnd}
+      >
       <div
         ref={listRef}
         style={{
@@ -1535,9 +1889,16 @@ export default function TeamView() {
               const hasText = combinedText.length > 0;
               const truncated = hasText ? smartTruncateText(combinedText, 15) : null;
 
+              const stackDragId = `stack:${stack.stackId}`;
+              const isStackDragging = activeDragId === stackDragId;
+              const isStackOver = overDropId === stackDragId;
+
               return (
-                <div
+                <DraggableDroppableRow
                   key={`stack-${stack.stackId}`}
+                  id={stackDragId}
+                  isDragging={isStackDragging}
+                  isOver={isStackOver && !isStackDragging}
                   className="team-item-row"
                   onMouseEnter={() => {
                     setHoveredRowIndex(index);
@@ -1546,7 +1907,10 @@ export default function TeamView() {
                   onMouseLeave={() => setHoveredRowIndex(null)}
                   onMouseMove={() => setKeyboardNavActive(false)}
                   onClick={() => pasteStack(stackItems)}
-                  style={rowStyle}
+                  style={{
+                    ...rowStyle,
+                    cursor: activeDragId ? 'grabbing' : 'grab',
+                  }}
                 >
                   {/* Stack image thumbnails */}
                   {stackImages.length > 0 && (
@@ -1838,7 +2202,7 @@ export default function TeamView() {
                       </button>
                     </div>
                   </div>
-                </div>
+                </DraggableDroppableRow>
               );
             }
 
@@ -1853,9 +2217,16 @@ export default function TeamView() {
             const truncated = isText && item.content ? smartTruncateText(item.content, 15) : null;
             const showSmartTruncation = truncated && truncated.needsTruncation && !isExpanded;
 
+            const itemDragId = `item:${item.id}`;
+            const isItemDragging = activeDragId === itemDragId;
+            const isItemOver = overDropId === itemDragId;
+
             return (
-              <div
+              <DraggableDroppableRow
                 key={item.id}
+                id={itemDragId}
+                isDragging={isItemDragging}
+                isOver={isItemOver && !isItemDragging}
                 className="team-item-row"
                 onMouseEnter={() => {
                   setHoveredRowIndex(index);
@@ -1864,7 +2235,10 @@ export default function TeamView() {
                 onMouseLeave={() => setHoveredRowIndex(null)}
                 onMouseMove={() => setKeyboardNavActive(false)}
                 onClick={() => pasteItem(item)}
-                style={rowStyle}
+                style={{
+                  ...rowStyle,
+                  cursor: activeDragId ? 'grabbing' : 'grab',
+                }}
               >
                 {/* Content section */}
                 <div>
@@ -2071,11 +2445,54 @@ export default function TeamView() {
                     </button>
                   </div>
                 </div>
-              </div>
+              </DraggableDroppableRow>
             );
           })
         )}
       </div>
+
+      {/* Drag overlay - shows ghost element matching original row size */}
+      <DragOverlay>
+        {activeDragId ? (() => {
+          // Find the dragged item/stack to show a content preview.
+          const [type, id] = activeDragId.split(':');
+          const row = listRows.find(r => 
+            type === 'stack' 
+              ? r.type === 'stack' && r.stack.stackId === id
+              : r.type === 'item' && r.item.id === id
+          );
+          
+          // Build preview text from the row content.
+          let previewText = type === 'stack' ? 'Stack' : 'Item';
+          if (row?.type === 'stack') {
+            previewText = combineStackText(row.items).slice(0, 80) || 'Stack';
+          } else if (row?.type === 'item') {
+            previewText = row.item.content?.slice(0, 80) || 'Item';
+          }
+          
+          return (
+            <div
+              style={{
+                width: '320px',
+                padding: '12px 16px',
+                backgroundColor: theme.bgSecondary,
+                border: `1px solid ${theme.border}`,
+                borderRadius: '6px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                fontSize: '12px',
+                color: theme.text,
+                opacity: 0.9,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {previewText}
+            </div>
+          );
+        })() : null}
+      </DragOverlay>
+      </DndContext>
 
       {/* Keyboard shortcuts bar - matches TodoView style */}
       <div style={{
@@ -2092,6 +2509,7 @@ export default function TeamView() {
           <span><KeyCap small>x</KeyCap> select</span>
           <span><KeyCap small>t</KeyCap> unshare</span>
           <span><KeyCap small>c</KeyCap> copy</span>
+          <span><KeyCap small>/</KeyCap> search</span>
         </div>
         <div style={{ display: 'flex', gap: '12px' }}>
           <span><KeyCap small>space</KeyCap> preview</span>
@@ -2179,6 +2597,30 @@ export default function TeamView() {
               }}>
                 {preview.content}
               </pre>
+            </div>
+          )}
+          
+          {/* Stack position indicator - shows 1/4 style when viewing a stack with multiple items */}
+          {stackPreviewItems.length > 1 && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'absolute',
+                bottom: '24px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                backdropFilter: 'blur(8px)',
+                WebkitBackdropFilter: 'blur(8px)',
+                borderRadius: '12px',
+                padding: '6px 12px',
+                color: '#fff',
+                fontSize: '13px',
+                fontWeight: 500,
+                cursor: 'default',
+              }}
+            >
+              {stackPreviewIndex + 1} / {stackPreviewItems.length}
             </div>
           )}
         </div>

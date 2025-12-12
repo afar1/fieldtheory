@@ -267,11 +267,11 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
     setIsCreating(false);
     
     try {
-      const newTodo = await window.todoAPI.createTodo(text);
-      if (newTodo) {
-        setTodos(prev => [newTodo, ...prev]);
-        setSelectedIndex(0);
-      }
+      // Create the todo - the onTodosChanged callback will add it to state.
+      // We don't add optimistically here to avoid duplicates since createTodo
+      // already emits a todosChanged event with the updated list.
+      await window.todoAPI.createTodo(text);
+      setSelectedIndex(0);
     } catch (err) {
       console.error('[TodoView] Failed to create todo:', err);
     }

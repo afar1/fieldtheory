@@ -347,12 +347,47 @@ export default function ClipboardHistory() {
   const [preview, setPreview] = useState<PreviewContent | null>(null);
   const [previewClosing, setPreviewClosing] = useState(false);
   
+  // Stack preview navigation - tracks position within a stack's preview items.
+  // For stacks: images are shown individually, text is combined into one item at the end.
+  const [stackPreviewIndex, setStackPreviewIndex] = useState(0);
+  const [stackPreviewItems, setStackPreviewItems] = useState<PreviewContent[]>([]);
+  
+  // Build the preview sequence for a stack: [image1, image2, ..., combinedText].
+  const getStackPreviewItems = (items: ClipboardItem[]): PreviewContent[] => {
+    const previewItems: PreviewContent[] = [];
+    
+    // Add each image as a separate preview item.
+    for (const item of items) {
+      if (item.imageData) {
+        previewItems.push({
+          type: 'image',
+          data: item.imageData,
+          width: item.imageWidth || 0,
+          height: item.imageHeight || 0,
+        });
+      }
+    }
+    
+    // Combine all text into one preview item at the end.
+    const combinedText = items
+      .filter(i => i.content)
+      .map(i => i.content)
+      .join('\n\n');
+    if (combinedText) {
+      previewItems.push({ type: 'text', content: combinedText });
+    }
+    
+    return previewItems;
+  };
+  
   const dismissPreview = () => {
     if (!preview || previewClosing) return;
     setPreviewClosing(true);
     setTimeout(() => {
       setPreview(null);
       setPreviewClosing(false);
+      setStackPreviewIndex(0);
+      setStackPreviewItems([]);
     }, 150);
   };
   
@@ -1065,12 +1100,25 @@ export default function ClipboardHistory() {
         setKeyboardNavActive(true);
         const newIndex = Math.min(selectedIndex + 1, listRows.length - 1);
         
-        // If preview is open, update preview for new item.
+        // If preview is open, update preview for new row and reset stack index.
         if (preview && newIndex !== selectedIndex) {
           const newRow = listRows[newIndex];
           if (newRow) {
-            const newContent = getPreviewForRow(newRow);
-            if (newContent) setPreview(newContent);
+            if (newRow.type === 'stack') {
+              // Initialize stack preview for the new row.
+              const previewItems = getStackPreviewItems(newRow.items);
+              if (previewItems.length > 0) {
+                setStackPreviewItems(previewItems);
+                setStackPreviewIndex(0);
+                setPreview(previewItems[0]);
+              }
+            } else {
+              // Single item - clear stack state.
+              setStackPreviewItems([]);
+              setStackPreviewIndex(0);
+              const newContent = getPreviewForRow(newRow);
+              if (newContent) setPreview(newContent);
+            }
           }
         }
         
@@ -1106,12 +1154,25 @@ export default function ClipboardHistory() {
         setKeyboardNavActive(true);
         const newIndex = Math.max(selectedIndex - 1, 0);
         
-        // If preview is open, update preview for new item.
+        // If preview is open, update preview for new row and reset stack index.
         if (preview && newIndex !== selectedIndex) {
           const newRow = listRows[newIndex];
           if (newRow) {
-            const newContent = getPreviewForRow(newRow);
-            if (newContent) setPreview(newContent);
+            if (newRow.type === 'stack') {
+              // Initialize stack preview for the new row.
+              const previewItems = getStackPreviewItems(newRow.items);
+              if (previewItems.length > 0) {
+                setStackPreviewItems(previewItems);
+                setStackPreviewIndex(0);
+                setPreview(previewItems[0]);
+              }
+            } else {
+              // Single item - clear stack state.
+              setStackPreviewItems([]);
+              setStackPreviewIndex(0);
+              const newContent = getPreviewForRow(newRow);
+              if (newContent) setPreview(newContent);
+            }
           }
         }
         
@@ -1149,15 +1210,25 @@ export default function ClipboardHistory() {
         return;
       }
       
-      // H - Toggle "Show more" / "Hide" expansion on selected row
-      if (key === 'h' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+      // E or H - Toggle "Show more" / "Hide" expansion on selected row(s)
+      if ((key === 'e' || key === 'h') && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         // Skip if typing in input
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
         
+        e.preventDefault();
+        
+        // If multi-select is active, expand all selected items.
+        if (selectedIds.size > 0) {
+          selectedIds.forEach(itemId => {
+            toggleItemExpanded(itemId);
+          });
+          return;
+        }
+        
+        // Otherwise expand the currently selected row.
         const selectedRow = listRows[selectedIndex];
         if (!selectedRow) return;
         
-        e.preventDefault();
         if (selectedRow.type === 'stack') {
           toggleStackExpanded(selectedRow.stack.stackId);
         } else if (selectedRow.type === 'item') {
@@ -1475,6 +1546,52 @@ export default function ClipboardHistory() {
         return;
       }
       
+      // Arrow keys - navigate within stack preview when preview is open.
+      // →/↓ go forward through stack items, then move to next row when at end.
+      // ←/↑ go back through stack items (stop at first item).
+      if (preview && stackPreviewItems.length > 1) {
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+          e.preventDefault();
+          if (stackPreviewIndex < stackPreviewItems.length - 1) {
+            // Still more items in this stack - advance within stack.
+            setStackPreviewIndex(stackPreviewIndex + 1);
+            setPreview(stackPreviewItems[stackPreviewIndex + 1]);
+          } else {
+            // At the end of stack - move to next row in list.
+            const nextRowIndex = Math.min(selectedIndex + 1, listRows.length - 1);
+            if (nextRowIndex !== selectedIndex) {
+              setSelectedIndex(nextRowIndex);
+              const nextRow = listRows[nextRowIndex];
+              if (nextRow) {
+                if (nextRow.type === 'stack') {
+                  const previewItems = getStackPreviewItems(nextRow.items);
+                  if (previewItems.length > 0) {
+                    setStackPreviewItems(previewItems);
+                    setStackPreviewIndex(0);
+                    setPreview(previewItems[0]);
+                  }
+                } else {
+                  setStackPreviewItems([]);
+                  setStackPreviewIndex(0);
+                  const newContent = getPreviewForRow(nextRow);
+                  if (newContent) setPreview(newContent);
+                }
+              }
+            }
+          }
+          return;
+        }
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          const prevIndex = Math.max(stackPreviewIndex - 1, 0);
+          if (prevIndex !== stackPreviewIndex) {
+            setStackPreviewIndex(prevIndex);
+            setPreview(stackPreviewItems[prevIndex]);
+          }
+          return;
+        }
+      }
+      
       // Spacebar - Quick Look style preview (images or text)
       if (e.key === ' ') {
         const activeElement = document.activeElement;
@@ -1482,23 +1599,26 @@ export default function ClipboardHistory() {
                                 activeElement?.tagName === 'TEXTAREA' ||
                                 (activeElement as HTMLElement)?.isContentEditable;
         
-        // If typing in an input, let spacebar work normally
+        // If typing in an input, let spacebar work normally.
         if (isTypingInInput) {
           return;
         }
         
-        // If preview is open, dismiss it
+        // If preview is open, dismiss it (spacebar toggles preview on/off).
+        // Arrow keys are used to navigate within stack items.
         if (preview) {
           e.preventDefault();
           dismissPreview();
           return;
         }
         
-        // If hovering over an image, open preview for it
+        // If hovering over an image, open preview for it (single item, no stack nav).
         if (hoveredImageId !== null) {
           e.preventDefault();
           const hoveredItem = items.find(item => item.id === hoveredImageId);
           if (hoveredItem?.imageData) {
+            setStackPreviewItems([]);
+            setStackPreviewIndex(0);
             setPreview({
               type: 'image',
               data: hoveredItem.imageData,
@@ -1509,12 +1629,15 @@ export default function ClipboardHistory() {
           return;
         }
         
-        // Preview J/K selected row (image or text)
+        // Preview J/K selected row (image or text).
         const selectedRow = listRows[selectedIndex];
         if (selectedRow) {
           e.preventDefault();
           
           if (selectedRow.type === 'item') {
+            // Single item - no stack navigation needed.
+            setStackPreviewItems([]);
+            setStackPreviewIndex(0);
             if (selectedRow.item.imageData) {
               setPreview({
                 type: 'image',
@@ -1526,24 +1649,12 @@ export default function ClipboardHistory() {
               setPreview({ type: 'text', content: selectedRow.item.content });
             }
           } else if (selectedRow.type === 'stack') {
-            // Check for image first, then text
-            const imageItem = selectedRow.items.find(i => i.imageData);
-            if (imageItem?.imageData) {
-              setPreview({
-                type: 'image',
-                data: imageItem.imageData,
-                width: imageItem.imageWidth || 0,
-                height: imageItem.imageHeight || 0,
-              });
-            } else {
-              // Combine text from stack
-              const combinedText = selectedRow.items
-                .filter(i => i.content)
-                .map(i => i.content)
-                .join('\n\n');
-              if (combinedText) {
-                setPreview({ type: 'text', content: combinedText });
-              }
+            // Stack - build preview sequence and start at first item.
+            const previewItems = getStackPreviewItems(selectedRow.items);
+            if (previewItems.length > 0) {
+              setStackPreviewItems(previewItems);
+              setStackPreviewIndex(0);
+              setPreview(previewItems[0]);
             }
           }
           return;
@@ -1969,6 +2080,7 @@ export default function ClipboardHistory() {
                 borderRadius: '4px',
                 cursor: 'pointer',
                 transition: 'all 0.15s ease',
+                outline: 'none',
               }}
             >
               {mode === 'clipboard' ? 'My Fields' : mode === 'team' ? 'Team Fields' : 'Tasks'}
@@ -3845,6 +3957,30 @@ export default function ClipboardHistory() {
               }}>
                 {preview.content}
               </pre>
+            </div>
+          )}
+          
+          {/* Stack position indicator - shows 1/4 style when viewing a stack with multiple items */}
+          {stackPreviewItems.length > 1 && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'absolute',
+                bottom: '24px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                backdropFilter: 'blur(8px)',
+                WebkitBackdropFilter: 'blur(8px)',
+                borderRadius: '12px',
+                padding: '6px 12px',
+                color: '#fff',
+                fontSize: '13px',
+                fontWeight: 500,
+                cursor: 'default',
+              }}
+            >
+              {stackPreviewIndex + 1} / {stackPreviewItems.length}
             </div>
           )}
         </div>
