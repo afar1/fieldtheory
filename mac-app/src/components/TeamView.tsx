@@ -231,6 +231,66 @@ export default function TeamView() {
   const [keyboardNavActive, setKeyboardNavActive] = useState(false);
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
   const [expandedStacks, setExpandedStacks] = useState<Set<string>>(new Set());
+  
+  // Multi-select state (matching ClipboardHistory).
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isMultiSelect, setIsMultiSelect] = useState(false);
+  const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
+  
+  // Undo state for delete operations.
+  const [deletedItems, setDeletedItems] = useState<TeamClipboardItem[]>([]);
+
+  // Image hover and preview state (matching ClipboardHistory).
+  const [hoveredImageId, setHoveredImageId] = useState<string | null>(null);
+  type PreviewContent =
+    | { type: 'image'; url: string; width: number; height: number }
+    | { type: 'text'; content: string };
+  const [preview, setPreview] = useState<PreviewContent | null>(null);
+  const [previewClosing, setPreviewClosing] = useState(false);
+
+  // Dismiss preview with fade-out animation.
+  const dismissPreview = useCallback(() => {
+    if (!preview || previewClosing) return;
+    setPreviewClosing(true);
+    setTimeout(() => {
+      setPreview(null);
+      setPreviewClosing(false);
+    }, 150);
+  }, [preview, previewClosing]);
+
+  // Get preview content for a given row.
+  const getPreviewForRow = useCallback((row: TeamListRow): PreviewContent | null => {
+    if (row.type === 'item') {
+      const item = row.item;
+      if (item.imageUrl || item.imageData) {
+        return {
+          type: 'image',
+          url: item.imageUrl || `data:image/png;base64,${item.imageData}`,
+          width: item.imageWidth || 0,
+          height: item.imageHeight || 0,
+        };
+      } else if (item.content) {
+        return { type: 'text', content: item.content };
+      }
+    } else if (row.type === 'stack') {
+      // Check for image first, then text.
+      const imageItem = row.items.find(i => i.imageUrl || i.imageData);
+      if (imageItem) {
+        return {
+          type: 'image',
+          url: imageItem.imageUrl || `data:image/png;base64,${imageItem.imageData}`,
+          width: imageItem.imageWidth || 0,
+          height: imageItem.imageHeight || 0,
+        };
+      } else {
+        const combinedText = combineStackText(row.items);
+        if (combinedText) {
+          return { type: 'text', content: combinedText };
+        }
+      }
+    }
+    return null;
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Auth
@@ -495,6 +555,71 @@ export default function TeamView() {
     });
   }, []);
 
+  // Delete a team item (only works for items you own).
+  const deleteTeamItem = useCallback(async (itemId: string) => {
+    if (!window.teamClipboardAPI) return;
+    
+    // Find the item to save for undo.
+    const item = teamItems.find(i => i.id === itemId);
+    if (item) {
+      setDeletedItems([item]);
+    }
+    
+    const success = await window.teamClipboardAPI.deleteItem(itemId);
+    if (success) {
+      // Remove from local state immediately.
+      setTeamItems(prev => prev.filter(i => i.id !== itemId));
+    }
+  }, [teamItems]);
+
+  // Delete multiple team items (for stack deletion).
+  const deleteTeamItems = useCallback(async (itemIds: string[]) => {
+    if (!window.teamClipboardAPI) return;
+    
+    // Save items for undo.
+    const itemsToDelete = teamItems.filter(i => itemIds.includes(i.id));
+    setDeletedItems(itemsToDelete);
+    
+    // Delete each item.
+    for (const id of itemIds) {
+      await window.teamClipboardAPI.deleteItem(id);
+    }
+    
+    // Remove from local state.
+    setTeamItems(prev => prev.filter(i => !itemIds.includes(i.id)));
+  }, [teamItems]);
+
+  // Unstack a team stack (remove stack_id from all items).
+  const unstackTeamItems = useCallback(async (stackId: string) => {
+    if (!window.teamClipboardAPI) return;
+    
+    // Get all item IDs in this stack.
+    const stackItems = teamItems.filter(i => i.stackId === stackId);
+    const itemIds = stackItems.map(i => i.id);
+    
+    // Update stack_id to null for all items.
+    const success = await window.teamClipboardAPI.updateStackId(itemIds, null);
+    if (success) {
+      // Update local state.
+      setTeamItems(prev => prev.map(i => 
+        itemIds.includes(i.id) ? { ...i, stackId: null } : i
+      ));
+    }
+  }, [teamItems]);
+
+  // Toggle item expansion (for "show more" text).
+  const toggleItemExpanded = useCallback((itemId: string) => {
+    setExpandedItems(prev => {
+      const next = new Set(prev);
+      if (next.has(itemId)) {
+        next.delete(itemId);
+      } else {
+        next.add(itemId);
+      }
+      return next;
+    });
+  }, []);
+
   // ---------------------------------------------------------------------------
   // Build List Rows (group items into stacks)
   // ---------------------------------------------------------------------------
@@ -572,24 +697,174 @@ export default function TeamView() {
       const key = e.key;
       const hasMeta = e.metaKey;
       const hasShift = e.shiftKey;
+      const hasCtrl = e.ctrlKey;
+      const hasAlt = e.altKey;
 
       // Skip if typing in input.
       if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
 
       const selectedRow = listRows[selectedIndex];
 
+      // Escape: Dismiss preview, clear selection, or close window.
+      if (key === 'Escape') {
+        if (preview) {
+          e.preventDefault();
+          dismissPreview();
+          return;
+        }
+        // If items are selected, clear selection first.
+        if (selectedIds.size > 0) {
+          e.preventDefault();
+          setSelectedIds(new Set());
+          setIsMultiSelect(false);
+          return;
+        }
+        // Otherwise close the window.
+        window.clipboardAPI?.closeWindow();
+        return;
+      }
+
+      // X - Toggle selection on current item (Gmail-style).
+      if (key === 'x' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+        e.preventDefault();
+        
+        // Get item IDs to toggle (single item or all items in stack).
+        const itemIdsToToggle: string[] = [];
+        if (selectedRow?.type === 'item') {
+          itemIdsToToggle.push(selectedRow.item.id);
+        } else if (selectedRow?.type === 'stack') {
+          selectedRow.items.forEach(i => itemIdsToToggle.push(i.id));
+        }
+        
+        // Toggle selection.
+        setSelectedIds(prev => {
+          const next = new Set(prev);
+          const allSelected = itemIdsToToggle.every(id => next.has(id));
+          if (allSelected) {
+            itemIdsToToggle.forEach(id => next.delete(id));
+          } else {
+            itemIdsToToggle.forEach(id => next.add(id));
+          }
+          return next;
+        });
+        setLastClickedIndex(selectedIndex);
+        setIsMultiSelect(true);
+        return;
+      }
+
+      // Shift+Enter - Toggle multi-select mode.
+      if (key === 'Enter' && hasShift) {
+        e.preventDefault();
+        setIsMultiSelect(true);
+        if (selectedRow?.type === 'item') {
+          setSelectedIds(prev => {
+            const next = new Set(prev);
+            if (next.has(selectedRow.item.id)) {
+              next.delete(selectedRow.item.id);
+            } else {
+              next.add(selectedRow.item.id);
+            }
+            return next;
+          });
+        } else if (selectedRow?.type === 'stack') {
+          const stackItemIds = selectedRow.items.map(i => i.id);
+          setSelectedIds(prev => {
+            const next = new Set(prev);
+            const allSelected = stackItemIds.every(id => next.has(id));
+            if (allSelected) {
+              stackItemIds.forEach(id => next.delete(id));
+            } else {
+              stackItemIds.forEach(id => next.add(id));
+            }
+            return next;
+          });
+        }
+        return;
+      }
+
+      // Delete / Cmd+Backspace - Delete selected item/stack.
+      if (key === 'Delete' || key === 'Backspace') {
+        // Only Delete key works without modifier, Backspace needs Cmd/Ctrl.
+        if (key === 'Backspace' && !hasMeta && !hasCtrl) return;
+        
+        e.preventDefault();
+        (async () => {
+          if (selectedRow?.type === 'item') {
+            await deleteTeamItem(selectedRow.item.id);
+          } else if (selectedRow?.type === 'stack') {
+            const itemIds = selectedRow.items.map(i => i.id);
+            await deleteTeamItems(itemIds);
+          }
+        })();
+        return;
+      }
+
+      // Cmd+Z - Undo deletion.
+      if (key === 'z' && hasMeta && !hasShift && deletedItems.length > 0) {
+        e.preventDefault();
+        // Note: Undo for team items would require a restore API.
+        // For now, just reload the items from the server.
+        (async () => {
+          await loadTeamItems();
+          setDeletedItems([]);
+        })();
+        return;
+      }
+
+      // U - Unstack selected stack.
+      if (key === 'u' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+        if (selectedRow?.type === 'stack' && selectedRow.items.length > 1) {
+          e.preventDefault();
+          unstackTeamItems(selectedRow.stack.stackId);
+        }
+        return;
+      }
+
+      // H - Toggle expand/collapse on selected row.
+      if (key === 'h' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+        if (!selectedRow) return;
+        
+        e.preventDefault();
+        if (selectedRow.type === 'stack') {
+          toggleStackExpanded(selectedRow.stack.stackId);
+        } else if (selectedRow.type === 'item') {
+          toggleItemExpanded(selectedRow.item.id);
+        }
+        return;
+      }
+
       // Navigation: j/k or ArrowDown/ArrowUp.
       if (key === 'j' || key === 'ArrowDown') {
         e.preventDefault();
         setKeyboardNavActive(true);
-        setSelectedIndex(prev => Math.min(prev + 1, listRows.length - 1));
+        const newIndex = Math.min(selectedIndex + 1, listRows.length - 1);
+        setSelectedIndex(newIndex);
+        
+        // Update preview if open.
+        if (preview && newIndex !== selectedIndex) {
+          const newRow = listRows[newIndex];
+          if (newRow) {
+            const newContent = getPreviewForRow(newRow);
+            if (newContent) setPreview(newContent);
+          }
+        }
         return;
       }
 
       if (key === 'k' || key === 'ArrowUp') {
         e.preventDefault();
         setKeyboardNavActive(true);
-        setSelectedIndex(prev => Math.max(prev - 1, 0));
+        const newIndex = Math.max(selectedIndex - 1, 0);
+        setSelectedIndex(newIndex);
+        
+        // Update preview if open.
+        if (preview && newIndex !== selectedIndex) {
+          const newRow = listRows[newIndex];
+          if (newRow) {
+            const newContent = getPreviewForRow(newRow);
+            if (newContent) setPreview(newContent);
+          }
+        }
         return;
       }
 
@@ -604,23 +879,35 @@ export default function TeamView() {
         return;
       }
 
-      // Spacebar: Toggle expansion (for stacks or text items).
+      // Spacebar: Quick Look style preview (images or text).
       if (key === ' ' || key === 'Spacebar') {
         e.preventDefault();
-        if (selectedRow?.type === 'stack') {
-          toggleStackExpanded(selectedRow.stack.stackId);
-        } else if (selectedRow?.type === 'item') {
-          const item = selectedRow.item;
-          if (item.type === 'text' || item.type === 'transcript') {
-            setExpandedItems(prev => {
-              const next = new Set(prev);
-              if (next.has(item.id)) {
-                next.delete(item.id);
-              } else {
-                next.add(item.id);
-              }
-              return next;
+
+        // If preview is open, dismiss it.
+        if (preview) {
+          dismissPreview();
+          return;
+        }
+
+        // If hovering over an image, open preview for it.
+        if (hoveredImageId !== null) {
+          const hoveredItem = teamItems.find(item => item.id === hoveredImageId);
+          if (hoveredItem && (hoveredItem.imageUrl || hoveredItem.imageData)) {
+            setPreview({
+              type: 'image',
+              url: hoveredItem.imageUrl || `data:image/png;base64,${hoveredItem.imageData}`,
+              width: hoveredItem.imageWidth || 0,
+              height: hoveredItem.imageHeight || 0,
             });
+            return;
+          }
+        }
+
+        // Preview J/K selected row (image or text).
+        if (selectedRow) {
+          const previewContent = getPreviewForRow(selectedRow);
+          if (previewContent) {
+            setPreview(previewContent);
           }
         }
         return;
@@ -643,7 +930,7 @@ export default function TeamView() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [session, listRows, selectedIndex, pasteItem, pasteStack, copyToPersonal, toggleStackExpanded]);
+  }, [session, listRows, selectedIndex, selectedIds, deletedItems, pasteItem, pasteStack, copyToPersonal, preview, dismissPreview, getPreviewForRow, hoveredImageId, teamItems, deleteTeamItem, deleteTeamItems, unstackTeamItems, loadTeamItems, toggleStackExpanded, toggleItemExpanded]);
 
   // Scroll selected item into view.
   useEffect(() => {
@@ -654,22 +941,6 @@ export default function TeamView() {
       selectedElement.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
   }, [selectedIndex, keyboardNavActive]);
-
-  // ---------------------------------------------------------------------------
-  // Toggle item expansion.
-  // ---------------------------------------------------------------------------
-
-  const toggleItemExpanded = useCallback((itemId: string) => {
-    setExpandedItems(prev => {
-      const next = new Set(prev);
-      if (next.has(itemId)) {
-        next.delete(itemId);
-      } else {
-        next.add(itemId);
-      }
-      return next;
-    });
-  }, []);
 
   // ---------------------------------------------------------------------------
   // Render: Loading
@@ -1169,13 +1440,29 @@ export default function TeamView() {
                   {stackImages.length > 0 && (
                     <div style={{ display: 'flex', gap: '4px', marginBottom: hasText ? '8px' : '0', flexWrap: 'wrap' }}>
                       {stackImages.slice(0, 4).map((img) => (
-                        <div key={img.id} style={{ position: 'relative' }}>
+                        <div
+                          key={img.id}
+                          style={{ position: 'relative', cursor: 'pointer' }}
+                          onMouseEnter={() => setHoveredImageId(img.id)}
+                          onMouseLeave={() => setHoveredImageId(null)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (img.imageUrl || img.imageData) {
+                              setPreview({
+                                type: 'image',
+                                url: img.imageUrl || `data:image/png;base64,${img.imageData}`,
+                                width: img.imageWidth || 0,
+                                height: img.imageHeight || 0,
+                              });
+                            }
+                          }}
+                        >
                           {img.imageUrl || img.imageData ? (
                             <img
                               src={img.imageUrl || `data:image/png;base64,${img.imageData}`}
-                              alt=""
+                              alt="Screenshot preview"
                               style={{
-                                height: '40px',
+                                height: '50px',
                                 width: 'auto',
                                 borderRadius: '4px',
                                 border: `1px solid ${theme.border}`,
@@ -1183,8 +1470,8 @@ export default function TeamView() {
                             />
                           ) : (
                             <div style={{
-                              width: '40px',
-                              height: '40px',
+                              width: '50px',
+                              height: '50px',
                               borderRadius: '4px',
                               backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
                               border: `1px solid ${theme.border}`,
@@ -1196,12 +1483,30 @@ export default function TeamView() {
                               {img.type === 'screenshot' ? '📷' : '🖼️'}
                             </div>
                           )}
+                          {/* Preview button overlay on hover */}
+                          {hoveredImageId === img.id && (
+                            <div
+                              style={{
+                                position: 'absolute',
+                                inset: 0,
+                                backgroundColor: 'rgba(0,0,0,0.5)',
+                                borderRadius: '4px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                              }}
+                            >
+                              <span style={{ color: '#fff', fontSize: '10px', fontWeight: 500 }}>
+                                Preview <KeyCap small>⎵</KeyCap>
+                              </span>
+                            </div>
+                          )}
                         </div>
                       ))}
                       {stackImages.length > 4 && (
                         <div style={{
-                          width: '40px',
-                          height: '40px',
+                          width: '50px',
+                          height: '50px',
                           borderRadius: '4px',
                           backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
                           border: `1px solid ${theme.border}`,
@@ -1325,37 +1630,70 @@ export default function TeamView() {
               >
                 {/* Content section */}
                 <div>
-                  {/* Image/screenshot - show thumbnail */}
+                  {/* Image/screenshot - show thumbnail with preview */}
                   {isImage && (
                     <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
-                      {item.imageUrl || item.imageData ? (
-                        <img
-                          src={item.imageUrl || `data:image/png;base64,${item.imageData}`}
-                          alt=""
-                          style={{
+                      <div
+                        style={{ position: 'relative', flexShrink: 0, cursor: 'pointer' }}
+                        onMouseEnter={() => setHoveredImageId(item.id)}
+                        onMouseLeave={() => setHoveredImageId(null)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (item.imageUrl || item.imageData) {
+                            setPreview({
+                              type: 'image',
+                              url: item.imageUrl || `data:image/png;base64,${item.imageData}`,
+                              width: item.imageWidth || 0,
+                              height: item.imageHeight || 0,
+                            });
+                          }
+                        }}
+                      >
+                        {item.imageUrl || item.imageData ? (
+                          <img
+                            src={item.imageUrl || `data:image/png;base64,${item.imageData}`}
+                            alt="Screenshot preview"
+                            style={{
+                              height: '50px',
+                              width: 'auto',
+                              borderRadius: '4px',
+                              border: `1px solid ${theme.border}`,
+                            }}
+                          />
+                        ) : (
+                          <div style={{
+                            width: '50px',
                             height: '50px',
-                            width: 'auto',
                             borderRadius: '4px',
+                            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
                             border: `1px solid ${theme.border}`,
-                            flexShrink: 0,
-                          }}
-                        />
-                      ) : (
-                        <div style={{
-                          width: '50px',
-                          height: '50px',
-                          borderRadius: '4px',
-                          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
-                          border: `1px solid ${theme.border}`,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: '18px',
-                          flexShrink: 0,
-                        }}>
-                          {item.type === 'screenshot' ? '📷' : '🖼️'}
-                        </div>
-                      )}
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '18px',
+                          }}>
+                            {item.type === 'screenshot' ? '📷' : '🖼️'}
+                          </div>
+                        )}
+                        {/* Preview button overlay on hover */}
+                        {hoveredImageId === item.id && (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              inset: 0,
+                              backgroundColor: 'rgba(0,0,0,0.5)',
+                              borderRadius: '4px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            }}
+                          >
+                            <span style={{ color: '#fff', fontSize: '10px', fontWeight: 500 }}>
+                              Preview <KeyCap small>⎵</KeyCap>
+                            </span>
+                          </div>
+                        )}
+                      </div>
                       <div style={{ flex: 1, fontSize: '12px', fontWeight: 500, color: theme.text }}>
                         {item.type === 'screenshot' ? 'Screenshot' : 'Image'}
                       </div>
@@ -1476,6 +1814,80 @@ export default function TeamView() {
           })
         )}
       </div>
+
+      {/* CSS animations for preview */}
+      <style>{`
+        @keyframes previewFadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        @keyframes previewFadeOut {
+          from { opacity: 1; }
+          to { opacity: 0; }
+        }
+      `}</style>
+
+      {/* Preview modal - Quick Look style for images and text */}
+      {preview && (
+        <div
+          onClick={dismissPreview}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.85)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '40px',
+            zIndex: 10000,
+            cursor: 'pointer',
+            animation: previewClosing ? 'previewFadeOut 0.15s ease-in forwards' : 'previewFadeIn 0.15s ease-out',
+          }}
+        >
+          {preview.type === 'image' ? (
+            <img
+              src={preview.url}
+              alt="Preview"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                maxWidth: '90vw',
+                maxHeight: '90vh',
+                objectFit: 'contain',
+                borderRadius: '8px',
+                boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+              }}
+            />
+          ) : (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                maxWidth: '90vw',
+                maxHeight: '90vh',
+                overflow: 'auto',
+                backgroundColor: theme.bgSecondary,
+                borderRadius: '8px',
+                padding: '24px',
+                boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+              }}
+            >
+              <pre style={{
+                margin: 0,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                fontSize: '13px',
+                lineHeight: 1.6,
+                color: theme.text,
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+              }}>
+                {preview.content}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
