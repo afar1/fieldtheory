@@ -1,6 +1,6 @@
 {
   "name": "littleai-mac",
-  "version": "0.1.15-field-release",
+  "version": "0.1.18+maxwell",
   "private": true,
   "main": "electron-dist/main/index.js",
   "scripts": {

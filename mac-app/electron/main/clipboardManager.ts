@@ -238,6 +238,22 @@ export class ClipboardManager extends EventEmitter {
       `);
     });
 
+    // Migration: Add cumulative_stats table for tracking all-time stats that shouldn't decrease.
+    // Words transcribed is stored here so it persists even when transcriptions are deleted.
+    this.runMigration('add_cumulative_stats', () => {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS cumulative_stats (
+          key TEXT PRIMARY KEY,
+          value INTEGER NOT NULL DEFAULT 0
+        );
+        -- Initialize with current word count from existing transcriptions.
+        INSERT OR IGNORE INTO cumulative_stats (key, value)
+        SELECT 'words_transcribed', COALESCE(SUM(word_count), 0)
+        FROM clipboard_items
+        WHERE type = 'transcript' AND word_count IS NOT NULL;
+      `);
+    });
+
     // Trigger to keep FTS index in sync
     this.db.exec(`
       CREATE TRIGGER IF NOT EXISTS clipboard_items_ai AFTER INSERT ON clipboard_items BEGIN
@@ -449,6 +465,15 @@ export class ClipboardManager extends EventEmitter {
       stackId || null,
       source
     );
+
+    // If this is a transcript, increment the cumulative words counter.
+    // This ensures the stat never decreases even if items are deleted.
+    if (type === 'transcript' && wordCount > 0) {
+      this.db.prepare(`
+        INSERT INTO cumulative_stats (key, value) VALUES ('words_transcribed', ?)
+        ON CONFLICT(key) DO UPDATE SET value = value + ?
+      `).run(wordCount, wordCount);
+    }
 
     // Cleanup old items
     this.cleanupOldItems();
@@ -826,18 +851,19 @@ export class ClipboardManager extends EventEmitter {
       WHERE type = 'screenshot'
     `).get() as { count: number };
 
-    // Sum total words from all transcriptions
+    // Get cumulative words transcribed from the stats table.
+    // This counter only increases, so it persists even when items are deleted.
     const wordsRow = this.db.prepare(`
-      SELECT COALESCE(SUM(word_count), 0) as count 
-      FROM clipboard_items 
-      WHERE type = 'transcript' AND word_count IS NOT NULL
-    `).get() as { count: number };
+      SELECT COALESCE(value, 0) as count 
+      FROM cumulative_stats 
+      WHERE key = 'words_transcribed'
+    `).get() as { count: number } | undefined;
 
     return {
       stacks: stacksRow.count,
       transcriptions: transcriptionsRow.count,
       screenshots: screenshotsRow.count,
-      words: wordsRow.count,
+      words: wordsRow?.count ?? 0,
     };
   }
 
