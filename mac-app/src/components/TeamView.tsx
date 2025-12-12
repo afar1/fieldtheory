@@ -1548,38 +1548,6 @@ export default function TeamView() {
                   onClick={() => pasteStack(stackItems)}
                   style={rowStyle}
                 >
-                  {/* Stack indicator */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                    <span style={{
-                      fontSize: '9px',
-                      fontWeight: 600,
-                      color: theme.isDark ? '#a78bfa' : '#7c3aed',
-                      backgroundColor: theme.isDark ? 'rgba(167, 139, 250, 0.15)' : 'rgba(124, 58, 237, 0.1)',
-                      padding: '2px 6px',
-                      borderRadius: '4px',
-                    }}>
-                      STACK · {stack.itemCount} items
-                    </span>
-                    <button
-                      tabIndex={-1}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleStackExpanded(stack.stackId);
-                      }}
-                      style={{
-                        background: 'transparent',
-                        border: 'none',
-                        padding: '2px 4px',
-                        fontSize: '10px',
-                        color: theme.textSecondary,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      {expanded ? '▼' : '▶'}
-                    </button>
-                  </div>
-
                   {/* Stack image thumbnails */}
                   {stackImages.length > 0 && (
                     <div style={{ display: 'flex', gap: '4px', marginBottom: hasText ? '8px' : '0', flexWrap: 'wrap' }}>
@@ -1806,20 +1774,23 @@ export default function TeamView() {
                     </div>
                   )}
 
-                  {/* Footer row */}
+                  {/* Footer row - matches ClipboardHistory design */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                    <div style={{ fontSize: '10px', color: theme.textSecondary, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      {/* Cumulative word count for stack */}
-                      {(() => {
-                        const totalWords = stackItems.reduce((sum, item) => sum + (item.wordCount || 0), 0);
-                        return totalWords > 0 ? (
-                          <>
-                            <span>{totalWords} words</span>
-                            <span>•</span>
-                          </>
-                        ) : null;
-                      })()}
-                      <span>{formatRelativeTime(stack.createdAt)}</span>
+                    {/* Metadata - left side with stack icon (matching ClipboardHistory) */}
+                    <div style={{ fontSize: '10px', color: '#FBBF24', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      {/* Stack icon - layered rectangles (same as ClipboardHistory) */}
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="4" y="4" width="16" height="6" rx="1" />
+                        <rect x="4" y="14" width="16" height="6" rx="1" />
+                      </svg>
+                      <span>
+                        {stackItems.length} items
+                        {(() => {
+                          const totalWords = stackItems.reduce((sum, item) => sum + (item.wordCount || 0), 0);
+                          return totalWords > 0 ? ` • ${totalWords} words` : '';
+                        })()}
+                        {' • '}{formatRelativeTime(stack.createdAt)}
+                      </span>
                       <InitialsBadge email={stack.createdByEmail} />
                     </div>
                     <div style={{ display: 'flex', gap: '4px', visibility: isRowSelected || isHovered ? 'visible' : 'hidden' }}>
