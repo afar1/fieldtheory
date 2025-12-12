@@ -194,8 +194,29 @@ export class MobileSync extends EventEmitter {
   // ===========================================================================
 
   /**
+   * Sign up with email and password.
+   * Creates a new account. User must verify email before they can sign in.
+   */
+  async signUp(email: string, password: string): Promise<{ error: string | null }> {
+    if (!this.supabase) {
+      return { error: 'Supabase not initialized' };
+    }
+
+    console.log('[MobileSync] Signing up:', email);
+
+    const { error } = await this.supabase.auth.signUp({ email, password });
+
+    if (error) {
+      console.error('[MobileSync] Sign up failed:', error);
+      return { error: error.message };
+    }
+
+    console.log('[MobileSync] Sign up successful, verification email sent to:', email);
+    return { error: null };
+  }
+
+  /**
    * Sign in with email and password.
-   * Users create accounts on iOS first, then sign in here.
    */
   async signInWithPassword(email: string, password: string): Promise<{ error: string | null; session: Session | null }> {
     if (!this.supabase) {

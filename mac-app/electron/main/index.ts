@@ -1462,6 +1462,13 @@ function setupClipboardIPCHandlers(): void {
   // Password Authentication IPC Handlers
   // =========================================================================
 
+  ipcMain.handle('auth:signUp', async (_event, email: string, password: string) => {
+    if (!mobileSync) {
+      return { error: 'Mobile sync not initialized' };
+    }
+    return await mobileSync.signUp(email, password);
+  });
+
   ipcMain.handle('auth:signInWithPassword', async (_event, email: string, password: string) => {
     if (!mobileSync) {
       return { error: 'Mobile sync not initialized', session: null };
@@ -1801,6 +1808,38 @@ function setupClipboardIPCHandlers(): void {
     // a stack record is created automatically in updateStackId.
     // This handler is here for future extensibility (e.g., creating named stacks).
     return null;
+  });
+
+  // =========================================================================
+  // Team Membership IPC Handlers
+  // =========================================================================
+
+  ipcMain.handle(TeamClipboardIPCChannels.GET_TEAM_MEMBERS, async () => {
+    if (!teamClipboardSync) {
+      return [];
+    }
+    return await teamClipboardSync.getTeamMembers();
+  });
+
+  ipcMain.handle(TeamClipboardIPCChannels.ADD_TEAM_MEMBER, async (_event, email: string) => {
+    if (!teamClipboardSync) {
+      return { success: false, error: 'Team sync not initialized' };
+    }
+    return await teamClipboardSync.addTeamMember(email);
+  });
+
+  ipcMain.handle(TeamClipboardIPCChannels.REMOVE_TEAM_MEMBER, async (_event, membershipId: string) => {
+    if (!teamClipboardSync) {
+      return { success: false, error: 'Team sync not initialized' };
+    }
+    return await teamClipboardSync.removeTeamMember(membershipId);
+  });
+
+  ipcMain.handle(TeamClipboardIPCChannels.HAS_TEAMMATES, async () => {
+    if (!teamClipboardSync) {
+      return false;
+    }
+    return await teamClipboardSync.hasTeammates();
   });
 }
 
@@ -2528,12 +2567,23 @@ if (!gotTheLock) {
     }
     
     // First-run check: Show onboarding wizard if not completed.
+    // Skip onboarding for existing users (those with clipboard items) - they're updating, not new.
     const prefs = preferencesManager?.get();
     if (!prefs?.onboardingComplete) {
-      console.log('[Main] First run detected, showing onboarding wizard');
-      onboardingWindow = new OnboardingWindow();
-      const startStep = prefs?.onboardingStep ?? OnboardingStep.WELCOME;
-      onboardingWindow.show(startStep);
+      // Check if this is an existing user upgrading (they have clipboard history).
+      const hasExistingItems = clipboardManager?.hasExistingItems() ?? false;
+      
+      if (hasExistingItems) {
+        // Existing user - mark onboarding as complete and skip it.
+        console.log('[Main] Existing user detected (has clipboard items), skipping onboarding');
+        preferencesManager?.save({ onboardingComplete: true });
+      } else {
+        // New user - show onboarding wizard.
+        console.log('[Main] New user detected, showing onboarding wizard');
+        onboardingWindow = new OnboardingWindow();
+        const startStep = prefs?.onboardingStep ?? OnboardingStep.WELCOME;
+        onboardingWindow.show(startStep);
+      }
     }
     // createWindow(); // Commented out for testing - app runs in background, opens manually
 

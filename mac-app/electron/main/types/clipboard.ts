@@ -251,6 +251,12 @@ export const TeamClipboardIPCChannels = {
   TEAM_ITEM_ADDED: 'teamClipboard:itemAdded',
   TEAM_ITEM_DELETED: 'teamClipboard:itemDeleted',
   TEAM_ITEM_UPDATED: 'teamClipboard:itemUpdated',
+  
+  // Team membership.
+  GET_TEAM_MEMBERS: 'teamClipboard:getTeamMembers',
+  ADD_TEAM_MEMBER: 'teamClipboard:addTeamMember',
+  REMOVE_TEAM_MEMBER: 'teamClipboard:removeTeamMember',
+  HAS_TEAMMATES: 'teamClipboard:hasTeammates',
 } as const;
 
 /**

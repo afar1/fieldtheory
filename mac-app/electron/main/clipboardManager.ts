@@ -795,6 +795,15 @@ export class ClipboardManager extends EventEmitter {
    * Get all-time statistics for the clipboard history.
    * Returns counts of stacks, transcriptions, screenshots, and total words transcribed.
    */
+  /**
+   * Check if the user has any existing clipboard items.
+   * Used to detect existing users vs new installs for onboarding decisions.
+   */
+  hasExistingItems(): boolean {
+    const result = this.db.prepare('SELECT COUNT(*) as count FROM clipboard_items').get() as { count: number };
+    return result.count > 0;
+  }
+
   getAllTimeStats(): { stacks: number; transcriptions: number; screenshots: number; words: number } {
     // Count unique stacks (groups of items combined together)
     const stacksRow = this.db.prepare(`

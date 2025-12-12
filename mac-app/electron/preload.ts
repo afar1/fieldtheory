@@ -293,7 +293,20 @@ const TeamClipboardIPCChannels = {
   TEAM_ITEM_ADDED: 'teamClipboard:itemAdded',
   TEAM_ITEM_DELETED: 'teamClipboard:itemDeleted',
   TEAM_ITEM_UPDATED: 'teamClipboard:itemUpdated',
+  // Team membership.
+  GET_TEAM_MEMBERS: 'teamClipboard:getTeamMembers',
+  ADD_TEAM_MEMBER: 'teamClipboard:addTeamMember',
+  REMOVE_TEAM_MEMBER: 'teamClipboard:removeTeamMember',
+  HAS_TEAMMATES: 'teamClipboard:hasTeammates',
 } as const;
+
+// Team member type for UI display.
+type TeamMember = {
+  id: string;
+  email: string;
+  addedByMe: boolean;
+  createdAt: number;
+};
 
 // Todo type for bidirectional sync with Supabase.
 type Todo = {
@@ -1225,6 +1238,10 @@ type TodoAPI = typeof todoAPI;
 // =============================================================================
 
 const authAPI = {
+  // Sign up with email and password.
+  signUp: (email: string, password: string) =>
+    ipcRenderer.invoke('auth:signUp', email, password),
+
   // Sign in with email and password.
   signInWithPassword: (email: string, password: string) => 
     ipcRenderer.invoke('auth:signInWithPassword', email, password),
@@ -1320,6 +1337,30 @@ const teamClipboardAPI = {
     return () => {
       ipcRenderer.removeListener(TeamClipboardIPCChannels.TEAM_ITEM_DELETED, handler);
     };
+  },
+
+  // =========================================================================
+  // Team Membership
+  // =========================================================================
+
+  // Get all team members (people you added + people who added you).
+  getTeamMembers: async (): Promise<TeamMember[]> => {
+    return ipcRenderer.invoke(TeamClipboardIPCChannels.GET_TEAM_MEMBERS);
+  },
+
+  // Add a team member by email.
+  addTeamMember: async (email: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(TeamClipboardIPCChannels.ADD_TEAM_MEMBER, email);
+  },
+
+  // Remove a team member (can remove someone you added, or remove yourself).
+  removeTeamMember: async (membershipId: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(TeamClipboardIPCChannels.REMOVE_TEAM_MEMBER, membershipId);
+  },
+
+  // Check if the user has any teammates.
+  hasTeammates: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(TeamClipboardIPCChannels.HAS_TEAMMATES);
   },
 };
 

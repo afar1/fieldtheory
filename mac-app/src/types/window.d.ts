@@ -430,6 +430,7 @@ interface AuthAPI {
   signOut: () => Promise<{ error: string | null }>;
   getSession: () => Promise<any | null>;
   // Password authentication methods
+  signUp?: (email: string, password: string) => Promise<{ error: string | null }>;
   signInWithPassword?: (email: string, password: string) => Promise<{ error: string | null; session: any | null }>;
   resetPasswordForEmail?: (email: string) => Promise<{ error: string | null }>;
   updatePassword?: (newPassword: string) => Promise<{ error: string | null }>;
@@ -445,7 +446,9 @@ interface TeamClipboardItem {
   sharedByEmail: string | null;
   type: ClipboardItemType;
   content: string | null;
-  imageData: string | null;
+  imageData: string | null;    // Legacy: base64 from bytea column.
+  imagePath: string | null;    // New: path in Supabase Storage bucket.
+  imageUrl: string | null;     // New: signed URL for storage bucket access.
   imageWidth: number | null;
   imageHeight: number | null;
   imageSize: number | null;
@@ -487,6 +490,16 @@ interface TeamClipboardQueryOptions {
 }
 
 /**
+ * Team member info for UI display.
+ */
+interface TeamMember {
+  id: string;
+  email: string;
+  addedByMe: boolean;
+  createdAt: number;
+}
+
+/**
  * Team Clipboard API for shared clipboard.
  */
 interface TeamClipboardAPI {
@@ -501,6 +514,11 @@ interface TeamClipboardAPI {
   getStacks: () => Promise<TeamStackInfo[]>;
   onTeamItemAdded?: (callback: (item: TeamClipboardItem) => void) => () => void;
   onTeamItemDeleted?: (callback: (id: string) => void) => () => void;
+  // Team membership.
+  getTeamMembers: () => Promise<TeamMember[]>;
+  addTeamMember: (email: string) => Promise<{ success: boolean; error?: string }>;
+  removeTeamMember: (membershipId: string) => Promise<{ success: boolean; error?: string }>;
+  hasTeammates: () => Promise<boolean>;
 }
 
 /**

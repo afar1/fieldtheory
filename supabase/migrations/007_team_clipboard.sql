@@ -1,8 +1,120 @@
 -- =============================================================================
 -- Team Clipboard - Shared clipboard items for team collaboration.
--- Users signed into the same account can share clipboard items with their team.
+-- Users can add teammates by email. Once added, teammates see all shared items.
 -- =============================================================================
 
+-- =============================================================================
+-- Team membership - who is on whose team.
+-- A user adds another user's email to invite them. The invited user can see
+-- team items once they create an account with that verified email.
+-- =============================================================================
+
+create table if not exists public.team_members (
+  id uuid primary key default gen_random_uuid(),
+  
+  -- The user who added this team member (the "team owner" for this relationship).
+  added_by_user_id uuid not null references auth.users (id) on delete cascade,
+  
+  -- The email of the person being added. Case-insensitive matching.
+  -- This email may or may not have an account yet.
+  member_email text not null,
+  
+  -- Timestamps.
+  created_at timestamptz not null default now(),
+  
+  -- One entry per (adder, email) pair - can't add same person twice.
+  constraint team_members_unique_pair unique (added_by_user_id, member_email)
+);
+
+-- Index for looking up "who added me?" by email.
+create index if not exists idx_team_members_email on public.team_members(lower(member_email));
+create index if not exists idx_team_members_added_by on public.team_members(added_by_user_id);
+
+-- Enable RLS.
+alter table public.team_members enable row level security;
+
+-- Users can see team memberships where they added someone OR they were added.
+create policy "Users can see their team memberships"
+  on public.team_members
+  for select
+  to authenticated
+  using (
+    added_by_user_id = auth.uid() 
+    or lower(member_email) = lower(auth.jwt() ->> 'email')
+  );
+
+-- Users can add members to their team.
+create policy "Users can add team members"
+  on public.team_members
+  for insert
+  to authenticated
+  with check (added_by_user_id = auth.uid());
+
+-- Users can remove members they added, OR remove themselves from a team.
+create policy "Users can remove team members"
+  on public.team_members
+  for delete
+  to authenticated
+  using (
+    added_by_user_id = auth.uid() 
+    or lower(member_email) = lower(auth.jwt() ->> 'email')
+  );
+
+-- =============================================================================
+-- Helper function: Check if two users are teammates.
+-- Users are teammates if either one added the other's email.
+-- =============================================================================
+
+create or replace function public.are_teammates(user_id_a uuid, user_id_b uuid)
+returns boolean as $$
+declare
+  email_a text;
+  email_b text;
+begin
+  -- Get emails for both users.
+  select email into email_a from auth.users where id = user_id_a;
+  select email into email_b from auth.users where id = user_id_b;
+  
+  -- Check if either added the other.
+  return exists (
+    select 1 from public.team_members
+    where (added_by_user_id = user_id_a and lower(member_email) = lower(email_b))
+       or (added_by_user_id = user_id_b and lower(member_email) = lower(email_a))
+  );
+end;
+$$ language plpgsql security definer stable;
+
+-- =============================================================================
+-- Helper function: Get all user IDs that are teammates with the current user.
+-- Returns the current user's ID plus all teammates' IDs.
+-- =============================================================================
+
+create or replace function public.get_teammate_user_ids()
+returns setof uuid as $$
+declare
+  current_email text;
+begin
+  -- Get current user's email.
+  current_email := auth.jwt() ->> 'email';
+  
+  -- Return current user.
+  return next auth.uid();
+  
+  -- Return users who added me.
+  return query
+    select u.id from auth.users u
+    inner join public.team_members tm on tm.added_by_user_id = u.id
+    where lower(tm.member_email) = lower(current_email);
+  
+  -- Return users I added (who have accounts).
+  return query
+    select u.id from auth.users u
+    inner join public.team_members tm on lower(u.email) = lower(tm.member_email)
+    where tm.added_by_user_id = auth.uid();
+end;
+$$ language plpgsql security definer stable;
+
+-- =============================================================================
 -- Team clipboard items table.
 -- Stores items shared with the team. Similar structure to local clipboard_items
 -- but lives in Supabase for cross-device/cross-user access.
@@ -57,13 +169,13 @@ create index if not exists idx_team_clipboard_client_created on public.team_clip
 -- Enable RLS (Row Level Security).
 alter table public.team_clipboard_items enable row level security;
 
--- RLS policies: All authenticated users can read team items.
+-- RLS policies: Users can only see items shared by teammates.
 -- Only the owner can insert/update/delete their own items.
-create policy "Users can read all team clipboard items"
+create policy "Users can read teammate clipboard items"
   on public.team_clipboard_items
   for select
   to authenticated
-  using (true);
+  using (user_id in (select public.get_teammate_user_ids()));
 
 create policy "Users can insert their own team clipboard items"
   on public.team_clipboard_items
@@ -128,12 +240,12 @@ create index if not exists idx_team_stacks_created_by on public.team_clipboard_s
 -- Enable RLS.
 alter table public.team_clipboard_stacks enable row level security;
 
--- RLS policies: All authenticated users can read/modify stacks (collaborative).
-create policy "Users can read all team stacks"
+-- RLS policies: Users can only see/modify stacks created by teammates.
+create policy "Users can read teammate stacks"
   on public.team_clipboard_stacks
   for select
   to authenticated
-  using (true);
+  using (created_by_user_id in (select public.get_teammate_user_ids()));
 
 create policy "Users can insert team stacks"
   on public.team_clipboard_stacks
@@ -141,12 +253,12 @@ create policy "Users can insert team stacks"
   to authenticated
   with check (auth.uid() = created_by_user_id);
 
--- Anyone can update stacks (collaborative editing).
-create policy "Users can update any team stack"
+-- Teammates can update stacks (collaborative editing).
+create policy "Teammates can update team stacks"
   on public.team_clipboard_stacks
   for update
   to authenticated
-  using (true);
+  using (created_by_user_id in (select public.get_teammate_user_ids()));
 
 -- Only creator can delete stacks.
 create policy "Creators can delete their team stacks"
