@@ -30,7 +30,9 @@ export interface TeamClipboardItem {
   sharedByEmail: string | null;
   type: ClipboardItemType;
   content: string | null;
-  imageData: string | null; // base64 for IPC
+  imageData: string | null; // base64 for IPC (legacy, from bytea)
+  imagePath: string | null; // Path in storage bucket (new approach)
+  imageUrl: string | null;  // Signed URL for accessing the image
   imageWidth: number | null;
   imageHeight: number | null;
   imageSize: number | null;
@@ -80,7 +82,8 @@ interface TeamClipboardRow {
   shared_by_email: string | null;
   type: string;
   content: string | null;
-  image_data: Buffer | null;
+  image_data: Buffer | null;  // Legacy bytea column.
+  image_path: string | null;  // New storage bucket path.
   image_width: number | null;
   image_height: number | null;
   image_size: number | null;
@@ -107,6 +110,26 @@ interface TeamStackRow {
   name: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Row from Supabase team_members table.
+ */
+interface TeamMemberRow {
+  id: string;
+  added_by_user_id: string;
+  member_email: string;
+  created_at: string;
+}
+
+/**
+ * Team member info for UI display.
+ */
+export interface TeamMember {
+  id: string;
+  email: string;
+  addedByMe: boolean;  // True if current user added this member.
+  createdAt: number;
 }
 
 // =============================================================================
@@ -173,16 +196,49 @@ export class TeamClipboardSync extends EventEmitter {
 
   /**
    * Convert Supabase row to TeamClipboardItem.
+   * Note: This is a sync conversion. For signed URLs, call rowToTeamItemAsync.
    */
   private rowToTeamItem(row: TeamClipboardRow): TeamClipboardItem {
+    // Convert binary image data to base64 for IPC transport (legacy fallback).
+    // Supabase can return bytea in different formats depending on context.
+    let imageDataBase64: string | null = null;
+    if (row.image_data && !row.image_path) {
+      // Only process bytea if we don't have a storage path (legacy data).
+      try {
+        const imgData = row.image_data as unknown;
+        if (Buffer.isBuffer(imgData)) {
+          imageDataBase64 = imgData.toString('base64');
+        } else if (imgData instanceof Uint8Array) {
+          imageDataBase64 = Buffer.from(imgData).toString('base64');
+        } else if (typeof imgData === 'string') {
+          if (imgData.startsWith('\\x')) {
+            const hexString = imgData.slice(2);
+            imageDataBase64 = Buffer.from(hexString, 'hex').toString('base64');
+          } else {
+            imageDataBase64 = imgData;
+          }
+        } else if (typeof imgData === 'object' && imgData !== null) {
+          const anyData = imgData as any;
+          if (anyData.data && Array.isArray(anyData.data)) {
+            imageDataBase64 = Buffer.from(anyData.data).toString('base64');
+          } else {
+            imageDataBase64 = Buffer.from(imgData as any).toString('base64');
+          }
+        }
+      } catch (err) {
+        console.error('[TeamClipboardSync] Failed to convert image_data:', err);
+      }
+    }
+
     return {
       id: row.id,
       userId: row.user_id,
       sharedByEmail: row.shared_by_email,
       type: row.type as ClipboardItemType,
       content: row.content,
-      // Convert binary image data to base64 for IPC transport.
-      imageData: row.image_data ? Buffer.from(row.image_data).toString('base64') : null,
+      imageData: imageDataBase64,
+      imagePath: row.image_path,
+      imageUrl: null, // Set by rowToTeamItemAsync for storage bucket images.
       imageWidth: row.image_width,
       imageHeight: row.image_height,
       imageSize: row.image_size,
@@ -200,7 +256,73 @@ export class TeamClipboardSync extends EventEmitter {
   }
 
   /**
+   * Convert row to TeamClipboardItem with signed URL for storage bucket images.
+   * Use this when fetching items for display.
+   */
+  private async rowToTeamItemAsync(row: TeamClipboardRow): Promise<TeamClipboardItem> {
+    const item = this.rowToTeamItem(row);
+
+    // If we have an image_path, generate a signed URL.
+    if (row.image_path && this.supabase) {
+      try {
+        const { data, error } = await this.supabase.storage
+          .from('team-clipboard-images')
+          .createSignedUrl(row.image_path, 3600); // 1 hour expiry.
+
+        if (data && !error) {
+          item.imageUrl = data.signedUrl;
+        } else if (error) {
+          console.error('[TeamClipboardSync] Failed to create signed URL:', error);
+        }
+      } catch (err) {
+        console.error('[TeamClipboardSync] Error creating signed URL:', err);
+      }
+    }
+
+    return item;
+  }
+
+  /**
+   * Batch convert rows to TeamClipboardItems with signed URLs.
+   * More efficient than calling rowToTeamItemAsync individually.
+   */
+  private async rowsToTeamItemsAsync(rows: TeamClipboardRow[]): Promise<TeamClipboardItem[]> {
+    // First, convert all rows synchronously.
+    const items = rows.map(row => this.rowToTeamItem(row));
+
+    // Collect paths that need signed URLs.
+    const pathsToSign: { index: number; path: string }[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].image_path) {
+        pathsToSign.push({ index: i, path: rows[i].image_path! });
+      }
+    }
+
+    // Generate signed URLs in parallel for efficiency.
+    if (pathsToSign.length > 0 && this.supabase) {
+      const signPromises = pathsToSign.map(async ({ index, path }) => {
+        try {
+          const { data, error } = await this.supabase!.storage
+            .from('team-clipboard-images')
+            .createSignedUrl(path, 3600);
+
+          if (data && !error) {
+            items[index].imageUrl = data.signedUrl;
+          }
+        } catch (err) {
+          console.error('[TeamClipboardSync] Error signing URL for', path, err);
+        }
+      });
+
+      await Promise.all(signPromises);
+    }
+
+    return items;
+  }
+
+  /**
    * Query team clipboard items.
+   * Generates signed URLs for storage bucket images.
    */
   async queryItems(options: TeamClipboardQueryOptions = {}): Promise<TeamClipboardItem[]> {
     if (!this.isAuthenticated()) {
@@ -239,7 +361,10 @@ export class TeamClipboardSync extends EventEmitter {
         throw error;
       }
 
-      return (data as TeamClipboardRow[]).map(row => this.rowToTeamItem(row));
+      const rows = data as TeamClipboardRow[];
+      
+      // Use async conversion to get signed URLs for storage bucket images.
+      return this.rowsToTeamItemsAsync(rows);
     } catch (error) {
       console.error('[TeamClipboardSync] Failed to query team items:', error);
       return [];
@@ -266,7 +391,7 @@ export class TeamClipboardSync extends EventEmitter {
         return null;
       }
 
-      return this.rowToTeamItem(data as TeamClipboardRow);
+      return this.rowToTeamItemAsync(data as TeamClipboardRow);
     } catch (error) {
       console.error('[TeamClipboardSync] Failed to get team item:', error);
       return null;
@@ -293,7 +418,7 @@ export class TeamClipboardSync extends EventEmitter {
         return [];
       }
 
-      return (data as TeamClipboardRow[]).map(row => this.rowToTeamItem(row));
+      return this.rowsToTeamItemsAsync(data as TeamClipboardRow[]);
     } catch (error) {
       console.error('[TeamClipboardSync] Failed to get stack items:', error);
       return [];
@@ -305,8 +430,44 @@ export class TeamClipboardSync extends EventEmitter {
   // ===========================================================================
 
   /**
+   * Upload an image to the storage bucket.
+   * Returns the storage path on success, null on failure.
+   */
+  private async uploadImageToStorage(
+    imageBuffer: Buffer,
+    userId: string,
+    itemId: string
+  ): Promise<string | null> {
+    if (!this.supabase) return null;
+
+    // File path: {user_id}/{item_id}.png
+    const filePath = `${userId}/${itemId}.png`;
+
+    try {
+      const { error } = await this.supabase.storage
+        .from('team-clipboard-images')
+        .upload(filePath, imageBuffer, {
+          contentType: 'image/png',
+          upsert: false, // Don't overwrite if exists.
+        });
+
+      if (error) {
+        console.error('[TeamClipboardSync] Image upload failed:', error);
+        return null;
+      }
+
+      console.log('[TeamClipboardSync] Uploaded image to storage:', filePath);
+      return filePath;
+    } catch (err) {
+      console.error('[TeamClipboardSync] Error uploading image:', err);
+      return null;
+    }
+  }
+
+  /**
    * Share a local clipboard item to the team.
    * Creates a copy in Supabase's team_clipboard_items table.
+   * Images are uploaded to the storage bucket for better performance.
    */
   async shareToTeam(localItemId: number): Promise<TeamClipboardItem | null> {
     if (!this.isAuthenticated()) {
@@ -329,20 +490,25 @@ export class TeamClipboardSync extends EventEmitter {
 
     // Generate a client ID for deduplication.
     const clientId = `local-${localItemId}-${Date.now()}`;
+    
+    // Generate a unique item ID for storage path (we'll use this as the DB record ID too).
+    const itemId = crypto.randomUUID();
 
     try {
-      // Prepare image data for upload.
-      let imageDataForUpload: Buffer | null = null;
-      if (localItem.imageData) {
-        imageDataForUpload = localItem.imageData;
+      // Upload image to storage bucket if this is an image/screenshot.
+      let imagePath: string | null = null;
+      if (localItem.imageData && (localItem.type === 'image' || localItem.type === 'screenshot')) {
+        imagePath = await this.uploadImageToStorage(localItem.imageData, userId, itemId);
       }
 
       const insertData = {
+        id: itemId, // Use our generated ID so it matches the storage path.
         user_id: userId,
         shared_by_email: userEmail,
         type: localItem.type,
         content: localItem.content,
-        image_data: imageDataForUpload,
+        image_data: null, // No longer storing in bytea.
+        image_path: imagePath, // Storage bucket path.
         image_width: localItem.imageWidth,
         image_height: localItem.imageHeight,
         image_size: localItem.imageSize,
@@ -368,7 +534,9 @@ export class TeamClipboardSync extends EventEmitter {
       }
 
       console.log('[TeamClipboardSync] Shared item to team:', data.id);
-      const teamItem = this.rowToTeamItem(data as TeamClipboardRow);
+      
+      // Use async conversion to get signed URL for the uploaded image.
+      const teamItem = await this.rowToTeamItemAsync(data as TeamClipboardRow);
       this.emit('teamItemAdded', teamItem);
       return teamItem;
     } catch (error) {
@@ -380,6 +548,7 @@ export class TeamClipboardSync extends EventEmitter {
   /**
    * Share a stack of local items to the team.
    * Creates copies in Supabase with a shared stack_id.
+   * Images are uploaded to the storage bucket.
    */
   async shareStackToTeam(localItemIds: number[]): Promise<string | null> {
     if (!this.isAuthenticated()) {
@@ -420,18 +589,22 @@ export class TeamClipboardSync extends EventEmitter {
         }
 
         const clientId = `local-${localItemId}-${Date.now()}-${Math.random()}`;
+        const itemId = crypto.randomUUID();
 
-        let imageDataForUpload: Buffer | null = null;
-        if (localItem.imageData) {
-          imageDataForUpload = localItem.imageData;
+        // Upload image to storage bucket if applicable.
+        let imagePath: string | null = null;
+        if (localItem.imageData && (localItem.type === 'image' || localItem.type === 'screenshot')) {
+          imagePath = await this.uploadImageToStorage(localItem.imageData, userId, itemId);
         }
 
         const insertData = {
+          id: itemId,
           user_id: userId,
           shared_by_email: userEmail,
           type: localItem.type,
           content: localItem.content,
-          image_data: imageDataForUpload,
+          image_data: null, // No longer storing in bytea.
+          image_path: imagePath, // Storage bucket path.
           image_width: localItem.imageWidth,
           image_height: localItem.imageHeight,
           image_size: localItem.imageSize,
@@ -470,6 +643,7 @@ export class TeamClipboardSync extends EventEmitter {
   /**
    * Delete a team item.
    * Only the owner can delete their items (enforced by RLS).
+   * Also cleans up the image from storage if present.
    */
   async deleteItem(id: string): Promise<boolean> {
     if (!this.isAuthenticated()) {
@@ -477,6 +651,14 @@ export class TeamClipboardSync extends EventEmitter {
     }
 
     try {
+      // First, get the item to check for image_path.
+      const { data: item } = await this.supabase!
+        .from('team_clipboard_items')
+        .select('image_path')
+        .eq('id', id)
+        .single();
+
+      // Delete the database record.
       const { error } = await this.supabase!
         .from('team_clipboard_items')
         .delete()
@@ -485,6 +667,19 @@ export class TeamClipboardSync extends EventEmitter {
       if (error) {
         console.error('[TeamClipboardSync] Delete item failed:', error);
         return false;
+      }
+
+      // Clean up the image from storage if it exists.
+      if (item?.image_path) {
+        try {
+          await this.supabase!.storage
+            .from('team-clipboard-images')
+            .remove([item.image_path]);
+          console.log('[TeamClipboardSync] Deleted image from storage:', item.image_path);
+        } catch (storageErr) {
+          // Non-fatal - the DB record is already deleted.
+          console.warn('[TeamClipboardSync] Failed to delete image from storage:', storageErr);
+        }
       }
 
       console.log('[TeamClipboardSync] Deleted team item:', id);
@@ -620,6 +815,32 @@ export class TeamClipboardSync extends EventEmitter {
   // ===========================================================================
 
   /**
+   * Download image data from storage bucket.
+   * Returns the image as a Buffer, or null on failure.
+   */
+  private async downloadImageFromStorage(imagePath: string): Promise<Buffer | null> {
+    if (!this.supabase) return null;
+
+    try {
+      const { data, error } = await this.supabase.storage
+        .from('team-clipboard-images')
+        .download(imagePath);
+
+      if (error || !data) {
+        console.error('[TeamClipboardSync] Image download failed:', error);
+        return null;
+      }
+
+      // Convert Blob to Buffer.
+      const arrayBuffer = await data.arrayBuffer();
+      return Buffer.from(arrayBuffer);
+    } catch (err) {
+      console.error('[TeamClipboardSync] Error downloading image:', err);
+      return null;
+    }
+  }
+
+  /**
    * Copy a team item to personal clipboard.
    * Creates a local copy that's independent of the team item.
    */
@@ -648,14 +869,23 @@ export class TeamClipboardSync extends EventEmitter {
         console.log(`[TeamClipboardSync] Copied team item ${teamItemId} to personal: ${localId}`);
         return localId;
       } else if (teamItem.type === 'image' || teamItem.type === 'screenshot') {
-        // Store image item locally.
-        if (!teamItem.imageData) {
+        // Get image data - prefer storage bucket, fall back to base64.
+        let imageBuffer: Buffer | null = null;
+
+        if (teamItem.imagePath) {
+          // Download from storage bucket.
+          imageBuffer = await this.downloadImageFromStorage(teamItem.imagePath);
+        } else if (teamItem.imageData) {
+          // Legacy: decode from base64.
+          imageBuffer = Buffer.from(teamItem.imageData, 'base64');
+        }
+
+        if (!imageBuffer) {
           console.error('[TeamClipboardSync] Team image has no data');
           return null;
         }
 
         const { nativeImage } = await import('electron');
-        const imageBuffer = Buffer.from(teamItem.imageData, 'base64');
         const image = nativeImage.createFromBuffer(imageBuffer);
 
         const localId = await this.clipboardManager.storeImage(
@@ -711,9 +941,17 @@ export class TeamClipboardSync extends EventEmitter {
             localIds.push(localId);
           }
         } else if (teamItem.type === 'image' || teamItem.type === 'screenshot') {
-          if (teamItem.imageData) {
+          // Get image data - prefer storage bucket, fall back to base64.
+          let imageBuffer: Buffer | null = null;
+
+          if (teamItem.imagePath) {
+            imageBuffer = await this.downloadImageFromStorage(teamItem.imagePath);
+          } else if (teamItem.imageData) {
+            imageBuffer = Buffer.from(teamItem.imageData, 'base64');
+          }
+
+          if (imageBuffer) {
             const { nativeImage } = await import('electron');
-            const imageBuffer = Buffer.from(teamItem.imageData, 'base64');
             const image = nativeImage.createFromBuffer(imageBuffer);
 
             const localId = await this.clipboardManager.storeImage(
@@ -737,6 +975,154 @@ export class TeamClipboardSync extends EventEmitter {
       console.error('[TeamClipboardSync] Failed to copy stack to personal:', error);
       return localIds;
     }
+  }
+
+  // ===========================================================================
+  // Team Membership
+  // ===========================================================================
+
+  /**
+   * Add a team member by email.
+   * The member can see team items once they create an account with that email.
+   */
+  async addTeamMember(email: string): Promise<{ success: boolean; error?: string }> {
+    if (!this.isAuthenticated()) {
+      return { success: false, error: 'Not authenticated' };
+    }
+
+    const userId = this.getUserId();
+    const myEmail = this.getUserEmail();
+    if (!userId) {
+      return { success: false, error: 'No user ID' };
+    }
+
+    // Can't add yourself.
+    if (myEmail && email.toLowerCase() === myEmail.toLowerCase()) {
+      return { success: false, error: 'Cannot add yourself as a team member' };
+    }
+
+    try {
+      const { error } = await this.supabase!
+        .from('team_members')
+        .insert({
+          added_by_user_id: userId,
+          member_email: email.toLowerCase(),
+        });
+
+      if (error) {
+        // Handle unique constraint violation.
+        if (error.code === '23505') {
+          return { success: false, error: 'This person is already on your team' };
+        }
+        console.error('[TeamClipboardSync] Add team member failed:', error);
+        return { success: false, error: error.message };
+      }
+
+      console.log('[TeamClipboardSync] Added team member:', email);
+      this.emit('teamMemberAdded', email);
+      return { success: true };
+    } catch (error) {
+      console.error('[TeamClipboardSync] Failed to add team member:', error);
+      return { success: false, error: 'Failed to add team member' };
+    }
+  }
+
+  /**
+   * Remove a team member.
+   * Can remove someone you added, or remove yourself from a team.
+   */
+  async removeTeamMember(membershipId: string): Promise<{ success: boolean; error?: string }> {
+    if (!this.isAuthenticated()) {
+      return { success: false, error: 'Not authenticated' };
+    }
+
+    try {
+      const { error } = await this.supabase!
+        .from('team_members')
+        .delete()
+        .eq('id', membershipId);
+
+      if (error) {
+        console.error('[TeamClipboardSync] Remove team member failed:', error);
+        return { success: false, error: error.message };
+      }
+
+      console.log('[TeamClipboardSync] Removed team member:', membershipId);
+      this.emit('teamMemberRemoved', membershipId);
+      return { success: true };
+    } catch (error) {
+      console.error('[TeamClipboardSync] Failed to remove team member:', error);
+      return { success: false, error: 'Failed to remove team member' };
+    }
+  }
+
+  /**
+   * Get all team members.
+   * Returns people you added and people who added you.
+   */
+  async getTeamMembers(): Promise<TeamMember[]> {
+    if (!this.isAuthenticated()) {
+      return [];
+    }
+
+    const userId = this.getUserId();
+    const myEmail = this.getUserEmail();
+    if (!userId || !myEmail) {
+      return [];
+    }
+
+    try {
+      const { data, error } = await this.supabase!
+        .from('team_members')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('[TeamClipboardSync] Get team members failed:', error);
+        return [];
+      }
+
+      // Convert rows to TeamMember objects.
+      // Each row represents a relationship. We want to show the "other person".
+      const members: TeamMember[] = [];
+      const seenEmails = new Set<string>();
+
+      for (const row of data as TeamMemberRow[]) {
+        const addedByMe = row.added_by_user_id === userId;
+        const email = row.member_email;
+
+        // Skip duplicates (could happen if A added B and B added A).
+        if (seenEmails.has(email.toLowerCase())) {
+          continue;
+        }
+        seenEmails.add(email.toLowerCase());
+
+        // Don't show my own email in the list.
+        if (email.toLowerCase() === myEmail.toLowerCase()) {
+          continue;
+        }
+
+        members.push({
+          id: row.id,
+          email: email,
+          addedByMe: addedByMe,
+          createdAt: new Date(row.created_at).getTime(),
+        });
+      }
+
+      return members;
+    } catch (error) {
+      console.error('[TeamClipboardSync] Failed to get team members:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Check if the current user has any teammates.
+   */
+  async hasTeammates(): Promise<boolean> {
+    const members = await this.getTeamMembers();
+    return members.length > 0;
   }
 
   // ===========================================================================
