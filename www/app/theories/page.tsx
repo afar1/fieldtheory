@@ -23,29 +23,29 @@ const theories = [
 
 export default function Theories() {
   return (
-    <div className="py-24 max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div className="py-24 max-w-5xl mx-auto px-6">
       <div className="mb-16">
-        <h1 className="text-4xl font-bold text-white mb-4">Theories</h1>
-        <p className="text-xl text-gray-400">Thoughts on productivity, AI, and design.</p>
+        <h1 className="text-4xl font-bold mb-4">Theories</h1>
+        <p className="text-xl text-muted">Thoughts on productivity, AI, and design.</p>
       </div>
 
       <div className="space-y-12">
         {theories.map((theory) => (
-          <article key={theory.slug} className="group relative border-b border-white/10 pb-12 last:border-0">
-            <time className="text-sm text-gray-500 mb-2 block">{theory.date}</time>
-            <h2 className="text-2xl font-bold text-white mb-3 group-hover:text-purple-400 transition-colors">
+          <article key={theory.slug} className="group relative border-b border-subtle pb-12 last:border-0">
+            <time className="text-sm text-muted mb-2 block">{theory.date}</time>
+            <h2 className="text-2xl font-bold mb-3 group-hover:text-[var(--accent)] transition-colors">
               <Link href={`/theories/${theory.slug}`}>
                 {theory.title}
               </Link>
             </h2>
-            <p className="text-gray-400 leading-relaxed mb-4">
+            <p className="text-muted leading-relaxed mb-4">
               {theory.excerpt}
             </p>
             <Link 
               href={`/theories/${theory.slug}`}
-              className="text-sm font-medium text-purple-400 hover:text-purple-300 transition-colors"
+              className="text-sm font-medium text-[var(--accent)] hover:opacity-70 transition-opacity"
             >
-              Read more &rarr;
+              Read more →
             </Link>
           </article>
         ))}

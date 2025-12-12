@@ -9,7 +9,7 @@ const theories = {
     content: `
       <p class="mb-6">The modern knowledge worker is drowning in context. We switch between Slack, Zoom, code editors, and browsers hundreds of times a day. We lose thoughts in the cracks between apps.</p>
       <p class="mb-6">Field Theory attempts to solve this by creating a unified layer of memory across your operating system. By indexing your clipboard and transcribing your voice notes locally, we create a searchable archive of your digital life.</p>
-      <h3 class="text-2xl font-bold text-white mt-8 mb-4">The Local Advantage</h3>
+      <h3 class="text-2xl font-bold mt-8 mb-4">The Local Advantage</h3>
       <p class="mb-6">Processing this data locally isn't just a privacy feature—it's a performance feature. Latency is zero. Availability is 100%. You don't need an internet connection to recall what you copied three hours ago.</p>
     `
   },
@@ -39,10 +39,10 @@ export default async function TheoryPost({ params }: { params: Promise<{ slug: s
   }
 
   return (
-    <div className="py-24 max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
+    <div className="py-24 max-w-5xl mx-auto px-6">
       <Link 
         href="/theories"
-        className="inline-flex items-center text-sm text-gray-500 hover:text-white transition-colors mb-8"
+        className="inline-flex items-center text-sm text-muted hover:text-[var(--foreground)] transition-colors mb-8"
       >
         <ArrowLeft className="w-4 h-4 mr-2" />
         Back to Theories
@@ -50,14 +50,14 @@ export default async function TheoryPost({ params }: { params: Promise<{ slug: s
       
       <article>
         <header className="mb-12">
-          <time className="text-sm text-purple-400 mb-4 block">{theory.date}</time>
-          <h1 className="text-4xl md:text-5xl font-bold text-white mb-6 leading-tight">
+          <time className="text-sm text-muted mb-4 block">{theory.date}</time>
+          <h1 className="text-4xl md:text-5xl font-bold mb-6 leading-tight">
             {theory.title}
           </h1>
         </header>
         
         <div 
-          className="prose prose-invert prose-lg text-gray-300"
+          className="text-muted leading-relaxed"
           dangerouslySetInnerHTML={{ __html: theory.content }}
         />
       </article>
