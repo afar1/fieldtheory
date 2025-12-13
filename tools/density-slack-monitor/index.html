@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Density Slack Integration</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #F5F3EF;
+      min-height: 100vh;
+      color: #1a1a1a;
+      padding: 3rem 2rem;
+      line-height: 1.5;
+    }
+
+    .container {
+      max-width: 580px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-family: 'Times New Roman', Times, Georgia, serif;
+      font-size: 1.75rem;
+      font-weight: 400;
+      margin-bottom: 0.5rem;
+      color: #1a1a1a;
+      letter-spacing: -0.01em;
+    }
+
+    .subtitle {
+      color: #666;
+      margin-bottom: 2.5rem;
+      font-size: 0.9rem;
+    }
+
+    h2 {
+      font-family: 'Times New Roman', Times, Georgia, serif;
+      font-size: 1.1rem;
+      font-weight: 400;
+      margin-bottom: 1.25rem;
+      color: #1a1a1a;
+    }
+
+    label {
+      display: block;
+      font-size: 0.8rem;
+      color: #666;
+      margin-bottom: 0.4rem;
+      letter-spacing: 0.01em;
+    }
+
+    .card {
+      background: #fff;
+      border: 1px solid #d4d0c8;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    input, select {
+      width: 100%;
+      padding: 0.6rem 0.75rem;
+      border: 1px solid #d4d0c8;
+      background: #fff;
+      color: #1a1a1a;
+      font-size: 0.875rem;
+      margin-bottom: 1rem;
+      font-family: inherit;
+    }
+
+    .accent-border {
+      border-left: 2px solid #1a1a1a;
+    }
+
+    input:focus, select:focus {
+      outline: none;
+      border-color: #1a1a1a;
+    }
+
+    input::placeholder {
+      color: #999;
+    }
+
+    button {
+      padding: 0.6rem 1.25rem;
+      border: 1px solid #d4d0c8;
+      background: #ebe7df;
+      color: #1a1a1a;
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: background 0.15s ease;
+      font-family: inherit;
+    }
+
+    button:hover {
+      background: #e0dbd1;
+    }
+
+    button:disabled {
+      background: #f0ede8;
+      color: #999;
+      cursor: not-allowed;
+    }
+
+    .btn-danger {
+      background: #fff;
+      border-color: #c9a;
+      color: #943;
+    }
+
+    .btn-danger:hover {
+      background: #fdf8f6;
+    }
+
+    .btn-small {
+      padding: 0.35rem 0.7rem;
+      font-size: 0.8rem;
+    }
+
+    .row {
+      display: flex;
+      gap: 1rem;
+    }
+
+    .row > * {
+      flex: 1;
+    }
+
+    .actions {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 1rem;
+    }
+
+    .help-text {
+      font-size: 0.75rem;
+      color: #888;
+      margin-top: -0.6rem;
+      margin-bottom: 1rem;
+    }
+
+    .help-text a {
+      color: #1a1a1a;
+      text-decoration: underline;
+    }
+
+    .help-text a:hover {
+      color: #444;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.25rem 0.6rem;
+      font-size: 0.75rem;
+      border: 1px solid #d4d0c8;
+      background: #fff;
+    }
+
+    .status-idle {
+      color: #888;
+    }
+
+    .status-running {
+      color: #2a7d3f;
+      border-color: #9dc4a8;
+      background: #f4f9f5;
+    }
+
+    .status-error {
+      color: #943;
+      border-color: #d9a;
+      background: #fdf8f6;
+    }
+
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .status-running .dot {
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .threshold-btn {
+      padding: 0.4rem 0.75rem;
+      border: 1px solid #d4d0c8;
+      background: #fff;
+      color: #666;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      font-size: 0.8rem;
+    }
+
+    .threshold-btn:hover {
+      background: #ebe7df;
+      color: #1a1a1a;
+    }
+
+    .threshold-btn.active {
+      background: #1a1a1a;
+      border-color: #1a1a1a;
+      color: #fff;
+    }
+
+    .rule-list {
+      margin-top: 1.5rem;
+    }
+
+    .rule-item {
+      border: 1px solid #d4d0c8;
+      border-left: 2px solid #1a1a1a;
+      padding: 1rem;
+      margin-bottom: 0.75rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      background: #fff;
+      transition: background 0.15s ease;
+    }
+
+    .rule-item:hover {
+      background: #faf9f7;
+    }
+
+    .rule-info {
+      flex: 1;
+    }
+
+    .rule-name {
+      font-family: 'Times New Roman', Times, Georgia, serif;
+      font-size: 0.95rem;
+      margin-bottom: 0.25rem;
+    }
+
+    .rule-details {
+      font-size: 0.8rem;
+      color: #666;
+    }
+
+    .rule-status {
+      font-size: 0.7rem;
+      margin-top: 0.35rem;
+      color: #888;
+    }
+
+    #space-select {
+      font-size: 0.8rem;
+      line-height: 1.4;
+    }
+
+    #space-select option {
+      padding: 0.35rem 0.5rem;
+    }
+
+    #space-select option:hover,
+    #space-select option:checked {
+      background: #ebe7df;
+    }
+
+    .log-box {
+      background: #fff;
+      border: 1px solid #d4d0c8;
+      border-left: 2px solid #1a1a1a;
+      padding: 1rem;
+      height: 150px;
+      overflow-y: auto;
+      font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+      font-size: 0.75rem;
+      color: #666;
+    }
+
+    .log-entry {
+      margin-bottom: 0.35rem;
+    }
+
+    .log-entry.info { color: #1a1a1a; }
+    .log-entry.success { color: #2a7d3f; }
+    .log-entry.error { color: #943; }
+    .log-entry.warn { color: #8a6d3b; }
+
+    .monitor-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.25rem;
+    }
+
+    .monitor-header h2 {
+      margin-bottom: 0;
+    }
+
+    .space-count-display {
+      text-align: center;
+      padding: 1rem;
+      border: 1px solid #d4d0c8;
+      margin-bottom: 1rem;
+      background: #fff;
+    }
+
+    .current-count {
+      font-family: 'Times New Roman', Times, Georgia, serif;
+      font-size: 2rem;
+      font-weight: 400;
+      color: #1a1a1a;
+    }
+
+    .count-label {
+      font-size: 0.8rem;
+      color: #888;
+    }
+
+    .section-title {
+      font-family: 'Times New Roman', Times, Georgia, serif;
+      font-size: 0.95rem;
+      font-weight: 400;
+      margin-top: 1.5rem;
+      margin-bottom: 1rem;
+      color: #1a1a1a;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Density Slack Integration</h1>
+    <p class="subtitle">Get Slack notifications when room occupancy hits thresholds</p>
+
+    <!-- Configuration Card -->
+    <div class="card" id="config-card">
+      <h2>Configuration</h2>
+      
+      <label for="density-token">Density API Token</label>
+      <input type="password" id="density-token" class="accent-border" placeholder="Enter your Density API token">
+      <p class="help-text">
+        <a href="https://developers.density.io/docs/" target="_blank">Density API docs</a> · 
+        Find this in your Density dashboard under Settings → API
+      </p>
+
+      <label for="slack-webhook">Slack Webhook URL</label>
+      <input type="text" id="slack-webhook" class="accent-border" placeholder="https://hooks.slack.com/services/...">
+      <p class="help-text">
+        <a href="https://api.slack.com/apps" target="_blank">Your Slack settings</a> · 
+        <a href="/slack-setup.html">How to create a webhook</a>
+      </p>
+
+      <div class="actions">
+        <button id="connect-btn">Connect & Load Spaces</button>
+        <button id="test-slack-btn">Test Slack</button>
+      </div>
+    </div>
+
+    <!-- Notification Rules Card (hidden until connected) -->
+    <div class="card hidden" id="rules-card">
+      <h2>Notification Rules</h2>
+
+      <div style="margin-bottom: 1rem;">
+        <label for="space-search">Search Spaces</label>
+        <input type="text" id="space-search" class="accent-border" placeholder="Type to filter spaces...">
+      </div>
+      
+      <div style="margin-bottom: 1rem;">
+        <label for="space-select">Space</label>
+        <select id="space-select" class="accent-border" size="10" style="width: 100%; height: auto; min-height: 180px; overflow-x: auto;">
+          <option value="">Loading spaces...</option>
+        </select>
+      </div>
+      
+      <div style="margin-bottom: 1rem;">
+        <label>Alert when people count is:</label>
+        <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap;">
+          <button type="button" class="threshold-btn" data-mode="exact" data-value="0">= 0 (empty)</button>
+          <button type="button" class="threshold-btn" data-mode="exact" data-value="1">= 1</button>
+          <button type="button" class="threshold-btn" data-mode="exact" data-value="2">= 2</button>
+          <button type="button" class="threshold-btn active" data-mode="gte" data-value="3">≥ 3</button>
+          <button type="button" class="threshold-btn" data-mode="custom" data-value="custom">Custom ≥</button>
+        </div>
+        <div id="custom-threshold-row" class="hidden" style="margin-top: 0.5rem;">
+          <input type="number" id="custom-threshold" value="5" min="0" style="width: 100px;">
+        </div>
+        <input type="hidden" id="threshold-mode" value="gte">
+        <input type="hidden" id="threshold-value" value="3">
+      </div>
+      
+      <div class="row">
+        <div>
+          <label for="duration">For (min)</label>
+          <input type="number" id="duration" value="1" min="0" step="0.1">
+        </div>
+      </div>
+
+      <div class="row" style="margin-top: 1rem;">
+        <div>
+          <label for="cooldown">Cooldown (min)</label>
+          <input type="number" id="cooldown" value="5" min="0" step="0.1">
+          <p class="help-text">Wait this long before sending another notification</p>
+        </div>
+        <div>
+          <label for="message">Custom Message (optional)</label>
+          <input type="text" id="message" placeholder="Room is getting crowded!">
+        </div>
+      </div>
+
+      <button id="add-rule-btn">Add Rule</button>
+
+      <div class="rule-list" id="rule-list">
+        <!-- Rules will be rendered here -->
+      </div>
+    </div>
+
+    <!-- Monitor Status Card (hidden until rules exist) -->
+    <div class="card hidden" id="monitor-card">
+      <div class="monitor-header">
+        <h2>Monitor Status</h2>
+        <span class="status-badge status-idle" id="status-badge">
+          <span class="dot"></span>
+          <span id="status-text">Idle</span>
+        </span>
+      </div>
+
+      <div class="space-count-display hidden" id="count-display">
+        <div class="current-count" id="current-count">--</div>
+        <div class="count-label" id="count-label">people in selected space</div>
+      </div>
+
+      <div class="actions">
+        <button id="start-btn">Start Monitoring</button>
+        <button class="btn-danger hidden" id="stop-btn">Stop Monitoring</button>
+      </div>
+
+      <p class="section-title">Activity Log</p>
+      <div class="log-box" id="log-box">
+        <div class="log-entry">Waiting to start...</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // =============================================================================
+    // STATE MANAGEMENT
+    // State lives on the server. We just track UI state here.
+    // =============================================================================
+    
+    const state = {
+      densityToken: '',
+      slackWebhook: '',
+      spaces: [],
+      rules: [],
+      isMonitoring: false,
+    };
+
+    // =============================================================================
+    // DOM REFERENCES
+    // =============================================================================
+    
+    const elements = {
+      densityToken: document.getElementById('density-token'),
+      slackWebhook: document.getElementById('slack-webhook'),
+      connectBtn: document.getElementById('connect-btn'),
+      testSlackBtn: document.getElementById('test-slack-btn'),
+      rulesCard: document.getElementById('rules-card'),
+      monitorCard: document.getElementById('monitor-card'),
+      spaceSearch: document.getElementById('space-search'),
+      spaceSelect: document.getElementById('space-select'),
+      thresholdMode: document.getElementById('threshold-mode'),
+      thresholdValue: document.getElementById('threshold-value'),
+      customThreshold: document.getElementById('custom-threshold'),
+      customThresholdRow: document.getElementById('custom-threshold-row'),
+      duration: document.getElementById('duration'),
+      cooldown: document.getElementById('cooldown'),
+      message: document.getElementById('message'),
+      addRuleBtn: document.getElementById('add-rule-btn'),
+      ruleList: document.getElementById('rule-list'),
+      statusBadge: document.getElementById('status-badge'),
+      statusText: document.getElementById('status-text'),
+      startBtn: document.getElementById('start-btn'),
+      stopBtn: document.getElementById('stop-btn'),
+      logBox: document.getElementById('log-box'),
+      countDisplay: document.getElementById('count-display'),
+      currentCount: document.getElementById('current-count'),
+      countLabel: document.getElementById('count-label'),
+    };
+
+    // =============================================================================
+    // LOGGING
+    // =============================================================================
+    
+    function log(message, type = 'info') {
+      const timestamp = new Date().toLocaleTimeString();
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${type}`;
+      entry.textContent = `[${timestamp}] ${message}`;
+      elements.logBox.appendChild(entry);
+      elements.logBox.scrollTop = elements.logBox.scrollHeight;
+    }
+
+    function clearLog() {
+      elements.logBox.innerHTML = '';
+    }
+
+    // =============================================================================
+    // LOCAL STORAGE
+    // Just for form values - actual rules live on the server.
+    // =============================================================================
+    
+    function saveToStorage() {
+      const data = { densityToken: state.densityToken, slackWebhook: state.slackWebhook };
+      localStorage.setItem('densitySlackMonitor', JSON.stringify(data));
+    }
+
+    function loadFromStorage() {
+      const raw = localStorage.getItem('densitySlackMonitor');
+      if (!raw) return;
+      try {
+        const data = JSON.parse(raw);
+        state.densityToken = data.densityToken || '';
+        state.slackWebhook = data.slackWebhook || '';
+        elements.densityToken.value = state.densityToken;
+        elements.slackWebhook.value = state.slackWebhook;
+        if (state.densityToken && state.slackWebhook) {
+          connect();
+        }
+      } catch (e) {
+        console.error('Failed to load from storage:', e);
+      }
+    }
+
+    // =============================================================================
+    // API CALLS TO OUR BACKEND
+    // The backend handles Density and Slack calls to avoid CORS issues.
+    // =============================================================================
+
+    async function connect() {
+      try {
+        elements.connectBtn.disabled = true;
+        elements.connectBtn.textContent = 'Connecting...';
+
+        // Save config to backend.
+        await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            densityToken: state.densityToken,
+            slackWebhook: state.slackWebhook,
+          }),
+        });
+
+        // Fetch spaces from backend (which proxies to Density).
+        const res = await fetch('/api/spaces');
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'Failed to fetch spaces');
+        }
+        
+        const data = await res.json();
+        state.spaces = data.spaces || [];
+        
+        if (state.spaces.length === 0) {
+          throw new Error('No spaces found. Check your API token.');
+        }
+        
+        // Sort spaces alphabetically by displayName (which includes parent path).
+        state.spaces.sort((a, b) => (a.displayName || a.name).localeCompare(b.displayName || b.name));
+        
+        // Populate dropdown and clear search.
+        elements.spaceSearch.value = '';
+        renderSpaceDropdown('');
+        
+        // Show rule and monitor cards.
+        elements.rulesCard.classList.remove('hidden');
+        elements.monitorCard.classList.remove('hidden');
+        
+        // Load existing rules from server.
+        await loadRules();
+        await loadMonitorStatus();
+        
+        log(`Connected! Found ${state.spaces.length} space(s).`, 'success');
+        elements.connectBtn.textContent = 'Reconnect';
+        elements.connectBtn.disabled = false;
+        
+      } catch (error) {
+        log(`Connection failed: ${error.message}`, 'error');
+        elements.connectBtn.textContent = 'Connect & Load Spaces';
+        elements.connectBtn.disabled = false;
+      }
+    }
+
+    async function loadRules() {
+      const res = await fetch('/api/rules');
+      const data = await res.json();
+      state.rules = data.rules || [];
+      renderRules();
+    }
+
+    async function loadMonitorStatus() {
+      const res = await fetch('/api/monitor/status');
+      const data = await res.json();
+      state.isMonitoring = data.isMonitoring;
+      state.rules = data.rules || state.rules;
+      renderRules();
+      updateStatusUI();
+    }
+
+    async function addRule() {
+      const spaceId = elements.spaceSelect.value;
+      const space = state.spaces.find(s => s.id === spaceId);
+      
+      if (!space) {
+        log('Please select a space.', 'error');
+        return;
+      }
+      
+      const displayName = space.displayName || space.name;
+      
+      // Get threshold mode and value.
+      const thresholdMode = elements.thresholdMode.value;
+      let thresholdValue;
+      if (thresholdMode === 'custom') {
+        thresholdValue = parseFloat(elements.customThreshold.value) || 1;
+      } else {
+        thresholdValue = parseFloat(elements.thresholdValue.value);
+      }
+      
+      const rule = {
+        spaceId: space.id,
+        spaceName: displayName,
+        thresholdMode: thresholdMode,  // 'exact' or 'gte'
+        threshold: thresholdValue,
+        durationMinutes: elements.duration.value !== '' ? parseFloat(elements.duration.value) : 1,
+        cooldownMinutes: elements.cooldown.value !== '' ? parseFloat(elements.cooldown.value) : 5,
+        customMessage: elements.message.value || '',
+      };
+      
+      const res = await fetch('/api/rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(rule),
+      });
+      
+      if (!res.ok) {
+        const err = await res.json();
+        log(`Failed to add rule: ${err.error}`, 'error');
+        return;
+      }
+      
+      await loadRules();
+      log(`Added rule for "${space.name}": Alert when ≥${rule.threshold} people for ${rule.durationMinutes}min`, 'info');
+    }
+
+    async function removeRule(ruleId) {
+      await fetch(`/api/rules/${ruleId}`, { method: 'DELETE' });
+      await loadRules();
+      log('Rule removed.', 'info');
+    }
+
+    async function testSlack() {
+      if (!state.slackWebhook) {
+        log('Please enter your Slack webhook URL.', 'error');
+        return;
+      }
+      
+      log('Sending test message to Slack...', 'info');
+      
+      const res = await fetch('/api/slack/test', { method: 'POST' });
+      if (res.ok) {
+        log('Test message sent successfully!', 'success');
+      } else {
+        const err = await res.json();
+        log(`Slack test failed: ${err.error}`, 'error');
+      }
+    }
+
+    async function startMonitoring() {
+      if (state.rules.length === 0) {
+        log('Add at least one rule before starting.', 'warn');
+        return;
+      }
+      
+      const res = await fetch('/api/monitor/start', { method: 'POST' });
+      if (res.ok) {
+        state.isMonitoring = true;
+        updateStatusUI();
+        clearLog();
+        log('Monitoring started on server. Checking every 30 seconds.', 'info');
+        log('You can close this browser tab - monitoring continues on the server.', 'success');
+      } else {
+        const err = await res.json();
+        log(`Failed to start: ${err.error}`, 'error');
+      }
+    }
+
+    async function stopMonitoring() {
+      const res = await fetch('/api/monitor/stop', { method: 'POST' });
+      if (res.ok) {
+        state.isMonitoring = false;
+        updateStatusUI();
+        log('Monitoring stopped.', 'info');
+      }
+    }
+
+    // =============================================================================
+    // UI RENDERING
+    // =============================================================================
+
+    function renderRules() {
+      if (state.rules.length === 0) {
+        elements.ruleList.innerHTML = '<p style="color: #888; font-size: 0.85rem; margin-top: 1rem;">No rules yet. Add one above.</p>';
+        return;
+      }
+      
+      elements.ruleList.innerHTML = state.rules.map(rule => {
+        const statusText = rule.triggeredAt 
+          ? `Triggered ${formatTimeAgo(rule.triggeredAt)}`
+          : 'Waiting...';
+        
+        // Format threshold description based on mode.
+        let thresholdDesc;
+        if (rule.thresholdMode === 'exact') {
+          if (rule.threshold === 0) {
+            thresholdDesc = 'empty (0 people)';
+          } else {
+            thresholdDesc = `exactly ${rule.threshold} ${rule.threshold === 1 ? 'person' : 'people'}`;
+          }
+        } else {
+          thresholdDesc = `≥${rule.threshold} people`;
+        }
+        
+        return `
+          <div class="rule-item">
+            <div class="rule-info">
+              <div class="rule-name">${rule.spaceName}</div>
+              <div class="rule-details">
+                Alert when ${thresholdDesc} for ${rule.durationMinutes}+ min 
+                (cooldown: ${rule.cooldownMinutes}min)
+              </div>
+              <div class="rule-status" style="color: ${rule.triggeredAt ? '#8a6d3b' : '#888'}">
+                ${statusText}
+              </div>
+            </div>
+            <button class="btn-danger btn-small" onclick="removeRule('${rule.id}')">Remove</button>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function formatTimeAgo(timestamp) {
+      const seconds = Math.floor((Date.now() - timestamp) / 1000);
+      if (seconds < 60) return `${seconds}s ago`;
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 60) return `${minutes}m ago`;
+      const hours = Math.floor(minutes / 60);
+      return `${hours}h ago`;
+    }
+
+    function updateStatusUI() {
+      if (state.isMonitoring) {
+        elements.statusBadge.className = 'status-badge status-running';
+        elements.statusText.textContent = 'Monitoring';
+        elements.startBtn.classList.add('hidden');
+        elements.stopBtn.classList.remove('hidden');
+      } else {
+        elements.statusBadge.className = 'status-badge status-idle';
+        elements.statusText.textContent = 'Idle';
+        elements.startBtn.classList.remove('hidden');
+        elements.stopBtn.classList.add('hidden');
+      }
+    }
+
+    // Renders the space dropdown, filtered by search query.
+    function renderSpaceDropdown(query) {
+      const lowerQuery = query.toLowerCase().trim();
+      
+      const filtered = lowerQuery
+        ? state.spaces.filter(space => {
+            const displayName = space.displayName || space.name;
+            return displayName.toLowerCase().includes(lowerQuery);
+          })
+        : state.spaces;
+      
+      if (filtered.length === 0) {
+        elements.spaceSelect.innerHTML = '<option value="">No matching spaces</option>';
+        return;
+      }
+      
+      elements.spaceSelect.innerHTML = filtered.map(space => {
+        const displayName = space.displayName || space.name;
+        return `<option value="${space.id}">${displayName}</option>`;
+      }).join('');
+    }
+
+    // =============================================================================
+    // EVENT HANDLERS
+    // =============================================================================
+    
+    elements.connectBtn.addEventListener('click', () => {
+      state.densityToken = elements.densityToken.value.trim();
+      state.slackWebhook = elements.slackWebhook.value.trim();
+      saveToStorage();
+      
+      if (!state.densityToken) {
+        log('Please enter your Density API token.', 'error');
+        return;
+      }
+      
+      if (!state.slackWebhook) {
+        log('Please enter your Slack webhook URL.', 'error');
+        return;
+      }
+      
+      connect();
+    });
+
+    elements.testSlackBtn.addEventListener('click', () => {
+      state.slackWebhook = elements.slackWebhook.value.trim();
+      saveToStorage();
+      testSlack();
+    });
+
+    elements.addRuleBtn.addEventListener('click', addRule);
+    elements.startBtn.addEventListener('click', startMonitoring);
+    elements.stopBtn.addEventListener('click', stopMonitoring);
+    
+    // Filter spaces as user types in search box.
+    elements.spaceSearch.addEventListener('input', (e) => {
+      renderSpaceDropdown(e.target.value);
+    });
+    
+    // Handle threshold button clicks.
+    document.querySelectorAll('.threshold-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        // Remove active from all buttons.
+        document.querySelectorAll('.threshold-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        
+        const mode = btn.dataset.mode;
+        const value = btn.dataset.value;
+        
+        if (mode === 'custom') {
+          elements.thresholdMode.value = 'gte';
+          elements.customThresholdRow.classList.remove('hidden');
+          // Value will be read from customThreshold input.
+        } else {
+          elements.thresholdMode.value = mode;
+          elements.thresholdValue.value = value;
+          elements.customThresholdRow.classList.add('hidden');
+        }
+      });
+    });
+
+    // Periodically refresh status while monitoring.
+    setInterval(async () => {
+      if (state.isMonitoring) {
+        await loadMonitorStatus();
+      }
+    }, 10000);
+
+    // =============================================================================
+    // INITIALIZATION
+    // =============================================================================
+    
+    loadFromStorage();
+  </script>
+</body>
+</html>

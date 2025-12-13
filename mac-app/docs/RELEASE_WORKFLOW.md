@@ -87,3 +87,4 @@ Your `GH_TOKEN` doesn't have write access to `field-releases`. Update token perm
 - Use "Check for Updates…" in tray menu for manual check
 
 
+
