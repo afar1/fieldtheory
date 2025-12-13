@@ -404,607 +404,407 @@ export default function TranscriptionSettings() {
     ? Math.round((downloadProgress.downloaded / downloadProgress.total) * 100)
     : 0;
 
+  // Status indicator with colored dot.
+  const StatusDot = ({ color }: { color: string }) => (
+    <span style={{ ...styles.statusDot, backgroundColor: color }} />
+  );
+
+  // Get status color.
+  const getStatusColor = () => {
+    if (status === 'recording') return '#3b82f6';
+    if (status === 'transcribing') return '#f59e0b';
+    return '#22c55e';
+  };
+
+  const getStatusText = () => {
+    if (status === 'recording') return 'Recording';
+    if (status === 'transcribing') return 'Transcribing';
+    return 'Ready';
+  };
+
   return (
     <div style={styles.container}>
-      <h2 style={styles.heading}>Local Transcription</h2>
-
-      {/* Status section */}
-      <div style={styles.statusCard}>
-        <div style={styles.statusRow}>
-          <span style={styles.statusLabel}>Status:</span>
-          <span style={{
-            ...styles.statusValue,
-            color: status === 'recording' ? '#3b82f6' : status === 'transcribing' ? '#f59e0b' : '#6b7280',
-          }}>
-            {status === 'idle' && 'Ready'}
-            {status === 'recording' && 'Recording...'}
-            {status === 'transcribing' && 'Transcribing...'}
-          </span>
-        </div>
-
-        <div style={styles.statusRow}>
-          <span style={styles.statusLabel}>Model:</span>
-          <span style={{
-            ...styles.statusValue,
-            color: modelStatus === 'downloaded' ? '#22c55e' : modelStatus === 'downloading' ? '#f59e0b' : '#ef4444',
-          }}>
-            {modelStatus === 'downloaded' && 'Downloaded'}
-            {modelStatus === 'downloading' && 'Downloading...'}
-            {modelStatus === 'missing' && 'Not downloaded'}
-          </span>
-        </div>
-
-        <div style={styles.statusRow}>
-          <span style={styles.statusLabel}>Hotkey:</span>
-          <span style={styles.statusValue}>{hotkey}</span>
-        </div>
+      {/* Compact status row */}
+      <div style={styles.row}>
+        <span style={styles.rowLabel}>Status</span>
+        <span style={{ ...styles.rowValue, color: getStatusColor() }}>
+          <StatusDot color={getStatusColor()} />
+          {getStatusText()} • {selectedModel} {modelStatus === 'downloaded' ? '✓' : modelStatus === 'downloading' ? '↓' : '✗'}
+        </span>
       </div>
 
-      {/* Hotkey configuration section */}
-      <div style={styles.controlsSection}>
-        <h3 style={styles.subheading}>Keyboard Shortcut</h3>
-        <p style={styles.helpText}>
-          Click the button below and press your desired key or key combination to set a new hotkey.
-          You can use single keys (like Caps Lock or backtick `), modifier keys alone, or combinations.
-          Press the hotkey once to start recording, press again to stop and transcribe.
-        </p>
-        <p style={{ ...styles.helpText, fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>
-          Note: Some single keys may not be supported by the system. If registration fails, try a modifier combination instead.
-        </p>
-
-        <div style={styles.hotkeyContainer}>
+      {/* Recording hotkey */}
+      <div style={styles.row}>
+        <span style={styles.rowLabel}>Hotkey</span>
+        <div style={styles.rowControls}>
           <button
             onClick={handleStartCaptureHotkey}
             disabled={isCapturingHotkey}
-            style={{
-              ...styles.hotkeyButton,
-              ...(isCapturingHotkey ? styles.hotkeyButtonActive : {}),
-            }}
+            style={{ ...styles.btn, ...(isCapturingHotkey ? styles.btnActive : {}) }}
           >
-            {isCapturingHotkey ? 'Press your key combination...' : `Change Hotkey (Current: ${hotkey})`}
+            {isCapturingHotkey ? 'Press keys...' : hotkey}
           </button>
           {isCapturingHotkey && (
-            <button
-              onClick={() => {
-                setIsCapturingHotkey(false);
-                setHotkeyError(null);
-              }}
-              style={styles.cancelButton}
-            >
-              Cancel
-            </button>
+            <button onClick={() => { setIsCapturingHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
           )}
         </div>
+      </div>
+      {hotkeyError && <p style={styles.error}>{hotkeyError}</p>}
 
-        {hotkeyError && (
-          <p style={styles.hotkeyErrorText}>{hotkeyError}</p>
-        )}
+      {/* Overlay style */}
+      <div style={styles.row}>
+        <span style={styles.rowLabel}>Overlay</span>
+        <select
+          value={overlayStyle}
+          onChange={(e) => handleOverlayStyleChange(e.target.value as 'rectangle' | 'top-emerging')}
+          style={styles.select}
+        >
+          <option value="rectangle">Rectangle</option>
+          <option value="top-emerging">Dynamic Island</option>
+        </select>
       </div>
 
-      {/* Overlay style configuration section */}
-      <div style={styles.controlsSection}>
-        <h3 style={styles.subheading}>Recording Overlay Style</h3>
-        <p style={styles.helpText}>
-          Choose how the recording indicator appears when you're recording audio.
-          The top-emerging style mimics the Dynamic Island on iPhone, appearing to emerge from the top notch area.
-        </p>
-
-        <div style={styles.modelSelector}>
-          <label style={styles.label}>Overlay Style:</label>
-          <select
-            value={overlayStyle}
-            onChange={(e) => handleOverlayStyleChange(e.target.value as 'rectangle' | 'top-emerging')}
-            style={styles.select}
-          >
-            <option value="rectangle">Rectangle (Centered)</option>
-            <option value="top-emerging">Top Emerging (Dynamic Island style)</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Abandon Recording Settings */}
-      <div style={styles.controlsSection}>
-        <h3 style={styles.subheading}>Abandon Recording</h3>
-        <p style={styles.helpText}>
-          Configure the hotkey to cancel a recording in progress. When confirmation is enabled,
-          you'll be asked to confirm before abandoning a recording that has captured audio content.
-        </p>
-
-        {/* Abandon hotkey configuration */}
-        <div style={styles.hotkeyContainer}>
+      {/* Abandon hotkey */}
+      <div style={styles.row}>
+        <span style={styles.rowLabel}>Abandon</span>
+        <div style={styles.rowControls}>
           <button
-            onClick={() => {
-              setIsCapturingAbandonHotkey(true);
-              setAbandonHotkeyError(null);
-            }}
+            onClick={() => { setIsCapturingAbandonHotkey(true); setAbandonHotkeyError(null); }}
             disabled={isCapturingAbandonHotkey || isCapturingHotkey}
-            style={{
-              ...styles.hotkeyButton,
-              ...(isCapturingAbandonHotkey ? styles.hotkeyButtonActive : {}),
-            }}
+            style={{ ...styles.btn, ...(isCapturingAbandonHotkey ? styles.btnActive : {}) }}
           >
-            {isCapturingAbandonHotkey ? 'Press your key combination...' : `Abandon Hotkey: ${abandonHotkey}`}
+            {isCapturingAbandonHotkey ? 'Press keys...' : abandonHotkey}
           </button>
           {isCapturingAbandonHotkey && (
-            <button
-              onClick={() => {
-                setIsCapturingAbandonHotkey(false);
-                setAbandonHotkeyError(null);
-              }}
-              style={styles.cancelButton}
-            >
-              Cancel
-            </button>
+            <button onClick={() => { setIsCapturingAbandonHotkey(false); setAbandonHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
           )}
-        </div>
-
-        {abandonHotkeyError && (
-          <p style={styles.hotkeyErrorText}>{abandonHotkeyError}</p>
-        )}
-
-        {/* Confirmation toggle */}
-        <div style={styles.toggleRow}>
-          <div style={styles.toggleInfo}>
-            <span style={styles.toggleLabel}>Confirm before abandoning</span>
-            <span style={styles.toggleDescription}>
-              Ask for confirmation when audio content has been recorded
-            </span>
-          </div>
           <button
             onClick={() => handleAbandonConfirmationChange(!abandonConfirmation)}
-            style={{
-              ...styles.toggleButton,
-              backgroundColor: abandonConfirmation ? '#22c55e' : '#d1d5db',
-            }}
+            style={{ ...styles.toggle, backgroundColor: abandonConfirmation ? '#22c55e' : '#d1d5db' }}
+            title={abandonConfirmation ? 'Confirm enabled' : 'Confirm disabled'}
           >
-            <span style={{
-              ...styles.toggleKnob,
-              transform: abandonConfirmation ? 'translateX(20px)' : 'translateX(2px)',
-            }} />
+            <span style={{ ...styles.toggleKnob, transform: abandonConfirmation ? 'translateX(20px)' : 'translateX(2px)' }} />
           </button>
         </div>
-
-        <p style={{ ...styles.helpText, fontSize: '12px', marginTop: '12px' }}>
-          When confirmation is off, the recording will be cancelled immediately without warning.
-          Enable confirmation to prevent accidental loss of recordings.
-        </p>
       </div>
+      {abandonHotkeyError && <p style={styles.error}>{abandonHotkeyError}</p>}
 
       {/* Error display */}
-      {error && (
-        <div style={styles.errorCard}>
-          <p style={styles.errorText}>{error}</p>
+      {error && <p style={styles.error}>{error}</p>}
+
+      {/* Models section with sub-header */}
+      <div style={styles.modelsSection}>
+        <div style={styles.sectionHeader}>
+          <span style={styles.sectionTitle}>MODELS</span>
+          <div style={styles.sectionLine} />
         </div>
-      )}
-
-      {/* Model download section */}
-      <div style={{ ...styles.controlsSection, marginTop: '24px' }}>
-        <h3 style={styles.subheading}>Model Management</h3>
-        <p style={styles.helpText}>
-          Select a Whisper model size. Larger models provide better accuracy but require more disk space and processing time.
-          Models are downloaded to your app data directory. You can delete and redownload any model at any time.
-        </p>
-
-        <div style={styles.modelSelector}>
-          <label style={styles.label}>Selected Model:</label>
+        
+        {/* Active model selector */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Active</span>
           <select
             value={selectedModel}
             onChange={(e) => handleModelChange(e.target.value)}
             disabled={isDownloading || downloadingModel !== null}
             style={styles.select}
           >
-            {Object.entries(availableModels).map(([size, info]) => {
-              const isDownloaded = modelDownloadStatus[size] || false;
-              return (
-                <option key={size} value={size}>
-                  {info.description} {isDownloaded ? '✓' : ''}
-                </option>
-              );
-            })}
+            {Object.entries(availableModels)
+              .filter(([size]) => size !== 'base')
+              .map(([size, info]) => {
+                const isDownloaded = modelDownloadStatus[size] || false;
+                return (
+                  <option key={size} value={size} disabled={!isDownloaded}>
+                    {info.description} {isDownloaded ? '' : '(not downloaded)'}
+                  </option>
+                );
+              })}
           </select>
         </div>
 
-        {/* List of all models with actions */}
+        {/* Model cards with more context */}
         <div style={styles.modelsList}>
-          {Object.entries(availableModels).map(([size, info]) => {
-            const isDownloaded = modelDownloadStatus[size] || false;
-            const isSelected = size === selectedModel;
-            const isDownloadingThis = downloadingModel === size;
-            const isDeletingThis = deletingModel === size;
-            const progress = modelDownloadProgress[size];
-            const progressPercent = progress ? Math.round((progress.downloaded / progress.total) * 100) : 0;
+          {Object.entries(availableModels)
+            .filter(([size]) => size !== 'base')
+            .map(([size, info]) => {
+              const isDownloaded = modelDownloadStatus[size] || false;
+              const isSelected = size === selectedModel;
+              const isDownloadingThis = downloadingModel === size;
+              const isDeletingThis = deletingModel === size;
+              const progress = modelDownloadProgress[size];
+              const progressPercent = progress ? Math.round((progress.downloaded / progress.total) * 100) : 0;
+              const sizeMB = (info.sizeBytes / 1024 / 1024).toFixed(0);
+              
+              // Model quality hints.
+              const qualityHint = size === 'small' ? 'Good for quick tasks'
+                : size === 'medium' ? 'Balanced accuracy'
+                : size === 'large' ? 'Best accuracy'
+                : size === 'turbo' ? 'Fast + accurate'
+                : '';
 
-            return (
-              <div key={size} style={{
-                ...styles.modelItem,
-                backgroundColor: isSelected ? '#f0f9ff' : '#f9fafb',
-                borderColor: isSelected ? '#3b82f6' : '#e5e7eb',
-              }}>
-                <div style={styles.modelItemHeader}>
-                  <div>
-                    <div style={styles.modelItemName}>
-                      {info.description}
-                      {isSelected && <span style={styles.selectedBadge}>Selected</span>}
-                      {isDownloaded && !isSelected && <span style={styles.downloadedBadge}>Downloaded</span>}
+              return (
+                <div
+                  key={size}
+                  style={{
+                    ...styles.modelCard,
+                    borderLeft: isSelected ? '3px solid #3b82f6' : isDownloaded ? '3px solid #22c55e' : '3px solid #e5e7eb',
+                    backgroundColor: isSelected ? '#f0f9ff' : 'transparent',
+                  }}
+                >
+                  <div style={styles.modelCardContent}>
+                    <div style={styles.modelCardHeader}>
+                      <span style={{ ...styles.rowValue, fontWeight: isSelected ? 600 : 500 }}>
+                        {info.description.split(' - ')[0]}
+                      </span>
+                      <span style={styles.modelSize}>{sizeMB}MB</span>
                     </div>
-                    <div style={styles.modelItemSize}>
-                      {(info.sizeBytes / 1024 / 1024).toFixed(0)}MB
-                    </div>
+                    <span style={styles.modelHint}>{qualityHint}</span>
                   </div>
-                  <div style={styles.modelItemActions}>
-                    {isDownloaded ? (
+                  
+                  <div style={styles.rowControls}>
+                    {isDownloadingThis && progress ? (
+                      <div style={styles.progressBar}>
+                        <div style={{ ...styles.progressFill, width: `${progressPercent}%` }} />
+                        <span style={styles.progressText}>{progressPercent}%</span>
+                      </div>
+                    ) : isDownloaded ? (
                       <>
+                        <span style={styles.downloadedBadge}>Downloaded</span>
                         <button
                           onClick={() => handleDeleteModel(size)}
-                          disabled={isDeletingThis || isDownloadingThis || (isSelected && Object.values(modelDownloadStatus).filter(Boolean).length === 1)}
-                          style={{
-                            ...styles.deleteButton,
-                            opacity: (isDeletingThis || isDownloadingThis || (isSelected && Object.values(modelDownloadStatus).filter(Boolean).length === 1)) ? 0.5 : 1,
-                          }}
+                          disabled={isDeletingThis || (isSelected && Object.values(modelDownloadStatus).filter(Boolean).length === 1)}
+                          style={{ ...styles.btnGhost, color: '#9ca3af', opacity: isDeletingThis ? 0.5 : 1 }}
+                          title="Delete model"
                         >
-                          {isDeletingThis ? 'Deleting...' : 'Delete'}
-                        </button>
-                        <button
-                          onClick={() => handleDeleteModel(size).then(() => handleDownloadModelForSize(size))}
-                          disabled={isDeletingThis || isDownloadingThis}
-                          style={{
-                            ...styles.redownloadButton,
-                            opacity: (isDeletingThis || isDownloadingThis) ? 0.5 : 1,
-                          }}
-                        >
-                          Redownload
+                          {isDeletingThis ? '...' : '×'}
                         </button>
                       </>
                     ) : (
                       <button
                         onClick={() => handleDownloadModelForSize(size)}
-                        disabled={isDownloadingThis || downloadingModel !== null}
-                        style={{
-                          ...styles.downloadButtonSmall,
-                          opacity: (isDownloadingThis || downloadingModel !== null) ? 0.5 : 1,
-                        }}
+                        disabled={downloadingModel !== null}
+                        style={{ ...styles.btn, opacity: downloadingModel !== null ? 0.5 : 1 }}
                       >
-                        {isDownloadingThis ? 'Downloading...' : 'Download'}
+                        Download
                       </button>
                     )}
                   </div>
                 </div>
-                {isDownloadingThis && progress && (
-                  <div style={styles.progressContainer}>
-                    <div style={styles.progressBar}>
-                      <div
-                        style={{
-                          ...styles.progressFill,
-                          width: `${progressPercent}%`,
-                        }}
-                      />
-                    </div>
-                    <p style={styles.progressText}>
-                      {progressPercent}% ({Math.round(progress.downloaded / 1024 / 1024)}MB / {Math.round(progress.total / 1024 / 1024)}MB)
-                    </p>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+              );
+            })}
         </div>
-      </div>
-
-      {/* Usage instructions */}
-      <div style={styles.instructionsSection}>
-        <h3 style={styles.subheading}>How to Use</h3>
-        <ol style={styles.instructionsList}>
-          <li>Press your hotkey (<strong>{hotkey}</strong>) once to start recording</li>
-          <li>Speak your text</li>
-          <li>Press the hotkey again to stop recording and transcribe</li>
-          <li>The transcribed text will be copied to clipboard and pasted into the active app</li>
-        </ol>
-        <p style={styles.noteText}>
-          <strong>Note:</strong> You may need to grant Accessibility permissions for automatic pasting.
-          If paste fails, the text will remain in your clipboard for manual pasting.
-        </p>
       </div>
     </div>
   );
 }
 
-// Styles for the component.
+// =============================================================================
+// Unified Design System - Only 2 font sizes: 13px body, 11px headers
+// =============================================================================
 const styles: Record<string, React.CSSProperties> = {
   container: {
-    padding: '24px',
-    maxWidth: '600px',
-  },
-  heading: {
-    marginTop: 0,
-    marginBottom: '16px',
-    fontSize: '20px',
-    fontWeight: 600,
-  },
-  subheading: {
-    marginTop: 0,
-    marginBottom: '12px',
-    fontSize: '16px',
-    fontWeight: 600,
+    padding: 0,
   },
   notAvailable: {
     color: '#6b7280',
     fontStyle: 'italic',
+    fontSize: '13px',
   },
-  statusCard: {
-    backgroundColor: '#f9fafb',
-    borderRadius: '12px',
-    padding: '16px',
-    marginBottom: '20px',
-  },
-  statusRow: {
+  
+  // Flat row layout: label left, control right.
+  row: {
     display: 'flex',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    padding: '8px 0',
-    borderBottom: '1px solid #e5e7eb',
+    justifyContent: 'space-between',
+    padding: '4px 0',
+    minHeight: '32px',
   },
-  statusLabel: {
-    fontSize: '14px',
+  rowLabel: {
+    fontSize: '13px',
     color: '#374151',
+    fontWeight: 400,
   },
-  statusValue: {
-    fontSize: '14px',
+  rowValue: {
+    fontSize: '13px',
+    color: '#111827',
     fontWeight: 500,
+    display: 'flex',
+    alignItems: 'center',
   },
-  errorCard: {
-    backgroundColor: '#fef2f2',
-    border: '1px solid #fecaca',
-    borderRadius: '8px',
-    padding: '12px',
-    marginBottom: '20px',
+  rowControls: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
   },
-  errorText: {
-    margin: 0,
-    color: '#dc2626',
-    fontSize: '14px',
+  
+  // Status dot indicator.
+  statusDot: {
+    width: '8px',
+    height: '8px',
+    borderRadius: '50%',
+    display: 'inline-block',
+    marginRight: '6px',
   },
-  controlsSection: {
-    marginBottom: '24px',
-  },
-  helpText: {
-    marginBottom: '16px',
-    fontSize: '14px',
-    color: '#6b7280',
-  },
-  downloadButton: {
-    padding: '12px 24px',
-    fontSize: '15px',
-    fontWeight: 500,
-    color: '#fff',
-    backgroundColor: '#111827',
-    border: 'none',
-    borderRadius: '8px',
-    cursor: 'pointer',
-  },
-  downloadButtonSmall: {
+  
+  // Unified button styles.
+  btn: {
     padding: '6px 12px',
     fontSize: '13px',
     fontWeight: 500,
-    color: '#fff',
-    backgroundColor: '#111827',
-    border: 'none',
-    borderRadius: '6px',
-    cursor: 'pointer',
-  },
-  progressContainer: {
-    marginTop: '16px',
-  },
-  progressBar: {
-    width: '100%',
-    height: '8px',
-    backgroundColor: '#e5e7eb',
-    borderRadius: '4px',
-    overflow: 'hidden',
-    marginBottom: '8px',
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: '#3b82f6',
-    transition: 'width 0.3s ease',
-  },
-  progressText: {
-    margin: 0,
-    fontSize: '13px',
-    color: '#6b7280',
-  },
-  successText: {
-    marginTop: '12px',
-    fontSize: '14px',
-    color: '#22c55e',
-    fontWeight: 500,
-  },
-  instructionsSection: {
-    marginTop: '24px',
-  },
-  instructionsList: {
-    paddingLeft: '20px',
-    fontSize: '14px',
     color: '#374151',
-    lineHeight: '1.8',
-  },
-  noteText: {
-    marginTop: '16px',
-    padding: '12px',
-    backgroundColor: '#fef3c7',
-    border: '1px solid #fde047',
-    borderRadius: '8px',
-    fontSize: '13px',
-    color: '#92400e',
-  },
-  hotkeyContainer: {
-    display: 'flex',
-    gap: '12px',
-    alignItems: 'center',
-    marginTop: '12px',
-  },
-  hotkeyButton: {
-    padding: '10px 20px',
-    fontSize: '14px',
-    fontWeight: 500,
-    color: '#111827',
     backgroundColor: '#fff',
     border: '1px solid #d1d5db',
-    borderRadius: '8px',
+    borderRadius: '6px',
     cursor: 'pointer',
+    minWidth: '80px',
+    textAlign: 'center' as const,
   },
-  hotkeyButtonActive: {
+  btnActive: {
     backgroundColor: '#3b82f6',
     color: '#fff',
     borderColor: '#3b82f6',
   },
-  cancelButton: {
-    padding: '10px 20px',
-    fontSize: '14px',
-    fontWeight: 500,
+  btnGhost: {
+    backgroundColor: 'transparent',
+    border: 'none',
     color: '#6b7280',
-    backgroundColor: '#fff',
-    border: '1px solid #d1d5db',
-    borderRadius: '8px',
+    minWidth: 'auto',
+    padding: '6px 8px',
+    fontSize: '13px',
     cursor: 'pointer',
   },
-  hotkeyErrorText: {
-    marginTop: '8px',
+  
+  // Toggle switch.
+  toggle: {
+    position: 'relative' as const,
+    width: '44px',
+    minWidth: '44px',
+    height: '24px',
+    minHeight: '24px',
+    borderRadius: '12px',
+    cursor: 'pointer',
+    border: 'none',
+    padding: 0,
+    flexShrink: 0,
+    transition: 'background-color 0.2s',
+  },
+  toggleKnob: {
+    position: 'absolute' as const,
+    top: '2px',
+    left: 0,
+    width: '20px',
+    height: '20px',
+    borderRadius: '10px',
+    backgroundColor: '#fff',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+    transition: 'transform 0.2s',
+  },
+  
+  // Select dropdown.
+  select: {
+    padding: '6px 12px',
+    fontSize: '13px',
+    color: '#374151',
+    backgroundColor: '#fff',
+    border: '1px solid #d1d5db',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    minWidth: '160px',
+  },
+  
+  // Error text.
+  error: {
     fontSize: '13px',
     color: '#ef4444',
+    margin: '4px 0',
   },
-  modelSelector: {
-    marginBottom: '16px',
-  },
-  label: {
-    display: 'block',
-    marginBottom: '8px',
-    fontSize: '14px',
-    fontWeight: 500,
-    color: '#374151',
-  },
-  select: {
-    width: '100%',
-    padding: '10px 12px',
-    fontSize: '14px',
-    border: '1px solid #d1d5db',
-    borderRadius: '8px',
-    backgroundColor: '#fff',
-    color: '#111827',
-    cursor: 'pointer',
-  },
-  modelsList: {
+  
+  // Models section.
+  modelsSection: {
     marginTop: '16px',
+  },
+  sectionHeader: {
     display: 'flex',
-    flexDirection: 'column',
+    alignItems: 'center',
     gap: '12px',
+    marginBottom: '8px',
   },
-  modelItem: {
-    padding: '16px',
-    borderRadius: '8px',
-    border: '1px solid #e5e7eb',
-    backgroundColor: '#f9fafb',
+  sectionTitle: {
+    fontSize: '11px',
+    fontWeight: 600,
+    color: '#9ca3af',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.08em',
+    whiteSpace: 'nowrap' as const,
   },
-  modelItemHeader: {
+  sectionLine: {
+    flex: 1,
+    height: '1px',
+    backgroundColor: '#e5e7eb',
+  },
+  
+  // Model list and cards.
+  modelsList: {
     display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: '16px',
+    flexDirection: 'column' as const,
+    gap: '4px',
+    marginTop: '8px',
   },
-  modelItemName: {
-    fontSize: '15px',
-    fontWeight: 500,
-    color: '#111827',
-    marginBottom: '4px',
+  modelCard: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '8px 12px',
+    borderRadius: '6px',
+    border: '1px solid #e5e7eb',
+  },
+  modelCardContent: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '2px',
+  },
+  modelCardHeader: {
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
   },
-  modelItemSize: {
+  modelSize: {
     fontSize: '13px',
-    color: '#6b7280',
+    color: '#9ca3af',
   },
-  modelItemActions: {
-    display: 'flex',
-    gap: '8px',
-    flexShrink: 0,
-  },
-  selectedBadge: {
+  modelHint: {
     fontSize: '11px',
-    fontWeight: 500,
-    color: '#3b82f6',
-    backgroundColor: '#dbeafe',
-    padding: '2px 8px',
-    borderRadius: '4px',
+    color: '#9ca3af',
   },
   downloadedBadge: {
     fontSize: '11px',
     fontWeight: 500,
     color: '#22c55e',
-    backgroundColor: '#dcfce7',
-    padding: '2px 8px',
-    borderRadius: '4px',
   },
-  deleteButton: {
-    padding: '6px 12px',
-    fontSize: '13px',
-    fontWeight: 500,
-    color: '#dc2626',
-    backgroundColor: '#fff',
-    border: '1px solid #fecaca',
-    borderRadius: '6px',
-    cursor: 'pointer',
-  },
-  redownloadButton: {
-    padding: '6px 12px',
-    fontSize: '13px',
-    fontWeight: 500,
-    color: '#111827',
-    backgroundColor: '#fff',
-    border: '1px solid #d1d5db',
-    borderRadius: '6px',
-    cursor: 'pointer',
-  },
-  toggleRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '12px 0',
-    marginTop: '12px',
-    borderTop: '1px solid #e5e7eb',
-  },
-  toggleInfo: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '2px',
-  },
-  toggleLabel: {
-    fontSize: '14px',
-    fontWeight: 500,
-    color: '#111827',
-  },
-  toggleDescription: {
-    fontSize: '12px',
-    color: '#6b7280',
-  },
-  toggleButton: {
+  
+  // Progress bar for downloads.
+  progressBar: {
     position: 'relative' as const,
-    width: '44px',
-    height: '24px',
-    borderRadius: '12px',
-    border: 'none',
-    cursor: 'pointer',
-    transition: 'background-color 0.2s ease',
-    padding: 0,
+    width: '80px',
+    height: '6px',
+    backgroundColor: '#e5e7eb',
+    borderRadius: '3px',
+    overflow: 'hidden',
   },
-  toggleKnob: {
+  progressFill: {
     position: 'absolute' as const,
-    top: '2px',
-    width: '20px',
-    height: '20px',
-    borderRadius: '10px',
-    backgroundColor: '#fff',
-    boxShadow: '0 1px 3px rgba(0, 0, 0, 0.2)',
-    transition: 'transform 0.2s ease',
+    top: 0,
+    left: 0,
+    height: '100%',
+    backgroundColor: '#3b82f6',
+    borderRadius: '3px',
+    transition: 'width 0.3s ease',
+  },
+  progressText: {
+    position: 'absolute' as const,
+    top: '10px',
+    left: 0,
+    fontSize: '11px',
+    color: '#6b7280',
   },
 };
 
