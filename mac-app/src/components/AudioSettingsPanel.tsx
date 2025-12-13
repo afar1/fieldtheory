@@ -107,10 +107,7 @@ export default function AudioSettingsPanel() {
   if (!isMacOS) {
     return (
       <div style={styles.container}>
-        <h2 style={styles.heading}>Audio Input Priority</h2>
-        <p style={styles.notAvailable}>
-          Audio input priority control is only available on macOS.
-        </p>
+        <p style={styles.notAvailable}>Audio priority is only available on macOS.</p>
       </div>
     );
   }
@@ -119,8 +116,7 @@ export default function AudioSettingsPanel() {
   if (isLoading) {
     return (
       <div style={styles.container}>
-        <h2 style={styles.heading}>Audio Input Priority</h2>
-        <p>Loading audio devices...</p>
+        <p style={{ fontSize: '13px', color: '#6b7280' }}>Loading devices...</p>
       </div>
     );
   }
@@ -129,7 +125,6 @@ export default function AudioSettingsPanel() {
   if (error || !audioState) {
     return (
       <div style={styles.container}>
-        <h2 style={styles.heading}>Audio Input Priority</h2>
         <p style={styles.error}>{error || 'Failed to load audio state'}</p>
       </div>
     );
@@ -142,51 +137,16 @@ export default function AudioSettingsPanel() {
 
   return (
     <div style={styles.container}>
-      <h2 style={styles.heading}>Audio Input Priority</h2>
-
-      {/* Status section */}
-      <div style={styles.statusCard}>
-        <div style={styles.statusRow}>
-          <span style={styles.statusLabel}>Current Microphone:</span>
-          <span style={styles.statusValue}>
-            {currentDefault?.name || 'None'}
-          </span>
-        </div>
-
-        <div style={styles.statusRow}>
-          <span style={styles.statusLabel}>Priority Device:</span>
-          <span style={{
-            ...styles.statusValue,
-            color: audioState.priorityDeviceId ? '#3b82f6' : '#6b7280',
-          }}>
-            {priorityDevice?.name || 'None selected'}
-          </span>
-        </div>
-
-        <div style={styles.statusRow}>
-          <span style={styles.statusLabel}>Priority Lock:</span>
-          <span style={{
-            ...styles.statusValue,
-            color: audioState.priorityMode ? '#3b82f6' : '#6b7280',
-          }}>
-            {audioState.priorityMode ? 'Enabled' : 'Disabled'}
-          </span>
-        </div>
-
-        {audioState.userOverrideId && audioState.priorityMode && (
-          <div style={styles.statusRow}>
-            <span style={styles.statusLabel}>Override Active:</span>
-            <span style={{ ...styles.statusValue, color: '#f59e0b' }}>
-              {inputDevices.find((d) => d.id === audioState.userOverrideId)?.name || 'Unknown'}
-            </span>
-          </div>
-        )}
+      {/* Current status row */}
+      <div style={styles.row}>
+        <span style={styles.rowLabel}>Current</span>
+        <span style={styles.rowValue}>{currentDefault?.name || 'None'}</span>
       </div>
 
-      {/* Controls section */}
-      <div style={styles.controlsSection}>
-        <label style={styles.selectLabel}>
-          <span>Priority Device:</span>
+      {/* Priority device selector */}
+      <div style={styles.row}>
+        <span style={styles.rowLabel}>Priority</span>
+        <div style={styles.rowControls}>
           <select
             value={audioState.priorityDeviceId || ''}
             onChange={(e) => handleSetPriorityDevice(e.target.value || null)}
@@ -199,215 +159,220 @@ export default function AudioSettingsPanel() {
               </option>
             ))}
           </select>
-        </label>
-
-        <label style={styles.checkboxLabel}>
-          <input
-            type="checkbox"
-            checked={audioState.priorityMode}
-            onChange={handleTogglePriority}
-            disabled={!audioState.priorityDeviceId}
-            style={styles.checkbox}
-          />
-          <span>Lock to Priority Device</span>
-        </label>
-
-        <p style={styles.helpText}>
-          {audioState.priorityDeviceId
-            ? `When enabled, ${priorityDevice?.name || 'the priority device'} stays your microphone even when other devices connect or disconnect.`
-            : 'Select a device above to enable priority locking.'}
-        </p>
-
-        {audioState.userOverrideId && audioState.priorityMode && priorityDevice && (
-          <button
-            onClick={handleResetOverride}
-            style={styles.resetButton}
-          >
-            Reset to {priorityDevice.name}
-          </button>
-        )}
+        </div>
       </div>
 
-      {/* Device list section */}
+      {/* Priority lock toggle */}
+      <div style={styles.row}>
+        <span style={styles.rowLabel}>Lock</span>
+        <div style={styles.rowControls}>
+          <button
+            onClick={handleTogglePriority}
+            disabled={!audioState.priorityDeviceId}
+            style={{
+              ...styles.toggle,
+              backgroundColor: audioState.priorityMode ? '#22c55e' : '#d1d5db',
+              opacity: audioState.priorityDeviceId ? 1 : 0.5,
+              cursor: audioState.priorityDeviceId ? 'pointer' : 'not-allowed',
+            }}
+          >
+            <span style={{
+              ...styles.toggleKnob,
+              transform: audioState.priorityMode ? 'translateX(20px)' : 'translateX(2px)',
+            }} />
+          </button>
+          {audioState.userOverrideId && audioState.priorityMode && priorityDevice && (
+            <button onClick={handleResetOverride} style={styles.btn}>
+              Reset
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Devices list with sub-header */}
       <div style={styles.devicesSection}>
-        <h3 style={styles.subheading}>Input Devices</h3>
-        <ul style={styles.deviceList}>
-          {inputDevices.map((device) => (
-            <li
+        <div style={styles.sectionHeader}>
+          <span style={styles.sectionTitle}>INPUT DEVICES</span>
+          <div style={styles.sectionLine} />
+        </div>
+        
+        {inputDevices.map((device) => {
+          const isDefault = device.id === audioState.defaultInputId;
+          const isPriority = device.id === audioState.priorityDeviceId;
+          
+          return (
+            <div
               key={device.id}
               style={{
-                ...styles.deviceItem,
-                backgroundColor: device.id === audioState.defaultInputId
-                  ? '#eff6ff'
-                  : device.id === audioState.priorityDeviceId
-                    ? '#f0fdf4'
-                    : '#fff',
-                borderColor: device.id === audioState.defaultInputId
-                  ? '#3b82f6'
-                  : device.id === audioState.priorityDeviceId
-                    ? '#22c55e'
-                    : '#e5e7eb',
+                ...styles.deviceRow,
+                backgroundColor: isDefault ? '#f0f9ff' : 'transparent',
+                borderLeft: isDefault ? '3px solid #3b82f6' : isPriority ? '3px solid #22c55e' : '3px solid transparent',
               }}
             >
-              <div style={styles.deviceInfo}>
-                <span style={styles.deviceName}>
+              <div>
+                <span style={{ ...styles.rowValue, fontWeight: isDefault ? 600 : 500 }}>
                   {device.name}
-                  {device.id === audioState.priorityDeviceId && (
-                    <span style={styles.priorityBadge}>Priority</span>
-                  )}
                 </span>
                 <span style={styles.deviceMeta}>
                   {device.manufacturer && `${device.manufacturer} • `}
-                  {device.transportType?.toUpperCase() || 'Unknown'}
-                  {device.id === audioState.defaultInputId && ' • Default'}
+                  {device.transportType?.toUpperCase() || 'OTHER'}
+                  {isDefault && ' • Default'}
                 </span>
               </div>
-            </li>
-          ))}
-          {inputDevices.length === 0 && (
-            <li style={styles.emptyMessage}>No input devices found</li>
-          )}
-        </ul>
+              {isPriority && <span style={styles.priorityBadge}>★</span>}
+            </div>
+          );
+        })}
+        
+        {inputDevices.length === 0 && (
+          <div style={styles.emptyMessage}>No input devices found</div>
+        )}
       </div>
     </div>
   );
 }
 
-// Styles for the component.
+// =============================================================================
+// Unified Design System - Only 2 font sizes: 13px body, 11px headers
+// =============================================================================
 const styles: Record<string, React.CSSProperties> = {
   container: {
-    padding: '24px',
-    maxWidth: '600px',
+    padding: 0,
   },
   heading: {
-    marginTop: 0,
-    marginBottom: '16px',
-    fontSize: '20px',
-    fontWeight: 600,
-  },
-  subheading: {
-    marginTop: 0,
-    marginBottom: '12px',
-    fontSize: '16px',
-    fontWeight: 600,
+    display: 'none', // Hidden in new design - section header comes from parent
   },
   notAvailable: {
     color: '#6b7280',
     fontStyle: 'italic',
+    fontSize: '13px',
   },
   error: {
     color: '#ef4444',
-  },
-  statusCard: {
-    backgroundColor: '#f9fafb',
-    borderRadius: '12px',
-    padding: '16px',
-    marginBottom: '20px',
-  },
-  statusRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '8px 0',
-    borderBottom: '1px solid #e5e7eb',
-  },
-  statusLabel: {
-    fontSize: '14px',
-    color: '#374151',
-  },
-  statusValue: {
-    fontSize: '14px',
-    fontWeight: 500,
-  },
-  controlsSection: {
-    marginBottom: '24px',
-  },
-  selectLabel: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-    marginBottom: '16px',
-    fontSize: '15px',
-    fontWeight: 500,
-  },
-  select: {
-    padding: '8px 12px',
-    fontSize: '14px',
-    border: '1px solid #e5e7eb',
-    borderRadius: '8px',
-    backgroundColor: '#fff',
-    cursor: 'pointer',
-  },
-  checkboxLabel: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    fontSize: '15px',
-    fontWeight: 500,
-    cursor: 'pointer',
-  },
-  checkbox: {
-    width: '18px',
-    height: '18px',
-    cursor: 'pointer',
-  },
-  helpText: {
-    marginTop: '8px',
     fontSize: '13px',
-    color: '#6b7280',
   },
-  resetButton: {
-    marginTop: '12px',
-    padding: '8px 16px',
-    fontSize: '14px',
-    fontWeight: 500,
-    color: '#fff',
-    backgroundColor: '#3b82f6',
-    border: 'none',
-    borderRadius: '8px',
-    cursor: 'pointer',
-  },
-  devicesSection: {
-    marginTop: '24px',
-  },
-  deviceList: {
-    listStyle: 'none',
-    padding: 0,
-    margin: 0,
-  },
-  deviceItem: {
-    padding: '12px',
-    marginBottom: '8px',
-    borderRadius: '8px',
-    border: '1px solid',
-  },
-  deviceInfo: {
+  
+  // Flat row layout.
+  row: {
     display: 'flex',
-    flexDirection: 'column',
-    gap: '4px',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '4px 0',
+    minHeight: '32px',
   },
-  deviceName: {
-    fontSize: '14px',
+  rowLabel: {
+    fontSize: '13px',
+    color: '#374151',
+    fontWeight: 400,
+  },
+  rowValue: {
+    fontSize: '13px',
+    color: '#111827',
     fontWeight: 500,
+  },
+  rowControls: {
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
   },
-  deviceMeta: {
-    fontSize: '12px',
-    color: '#6b7280',
+  
+  // Button styles.
+  btn: {
+    padding: '6px 12px',
+    fontSize: '13px',
+    fontWeight: 500,
+    color: '#374151',
+    backgroundColor: '#fff',
+    border: '1px solid #d1d5db',
+    borderRadius: '6px',
+    cursor: 'pointer',
   },
-  priorityBadge: {
+  
+  // Toggle switch.
+  toggle: {
+    position: 'relative' as const,
+    width: '44px',
+    minWidth: '44px',
+    height: '24px',
+    minHeight: '24px',
+    borderRadius: '12px',
+    cursor: 'pointer',
+    border: 'none',
+    padding: 0,
+    flexShrink: 0,
+    transition: 'background-color 0.2s',
+  },
+  toggleKnob: {
+    position: 'absolute' as const,
+    top: '2px',
+    left: 0,
+    width: '20px',
+    height: '20px',
+    borderRadius: '10px',
+    backgroundColor: '#fff',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+    transition: 'transform 0.2s',
+  },
+  
+  // Select dropdown.
+  select: {
+    padding: '6px 12px',
+    fontSize: '13px',
+    color: '#374151',
+    backgroundColor: '#fff',
+    border: '1px solid #d1d5db',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    minWidth: '180px',
+  },
+  
+  // Section header with divider line.
+  devicesSection: {
+    marginTop: '12px',
+  },
+  sectionHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    marginBottom: '8px',
+  },
+  sectionTitle: {
     fontSize: '11px',
     fontWeight: 600,
-    color: '#15803d',
-    backgroundColor: '#dcfce7',
-    padding: '2px 6px',
-    borderRadius: '4px',
+    color: '#9ca3af',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.08em',
+    whiteSpace: 'nowrap' as const,
+  },
+  sectionLine: {
+    flex: 1,
+    height: '1px',
+    backgroundColor: '#e5e7eb',
+  },
+  
+  // Device row (compact).
+  deviceRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '6px 10px',
+    marginBottom: '2px',
+    borderRadius: '6px',
+  },
+  deviceMeta: {
+    display: 'block',
+    fontSize: '11px',
+    color: '#9ca3af',
+    marginTop: '2px',
+  },
+  priorityBadge: {
+    fontSize: '13px',
+    color: '#22c55e',
   },
   emptyMessage: {
     padding: '12px',
     color: '#6b7280',
     fontStyle: 'italic',
+    fontSize: '13px',
   },
 };

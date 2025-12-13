@@ -1,13 +1,12 @@
 // =============================================================================
 // SettingsPanel - Consolidated settings UI for the clipboard history window.
-// Shows audio, transcription, vision, and clipboard settings in one view.
+// Shows audio, transcription, and clipboard settings in one view.
 // Styled consistently with the clipboard history window's design language.
 // =============================================================================
 
 import { useEffect, useState, useCallback } from 'react';
 import AudioSettingsPanel from './AudioSettingsPanel';
 import TranscriptionSettings from './TranscriptionSettings';
-import VisionSettings from './VisionSettings';
 import PromptSettings from './PromptSettings';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
@@ -19,7 +18,7 @@ import { useTheme } from '../contexts/ThemeContext';
  * clipboard history context.
  */
 export default function SettingsPanel() {
-  const { theme, toggleGlass } = useTheme();
+  const { theme } = useTheme();
   // Permissions state
   const [permissions, setPermissions] = useState<{ accessibilityGranted: boolean } | null>(null);
   const [showPermissionsGate, setShowPermissionsGate] = useState(false);
@@ -603,538 +602,262 @@ export default function SettingsPanel() {
     </div>
   );
 
+  // Section header component for consistent divider styling
+  const SectionHeader = ({ title }: { title: string }) => (
+    <div style={styles.sectionHeader}>
+      <span style={styles.sectionTitle}>{title}</span>
+      <div style={styles.sectionLine} />
+    </div>
+  );
+
   return (
     <div style={styles.container}>
-      <h2 style={styles.title}>Settings</h2>
-
       {permissionsWarning}
 
+      {/* Audio Section */}
       <div style={styles.section}>
-        <h3 style={styles.sectionTitle}>Audio</h3>
+        <SectionHeader title="Audio" />
         <AudioSettingsPanel />
       </div>
 
+      {/* Transcription Section */}
       <div style={styles.section}>
-        <h3 style={styles.sectionTitle}>Transcription</h3>
+        <SectionHeader title="Transcription" />
         <TranscriptionSettings />
       </div>
 
+      {/* AI Features Section */}
       <div style={styles.section}>
-        <h3 style={styles.sectionTitle}>Vision</h3>
-        <VisionSettings />
-      </div>
-
-      <div style={styles.section}>
-        <h3 style={styles.sectionTitle}>AI Features</h3>
-        <p style={styles.sectionDescription}>
-          Configure API keys for AI-powered features like the Engineer prompt refinement.
-        </p>
+        <SectionHeader title="AI Features" />
         
-        <div style={styles.hotkeyCard}>
-          <h4 style={styles.hotkeyTitle}>Anthropic API Key</h4>
-          <p style={{ fontSize: '12px', color: '#6b7280', marginBottom: '12px' }}>
-            Required for the Engineer feature. Your key is stored securely in the system keychain.
-          </p>
-          
-          {hasApiKey ? (
-            <div style={styles.hotkeyRow}>
-              <div>
-                <span style={{ color: '#10b981', fontWeight: 500 }}>✓ API Key Configured</span>
-                <p style={{ fontSize: '11px', color: '#6b7280', margin: '2px 0 0 0' }}>
-                  Engineer feature is ready to use
-                </p>
-              </div>
-              <button
-                onClick={handleClearApiKey}
-                style={{
-                  ...styles.cancelButton,
-                  backgroundColor: '#fef2f2',
-                  color: '#dc2626',
-                  borderColor: '#fecaca',
-                }}
-              >
-                Remove Key
-              </button>
-            </div>
-          ) : (
-            <div>
-              <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+        {/* API Key Row */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Anthropic API Key</span>
+          <div style={styles.rowControls}>
+            {hasApiKey ? (
+              <>
+                <span style={{ ...styles.rowValue, color: '#10b981' }}>✓ Configured</span>
+                <button onClick={handleClearApiKey} style={{ ...styles.btn, ...styles.btnDanger }}>
+                  Clear
+                </button>
+              </>
+            ) : (
+              <>
                 <input
                   type={showApiKey ? 'text' : 'password'}
                   value={apiKeyInput}
                   onChange={(e) => setApiKeyInput(e.target.value)}
                   placeholder="sk-ant-..."
-                  style={{
-                    flex: 1,
-                    padding: '8px 12px',
-                    fontSize: '13px',
-                    border: '1px solid #d1d5db',
-                    borderRadius: '6px',
-                    fontFamily: 'monospace',
-                  }}
+                  style={{ ...styles.input, fontFamily: 'monospace', width: '180px' }}
                 />
-                <button
-                  onClick={() => setShowApiKey(!showApiKey)}
-                  style={{
-                    padding: '8px 12px',
-                    fontSize: '12px',
-                    color: '#374151',
-                    backgroundColor: '#f9fafb',
-                    border: '1px solid #d1d5db',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                  }}
-                >
+                <button onClick={() => setShowApiKey(!showApiKey)} style={styles.btnGhost}>
                   {showApiKey ? 'Hide' : 'Show'}
                 </button>
-              </div>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <button
                   onClick={handleSaveApiKey}
                   disabled={apiKeySaving || !apiKeyInput.trim()}
                   style={{
-                    padding: '8px 16px',
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    color: '#fff',
-                    backgroundColor: apiKeySaving || !apiKeyInput.trim() ? '#9ca3af' : '#3b82f6',
-                    border: 'none',
-                    borderRadius: '6px',
+                    ...styles.btn,
+                    ...(apiKeySaving || !apiKeyInput.trim() ? {} : styles.btnSuccess),
+                    opacity: apiKeySaving || !apiKeyInput.trim() ? 0.5 : 1,
                     cursor: apiKeySaving || !apiKeyInput.trim() ? 'not-allowed' : 'pointer',
                   }}
                 >
-                  {apiKeySaving ? 'Saving...' : 'Save API Key'}
+                  {apiKeySaving ? 'Saving...' : 'Save'}
                 </button>
-                <a
-                  href="https://console.anthropic.com/settings/keys"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ fontSize: '12px', color: '#3b82f6' }}
-                >
-                  Get an API key →
-                </a>
-              </div>
-              {apiKeyError && (
-                <p style={{ color: '#dc2626', fontSize: '12px', marginTop: '8px' }}>
-                  {apiKeyError}
-                </p>
-              )}
-            </div>
-          )}
+              </>
+            )}
+          </div>
         </div>
-      </div>
-
-      {/* Prompt Settings - Expandable section for system prompt customization */}
-      <div style={styles.section}>
-        <h3 style={styles.sectionTitle}>Prompt Improvement Settings</h3>
-        <p style={styles.sectionDescription}>
-          Customize how your transcriptions are improved by the Engineer feature.
-        </p>
+        {apiKeyError && <p style={styles.error}>{apiKeyError}</p>}
+        
+        {/* Prompt Settings */}
         <PromptSettings />
       </div>
 
+      {/* Keyboard Shortcuts Section */}
       <div style={styles.section}>
-        <h3 style={styles.sectionTitle}>Clipboard History</h3>
-        <p style={styles.sectionDescription}>
-          Configure hotkeys for clipboard history features.
-        </p>
+        <SectionHeader title="Keyboard Shortcuts" />
         
-        <div style={styles.hotkeyCard}>
-          <h4 style={styles.hotkeyTitle}>Hotkey Configuration</h4>
-          
-          {/* Screenshot Hotkey */}
-          <div style={styles.hotkeyRow}>
-            <label style={styles.hotkeyLabel}>Screenshot Hotkey</label>
-            <div style={styles.hotkeyButtonRow}>
-              <button
-                onClick={() => {
-                  setIsCapturingScreenshotHotkey(true);
-                  setHotkeyError(null);
-                }}
-                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey}
-                style={{
-                  ...styles.hotkeyButton,
-                  ...(isCapturingScreenshotHotkey ? styles.hotkeyButtonActive : {}),
-                }}
-              >
-                {isCapturingScreenshotHotkey ? 'Press key combination...' : `Change (${clipboardHotkeys.screenshot || 'Not set'})`}
-              </button>
-              {isCapturingScreenshotHotkey && (
-                <button
-                  onClick={() => {
-                    setIsCapturingScreenshotHotkey(false);
-                    setHotkeyError(null);
-                  }}
-                  style={styles.cancelButton}
-                >
-                  Cancel
-                </button>
-              )}
-            </div>
+        {/* Screenshot */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Screenshot</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => { setIsCapturingScreenshotHotkey(true); setHotkeyError(null); }}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey}
+              style={{ ...styles.btn, ...(isCapturingScreenshotHotkey ? styles.btnActive : {}) }}
+            >
+              {isCapturingScreenshotHotkey ? 'Press keys...' : clipboardHotkeys.screenshot || '⌘⇧4'}
+            </button>
+            {isCapturingScreenshotHotkey && (
+              <button onClick={() => { setIsCapturingScreenshotHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
           </div>
-          
-          {/* History Hotkey */}
-          <div style={styles.hotkeyRow}>
-            <label style={styles.hotkeyLabel}>History Hotkey</label>
-            <div style={styles.hotkeyButtonRow}>
-              <button
-                onClick={() => {
-                  setIsCapturingHistoryHotkey(true);
-                  setHotkeyError(null);
-                }}
-                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey}
-                style={{
-                  ...styles.hotkeyButton,
-                  ...(isCapturingHistoryHotkey ? styles.hotkeyButtonActive : {}),
-                }}
-              >
-                {isCapturingHistoryHotkey ? 'Press key combination...' : `Change (${clipboardHotkeys.history || 'Not set'})`}
-              </button>
-              {isCapturingHistoryHotkey && (
-                <button
-                  onClick={() => {
-                    setIsCapturingHistoryHotkey(false);
-                    setHotkeyError(null);
-                  }}
-                  style={styles.cancelButton}
-                >
-                  Cancel
-                </button>
-              )}
-            </div>
+        </div>
+        
+        {/* Clipboard History */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Clipboard History</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => { setIsCapturingHistoryHotkey(true); setHotkeyError(null); }}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey}
+              style={{ ...styles.btn, ...(isCapturingHistoryHotkey ? styles.btnActive : {}) }}
+            >
+              {isCapturingHistoryHotkey ? 'Press keys...' : clipboardHotkeys.history || '⌘⇧V'}
+            </button>
+            {isCapturingHistoryHotkey && (
+              <button onClick={() => { setIsCapturingHistoryHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
           </div>
-          
-          {/* Continuous Context Enable/Disable */}
-          <div style={styles.hotkeyRow}>
-            <div>
-              <label style={styles.hotkeyLabel}>Continuous Context Mode</label>
-              <p style={{ fontSize: '11px', color: '#6b7280', margin: '2px 0 0 0' }}>
-                Take multiple screenshots in a row, grouped together
-              </p>
-            </div>
+        </div>
+        
+        {/* Continuous Context */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Continuous Context</span>
+          <div style={styles.rowControls}>
             <button
               onClick={() => handleToggleContinuousContext(!continuousContextEnabled)}
-              style={{
-                padding: '6px 14px',
-                fontSize: '12px',
-                fontWeight: 500,
-                color: continuousContextEnabled ? '#fff' : '#374151',
-                backgroundColor: continuousContextEnabled ? '#10b981' : '#fff',
-                border: `1px solid ${continuousContextEnabled ? '#10b981' : '#d1d5db'}`,
-                borderRadius: '6px',
-                cursor: 'pointer',
-                minWidth: '50px',
-              }}
+              style={{ ...styles.toggle, backgroundColor: continuousContextEnabled ? '#10b981' : '#d1d5db' }}
             >
-              {continuousContextEnabled ? 'On' : 'Off'}
+              <span style={{ ...styles.toggleKnob, transform: continuousContextEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
             </button>
-          </div>
-          
-          {/* Continuous Context Hotkey */}
-          <div style={{ ...styles.hotkeyRow, opacity: continuousContextEnabled ? 1 : 0.5 }}>
-            <label style={styles.hotkeyLabel}>Continuous Context Hotkey</label>
-            <div style={styles.hotkeyButtonRow}>
-              <button
-                onClick={() => {
-                  setIsCapturingContinuousContextHotkey(true);
-                  setHotkeyError(null);
-                }}
-                disabled={!continuousContextEnabled || isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey}
-                style={{
-                  ...styles.hotkeyButton,
-                  ...(isCapturingContinuousContextHotkey ? styles.hotkeyButtonActive : {}),
-                  cursor: continuousContextEnabled ? 'pointer' : 'not-allowed',
-                }}
-              >
-                {isCapturingContinuousContextHotkey ? 'Press key combination...' : `Change (${continuousContextHotkey || 'Not set'})`}
-              </button>
-              {isCapturingContinuousContextHotkey && (
-                <button
-                  onClick={() => {
-                    setIsCapturingContinuousContextHotkey(false);
-                    setHotkeyError(null);
-                  }}
-                  style={styles.cancelButton}
-                >
-                  Cancel
-                </button>
-              )}
-            </div>
-          </div>
-          
-          {/* Todo List Hotkey */}
-          <div style={styles.hotkeyRow}>
-            <div>
-              <label style={styles.hotkeyLabel}>Todo List Hotkey</label>
-              <p style={{ fontSize: '11px', color: '#6b7280', margin: '2px 0 0 0' }}>
-                Open tasks synced from your iOS device
-              </p>
-            </div>
-            <div style={styles.hotkeyButtonRow}>
-              <button
-                onClick={() => {
-                  setIsCapturingTodoHotkey(true);
-                  setHotkeyError(null);
-                }}
-                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey}
-                style={{
-                  ...styles.hotkeyButton,
-                  ...(isCapturingTodoHotkey ? styles.hotkeyButtonActive : {}),
-                }}
-              >
-                {isCapturingTodoHotkey ? 'Press key combination...' : `Change (${todoHotkey || 'Not set'})`}
-              </button>
-              {isCapturingTodoHotkey && (
-                <button
-                  onClick={() => {
-                    setIsCapturingTodoHotkey(false);
-                    setHotkeyError(null);
-                  }}
-                  style={styles.cancelButton}
-                >
-                  Cancel
-                </button>
-              )}
-            </div>
-          </div>
-          
-          {hotkeyError && (
-            <p style={styles.hotkeyError}>{hotkeyError}</p>
-          )}
-          
-          <p style={styles.hotkeyHelp}>
-            Supports 2-3 modifier keys + primary key (e.g., Command+Shift+Control+Space). 
-            Screenshot hotkey captures selected area and adds to prompt stack.
-            Continuous Context hotkey starts multi-screenshot capture mode (press Escape to stop).
-            Todo List hotkey opens your synced tasks from iOS.
-          </p>
-        </div>
-      </div>
-
-      {/* Appearance Section */}
-      <div style={styles.section}>
-        <h3 style={styles.sectionTitle}>Appearance</h3>
-        <p style={styles.sectionDescription}>
-          Customize the visual appearance of the clipboard history window.
-        </p>
-        
-        <div style={styles.hotkeyCard}>
-          <div style={styles.hotkeyRow}>
-            <div>
-              <label style={styles.hotkeyLabel}>Glass Effect</label>
-              <p style={{ fontSize: '11px', color: '#6b7280', margin: '2px 0 0 0' }}>
-                Enable blur effect for dark mode (may impact performance)
-              </p>
-            </div>
             <button
-              onClick={toggleGlass}
-              style={{
-                padding: '6px 14px',
-                fontSize: '12px',
-                fontWeight: 500,
-                color: theme.glassEnabled ? '#fff' : '#374151',
-                backgroundColor: theme.glassEnabled ? theme.accent : '#fff',
-                border: `1px solid ${theme.glassEnabled ? theme.accent : '#d1d5db'}`,
-                borderRadius: '6px',
-                cursor: 'pointer',
-                minWidth: '50px',
-              }}
+              onClick={() => { setIsCapturingContinuousContextHotkey(true); setHotkeyError(null); }}
+              disabled={!continuousContextEnabled || isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey}
+              style={{ ...styles.btn, ...(isCapturingContinuousContextHotkey ? styles.btnActive : {}), opacity: continuousContextEnabled ? 1 : 0.5 }}
             >
-              {theme.glassEnabled ? 'On' : 'Off'}
+              {isCapturingContinuousContextHotkey ? 'Press keys...' : continuousContextHotkey || '⌥⇧1'}
             </button>
+            {isCapturingContinuousContextHotkey && (
+              <button onClick={() => { setIsCapturingContinuousContextHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
           </div>
         </div>
+        
+        {/* Todo List */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Todo List</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => { setIsCapturingTodoHotkey(true); setHotkeyError(null); }}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey}
+              style={{ ...styles.btn, ...(isCapturingTodoHotkey ? styles.btnActive : {}) }}
+            >
+              {isCapturingTodoHotkey ? 'Press keys...' : todoHotkey || '⌘⇧T'}
+            </button>
+            {isCapturingTodoHotkey && (
+              <button onClick={() => { setIsCapturingTodoHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+          </div>
+        </div>
+        
+        {hotkeyError && <p style={styles.error}>{hotkeyError}</p>}
       </div>
 
-      {/* Mobile Sync Section - Sync iOS transcriptions and todos to Mac */}
+      {/* Mobile Sync Section */}
       <div style={styles.section}>
-        <h3 style={styles.sectionTitle}>📱 Mobile Sync</h3>
-        <p style={styles.sectionDescription}>
-          Sync transcriptions and tasks from your iOS device. Sign in with your iOS app account.
-        </p>
+        <SectionHeader title="Mobile Sync" />
         
-        <div style={styles.hotkeyCard}>
-          {session ? (
-            // Logged in state - show user info and sync controls
-            <>
+        {session ? (
+          <>
+            <div style={styles.row}>
               <div style={styles.syncUserInfo}>
-                <div style={styles.syncUserEmail}>
-                  <span style={styles.syncUserIcon}>✓</span>
-                  {session.user.email}
-                </div>
-                <button
-                  onClick={handleSignOut}
-                  disabled={authLoading}
-                  style={styles.signOutButton}
-                >
-                  {authLoading ? 'Signing out...' : 'Sign Out'}
+                <span style={styles.syncUserIcon}>✓</span>
+                <span style={styles.rowValue}>{session.user.email}</span>
+              </div>
+              <div style={styles.rowControls}>
+                <button onClick={handleManualSync} disabled={isSyncing} style={styles.btn}>
+                  {isSyncing ? 'Syncing...' : 'Sync'}
+                </button>
+                <button onClick={handleForceSync} disabled={isSyncing} style={styles.btn} title="Fix source attribution">
+                  Fix
+                </button>
+                <button onClick={handleSignOut} disabled={authLoading} style={styles.btnGhost}>
+                  {authLoading ? '...' : 'Sign Out'}
                 </button>
               </div>
-              
-              <div style={styles.syncControls}>
-                <button
-                  onClick={handleManualSync}
-                  disabled={isSyncing}
-                  style={styles.syncButton}
-                >
-                  {isSyncing ? 'Syncing...' : '🔄 Sync Now'}
-                </button>
-                <button
-                  onClick={handleForceSync}
-                  disabled={isSyncing}
-                  style={styles.fixButton}
-                  title="Re-sync all transcripts and fix source attribution"
-                >
-                  🔧 Fix Attribution
-                </button>
-              </div>
-              {syncStatus && (
-                <div style={styles.syncStatusText}>{syncStatus}</div>
-              )}
-              
-              <p style={styles.hotkeyHelp}>
-                iOS transcriptions sync automatically every 30 seconds. 
-                Use "Fix Attribution" if iOS items show as Mac.
-              </p>
-            </>
-          ) : showForgotPassword ? (
-            // Forgot password flow - send reset email.
-            <>
-              <h4 style={styles.hotkeyTitle}>Reset Password</h4>
-              <p style={{ ...styles.hotkeyHelp, marginTop: 0, marginBottom: '12px' }}>
-                Enter your email and we'll send a reset link. The link will open in your browser where you can set a new password.
-              </p>
-              
-              {resetEmailSent ? (
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ 
-                    padding: '12px', 
-                    background: 'rgba(74, 222, 128, 0.1)', 
-                    borderRadius: '6px',
-                    border: '1px solid rgba(74, 222, 128, 0.2)',
-                    marginBottom: '12px'
-                  }}>
-                    <p style={{ margin: 0, color: '#4ade80', fontWeight: 500 }}>
-                      ✓ Reset link sent!
-                    </p>
-                    <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: 'rgba(255,255,255,0.7)' }}>
-                      Check your email and click the link to reset your password.
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowForgotPassword(false);
-                      setResetEmailSent(false);
-                      setAuthError(null);
-                    }}
-                    style={styles.loginButton}
-                  >
-                    Back to Sign In
-                  </button>
-                </div>
-              ) : (
-                <form onSubmit={handleForgotPassword} style={styles.loginForm}>
-                  <input
-                    type="email"
-                    placeholder="Email"
-                    value={authEmail}
-                    onChange={(e) => setAuthEmail(e.target.value)}
-                    disabled={authLoading}
-                    style={styles.loginInput}
-                    required
-                    autoFocus
-                  />
-                  {authError && (
-                    <p style={styles.hotkeyError}>{authError}</p>
-                  )}
-                  <button
-                    type="submit"
-                    disabled={authLoading || !authEmail.trim()}
-                    style={styles.loginButton}
-                  >
-                    {authLoading ? 'Sending...' : 'Send Reset Link'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowForgotPassword(false);
-                      setAuthError(null);
-                    }}
-                    style={{ 
-                      ...styles.loginButton, 
-                      marginTop: '8px',
-                      background: '#f3f4f6', 
-                      border: '1px solid #d1d5db',
-                      color: '#374151'
-                    }}
-                  >
-                    Back to Sign In
-                  </button>
-                </form>
-              )}
-            </>
+            </div>
+            {syncStatus && <p style={styles.syncStatusText}>{syncStatus}</p>}
+          </>
+        ) : showForgotPassword ? (
+          // Password reset flow
+          resetEmailSent ? (
+            <div style={styles.row}>
+              <span style={{ ...styles.rowValue, color: '#10b981' }}>✓ Reset link sent! Check email.</span>
+              <button
+                onClick={() => { setShowForgotPassword(false); setResetEmailSent(false); setAuthError(null); }}
+                style={styles.btn}
+              >
+                Back
+              </button>
+            </div>
           ) : (
-            // Normal sign-in form.
-            <>
-              <h4 style={styles.hotkeyTitle}>Sign in to sync</h4>
-              <p style={{ ...styles.hotkeyHelp, marginTop: 0, marginBottom: '12px' }}>
-                Use the same email and password as your iOS app.
-              </p>
-              
-              <form onSubmit={handleSignIn} style={styles.loginForm}>
+            <form onSubmit={handleForgotPassword} style={styles.loginForm}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <input
                   type="email"
                   placeholder="Email"
                   value={authEmail}
                   onChange={(e) => setAuthEmail(e.target.value)}
                   disabled={authLoading}
-                  style={styles.loginInput}
-                  tabIndex={1}
+                  style={{ ...styles.input, flex: 1 }}
                   required
+                  autoFocus
                 />
-                <input
-                  type="password"
-                  placeholder="Password"
-                  value={authPassword}
-                  onChange={(e) => setAuthPassword(e.target.value)}
-                  disabled={authLoading}
-                  style={styles.loginInput}
-                  tabIndex={2}
-                  required
-                />
-                {authError && (
-                  <p style={styles.hotkeyError}>{authError}</p>
-                )}
-                <button
-                  type="submit"
-                  disabled={authLoading || !authEmail.trim() || !authPassword}
-                  style={styles.loginButton}
-                >
-                  {authLoading ? 'Signing in...' : 'Sign In'}
+                <button type="submit" disabled={authLoading || !authEmail.trim()} style={{ ...styles.btn, ...styles.btnSuccess }}>
+                  {authLoading ? '...' : 'Send Reset'}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowForgotPassword(true);
-                    setAuthError(null);
-                  }}
-                  style={{ 
-                    marginTop: '8px',
-                    background: 'transparent',
-                    border: 'none',
-                    color: '#60a5fa',
-                    fontSize: '13px',
-                    cursor: 'pointer',
-                    textDecoration: 'underline'
-                  }}
-                >
-                  Forgot password?
+                <button type="button" onClick={() => { setShowForgotPassword(false); setAuthError(null); }} style={styles.btnGhost}>
+                  Cancel
                 </button>
-              </form>
-            </>
-          )}
-        </div>
+              </div>
+              {authError && <p style={styles.error}>{authError}</p>}
+            </form>
+          )
+        ) : (
+          // Sign in form
+          <form onSubmit={handleSignIn} style={styles.loginForm}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input
+                type="email"
+                placeholder="Email"
+                value={authEmail}
+                onChange={(e) => setAuthEmail(e.target.value)}
+                disabled={authLoading}
+                style={{ ...styles.input, flex: 1 }}
+                tabIndex={1}
+                required
+              />
+              <input
+                type="password"
+                placeholder="Password"
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                disabled={authLoading}
+                style={{ ...styles.input, width: '120px' }}
+                tabIndex={2}
+                required
+              />
+              <button
+                type="submit"
+                disabled={authLoading || !authEmail.trim() || !authPassword}
+                style={{ ...styles.btn, ...styles.btnSuccess }}
+              >
+                {authLoading ? '...' : 'Sign In'}
+              </button>
+            </div>
+            {authError && <p style={styles.error}>{authError}</p>}
+            <button
+              type="button"
+              onClick={() => { setShowForgotPassword(true); setAuthError(null); }}
+              style={{ ...styles.btnGhost, fontSize: '13px', textDecoration: 'underline', color: '#3b82f6', padding: 0 }}
+            >
+              Forgot password?
+            </button>
+          </form>
+        )}
       </div>
     </div>
   );
@@ -1155,57 +878,217 @@ const styles: Record<string, React.CSSProperties> = {
     height: '100%',
   },
   loadingText: {
-    color: '#666',
+    color: '#6b7280',
     fontSize: '13px',
   },
+  
+  // ==========================================================================
+  // NEW UNIFIED DESIGN SYSTEM - Only 2 font sizes: 13px body, 11px headers
+  // ==========================================================================
+  
   title: {
-    fontSize: '18px',
+    fontSize: '13px',
     fontWeight: 600,
     marginTop: 0,
-    marginBottom: '20px',
-    color: '#111',
-  },
-  section: {
     marginBottom: '24px',
+    color: '#111827',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.05em',
+  },
+  
+  // Section with divider line
+  section: {
+    marginBottom: '20px',
+  },
+  sectionHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    marginBottom: '8px',
   },
   sectionTitle: {
-    fontSize: '14px',
+    fontSize: '11px',
     fontWeight: 600,
-    color: '#374151',
-    marginTop: 0,
-    marginBottom: '12px',
+    color: '#9ca3af',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.08em',
+    whiteSpace: 'nowrap' as const,
   },
-  sectionDescription: {
+  sectionLine: {
+    flex: 1,
+    height: '1px',
+    backgroundColor: '#e5e7eb',
+  },
+  
+  // Flat row layout: label left, control right
+  row: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '4px 0',
+    minHeight: '32px',
+  },
+  rowLabel: {
     fontSize: '13px',
-    color: '#6b7280',
-    marginTop: 0,
-    marginBottom: '12px',
+    color: '#374151',
+    fontWeight: 400,
   },
+  rowValue: {
+    fontSize: '13px',
+    color: '#111827',
+    fontWeight: 500,
+  },
+  rowControls: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  
+  // Unified button styles
+  btn: {
+    padding: '6px 12px',
+    fontSize: '13px',
+    fontWeight: 500,
+    color: '#374151',
+    backgroundColor: '#fff',
+    border: '1px solid #d1d5db',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    minWidth: '80px',
+    textAlign: 'center' as const,
+  },
+  btnActive: {
+    backgroundColor: '#3b82f6',
+    color: '#fff',
+    borderColor: '#3b82f6',
+  },
+  btnDanger: {
+    color: '#dc2626',
+    borderColor: '#fecaca',
+    backgroundColor: '#fef2f2',
+  },
+  btnSuccess: {
+    color: '#fff',
+    backgroundColor: '#10b981',
+    borderColor: '#10b981',
+  },
+  btnGhost: {
+    backgroundColor: 'transparent',
+    border: 'none',
+    color: '#6b7280',
+    minWidth: 'auto',
+    padding: '6px 8px',
+  },
+  
+  // Toggle switch
+  toggle: {
+    position: 'relative' as const,
+    width: '44px',
+    minWidth: '44px',
+    height: '24px',
+    minHeight: '24px',
+    borderRadius: '12px',
+    cursor: 'pointer',
+    border: 'none',
+    padding: 0,
+    flexShrink: 0,
+    transition: 'background-color 0.2s',
+  },
+  toggleKnob: {
+    position: 'absolute' as const,
+    top: '2px',
+    left: 0,
+    width: '20px',
+    height: '20px',
+    borderRadius: '10px',
+    backgroundColor: '#fff',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+    transition: 'transform 0.2s',
+  },
+  
+  // Select dropdown
+  select: {
+    padding: '6px 12px',
+    fontSize: '13px',
+    color: '#374151',
+    backgroundColor: '#fff',
+    border: '1px solid #d1d5db',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    minWidth: '160px',
+  },
+  
+  // Input field
+  input: {
+    padding: '6px 12px',
+    fontSize: '13px',
+    color: '#111827',
+    backgroundColor: '#fff',
+    border: '1px solid #d1d5db',
+    borderRadius: '6px',
+    outline: 'none',
+    flex: 1,
+  },
+  
+  // Status indicators
+  statusDot: {
+    width: '8px',
+    height: '8px',
+    borderRadius: '50%',
+    display: 'inline-block',
+    marginRight: '6px',
+  },
+  statusGreen: { backgroundColor: '#22c55e' },
+  statusYellow: { backgroundColor: '#f59e0b' },
+  statusRed: { backgroundColor: '#ef4444' },
+  statusGray: { backgroundColor: '#9ca3af' },
+  
+  // Error text
+  error: {
+    fontSize: '13px',
+    color: '#ef4444',
+    marginTop: '4px',
+  },
+  
+  // Model list (compact)
+  modelRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '8px 0',
+    borderBottom: '1px solid #f3f4f6',
+  },
+  modelName: {
+    fontSize: '13px',
+    color: '#374151',
+  },
+  modelSize: {
+    fontSize: '13px',
+    color: '#9ca3af',
+    marginLeft: '8px',
+  },
+  
+  // Permissions warning (compact)
   permissionsWarning: {
-    backgroundColor: '#fff3e0',
-    border: '1px solid #ff9800',
-    borderRadius: '8px',
-    padding: '16px',
+    backgroundColor: '#fffbeb',
+    border: '1px solid #f59e0b',
+    borderRadius: '6px',
+    padding: '12px',
     marginBottom: '20px',
   },
   permissionsContent: {
-    textAlign: 'center',
-  },
-  permissionsTitle: {
-    fontSize: '14px',
-    fontWeight: 600,
-    marginTop: 0,
-    marginBottom: '8px',
-    color: '#e65100',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   permissionsText: {
     fontSize: '13px',
-    color: '#666',
-    marginBottom: '12px',
+    color: '#92400e',
+    margin: 0,
   },
   permissionsButton: {
-    padding: '8px 16px',
-    backgroundColor: '#007AFF',
+    padding: '6px 12px',
+    backgroundColor: '#f59e0b',
     color: 'white',
     border: 'none',
     borderRadius: '6px',
@@ -1213,27 +1096,47 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '13px',
     fontWeight: 500,
   },
-  hotkeyCard: {
-    padding: '16px',
-    borderRadius: '8px',
-    backgroundColor: '#f9fafb',
-    border: '1px solid #e5e7eb',
+  
+  // Mobile sync (logged in state)
+  syncUserInfo: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
   },
-  hotkeyTitle: {
-    marginTop: 0,
-    marginBottom: '16px',
-    fontSize: '14px',
+  syncUserIcon: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '18px',
+    height: '18px',
+    backgroundColor: '#10b981',
+    color: '#fff',
+    borderRadius: '50%',
+    fontSize: '10px',
     fontWeight: 600,
-    color: '#374151',
+  },
+  
+  // Login form (compact)
+  loginForm: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '8px',
+  },
+  
+  // Legacy compatibility - keeping for nested components
+  hotkeyCard: {
+    padding: 0,
   },
   hotkeyRow: {
-    marginBottom: '12px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '8px 0',
+    minHeight: '36px',
   },
   hotkeyLabel: {
-    display: 'block',
-    marginBottom: '6px',
     fontSize: '13px',
-    color: '#6b7280',
+    color: '#374151',
   },
   hotkeyButtonRow: {
     display: 'flex',
@@ -1242,7 +1145,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   hotkeyButton: {
     padding: '6px 12px',
-    fontSize: '12px',
+    fontSize: '13px',
     fontWeight: 500,
     color: '#374151',
     backgroundColor: '#fff',
@@ -1256,34 +1159,20 @@ const styles: Record<string, React.CSSProperties> = {
     borderColor: '#3b82f6',
   },
   cancelButton: {
-    padding: '6px 12px',
-    fontSize: '12px',
+    padding: '6px 8px',
+    fontSize: '13px',
     color: '#6b7280',
     backgroundColor: 'transparent',
     border: 'none',
     cursor: 'pointer',
   },
   hotkeyError: {
-    marginTop: '8px',
-    marginBottom: 0,
-    fontSize: '12px',
+    fontSize: '13px',
     color: '#ef4444',
-  },
-  hotkeyHelp: {
-    marginTop: '12px',
-    marginBottom: 0,
-    fontSize: '11px',
-    color: '#6b7280',
-    lineHeight: '1.5',
-  },
-  // Mobile sync styles
-  loginForm: {
-    display: 'flex',
-    flexDirection: 'column' as const,
-    gap: '10px',
+    marginTop: '4px',
   },
   loginInput: {
-    padding: '10px 12px',
+    padding: '8px 12px',
     fontSize: '13px',
     border: '1px solid #d1d5db',
     borderRadius: '6px',
@@ -1292,7 +1181,7 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: 'border-box' as const,
   },
   loginButton: {
-    padding: '10px 16px',
+    padding: '8px 16px',
     fontSize: '13px',
     fontWeight: 500,
     color: '#fff',
@@ -1300,37 +1189,10 @@ const styles: Record<string, React.CSSProperties> = {
     border: 'none',
     borderRadius: '6px',
     cursor: 'pointer',
-    marginTop: '4px',
-  },
-  syncUserInfo: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: '16px',
-  },
-  syncUserEmail: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    fontSize: '13px',
-    fontWeight: 500,
-    color: '#374151',
-  },
-  syncUserIcon: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '20px',
-    height: '20px',
-    backgroundColor: '#10b981',
-    color: '#fff',
-    borderRadius: '50%',
-    fontSize: '11px',
-    fontWeight: 600,
   },
   signOutButton: {
     padding: '6px 12px',
-    fontSize: '12px',
+    fontSize: '13px',
     color: '#6b7280',
     backgroundColor: 'transparent',
     border: '1px solid #d1d5db',
@@ -1340,12 +1202,11 @@ const styles: Record<string, React.CSSProperties> = {
   syncControls: {
     display: 'flex',
     alignItems: 'center',
-    gap: '12px',
-    marginBottom: '12px',
+    gap: '8px',
   },
   syncButton: {
-    padding: '8px 14px',
-    fontSize: '12px',
+    padding: '6px 12px',
+    fontSize: '13px',
     fontWeight: 500,
     color: '#374151',
     backgroundColor: '#fff',
@@ -1354,8 +1215,8 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
   },
   fixButton: {
-    padding: '8px 14px',
-    fontSize: '12px',
+    padding: '6px 12px',
+    fontSize: '13px',
     fontWeight: 500,
     color: '#6b7280',
     backgroundColor: '#f9fafb',
@@ -1364,8 +1225,17 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
   },
   syncStatusText: {
-    fontSize: '12px',
+    fontSize: '13px',
     color: '#6b7280',
-    marginTop: '8px',
+    marginTop: '4px',
+  },
+  sectionDescription: {
+    display: 'none', // Hide verbose descriptions in new design
+  },
+  hotkeyTitle: {
+    display: 'none', // Hide nested titles in new design
+  },
+  hotkeyHelp: {
+    display: 'none', // Hide help text in new design
   },
 };
