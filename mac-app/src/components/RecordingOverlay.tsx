@@ -47,6 +47,25 @@ export default function RecordingOverlay() {
     };
   }, []);
   
+  // Handle keyboard events for confirmation dialog.
+  // Escape triggers abandon, any other key continues recording.
+  useEffect(() => {
+    if (state !== 'confirmation') return;
+    
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        window.overlayAPI?.confirmAbandon?.();
+      } else {
+        e.preventDefault();
+        window.overlayAPI?.cancelAbandon?.();
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [state]);
+  
   // Handle confirmation state - show abandon confirmation UI.
   if (state === 'confirmation') {
     return (
@@ -57,16 +76,16 @@ export default function RecordingOverlay() {
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: '8px',
-        padding: '12px 16px',
+        gap: '12px',
+        padding: '20px 24px',
         background: 'rgba(0, 0, 0, 0.9)',
-        borderRadius: '12px',
+        borderRadius: '16px',
         backdropFilter: 'blur(20px)',
       }}>
         {/* Warning message */}
         <div style={{
-          fontSize: '12px',
-          fontWeight: 500,
+          fontSize: '14px',
+          fontWeight: 600,
           color: '#fff',
           textAlign: 'center',
         }}>
@@ -76,18 +95,18 @@ export default function RecordingOverlay() {
         {/* Action buttons */}
         <div style={{
           display: 'flex',
-          gap: '8px',
+          gap: '10px',
         }}>
           <button
             onClick={() => window.overlayAPI?.confirmAbandon?.()}
             style={{
-              padding: '4px 12px',
-              fontSize: '11px',
+              padding: '8px 16px',
+              fontSize: '12px',
               fontWeight: 600,
               color: '#fff',
               backgroundColor: '#ff3b30',
               border: 'none',
-              borderRadius: '6px',
+              borderRadius: '8px',
               cursor: 'pointer',
             }}
           >
@@ -96,27 +115,27 @@ export default function RecordingOverlay() {
           <button
             onClick={() => window.overlayAPI?.cancelAbandon?.()}
             style={{
-              padding: '4px 12px',
-              fontSize: '11px',
+              padding: '8px 16px',
+              fontSize: '12px',
               fontWeight: 600,
               color: '#fff',
               backgroundColor: 'rgba(255, 255, 255, 0.2)',
               border: 'none',
-              borderRadius: '6px',
+              borderRadius: '8px',
               cursor: 'pointer',
             }}
           >
-            Continue
+            Keep Recording
           </button>
         </div>
         
         {/* Hint */}
         <div style={{
-          fontSize: '9px',
+          fontSize: '10px',
           color: 'rgba(255, 255, 255, 0.6)',
-          marginTop: '2px',
+          marginTop: '4px',
         }}>
-          Press Esc again to abandon, any other key to continue
+          Esc = abandon, any other key = keep recording
         </div>
       </div>
     );

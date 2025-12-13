@@ -752,9 +752,6 @@ export default function TeamView() {
 
   // Delete a team item.
   const deleteTeamItem = useCallback(async (itemId: string) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:deleteTeamItem',message:'deleteTeamItem called',data:{itemId,hasAPI:!!window.teamClipboardAPI},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-    // #endregion
     if (!window.teamClipboardAPI) return;
     
     // Find the item to save for undo.
@@ -764,9 +761,6 @@ export default function TeamView() {
     }
     
     const success = await window.teamClipboardAPI.deleteItem(itemId);
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:deleteTeamItem',message:'deleteItem result',data:{itemId,success},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-    // #endregion
     if (success) {
       // Remove from local state immediately.
       setTeamItems(prev => prev.filter(i => i.id !== itemId));
@@ -792,23 +786,14 @@ export default function TeamView() {
 
   // Unstack a team stack (remove stack_id from all items).
   const unstackTeamItems = useCallback(async (stackId: string) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:unstackTeamItems',message:'unstackTeamItems called',data:{stackId,hasAPI:!!window.teamClipboardAPI,teamItemsCount:teamItems.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C,E'})}).catch(()=>{});
-    // #endregion
     if (!window.teamClipboardAPI) return;
     
     // Get all item IDs in this stack.
     const stackItems = teamItems.filter(i => i.stackId === stackId);
     const itemIds = stackItems.map(i => i.id);
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:unstackTeamItems',message:'stack items found',data:{stackId,itemIds,stackItemsCount:stackItems.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'E'})}).catch(()=>{});
-    // #endregion
     
     // Update stack_id to null for all items.
     const success = await window.teamClipboardAPI.updateStackId(itemIds, null);
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:unstackTeamItems',message:'updateStackId result',data:{stackId,success,itemIds},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-    // #endregion
     if (success) {
       // Update local state.
       setTeamItems(prev => prev.map(i => 
@@ -837,9 +822,6 @@ export default function TeamView() {
   const buildListRows = useCallback((): TeamListRow[] => {
     const rows: TeamListRow[] = [];
     const seenStackIds = new Set<string>();
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:buildListRows',message:'building list rows',data:{teamItemsCount:teamItems.length,itemsWithStackId:teamItems.filter(i=>i.stackId).length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'E'})}).catch(()=>{});
-    // #endregion
 
     // Filter items by search query if present.
     const searchLower = debouncedSearchQuery.toLowerCase().trim();
@@ -943,9 +925,6 @@ export default function TeamView() {
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:693',message:'useEffect keyboard setup',data:{hasSession:!!session,listRowsLength:listRows.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
     if (!session || listRows.length === 0) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -954,10 +933,6 @@ export default function TeamView() {
       const hasShift = e.shiftKey;
       const hasCtrl = e.ctrlKey;
       const hasAlt = e.altKey;
-
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:handleKeyDown',message:'key pressed',data:{key,hasMeta,hasShift,hasCtrl,hasAlt,activeElement:document.activeElement?.tagName,selectedIndex},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,D'})}).catch(()=>{});
-      // #endregion
 
       // / - Focus search input (like Gmail, Google). Works from anywhere.
       if (key === '/' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
@@ -972,9 +947,6 @@ export default function TeamView() {
       if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
 
       const selectedRow = listRows[selectedIndex];
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:handleKeyDown',message:'selectedRow check',data:{selectedRowType:selectedRow?.type,selectedRowExists:!!selectedRow,selectedIndex,listRowsLength:listRows.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
-      // #endregion
 
       // Escape: Dismiss preview, clear selection, or close window.
       if (key === 'Escape') {
@@ -1044,9 +1016,6 @@ export default function TeamView() {
       // X - Toggle selection on current item (Gmail-style).
       if (key === 'x' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         e.preventDefault();
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:x-key',message:'x key pressed',data:{selectedRowType:selectedRow?.type,selectedRowExists:!!selectedRow},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
-        // #endregion
         
         // Get item IDs to toggle (single item or all items in stack).
         const itemIdsToToggle: string[] = [];
@@ -1055,9 +1024,6 @@ export default function TeamView() {
         } else if (selectedRow?.type === 'stack') {
           selectedRow.items.forEach(i => itemIdsToToggle.push(i.id));
         }
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/cde28e77-d49a-4a0c-b31f-97891e8e5e11',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'TeamView.tsx:x-key',message:'itemIdsToToggle',data:{itemIdsToToggle,count:itemIdsToToggle.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
-        // #endregion
         
         // Toggle selection.
         setSelectedIds(prev => {

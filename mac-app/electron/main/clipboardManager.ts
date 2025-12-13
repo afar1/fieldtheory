@@ -143,6 +143,10 @@ export class ClipboardManager extends EventEmitter {
   private screencaptureProcess: ChildProcess | null = null;
   private continuousContextEscapeRegistered: boolean = false;
   private continuousContextPausedForCommand: boolean = false;
+  
+  // Screenshot capture lock to prevent race condition with clipboard polling.
+  // When true, checkClipboard() skips to avoid storing duplicate screenshot.
+  private screenshotInProgress: boolean = false;
 
   constructor(config: Partial<ClipboardConfig> = {}) {
     super();
@@ -341,6 +345,12 @@ export class ClipboardManager extends EventEmitter {
    * Check clipboard for changes and store if new.
    */
   private async checkClipboard(): Promise<void> {
+    // Skip if a screenshot capture is in progress to avoid race condition.
+    // The screenshot method will update lastContentHash and store the image itself.
+    if (this.screenshotInProgress) {
+      return;
+    }
+    
     try {
       // Check for text first
       const text = clipboard.readText();
@@ -924,6 +934,9 @@ export class ClipboardManager extends EventEmitter {
    * @param stackId - Optional stack ID to group this screenshot with other items
    */
   async captureScreenshot(region: boolean = false, stackId?: string): Promise<number> {
+    // Set flag to prevent polling from picking up the screenshot while we're capturing it.
+    this.screenshotInProgress = true;
+    
     try {
       if (region) {
         // Interactive selection mode: drag to select area, saves directly to clipboard
@@ -937,17 +950,19 @@ export class ClipboardManager extends EventEmitter {
         const image = clipboard.readImage();
         if (image.isEmpty()) {
           console.warn('[ClipboardManager] Screenshot capture cancelled or failed');
+          this.screenshotInProgress = false;
           return -1;
         }
         
         const imageBuffer = image.toPNG();
         
         // Update lastContentHash to prevent polling from re-storing this image.
-        // This must happen before storeImage to avoid race with the polling interval.
         this.lastContentHash = this.hashContent(imageBuffer.toString('base64'));
         
         // Store in history (with stackId if provided)
         const id = await this.storeImage(image, imageBuffer, 'screenshot', undefined, stackId);
+        
+        this.screenshotInProgress = false;
         return id;
       } else {
         // Full screen capture
@@ -962,7 +977,6 @@ export class ClipboardManager extends EventEmitter {
           const image = nativeImage.createFromBuffer(imageBuffer);
           
           // Update lastContentHash to prevent polling from re-storing this image.
-          // This must happen before storeImage to avoid race with the polling interval.
           this.lastContentHash = this.hashContent(imageBuffer.toString('base64'));
           
           // Store in history (with stackId if provided)
@@ -971,17 +985,20 @@ export class ClipboardManager extends EventEmitter {
           // Clean up temp file
           await fs.unlink(tempPath);
           
+          this.screenshotInProgress = false;
           return id;
         } catch (error) {
           // Clean up temp file even on error
           try {
             await fs.unlink(tempPath);
           } catch {}
+          this.screenshotInProgress = false;
           throw error;
         }
       }
     } catch (error) {
       console.error('[ClipboardManager] Screenshot capture failed:', error);
+      this.screenshotInProgress = false;
       return -1;
     }
   }
