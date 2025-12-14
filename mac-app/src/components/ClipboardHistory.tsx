@@ -8,6 +8,7 @@ import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import SettingsPanel from './SettingsPanel';
 import TodoView from './TodoView';
 import TeamView from './TeamView';
+import DMsView from './DMsView';
 import { useTheme } from '../contexts/ThemeContext';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
@@ -24,8 +25,8 @@ import {
   useDroppable,
 } from '@dnd-kit/core';
 
-// View mode: clipboard history, todo list, or team clipboard.
-type ViewMode = 'clipboard' | 'todo' | 'team';
+// View mode: clipboard history, todo list, team clipboard, or DMs.
+type ViewMode = 'clipboard' | 'todo' | 'team' | 'dms';
 
 type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
 type ClipboardSource = 'mac' | 'ios';
@@ -288,7 +289,7 @@ export default function ClipboardHistory() {
   // Initialize viewMode from localStorage, defaulting to 'clipboard'.
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     const saved = localStorage.getItem('fieldTheoryView');
-    if (saved === 'clipboard' || saved === 'team' || saved === 'todo') {
+    if (saved === 'clipboard' || saved === 'team' || saved === 'todo' || saved === 'dms') {
       return saved;
     }
     return 'clipboard';
@@ -433,6 +434,18 @@ export default function ClipboardHistory() {
   const [priorityDeviceId, setPriorityDeviceId] = useState<string | null>(null);
   const [showMicDropdown, setShowMicDropdown] = useState(false);
   
+  // Hot Mic state - when enabled, incoming DMs auto-open preview.
+  const [hotMicEnabled, setHotMicEnabled] = useState(false);
+  const [hotMicMessage, setHotMicMessage] = useState<{
+    id: string;
+    senderEmail: string | null;
+    senderName: string | null;
+    contentType: 'text' | 'image' | 'stack';
+    contentText: string | null;
+    imageUrl: string | null;
+  } | null>(null);
+  const [hasUnreadDMs, setHasUnreadDMs] = useState(false);
+  
   // Update notification state.
   type UpdateStatus = 'idle' | 'available' | 'downloading' | 'ready';
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
@@ -489,6 +502,43 @@ export default function ClipboardHistory() {
     
     return cleanup;
   }, []);
+  
+  // Load Hot Mic state, check unread, and listen for incoming messages.
+  useEffect(() => {
+    if (!window.socialAPI) return;
+    
+    // Load initial hot mic state and unread count.
+    window.socialAPI.getHotMic().then(setHotMicEnabled);
+    window.socialAPI.hasUnread().then(setHasUnreadDMs);
+    
+    // Listen for incoming DMs for Hot Mic feature.
+    const unsubscribe = window.socialAPI.onMessageReceived(async (message) => {
+      // Update unread indicator.
+      setHasUnreadDMs(true);
+      
+      // Only show Hot Mic preview for DMs (not feedback replies).
+      if (message.type !== 'dm') return;
+      
+      // Check if Hot Mic is enabled.
+      const hotMicOn = await window.socialAPI!.getHotMic();
+      if (!hotMicOn) return;
+      
+      // Don't interrupt if recording.
+      if (isRecording) return;
+      
+      // Show the Hot Mic preview.
+      setHotMicMessage({
+        id: message.id,
+        senderEmail: message.senderEmail,
+        senderName: message.senderName,
+        contentType: message.contentType,
+        contentText: message.contentText,
+        imageUrl: message.imageUrl,
+      });
+    });
+    
+    return unsubscribe;
+  }, [isRecording]);
   
   // Close mic dropdown when clicking outside.
   useEffect(() => {
@@ -555,6 +605,12 @@ export default function ClipboardHistory() {
   const [pendingStackSelection, setPendingStackSelection] = useState<string | null>(null);
   const [pendingItemSelection, setPendingItemSelection] = useState<number | null>(null);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+
+  // DM modal state - for sending DMs to contacts.
+  const [showDMModal, setShowDMModal] = useState(false);
+  const [dmRecipientQuery, setDmRecipientQuery] = useState('');
+  const [dmContacts, setDmContacts] = useState<{ id: string; userId: string | null; email: string; name: string | null }[]>([]);
+  const [selectedDmContactIndex, setSelectedDmContactIndex] = useState(0);
 
   // dnd-kit drag state - tracks what's being dragged.
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
@@ -995,6 +1051,75 @@ export default function ClipboardHistory() {
             loadItems(true);
           });
         }
+        return;
+      }
+
+      // D - Open DM modal to send selected item to a contact.
+      if (key === 'd' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+        // Skip if typing in input
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        e.preventDefault();
+        
+        // Load contacts for the modal.
+        (async () => {
+          if (!window.socialAPI) return;
+          const contacts = await window.socialAPI.getContacts();
+          setDmContacts(contacts.filter(c => c.contactUserId).map(c => ({
+            id: c.id,
+            userId: c.contactUserId,
+            email: c.contactEmail,
+            name: c.contactName,
+          })));
+          setDmRecipientQuery('');
+          setSelectedDmContactIndex(0);
+          setShowDMModal(true);
+        })();
+        return;
+      }
+
+      // F - Submit selected item as feedback to admin.
+      if (key === 'f' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+        // Skip if typing in input
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        e.preventDefault();
+        
+        // Get the selected item ID.
+        const selectedRow = listRows[selectedIndex];
+        if (!selectedRow) return;
+        
+        const itemId = selectedRow.type === 'item' 
+          ? selectedRow.item.id 
+          : selectedRow.items[0]?.id;
+        
+        if (!itemId) return;
+        
+        // Submit feedback.
+        (async () => {
+          if (!window.socialAPI) return;
+          const result = await window.socialAPI.submitFeedback(itemId);
+          if (result) {
+            // Show a brief confirmation.
+            // (Could add toast notification here)
+            console.log('[ClipboardHistory] Feedback submitted:', result.id);
+          }
+        })();
+        return;
+      }
+
+      // H - Toggle Hot Mic on/off.
+      if (key === 'h' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+        // Skip if typing in input
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        e.preventDefault();
+        
+        (async () => {
+          if (!window.socialAPI) return;
+          const newState = !hotMicEnabled;
+          const success = await window.socialAPI.setHotMic(newState);
+          if (success) {
+            setHotMicEnabled(newState);
+          }
+        })();
         return;
       }
       
@@ -1520,19 +1645,21 @@ export default function ClipboardHistory() {
           }));
           window.clipboardAPI?.setTargetApp(newApp);
         } else if (hasShift) {
-          // Shift+Tab - cycle backwards: clipboard ← team ← todo ← clipboard.
+          // Shift+Tab - cycle backwards: clipboard ← team ← dms ← todo ← clipboard.
           setShowSettings(false);
           setViewMode(prev => {
             if (prev === 'clipboard') return 'todo';
-            if (prev === 'todo') return 'team';
+            if (prev === 'todo') return 'dms';
+            if (prev === 'dms') return 'team';
             return 'clipboard';
           });
         } else {
-          // Tab - cycle forwards: clipboard → team → todo → clipboard.
+          // Tab - cycle forwards: clipboard → team → dms → todo → clipboard.
           setShowSettings(false);
           setViewMode(prev => {
             if (prev === 'clipboard') return 'team';
-            if (prev === 'team') return 'todo';
+            if (prev === 'team') return 'dms';
+            if (prev === 'dms') return 'todo';
             return 'clipboard';
           });
         }
@@ -2054,6 +2181,43 @@ export default function ClipboardHistory() {
             )}
           </div>
         )}
+        
+        {/* Hot Mic toggle - shows under the mic dropdown */}
+        {!showSettings && (
+          <button
+            onClick={async () => {
+              if (!window.socialAPI) return;
+              const newState = !hotMicEnabled;
+              const success = await window.socialAPI.setHotMic(newState);
+              if (success) {
+                setHotMicEnabled(newState);
+              }
+            }}
+            title={`Hot Mic: ${hotMicEnabled ? 'ON' : 'OFF'} (H to toggle)`}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '2px 6px',
+              fontSize: '9px',
+              color: hotMicEnabled ? '#10b981' : theme.textSecondary,
+              backgroundColor: 'transparent',
+              border: `1px solid ${hotMicEnabled ? '#10b981' : theme.border}`,
+              borderRadius: '4px',
+              cursor: 'pointer',
+              // @ts-ignore - prevent drag
+              WebkitAppRegion: 'no-drag',
+            }}
+          >
+            <span style={{ 
+              width: '6px', 
+              height: '6px', 
+              borderRadius: '50%',
+              backgroundColor: hotMicEnabled ? '#10b981' : theme.textSecondary,
+            }} />
+            Hot Mic {hotMicEnabled ? 'ON' : 'OFF'}
+          </button>
+        )}
       </div>
       
       {/* View mode tabs - only show when not in settings */}
@@ -2065,10 +2229,16 @@ export default function ClipboardHistory() {
           padding: '0 16px',
           marginBottom: '8px',
         }}>
-          {(['clipboard', 'team', 'todo'] as ViewMode[]).map((mode) => (
+          {(['clipboard', 'team', 'dms', 'todo'] as ViewMode[]).map((mode) => (
             <button
               key={mode}
-              onClick={() => setViewMode(mode)}
+              onClick={() => {
+                setViewMode(mode);
+                // Clear unread indicator when viewing DMs.
+                if (mode === 'dms') {
+                  setHasUnreadDMs(false);
+                }
+              }}
               tabIndex={-1}
               style={{
                 padding: '4px 10px',
@@ -2083,19 +2253,31 @@ export default function ClipboardHistory() {
                 outline: 'none',
               }}
             >
-              {mode === 'clipboard' ? 'My Fields' : mode === 'team' ? 'Team Fields' : 'Tasks'}
+              {mode === 'clipboard' ? 'My Fields' : mode === 'team' ? 'Team Fields' : mode === 'dms' ? 'DMs' : 'Tasks'}
+              {mode === 'dms' && hasUnreadDMs && viewMode !== 'dms' && (
+                <span style={{
+                  marginLeft: '4px',
+                  width: '6px',
+                  height: '6px',
+                  borderRadius: '50%',
+                  backgroundColor: '#f59e0b',
+                  display: 'inline-block',
+                }} />
+              )}
             </button>
           ))}
         </div>
       )}
 
-      {/* Conditionally show Settings, Todo View, Team View, or Clipboard History */}
+      {/* Conditionally show Settings, Todo View, Team View, DMs View, or Clipboard History */}
       {showSettings ? (
         <SettingsPanel />
       ) : viewMode === 'todo' ? (
         <TodoView onSwitchToClipboard={() => setViewMode('clipboard')} />
       ) : viewMode === 'team' ? (
         <TeamView />
+      ) : viewMode === 'dms' ? (
+        <DMsView />
       ) : (
         <div 
           style={{ 
@@ -3892,7 +4074,281 @@ export default function ClipboardHistory() {
               
               <span><KeyCap>u</KeyCap> unstack</span>
               <span><KeyCap>↑</KeyCap><KeyCap>k</KeyCap> up</span>
+              <span><KeyCap>d</KeyCap> DM</span>
+              <span><KeyCap>f</KeyCap> feedback</span>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* DM Modal - Send selected item as DM */}
+      {showDMModal && (
+        <div
+          onClick={() => setShowDMModal(false)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.4)',
+            backdropFilter: 'blur(4px)',
+            WebkitBackdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10002,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: theme.bg,
+              borderRadius: '10px',
+              padding: '16px 20px',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+              width: '300px',
+            }}
+          >
+            <div style={{ 
+              fontSize: '12px', 
+              fontWeight: 600, 
+              color: theme.textSecondary, 
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+              marginBottom: '14px',
+            }}>
+              Send DM
+            </div>
+            <input
+              autoFocus
+              type="text"
+              placeholder="Search contacts..."
+              value={dmRecipientQuery}
+              onChange={(e) => {
+                setDmRecipientQuery(e.target.value);
+                setSelectedDmContactIndex(0);
+              }}
+              onKeyDown={(e) => {
+                const filteredContacts = dmContacts.filter(c => 
+                  c.email.toLowerCase().includes(dmRecipientQuery.toLowerCase()) ||
+                  c.name?.toLowerCase().includes(dmRecipientQuery.toLowerCase())
+                );
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setSelectedDmContactIndex(prev => Math.min(prev + 1, filteredContacts.length - 1));
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setSelectedDmContactIndex(prev => Math.max(prev - 1, 0));
+                } else if (e.key === 'Enter' && filteredContacts.length > 0) {
+                  e.preventDefault();
+                  const contact = filteredContacts[selectedDmContactIndex];
+                  if (contact?.userId) {
+                    // Get selected item ID and send DM.
+                    const selectedRow = listRows[selectedIndex];
+                    const itemId = selectedRow?.type === 'item' 
+                      ? selectedRow.item.id 
+                      : selectedRow?.items?.[0]?.id;
+                    if (itemId) {
+                      window.socialAPI?.sendDM(contact.userId, itemId).then((result) => {
+                        if (result) {
+                          console.log('[ClipboardHistory] DM sent:', result.id);
+                        }
+                      });
+                    }
+                    setShowDMModal(false);
+                  }
+                } else if (e.key === 'Escape') {
+                  setShowDMModal(false);
+                }
+              }}
+              style={{
+                width: '100%',
+                padding: '8px',
+                fontSize: '12px',
+                border: `1px solid ${theme.inputBorder}`,
+                borderRadius: '6px',
+                backgroundColor: theme.inputBg,
+                color: theme.text,
+                marginBottom: '8px',
+                boxSizing: 'border-box',
+                outline: 'none',
+              }}
+            />
+            <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+              {dmContacts
+                .filter(c => 
+                  c.email.toLowerCase().includes(dmRecipientQuery.toLowerCase()) ||
+                  c.name?.toLowerCase().includes(dmRecipientQuery.toLowerCase())
+                )
+                .map((contact, idx) => (
+                  <div
+                    key={contact.id}
+                    onClick={() => {
+                      if (contact.userId) {
+                        const selectedRow = listRows[selectedIndex];
+                        const itemId = selectedRow?.type === 'item' 
+                          ? selectedRow.item.id 
+                          : selectedRow?.items?.[0]?.id;
+                        if (itemId) {
+                          window.socialAPI?.sendDM(contact.userId, itemId);
+                        }
+                        setShowDMModal(false);
+                      }
+                    }}
+                    style={{
+                      padding: '8px',
+                      borderRadius: '4px',
+                      backgroundColor: idx === selectedDmContactIndex ? theme.bgSecondary : 'transparent',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <div style={{ fontSize: '12px', color: theme.text }}>
+                      {contact.name || contact.email}
+                    </div>
+                    {contact.name && (
+                      <div style={{ fontSize: '10px', color: theme.textSecondary }}>
+                        {contact.email}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              {dmContacts.filter(c => 
+                c.email.toLowerCase().includes(dmRecipientQuery.toLowerCase()) ||
+                c.name?.toLowerCase().includes(dmRecipientQuery.toLowerCase())
+              ).length === 0 && (
+                <div style={{ fontSize: '11px', color: theme.textSecondary, padding: '8px' }}>
+                  No contacts found. Add friends in the DMs tab.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hot Mic Preview - Shows incoming DM when Hot Mic is enabled */}
+      {hotMicMessage && (
+        <div
+          onClick={() => setHotMicMessage(null)}
+          onKeyDown={(e) => {
+            if (e.key === ' ' || e.key === 'Escape') {
+              e.preventDefault();
+              setHotMicMessage(null);
+            } else if (e.key === 'h' || e.key === 'H') {
+              e.preventDefault();
+              // Toggle Hot Mic off.
+              window.socialAPI?.setHotMic(false).then(success => {
+                if (success) {
+                  setHotMicEnabled(false);
+                  setHotMicMessage(null);
+                }
+              });
+            }
+          }}
+          tabIndex={0}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.6)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10010,
+            outline: 'none',
+          }}
+          ref={(el) => el?.focus()}
+        >
+          {/* Sender info at top */}
+          <div style={{
+            fontSize: '12px',
+            color: '#fff',
+            marginBottom: '16px',
+            opacity: 0.8,
+          }}>
+            From: {hotMicMessage.senderName || hotMicMessage.senderEmail || 'Unknown'}
+          </div>
+
+          {/* Content */}
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: theme.bg,
+              borderRadius: '12px',
+              padding: '24px',
+              maxWidth: '80%',
+              maxHeight: '60%',
+              overflow: 'auto',
+              boxShadow: '0 12px 48px rgba(0, 0, 0, 0.4)',
+            }}
+          >
+            {hotMicMessage.contentType === 'image' && hotMicMessage.imageUrl && (
+              <img
+                src={hotMicMessage.imageUrl}
+                alt="DM Image"
+                style={{
+                  maxWidth: '100%',
+                  maxHeight: '400px',
+                  borderRadius: '8px',
+                }}
+              />
+            )}
+            {hotMicMessage.contentText && (
+              <div style={{
+                fontSize: '16px',
+                color: theme.text,
+                whiteSpace: 'pre-wrap',
+                lineHeight: 1.5,
+              }}>
+                {hotMicMessage.contentText}
+              </div>
+            )}
+          </div>
+
+          {/* Hot Mic toggle hint at bottom */}
+          <div style={{
+            marginTop: '24px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            fontSize: '11px',
+            color: 'rgba(255, 255, 255, 0.6)',
+          }}>
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '18px',
+              height: '18px',
+              backgroundColor: 'rgba(255, 255, 255, 0.15)',
+              borderRadius: '4px',
+              fontSize: '10px',
+              fontWeight: 500,
+            }}>
+              H
+            </span>
+            <span>to toggle Hot Mic on/off</span>
+            <span style={{ margin: '0 8px', opacity: 0.4 }}>•</span>
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minWidth: '18px',
+              height: '18px',
+              padding: '0 4px',
+              backgroundColor: 'rgba(255, 255, 255, 0.15)',
+              borderRadius: '4px',
+              fontSize: '9px',
+              fontWeight: 500,
+            }}>
+              space
+            </span>
+            <span>to dismiss</span>
           </div>
         </div>
       )}

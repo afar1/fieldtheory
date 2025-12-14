@@ -521,6 +521,111 @@ interface TeamClipboardAPI {
   hasTeammates: () => Promise<boolean>;
 }
 
+// =============================================================================
+// Social/DM Types - DMs, Feedback, and Contacts
+// =============================================================================
+
+/**
+ * Message from the unified messages table.
+ */
+interface SocialMessage {
+  id: string;
+  type: 'dm' | 'feedback';
+  senderUserId: string;
+  senderEmail: string | null;
+  senderName: string | null;
+  recipientUserId: string;
+  recipientEmail: string | null;
+  recipientName: string | null;
+  contentType: 'text' | 'image' | 'stack';
+  contentText: string | null;
+  imagePath: string | null;
+  imageUrl: string | null;
+  stackId: string | null;
+  sourceItemId: string | null;
+  readAt: number | null;
+  feedbackStatus: 'open' | 'resolved' | 'archived' | null;
+  parentMessageId: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * Contact from the contacts table.
+ */
+interface SocialContact {
+  id: string;
+  ownerUserId: string;
+  contactEmail: string;
+  contactUserId: string | null;
+  contactName: string | null;
+  relationshipType: 'team' | 'friend' | null;
+  status: 'pending' | 'accepted';
+  createdAt: number;
+}
+
+/**
+ * DM conversation summary for list view.
+ */
+interface DMConversation {
+  otherUserId: string;
+  otherUserEmail: string;
+  otherUserName: string | null;
+  relationshipType: 'team' | 'friend' | null;
+  lastMessage: SocialMessage | null;
+  unreadCount: number;
+}
+
+/**
+ * Activity log entry for feedback.
+ */
+interface ActivityLogEntry {
+  id: string;
+  messageId: string;
+  userId: string;
+  userEmail: string | null;
+  action: 'created' | 'status_changed' | 'replied';
+  oldStatus: string | null;
+  newStatus: string | null;
+  createdAt: number;
+}
+
+/**
+ * Social API for DMs, Feedback, Contacts, and Hot Mic.
+ */
+interface SocialAPI {
+  // DM operations
+  sendDM: (recipientUserId: string, localItemId: number) => Promise<SocialMessage | null>;
+  sendTextDM: (recipientUserId: string, text: string, parentMessageId?: string) => Promise<SocialMessage | null>;
+  getConversations: () => Promise<DMConversation[]>;
+  getDMsWithUser: (otherUserId: string) => Promise<SocialMessage[]>;
+  markAsRead: (messageId: string) => Promise<boolean>;
+  hasUnread: () => Promise<boolean>;
+  
+  // Feedback operations
+  submitFeedback: (localItemId: number) => Promise<SocialMessage | null>;
+  getMyFeedback: () => Promise<SocialMessage[]>;
+  getAllFeedback: () => Promise<SocialMessage[]>;
+  getFeedbackReplies: (feedbackId: string) => Promise<SocialMessage[]>;
+  updateFeedbackStatus: (feedbackId: string, status: 'open' | 'resolved' | 'archived') => Promise<boolean>;
+  getActivityLog: (feedbackId: string) => Promise<ActivityLogEntry[]>;
+  
+  // Contact operations
+  getContacts: () => Promise<SocialContact[]>;
+  addFriend: (email: string) => Promise<{ success: boolean; error?: string }>;
+  searchContacts: (query: string) => Promise<SocialContact[]>;
+  
+  // Hot mic
+  getHotMic: () => Promise<boolean>;
+  setHotMic: (enabled: boolean) => Promise<boolean>;
+  
+  // Admin check
+  isAdmin: () => Promise<boolean>;
+  
+  // Events
+  onMessageReceived: (callback: (message: SocialMessage) => void) => () => void;
+}
+
 /**
  * Extend the Window interface with our custom APIs.
  */
@@ -537,6 +642,7 @@ declare global {
     todoAPI?: TodoAPI;
     authAPI?: AuthAPI;
     teamClipboardAPI?: TeamClipboardAPI;
+    socialAPI?: SocialAPI;
     platform?: PlatformInfo;
   }
 }

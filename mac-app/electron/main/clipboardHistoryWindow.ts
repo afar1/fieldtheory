@@ -435,6 +435,14 @@ export class ClipboardHistoryWindow {
   }
 
   /**
+   * Check if recording is active.
+   * Used by Hot Mic to avoid interrupting a recording.
+   */
+  getRecordingActive(): boolean {
+    return this.isRecordingActive;
+  }
+
+  /**
    * Destroy the window.
    */
   destroy(): void {
