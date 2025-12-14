@@ -520,7 +520,8 @@ export default function ClipboardHistory() {
       if (message.type !== 'dm') return;
       
       // Check if Hot Mic is enabled.
-      const hotMicOn = await window.socialAPI!.getHotMic();
+      if (!window.socialAPI) return;
+      const hotMicOn = await window.socialAPI.getHotMic();
       if (!hotMicOn) return;
       
       // Don't interrupt if recording.
