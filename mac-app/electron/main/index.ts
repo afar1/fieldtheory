@@ -2476,7 +2476,6 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   // Forward socialSync messageReceived events to all renderer windows for Hot Mic.
-  // Also show the clipboard history window if it's hidden (this is the Hot Mic magic).
   if (socialSync) {
     socialSync.on('messageReceived', async (message: { id: string; type: string }) => {
       console.log('[Main] Hot Mic message received:', message.id, 'type:', message.type);
