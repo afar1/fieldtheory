@@ -9,6 +9,7 @@ import { createClient, SupabaseClient, Session, SupportedStorage } from '@supaba
 import { ClipboardManager } from './clipboardManager';
 import { PreferencesManager } from './preferences';
 import { EventEmitter } from 'events';
+import WebSocket from 'ws';
 
 /**
  * Simple in-memory storage adapter for Supabase auth in the main process.
@@ -121,12 +122,17 @@ export class MobileSync extends EventEmitter {
 
     // Use in-memory storage for auth state - required for OTP verification to work.
     // The Supabase client needs storage to track state between OTP request and verify.
+    // Explicit WebSocket transport fixes Realtime timeouts in Node.js < v22 / Electron.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     this.supabase = createClient(url, anonKey, {
       auth: {
         storage: new MemoryStorage(),
         autoRefreshToken: true,
         persistSession: true,
         detectSessionInUrl: false,
+      },
+      realtime: {
+        transport: WebSocket as any,
       },
     });
 
