@@ -2448,6 +2448,13 @@ async function initTranscriberSystem(): Promise<void> {
   // When mobileSync sets a session, we forward it to teamClipboardSync and socialSync.
   const originalSetSession = mobileSync.setSession.bind(mobileSync);
   mobileSync.setSession = async (accessToken: string, refreshToken: string) => {
+    // Skip if we already have this exact session to prevent duplicate calls.
+    // Multiple UI components call setSyncSession on mount/auth change.
+    const currentSession = mobileSync!.getSession();
+    if (currentSession?.access_token === accessToken) {
+      return;
+    }
+    
     await originalSetSession(accessToken, refreshToken);
     // Forward session to teamClipboardSync and socialSync.
     const session = mobileSync!.getSession();
