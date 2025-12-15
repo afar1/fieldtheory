@@ -406,7 +406,7 @@ export class MobileSync extends EventEmitter {
       console.error('[MobileSync] Initial sync failed:', err);
     });
 
-    // Then sync every 30 seconds.
+    // Sync every 60 seconds. Realtime handles instant updates for todos; this is the fallback.
     this.syncInterval = setInterval(() => {
       if (!this.syncEnabled || !this.session) {
         return;
@@ -414,7 +414,12 @@ export class MobileSync extends EventEmitter {
       this.syncTranscripts().catch(err => {
         console.error('[MobileSync] Periodic sync failed:', err);
       });
-    }, 30000);
+      
+      // Sync todos periodically as fallback (Realtime handles instant updates when connected).
+      this.syncTodos().catch(err => {
+        console.error('[MobileSync] Todo sync failed:', err);
+      });
+    }, 60000);
 
     console.log('[MobileSync] Periodic sync started');
   }
