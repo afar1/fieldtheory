@@ -1016,6 +1016,54 @@ export default function ClipboardHistory() {
           e.preventDefault();
         }
       }
+
+      // When not in clipboard view, only handle global shortcuts (Tab for view switching).
+      // Let TeamView/TodoView/DMsView handle their own navigation and preview.
+      if (viewMode !== 'clipboard') {
+        // Tab/Shift+Tab cycles through view modes (global shortcut).
+        if (key === 'Tab' && !hasCtrl && !hasMeta) {
+          if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
+            return; // Let Tab navigate between form fields naturally.
+          }
+          e.preventDefault();
+
+          if (hasAlt) {
+            // Option+Tab - cycle through target apps.
+            if (targetAppInfo.runningApps.length === 0) {
+              return;
+            }
+            const nextIndex = (targetAppInfo.targetAppIndex + 1) % targetAppInfo.runningApps.length;
+            const newApp = targetAppInfo.runningApps[nextIndex];
+            setTargetAppInfo(prev => ({
+              ...prev,
+              targetApp: newApp,
+              targetAppIndex: nextIndex,
+            }));
+            window.clipboardAPI?.setTargetApp(newApp);
+          } else if (hasShift) {
+            // Shift+Tab - cycle backwards: clipboard ← team ← dms ← todo ← clipboard.
+            setShowSettings(false);
+            setViewMode(prev => {
+              if (prev === 'clipboard') return 'todo';
+              if (prev === 'todo') return 'dms';
+              if (prev === 'dms') return 'team';
+              return 'clipboard';
+            });
+          } else {
+            // Tab - cycle forwards: clipboard → team → dms → todo → clipboard.
+            setShowSettings(false);
+            setViewMode(prev => {
+              if (prev === 'clipboard') return 'team';
+              if (prev === 'team') return 'dms';
+              if (prev === 'dms') return 'todo';
+              return 'clipboard';
+            });
+          }
+          return;
+        }
+        // All other keys: let the active view handle them.
+        return;
+      }
       
       // Shift+? - Show shortcuts modal
       if (key === '?' && hasShift) {
@@ -1794,7 +1842,7 @@ export default function ClipboardHistory() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
 
@@ -2254,7 +2302,7 @@ export default function ClipboardHistory() {
                 outline: 'none',
               }}
             >
-              {mode === 'clipboard' ? 'My Fields' : mode === 'team' ? 'Team Fields' : mode === 'dms' ? 'DMs' : 'Tasks'}
+              {mode === 'clipboard' ? 'Clipboard' : mode === 'team' ? 'Team' : mode === 'dms' ? 'Messages' : 'Tasks'}
               {mode === 'dms' && hasUnreadDMs && viewMode !== 'dms' && (
                 <span style={{
                   marginLeft: '4px',

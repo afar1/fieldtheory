@@ -101,8 +101,12 @@ function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
     }
   }
 
-  console.warn('[Main] Could not load Supabase credentials from .env.local');
-  return {};
+  // Production fallback - anon key is public by design, protected by RLS.
+  console.log('[Main] Using production Supabase credentials');
+  return {
+    supabaseUrl: 'https://FIELD_THEORY_SUPABASE_URL.example',
+    supabaseAnonKey: 'FIELD_THEORY_SUPABASE_PUBLISHABLE_KEY',
+  };
 }
 
 // Override userData path for experimental builds to isolate data from production.
