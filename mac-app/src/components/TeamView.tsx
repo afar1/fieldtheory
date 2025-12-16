@@ -2746,30 +2746,6 @@ export default function TeamView() {
       </DragOverlay>
       </DndContext>
 
-      {/* Keyboard shortcuts bar - matches TodoView style */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '6px 16px',
-        borderTop: `1px solid ${theme.border}`,
-        fontSize: '10px',
-        color: theme.textSecondary,
-      }}>
-        <div style={{ display: 'flex', gap: '12px' }}>
-          <span><KeyCap small>j</KeyCap><KeyCap small>k</KeyCap> navigate</span>
-          <span><KeyCap small>x</KeyCap> select</span>
-          <span><KeyCap small>t</KeyCap> unshare</span>
-          <span><KeyCap small>c</KeyCap> copy</span>
-          <span><KeyCap small>/</KeyCap> search</span>
-        </div>
-        <div style={{ display: 'flex', gap: '12px' }}>
-          <span><KeyCap small>space</KeyCap> preview</span>
-          <span><KeyCap small>↵</KeyCap> paste</span>
-          <span><KeyCap small>tab</KeyCap> view</span>
-        </div>
-      </div>
-
       {/* CSS animations for preview, loading spinner, and item transitions */}
       <style>{`
         @keyframes previewFadeIn {
