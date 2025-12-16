@@ -1955,6 +1955,112 @@ export default function TeamView() {
         )}
       </div>
 
+      {/* Selection actions bar - slides in when items are selected */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          padding: '0 8px',
+          height: selectedIds.size > 0 ? '24px' : '0',
+          marginBottom: selectedIds.size > 0 ? '4px' : '0',
+          transition: 'height 0.15s ease, margin-bottom 0.15s ease',
+          overflow: 'hidden',
+        }}
+      >
+        {selectedIds.size > 0 && (
+          <div
+            style={{
+              fontSize: '11px',
+              color: theme.textSecondary,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}
+          >
+            <span style={{ fontWeight: 500 }}>{selectedIds.size} selected</span>
+            <span style={{ color: theme.border }}>•</span>
+            <button
+              tabIndex={-1}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={async () => {
+                await deleteTeamItems(Array.from(selectedIds));
+                setSelectedIds(new Set());
+                setIsMultiSelect(false);
+              }}
+              style={{
+                padding: '2px 6px',
+                fontSize: '10px',
+                backgroundColor: 'transparent',
+                color: theme.textSecondary,
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+              }}
+            >
+              <KeyCap small>⌫</KeyCap> unshare
+            </button>
+            {selectedIds.size > 1 && (
+              <button
+                tabIndex={-1}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={async () => {
+                  const newStackId = crypto.randomUUID();
+                  const itemIds = Array.from(selectedIds);
+                  const success = await window.teamClipboardAPI?.updateStackId(itemIds, newStackId);
+                  if (success) {
+                    setTeamItems(prev => prev.map(i => 
+                      itemIds.includes(i.id) ? { ...i, stackId: newStackId } : i
+                    ));
+                    setSelectedIds(new Set());
+                    setIsMultiSelect(false);
+                  }
+                }}
+                style={{
+                  padding: '2px 6px',
+                  fontSize: '10px',
+                  backgroundColor: 'transparent',
+                  color: theme.textSecondary,
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                <KeyCap small>s</KeyCap> stack
+              </button>
+            )}
+            <button
+              tabIndex={-1}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                setSelectedIds(new Set());
+                setIsMultiSelect(false);
+              }}
+              style={{
+                padding: '2px 6px',
+                fontSize: '10px',
+                backgroundColor: 'transparent',
+                color: theme.textSecondary,
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+              }}
+            >
+              <KeyCap small>esc</KeyCap> clear
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Team items list */}
       <DndContext
         sensors={sensors}
