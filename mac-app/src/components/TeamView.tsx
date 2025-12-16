@@ -1093,8 +1093,6 @@ export default function TeamView() {
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
-    if (!session || listRows.length === 0) return;
-
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key;
       const hasMeta = e.metaKey;
@@ -1114,26 +1112,27 @@ export default function TeamView() {
       // Skip if typing in input (for all other shortcuts).
       if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
 
-      const selectedRow = listRows[selectedIndex];
-
-      // Escape: Dismiss preview, clear selection, or close window.
+      // Escape always works - dismiss preview, clear selection, or close window.
       if (key === 'Escape') {
         if (preview) {
           e.preventDefault();
           dismissPreview();
           return;
         }
-        // If items are selected, clear selection first.
         if (selectedIds.size > 0) {
           e.preventDefault();
           setSelectedIds(new Set());
           setIsMultiSelect(false);
           return;
         }
-        // Otherwise close the window.
         window.clipboardAPI?.closeWindow();
         return;
       }
+
+      // Item-specific shortcuts require session and items.
+      if (!session || listRows.length === 0) return;
+
+      const selectedRow = listRows[selectedIndex];
 
       // Arrow keys - navigate within stack preview when preview is open.
       // →/↓ go forward through stack items, then move to next row when at end.
@@ -1990,19 +1989,34 @@ export default function TeamView() {
           listRows.map((row, index) => {
             const isRowSelected = selectedIndex === index;
             const isHovered = hoveredRowIndex === index;
+            
+            // Check if this row's items are multi-selected (x key selection).
+            const isMultiSelected = row.type === 'stack'
+              ? row.items.some(item => selectedIds.has(item.id))
+              : selectedIds.has(row.item.id);
 
             // Shared row styling.
+            // Priority: Multi-selected (x) > Row selected (j/k) > Default
             const rowStyle = {
               display: 'flex',
               flexDirection: 'column' as const,
               padding: '12px 16px',
-              backgroundColor: isRowSelected ? theme.bgSecondary : 'transparent',
+              backgroundColor: isMultiSelected 
+                ? (theme.selectedBg || (theme.isDark ? 'rgba(45, 212, 191, 0.15)' : 'rgba(20, 184, 166, 0.1)'))
+                : isRowSelected 
+                  ? theme.bgSecondary 
+                  : 'transparent',
               borderTop: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
               borderBottom: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : `1px solid ${theme.border}`,
               borderRight: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
-              borderLeft: isRowSelected
-                ? `2px solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
-                : '2px solid transparent',
+              // J/K = bright teal, X-selection = muted teal, both = thicker bright teal
+              borderLeft: isRowSelected && isMultiSelected
+                ? `4px solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
+                : isRowSelected
+                  ? `2px solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
+                  : isMultiSelected
+                    ? `2px solid ${theme.selectedBorder || (theme.isDark ? '#2dd4bf80' : '#14b8a680')}`
+                    : '2px solid transparent',
               boxShadow: isRowSelected
                 ? theme.isDark 
                   ? '0 2px 8px rgba(0,0,0,0.3)' 

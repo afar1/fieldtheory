@@ -122,8 +122,10 @@ export default function DMsView({ onSendDM }: DMsViewProps) {
   const [addFriendEmail, setAddFriendEmail] = useState('');
   const [showAddFriend, setShowAddFriend] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState(0);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   // ==========================================================================
   // Data Loading
@@ -228,6 +230,96 @@ export default function DMsView({ onSendDM }: DMsViewProps) {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, feedbackReplies]);
+
+  // Get current list items based on active tab.
+  const listItems = activeTab === 'dms' ? conversations : feedback;
+
+  // Reset selectedIndex when switching tabs or when list changes.
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [activeTab]);
+
+  // Keyboard navigation.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const key = e.key;
+
+      // Skip if typing in input (except Escape).
+      if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/) && key !== 'Escape') {
+        return;
+      }
+
+      // Escape: Close modal, deselect, or close window.
+      if (key === 'Escape') {
+        if (showAddFriend) {
+          e.preventDefault();
+          setShowAddFriend(false);
+          return;
+        }
+        if (selectedConversation || selectedFeedback) {
+          e.preventDefault();
+          setSelectedConversation(null);
+          setSelectedFeedback(null);
+          return;
+        }
+        window.clipboardAPI?.closeWindow();
+        return;
+      }
+
+      // j/k or Arrow keys: Navigate list.
+      if (key === 'j' || key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedIndex(prev => Math.min(prev + 1, listItems.length - 1));
+        return;
+      }
+      if (key === 'k' || key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedIndex(prev => Math.max(prev - 1, 0));
+        return;
+      }
+
+      // Enter: Select the current item.
+      if (key === 'Enter' && listItems.length > 0) {
+        e.preventDefault();
+        if (activeTab === 'dms') {
+          const convo = conversations[selectedIndex];
+          if (convo) setSelectedConversation(convo.otherUserId);
+        } else {
+          const item = feedback[selectedIndex];
+          if (item) setSelectedFeedback(item);
+        }
+        return;
+      }
+
+      // 1 or d: Switch to DMs tab.
+      if ((key === '1' || key === 'd') && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setActiveTab('dms');
+        setSelectedConversation(null);
+        setSelectedFeedback(null);
+        return;
+      }
+
+      // 2 or f: Switch to Feedback tab.
+      if ((key === '2' || key === 'f') && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setActiveTab('feedback');
+        setSelectedConversation(null);
+        setSelectedFeedback(null);
+        return;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeTab, conversations, feedback, listItems.length, selectedIndex, showAddFriend, selectedConversation, selectedFeedback]);
+
+  // Scroll selected item into view.
+  useEffect(() => {
+    if (!listRef.current) return;
+    const selectedElement = listRef.current.children[selectedIndex] as HTMLElement;
+    selectedElement?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [selectedIndex]);
 
   // ==========================================================================
   // Actions
@@ -508,13 +600,16 @@ export default function DMsView({ onSendDM }: DMsViewProps) {
         overflow: 'hidden',
       }}>
         {/* Left panel: Conversations or Feedback list */}
-        <div style={{
-          width: '200px',
-          flexShrink: 0,
-          overflowY: 'auto',
-          borderRight: `1px solid ${theme.inputBorder}`,
-          paddingRight: '12px',
-        }}>
+        <div
+          ref={listRef}
+          style={{
+            width: '200px',
+            flexShrink: 0,
+            overflowY: 'auto',
+            borderRight: `1px solid ${theme.inputBorder}`,
+            paddingRight: '12px',
+          }}
+        >
           {activeTab === 'dms' ? (
             // DM Conversations list
             conversations.length === 0 ? (
@@ -522,16 +617,24 @@ export default function DMsView({ onSendDM }: DMsViewProps) {
                 No conversations yet. Press D on an item to send a DM.
               </div>
             ) : (
-              conversations.map((convo) => (
+              conversations.map((convo, index) => (
                 <div
                   key={convo.otherUserId}
-                  onClick={() => setSelectedConversation(convo.otherUserId)}
+                  onClick={() => {
+                    setSelectedConversation(convo.otherUserId);
+                    setSelectedIndex(index);
+                  }}
                   style={{
                     padding: '8px',
                     marginBottom: '4px',
                     borderRadius: '4px',
-                    backgroundColor: selectedConversation === convo.otherUserId ? theme.bgSecondary : 'transparent',
+                    backgroundColor: selectedConversation === convo.otherUserId 
+                      ? theme.bgSecondary 
+                      : index === selectedIndex 
+                        ? `${theme.bgSecondary}80` 
+                        : 'transparent',
                     cursor: 'pointer',
+                    outline: index === selectedIndex ? `1px solid ${theme.accent}40` : 'none',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', marginBottom: '2px' }}>
@@ -577,17 +680,25 @@ export default function DMsView({ onSendDM }: DMsViewProps) {
                 No feedback yet. Press F on an item to submit feedback.
               </div>
             ) : (
-              feedback.map((item) => (
+              feedback.map((item, index) => (
                 <div
                   key={item.id}
-                  onClick={() => setSelectedFeedback(item)}
+                  onClick={() => {
+                    setSelectedFeedback(item);
+                    setSelectedIndex(index);
+                  }}
                   style={{
                     padding: '8px',
                     marginBottom: '4px',
                     borderRadius: '4px',
-                    backgroundColor: selectedFeedback?.id === item.id ? theme.bgSecondary : 'transparent',
+                    backgroundColor: selectedFeedback?.id === item.id 
+                      ? theme.bgSecondary 
+                      : index === selectedIndex 
+                        ? `${theme.bgSecondary}80` 
+                        : 'transparent',
                     cursor: 'pointer',
                     opacity: item.feedbackStatus === 'archived' ? 0.5 : 1,
+                    outline: index === selectedIndex ? `1px solid ${theme.accent}40` : 'none',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', marginBottom: '2px' }}>
