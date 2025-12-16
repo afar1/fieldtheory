@@ -116,9 +116,39 @@ async function getCachedImageUrl(imageUrl: string | null, imageData: string | nu
   }
 }
 
+// Get cached image URL synchronously (for initial state).
+// Returns cached URL if available, empty string if needs async fetch.
+function getCachedImageUrlSync(imageUrl: string | null, imageData: string | null, itemId: string): string {
+  // If we have base64 data, use it directly.
+  if (imageData) {
+    return `data:image/png;base64,${imageData}`;
+  }
+
+  if (!imageUrl) {
+    return '';
+  }
+
+  // Check in-memory cache (fast).
+  if (blobUrlCache.has(itemId)) {
+    return blobUrlCache.get(itemId)!;
+  }
+
+  // Check localStorage cache (medium - sync but involves parsing).
+  const metadata = getImageCacheMetadata();
+  const cached = metadata.get(itemId);
+  if (cached?.base64) {
+    const blobUrl = `data:image/png;base64,${cached.base64}`;
+    blobUrlCache.set(itemId, blobUrl); // Promote to memory cache.
+    return blobUrl;
+  }
+
+  // Not cached - needs async fetch.
+  return '';
+}
+
 // =============================================================================
 // CachedImage Component - Renders an image using the cache.
-// Shows the image immediately if cached, fetches and caches otherwise.
+// Uses lazy state initialization to show cached images instantly.
 // =============================================================================
 
 function CachedImage({
@@ -134,32 +164,33 @@ function CachedImage({
   alt: string;
   style?: React.CSSProperties;
 }) {
-  const [src, setSrc] = useState<string>('');
+  // Lazy initialization: check cache synchronously on first render.
+  const [src, setSrc] = useState<string>(() => 
+    getCachedImageUrlSync(imageUrl, imageData, itemId)
+  );
 
+  // Only fetch async if we didn't have a cached value.
   useEffect(() => {
-    let cancelled = false;
+    if (src) return; // Already have cached image.
     
+    let cancelled = false;
     getCachedImageUrl(imageUrl, imageData, itemId).then(url => {
-      if (!cancelled) {
+      if (!cancelled && url) {
         setSrc(url);
       }
     });
     
     return () => { cancelled = true; };
-  }, [imageUrl, imageData, itemId]);
+  }, [imageUrl, imageData, itemId, src]);
 
   if (!src) {
-    // Show placeholder while loading.
+    // Show skeleton placeholder while loading (less jarring than text).
     return (
       <div style={{
         ...style,
-        backgroundColor: 'rgba(128, 128, 128, 0.1)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}>
-        <span style={{ fontSize: '12px', color: '#888' }}>...</span>
-      </div>
+        backgroundColor: 'rgba(128, 128, 128, 0.08)',
+        borderRadius: '4px',
+      }} />
     );
   }
 
