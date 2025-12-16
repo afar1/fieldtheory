@@ -1208,36 +1208,6 @@ export default function TeamView() {
         return;
       }
 
-      // Shift+Enter - Toggle multi-select mode.
-      if (key === 'Enter' && hasShift) {
-        e.preventDefault();
-        setIsMultiSelect(true);
-        if (selectedRow?.type === 'item') {
-          setSelectedIds(prev => {
-            const next = new Set(prev);
-            if (next.has(selectedRow.item.id)) {
-              next.delete(selectedRow.item.id);
-            } else {
-              next.add(selectedRow.item.id);
-            }
-            return next;
-          });
-        } else if (selectedRow?.type === 'stack') {
-          const stackItemIds = selectedRow.items.map(i => i.id);
-          setSelectedIds(prev => {
-            const next = new Set(prev);
-            const allSelected = stackItemIds.every(id => next.has(id));
-            if (allSelected) {
-              stackItemIds.forEach(id => next.delete(id));
-            } else {
-              stackItemIds.forEach(id => next.add(id));
-            }
-            return next;
-          });
-        }
-        return;
-      }
-
       // Delete / Backspace - Delete selected item/stack.
       if (key === 'Delete' || key === 'Backspace') {
         e.preventDefault();

@@ -1615,41 +1615,6 @@ export default function ClipboardHistory() {
         return;
       }
 
-      if (key === 'Enter' && hasShift) {
-        // Skip if user is typing in an input field.
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
-          return;
-        }
-        // Toggle multi-select mode
-        setIsMultiSelect(true);
-        const selectedRow = listRows[selectedIndex];
-        if (selectedRow?.type === 'item') {
-          setSelectedIds(prev => {
-            const next = new Set(prev);
-            if (next.has(selectedRow.item.id)) {
-              next.delete(selectedRow.item.id);
-            } else {
-              next.add(selectedRow.item.id);
-            }
-            return next;
-          });
-        } else if (selectedRow?.type === 'stack') {
-          // For stacks, toggle all items in the stack
-          const stackItemIds = selectedRow.items.map(i => i.id);
-          setSelectedIds(prev => {
-            const next = new Set(prev);
-            const allSelected = stackItemIds.every(id => next.has(id));
-            if (allSelected) {
-              stackItemIds.forEach(id => next.delete(id));
-            } else {
-              stackItemIds.forEach(id => next.add(id));
-            }
-            return next;
-          });
-        }
-        return;
-      }
-
       // Cmd+Z: Undo deletion
       if (key === 'z' && hasMeta && !hasShift && deletedItems.length > 0) {
         e.preventDefault();
