@@ -1238,11 +1238,8 @@ export default function TeamView() {
         return;
       }
 
-      // Delete / Cmd+Backspace - Delete selected item/stack.
+      // Delete / Backspace - Delete selected item/stack.
       if (key === 'Delete' || key === 'Backspace') {
-        // Only Delete key works without modifier, Backspace needs Cmd/Ctrl.
-        if (key === 'Backspace' && !hasMeta && !hasCtrl) return;
-        
         e.preventDefault();
         (async () => {
           if (selectedRow?.type === 'item') {

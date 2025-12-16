@@ -1411,13 +1411,10 @@ export default function ClipboardHistory() {
         return;
       }
       
-      // Delete key - Delete selected item (same as Cmd+Backspace)
+      // Delete / Backspace - Delete selected item.
       if (key === 'Delete' || key === 'Backspace') {
-        // Skip if typing in input, unless Cmd/Ctrl is held
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/) && !hasMeta && !hasCtrl) return;
-        
-        // Only Delete key works without modifier, Backspace needs Cmd/Ctrl
-        if (key === 'Backspace' && !hasMeta && !hasCtrl) return;
+        // Skip if typing in input.
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
         
         e.preventDefault();
         const selectedRow = listRows[selectedIndex];
