@@ -22,6 +22,151 @@ import {
 } from '@dnd-kit/core';
 
 // =============================================================================
+// Image Cache - stores fetched images as blob URLs to avoid re-downloading.
+// Uses localStorage for persistence across sessions.
+// =============================================================================
+
+const IMAGE_CACHE_KEY = 'teamImageCache';
+const IMAGE_CACHE_MAX_SIZE = 50; // Maximum number of images to cache.
+
+// In-memory cache for blob URLs (faster than localStorage for rendering).
+const blobUrlCache = new Map<string, string>();
+
+// Load cache metadata from localStorage on init.
+function getImageCacheMetadata(): Map<string, { timestamp: number; base64: string }> {
+  try {
+    const stored = localStorage.getItem(IMAGE_CACHE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      return new Map(Object.entries(parsed));
+    }
+  } catch (e) {
+    // Ignore parse errors.
+  }
+  return new Map();
+}
+
+// Save cache metadata to localStorage.
+function saveImageCacheMetadata(cache: Map<string, { timestamp: number; base64: string }>) {
+  try {
+    // Limit cache size by removing oldest entries.
+    const entries = Array.from(cache.entries());
+    if (entries.length > IMAGE_CACHE_MAX_SIZE) {
+      entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+      const toKeep = entries.slice(-IMAGE_CACHE_MAX_SIZE);
+      cache = new Map(toKeep);
+    }
+    localStorage.setItem(IMAGE_CACHE_KEY, JSON.stringify(Object.fromEntries(cache)));
+  } catch (e) {
+    // Ignore storage errors (quota exceeded, etc.).
+  }
+}
+
+// Get cached image URL or fetch and cache it.
+async function getCachedImageUrl(imageUrl: string | null, imageData: string | null, itemId: string): Promise<string> {
+  // If we have base64 data, use it directly (already local).
+  if (imageData) {
+    return `data:image/png;base64,${imageData}`;
+  }
+
+  if (!imageUrl) {
+    return '';
+  }
+
+  // Check in-memory cache first.
+  if (blobUrlCache.has(itemId)) {
+    return blobUrlCache.get(itemId)!;
+  }
+
+  // Check localStorage cache.
+  const metadata = getImageCacheMetadata();
+  const cached = metadata.get(itemId);
+  if (cached?.base64) {
+    // Convert base64 to blob URL and store in memory cache.
+    const blobUrl = `data:image/png;base64,${cached.base64}`;
+    blobUrlCache.set(itemId, blobUrl);
+    return blobUrl;
+  }
+
+  // Fetch from URL and cache.
+  try {
+    const response = await fetch(imageUrl);
+    if (!response.ok) throw new Error('Failed to fetch image');
+    
+    const blob = await response.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    blobUrlCache.set(itemId, blobUrl);
+
+    // Also store as base64 in localStorage for persistence.
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64 = (reader.result as string).split(',')[1];
+      if (base64) {
+        metadata.set(itemId, { timestamp: Date.now(), base64 });
+        saveImageCacheMetadata(metadata);
+      }
+    };
+    reader.readAsDataURL(blob);
+
+    return blobUrl;
+  } catch (e) {
+    // Fall back to original URL on error.
+    console.warn('[TeamView] Image cache fetch failed:', e);
+    return imageUrl;
+  }
+}
+
+// =============================================================================
+// CachedImage Component - Renders an image using the cache.
+// Shows the image immediately if cached, fetches and caches otherwise.
+// =============================================================================
+
+function CachedImage({
+  imageUrl,
+  imageData,
+  itemId,
+  alt,
+  style,
+}: {
+  imageUrl: string | null;
+  imageData: string | null;
+  itemId: string;
+  alt: string;
+  style?: React.CSSProperties;
+}) {
+  const [src, setSrc] = useState<string>('');
+
+  useEffect(() => {
+    let cancelled = false;
+    
+    getCachedImageUrl(imageUrl, imageData, itemId).then(url => {
+      if (!cancelled) {
+        setSrc(url);
+      }
+    });
+    
+    return () => { cancelled = true; };
+  }, [imageUrl, imageData, itemId]);
+
+  if (!src) {
+    // Show placeholder while loading.
+    return (
+      <div style={{
+        ...style,
+        backgroundColor: 'rgba(128, 128, 128, 0.1)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}>
+        <span style={{ fontSize: '12px', color: '#888' }}>...</span>
+      </div>
+    );
+  }
+
+  return <img src={src} alt={alt} style={style} />;
+}
+
+// =============================================================================
 // Types
 // =============================================================================
 
@@ -427,6 +572,14 @@ export default function TeamView() {
 
   // Check session on mount and listen for changes.
   useEffect(() => {
+    // If supabase client is not available, skip auth. This can happen if
+    // environment variables are missing during development.
+    if (!supabase) {
+      console.warn('[TeamView] Supabase client not available');
+      setCheckingAuth(false);
+      return;
+    }
+
     // Get session - supabase caches this so it should be fast on remount.
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
@@ -475,10 +628,12 @@ export default function TeamView() {
       setAuthError(result.error);
     } else if (result?.session) {
       // Set session in renderer's supabase client so it persists across tab switches.
-      await supabase.auth.setSession({
-        access_token: result.session.access_token,
-        refresh_token: result.session.refresh_token,
-      });
+      if (supabase) {
+        await supabase.auth.setSession({
+          access_token: result.session.access_token,
+          refresh_token: result.session.refresh_token,
+        });
+      }
       setSession(result.session);
       setAuthEmail('');
       setAuthPassword('');
@@ -637,6 +792,16 @@ export default function TeamView() {
     } catch (e) {
       // Ignore storage errors (quota exceeded, etc.).
     }
+    
+    // Pre-cache images in the background for instant display next time.
+    // This runs asynchronously and doesn't block the UI.
+    items
+      .filter(item => item.imageUrl && !item.imageData)
+      .forEach(item => {
+        getCachedImageUrl(item.imageUrl, item.imageData, item.id).catch(() => {
+          // Ignore individual image cache failures.
+        });
+      });
     
     setItemsLoading(false);
     setBackgroundSyncing(false);
@@ -881,13 +1046,16 @@ export default function TeamView() {
   // Use background sync if we have cached items for instant display.
   useEffect(() => {
     if (session) {
-      loadTeamMembers();
+      // Load both team members and items in parallel.
       // If we have cached items, do a background sync. Otherwise, show loading.
       const hasCachedItems = teamItems.length > 0;
+      loadTeamMembers();
       loadTeamItems(hasCachedItems);
     }
+  // Note: We intentionally exclude teamItems from deps to avoid re-triggering on every update.
+  // The initial cache check is based on the state at mount time.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, loadTeamMembers]);
+  }, [session, loadTeamMembers, loadTeamItems]);
 
   // Reset selection when list rows change.
   useEffect(() => {
@@ -1409,10 +1577,10 @@ export default function TeamView() {
           {authMode === 'signIn' && !successMessage && (
             <>
               <h3 style={{ margin: '0 0 8px 0', fontSize: '16px', color: theme.text }}>
-                Sign in to use Team Clipboard
+                Sign in to Field Theory
               </h3>
               <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: theme.textSecondary }}>
-                Share clipboard items with your team.
+                Share clipboard items with your team and sync across devices.
               </p>
 
               <form onSubmit={handleSignIn}>
