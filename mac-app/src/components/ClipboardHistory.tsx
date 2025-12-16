@@ -3744,33 +3744,6 @@ export default function ClipboardHistory() {
         </div>
       )}
 
-      {/* Keyboard shortcuts bar - only show for clipboard view, not settings */}
-      {viewMode === 'clipboard' && !showSettings && (
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '6px 16px',
-          borderTop: `1px solid ${theme.border}`,
-          fontSize: '10px',
-          color: theme.textSecondary,
-          backgroundColor: theme.bg,
-        }}>
-          <div style={{ display: 'flex', gap: '12px' }}>
-            <span><KeyCap small>j</KeyCap><KeyCap small>k</KeyCap> navigate</span>
-            <span><KeyCap small>x</KeyCap> select</span>
-            <span><KeyCap small>s</KeyCap> stack</span>
-            <span><KeyCap small>t</KeyCap> team</span>
-            <span><KeyCap small>/</KeyCap> search</span>
-          </div>
-          <div style={{ display: 'flex', gap: '12px' }}>
-            <span><KeyCap small>space</KeyCap> preview</span>
-            <span><KeyCap small>↵</KeyCap> paste</span>
-            <span><KeyCap small>tab</KeyCap> view</span>
-          </div>
-        </div>
-      )}
-      
       {/* Footer - three-column layout: left=stats, center=recording, right=controls */}
       <div
         style={{
