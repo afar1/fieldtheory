@@ -22,6 +22,182 @@ import {
 } from '@dnd-kit/core';
 
 // =============================================================================
+// Image Cache - stores fetched images as blob URLs to avoid re-downloading.
+// Uses localStorage for persistence across sessions.
+// =============================================================================
+
+const IMAGE_CACHE_KEY = 'teamImageCache';
+const IMAGE_CACHE_MAX_SIZE = 50; // Maximum number of images to cache.
+
+// In-memory cache for blob URLs (faster than localStorage for rendering).
+const blobUrlCache = new Map<string, string>();
+
+// Load cache metadata from localStorage on init.
+function getImageCacheMetadata(): Map<string, { timestamp: number; base64: string }> {
+  try {
+    const stored = localStorage.getItem(IMAGE_CACHE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      return new Map(Object.entries(parsed));
+    }
+  } catch (e) {
+    // Ignore parse errors.
+  }
+  return new Map();
+}
+
+// Save cache metadata to localStorage.
+function saveImageCacheMetadata(cache: Map<string, { timestamp: number; base64: string }>) {
+  try {
+    // Limit cache size by removing oldest entries.
+    const entries = Array.from(cache.entries());
+    if (entries.length > IMAGE_CACHE_MAX_SIZE) {
+      entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+      const toKeep = entries.slice(-IMAGE_CACHE_MAX_SIZE);
+      cache = new Map(toKeep);
+    }
+    localStorage.setItem(IMAGE_CACHE_KEY, JSON.stringify(Object.fromEntries(cache)));
+  } catch (e) {
+    // Ignore storage errors (quota exceeded, etc.).
+  }
+}
+
+// Get cached image URL or fetch and cache it.
+async function getCachedImageUrl(imageUrl: string | null, imageData: string | null, itemId: string): Promise<string> {
+  // If we have base64 data, use it directly (already local).
+  if (imageData) {
+    return `data:image/png;base64,${imageData}`;
+  }
+
+  if (!imageUrl) {
+    return '';
+  }
+
+  // Check in-memory cache first.
+  if (blobUrlCache.has(itemId)) {
+    return blobUrlCache.get(itemId)!;
+  }
+
+  // Check localStorage cache.
+  const metadata = getImageCacheMetadata();
+  const cached = metadata.get(itemId);
+  if (cached?.base64) {
+    // Convert base64 to blob URL and store in memory cache.
+    const blobUrl = `data:image/png;base64,${cached.base64}`;
+    blobUrlCache.set(itemId, blobUrl);
+    return blobUrl;
+  }
+
+  // Fetch from URL and cache.
+  try {
+    const response = await fetch(imageUrl);
+    if (!response.ok) throw new Error('Failed to fetch image');
+    
+    const blob = await response.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    blobUrlCache.set(itemId, blobUrl);
+
+    // Also store as base64 in localStorage for persistence.
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64 = (reader.result as string).split(',')[1];
+      if (base64) {
+        metadata.set(itemId, { timestamp: Date.now(), base64 });
+        saveImageCacheMetadata(metadata);
+      }
+    };
+    reader.readAsDataURL(blob);
+
+    return blobUrl;
+  } catch (e) {
+    // Fall back to original URL on error.
+    console.warn('[TeamView] Image cache fetch failed:', e);
+    return imageUrl;
+  }
+}
+
+// Get cached image URL synchronously (for initial state).
+// Returns cached URL if available, empty string if needs async fetch.
+function getCachedImageUrlSync(imageUrl: string | null, imageData: string | null, itemId: string): string {
+  // If we have base64 data, use it directly.
+  if (imageData) {
+    return `data:image/png;base64,${imageData}`;
+  }
+
+  if (!imageUrl) {
+    return '';
+  }
+
+  // Check in-memory cache (fast).
+  if (blobUrlCache.has(itemId)) {
+    return blobUrlCache.get(itemId)!;
+  }
+
+  // Check localStorage cache (medium - sync but involves parsing).
+  const metadata = getImageCacheMetadata();
+  const cached = metadata.get(itemId);
+  if (cached?.base64) {
+    const blobUrl = `data:image/png;base64,${cached.base64}`;
+    blobUrlCache.set(itemId, blobUrl); // Promote to memory cache.
+    return blobUrl;
+  }
+
+  // Not cached - needs async fetch.
+  return '';
+}
+
+// =============================================================================
+// CachedImage Component - Renders an image using the cache.
+// Uses lazy state initialization to show cached images instantly.
+// =============================================================================
+
+function CachedImage({
+  imageUrl,
+  imageData,
+  itemId,
+  alt,
+  style,
+}: {
+  imageUrl: string | null;
+  imageData: string | null;
+  itemId: string;
+  alt: string;
+  style?: React.CSSProperties;
+}) {
+  // Lazy initialization: check cache synchronously on first render.
+  const [src, setSrc] = useState<string>(() => 
+    getCachedImageUrlSync(imageUrl, imageData, itemId)
+  );
+
+  // Only fetch async if we didn't have a cached value.
+  useEffect(() => {
+    if (src) return; // Already have cached image.
+    
+    let cancelled = false;
+    getCachedImageUrl(imageUrl, imageData, itemId).then(url => {
+      if (!cancelled && url) {
+        setSrc(url);
+      }
+    });
+    
+    return () => { cancelled = true; };
+  }, [imageUrl, imageData, itemId, src]);
+
+  if (!src) {
+    // Show skeleton placeholder while loading (less jarring than text).
+    return (
+      <div style={{
+        ...style,
+        backgroundColor: 'rgba(128, 128, 128, 0.08)',
+        borderRadius: '4px',
+      }} />
+    );
+  }
+
+  return <img src={src} alt={alt} style={style} />;
+}
+
+// =============================================================================
 // Types
 // =============================================================================
 
@@ -427,6 +603,14 @@ export default function TeamView() {
 
   // Check session on mount and listen for changes.
   useEffect(() => {
+    // If supabase client is not available, skip auth. This can happen if
+    // environment variables are missing during development.
+    if (!supabase) {
+      console.warn('[TeamView] Supabase client not available');
+      setCheckingAuth(false);
+      return;
+    }
+
     // Get session - supabase caches this so it should be fast on remount.
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
@@ -475,10 +659,12 @@ export default function TeamView() {
       setAuthError(result.error);
     } else if (result?.session) {
       // Set session in renderer's supabase client so it persists across tab switches.
-      await supabase.auth.setSession({
-        access_token: result.session.access_token,
-        refresh_token: result.session.refresh_token,
-      });
+      if (supabase) {
+        await supabase.auth.setSession({
+          access_token: result.session.access_token,
+          refresh_token: result.session.refresh_token,
+        });
+      }
       setSession(result.session);
       setAuthEmail('');
       setAuthPassword('');
@@ -637,6 +823,16 @@ export default function TeamView() {
     } catch (e) {
       // Ignore storage errors (quota exceeded, etc.).
     }
+    
+    // Pre-cache images in the background for instant display next time.
+    // This runs asynchronously and doesn't block the UI.
+    items
+      .filter(item => item.imageUrl && !item.imageData)
+      .forEach(item => {
+        getCachedImageUrl(item.imageUrl, item.imageData, item.id).catch(() => {
+          // Ignore individual image cache failures.
+        });
+      });
     
     setItemsLoading(false);
     setBackgroundSyncing(false);
@@ -881,13 +1077,16 @@ export default function TeamView() {
   // Use background sync if we have cached items for instant display.
   useEffect(() => {
     if (session) {
-      loadTeamMembers();
+      // Load both team members and items in parallel.
       // If we have cached items, do a background sync. Otherwise, show loading.
       const hasCachedItems = teamItems.length > 0;
+      loadTeamMembers();
       loadTeamItems(hasCachedItems);
     }
+  // Note: We intentionally exclude teamItems from deps to avoid re-triggering on every update.
+  // The initial cache check is based on the state at mount time.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, loadTeamMembers]);
+  }, [session, loadTeamMembers, loadTeamItems]);
 
   // Reset selection when list rows change.
   useEffect(() => {
@@ -925,8 +1124,6 @@ export default function TeamView() {
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
-    if (!session || listRows.length === 0) return;
-
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key;
       const hasMeta = e.metaKey;
@@ -946,26 +1143,27 @@ export default function TeamView() {
       // Skip if typing in input (for all other shortcuts).
       if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
 
-      const selectedRow = listRows[selectedIndex];
-
-      // Escape: Dismiss preview, clear selection, or close window.
+      // Escape always works - dismiss preview, clear selection, or close window.
       if (key === 'Escape') {
         if (preview) {
           e.preventDefault();
           dismissPreview();
           return;
         }
-        // If items are selected, clear selection first.
         if (selectedIds.size > 0) {
           e.preventDefault();
           setSelectedIds(new Set());
           setIsMultiSelect(false);
           return;
         }
-        // Otherwise close the window.
         window.clipboardAPI?.closeWindow();
         return;
       }
+
+      // Item-specific shortcuts require session and items.
+      if (!session || listRows.length === 0) return;
+
+      const selectedRow = listRows[selectedIndex];
 
       // Arrow keys - navigate within stack preview when preview is open.
       // →/↓ go forward through stack items, then move to next row when at end.
@@ -1041,41 +1239,8 @@ export default function TeamView() {
         return;
       }
 
-      // Shift+Enter - Toggle multi-select mode.
-      if (key === 'Enter' && hasShift) {
-        e.preventDefault();
-        setIsMultiSelect(true);
-        if (selectedRow?.type === 'item') {
-          setSelectedIds(prev => {
-            const next = new Set(prev);
-            if (next.has(selectedRow.item.id)) {
-              next.delete(selectedRow.item.id);
-            } else {
-              next.add(selectedRow.item.id);
-            }
-            return next;
-          });
-        } else if (selectedRow?.type === 'stack') {
-          const stackItemIds = selectedRow.items.map(i => i.id);
-          setSelectedIds(prev => {
-            const next = new Set(prev);
-            const allSelected = stackItemIds.every(id => next.has(id));
-            if (allSelected) {
-              stackItemIds.forEach(id => next.delete(id));
-            } else {
-              stackItemIds.forEach(id => next.add(id));
-            }
-            return next;
-          });
-        }
-        return;
-      }
-
-      // Delete / Cmd+Backspace - Delete selected item/stack.
+      // Delete / Backspace - Delete selected item/stack.
       if (key === 'Delete' || key === 'Backspace') {
-        // Only Delete key works without modifier, Backspace needs Cmd/Ctrl.
-        if (key === 'Backspace' && !hasMeta && !hasCtrl) return;
-        
         e.preventDefault();
         (async () => {
           if (selectedRow?.type === 'item') {
@@ -1409,10 +1574,10 @@ export default function TeamView() {
           {authMode === 'signIn' && !successMessage && (
             <>
               <h3 style={{ margin: '0 0 8px 0', fontSize: '16px', color: theme.text }}>
-                Sign in to use Team Clipboard
+                Sign in to Field Theory
               </h3>
               <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: theme.textSecondary }}>
-                Share clipboard items with your team.
+                Share clipboard items with your team and sync across devices.
               </p>
 
               <form onSubmit={handleSignIn}>
@@ -1791,6 +1956,112 @@ export default function TeamView() {
         )}
       </div>
 
+      {/* Selection actions bar - slides in when items are selected */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          padding: '0 8px',
+          height: selectedIds.size > 0 ? '24px' : '0',
+          marginBottom: selectedIds.size > 0 ? '4px' : '0',
+          transition: 'height 0.15s ease, margin-bottom 0.15s ease',
+          overflow: 'hidden',
+        }}
+      >
+        {selectedIds.size > 0 && (
+          <div
+            style={{
+              fontSize: '11px',
+              color: theme.textSecondary,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}
+          >
+            <span style={{ fontWeight: 500 }}>{selectedIds.size} selected</span>
+            <span style={{ color: theme.border }}>•</span>
+            <button
+              tabIndex={-1}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={async () => {
+                await deleteTeamItems(Array.from(selectedIds));
+                setSelectedIds(new Set());
+                setIsMultiSelect(false);
+              }}
+              style={{
+                padding: '2px 6px',
+                fontSize: '10px',
+                backgroundColor: 'transparent',
+                color: theme.textSecondary,
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+              }}
+            >
+              <KeyCap small>⌫</KeyCap> unshare
+            </button>
+            {selectedIds.size > 1 && (
+              <button
+                tabIndex={-1}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={async () => {
+                  const newStackId = crypto.randomUUID();
+                  const itemIds = Array.from(selectedIds);
+                  const success = await window.teamClipboardAPI?.updateStackId(itemIds, newStackId);
+                  if (success) {
+                    setTeamItems(prev => prev.map(i => 
+                      itemIds.includes(i.id) ? { ...i, stackId: newStackId } : i
+                    ));
+                    setSelectedIds(new Set());
+                    setIsMultiSelect(false);
+                  }
+                }}
+                style={{
+                  padding: '2px 6px',
+                  fontSize: '10px',
+                  backgroundColor: 'transparent',
+                  color: theme.textSecondary,
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                <KeyCap small>s</KeyCap> stack
+              </button>
+            )}
+            <button
+              tabIndex={-1}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                setSelectedIds(new Set());
+                setIsMultiSelect(false);
+              }}
+              style={{
+                padding: '2px 6px',
+                fontSize: '10px',
+                backgroundColor: 'transparent',
+                color: theme.textSecondary,
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+              }}
+            >
+              <KeyCap small>esc</KeyCap> clear
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Team items list */}
       <DndContext
         sensors={sensors}
@@ -1822,19 +2093,34 @@ export default function TeamView() {
           listRows.map((row, index) => {
             const isRowSelected = selectedIndex === index;
             const isHovered = hoveredRowIndex === index;
+            
+            // Check if this row's items are multi-selected (x key selection).
+            const isMultiSelected = row.type === 'stack'
+              ? row.items.some(item => selectedIds.has(item.id))
+              : selectedIds.has(row.item.id);
 
             // Shared row styling.
+            // Priority: Multi-selected (x) > Row selected (j/k) > Default
             const rowStyle = {
               display: 'flex',
               flexDirection: 'column' as const,
               padding: '12px 16px',
-              backgroundColor: isRowSelected ? theme.bgSecondary : 'transparent',
+              backgroundColor: isMultiSelected 
+                ? (theme.selectedBg || (theme.isDark ? 'rgba(45, 212, 191, 0.15)' : 'rgba(20, 184, 166, 0.1)'))
+                : isRowSelected 
+                  ? theme.bgSecondary 
+                  : 'transparent',
               borderTop: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
               borderBottom: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : `1px solid ${theme.border}`,
               borderRight: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
-              borderLeft: isRowSelected
-                ? `2px solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
-                : '2px solid transparent',
+              // J/K = bright teal, X-selection = muted teal, both = thicker bright teal
+              borderLeft: isRowSelected && isMultiSelected
+                ? `4px solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
+                : isRowSelected
+                  ? `2px solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
+                  : isMultiSelected
+                    ? `2px solid ${theme.selectedBorder || (theme.isDark ? '#2dd4bf80' : '#14b8a680')}`
+                    : '2px solid transparent',
               boxShadow: isRowSelected
                 ? theme.isDark 
                   ? '0 2px 8px rgba(0,0,0,0.3)' 
@@ -2459,30 +2745,6 @@ export default function TeamView() {
         })() : null}
       </DragOverlay>
       </DndContext>
-
-      {/* Keyboard shortcuts bar - matches TodoView style */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '6px 16px',
-        borderTop: `1px solid ${theme.border}`,
-        fontSize: '10px',
-        color: theme.textSecondary,
-      }}>
-        <div style={{ display: 'flex', gap: '12px' }}>
-          <span><KeyCap small>j</KeyCap><KeyCap small>k</KeyCap> navigate</span>
-          <span><KeyCap small>x</KeyCap> select</span>
-          <span><KeyCap small>t</KeyCap> unshare</span>
-          <span><KeyCap small>c</KeyCap> copy</span>
-          <span><KeyCap small>/</KeyCap> search</span>
-        </div>
-        <div style={{ display: 'flex', gap: '12px' }}>
-          <span><KeyCap small>space</KeyCap> preview</span>
-          <span><KeyCap small>↵</KeyCap> paste</span>
-          <span><KeyCap small>tab</KeyCap> view</span>
-        </div>
-      </div>
 
       {/* CSS animations for preview, loading spinner, and item transitions */}
       <style>{`

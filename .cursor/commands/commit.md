@@ -1,5 +1,5 @@
 # Commit current work
-Commit all current work and push to origin
+Commit all current work and push to origin. But if we are working on a web app of any kind (this does not apply to dmg or ios apps) before you do, try to build this locally using npm run build. Once we confirm that it built properly locally since it takes such a short time, we can then commit and push to origin. If it fails to build locally, identify and fix those issues first, then commit and push to origin.
 
 ## Important
 - Always commit ALL modified and staged files (use `git add -A` to stage everything)
