@@ -41,19 +41,11 @@ export default function SettingsPanel() {
   const [todoHotkey, setTodoHotkey] = useState('Command+Shift+T');
   const [isCapturingTodoHotkey, setIsCapturingTodoHotkey] = useState(false);
   
-  // Mobile sync state - for syncing iOS transcriptions to clipboard history.
-  // Uses email/password authentication. Users create accounts on iOS first.
+  // Mobile sync state - sign-in is handled via TeamView, we just listen for session.
   const [session, setSession] = useState<Session | null>(null);
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
-  
-  // Password reset flow state.
-  const [showForgotPassword, setShowForgotPassword] = useState(false);
-  const [resetEmailSent, setResetEmailSent] = useState(false);
   
   // API key state - for Engineer feature (Anthropic API)
   const [hasApiKey, setHasApiKey] = useState(false);
@@ -150,12 +142,20 @@ export default function SettingsPanel() {
   
   // Check Supabase auth state on mount and listen for changes.
   // When authenticated, pass session to main process for mobile sync.
+  // The sign-in form is in TeamView - this just listens for session changes.
   useEffect(() => {
-    // Get initial session
+    // If supabase client is not available, skip auth. This can happen if
+    // environment variables are missing during development.
+    if (!supabase) {
+      console.warn('[SettingsPanel] Supabase client not available');
+      return;
+    }
+
+    // Get initial session.
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       if (session) {
-        // Pass session to main process for MobileSync
+        // Pass session to main process for MobileSync.
         window.clipboardAPI?.setSyncSession?.(
           session.access_token,
           session.refresh_token
@@ -163,7 +163,7 @@ export default function SettingsPanel() {
       }
     });
 
-    // Listen for auth changes
+    // Listen for auth changes (triggered by TeamView sign-in or token refresh).
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       if (session) {
@@ -179,80 +179,15 @@ export default function SettingsPanel() {
     return () => subscription.unsubscribe();
   }, []);
   
-  // Handle sign in with email and password.
-  const handleSignIn = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const email = authEmail.toLowerCase().trim();
-    const password = authPassword;
-    
-    if (!email || !password) {
-      setAuthError('Please enter your email and password');
-      return;
-    }
-    
-    setAuthLoading(true);
-    setAuthError(null);
-    
-    try {
-      const result = await window.authAPI?.signInWithPassword(email, password);
-      
-      if (result?.error) {
-        setAuthError(result.error);
-      } else if (result?.session) {
-        setSession(result.session);
-        setAuthEmail('');
-        setAuthPassword('');
-        setSyncStatus('Signed in! Syncing...');
-        handleManualSync();
-      } else {
-        setAuthError('Sign in failed - no session returned');
-      }
-    } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Sign in failed');
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-  
-  // Handle forgot password - sends reset email.
-  const handleForgotPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const email = authEmail.toLowerCase().trim();
-    
-    if (!email) {
-      setAuthError('Please enter your email address');
-      return;
-    }
-    
-    setAuthLoading(true);
-    setAuthError(null);
-    
-    try {
-      const result = await window.authAPI?.resetPasswordForEmail(email);
-      
-      if (result?.error) {
-        setAuthError(result.error);
-      } else {
-        setResetEmailSent(true);
-        setSyncStatus('Reset link sent! Check your email.');
-      }
-    } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Failed to send reset email');
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-  
-  
   // Handle sign out.
   const handleSignOut = async () => {
     setAuthLoading(true);
     try {
       await window.authAPI?.signOut();
-      await supabase.auth.signOut();
+      if (supabase) {
+        await supabase.auth.signOut();
+      }
       setSyncStatus(null);
-      setAuthEmail('');
-      setAuthPassword('');
     } catch (err) {
       console.error('Sign out error:', err);
     } finally {
@@ -781,82 +716,13 @@ export default function SettingsPanel() {
             </div>
             {syncStatus && <p style={styles.syncStatusText}>{syncStatus}</p>}
           </>
-        ) : showForgotPassword ? (
-          // Password reset flow
-          resetEmailSent ? (
-            <div style={styles.row}>
-              <span style={{ ...styles.rowValue, color: '#10b981' }}>✓ Reset link sent! Check email.</span>
-              <button
-                onClick={() => { setShowForgotPassword(false); setResetEmailSent(false); setAuthError(null); }}
-                style={styles.btn}
-              >
-                Back
-              </button>
-            </div>
-          ) : (
-            <form onSubmit={handleForgotPassword} style={styles.loginForm}>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <input
-                  type="email"
-                  placeholder="Email"
-                  value={authEmail}
-                  onChange={(e) => setAuthEmail(e.target.value)}
-                  disabled={authLoading}
-                  style={{ ...styles.input, flex: 1 }}
-                  required
-                  autoFocus
-                />
-                <button type="submit" disabled={authLoading || !authEmail.trim()} style={{ ...styles.btn, ...styles.btnSuccess }}>
-                  {authLoading ? '...' : 'Send Reset'}
-                </button>
-                <button type="button" onClick={() => { setShowForgotPassword(false); setAuthError(null); }} style={styles.btnGhost}>
-                  Cancel
-                </button>
-              </div>
-              {authError && <p style={styles.error}>{authError}</p>}
-            </form>
-          )
         ) : (
-          // Sign in form
-          <form onSubmit={handleSignIn} style={styles.loginForm}>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <input
-                type="email"
-                placeholder="Email"
-                value={authEmail}
-                onChange={(e) => setAuthEmail(e.target.value)}
-                disabled={authLoading}
-                style={{ ...styles.input, flex: 1 }}
-                tabIndex={1}
-                required
-              />
-              <input
-                type="password"
-                placeholder="Password"
-                value={authPassword}
-                onChange={(e) => setAuthPassword(e.target.value)}
-                disabled={authLoading}
-                style={{ ...styles.input, width: '120px' }}
-                tabIndex={2}
-                required
-              />
-              <button
-                type="submit"
-                disabled={authLoading || !authEmail.trim() || !authPassword}
-                style={{ ...styles.btn, ...styles.btnSuccess }}
-              >
-                {authLoading ? '...' : 'Sign In'}
-              </button>
-            </div>
-            {authError && <p style={styles.error}>{authError}</p>}
-            <button
-              type="button"
-              onClick={() => { setShowForgotPassword(true); setAuthError(null); }}
-              style={{ ...styles.btnGhost, fontSize: '13px', textDecoration: 'underline', color: '#3b82f6', padding: 0 }}
-            >
-              Forgot password?
-            </button>
-          </form>
+          // Not signed in - direct user to Team tab.
+          <div style={styles.row}>
+            <span style={{ ...styles.rowValue, color: theme.textSecondary }}>
+              Sign in via the Team tab to enable mobile sync.
+            </span>
+          </div>
         )}
       </div>
     </div>

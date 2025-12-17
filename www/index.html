@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Field Theory - Voice-first prompts for AI coding</title>
+  <meta name="description" content="Transform spoken thoughts into structured AI prompts. Local transcription, clipboard history, and cross-device sync for Cursor users.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav class="nav">
+    <div class="container nav-inner">
+      <a href="/" class="nav-logo">Field Theory</a>
+      <ul class="nav-links">
+        <li><a href="theory.html">Theory</a></li>
+        <li><a href="pricing.html">Pricing</a></li>
+        <li><a href="download.html">Download</a></li>
+        <li><button class="theme-toggle" onclick="toggleTheme()">◐</button></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="container">
+      <h1>Voice-first prompts for AI coding</h1>
+      <p class="hero-tagline">
+        Speak naturally. Get structured prompts. Paste into Cursor.
+        Local transcription means your voice never leaves your device.
+      </p>
+
+      <div class="hero-visual">
+┌─────────────────────────────────────────────────────────────┐
+│  ⌥ + Space                                                  │
+│                                                             │
+│  "Fix the TypeScript error in the auth module,              │
+│   the generic types aren't matching up with                 │
+│   the return type of the async function"                    │
+│                                                             │
+│  ════════════════════════════════════════════════           │
+│  ░░░░░░░░░░░░░░░░░░░░░ transcribing...                      │
+│                                                             │
+│  → Ready to paste into Cursor                               │
+└─────────────────────────────────────────────────────────────┘</div>
+
+      <div class="hero-buttons">
+        <a href="download.html" class="btn btn-primary">Download for Mac</a>
+        <a href="#features" class="btn btn-secondary">See how it works</a>
+      </div>
+    </div>
+  </section>
+
+  <hr class="dotted-line container">
+
+  <!-- Features Section -->
+  <section id="features" class="features">
+    <div class="container">
+
+      <!-- Feature 1: Local Transcription -->
+      <article class="feature">
+        <div class="feature-content">
+          <h2>Local Transcription</h2>
+          <p class="feature-problem">
+            Cloud transcription sees everything you say. That's a privacy nightmare for sensitive work.
+          </p>
+          <p class="feature-description">
+            Field Theory runs Whisper locally on your Mac and iPhone. Your voice data never leaves your device. 
+            No cloud processing, no data mining, no monthly API bills.
+          </p>
+        </div>
+        <div class="feature-visual">
+┌─────────────────────────────────────────────────┐
+│  whisper.local                                  │
+│                                                 │
+│  ┌─────────────────────────────────────────┐    │
+│  │  🎤 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   │    │
+│  └─────────────────────────────────────────┘    │
+│                                                 │
+│  → Audio captured                               │
+│  → Processed on-device                          │
+│  → Text stored locally                          │
+│                                                 │
+│  ════════════════════════════════════════════   │
+│  <span class="highlight">✓ Never leaves your Mac</span>                        │
+│  <span class="highlight">✓ No API costs</span>                                 │
+└─────────────────────────────────────────────────┘</div>
+      </article>
+
+      <hr class="dotted-line">
+
+      <!-- Feature 2: Clipboard History -->
+      <article class="feature reversed">
+        <div class="feature-content">
+          <h2>Clipboard History</h2>
+          <p class="feature-problem">
+            You copied something important an hour ago. Now it's gone forever.
+          </p>
+          <p class="feature-description">
+            Every text snippet, link, and image you copy is indexed and searchable. 
+            Recall that one link from three weeks ago in milliseconds. 
+            Total Recall for your clipboard.
+          </p>
+        </div>
+        <div class="feature-visual">
+┌─────────────────────────────────────────────────┐
+│  ⌘ + Shift + V                                  │
+│                                                 │
+│  ┌─────────────────────────────────────────┐    │
+│  │  🔍 search clipboard...                 │    │
+│  └─────────────────────────────────────────┘    │
+│                                                 │
+│  001: https://example.com/api/v2...             │
+│  002: const data = await fetch(...              │
+│  003: "Fix the auth bug where..."               │
+│  004: Meeting notes from Tuesday                │
+│  005: SELECT * FROM users WHERE...              │
+│                                                 │
+│  ════════════════════════════════════════════   │
+│  <span class="highlight">↑↓ Navigate   ⏎ Paste   ⌘F Search</span>            │
+└─────────────────────────────────────────────────┘</div>
+      </article>
+
+      <hr class="dotted-line">
+
+      <!-- Feature 3: Input Stacking -->
+      <article class="feature">
+        <div class="feature-content">
+          <h2>Input Stacking</h2>
+          <p class="feature-problem">
+            Building context for AI prompts is tedious. Screenshots, code, notes—scattered everywhere.
+          </p>
+          <p class="feature-description">
+            Stack screenshots, voice transcriptions, and text to create rich multi-modal prompts.
+            Combine them and paste into Cursor. Context window management, reimagined.
+          </p>
+        </div>
+        <div class="feature-visual">
+┌─────────────────────────────────────────────────┐
+│  ⌘ + ⌥ + Space  (stacking mode)                 │
+│                                                 │
+│  ┌─────────────────────────────────────────┐    │
+│  │  [1] 📷 screenshot.png                  │    │
+│  │  [2] 📝 error_log.txt                   │    │
+│  │  [3] 🎤 "Fix this bug, the issue is..." │    │
+│  │  [4] 📷 code_snippet.png                │    │
+│  └─────────────────────────────────────────┘    │
+│                                                 │
+│  ════════════════════════════════════════════   │
+│  <span class="highlight">→ Combined prompt ready</span>                        │
+│  <span class="highlight">→ Paste to Cursor</span>                              │
+└─────────────────────────────────────────────────┘</div>
+      </article>
+
+      <hr class="dotted-line">
+
+      <!-- Feature 4: Hot Mic -->
+      <article class="feature reversed">
+        <div class="feature-content">
+          <h2>Hot Mic</h2>
+          <p class="feature-problem">
+            Push-to-talk is one more thing to remember. You just want to think out loud.
+          </p>
+          <p class="feature-description">
+            Enable Hot Mic and Field Theory listens continuously, 
+            transcribing your thoughts as you work. Infinite voice history, 
+            searchable anytime. Every idea captured.
+          </p>
+        </div>
+        <div class="feature-visual">
+┌─────────────────────────────────────────────────┐
+│  hot_mic: <span class="highlight">● LIVE</span>                                │
+│                                                 │
+│  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   │
+│                                                 │
+│  14:32  "need to refactor the auth..."          │
+│  14:35  "maybe use a custom hook for..."        │
+│  14:38  "actually wait, the problem is"         │
+│  14:41  "the state isn't persisting..."         │
+│  14:44  "got it, need useRef instead"           │
+│                                                 │
+│  ════════════════════════════════════════════   │
+│  <span class="highlight">∞ Infinite history</span>                             │
+│  <span class="highlight">🔍 Searchable anytime</span>                          │
+└─────────────────────────────────────────────────┘</div>
+      </article>
+
+      <hr class="dotted-line">
+
+      <!-- Feature 5: Mac ↔ iPhone Sync -->
+      <article class="feature">
+        <div class="feature-content">
+          <h2>Mac ↔ iPhone Sync</h2>
+          <p class="feature-problem">
+            Voice notes on your phone. Work on your Mac. No easy way to connect them.
+          </p>
+          <p class="feature-description">
+            Capture voice notes on your iPhone during your commute. 
+            They appear in your Mac clipboard history automatically. 
+            End-to-end encrypted—we can't read your data even if we wanted to.
+          </p>
+        </div>
+        <div class="feature-visual">
+┌─────────────────────────────────────────────────┐
+│  sync                                           │
+│                                                 │
+│   ┌────────┐              ┌────────┐            │
+│   │ iPhone │  ─────────▶  │  Mac   │            │
+│   │   📱   │   encrypted  │   💻   │            │
+│   └────────┘              └────────┘            │
+│                                                 │
+│   "Captured on commute"   → Appears in          │
+│                              clipboard history  │
+│                                                 │
+│  ════════════════════════════════════════════   │
+│  <span class="highlight">✓ End-to-end encrypted</span>                        │
+│  <span class="highlight">✓ Automatic sync</span>                               │
+└─────────────────────────────────────────────────┘</div>
+      </article>
+
+      <hr class="dotted-line">
+
+      <!-- Feature 6: Send to Cursor -->
+      <article class="feature reversed">
+        <div class="feature-content">
+          <h2>Send to Cursor</h2>
+          <p class="feature-problem">
+            Copy, switch apps, paste, switch back. The friction adds up.
+          </p>
+          <p class="feature-description">
+            On iOS, send any transcription directly to Cursor's agent dashboard 
+            with one tap. Built-in browser keeps your workflow tight. 
+            No app switching required.
+          </p>
+        </div>
+        <div class="feature-visual">
+┌─────────────────────────────────────────────────┐
+│  iOS → Cursor                                   │
+│                                                 │
+│  ┌─────────────────────────────────────────┐    │
+│  │  "Fix the TypeScript error in the       │    │
+│  │   auth module, the generics aren't      │    │
+│  │   matching up with the return type"     │    │
+│  └─────────────────────────────────────────┘    │
+│                                                 │
+│          ┌──────────────────────┐               │
+│          │   Send to Cursor  →  │               │
+│          └──────────────────────┘               │
+│                                                 │
+│  ════════════════════════════════════════════   │
+│  <span class="highlight">→ One tap, no app switching</span>                    │
+└─────────────────────────────────────────────────┘</div>
+      </article>
+
+    </div>
+  </section>
+
+  <hr class="dotted-line container">
+
+  <!-- Pricing Preview -->
+  <section class="pricing">
+    <div class="container">
+      <h2>Simple Pricing</h2>
+      <div class="pricing-grid">
+
+        <div class="pricing-card">
+          <h3>Free</h3>
+          <div class="price">$0</div>
+          <ul>
+            <li>Local voice transcription</li>
+            <li>Clipboard history</li>
+            <li>Screenshot capture + vision</li>
+            <li>Input stacking</li>
+            <li>Mac ↔ iPhone sync</li>
+            <li>Priority microphone</li>
+          </ul>
+          <a href="download.html" class="btn btn-secondary">Download</a>
+        </div>
+
+        <div class="pricing-card featured">
+          <h3>Pro</h3>
+          <div class="price">$10 <span>/month</span></div>
+          <ul>
+            <li>Everything in Free</li>
+            <li>Unlimited prompt refinement</li>
+            <li>Hot Mic infinite history</li>
+            <li>Team clipboard sharing</li>
+            <li>Priority support</li>
+          </ul>
+          <a href="pricing.html" class="btn btn-primary">Learn more</a>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container footer-inner">
+      <p>&copy; 2024 Field Theory</p>
+      <ul class="footer-links">
+        <li><a href="theory.html">Theory</a></li>
+        <li><a href="pricing.html">Pricing</a></li>
+        <li><a href="download.html">Download</a></li>
+      </ul>
+    </div>
+  </footer>
+
+  <!-- Theme toggle script -->
+  <script>
+    // Check for saved theme preference or default to light
+    if (localStorage.getItem('theme') === 'dark') {
+      document.body.classList.add('dark');
+    }
+
+    function toggleTheme() {
+      document.body.classList.toggle('dark');
+      localStorage.setItem('theme', document.body.classList.contains('dark') ? 'dark' : 'light');
+    }
+  </script>
+
+</body>
+</html>
