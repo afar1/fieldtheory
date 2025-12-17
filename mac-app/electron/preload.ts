@@ -308,6 +308,100 @@ type TeamMember = {
   createdAt: number;
 };
 
+// =============================================================================
+// Social/DM Types - DMs, Feedback, and Contacts
+// =============================================================================
+
+// Message from the unified messages table.
+type SocialMessage = {
+  id: string;
+  type: 'dm' | 'feedback';
+  senderUserId: string;
+  senderEmail: string | null;
+  senderName: string | null;
+  recipientUserId: string;
+  recipientEmail: string | null;
+  recipientName: string | null;
+  contentType: 'text' | 'image' | 'stack';
+  contentText: string | null;
+  imagePath: string | null;
+  imageUrl: string | null;
+  stackId: string | null;
+  sourceItemId: string | null;
+  readAt: number | null;
+  feedbackStatus: 'open' | 'resolved' | 'archived' | null;
+  parentMessageId: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+// Contact from the contacts table.
+type SocialContact = {
+  id: string;
+  ownerUserId: string;
+  contactEmail: string;
+  contactUserId: string | null;
+  contactName: string | null;
+  relationshipType: 'team' | 'friend' | null;
+  status: 'pending' | 'accepted';
+  createdAt: number;
+};
+
+// DM conversation summary for list view.
+type DMConversation = {
+  otherUserId: string;
+  otherUserEmail: string;
+  otherUserName: string | null;
+  relationshipType: 'team' | 'friend' | null;
+  lastMessage: SocialMessage | null;
+  unreadCount: number;
+};
+
+// Activity log entry for feedback.
+type ActivityLogEntry = {
+  id: string;
+  messageId: string;
+  userId: string;
+  userEmail: string | null;
+  action: 'created' | 'status_changed' | 'replied';
+  oldStatus: string | null;
+  newStatus: string | null;
+  createdAt: number;
+};
+
+const SocialIPCChannels = {
+  // DM operations
+  SEND_DM: 'social:sendDM',
+  SEND_TEXT_DM: 'social:sendTextDM',
+  GET_CONVERSATIONS: 'social:getConversations',
+  GET_DMS_WITH_USER: 'social:getDMsWithUser',
+  MARK_AS_READ: 'social:markAsRead',
+  HAS_UNREAD: 'social:hasUnread',
+  
+  // Feedback operations
+  SUBMIT_FEEDBACK: 'social:submitFeedback',
+  GET_MY_FEEDBACK: 'social:getMyFeedback',
+  GET_ALL_FEEDBACK: 'social:getAllFeedback',
+  GET_FEEDBACK_REPLIES: 'social:getFeedbackReplies',
+  UPDATE_FEEDBACK_STATUS: 'social:updateFeedbackStatus',
+  GET_ACTIVITY_LOG: 'social:getActivityLog',
+  
+  // Contact operations
+  GET_CONTACTS: 'social:getContacts',
+  ADD_FRIEND: 'social:addFriend',
+  SEARCH_CONTACTS: 'social:searchContacts',
+  
+  // Hot mic
+  GET_HOT_MIC: 'social:getHotMic',
+  SET_HOT_MIC: 'social:setHotMic',
+  
+  // Admin check
+  IS_ADMIN: 'social:isAdmin',
+  
+  // Events
+  MESSAGE_RECEIVED: 'social:messageReceived',
+} as const;
+
 // Todo type for bidirectional sync with Supabase.
 type Todo = {
   id: string;           // Supabase UUID
@@ -1366,6 +1460,139 @@ const teamClipboardAPI = {
 
 type TeamClipboardAPI = typeof teamClipboardAPI;
 
+// =============================================================================
+// Social API - DMs, Feedback, Contacts, and Hot Mic
+// =============================================================================
+
+const socialAPI = {
+  // =========================================================================
+  // DM Operations
+  // =========================================================================
+  
+  // Send a DM with a clipboard item.
+  sendDM: async (recipientUserId: string, localItemId: number): Promise<SocialMessage | null> => {
+    return ipcRenderer.invoke(SocialIPCChannels.SEND_DM, recipientUserId, localItemId);
+  },
+  
+  // Send a text-only DM (for replies).
+  sendTextDM: async (recipientUserId: string, text: string, parentMessageId?: string): Promise<SocialMessage | null> => {
+    return ipcRenderer.invoke(SocialIPCChannels.SEND_TEXT_DM, recipientUserId, text, parentMessageId);
+  },
+  
+  // Get all DM conversations.
+  getConversations: async (): Promise<DMConversation[]> => {
+    return ipcRenderer.invoke(SocialIPCChannels.GET_CONVERSATIONS);
+  },
+  
+  // Get all DMs with a specific user.
+  getDMsWithUser: async (otherUserId: string): Promise<SocialMessage[]> => {
+    return ipcRenderer.invoke(SocialIPCChannels.GET_DMS_WITH_USER, otherUserId);
+  },
+  
+  // Mark a message as read.
+  markAsRead: async (messageId: string): Promise<boolean> => {
+    return ipcRenderer.invoke(SocialIPCChannels.MARK_AS_READ, messageId);
+  },
+  
+  // Check if there are unread messages.
+  hasUnread: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(SocialIPCChannels.HAS_UNREAD);
+  },
+  
+  // =========================================================================
+  // Feedback Operations
+  // =========================================================================
+  
+  // Submit feedback (send to admin).
+  submitFeedback: async (localItemId: number): Promise<SocialMessage | null> => {
+    return ipcRenderer.invoke(SocialIPCChannels.SUBMIT_FEEDBACK, localItemId);
+  },
+  
+  // Get current user's submitted feedback.
+  getMyFeedback: async (): Promise<SocialMessage[]> => {
+    return ipcRenderer.invoke(SocialIPCChannels.GET_MY_FEEDBACK);
+  },
+  
+  // Get all feedback (admin only).
+  getAllFeedback: async (): Promise<SocialMessage[]> => {
+    return ipcRenderer.invoke(SocialIPCChannels.GET_ALL_FEEDBACK);
+  },
+  
+  // Get replies to a feedback item.
+  getFeedbackReplies: async (feedbackId: string): Promise<SocialMessage[]> => {
+    return ipcRenderer.invoke(SocialIPCChannels.GET_FEEDBACK_REPLIES, feedbackId);
+  },
+  
+  // Update feedback status.
+  updateFeedbackStatus: async (feedbackId: string, status: 'open' | 'resolved' | 'archived'): Promise<boolean> => {
+    return ipcRenderer.invoke(SocialIPCChannels.UPDATE_FEEDBACK_STATUS, feedbackId, status);
+  },
+  
+  // Get activity log for a feedback item.
+  getActivityLog: async (feedbackId: string): Promise<ActivityLogEntry[]> => {
+    return ipcRenderer.invoke(SocialIPCChannels.GET_ACTIVITY_LOG, feedbackId);
+  },
+  
+  // =========================================================================
+  // Contact Operations
+  // =========================================================================
+  
+  // Get all contacts.
+  getContacts: async (): Promise<SocialContact[]> => {
+    return ipcRenderer.invoke(SocialIPCChannels.GET_CONTACTS);
+  },
+  
+  // Add a friend by email.
+  addFriend: async (email: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(SocialIPCChannels.ADD_FRIEND, email);
+  },
+  
+  // Search contacts by name or email.
+  searchContacts: async (query: string): Promise<SocialContact[]> => {
+    return ipcRenderer.invoke(SocialIPCChannels.SEARCH_CONTACTS, query);
+  },
+  
+  // =========================================================================
+  // Hot Mic
+  // =========================================================================
+  
+  // Get hot mic enabled status.
+  getHotMic: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(SocialIPCChannels.GET_HOT_MIC);
+  },
+  
+  // Set hot mic enabled status.
+  setHotMic: async (enabled: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke(SocialIPCChannels.SET_HOT_MIC, enabled);
+  },
+  
+  // =========================================================================
+  // Admin Check
+  // =========================================================================
+  
+  // Check if current user is admin.
+  isAdmin: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(SocialIPCChannels.IS_ADMIN);
+  },
+  
+  // =========================================================================
+  // Events
+  // =========================================================================
+  
+  // Listen for new message received (for hot mic).
+  onMessageReceived: (callback: (message: SocialMessage) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, message: SocialMessage) => {
+      callback(message);
+    };
+    ipcRenderer.on(SocialIPCChannels.MESSAGE_RECEIVED, handler);
+    return () => {
+      ipcRenderer.removeListener(SocialIPCChannels.MESSAGE_RECEIVED, handler);
+    };
+  },
+};
+
+type SocialAPI = typeof socialAPI;
+
 contextBridge.exposeInMainWorld('audioAPI', audioAPI);
 contextBridge.exposeInMainWorld('transcribeAPI', transcribeAPI);
 contextBridge.exposeInMainWorld('clipboardAPI', clipboardAPI);
@@ -1375,6 +1602,7 @@ contextBridge.exposeInMainWorld('updaterAPI', updaterAPI);
 contextBridge.exposeInMainWorld('todoAPI', todoAPI);
 contextBridge.exposeInMainWorld('authAPI', authAPI);
 contextBridge.exposeInMainWorld('teamClipboardAPI', teamClipboardAPI);
+contextBridge.exposeInMainWorld('socialAPI', socialAPI);
 
 contextBridge.exposeInMainWorld('platform', {
   isMacOS: process.platform === 'darwin',
@@ -1394,6 +1622,7 @@ declare global {
     todoAPI: TodoAPI;
     authAPI: AuthAPI;
     teamClipboardAPI: TeamClipboardAPI;
+    socialAPI: SocialAPI;
     platform: {
       isMacOS: boolean;
       isWindows: boolean;

@@ -9,14 +9,12 @@ import {
   Switch,
   Modal,
   Alert,
-  GestureResponderEvent,
   Pressable,
   Vibration,
   AppState,
   TextInput,
   SafeAreaView,
   FlatList,
-  RefreshControl,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -32,6 +30,7 @@ import { TodoList } from './components/TodoList';
 import { ObservationList } from './components/ObservationList';
 import { CursorBrowser, CursorBrowserHandle } from './components/CursorBrowser';
 import { PullToCreate } from './components/PullToCreate';
+import { TranscriptItem } from './components/TranscriptItem';
 import { StorageService } from './services/storage';
 import { processTranscription } from './services/llm';
 import { Todo, Observation, Settings, TranscriptEntry, TranscriptSegment } from './types';
@@ -154,8 +153,6 @@ const buildStackText = (segments: TranscriptSegment[]) =>
   segments.map((segment) => segment.text).join(STACK_SEPARATOR);
 
 export default function App() {
-  console.log('[App] Component rendering');
-  
   const {
     isRecording,
     isProcessing,
@@ -700,40 +697,40 @@ export default function App() {
     }
   }, []);
 
-  const handleToggleComplete = useCallback(async (id: string) => {
+  const handleToggleComplete = useCallback((id: string) => {
     const newTodos = todos.map((t) =>
       t.id === id ? { ...t, completed: !t.completed, updatedAt: Date.now() } : t
     );
     setTodos(newTodos);
-    await StorageService.saveTodos(newTodos);
+    StorageService.saveTodos(newTodos).catch(console.error);
   }, [todos]);
 
-  const handleUpdateTodo = useCallback(async (id: string, text: string) => {
+  const handleUpdateTodo = useCallback((id: string, text: string) => {
     const newTodos = todos.map((t) => (t.id === id ? { ...t, text, updatedAt: Date.now() } : t));
     setTodos(newTodos);
-    await StorageService.saveTodos(newTodos);
+    StorageService.saveTodos(newTodos).catch(console.error);
   }, [todos]);
 
-  const handleDeleteTodo = useCallback(async (id: string) => {
+  const handleDeleteTodo = useCallback((id: string) => {
     const newTodos = todos.filter((t) => t.id !== id);
     setTodos(newTodos);
-    await StorageService.saveTodos(newTodos);
+    StorageService.saveTodos(newTodos).catch(console.error);
   }, [todos]);
 
-  const handleUpdateObservation = useCallback(async (id: string, text: string) => {
+  const handleUpdateObservation = useCallback((id: string, text: string) => {
     const newObservations = observations.map((o) => (o.id === id ? { ...o, text, updatedAt: Date.now() } : o));
     setObservations(newObservations);
-    await StorageService.saveObservations(newObservations);
+    StorageService.saveObservations(newObservations).catch(console.error);
   }, [observations]);
 
-  const handleDeleteObservation = useCallback(async (id: string) => {
+  const handleDeleteObservation = useCallback((id: string) => {
     const newObservations = observations.filter((o) => o.id !== id);
     setObservations(newObservations);
-    await StorageService.saveObservations(newObservations);
+    StorageService.saveObservations(newObservations).catch(console.error);
   }, [observations]);
 
   // Create a new task via pull-to-create.
-  const handleCreateTask = useCallback(async (text: string): Promise<boolean> => {
+  const handleCreateTask = useCallback((text: string): boolean => {
     const newTodo: Todo = {
       id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
       text,
@@ -743,12 +740,12 @@ export default function App() {
     };
     const newTodos = [newTodo, ...todos];
     setTodos(newTodos);
-    await StorageService.saveTodos(newTodos);
+    StorageService.saveTodos(newTodos).catch(console.error);
     return true;
   }, [todos]);
 
   // Create a new observation via pull-to-create.
-  const handleCreateObservation = useCallback(async (text: string): Promise<boolean> => {
+  const handleCreateObservation = useCallback((text: string): boolean => {
     const newObs: Observation = {
       id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
       text,
@@ -757,12 +754,12 @@ export default function App() {
     };
     const newObservations = [newObs, ...observations];
     setObservations(newObservations);
-    await StorageService.saveObservations(newObservations);
+    StorageService.saveObservations(newObservations).catch(console.error);
     return true;
   }, [observations]);
 
   // Create a new transcript via pull-to-create.
-  const handleCreateTranscript = useCallback(async (text: string): Promise<boolean> => {
+  const handleCreateTranscript = useCallback((text: string): boolean => {
     const newEntry: TranscriptEntry = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       text,
@@ -771,7 +768,7 @@ export default function App() {
     };
     const newTranscripts = [newEntry, ...transcripts];
     setTranscripts(newTranscripts);
-    await StorageService.saveTranscripts(newTranscripts);
+    StorageService.saveTranscripts(newTranscripts).catch(console.error);
     return true;
   }, [transcripts]);
 
@@ -788,16 +785,16 @@ export default function App() {
     setCreateMode({ isCreating, itemType: 'observation', text, save, cancel });
   }, []);
 
-  const handleToggleAutoStart = useCallback(async (value: boolean) => {
+  const handleToggleAutoStart = useCallback((value: boolean) => {
     const newSettings = { ...settings, autoStart: value };
     setSettings(newSettings);
-    await StorageService.saveSettings(newSettings);
+    StorageService.saveSettings(newSettings).catch(console.error);
   }, [settings]);
 
-  const handleToggleSetting = useCallback(async (key: keyof Settings, value: boolean) => {
+  const handleToggleSetting = useCallback((key: keyof Settings, value: boolean) => {
     const newSettings = { ...settings, [key]: value };
     setSettings(newSettings);
-    await StorageService.saveSettings(newSettings);
+    StorageService.saveSettings(newSettings).catch(console.error);
   }, [settings]);
 
   const handleCopyTranscript = async (entry: TranscriptEntry) => {
@@ -836,12 +833,12 @@ export default function App() {
   const [editingTranscriptId, setEditingTranscriptId] = useState<string | null>(null);
   const [editTranscriptText, setEditTranscriptText] = useState('');
 
-  const handleUpdateTranscript = useCallback(async (id: string, text: string) => {
+  const handleUpdateTranscript = useCallback((id: string, text: string) => {
     const updated = transcripts.map((t) => 
       t.id === id ? { ...t, text: text.trim(), updatedAt: Date.now() } : t
     );
     setTranscripts(updated);
-    await StorageService.saveTranscripts(updated);
+    StorageService.saveTranscripts(updated).catch(console.error);
     setEditingTranscriptId(null);
     setEditTranscriptText('');
   }, [transcripts]);
@@ -1098,232 +1095,64 @@ export default function App() {
     setSelectedIds(new Set());
   }, [selectedIds, sortedTranscripts, handleUnstackTranscript]);
 
-  // Render a single transcript item with selection mode support.
+  // Render a single transcript item using memoized component.
+  // We compute per-item state here and pass it as props to avoid re-rendering the whole list.
   const renderTranscriptItem = useCallback(({ item, index }: { item: TranscriptEntry; index: number }) => {
-    const isExpanded = Boolean(expandedMap[item.id]);
-    const isCopied = copiedId === item.id;
-    const shouldShowExpand = item.text.length > 160 || item.text.includes('\n');
-    const stackCount = item.stackSegments?.length ?? 1;
-    const isStacked = stackCount > 1;
-    const isSelected = selectedIds.has(item.id);
-    const isProcessingThis = processingItemId === item.id;
-    const isSeparated = separatedIds.has(item.id);
-
-    // Show inline date header if this is the first item or different date from previous.
     const prevItem = index > 0 ? sortedTranscripts[index - 1] : null;
     const showDateHeader = !prevItem || getDateKey(item.createdAt) !== getDateKey(prevItem.createdAt);
 
-    const handleExpandPress = (event: GestureResponderEvent) => {
-      event.stopPropagation();
-      handleToggleExpand(item.id);
-    };
-
-    const handleSendToCursorPress = (event: GestureResponderEvent) => {
-      event.stopPropagation();
-      handleSendToCursor(item.text);
-    };
-
-    const handleFindTasksPress = (event: GestureResponderEvent) => {
-      event.stopPropagation();
-      handleManualSeparate(item.text, item.id);
-    };
-
-    // Long-press on stack badge to unstack
-    const handleStackBadgeLongPress = (event: GestureResponderEvent) => {
-      event.stopPropagation();
-      handleUnstackTranscript(item.id);
-    };
-
-    // In selection mode, tap toggles selection. Otherwise, tap copies.
-    const handlePress = () => {
-      if (selectionMode) {
-        toggleSelection(item.id);
-      } else {
-        handleCopyTranscript(item);
-      }
-    };
-
-    // Long-press enters selection mode with this item selected.
-    const handleLongPress = () => {
-      if (!selectionMode) {
-        enterSelectionMode(item.id);
-      }
-    };
-
     return (
-      <View>
-        {/* Inline date header - shown when date changes */}
-        {showDateHeader && (
-          <View style={styles.inlineDateHeader}>
-            <Text style={styles.inlineDateHeaderText}>{formatDateHeader(item.createdAt)}</Text>
-          </View>
-        )}
-        <Pressable
-          onPress={handlePress}
-          onLongPress={handleLongPress}
-          delayLongPress={85}
-          android_ripple={{ color: '#E2E8F0' }}
-          style={[
-            styles.transcriptCard,
-            isCopied && styles.transcriptCardCopied,
-            isSelected && styles.transcriptCardSelected,
-          ]}
-        >
-          {/* Floating checkbox overlay - positioned top-left of card */}
-          {selectionMode && (
-            <TouchableOpacity
-              onPress={() => toggleSelection(item.id)}
-              style={styles.checkboxOverlay}
-              hitSlop={8}
-            >
-              <View style={[styles.checkboxCircle, isSelected && styles.checkboxCircleSelected]}>
-                {isSelected && <Feather name="check" size={12} color="#fff" />}
-              </View>
-            </TouchableOpacity>
-          )}
-          
-          {/* Top row: Time + Stack badge on left, Edit button on right */}
-          <View style={styles.transcriptHeader}>
-            <View style={styles.transcriptHeaderLeft}>
-              <Text style={[styles.transcriptTime, isCopied && styles.transcriptTimeCopied]}>
-                {isCopied ? 'Copied!' : formatTime(item.createdAt)}
-              </Text>
-              {/* Stack badge - next to time */}
-              {isStacked && (
-                <TouchableOpacity
-                  onLongPress={handleStackBadgeLongPress}
-                  delayLongPress={85}
-                  style={styles.stackBadge}
-                  hitSlop={8}
-                  disabled={selectionMode}
-                >
-                  <Feather name="layers" size={12} color={selectionMode ? '#9CA3AF' : '#1D4ED8'} />
-                  <Text style={[styles.stackBadgeText, selectionMode && styles.stackBadgeTextDisabled]}>{stackCount}</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-            {/* Edit button - top right */}
-            <TouchableOpacity
-              onPress={(e) => {
-                e.stopPropagation();
-                handleEditTranscript(item);
-              }}
-              hitSlop={8}
-              style={[styles.editButton, selectionMode && styles.actionButtonDisabled]}
-              disabled={selectionMode}
-            >
-              <Feather name="edit-2" size={14} color={selectionMode ? '#9CA3AF' : '#6B7280'} />
-            </TouchableOpacity>
-          </View>
-          
-          {/* Main text content - show TextInput when editing */}
-          {editingTranscriptId === item.id ? (
-            <View style={styles.transcriptEditContainer}>
-              <TextInput
-                style={styles.transcriptEditInput}
-                value={editTranscriptText}
-                onChangeText={setEditTranscriptText}
-                multiline
-                autoFocus
-                textAlignVertical="top"
-                returnKeyType="default"
-              />
-              <View style={styles.transcriptEditActions}>
-                <TouchableOpacity
-                  onPress={handleCancelEditTranscript}
-                  style={styles.transcriptEditCancel}
-                >
-                  <Text style={styles.transcriptEditCancelText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => handleUpdateTranscript(item.id, editTranscriptText)}
-                  style={[
-                    styles.transcriptEditSave,
-                    !editTranscriptText.trim() && styles.transcriptEditSaveDisabled,
-                  ]}
-                  disabled={!editTranscriptText.trim()}
-                >
-                  <Text style={styles.transcriptEditSaveText}>Save</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ) : (
-            <Text
-              style={styles.transcriptText}
-              numberOfLines={isExpanded ? undefined : MAX_PREVIEW_LINES}
-            >
-              {item.text}
-            </Text>
-          )}
-          
-          {/* Bottom row: Action buttons on left, Expand button on right */}
-          <View style={styles.transcriptFooter}>
-            <View style={styles.transcriptActions}>
-              {/* Send to Cursor button - only shown when Cursor tab is enabled */}
-              {settings.showCursor && (
-                <TouchableOpacity
-                  onPress={handleSendToCursorPress}
-                  hitSlop={8}
-                  style={[styles.sendToCursorButton, selectionMode && styles.actionButtonDisabled]}
-                  disabled={selectionMode}
-                >
-                  <Feather name="terminal" size={14} color={selectionMode ? '#9CA3AF' : '#059669'} />
-                  <Text style={[styles.sendToCursorText, selectionMode && styles.sendToCursorTextDisabled]}>Send to Cursor</Text>
-                </TouchableOpacity>
-              )}
-              {/* Create Tasks - button when auto-create off, status when auto-create on */}
-              {settings.autoSeparate ? (
-                // Auto-create is ON - show status
-                isProcessingLLM ? (
-                  <View style={styles.tasksSavedLabel}>
-                    <Feather name="loader" size={14} color="#7C3AED" />
-                    <Text style={styles.tasksCreatingText}>Creating tasks...</Text>
-                  </View>
-                ) : isSeparated ? (
-                  <View style={styles.tasksSavedLabel}>
-                    <Feather name="check" size={14} color="#059669" />
-                    <Text style={styles.tasksSavedText}>Tasks created</Text>
-                  </View>
-                ) : null
-              ) : (
-                // Auto-create is OFF - show button
-                isSeparated ? (
-                  <View style={styles.tasksSavedLabel}>
-                    <Feather name="check" size={14} color="#059669" />
-                    <Text style={styles.tasksSavedText}>Created</Text>
-                  </View>
-                ) : (
-                  <TouchableOpacity
-                    onPress={handleFindTasksPress}
-                    hitSlop={8}
-                    style={[styles.separateButton, (selectionMode || isProcessingLLM) && styles.actionButtonDisabled]}
-                    disabled={isProcessingLLM || selectionMode}
-                  >
-                    <Feather name="git-branch" size={14} color={(isProcessingLLM || selectionMode) ? '#9CA3AF' : '#7C3AED'} />
-                    <Text style={[styles.separateButtonText, (isProcessingLLM || selectionMode) && styles.separateButtonTextDisabled]}>
-                      {isProcessingThis ? 'Creating...' : 'Create Tasks'}
-                    </Text>
-                  </TouchableOpacity>
-                )
-              )}
-            </View>
-            {/* Expand/Collapse button - bottom right */}
-            {shouldShowExpand && (
-              <TouchableOpacity
-                onPress={handleExpandPress}
-                hitSlop={8}
-                style={styles.expandButton}
-              >
-                <Text style={styles.expandButtonText}>
-                  {isExpanded ? 'Collapse ▲' : 'Expand ▼'}
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        </Pressable>
-      </View>
+      <TranscriptItem
+        item={item}
+        isExpanded={Boolean(expandedMap[item.id])}
+        isCopied={copiedId === item.id}
+        isSelected={selectedIds.has(item.id)}
+        isProcessingThis={processingItemId === item.id}
+        isSeparated={separatedIds.has(item.id)}
+        showDateHeader={showDateHeader}
+        selectionMode={selectionMode}
+        isProcessingLLM={isProcessingLLM}
+        showCursor={settings.showCursor}
+        autoSeparate={settings.autoSeparate}
+        isEditing={editingTranscriptId === item.id}
+        editText={editingTranscriptId === item.id ? editTranscriptText : ''}
+        onEditTextChange={setEditTranscriptText}
+        onToggleExpand={handleToggleExpand}
+        onSendToCursor={handleSendToCursor}
+        onManualSeparate={handleManualSeparate}
+        onUnstack={handleUnstackTranscript}
+        onCopy={handleCopyTranscript}
+        onEnterSelectionMode={enterSelectionMode}
+        onToggleSelection={toggleSelection}
+        onEdit={handleEditTranscript}
+        onCancelEdit={handleCancelEditTranscript}
+        onSaveEdit={handleUpdateTranscript}
+      />
     );
-  }, [expandedMap, copiedId, sortedTranscripts, settings.autoSeparate, settings.showCursor, isProcessingLLM, selectionMode, selectedIds, processingItemId, separatedIds, handleToggleExpand, handleSendToCursor, handleManualSeparate, handleUnstackTranscript, handleCopyTranscript, enterSelectionMode, toggleSelection]);
+  }, [
+    sortedTranscripts,
+    expandedMap,
+    copiedId,
+    selectedIds,
+    processingItemId,
+    separatedIds,
+    selectionMode,
+    isProcessingLLM,
+    settings.showCursor,
+    settings.autoSeparate,
+    editingTranscriptId,
+    editTranscriptText,
+    handleToggleExpand,
+    handleSendToCursor,
+    handleManualSeparate,
+    handleUnstackTranscript,
+    handleCopyTranscript,
+    enterSelectionMode,
+    toggleSelection,
+    handleEditTranscript,
+    handleCancelEditTranscript,
+    handleUpdateTranscript,
+  ]);
 
   // Show loading state during initial data load
   if (!isInitialized) {
@@ -1423,6 +1252,10 @@ export default function App() {
                   keyExtractor={(item) => item.id}
                   renderItem={renderTranscriptItem}
                   contentContainerStyle={styles.sectionContent}
+                  windowSize={5}
+                  removeClippedSubviews={true}
+                  maxToRenderPerBatch={10}
+                  initialNumToRender={10}
                 />
               )}
             </PullToCreate>
@@ -1889,26 +1722,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F5F5F5',
   },
-  checkboxOverlay: {
-    position: 'absolute',
-    top: -4,
-    left: -4,
-    zIndex: 10,
-  },
-  checkboxCircle: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#fff',
-    borderWidth: 2,
-    borderColor: '#9CA3AF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkboxCircleSelected: {
-    backgroundColor: '#2563EB',
-    borderColor: '#2563EB',
-  },
   bottomBar: {
     flexDirection: 'row',
     justifyContent: 'space-around',
@@ -1976,12 +1789,6 @@ const styles = StyleSheet.create({
   },
   selectionBottomButtonDisabled: {
     opacity: 0.4,
-  },
-  actionButtonDisabled: {
-    opacity: 0.5,
-  },
-  sendToCursorTextDisabled: {
-    color: '#9CA3AF',
   },
   recordButtonContainer: {
     top: -20,
@@ -2137,191 +1944,6 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 16,
   },
-  transcriptCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
-  transcriptCardPressed: {
-    opacity: 0.8,
-  },
-  transcriptCardCopied: {
-    borderColor: '#2563EB',
-  },
-  transcriptCardSelected: {
-    backgroundColor: '#EEF2FF',
-    borderColor: '#818CF8',
-  },
-  transcriptHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  transcriptHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  editButton: {
-    padding: 4,
-  },
-  transcriptFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  transcriptTime: {
-    fontSize: 12,
-    color: '#9CA3AF',
-  },
-  transcriptTimeCopied: {
-    color: '#2563EB',
-    fontWeight: '600',
-  },
-  stackBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 8,
-    backgroundColor: '#DBEAFE',
-    gap: 4,
-  },
-  stackBadgeText: {
-    fontSize: 12,
-    color: '#1D4ED8',
-    fontWeight: '600',
-  },
-  stackBadgeTextDisabled: {
-    color: '#9CA3AF',
-  },
-  expandButton: {
-    paddingVertical: 4,
-  },
-  transcriptText: {
-    fontSize: 16,
-    lineHeight: 22,
-    color: '#111',
-  },
-  transcriptEditContainer: {
-    marginTop: 8,
-  },
-  transcriptEditInput: {
-    fontSize: 16,
-    lineHeight: 22,
-    color: '#111',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 8,
-    padding: 12,
-    minHeight: 80,
-    maxHeight: 200,
-    backgroundColor: '#F9FAFB',
-  },
-  transcriptEditActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 12,
-    marginTop: 12,
-  },
-  transcriptEditCancel: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-  },
-  transcriptEditCancelText: {
-    fontSize: 14,
-    color: '#6B7280',
-    fontWeight: '500',
-  },
-  transcriptEditSave: {
-    paddingVertical: 8,
-    paddingHorizontal: 20,
-    backgroundColor: '#2563EB',
-    borderRadius: 8,
-  },
-  transcriptEditSaveDisabled: {
-    opacity: 0.5,
-  },
-  transcriptEditSaveText: {
-    fontSize: 14,
-    color: '#fff',
-    fontWeight: '600',
-  },
-  transcriptActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 10,
-    gap: 8,
-  },
-  expandButtonText: {
-    fontSize: 13,
-    color: '#6B7280',
-  },
-  sendToCursorButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 8,
-    backgroundColor: '#ECFDF5',
-    gap: 5,
-  },
-  sendToCursorText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#059669',
-  },
-  separateButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 8,
-    backgroundColor: '#F3E8FF',
-    gap: 5,
-  },
-  separateButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#7C3AED',
-  },
-  separateButtonTextDisabled: {
-    color: '#9CA3AF',
-  },
-  tasksSavedLabel: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    gap: 5,
-  },
-  tasksSavedText: {
-    fontSize: 13,
-    color: '#059669',
-  },
-  tasksCreatingText: {
-    fontSize: 13,
-    color: '#7C3AED',
-  },
-  deleteButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 8,
-    backgroundColor: '#FEF2F2',
-    gap: 5,
-  },
-  deleteButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#DC2626',
-  },
   settingsSectionTitle: {
     fontSize: 14,
     fontWeight: '600',
@@ -2380,17 +2002,6 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 16,
     color: '#666',
-  },
-  inlineDateHeader: {
-    paddingVertical: 8,
-    paddingTop: 16,
-  },
-  inlineDateHeaderText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#6B7280',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
   },
 });
 

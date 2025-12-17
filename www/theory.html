@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Theory - Field Theory</title>
+  <meta name="description" content="The philosophy behind Field Theory. Why voice-first, why local, why now.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav class="nav">
+    <div class="container nav-inner">
+      <a href="/" class="nav-logo">Field Theory</a>
+      <ul class="nav-links">
+        <li><a href="theory.html">Theory</a></li>
+        <li><a href="pricing.html">Pricing</a></li>
+        <li><a href="download.html">Download</a></li>
+        <li><button class="theme-toggle" onclick="toggleTheme()">◐</button></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Theory Content -->
+  <main class="theory-content">
+    <h1>The Theory</h1>
+
+    <p>
+      The gap between thinking and typing is where good ideas go to die. 
+      You have a clear thought—a fix, an approach, a question—but by the time 
+      you've context-switched to your keyboard, half the nuance is gone.
+    </p>
+
+    <p>
+      Field Theory exists to close that gap. Speak your thought. 
+      Get it transcribed locally. Paste it into your AI coding tool. Done.
+    </p>
+
+    <h2>Why Voice?</h2>
+
+    <p>
+      You think in continuous streams. Typing forces you to think in discrete chunks. 
+      Voice lets you externalize thought at the speed you actually think—
+      complete with the "wait, actually" moments that often contain the real insight.
+    </p>
+
+    <p>
+      For AI prompting specifically, voice is powerful because rambling is fine. 
+      You can dump context, explain the problem, mention constraints, 
+      and let the AI sort through it. The prompt doesn't need to be polished. 
+      It needs to be complete.
+    </p>
+
+    <h2>Why Local?</h2>
+
+    <p>
+      Your voice contains everything. Work conversations, passwords spoken aloud, 
+      half-formed ideas, complaints about your coworkers. 
+      None of that should live on someone else's server.
+    </p>
+
+    <p>
+      Modern Macs can run Whisper locally at near-realtime speed. 
+      There's no technical reason to send your audio to the cloud anymore. 
+      So we don't.
+    </p>
+
+    <h2>Why a Clipboard?</h2>
+
+    <p>
+      The clipboard is the universal interface. Every app knows how to paste. 
+      Instead of building integrations with a dozen tools, 
+      we put your transcriptions where they're already useful: in your clipboard history, 
+      ready to paste anywhere.
+    </p>
+
+    <p>
+      This also means your voice notes, screenshots, and copied text 
+      all live in one timeline. One searchable, stackable, organized timeline.
+    </p>
+
+    <h2>Why Multi-Modal?</h2>
+
+    <p>
+      The best AI prompts aren't just text. They're text plus a screenshot of the error, 
+      plus the code you're looking at, plus the context of what you tried. 
+      Field Theory lets you stack all of these together into a single prompt.
+    </p>
+
+    <p>
+      Our vision model describes your screenshots automatically, 
+      so even the images become searchable text. 
+      "Find that screenshot of the login form" actually works.
+    </p>
+
+    <h2>The Name</h2>
+
+    <p>
+      Field Theory in physics describes how forces propagate through space. 
+      Our Field Theory describes how thoughts propagate through your tools—
+      from your mind, through your voice, into text, into AI, into code.
+    </p>
+
+    <p>
+      Also, we just liked the name.
+    </p>
+
+    <hr class="dotted-line">
+
+    <p style="text-align: center; margin-top: 3rem;">
+      <a href="download.html" class="btn btn-primary">Try Field Theory</a>
+    </p>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container footer-inner">
+      <p>&copy; 2024 Field Theory</p>
+      <ul class="footer-links">
+        <li><a href="theory.html">Theory</a></li>
+        <li><a href="pricing.html">Pricing</a></li>
+        <li><a href="download.html">Download</a></li>
+      </ul>
+    </div>
+  </footer>
+
+  <!-- Theme toggle script -->
+  <script>
+    if (localStorage.getItem('theme') === 'dark') {
+      document.body.classList.add('dark');
+    }
+
+    function toggleTheme() {
+      document.body.classList.toggle('dark');
+      localStorage.setItem('theme', document.body.classList.contains('dark') ? 'dark' : 'light');
+    }
+  </script>
+
+</body>
+</html>

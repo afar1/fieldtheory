@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pricing - Field Theory</title>
+  <meta name="description" content="Field Theory pricing. Core features free forever, Pro for power users and teams.">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav class="nav">
+    <div class="container nav-inner">
+      <a href="/" class="nav-logo">Field Theory</a>
+      <ul class="nav-links">
+        <li><a href="theory.html">Theory</a></li>
+        <li><a href="pricing.html">Pricing</a></li>
+        <li><a href="download.html">Download</a></li>
+        <li><button class="theme-toggle" onclick="toggleTheme()">◐</button></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Pricing Section -->
+  <section class="pricing" style="padding-top: 4rem;">
+    <div class="container">
+      <h1 style="text-align: center; font-size: 2.5rem; margin-bottom: 0.5rem;">Pricing</h1>
+      <p class="hero-tagline" style="margin-bottom: 3rem;">
+        Core features are free forever. Pro unlocks power features.
+      </p>
+
+      <div class="pricing-grid">
+
+        <div class="pricing-card">
+          <h3>Free</h3>
+          <div class="price">$0 <span>forever</span></div>
+          <ul>
+            <li><strong>Local voice transcription</strong><br>
+              <small style="color: var(--color-text-muted);">Whisper runs on-device, your audio never leaves</small>
+            </li>
+            <li><strong>Clipboard history</strong><br>
+              <small style="color: var(--color-text-muted);">Searchable timeline of everything you copy</small>
+            </li>
+            <li><strong>Screenshot + AI vision</strong><br>
+              <small style="color: var(--color-text-muted);">Capture screens, get AI descriptions automatically</small>
+            </li>
+            <li><strong>Input stacking</strong><br>
+              <small style="color: var(--color-text-muted);">Combine voice, screenshots, text into one prompt</small>
+            </li>
+            <li><strong>Mac ↔ iPhone sync</strong><br>
+              <small style="color: var(--color-text-muted);">E2E encrypted sync between devices</small>
+            </li>
+            <li><strong>Priority microphone</strong><br>
+              <small style="color: var(--color-text-muted);">Lock to your preferred input device</small>
+            </li>
+          </ul>
+          <a href="download.html" class="btn btn-secondary" style="width: 100%; text-align: center;">Download Free</a>
+        </div>
+
+        <div class="pricing-card featured">
+          <h3>Pro</h3>
+          <div class="price">$10 <span>/month</span></div>
+          <ul>
+            <li><strong>Everything in Free</strong><br>
+              <small style="color: var(--color-text-muted);">All core features included</small>
+            </li>
+            <li><strong>Prompt refinement</strong><br>
+              <small style="color: var(--color-text-muted);">Claude transforms rambling into structured prompts</small>
+            </li>
+            <li><strong>Hot Mic infinite history</strong><br>
+              <small style="color: var(--color-text-muted);">Continuous transcription, never miss a thought</small>
+            </li>
+            <li><strong>Team clipboard sharing</strong><br>
+              <small style="color: var(--color-text-muted);">Share stacks and prompts with your team</small>
+            </li>
+            <li><strong>Priority support</strong><br>
+              <small style="color: var(--color-text-muted);">Direct access to the team</small>
+            </li>
+          </ul>
+          <a href="#" class="btn btn-primary" style="width: 100%; text-align: center;">Start Pro Trial</a>
+        </div>
+
+      </div>
+
+      <hr class="dotted-line" style="margin-top: 4rem;">
+
+      <!-- FAQ -->
+      <div style="max-width: 700px; margin: 3rem auto;">
+        <h2 style="text-align: center; margin-bottom: 2rem;">Questions</h2>
+
+        <div style="margin-bottom: 2rem;">
+          <h3 style="font-size: 1.1rem; margin-bottom: 0.5rem;">Why is most of it free?</h3>
+          <p style="color: var(--color-text-muted);">
+            The core value—local transcription and clipboard history—costs us nothing to run. 
+            It happens entirely on your device. We charge for features that use cloud services 
+            (like prompt refinement with Claude) or require server infrastructure (like team features).
+          </p>
+        </div>
+
+        <div style="margin-bottom: 2rem;">
+          <h3 style="font-size: 1.1rem; margin-bottom: 0.5rem;">Can I use my own API key?</h3>
+          <p style="color: var(--color-text-muted);">
+            Yes. You can bring your own Anthropic API key for prompt refinement instead of subscribing to Pro. 
+            You'll just pay Anthropic directly for usage.
+          </p>
+        </div>
+
+        <div style="margin-bottom: 2rem;">
+          <h3 style="font-size: 1.1rem; margin-bottom: 0.5rem;">Is there a team plan?</h3>
+          <p style="color: var(--color-text-muted);">
+            Team features are included in Pro. If you need volume pricing or admin controls, 
+            reach out and we'll figure something out.
+          </p>
+        </div>
+
+        <div style="margin-bottom: 2rem;">
+          <h3 style="font-size: 1.1rem; margin-bottom: 0.5rem;">What about privacy?</h3>
+          <p style="color: var(--color-text-muted);">
+            Voice transcription is 100% local—your audio never leaves your device. 
+            Mac ↔ iPhone sync is end-to-end encrypted—we can't read your data even if we wanted to. 
+            The only time data touches our servers is if you explicitly use prompt refinement 
+            (which sends text to Claude, not audio).
+          </p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container footer-inner">
+      <p>&copy; 2024 Field Theory</p>
+      <ul class="footer-links">
+        <li><a href="theory.html">Theory</a></li>
+        <li><a href="pricing.html">Pricing</a></li>
+        <li><a href="download.html">Download</a></li>
+      </ul>
+    </div>
+  </footer>
+
+  <!-- Theme toggle script -->
+  <script>
+    if (localStorage.getItem('theme') === 'dark') {
+      document.body.classList.add('dark');
+    }
+
+    function toggleTheme() {
+      document.body.classList.toggle('dark');
+      localStorage.setItem('theme', document.body.classList.contains('dark') ? 'dark' : 'light');
+    }
+  </script>
+
+</body>
+</html>
