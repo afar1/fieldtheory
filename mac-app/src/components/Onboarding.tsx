@@ -45,12 +45,12 @@ function WelcomeScreen({ onNext, onSkip }: { onNext: () => void; onSkip: () => v
   return (
     <div style={styles.screen}>
       <div style={styles.iconLarge}>🎙️</div>
-      <h1 style={styles.title}>Welcome to Oscar</h1>
+      <h1 style={styles.title}>Welcome to Field Theory</h1>
       <p style={styles.subtitle}>
         Fast, private voice transcription for Mac.
       </p>
       <p style={styles.description}>
-        Your voice never leaves your computer. Oscar uses Whisper, 
+        Your voice never leaves your computer. Field Theory uses Whisper, 
         an open-source AI model that runs entirely on your Mac.
       </p>
       <button style={styles.primaryButton} onClick={onNext}>
@@ -84,7 +84,7 @@ function MicrophoneScreen({
       <div style={styles.iconLarge}>🎤</div>
       <h1 style={styles.title}>Microphone Access</h1>
       <p style={styles.subtitle}>
-        Oscar needs access to your microphone to capture your voice for transcription.
+        Field Theory needs access to your microphone to capture your voice for transcription.
       </p>
       
       <div style={styles.privacyBox}>
@@ -146,13 +146,13 @@ function AccessibilityScreen({
       <div style={styles.iconLarge}>⌨️</div>
       <h1 style={styles.title}>Accessibility Permission</h1>
       <p style={styles.subtitle}>
-        Oscar needs accessibility access to paste transcribed text into your apps.
+        Field Theory needs accessibility access to paste transcribed text into your apps.
       </p>
 
       <div style={styles.infoBox}>
         <strong>Why this is needed:</strong>
         <p style={{ margin: '8px 0 0 0' }}>
-          After transcription, Oscar simulates a paste command (⌘V) to insert 
+          After transcription, Field Theory simulates a paste command (⌘V) to insert 
           text where your cursor is. This requires accessibility permission.
         </p>
       </div>
@@ -176,7 +176,7 @@ function AccessibilityScreen({
             </div>
             <div style={styles.step}>
               <span style={styles.stepNumber}>2</span>
-              <span>Find "Oscar" in the list and enable it</span>
+              <span>Find "Field Theory" in the list and enable it</span>
             </div>
             <div style={styles.step}>
               <span style={styles.stepNumber}>3</span>
@@ -225,7 +225,7 @@ function ModelDownloadScreen({
       <div style={styles.iconLarge}>🧠</div>
       <h1 style={styles.title}>Download AI Model</h1>
       <p style={styles.subtitle}>
-        Oscar uses the Whisper AI model for transcription. 
+        Field Theory uses the Whisper AI model for transcription. 
         This download is required for the app to work.
       </p>
 
@@ -280,7 +280,7 @@ function CompleteScreen({ onFinish }: { onFinish: () => void }) {
       <div style={styles.iconLarge}>🎉</div>
       <h1 style={styles.title}>You're All Set!</h1>
       <p style={styles.subtitle}>
-        Oscar is ready to transcribe your voice.
+        Field Theory is ready to transcribe your voice.
       </p>
 
       <div style={styles.hotkeyBox}>
@@ -300,14 +300,14 @@ function CompleteScreen({ onFinish }: { onFinish: () => void }) {
       <div style={styles.tipsBox}>
         <strong>Quick Tips:</strong>
         <ul style={styles.tipsList}>
-          <li>Oscar lives in your menu bar (look for the 🎙️ icon)</li>
+          <li>Field Theory lives in your menu bar (look for the 🎙️ icon)</li>
           <li>Right-click the icon to access settings</li>
           <li>You can change the hotkey in Settings</li>
         </ul>
       </div>
 
       <button style={styles.primaryButton} onClick={onFinish}>
-        Start Using Oscar
+        Start Using Field Theory
       </button>
     </div>
   );
@@ -337,19 +337,32 @@ export default function Onboarding() {
   const [modelDownloaded, setModelDownloaded] = useState(false);
   const [modelDownloading, setModelDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
 
   // Load initial state from Electron.
   useEffect(() => {
     const loadState = async () => {
-      if (!window.onboardingAPI) return;
+      // If onboardingAPI is not available, wait a moment for preload to initialize.
+      // This handles the race condition where renderer loads before preload completes.
+      if (!window.onboardingAPI) {
+        console.warn('[Onboarding] onboardingAPI not available, rendering with defaults');
+        setIsLoading(false);
+        return;
+      }
       
-      const state = await window.onboardingAPI.getState();
-      setPermissions(state.permissions);
-      setModelDownloaded(state.modelDownloaded);
-      
-      // If resuming, use saved step (but respect URL param if present).
-      if (state.currentStep > 0 && !window.location.hash.includes('step=')) {
-        setCurrentStep(state.currentStep);
+      try {
+        const state = await window.onboardingAPI.getState();
+        setPermissions(state.permissions);
+        setModelDownloaded(state.modelDownloaded);
+        
+        // If resuming, use saved step (but respect URL param if present).
+        if (state.currentStep > 0 && !window.location.hash.includes('step=')) {
+          setCurrentStep(state.currentStep);
+        }
+      } catch (err) {
+        console.error('[Onboarding] Failed to load state:', err);
+      } finally {
+        setIsLoading(false);
       }
     };
     loadState();
@@ -494,6 +507,20 @@ export default function Onboarding() {
         return <WelcomeScreen onNext={goToNext} onSkip={skip} />;
     }
   };
+
+  // Show a loading state while waiting for the API.
+  if (isLoading) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.content}>
+          <div style={styles.screen}>
+            <div style={styles.iconLarge}>🎙️</div>
+            <h1 style={styles.title}>Loading...</h1>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={styles.container}>

@@ -13,7 +13,9 @@ import { ModelSize } from './modelManager';
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
 import { MobileSync } from './mobileSync';
 import { TeamClipboardSync, TeamClipboardQueryOptions } from './teamClipboardSync';
+import { SocialSync } from './socialSync';
 import { TeamClipboardIPCChannels } from './types/clipboard';
+import { SocialIPCChannels } from './types/social';
 import {
   AudioIPCChannels,
   SetPriorityModePayload,
@@ -99,8 +101,12 @@ function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
     }
   }
 
-  console.warn('[Main] Could not load Supabase credentials from .env.local');
-  return {};
+  // Production fallback - anon key is public by design, protected by RLS.
+  console.log('[Main] Using production Supabase credentials');
+  return {
+    supabaseUrl: 'https://FIELD_THEORY_SUPABASE_URL.example',
+    supabaseAnonKey: 'FIELD_THEORY_SUPABASE_PUBLISHABLE_KEY',
+  };
 }
 
 // Override userData path for experimental builds to isolate data from production.
@@ -132,6 +138,7 @@ let visionModelManager: VisionModelManager | null = null;
 let visionProcessor: VisionProcessor | null = null;
 let mobileSync: MobileSync | null = null;
 let teamClipboardSync: TeamClipboardSync | null = null;
+let socialSync: SocialSync | null = null;
 let onboardingWindow: OnboardingWindow | null = null;
 
 // Track pending update state so windows can query it when they open.
@@ -1841,6 +1848,154 @@ function setupClipboardIPCHandlers(): void {
     }
     return await teamClipboardSync.hasTeammates();
   });
+
+  // =========================================================================
+  // Social IPC Handlers - DMs, Feedback, Contacts, Hot Mic
+  // =========================================================================
+
+  // DM: Send a DM with a clipboard item.
+  ipcMain.handle(SocialIPCChannels.SEND_DM, async (_event, recipientUserId: string, localItemId: number) => {
+    if (!socialSync) {
+      return null;
+    }
+    return await socialSync.sendDM(recipientUserId, localItemId);
+  });
+
+  // DM: Send a text-only DM (for replies).
+  ipcMain.handle(SocialIPCChannels.SEND_TEXT_DM, async (_event, recipientUserId: string, text: string, parentMessageId?: string) => {
+    if (!socialSync) {
+      return null;
+    }
+    return await socialSync.sendTextDM(recipientUserId, text, parentMessageId);
+  });
+
+  // DM: Get all DM conversations.
+  ipcMain.handle(SocialIPCChannels.GET_CONVERSATIONS, async () => {
+    if (!socialSync) {
+      return [];
+    }
+    return await socialSync.getDMConversations();
+  });
+
+  // DM: Get all DMs with a specific user.
+  ipcMain.handle(SocialIPCChannels.GET_DMS_WITH_USER, async (_event, otherUserId: string) => {
+    if (!socialSync) {
+      return [];
+    }
+    return await socialSync.getDMsWithUser(otherUserId);
+  });
+
+  // DM: Mark a message as read.
+  ipcMain.handle(SocialIPCChannels.MARK_AS_READ, async (_event, messageId: string) => {
+    if (!socialSync) {
+      return false;
+    }
+    return await socialSync.markAsRead(messageId);
+  });
+
+  // DM: Check if there are unread messages.
+  ipcMain.handle(SocialIPCChannels.HAS_UNREAD, async () => {
+    if (!socialSync) {
+      return false;
+    }
+    return await socialSync.hasUnreadMessages();
+  });
+
+  // Feedback: Submit feedback (send to admin).
+  ipcMain.handle(SocialIPCChannels.SUBMIT_FEEDBACK, async (_event, localItemId: number) => {
+    if (!socialSync) {
+      return null;
+    }
+    return await socialSync.submitFeedback(localItemId);
+  });
+
+  // Feedback: Get current user's submitted feedback.
+  ipcMain.handle(SocialIPCChannels.GET_MY_FEEDBACK, async () => {
+    if (!socialSync) {
+      return [];
+    }
+    return await socialSync.getMyFeedback();
+  });
+
+  // Feedback: Get all feedback (admin only).
+  ipcMain.handle(SocialIPCChannels.GET_ALL_FEEDBACK, async () => {
+    if (!socialSync) {
+      return [];
+    }
+    return await socialSync.getAllFeedback();
+  });
+
+  // Feedback: Get replies to a feedback item.
+  ipcMain.handle(SocialIPCChannels.GET_FEEDBACK_REPLIES, async (_event, feedbackId: string) => {
+    if (!socialSync) {
+      return [];
+    }
+    return await socialSync.getFeedbackReplies(feedbackId);
+  });
+
+  // Feedback: Update feedback status.
+  ipcMain.handle(SocialIPCChannels.UPDATE_FEEDBACK_STATUS, async (_event, feedbackId: string, status: 'open' | 'resolved' | 'archived') => {
+    if (!socialSync) {
+      return false;
+    }
+    return await socialSync.updateFeedbackStatus(feedbackId, status);
+  });
+
+  // Feedback: Get activity log for a feedback item.
+  ipcMain.handle(SocialIPCChannels.GET_ACTIVITY_LOG, async (_event, feedbackId: string) => {
+    if (!socialSync) {
+      return [];
+    }
+    return await socialSync.getActivityLog(feedbackId);
+  });
+
+  // Contacts: Get all contacts.
+  ipcMain.handle(SocialIPCChannels.GET_CONTACTS, async () => {
+    if (!socialSync) {
+      return [];
+    }
+    return await socialSync.getContacts();
+  });
+
+  // Contacts: Add a friend by email.
+  ipcMain.handle(SocialIPCChannels.ADD_FRIEND, async (_event, email: string) => {
+    if (!socialSync) {
+      return { success: false, error: 'Social sync not initialized' };
+    }
+    return await socialSync.addFriend(email);
+  });
+
+  // Contacts: Search contacts by name or email.
+  ipcMain.handle(SocialIPCChannels.SEARCH_CONTACTS, async (_event, query: string) => {
+    if (!socialSync) {
+      return [];
+    }
+    return await socialSync.searchContacts(query);
+  });
+
+  // Hot Mic: Get hot mic enabled status.
+  ipcMain.handle(SocialIPCChannels.GET_HOT_MIC, async () => {
+    if (!socialSync) {
+      return false;
+    }
+    return await socialSync.getHotMicEnabled();
+  });
+
+  // Hot Mic: Set hot mic enabled status.
+  ipcMain.handle(SocialIPCChannels.SET_HOT_MIC, async (_event, enabled: boolean) => {
+    if (!socialSync) {
+      return false;
+    }
+    return await socialSync.setHotMicEnabled(enabled);
+  });
+
+  // Admin: Check if current user is admin.
+  ipcMain.handle(SocialIPCChannels.IS_ADMIN, async () => {
+    if (!socialSync) {
+      return false;
+    }
+    return await socialSync.isCurrentUserAdmin();
+  });
 }
 
 
@@ -2275,22 +2430,50 @@ async function initTranscriberSystem(): Promise<void> {
   // This enables collaborative clipboard sharing between team members.
   teamClipboardSync = new TeamClipboardSync(clipboardManager);
   
+  // Initialize social sync for DMs, Feedback, and Contacts.
+  socialSync = new SocialSync(clipboardManager);
+  
+  // Check if mobileSync already has a session from stored credentials.
+  // If so, initialize teamClipboardSync and socialSync with it.
+  const existingSession = mobileSync.getSession();
+  // @ts-ignore - Access internal supabase client.
+  const existingSupabaseClient = mobileSync['supabase'];
+  
+  if (existingSession && existingSupabaseClient) {
+    console.log('[Main] Found existing session on startup, initializing syncs');
+    teamClipboardSync.setSupabaseClient(existingSupabaseClient);
+    teamClipboardSync.setSession(existingSession);
+    socialSync.setSupabaseClient(existingSupabaseClient);
+    socialSync.setSession(existingSession);
+  }
+  
   // Set the Supabase client from mobileSync once a session is established.
   // The client is shared to avoid duplicate connections.
-  // When mobileSync sets a session, we forward it to teamClipboardSync.
+  // When mobileSync sets a session, we forward it to teamClipboardSync and socialSync.
   const originalSetSession = mobileSync.setSession.bind(mobileSync);
   mobileSync.setSession = async (accessToken: string, refreshToken: string) => {
+    // Skip if we already have this exact session to prevent duplicate calls.
+    // Multiple UI components call setSyncSession on mount/auth change.
+    const currentSession = mobileSync!.getSession();
+    if (currentSession?.access_token === accessToken) {
+      return;
+    }
+    
     await originalSetSession(accessToken, refreshToken);
-    // Forward session to teamClipboardSync.
+    // Forward session to teamClipboardSync and socialSync.
     const session = mobileSync!.getSession();
-    if (session && teamClipboardSync) {
-      // The Supabase client is available on mobileSync after init.
-      // We need to share it with teamClipboardSync.
-      // @ts-ignore - Access internal supabase client.
-      if (mobileSync!['supabase']) {
-        teamClipboardSync.setSupabaseClient(mobileSync!['supabase']);
-      }
+    // The Supabase client is available on mobileSync after init.
+    // @ts-ignore - Access internal supabase client.
+    const supabaseClient = mobileSync!['supabase'];
+    
+    if (session && teamClipboardSync && supabaseClient) {
+      teamClipboardSync.setSupabaseClient(supabaseClient);
       teamClipboardSync.setSession(session);
+    }
+    
+    if (session && socialSync && supabaseClient) {
+      socialSync.setSupabaseClient(supabaseClient);
+      socialSync.setSession(session);
     }
   };
 
@@ -2302,6 +2485,45 @@ async function initTranscriberSystem(): Promise<void> {
       }
     });
   });
+
+  // Forward socialSync messageReceived events to all renderer windows for Hot Mic.
+  if (socialSync) {
+    socialSync.on('messageReceived', async (message: { id: string; type: string }) => {
+      console.log('[Main] Hot Mic message received:', message.id, 'type:', message.type);
+      
+      // Only trigger Hot Mic for DMs, not feedback replies.
+      if (message.type !== 'dm') {
+        console.log('[Main] Not a DM, skipping Hot Mic');
+        return;
+      }
+      
+      // Check if Hot Mic is enabled for this user.
+      const hotMicEnabled = await socialSync!.getHotMicEnabled();
+      if (!hotMicEnabled) {
+        console.log('[Main] Hot Mic is disabled, skipping');
+        return;
+      }
+      
+      // Check if user is currently recording (don't interrupt).
+      if (clipboardHistoryWindow?.getRecordingActive()) {
+        console.log('[Main] User is recording, skipping Hot Mic');
+        return;
+      }
+      
+      // Show the clipboard history window if it's not visible.
+      if (clipboardHistoryWindow && !clipboardHistoryWindow.isVisible()) {
+        console.log('[Main] Showing clipboard history window for Hot Mic');
+        clipboardHistoryWindow.show();
+      }
+      
+      // Send message to renderer to show the Hot Mic preview.
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(SocialIPCChannels.MESSAGE_RECEIVED, message);
+        }
+      });
+    });
+  }
 
   // Register todo hotkey (Cmd+Shift+T by default).
   // This hotkey toggles between todo view and clipboard view.
