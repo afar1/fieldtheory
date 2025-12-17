@@ -9,6 +9,9 @@ import { createClient, SupabaseClient, Session, SupportedStorage } from '@supaba
 import { ClipboardManager } from './clipboardManager';
 import { PreferencesManager } from './preferences';
 import { EventEmitter } from 'events';
+import WebSocket from 'ws';
+import fs from 'fs';
+import path from 'path';
 
 /**
  * Simple in-memory storage adapter for Supabase auth in the main process.
@@ -96,6 +99,9 @@ export class MobileSync extends EventEmitter {
   // Track which client_ids we've already synced to avoid duplicates.
   private syncedClientIds: Set<string> = new Set();
 
+  // Track last failed token to avoid log spam when renderer retries with same stale token.
+  private lastFailedToken: string | null = null;
+
   // Local cache of todos for the UI.
   private todos: Todo[] = [];
 
@@ -121,12 +127,17 @@ export class MobileSync extends EventEmitter {
 
     // Use in-memory storage for auth state - required for OTP verification to work.
     // The Supabase client needs storage to track state between OTP request and verify.
+    // Explicit WebSocket transport fixes Realtime timeouts in Node.js < v22 / Electron.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     this.supabase = createClient(url, anonKey, {
       auth: {
         storage: new MemoryStorage(),
         autoRefreshToken: true,
         persistSession: true,
         detectSessionInUrl: false,
+      },
+      realtime: {
+        transport: WebSocket as any,
       },
     });
 
@@ -143,16 +154,27 @@ export class MobileSync extends EventEmitter {
       return;
     }
 
+    // Skip if we already failed with this exact token (prevents log spam from renderer retries).
+    if (this.lastFailedToken === accessToken) {
+      return;
+    }
+
     const { data, error } = await this.supabase.auth.setSession({
       access_token: accessToken,
       refresh_token: refreshToken,
     });
 
+    // Token expired or invalid - clear session, user will need to sign in again.
+    // This is normal when app hasn't been used for a while.
     if (error) {
-      console.error('[MobileSync] Failed to set session:', error);
+      this.lastFailedToken = accessToken;
+      console.log('[MobileSync] Session restore failed (tokens expired), user needs to sign in');
+      this.clearSession();
       return;
     }
 
+    // Success - clear the failed token tracker.
+    this.lastFailedToken = null;
     this.session = data.session;
     console.log('[MobileSync] Session set for user:', this.session?.user?.email);
 
@@ -237,8 +259,14 @@ export class MobileSync extends EventEmitter {
       }
 
       if (data.session) {
-        this.session = data.session;
         console.log('[MobileSync] Signed in, session established for:', data.session.user?.email);
+        
+        // Call setSession to trigger the monkey-patched version in index.ts
+        // which forwards the session to TeamClipboardSync and SocialSync.
+        // This must be called BEFORE setting this.session so the early-return
+        // check in the patched version doesn't skip forwarding.
+        await this.setSession(data.session.access_token, data.session.refresh_token);
+        
         this.startPeriodicSync();
         return { error: null, session: data.session };
       }
@@ -252,6 +280,69 @@ export class MobileSync extends EventEmitter {
   }
 
   /**
+   * Load password reset redirect URL from environment or .env.local file.
+   * Falls back to localhost for development.
+   */
+  private getPasswordResetUrl(): string | null {
+    // First check process.env (set at runtime or by Vite)
+    if (process.env.VITE_PASSWORD_RESET_URL) {
+      return process.env.VITE_PASSWORD_RESET_URL;
+    }
+
+    // Try to load from .env.local file (same approach as Supabase credentials)
+    const envPaths: string[] = [
+      path.join(__dirname, '../../.env.local'),
+      path.join(process.cwd(), '.env.local'),
+      path.join(process.cwd(), 'mac-app/.env.local'),
+    ];
+
+    // Add app paths if Electron app is available
+    try {
+      const { app } = require('electron');
+      if (app?.isReady()) {
+        envPaths.push(
+          path.join(app.getAppPath(), '.env.local'),
+          path.join(app.getAppPath(), '../.env.local')
+        );
+      }
+    } catch (err) {
+      // App not available yet, skip app paths
+    }
+
+    for (const envPath of envPaths) {
+      try {
+        if (fs.existsSync(envPath)) {
+          const content = fs.readFileSync(envPath, 'utf-8');
+          const lines = content.split('\n');
+          
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed && !trimmed.startsWith('#')) {
+              const [key, ...valueParts] = trimmed.split('=');
+              if (key?.trim() === 'VITE_PASSWORD_RESET_URL' && valueParts.length > 0) {
+                const url = valueParts.join('=').trim();
+                console.log('[MobileSync] Loaded password reset URL from:', envPath);
+                return url;
+              }
+            }
+          }
+        }
+      } catch (err) {
+        // Ignore errors, try next path
+      }
+    }
+
+    // Fall back to localhost for development.
+    if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
+      return 'http://localhost:5173/reset-password.html';
+    }
+
+    // Production fallback - GitHub Pages URL.
+    // This URL should be configured in Supabase dashboard under Auth > URL Configuration > Redirect URLs.
+    return 'https://afar1.github.io/field-theory/reset-password.html';
+  }
+
+  /**
    * Send a password reset email.
    * User clicks the link in the email, which opens a web page to set their password.
    * After setting password, user returns to app and signs in.
@@ -261,17 +352,36 @@ export class MobileSync extends EventEmitter {
       return { error: 'Supabase not initialized' };
     }
 
+    // Get redirect URL from environment variable or .env.local file.
+    // In production, this should be set to a publicly accessible URL where reset-password.html is hosted.
+    const redirectUrl = this.getPasswordResetUrl();
+
+    if (!redirectUrl) {
+      console.error('[MobileSync] Password reset URL not configured. Set VITE_PASSWORD_RESET_URL in .env.local or environment variable.');
+      return { error: 'Password reset is not configured. Please set VITE_PASSWORD_RESET_URL to a publicly accessible URL where reset-password.html is hosted.' };
+    }
+
     console.log('[MobileSync] Sending password reset email to:', email);
+    console.log('[MobileSync] Using redirect URL:', redirectUrl);
 
     try {
       // Redirect to our browser-based password reset page.
       // This page handles the token and lets users set their password in a regular browser.
       const { error } = await this.supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: 'http://localhost:5173/reset-password.html',
+        redirectTo: redirectUrl,
       });
 
       if (error) {
         console.error('[MobileSync] Password reset email failed:', error);
+        
+        // Parse rate limiting error to show user-friendly message.
+        // Supabase returns: "For security purposes, you can only request this after X seconds."
+        const rateLimitMatch = error.message.match(/after (\d+) seconds?/i);
+        if (rateLimitMatch) {
+          const seconds = rateLimitMatch[1];
+          return { error: `Please wait ${seconds} seconds before requesting another password reset email.` };
+        }
+        
         return { error: error.message };
       }
 
@@ -280,6 +390,14 @@ export class MobileSync extends EventEmitter {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       console.error('[MobileSync] Password reset exception:', message);
+      
+      // Also check for rate limiting in exception message.
+      const rateLimitMatch = message.match(/after (\d+) seconds?/i);
+      if (rateLimitMatch) {
+        const seconds = rateLimitMatch[1];
+        return { error: `Please wait ${seconds} seconds before requesting another password reset email.` };
+      }
+      
       return { error: message };
     }
   }
@@ -330,20 +448,15 @@ export class MobileSync extends EventEmitter {
     console.log('[MobileSync] Setting session from recovery token...');
 
     try {
-      const { data, error } = await this.supabase.auth.setSession({
-        access_token: accessToken,
-        refresh_token: refreshToken,
-      });
-
-      if (error) {
-        console.error('[MobileSync] Failed to set session from token:', error);
-        return { error: error.message, session: null };
-      }
-
-      if (data.session) {
-        this.session = data.session;
-        console.log('[MobileSync] Session established from recovery token for:', data.session.user?.email);
-        return { error: null, session: data.session };
+      // Use setSession which handles everything: sets session via Supabase,
+      // stores it locally, and triggers the monkey-patched version in index.ts
+      // that forwards to TeamClipboardSync and SocialSync.
+      await this.setSession(accessToken, refreshToken);
+      
+      const session = this.getSession();
+      if (session) {
+        console.log('[MobileSync] Session established from recovery token for:', session.user?.email);
+        return { error: null, session };
       }
 
       return { error: 'No session returned', session: null };
