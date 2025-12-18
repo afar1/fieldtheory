@@ -6,10 +6,10 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Linking,
-  Alert,
   Platform,
   AppState,
   AppStateStatus,
+  Keyboard,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Feather } from '@expo/vector-icons';
@@ -29,12 +29,19 @@ const KEEP_ALIVE_INTERVAL_MS = 5 * 60 * 1000;
 // If page hasn't been refreshed in this time, auto-reload when visited (15 minutes).
 const STALE_THRESHOLD_MS = 15 * 60 * 1000;
 
+// How long to wait for the page to be ready before giving up (in ms).
+const PAGE_READY_TIMEOUT_MS = 15000;
+
+// How often to check if Cursor's React app is ready (in ms).
+const PAGE_READY_POLL_INTERVAL_MS = 500;
+
 // Ref handle exposed to parent components.
 // Lets the parent paste text into the Cursor input and focus the browser.
 export interface CursorBrowserHandle {
   pasteText: (text: string) => void;
   reload: () => void;
   ensureFresh: () => void;
+  isReady: () => boolean;
 }
 
 interface CursorBrowserProps {
@@ -51,23 +58,111 @@ interface CursorBrowserProps {
  * - Maintains login session across app restarts (cookies persist in WebView).
  * - Exposes a `pasteText` method to inject transcribed text into Cursor's input.
  * - Uses injected JavaScript to interact with the Cursor UI.
+ * - Queues paste operations until the page's React app is fully mounted.
+ * - Supports recording directly on this page.
  * 
  * The WebView uses the default cache/cookie storage which persists between sessions,
  * so users stay logged in as long as Cursor's session cookies are valid.
  */
 export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>(
-  function CursorBrowser({ onReady, onError }, ref) {
+  function CursorBrowser({ 
+    onReady, 
+    onError, 
+  }, ref) {
     const webViewRef = useRef<WebView>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [canGoBack, setCanGoBack] = useState(false);
     const [canGoForward, setCanGoForward] = useState(false);
     const [currentUrl, setCurrentUrl] = useState(CURSOR_AGENT_URL);
     const [hasError, setHasError] = useState(false);
+    const [isAppReady, setIsAppReady] = useState(false);
+    const pendingPasteRef = useRef<string | null>(null);
     
     // Track last successful page load time for keep-alive mechanism
     const lastRefreshRef = useRef<number>(Date.now());
     const keepAliveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+    
+    const readyPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const readyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const checkAppReadyJS = `
+      (function() {
+        const selectors = [
+          'textarea[placeholder*="Ask Cursor"]',
+          'textarea[placeholder*="build"]',
+          'textarea[placeholder*="explore"]',
+          'textarea[placeholder*="message"]',
+          'textarea[placeholder*="Message"]',
+          '[contenteditable="true"][role="textbox"]',
+          '[contenteditable="true"]',
+          'textarea',
+        ];
+        for (const selector of selectors) {
+          const el = document.querySelector(selector);
+          if (el) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'appReady', ready: true }));
+            return true;
+          }
+        }
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'appReady', ready: false }));
+        return false;
+      })();
+    `;
+
+    const startReadyPolling = useCallback(() => {
+      if (readyPollIntervalRef.current) {
+        clearInterval(readyPollIntervalRef.current);
+      }
+      if (readyTimeoutRef.current) {
+        clearTimeout(readyTimeoutRef.current);
+      }
+
+      setIsAppReady(false);
+
+      readyPollIntervalRef.current = setInterval(() => {
+        if (webViewRef.current && !hasError) {
+          webViewRef.current.injectJavaScript(checkAppReadyJS);
+        }
+      }, PAGE_READY_POLL_INTERVAL_MS);
+
+      readyTimeoutRef.current = setTimeout(() => {
+        if (readyPollIntervalRef.current) {
+          clearInterval(readyPollIntervalRef.current);
+          readyPollIntervalRef.current = null;
+        }
+        setIsAppReady(true);
+        processPendingPaste();
+      }, PAGE_READY_TIMEOUT_MS);
+    }, [hasError]);
+
+    const processPendingPaste = useCallback(() => {
+      if (pendingPasteRef.current) {
+        const text = pendingPasteRef.current;
+        pendingPasteRef.current = null;
+        performPasteInternal(text);
+      }
+    }, []);
+
+    const handleMessage = useCallback((event: any) => {
+      try {
+        const data = JSON.parse(event.nativeEvent.data);
+        if (data.type === 'appReady' && data.ready) {
+          setIsAppReady(true);
+          if (readyPollIntervalRef.current) {
+            clearInterval(readyPollIntervalRef.current);
+            readyPollIntervalRef.current = null;
+          }
+          if (readyTimeoutRef.current) {
+            clearTimeout(readyTimeoutRef.current);
+            readyTimeoutRef.current = null;
+          }
+          processPendingPaste();
+        }
+      } catch (e) {
+        // Ignore non-JSON messages
+      }
+    }, [processPendingPaste]);
 
     // Keep-alive mechanism: Periodically inject a simple JS ping to prevent page staling.
     // This runs a lightweight check that keeps the WebView's JS context active.
@@ -124,47 +219,50 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
         if (keepAliveIntervalRef.current) {
           clearInterval(keepAliveIntervalRef.current);
         }
+        if (readyPollIntervalRef.current) {
+          clearInterval(readyPollIntervalRef.current);
+        }
+        if (readyTimeoutRef.current) {
+          clearTimeout(readyTimeoutRef.current);
+        }
         subscription.remove();
       };
     }, [pingPage, isPageStale, ensureFresh]);
 
-    // Expose methods to parent component via ref.
     useImperativeHandle(ref, () => ({
-      /**
-       * Paste text into Cursor's chat input field.
-       * This uses JavaScript injection to find the input and set its value.
-       * Automatically ensures the page is fresh before pasting.
-       */
       pasteText: (text: string) => {
-        // First, ensure the page is fresh
         if (isPageStale() || hasError) {
-          console.log('[CursorBrowser] Page stale before paste, refreshing first...');
+          pendingPasteRef.current = text;
           setHasError(false);
+          setIsAppReady(false);
           webViewRef.current?.reload();
-          // Queue the paste operation after reload
-          // We use a small delay to allow the page to start loading
-          setTimeout(() => {
-            performPaste(text);
-          }, 2000);
           return;
         }
         
-        performPaste(text);
+        if (!isAppReady) {
+          pendingPasteRef.current = text;
+          startReadyPolling();
+          return;
+        }
+        
+        performPasteInternal(text);
       },
 
       reload: () => {
         setHasError(false);
+        setIsAppReady(false);
         lastRefreshRef.current = Date.now();
         webViewRef.current?.reload();
       },
 
       ensureFresh,
+      isReady: () => isAppReady && !isPageStale() && !hasError,
     }));
 
     // Helper function to perform the actual paste operation.
     // Note: We intentionally do NOT focus the input after pasting, so the keyboard
     // stays hidden. User can tap the input field if they want to edit.
-    const performPaste = useCallback((text: string) => {
+    const performPasteInternal = useCallback((text: string) => {
       // Escape the text for safe JavaScript injection.
       const escapedText = text
         .replace(/\\/g, '\\\\')
@@ -262,14 +360,14 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
       setCurrentUrl(navState.url || CURSOR_AGENT_URL);
     }, []);
 
-    // Handle page load complete.
     const handleLoadEnd = useCallback(() => {
       setIsLoading(false);
       setHasError(false);
-      // Track when we last successfully loaded the page
       lastRefreshRef.current = Date.now();
+      startReadyPolling();
+      
       onReady?.();
-    }, [onReady]);
+    }, [onReady, startReadyPolling]);
 
     // Handle page load start.
     const handleLoadStart = useCallback(() => {
@@ -356,6 +454,10 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
           <TouchableOpacity style={styles.navButton} onPress={handleOpenExternal}>
             <Feather name="external-link" size={18} color="#111" />
           </TouchableOpacity>
+
+          <TouchableOpacity style={styles.navButton} onPress={() => Keyboard.dismiss()}>
+            <Feather name="chevron-down" size={18} color="#111" />
+          </TouchableOpacity>
         </View>
 
         {/* WebView */}
@@ -381,6 +483,7 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
               onLoadStart={handleLoadStart}
               onError={handleError}
               onShouldStartLoadWithRequest={handleShouldStartLoadWithRequest}
+              onMessage={handleMessage}
               // Enable JavaScript (required for Cursor's React app).
               javaScriptEnabled={true}
               // Enable DOM storage for session persistence.
@@ -420,7 +523,18 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
               <Text style={styles.loadingText}>Loading Cursor...</Text>
             </View>
           )}
+          
+          {/* App ready indicator - subtle dot in corner */}
+          {!isLoading && !hasError && (
+            <View style={styles.readyIndicator}>
+              <View style={[
+                styles.readyDot,
+                isAppReady ? styles.readyDotReady : styles.readyDotLoading
+              ]} />
+            </View>
+          )}
         </View>
+
       </View>
     );
   }
@@ -483,6 +597,22 @@ const styles = StyleSheet.create({
   loadingText: {
     fontSize: 16,
     color: '#6B7280',
+  },
+  readyIndicator: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+  },
+  readyDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  readyDotReady: {
+    backgroundColor: '#22C55E',
+  },
+  readyDotLoading: {
+    backgroundColor: '#F59E0B',
   },
   errorContainer: {
     flex: 1,

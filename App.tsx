@@ -235,6 +235,8 @@ export default function App() {
   const appStateRef = useRef<string>(AppState.currentState);
   // Track if user manually stopped recording (prevents auto-start until they manually start again)
   const manuallyStoppedRef = useRef<boolean>(false);
+  // Track which page was active when recording started, so we know where to send the transcription
+  const recordingStartedOnPageRef = useRef<number>(0);
 
   // Load data from storage on mount
   useEffect(() => {
@@ -388,6 +390,7 @@ export default function App() {
   }, [settings.autoStart, isReady, isRecording, isProcessing, isDownloadingModel, startRecording, session]);
 
   // Capture every finished transcription so we can build the timeline.
+  // If recording started on the Cursor page, paste directly into Cursor's input.
   useEffect(() => {
     if (transcription === null) {
       return;
@@ -398,6 +401,13 @@ export default function App() {
         ? transcription.trim()
         : 'No speech detected in this recording.';
 
+    const shouldPasteToCursor = recordingStartedOnPageRef.current === 1;
+
+    if (shouldPasteToCursor && cleanedText !== 'No speech detected in this recording.') {
+      cursorBrowserRef.current?.pasteText(cleanedText);
+      Clipboard.setStringAsync(cleanedText).catch(console.error);
+      return;
+    }
     const newEntry: TranscriptEntry = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       text: cleanedText,
@@ -574,6 +584,8 @@ export default function App() {
       await stopRecording();
       manuallyStoppedRef.current = true; // User manually stopped - don't auto-start again
     } else {
+      // Track which page we're on when starting recording
+      recordingStartedOnPageRef.current = pageIndex;
       await startRecording();
       manuallyStoppedRef.current = false; // User manually started - allow auto-start again
     }
@@ -847,8 +859,8 @@ export default function App() {
     // Cursor is always at page 1 (right after Transcripts).
     const cursorPageIndex = 1;
     
-    // Switch to the Cursor browser page.
-    pagerRef.current?.setPage(cursorPageIndex);
+    // Switch to the Cursor browser page instantly (no animation).
+    pagerRef.current?.setPageWithoutAnimation(cursorPageIndex);
     setPageIndex(cursorPageIndex);
     
     // Provide haptic feedback.
@@ -1184,15 +1196,15 @@ export default function App() {
       )}
 
       {/* Pager View - Order: Transcripts → Cursor → Tasks → Observations */}
-      {/* This allows natural swipe-left from Cursor to go back to Transcripts */}
       <PagerView
         ref={pagerRef}
         style={styles.pager}
+        scrollEnabled={false}
         onPageSelected={(e) => {
-          try {
-            setPageIndex(e.nativeEvent.position);
-          } catch (err) {
-            console.error('Error handling page selection:', err);
+          const newPageIndex = e.nativeEvent.position;
+          setPageIndex(newPageIndex);
+          if (newPageIndex === 1 && cursorBrowserRef.current) {
+            cursorBrowserRef.current.ensureFresh();
           }
         }}
       >
@@ -1226,7 +1238,7 @@ export default function App() {
                   renderItem={renderTranscriptItem}
                   contentContainerStyle={styles.sectionContent}
                   windowSize={5}
-                  removeClippedSubviews={true}
+                  removeClippedSubviews={false}
                   maxToRenderPerBatch={10}
                   initialNumToRender={10}
                 />
