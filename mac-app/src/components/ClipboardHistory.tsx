@@ -9,6 +9,7 @@ import SettingsPanel from './SettingsPanel';
 import TodoView from './TodoView';
 import TeamView from './TeamView';
 import DMsView from './DMsView';
+import PopularCommands from './PopularCommands';
 import { useTheme } from '../contexts/ThemeContext';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
@@ -26,7 +27,7 @@ import {
 } from '@dnd-kit/core';
 
 // View mode: clipboard history, todo list, team clipboard, or DMs.
-type ViewMode = 'clipboard' | 'todo' | 'team' | 'dms';
+type ViewMode = 'clipboard' | 'todo' | 'team' | 'dms' | 'commands';
 
 type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
 type ClipboardSource = 'mac' | 'ios';
@@ -289,7 +290,7 @@ export default function ClipboardHistory() {
   // Initialize viewMode from localStorage, defaulting to 'clipboard'.
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     const saved = localStorage.getItem('fieldTheoryView');
-    if (saved === 'clipboard' || saved === 'team' || saved === 'todo' || saved === 'dms') {
+    if (saved === 'clipboard' || saved === 'team' || saved === 'todo' || saved === 'dms' || saved === 'commands') {
       return saved;
     }
     return 'clipboard';
@@ -2240,7 +2241,7 @@ export default function ClipboardHistory() {
           padding: '0 16px',
           marginBottom: '8px',
         }}>
-          {(['clipboard', 'team', 'dms', 'todo'] as ViewMode[]).map((mode) => (
+          {(['clipboard', 'commands', 'team', 'dms', 'todo'] as ViewMode[]).map((mode) => (
             <button
               key={mode}
               onClick={() => {
@@ -2264,7 +2265,7 @@ export default function ClipboardHistory() {
                 outline: 'none',
               }}
             >
-              {mode === 'clipboard' ? 'Clipboard' : mode === 'team' ? 'Team' : mode === 'dms' ? 'Messages' : 'Tasks'}
+              {mode === 'clipboard' ? 'Clipboard' : mode === 'commands' ? 'Commands' : mode === 'team' ? 'Team' : mode === 'dms' ? 'Messages' : 'Tasks'}
               {mode === 'dms' && hasUnreadDMs && viewMode !== 'dms' && (
                 <span style={{
                   marginLeft: '4px',
@@ -2289,6 +2290,8 @@ export default function ClipboardHistory() {
         <TeamView />
       ) : viewMode === 'dms' ? (
         <DMsView />
+      ) : viewMode === 'commands' ? (
+        <PopularCommands />
       ) : (
         <div 
           style={{ 
