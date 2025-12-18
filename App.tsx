@@ -405,10 +405,7 @@ export default function App() {
     const shouldPasteToCursor = recordingStartedOnPageRef.current === 1;
 
     if (shouldPasteToCursor && cleanedText !== 'No speech detected in this recording.') {
-      // Paste directly to Cursor and don't create a transcript entry
-      console.log('[App] Recording from Cursor page - pasting directly to Cursor');
       cursorBrowserRef.current?.pasteText(cleanedText);
-      // Also copy to clipboard as a backup
       Clipboard.setStringAsync(cleanedText).catch(console.error);
       return;
     }
@@ -865,8 +862,8 @@ export default function App() {
     // Cursor is always at page 1 (right after Transcripts).
     const cursorPageIndex = 1;
     
-    // Switch to the Cursor browser page.
-    pagerRef.current?.setPage(cursorPageIndex);
+    // Switch to the Cursor browser page instantly (no animation).
+    pagerRef.current?.setPageWithoutAnimation(cursorPageIndex);
     setPageIndex(cursorPageIndex);
     
     // Provide haptic feedback.
@@ -1253,7 +1250,7 @@ export default function App() {
                   renderItem={renderTranscriptItem}
                   contentContainerStyle={styles.sectionContent}
                   windowSize={5}
-                  removeClippedSubviews={true}
+                  removeClippedSubviews={false}
                   maxToRenderPerBatch={10}
                   initialNumToRender={10}
                 />
@@ -1262,22 +1259,7 @@ export default function App() {
           </View>
         </View>
         <View key="cursor" style={styles.pageContainer}>
-          <CursorBrowser 
-            ref={cursorBrowserRef}
-            isRecording={isRecording}
-            isProcessing={isProcessing}
-            isWhisperReady={isReady && !isDownloadingModel}
-            onStartRecording={() => {
-              // Track that recording started on Cursor page (page 1)
-              recordingStartedOnPageRef.current = 1;
-              manuallyStoppedRef.current = false;
-              startRecording();
-            }}
-            onStopRecording={() => {
-              manuallyStoppedRef.current = true;
-              stopRecording();
-            }}
-          />
+          <CursorBrowser ref={cursorBrowserRef} />
         </View>
         <View key="todos" style={styles.pageContainer}>
           <TodoList
