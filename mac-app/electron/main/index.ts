@@ -117,7 +117,7 @@ if (process.env.EXPERIMENTAL === 'true') {
     'Library/Application Support/Oscar Experimental'
   );
   app.setPath('userData', experimentalUserData);
-  app.setName('Oscar Experimental');
+  app.setName('Field Theory Experimental');
 }
 
 // Configure autoUpdater for manual update flow (only in production builds).

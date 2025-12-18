@@ -448,9 +448,10 @@ export default function ClipboardHistory() {
   const [hasUnreadDMs, setHasUnreadDMs] = useState(false);
   
   // Update notification state.
-  type UpdateStatus = 'idle' | 'available' | 'downloading' | 'ready';
+  type UpdateStatus = 'idle' | 'available' | 'downloading' | 'ready' | 'error';
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   
   // App version for footer display.
   const [appVersion] = useState(() => window.updaterAPI?.getVersion?.() || '0.0.0');
@@ -584,8 +585,10 @@ export default function ClipboardHistory() {
       window.updaterAPI.onUpdateNotAvailable(() => {
         setUpdateStatus('idle');
       }),
-      window.updaterAPI.onError(() => {
-        setUpdateStatus('idle');
+      window.updaterAPI.onError((error) => {
+        console.error('[Updater] Error:', error);
+        setUpdateError(error);
+        setUpdateStatus('error');
       }),
     ];
     
@@ -3801,8 +3804,8 @@ export default function ClipboardHistory() {
                   <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/>
                   <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>
                 </svg>
-                <span style={{ fontSize: '10px', color: theme.text }}>
-                  {updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'New update ready' : 'New update available'}
+                <span style={{ fontSize: '10px', color: updateStatus === 'error' ? '#ef4444' : theme.text }}>
+                  {updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'New update ready' : updateStatus === 'error' ? `Update failed: ${updateError}` : 'New update available'}
                 </span>
                 {/* Shimmer overlay - always show during update sequence */}
                 <div style={{
@@ -3816,7 +3819,7 @@ export default function ClipboardHistory() {
                   pointerEvents: 'none',
                 }} />
               </div>
-              {updateStatus !== 'downloading' && (
+                {updateStatus !== 'downloading' && updateStatus !== 'error' && (
                 <>
                   <button
                     onClick={() => {
@@ -3856,6 +3859,25 @@ export default function ClipboardHistory() {
                     {updateStatus === 'ready' ? 'Install and restart' : 'Update'}
                   </button>
                 </>
+              )}
+              {updateStatus === 'error' && (
+                <button
+                  onClick={() => {
+                    setUpdateError(null);
+                    setUpdateStatus('idle');
+                  }}
+                  style={{
+                    padding: '2px 6px',
+                    fontSize: '9px',
+                    color: theme.text,
+                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Dismiss
+                </button>
               )}
             </div>
           ) : (

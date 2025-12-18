@@ -133,7 +133,7 @@ export class OnboardingWindow {
       this.window.loadURL(`${startUrl}#/onboarding?step=${startStep}`);
     } else {
       // Production - load from built files.
-      const indexPath = path.join(app.getAppPath(), 'electron-dist', 'index.html');
+      const indexPath = path.join(app.getAppPath(), 'dist', 'index.html');
       this.window.loadFile(indexPath, { hash: `/onboarding?step=${startStep}` });
     }
 
