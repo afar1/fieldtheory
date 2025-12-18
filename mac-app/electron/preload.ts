@@ -26,6 +26,10 @@ const TranscribeIPCChannels = {
   SET_ABANDON_HOTKEY: 'transcribe:setAbandonHotkey',
   GET_ABANDON_CONFIRMATION: 'transcribe:getAbandonConfirmation',
   SET_ABANDON_CONFIRMATION: 'transcribe:setAbandonConfirmation',
+  GET_SOUND_CONFIG: 'transcribe:getSoundConfig',
+  SET_SOUND_CONFIG: 'transcribe:setSoundConfig',
+  GET_AVAILABLE_SOUNDS: 'transcribe:getAvailableSounds',
+  PREVIEW_SOUND: 'transcribe:previewSound',
   STATUS_CHANGED: 'transcribe:statusChanged',
   RESULT: 'transcribe:result',
   ERROR: 'transcribe:error',
@@ -154,6 +158,21 @@ type AudioState = {
 
 type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
 type ModelStatus = 'downloaded' | 'downloading' | 'missing';
+
+// Sound configuration for recording actions.
+type SoundConfig = {
+  enabled: boolean;
+  recordingStart: string | undefined;
+  recordingStop: string | undefined;
+  recordingCancel: string | undefined;
+};
+
+// Sound option for UI display.
+type SoundOption = {
+  id: string;
+  name: string;
+  category: string;
+};
 
 type ModelInfo = {
   name: string;
@@ -459,6 +478,10 @@ export interface TranscribeAPI {
   setAbandonHotkey: (hotkey: string) => Promise<boolean>;
   getAbandonConfirmation: () => Promise<boolean>;
   setAbandonConfirmation: (enabled: boolean) => Promise<void>;
+  getSoundConfig: () => Promise<SoundConfig>;
+  setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
+  getAvailableSounds: () => Promise<SoundOption[]>;
+  previewSound: (soundId: string) => Promise<void>;
   getStackCount: () => Promise<number>;
   getStackingMode: () => Promise<StackingModeState>;
   onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
@@ -657,6 +680,22 @@ const transcribeAPI: TranscribeAPI = {
 
   setAbandonConfirmation: async (enabled: boolean): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_ABANDON_CONFIRMATION, enabled);
+  },
+
+  getSoundConfig: async (): Promise<SoundConfig> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_SOUND_CONFIG);
+  },
+
+  setSoundConfig: async (config: Partial<SoundConfig>): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_SOUND_CONFIG, config);
+  },
+
+  getAvailableSounds: async (): Promise<SoundOption[]> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AVAILABLE_SOUNDS);
+  },
+
+  previewSound: async (soundId: string): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.PREVIEW_SOUND, soundId);
   },
 
   onStatusChanged: (callback: (status: TranscriptionStatus) => void): (() => void) => {
