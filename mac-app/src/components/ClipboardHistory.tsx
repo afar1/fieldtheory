@@ -667,6 +667,7 @@ export default function ClipboardHistory() {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const tabsRef = useRef<HTMLDivElement>(null);
   const searchDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ITEMS_PER_PAGE = 50;
 
@@ -1022,9 +1023,14 @@ export default function ClipboardHistory() {
       // Let TeamView/TodoView/DMsView handle their own navigation and preview.
       if (viewMode !== 'clipboard') {
         // Tab/Shift+Tab cycles through view modes (global shortcut).
+        // But allow normal Tab navigation when focused on tab buttons themselves.
         if (key === 'Tab' && !hasCtrl && !hasMeta) {
           if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
             return; // Let Tab navigate between form fields naturally.
+          }
+          // If focused on a tab button, let Tab work normally to navigate between buttons.
+          if (tabsRef.current && tabsRef.current.contains(document.activeElement)) {
+            return; // Let Tab navigate between tab buttons naturally.
           }
           e.preventDefault();
 
@@ -1042,21 +1048,23 @@ export default function ClipboardHistory() {
             }));
             window.clipboardAPI?.setTargetApp(newApp);
           } else if (hasShift) {
-            // Shift+Tab - cycle backwards: clipboard ← team ← dms ← todo ← clipboard.
+            // Shift+Tab - cycle backwards: clipboard ← commands ← todo ← dms ← team ← clipboard.
             setShowSettings(false);
             setViewMode(prev => {
-              if (prev === 'clipboard') return 'todo';
+              if (prev === 'clipboard') return 'commands';
+              if (prev === 'commands') return 'todo';
               if (prev === 'todo') return 'dms';
               if (prev === 'dms') return 'team';
               return 'clipboard';
             });
           } else {
-            // Tab - cycle forwards: clipboard → team → dms → todo → clipboard.
+            // Tab - cycle forwards: clipboard → team → dms → todo → commands → clipboard.
             setShowSettings(false);
             setViewMode(prev => {
               if (prev === 'clipboard') return 'team';
               if (prev === 'team') return 'dms';
               if (prev === 'dms') return 'todo';
+              if (prev === 'todo') return 'commands';
               return 'clipboard';
             });
           }
@@ -1657,21 +1665,23 @@ export default function ClipboardHistory() {
           }));
           window.clipboardAPI?.setTargetApp(newApp);
         } else if (hasShift) {
-          // Shift+Tab - cycle backwards: clipboard ← team ← dms ← todo ← clipboard.
+          // Shift+Tab - cycle backwards: clipboard ← commands ← todo ← dms ← team ← clipboard.
           setShowSettings(false);
           setViewMode(prev => {
-            if (prev === 'clipboard') return 'todo';
+            if (prev === 'clipboard') return 'commands';
+            if (prev === 'commands') return 'todo';
             if (prev === 'todo') return 'dms';
             if (prev === 'dms') return 'team';
             return 'clipboard';
           });
         } else {
-          // Tab - cycle forwards: clipboard → team → dms → todo → clipboard.
+          // Tab - cycle forwards: clipboard → team → dms → todo → commands → clipboard.
           setShowSettings(false);
           setViewMode(prev => {
             if (prev === 'clipboard') return 'team';
             if (prev === 'team') return 'dms';
             if (prev === 'dms') return 'todo';
+            if (prev === 'todo') return 'commands';
             return 'clipboard';
           });
         }
@@ -1875,6 +1885,7 @@ export default function ClipboardHistory() {
     } else {
       // Normal click: paste to target app
       const targetBundleId = targetAppInfo.targetApp?.bundleId;
+      
       // If there's an improved version, paste that instead
       if (improveResult?.stackId === `item-${item.id}`) {
         window.clipboardAPI?.pasteText?.(improveResult.refinedPrompt, targetBundleId);
@@ -2234,14 +2245,16 @@ export default function ClipboardHistory() {
       
       {/* View mode tabs - only show when not in settings */}
       {!showSettings && (
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '2px',
-          padding: '0 16px',
-          marginBottom: '8px',
-        }}>
-          {(['clipboard', 'commands', 'team', 'dms', 'todo'] as ViewMode[]).map((mode) => (
+        <div 
+          ref={tabsRef}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '2px',
+            padding: '0 16px',
+            marginBottom: '8px',
+          }}>
+          {(['clipboard', 'team', 'dms', 'todo', 'commands'] as ViewMode[]).map((mode) => (
             <button
               key={mode}
               onClick={() => {
@@ -2251,9 +2264,11 @@ export default function ClipboardHistory() {
                   setHasUnreadDMs(false);
                 }
               }}
-              tabIndex={-1}
+              tabIndex={0}
               style={{
+                position: 'relative',
                 padding: '4px 10px',
+                paddingRight: mode === 'dms' ? '18px' : '10px', // Reserve space for orange dot
                 fontSize: '10px',
                 fontWeight: 400,
                 backgroundColor: viewMode === mode ? theme.accent : 'transparent',
@@ -2265,10 +2280,13 @@ export default function ClipboardHistory() {
                 outline: 'none',
               }}
             >
-              {mode === 'clipboard' ? 'Clipboard' : mode === 'commands' ? 'Commands' : mode === 'team' ? 'Team' : mode === 'dms' ? 'Messages' : 'Tasks'}
+              {mode === 'clipboard' ? 'Clipboard' : mode === 'commands' ? 'Popular commands' : mode === 'team' ? 'Team' : mode === 'dms' ? 'Messages' : 'Tasks'}
               {mode === 'dms' && hasUnreadDMs && viewMode !== 'dms' && (
                 <span style={{
-                  marginLeft: '4px',
+                  position: 'absolute',
+                  right: '6px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
                   width: '6px',
                   height: '6px',
                   borderRadius: '50%',

@@ -74,6 +74,10 @@ interface SoundConfig {
   recordingStart: string | undefined;
   recordingStop: string | undefined;
   recordingCancel: string | undefined;
+  windowOpen: string | undefined;
+  windowClose: string | undefined;
+  transcribing: string | undefined;
+  paste: string | undefined;
 }
 
 /**
@@ -109,6 +113,7 @@ interface TranscribeAPI {
   setSoundConfig?: (config: Partial<SoundConfig>) => Promise<void>;
   getAvailableSounds?: () => Promise<SoundOption[]>;
   previewSound?: (soundId: string) => Promise<void>;
+  playPasteSound?: () => Promise<void>;
   getStackCount: () => Promise<number>;
   onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
   onResult: (callback: (text: string) => void) => () => void;
@@ -203,6 +208,7 @@ interface ClipboardQueryOptions {
  */
 interface ClipboardHotkeys {
   screenshot?: string;
+  desktopScreenshot?: string;
   history?: string;
   continuousContext?: string;
 }

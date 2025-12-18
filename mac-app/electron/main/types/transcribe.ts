@@ -25,6 +25,7 @@ export const TranscribeIPCChannels = {
   SET_SOUND_CONFIG: 'transcribe:setSoundConfig',
   GET_AVAILABLE_SOUNDS: 'transcribe:getAvailableSounds',
   PREVIEW_SOUND: 'transcribe:previewSound',
+  PLAY_PASTE_SOUND: 'transcribe:playPasteSound',
 
   // Main -> Renderer (send pattern)
   STATUS_CHANGED: 'transcribe:statusChanged',
@@ -47,6 +48,10 @@ export interface SoundConfig {
   recordingStart: string | undefined;
   recordingStop: string | undefined;
   recordingCancel: string | undefined;
+  windowOpen: string | undefined;
+  windowClose: string | undefined;
+  transcribing: string | undefined;
+  paste: string | undefined;
 }
 
 /**
@@ -97,6 +102,7 @@ export interface TranscribeAPI {
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
   getAvailableSounds: () => Promise<SoundOption[]>;
   previewSound: (soundId: string) => Promise<void>;
+  playPasteSound: () => Promise<void>;
   onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
   onResult: (callback: (text: string) => void) => () => void;
   onError: (callback: (error: string) => void) => () => void;
