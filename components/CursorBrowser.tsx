@@ -9,6 +9,7 @@ import {
   Platform,
   AppState,
   AppStateStatus,
+  Keyboard,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Feather } from '@expo/vector-icons';
@@ -48,16 +49,6 @@ interface CursorBrowserProps {
   onReady?: () => void;
   // Called when there's an error loading the page.
   onError?: (error: string) => void;
-  // Whether recording is in progress (shows recording indicator).
-  isRecording?: boolean;
-  // Whether recording is being processed (transcribed).
-  isProcessing?: boolean;
-  // Whether the whisper model is ready.
-  isWhisperReady?: boolean;
-  // Callback to start recording.
-  onStartRecording?: () => void;
-  // Callback to stop recording.
-  onStopRecording?: () => void;
 }
 
 /**
@@ -77,11 +68,6 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
   function CursorBrowser({ 
     onReady, 
     onError, 
-    isRecording = false, 
-    isProcessing = false,
-    isWhisperReady = true,
-    onStartRecording,
-    onStopRecording,
   }, ref) {
     const webViewRef = useRef<WebView>(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -159,32 +145,24 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
           clearInterval(readyPollIntervalRef.current);
           readyPollIntervalRef.current = null;
         }
-        // Assume ready anyway after timeout - best effort
-        console.log('[CursorBrowser] App ready check timed out, assuming ready');
         setIsAppReady(true);
         processPendingPaste();
       }, PAGE_READY_TIMEOUT_MS);
     }, [hasError]);
 
-    // Process any pending paste operation.
     const processPendingPaste = useCallback(() => {
       if (pendingPasteRef.current) {
         const text = pendingPasteRef.current;
         pendingPasteRef.current = null;
-        console.log('[CursorBrowser] Processing queued paste');
         performPasteInternal(text);
       }
     }, []);
 
-    // Handle messages from the WebView (e.g., app ready status).
     const handleMessage = useCallback((event: any) => {
       try {
         const data = JSON.parse(event.nativeEvent.data);
         if (data.type === 'appReady' && data.ready) {
-          console.log('[CursorBrowser] Cursor app is ready');
           setIsAppReady(true);
-          
-          // Stop polling
           if (readyPollIntervalRef.current) {
             clearInterval(readyPollIntervalRef.current);
             readyPollIntervalRef.current = null;
@@ -193,8 +171,6 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
             clearTimeout(readyTimeoutRef.current);
             readyTimeoutRef.current = null;
           }
-          
-          // Process any pending paste
           processPendingPaste();
         }
       } catch (e) {
@@ -278,9 +254,7 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
        * and executed once the page is confirmed ready.
        */
       pasteText: (text: string) => {
-        // If page is stale, reload and queue the paste
         if (isPageStale() || hasError) {
-          console.log('[CursorBrowser] Page stale before paste, refreshing and queueing...');
           pendingPasteRef.current = text;
           setHasError(false);
           setIsAppReady(false);
@@ -288,16 +262,12 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
           return;
         }
         
-        // If app isn't ready yet, queue the paste
         if (!isAppReady) {
-          console.log('[CursorBrowser] App not ready, queueing paste...');
           pendingPasteRef.current = text;
-          // Start polling for readiness in case we haven't already
           startReadyPolling();
           return;
         }
         
-        // App is ready, paste immediately
         performPasteInternal(text);
       },
 
@@ -515,6 +485,10 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
           <TouchableOpacity style={styles.navButton} onPress={handleOpenExternal}>
             <Feather name="external-link" size={18} color="#111" />
           </TouchableOpacity>
+
+          <TouchableOpacity style={styles.navButton} onPress={() => Keyboard.dismiss()}>
+            <Feather name="chevron-down" size={18} color="#111" />
+          </TouchableOpacity>
         </View>
 
         {/* WebView */}
@@ -592,36 +566,6 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
           )}
         </View>
 
-        {/* Floating Record Button - for recording directly on this page */}
-        {onStartRecording && onStopRecording && (
-          <View style={styles.floatingRecordContainer}>
-            <TouchableOpacity
-              style={[
-                styles.floatingRecordButton,
-                isRecording && styles.floatingRecordButtonActive,
-                (!isWhisperReady || isProcessing) && styles.floatingRecordButtonDisabled,
-              ]}
-              onPress={isRecording ? onStopRecording : onStartRecording}
-              disabled={!isWhisperReady || isProcessing}
-            >
-              {isProcessing ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <Feather 
-                  name={isRecording ? "square" : "mic"} 
-                  size={24} 
-                  color="#fff" 
-                />
-              )}
-            </TouchableOpacity>
-            {isRecording && (
-              <Text style={styles.recordingLabel}>Recording...</Text>
-            )}
-            {isProcessing && (
-              <Text style={styles.recordingLabel}>Transcribing...</Text>
-            )}
-          </View>
-        )}
       </View>
     );
   }
@@ -700,41 +644,6 @@ const styles = StyleSheet.create({
   },
   readyDotLoading: {
     backgroundColor: '#F59E0B',
-  },
-  floatingRecordContainer: {
-    position: 'absolute',
-    bottom: 24,
-    right: 16,
-    alignItems: 'center',
-    gap: 8,
-  },
-  floatingRecordButton: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#2563EB',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 8,
-  },
-  floatingRecordButtonActive: {
-    backgroundColor: '#DC2626',
-  },
-  floatingRecordButtonDisabled: {
-    backgroundColor: '#9CA3AF',
-  },
-  recordingLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#DC2626',
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
   },
   errorContainer: {
     flex: 1,
