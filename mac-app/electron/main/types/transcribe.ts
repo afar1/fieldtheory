@@ -19,6 +19,12 @@ export const TranscribeIPCChannels = {
   SET_ABANDON_HOTKEY: 'transcribe:setAbandonHotkey',
   GET_ABANDON_CONFIRMATION: 'transcribe:getAbandonConfirmation',
   SET_ABANDON_CONFIRMATION: 'transcribe:setAbandonConfirmation',
+  
+  // Sound settings
+  GET_SOUND_CONFIG: 'transcribe:getSoundConfig',
+  SET_SOUND_CONFIG: 'transcribe:setSoundConfig',
+  GET_AVAILABLE_SOUNDS: 'transcribe:getAvailableSounds',
+  PREVIEW_SOUND: 'transcribe:previewSound',
 
   // Main -> Renderer (send pattern)
   STATUS_CHANGED: 'transcribe:statusChanged',
@@ -32,6 +38,25 @@ export const TranscribeIPCChannels = {
  * Transcription status.
  */
 export type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
+
+/**
+ * Sound configuration for recording actions.
+ */
+export interface SoundConfig {
+  enabled: boolean;
+  recordingStart: string | undefined;
+  recordingStop: string | undefined;
+  recordingCancel: string | undefined;
+}
+
+/**
+ * Sound option for UI display.
+ */
+export interface SoundOption {
+  id: string;
+  name: string;
+  category: string;
+}
 
 /**
  * Model download status.
@@ -68,6 +93,10 @@ export interface TranscribeAPI {
   setAbandonHotkey: (hotkey: string) => Promise<boolean>;
   getAbandonConfirmation: () => Promise<boolean>;
   setAbandonConfirmation: (enabled: boolean) => Promise<void>;
+  getSoundConfig: () => Promise<SoundConfig>;
+  setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
+  getAvailableSounds: () => Promise<SoundOption[]>;
+  previewSound: (soundId: string) => Promise<void>;
   onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
   onResult: (callback: (text: string) => void) => () => void;
   onError: (callback: (error: string) => void) => () => void;
