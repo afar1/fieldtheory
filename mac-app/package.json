@@ -1,5 +1,5 @@
 {
-  "name": "littleai-mac",
+  "name": "field-theory",
   "version": "0.1.22+maxwell",
   "private": true,
   "main": "electron-dist/main/index.js",
@@ -51,14 +51,14 @@
   },
   "build": {
     "appId": "com.oscar.app",
-    "productName": "Oscar",
+    "productName": "Field Theory",
     "publish": {
       "provider": "github",
       "owner": "afar1",
       "repo": "field-releases"
     },
-    "afterSign": "scripts/notarize.js",
     "mac": {
+      "notarize": false,
       "category": "public.app-category.productivity",
       "minimumSystemVersion": "13.0",
       "target": [
