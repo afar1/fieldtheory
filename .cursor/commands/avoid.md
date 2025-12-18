@@ -1,4 +1,4 @@
-Importanat things to remember to do and to avoid.
+Important things to remember to do and to avoid.
 
 ## TypeScript
 - Only create an abstraction if it’s actually needed

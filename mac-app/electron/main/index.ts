@@ -406,7 +406,7 @@ function restoreClipboardHistoryBounds(): { x: number; y: number; width: number;
  * Initialize clipboard history window with bounds change callback.
  */
 function initClipboardHistoryWindow(): ClipboardHistoryWindow {
-  const window = new ClipboardHistoryWindow();
+  const window = new ClipboardHistoryWindow(preferencesManager ?? undefined);
   
   // Set up callback to save bounds when window is moved/resized.
   window.setOnBoundsChanged(async (bounds) => {
@@ -663,7 +663,16 @@ function setupTranscribeIPCHandlers(): void {
   // Sound settings handlers.
   ipcMain.handle(TranscribeIPCChannels.GET_SOUND_CONFIG, () => {
     if (!transcriberManager) {
-      return { enabled: true, recordingStart: undefined, recordingStop: undefined, recordingCancel: undefined };
+      return { 
+        enabled: true, 
+        recordingStart: 'ButtonClickDown.mp3', 
+        recordingStop: 'ButtonClickUp.mp3', 
+        recordingCancel: 'AlertBonk.mp3',
+        windowOpen: 'WindowOpen.mp3',
+        windowClose: 'WindowClose.mp3',
+        transcribing: 'ButtonClickUp.mp3',
+        paste: 'Click.mp3'
+      };
     }
     return transcriberManager.getSoundManager().getConfig();
   });
@@ -673,6 +682,10 @@ function setupTranscribeIPCHandlers(): void {
     recordingStart?: string;
     recordingStop?: string;
     recordingCancel?: string;
+    windowOpen?: string;
+    windowClose?: string;
+    transcribing?: string;
+    paste?: string;
   }) => {
     if (!transcriberManager) {
       throw new Error('TranscriberManager not initialized');
@@ -691,6 +704,13 @@ function setupTranscribeIPCHandlers(): void {
       throw new Error('TranscriberManager not initialized');
     }
     transcriberManager.getSoundManager().preview(soundId);
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.PLAY_PASTE_SOUND, async () => {
+    if (!transcriberManager) {
+      throw new Error('TranscriberManager not initialized');
+    }
+    transcriberManager.getSoundManager().play('paste');
   });
 
   ipcMain.handle('transcribe:getStackCount', () => {
@@ -854,14 +874,7 @@ function setupClipboardIPCHandlers(): void {
     if (!clipboardManager) {
       return -1;
     }
-    const id = await clipboardManager.captureScreenshot(region || false);
-    if (id > 0) {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
-        }
-      });
-    }
+    const id = await clipboardManager.captureScreenshot({ region: region || false });
     return id;
   });
 
@@ -875,13 +888,17 @@ function setupClipboardIPCHandlers(): void {
     return clipboardManager.getHotkeys();
   });
 
-  ipcMain.handle(ClipboardIPCChannels.SET_HOTKEYS, async (_event, hotkeys: { screenshot?: string; history?: string }) => {
+  ipcMain.handle(ClipboardIPCChannels.SET_HOTKEYS, async (_event, hotkeys: { screenshot?: string; history?: string; desktopScreenshot?: string }) => {
     if (!clipboardManager || !preferencesManager) {
       return false;
     }
     
     let success = true;
-    const prefsToSave: { clipboardScreenshotHotkey?: string; clipboardHistoryHotkey?: string } = {};
+    const prefsToSave: { 
+      clipboardScreenshotHotkey?: string; 
+      clipboardHistoryHotkey?: string;
+      clipboardDesktopScreenshotHotkey?: string;
+    } = {};
     
     if (hotkeys.screenshot !== undefined) {
       if (typeof hotkeys.screenshot !== 'string' || hotkeys.screenshot.trim() === '') {
@@ -892,6 +909,18 @@ function setupClipboardIPCHandlers(): void {
         success = false;
       } else {
         prefsToSave.clipboardScreenshotHotkey = hotkeys.screenshot;
+      }
+    }
+
+    if (hotkeys.desktopScreenshot !== undefined) {
+      if (typeof hotkeys.desktopScreenshot !== 'string' || hotkeys.desktopScreenshot.trim() === '') {
+        return false;
+      }
+      const result = clipboardManager.setDesktopScreenshotHotkey(hotkeys.desktopScreenshot);
+      if (!result) {
+        success = false;
+      } else {
+        prefsToSave.clipboardDesktopScreenshotHotkey = hotkeys.desktopScreenshot;
       }
     }
     
@@ -921,6 +950,12 @@ function setupClipboardIPCHandlers(): void {
         console.error('[Main] pasteItem: clipboardManager not initialized');
         return;
       }
+      
+      // Play paste sound
+      if (transcriberManager) {
+        transcriberManager.getSoundManager().play('paste');
+      }
+      
       const item = clipboardManager.getItem(id);
       if (!item) {
         console.error('[Main] pasteItem: item not found', id);
@@ -971,6 +1006,11 @@ function setupClipboardIPCHandlers(): void {
       if (!ids || ids.length === 0) {
         console.error('[Main] pasteStack: no item IDs provided');
         return;
+      }
+      
+      // Play paste sound
+      if (transcriberManager) {
+        transcriberManager.getSoundManager().play('paste');
       }
       
       // Get all items from IDs
@@ -1025,6 +1065,11 @@ function setupClipboardIPCHandlers(): void {
       if (!text) {
         console.error('[Main] pasteText: no text provided');
         return;
+      }
+      
+      // Play paste sound
+      if (transcriberManager) {
+        transcriberManager.getSoundManager().play('paste');
       }
       
       // Put text on clipboard first
@@ -1108,6 +1153,11 @@ function setupClipboardIPCHandlers(): void {
   ipcMain.handle(ClipboardIPCChannels.PASTE_TO_APP, async (_event, bundleId: string) => {
     if (!clipboardHistoryWindow) {
       return false;
+    }
+    
+    // Play paste sound
+    if (transcriberManager) {
+      transcriberManager.getSoundManager().play('paste');
     }
     
     // Hide our window first.
@@ -2305,7 +2355,8 @@ async function initTranscriberSystem(): Promise<void> {
   const prefs = preferencesManager.get();
   clipboardManager.loadHotkeysFromPreferences(
     prefs.clipboardScreenshotHotkey,
-    prefs.clipboardHistoryHotkey
+    prefs.clipboardHistoryHotkey,
+    prefs.clipboardDesktopScreenshotHotkey
   );
   
   // Load continuous context preferences
@@ -2357,30 +2408,22 @@ async function initTranscriberSystem(): Promise<void> {
   
   // Register clipboard hotkeys
   clipboardManager.registerScreenshotHotkey(async () => {
-    // Get current stackId if in stacking mode
     const stackId = transcriberManager?.getCurrentStackId() || undefined;
-    
-    // Capture screenshot with region selection (drag to select)
-    // If in stacking mode, the screenshot is tagged with the current stackId
-    const id = await clipboardManager!.captureScreenshot(true, stackId);
+    const id = await clipboardManager!.captureScreenshot({ region: true }, stackId);
     if (id > 0) {
-      // Add screenshot to prompt stack tracking
       if (transcriberManager) {
         transcriberManager.addToStack(id);
         
-        // In stacking mode, auto-paste the screenshot to the target app
         const stackingMode = transcriberManager.getStackingMode();
         if (stackingMode.active && stackingMode.targetApp) {
           const { exec } = await import('child_process');
           const { promisify } = await import('util');
           const execAsync = promisify(exec);
           
-          // Activate target app
           try {
             await execAsync(`osascript -e 'tell application id "${stackingMode.targetApp}" to activate'`);
             await new Promise(resolve => setTimeout(resolve, 100));
             
-            // Read the screenshot and paste it
             const item = clipboardManager!.getItem(id);
             if (item?.imageData) {
               const { nativeImage } = await import('electron');
@@ -2394,19 +2437,27 @@ async function initTranscriberSystem(): Promise<void> {
         }
       }
       
-      // Queue for vision processing if vision processor is available
       if (visionProcessor) {
         visionProcessor.queueImage(id).catch((error) => {
           console.error('[Main] Failed to queue image for vision processing:', error);
         });
       }
+    }
+  });
+
+  clipboardManager.registerDesktopScreenshotHotkey(async () => {
+    const stackId = transcriberManager?.getCurrentStackId() || undefined;
+    const id = await clipboardManager!.captureScreenshot({ region: true, saveToDesktop: true }, stackId);
+    if (id > 0) {
+      if (transcriberManager) {
+        transcriberManager.addToStack(id);
+      }
       
-      // Notify all windows (including clipboard history window)
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
-        }
-      });
+      if (visionProcessor) {
+        visionProcessor.queueImage(id).catch((error) => {
+          console.error('[Main] Failed to queue desktop image for vision processing:', error);
+        });
+      }
     }
   });
   
@@ -2679,9 +2730,9 @@ if (!gotTheLock) {
     setupOnboardingIPCHandlers();
     setupDisplayListeners();
 
-    // Register keyboard shortcut to reset onboarding (Cmd+Shift+R).
+    // Register keyboard shortcut to reset onboarding (Shift+Option+O).
     // Useful for testing and development.
-    globalShortcut.register('Command+Shift+R', async () => {
+    globalShortcut.register('Shift+Alt+O', async () => {
       console.log('[Main] Reset onboarding shortcut triggered');
       if (!preferencesManager) return;
       

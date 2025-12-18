@@ -30,6 +30,7 @@ const TranscribeIPCChannels = {
   SET_SOUND_CONFIG: 'transcribe:setSoundConfig',
   GET_AVAILABLE_SOUNDS: 'transcribe:getAvailableSounds',
   PREVIEW_SOUND: 'transcribe:previewSound',
+  PLAY_PASTE_SOUND: 'transcribe:playPasteSound',
   STATUS_CHANGED: 'transcribe:statusChanged',
   RESULT: 'transcribe:result',
   ERROR: 'transcribe:error',
@@ -165,6 +166,10 @@ type SoundConfig = {
   recordingStart: string | undefined;
   recordingStop: string | undefined;
   recordingCancel: string | undefined;
+  windowOpen: string | undefined;
+  windowClose: string | undefined;
+  transcribing: string | undefined;
+  paste: string | undefined;
 };
 
 // Sound option for UI display.
@@ -243,6 +248,7 @@ type ClipboardQueryOptions = {
 
 type ClipboardHotkeys = {
   screenshot?: string;
+  desktopScreenshot?: string;
   history?: string;
   continuousContext?: string;
 };
@@ -482,6 +488,7 @@ export interface TranscribeAPI {
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
   getAvailableSounds: () => Promise<SoundOption[]>;
   previewSound: (soundId: string) => Promise<void>;
+  playPasteSound: () => Promise<void>;
   getStackCount: () => Promise<number>;
   getStackingMode: () => Promise<StackingModeState>;
   onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
@@ -696,6 +703,10 @@ const transcribeAPI: TranscribeAPI = {
 
   previewSound: async (soundId: string): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.PREVIEW_SOUND, soundId);
+  },
+  
+  playPasteSound: async (): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.PLAY_PASTE_SOUND);
   },
 
   onStatusChanged: (callback: (status: TranscriptionStatus) => void): (() => void) => {

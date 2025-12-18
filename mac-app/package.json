@@ -59,7 +59,6 @@
     },
     "afterSign": "scripts/notarize.js",
     "mac": {
-      "notarize": false,
       "category": "public.app-category.productivity",
       "minimumSystemVersion": "13.0",
       "target": [

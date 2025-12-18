@@ -401,13 +401,19 @@ export default function App() {
         ? transcription.trim()
         : 'No speech detected in this recording.';
 
+    // Check if recording started on the Cursor page (page index 1)
     const shouldPasteToCursor = recordingStartedOnPageRef.current === 1;
 
     if (shouldPasteToCursor && cleanedText !== 'No speech detected in this recording.') {
+      // Paste directly to Cursor and don't create a transcript entry
+      console.log('[App] Recording from Cursor page - pasting directly to Cursor');
       cursorBrowserRef.current?.pasteText(cleanedText);
+      // Also copy to clipboard as a backup
       Clipboard.setStringAsync(cleanedText).catch(console.error);
       return;
     }
+
+    // Normal flow: create a transcript entry
     const newEntry: TranscriptEntry = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       text: cleanedText,
@@ -859,8 +865,8 @@ export default function App() {
     // Cursor is always at page 1 (right after Transcripts).
     const cursorPageIndex = 1;
     
-    // Switch to the Cursor browser page instantly (no animation).
-    pagerRef.current?.setPageWithoutAnimation(cursorPageIndex);
+    // Switch to the Cursor browser page.
+    pagerRef.current?.setPage(cursorPageIndex);
     setPageIndex(cursorPageIndex);
     
     // Provide haptic feedback.
@@ -1196,15 +1202,24 @@ export default function App() {
       )}
 
       {/* Pager View - Order: Transcripts → Cursor → Tasks → Observations */}
+      {/* Swipe gestures are disabled because they conflict with the WebView on the Cursor page. */}
+      {/* Users navigate via the bottom tab bar instead for reliable navigation. */}
       <PagerView
         ref={pagerRef}
         style={styles.pager}
         scrollEnabled={false}
         onPageSelected={(e) => {
-          const newPageIndex = e.nativeEvent.position;
-          setPageIndex(newPageIndex);
-          if (newPageIndex === 1 && cursorBrowserRef.current) {
-            cursorBrowserRef.current.ensureFresh();
+          try {
+            const newPageIndex = e.nativeEvent.position;
+            setPageIndex(newPageIndex);
+            
+            // Pre-warm the Cursor page when navigating to it.
+            // This ensures the page is fresh and ready for paste operations.
+            if (newPageIndex === 1 && cursorBrowserRef.current) {
+              cursorBrowserRef.current.ensureFresh();
+            }
+          } catch (err) {
+            console.error('Error handling page selection:', err);
           }
         }}
       >
@@ -1238,7 +1253,7 @@ export default function App() {
                   renderItem={renderTranscriptItem}
                   contentContainerStyle={styles.sectionContent}
                   windowSize={5}
-                  removeClippedSubviews={false}
+                  removeClippedSubviews={true}
                   maxToRenderPerBatch={10}
                   initialNumToRender={10}
                 />
@@ -1247,7 +1262,22 @@ export default function App() {
           </View>
         </View>
         <View key="cursor" style={styles.pageContainer}>
-          <CursorBrowser ref={cursorBrowserRef} />
+          <CursorBrowser 
+            ref={cursorBrowserRef}
+            isRecording={isRecording}
+            isProcessing={isProcessing}
+            isWhisperReady={isReady && !isDownloadingModel}
+            onStartRecording={() => {
+              // Track that recording started on Cursor page (page 1)
+              recordingStartedOnPageRef.current = 1;
+              manuallyStoppedRef.current = false;
+              startRecording();
+            }}
+            onStopRecording={() => {
+              manuallyStoppedRef.current = true;
+              stopRecording();
+            }}
+          />
         </View>
         <View key="todos" style={styles.pageContainer}>
           <TodoList

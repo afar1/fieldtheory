@@ -1,8 +1,3 @@
-// =============================================================================
-// TranscriptionSettings - UI for managing local transcription settings.
-// Displays model download status, transcription status, and controls.
-// =============================================================================
-
 import { useEffect, useState, useCallback } from 'react';
 
 type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
@@ -15,9 +10,6 @@ type ModelInfo = {
   description: string;
 };
 
-/**
- * TranscriptionSettings displays transcription status and model management.
- */
 export default function TranscriptionSettings() {
   const [status, setStatus] = useState<TranscriptionStatus>('idle');
   const [modelStatus, setModelStatus] = useState<ModelStatus>('missing');
@@ -35,22 +27,23 @@ export default function TranscriptionSettings() {
   const [deletingModel, setDeletingModel] = useState<string | null>(null);
   const [modelDownloadProgress, setModelDownloadProgress] = useState<Record<string, { downloaded: number; total: number }>>({});
   
-  // Abandon recording settings.
   const [abandonHotkey, setAbandonHotkey] = useState<string>('Escape');
   const [isCapturingAbandonHotkey, setIsCapturingAbandonHotkey] = useState(false);
   const [abandonHotkeyError, setAbandonHotkeyError] = useState<string | null>(null);
   const [abandonConfirmation, setAbandonConfirmation] = useState(true);
   
-  // Sound settings.
   const [soundsEnabled, setSoundsEnabled] = useState(true);
   const [recordingStartSound, setRecordingStartSound] = useState<string | undefined>('ButtonClickDown.mp3');
   const [recordingStopSound, setRecordingStopSound] = useState<string | undefined>('ButtonClickUp.mp3');
   const [recordingCancelSound, setRecordingCancelSound] = useState<string | undefined>('AlertBonk.mp3');
+  const [windowOpenSound, setWindowOpenSound] = useState<string | undefined>('WindowOpen.mp3');
+  const [windowCloseSound, setWindowCloseSound] = useState<string | undefined>('WindowClose.mp3');
+  const [transcribingSound, setTranscribingSound] = useState<string | undefined>('ButtonClickUp.mp3');
+  const [pasteSound, setPasteSound] = useState<string | undefined>('Click.mp3');
   const [availableSounds, setAvailableSounds] = useState<Array<{ id: string; name: string; category: string }>>([]);
 
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
 
-  // Fetch initial state and subscribe to changes.
   useEffect(() => {
     if (!isMacOS || !window.transcribeAPI) {
       return;
@@ -84,6 +77,10 @@ export default function TranscriptionSettings() {
         setRecordingStartSound(soundConfig.recordingStart);
         setRecordingStopSound(soundConfig.recordingStop);
         setRecordingCancelSound(soundConfig.recordingCancel);
+        setWindowOpenSound(soundConfig.windowOpen);
+        setWindowCloseSound(soundConfig.windowClose);
+        setTranscribingSound(soundConfig.transcribing);
+        setPasteSound(soundConfig.paste);
         setAvailableSounds(sounds);
       } catch (err) {
         console.error('Failed to fetch transcription status:', err);
@@ -92,14 +89,12 @@ export default function TranscriptionSettings() {
 
     fetchStatus();
 
-    // Subscribe to status changes.
     const unsubscribeStatus = window.transcribeAPI!.onStatusChanged((newStatus) => {
       setStatus(newStatus);
     });
 
     const unsubscribeResult = window.transcribeAPI!.onResult((text) => {
       console.log('Transcription result:', text);
-      // Could show a toast notification here
     });
 
     const unsubscribeError = window.transcribeAPI!.onError((errorMsg) => {
@@ -109,7 +104,6 @@ export default function TranscriptionSettings() {
 
     const unsubscribeProgress = window.transcribeAPI!.onModelDownloadProgress((downloaded, total) => {
       setDownloadProgress({ downloaded, total });
-      // Also track progress for the currently downloading model
       setModelDownloadProgress(prev => {
         if (downloadingModel) {
           return {
@@ -134,7 +128,6 @@ export default function TranscriptionSettings() {
     };
   }, [isMacOS, downloadingModel]);
 
-  // Handler for downloading the model.
   const handleDownloadModel = useCallback(async () => {
     if (!window.transcribeAPI || isDownloading) return;
 
@@ -146,7 +139,6 @@ export default function TranscriptionSettings() {
       await window.transcribeAPI.downloadModel(selectedModel);
       setModelStatus('downloaded');
       setDownloadProgress(null);
-      // Refresh download status for all models
       const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
       setModelDownloadStatus(downloadStatus);
     } catch (err) {
@@ -158,7 +150,6 @@ export default function TranscriptionSettings() {
     }
   }, [isDownloading, selectedModel]);
 
-  // Handler for downloading a specific model.
   const handleDownloadModelForSize = useCallback(async (modelSize: string) => {
     if (!window.transcribeAPI || downloadingModel) return;
 
@@ -167,7 +158,6 @@ export default function TranscriptionSettings() {
 
     try {
       await window.transcribeAPI.downloadModel(modelSize);
-      // Refresh download status for all models
       const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
       setModelDownloadStatus(downloadStatus);
       setModelDownloadProgress(prev => {
@@ -183,7 +173,6 @@ export default function TranscriptionSettings() {
     }
   }, [downloadingModel]);
 
-  // Handler for changing the selected model.
   const handleModelChange = useCallback(async (newModel: string) => {
     if (!window.transcribeAPI || isDownloading) return;
     
@@ -191,11 +180,9 @@ export default function TranscriptionSettings() {
     setError(null);
     try {
       await window.transcribeAPI.setSelectedModel(newModel);
-      // Refresh model status for the new model
       const newModelStatus = await window.transcribeAPI.getModelStatus();
       setModelStatus(newModelStatus);
       setDownloadProgress(null);
-      // Refresh download status for all models
       const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
       setModelDownloadStatus(downloadStatus);
     } catch (err) {
@@ -204,11 +191,9 @@ export default function TranscriptionSettings() {
     }
   }, [isDownloading]);
 
-  // Handler for deleting a specific model.
   const handleDeleteModel = useCallback(async (modelSize: string) => {
     if (!window.transcribeAPI || deletingModel) return;
 
-    // Don't allow deleting the currently selected model if it's the only one downloaded
     const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
     const downloadedCount = Object.values(downloadStatus).filter(Boolean).length;
     if (modelSize === selectedModel && downloadedCount === 1) {
@@ -221,11 +206,9 @@ export default function TranscriptionSettings() {
 
     try {
       await window.transcribeAPI.deleteModel(modelSize);
-      // Refresh download status for all models
       const newDownloadStatus = await window.transcribeAPI.getModelDownloadStatus();
       setModelDownloadStatus(newDownloadStatus);
       
-      // If we deleted the selected model, switch to another downloaded model or base
       if (modelSize === selectedModel) {
         const availableModel = Object.entries(newDownloadStatus).find(([size, downloaded]) => 
           downloaded && size !== modelSize
@@ -240,7 +223,6 @@ export default function TranscriptionSettings() {
     }
   }, [deletingModel, selectedModel, handleModelChange]);
 
-  // Handler for changing overlay style.
   const handleOverlayStyleChange = useCallback(async (newStyle: 'rectangle' | 'top-emerging') => {
     if (!window.transcribeAPI) return;
     
@@ -254,7 +236,6 @@ export default function TranscriptionSettings() {
     }
   }, []);
   
-  // Handler for setting abandon recording hotkey.
   const handleSetAbandonHotkey = useCallback(async (newHotkey: string) => {
     if (!window.transcribeAPI?.setAbandonHotkey) return;
 
@@ -274,7 +255,6 @@ export default function TranscriptionSettings() {
     }
   }, []);
   
-  // Handler for changing abandon confirmation setting.
   const handleAbandonConfirmationChange = useCallback(async (enabled: boolean) => {
     if (!window.transcribeAPI?.setAbandonConfirmation) return;
     
@@ -286,7 +266,6 @@ export default function TranscriptionSettings() {
     }
   }, []);
   
-  // Handler for toggling sounds enabled/disabled.
   const handleSoundsEnabledChange = useCallback(async (enabled: boolean) => {
     if (!window.transcribeAPI?.setSoundConfig) return;
     
@@ -298,14 +277,16 @@ export default function TranscriptionSettings() {
     }
   }, []);
   
-  // Handler for changing a specific sound.
-  const handleSoundChange = useCallback(async (event: 'recordingStart' | 'recordingStop' | 'recordingCancel', soundId: string) => {
+  const handleSoundChange = useCallback(async (event: 'recordingStart' | 'recordingStop' | 'recordingCancel' | 'windowOpen' | 'windowClose' | 'transcribing' | 'paste', soundId: string) => {
     if (!window.transcribeAPI?.setSoundConfig) return;
     
-    // Update local state immediately for responsiveness.
     if (event === 'recordingStart') setRecordingStartSound(soundId);
     if (event === 'recordingStop') setRecordingStopSound(soundId);
     if (event === 'recordingCancel') setRecordingCancelSound(soundId);
+    if (event === 'windowOpen') setWindowOpenSound(soundId);
+    if (event === 'windowClose') setWindowCloseSound(soundId);
+    if (event === 'transcribing') setTranscribingSound(soundId);
+    if (event === 'paste') setPasteSound(soundId);
     
     try {
       await window.transcribeAPI.setSoundConfig({ [event]: soundId });
@@ -314,7 +295,6 @@ export default function TranscriptionSettings() {
     }
   }, []);
   
-  // Handler for previewing a sound.
   const handlePreviewSound = useCallback(async (soundId: string) => {
     if (!window.transcribeAPI?.previewSound) return;
     
@@ -325,13 +305,11 @@ export default function TranscriptionSettings() {
     }
   }, []);
 
-  // Handler for capturing hotkey.
   const handleStartCaptureHotkey = useCallback(() => {
     setIsCapturingHotkey(true);
     setHotkeyError(null);
   }, []);
 
-  // Handler for setting hotkey.
   const handleSetHotkey = useCallback(async (newHotkey: string) => {
     if (!window.transcribeAPI) return;
 
@@ -349,7 +327,6 @@ export default function TranscriptionSettings() {
     }
   }, []);
 
-  // Handler for keydown events when capturing hotkey (transcription or abandon).
   useEffect(() => {
     const capturing = isCapturingHotkey ? 'transcription' : isCapturingAbandonHotkey ? 'abandon' : null;
     if (!capturing) return;
@@ -364,10 +341,8 @@ export default function TranscriptionSettings() {
       if (event.altKey) parts.push('Alt');
       if (event.shiftKey) parts.push('Shift');
 
-      // Get the key name
       let key = event.key;
       
-      // Handle special keys
       if (key === ' ') {
         key = 'Space';
       } else if (key === '`' || key === 'Backquote') {
@@ -378,7 +353,6 @@ export default function TranscriptionSettings() {
         key = key.toUpperCase();
       }
 
-      // Map common key names to Electron format
       const keyMap: Record<string, string> = {
         'Meta': 'Command',
         'Control': 'Control',
@@ -405,25 +379,18 @@ export default function TranscriptionSettings() {
         key = keyMap[key];
       }
 
-      // Filter out modifier keys from the key itself
       if (key === 'Meta' || key === 'Control' || key === 'Alt' || key === 'Shift') {
-        // This is a modifier-only press
         if (parts.length === 0) {
-          // Single modifier key
           handleSetHotkey(key);
           return;
         }
-        // Modifier is already in parts, skip
         return;
       }
 
-      // Build hotkey string
       let hotkeyString: string;
       if (parts.length > 0) {
-        // Modifier + key combination
         hotkeyString = parts.join('+') + '+' + key;
       } else {
-        // Single key (no modifiers)
         hotkeyString = key;
       }
 
@@ -440,7 +407,6 @@ export default function TranscriptionSettings() {
     };
   }, [isCapturingHotkey, isCapturingAbandonHotkey, handleSetHotkey, handleSetAbandonHotkey]);
 
-  // If not on macOS, show a message.
   if (!isMacOS) {
     return (
       <div style={styles.container}>
@@ -452,17 +418,6 @@ export default function TranscriptionSettings() {
     );
   }
 
-  // Calculate download progress percentage.
-  const downloadPercent = downloadProgress
-    ? Math.round((downloadProgress.downloaded / downloadProgress.total) * 100)
-    : 0;
-
-  // Status indicator with colored dot.
-  const StatusDot = ({ color }: { color: string }) => (
-    <span style={{ ...styles.statusDot, backgroundColor: color }} />
-  );
-
-  // Get status color.
   const getStatusColor = () => {
     if (status === 'recording') return '#3b82f6';
     if (status === 'transcribing') return '#f59e0b';
@@ -477,16 +432,14 @@ export default function TranscriptionSettings() {
 
   return (
     <div style={styles.container}>
-      {/* Compact status row */}
       <div style={styles.row}>
         <span style={styles.rowLabel}>Status</span>
         <span style={{ ...styles.rowValue, color: getStatusColor() }}>
-          <StatusDot color={getStatusColor()} />
+          <span style={{ ...styles.statusDot, backgroundColor: getStatusColor() }} />
           {getStatusText()} • {selectedModel} {modelStatus === 'downloaded' ? '✓' : modelStatus === 'downloading' ? '↓' : '✗'}
         </span>
       </div>
 
-      {/* Recording hotkey */}
       <div style={styles.row}>
         <span style={styles.rowLabel}>Hotkey</span>
         <div style={styles.rowControls}>
@@ -504,7 +457,6 @@ export default function TranscriptionSettings() {
       </div>
       {hotkeyError && <p style={styles.error}>{hotkeyError}</p>}
 
-      {/* Overlay style */}
       <div style={styles.row}>
         <span style={styles.rowLabel}>Overlay</span>
         <select
@@ -517,7 +469,6 @@ export default function TranscriptionSettings() {
         </select>
       </div>
 
-      {/* Abandon hotkey */}
       <div style={styles.row}>
         <span style={styles.rowLabel}>Abandon</span>
         <div style={styles.rowControls}>
@@ -542,7 +493,6 @@ export default function TranscriptionSettings() {
       </div>
       {abandonHotkeyError && <p style={styles.error}>{abandonHotkeyError}</p>}
 
-      {/* Sounds section */}
       <div style={styles.soundsSection}>
         <div style={styles.sectionHeader}>
           <span style={styles.sectionTitle}>SOUNDS</span>
@@ -558,7 +508,6 @@ export default function TranscriptionSettings() {
         
         {soundsEnabled && (
           <>
-            {/* Recording Start Sound */}
             <div style={styles.row}>
               <span style={styles.rowLabel}>Start</span>
               <div style={styles.rowControls}>
@@ -567,6 +516,7 @@ export default function TranscriptionSettings() {
                   onChange={(e) => handleSoundChange('recordingStart', e.target.value)}
                   style={styles.selectSmall}
                 >
+                  <option value="">None</option>
                   {availableSounds.map((sound) => (
                     <option key={sound.id} value={sound.id}>
                       {sound.name}
@@ -583,7 +533,6 @@ export default function TranscriptionSettings() {
               </div>
             </div>
 
-            {/* Recording Stop Sound */}
             <div style={styles.row}>
               <span style={styles.rowLabel}>Stop</span>
               <div style={styles.rowControls}>
@@ -592,6 +541,7 @@ export default function TranscriptionSettings() {
                   onChange={(e) => handleSoundChange('recordingStop', e.target.value)}
                   style={styles.selectSmall}
                 >
+                  <option value="">None</option>
                   {availableSounds.map((sound) => (
                     <option key={sound.id} value={sound.id}>
                       {sound.name}
@@ -608,7 +558,6 @@ export default function TranscriptionSettings() {
               </div>
             </div>
 
-            {/* Recording Cancel Sound */}
             <div style={styles.row}>
               <span style={styles.rowLabel}>Cancel</span>
               <div style={styles.rowControls}>
@@ -617,6 +566,7 @@ export default function TranscriptionSettings() {
                   onChange={(e) => handleSoundChange('recordingCancel', e.target.value)}
                   style={styles.selectSmall}
                 >
+                  <option value="">None</option>
                   {availableSounds.map((sound) => (
                     <option key={sound.id} value={sound.id}>
                       {sound.name}
@@ -632,21 +582,118 @@ export default function TranscriptionSettings() {
                 </button>
               </div>
             </div>
+
+            <div style={styles.row}>
+              <span style={styles.rowLabel}>Transcribing</span>
+              <div style={styles.rowControls}>
+                <select
+                  value={transcribingSound || ''}
+                  onChange={(e) => handleSoundChange('transcribing', e.target.value)}
+                  style={styles.selectSmall}
+                >
+                  <option value="">None</option>
+                  {availableSounds.map((sound) => (
+                    <option key={sound.id} value={sound.id}>
+                      {sound.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => transcribingSound && handlePreviewSound(transcribingSound)}
+                  style={styles.btnGhost}
+                  title="Preview sound"
+                >
+                  ▶
+                </button>
+              </div>
+            </div>
+
+            <div style={styles.row}>
+              <span style={styles.rowLabel}>Open Window</span>
+              <div style={styles.rowControls}>
+                <select
+                  value={windowOpenSound || ''}
+                  onChange={(e) => handleSoundChange('windowOpen', e.target.value)}
+                  style={styles.selectSmall}
+                >
+                  <option value="">None</option>
+                  {availableSounds.map((sound) => (
+                    <option key={sound.id} value={sound.id}>
+                      {sound.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => windowOpenSound && handlePreviewSound(windowOpenSound)}
+                  style={styles.btnGhost}
+                  title="Preview sound"
+                >
+                  ▶
+                </button>
+              </div>
+            </div>
+
+            <div style={styles.row}>
+              <span style={styles.rowLabel}>Close Window</span>
+              <div style={styles.rowControls}>
+                <select
+                  value={windowCloseSound || ''}
+                  onChange={(e) => handleSoundChange('windowClose', e.target.value)}
+                  style={styles.selectSmall}
+                >
+                  <option value="">None</option>
+                  {availableSounds.map((sound) => (
+                    <option key={sound.id} value={sound.id}>
+                      {sound.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => windowCloseSound && handlePreviewSound(windowCloseSound)}
+                  style={styles.btnGhost}
+                  title="Preview sound"
+                >
+                  ▶
+                </button>
+              </div>
+            </div>
+
+            <div style={styles.row}>
+              <span style={styles.rowLabel}>Paste Item</span>
+              <div style={styles.rowControls}>
+                <select
+                  value={pasteSound || ''}
+                  onChange={(e) => handleSoundChange('paste', e.target.value)}
+                  style={styles.selectSmall}
+                >
+                  <option value="">None</option>
+                  {availableSounds.map((sound) => (
+                    <option key={sound.id} value={sound.id}>
+                      {sound.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => pasteSound && handlePreviewSound(pasteSound)}
+                  style={styles.btnGhost}
+                  title="Preview sound"
+                >
+                  ▶
+                </button>
+              </div>
+            </div>
           </>
         )}
       </div>
 
-      {/* Error display */}
       {error && <p style={styles.error}>{error}</p>}
 
-      {/* Models section with sub-header */}
       <div style={styles.modelsSection}>
         <div style={styles.sectionHeader}>
           <span style={styles.sectionTitle}>MODELS</span>
           <div style={styles.sectionLine} />
         </div>
         
-        {/* Active model selector */}
         <div style={styles.row}>
           <span style={styles.rowLabel}>Active</span>
           <select
@@ -668,7 +715,6 @@ export default function TranscriptionSettings() {
           </select>
         </div>
 
-        {/* Model cards with more context */}
         <div style={styles.modelsList}>
           {Object.entries(availableModels)
             .filter(([size]) => size !== 'base')
@@ -681,7 +727,6 @@ export default function TranscriptionSettings() {
               const progressPercent = progress ? Math.round((progress.downloaded / progress.total) * 100) : 0;
               const sizeMB = (info.sizeBytes / 1024 / 1024).toFixed(0);
               
-              // Model quality hints.
               const qualityHint = size === 'small' ? 'Good for quick tasks'
                 : size === 'medium' ? 'Balanced accuracy'
                 : size === 'large' ? 'Best accuracy'
