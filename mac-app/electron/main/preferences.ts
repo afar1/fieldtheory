@@ -76,6 +76,13 @@ interface Preferences {
   // Custom system prompt for the Engineer feature.
   // If set, overrides the default prompt loaded from file.
   customSystemPrompt?: string;
+  
+  // Sound settings - optional sounds for recording actions.
+  // If soundsEnabled is false, no sounds play.
+  soundsEnabled?: boolean;
+  recordingStartSound?: string;  // Sound file name to play when recording starts
+  recordingStopSound?: string;   // Sound file name to play when recording stops
+  recordingCancelSound?: string; // Sound file name to play when recording is cancelled
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
@@ -89,6 +96,12 @@ const DEFAULT_PREFERENCES: Preferences = {
   abandonRecordingHotkey: 'Escape', // Default: Escape key to cancel recording
   abandonRecordingConfirmation: true, // Default: confirm before abandoning if there's audio
   todoHotkey: 'Command+Shift+T', // Default: Cmd+Shift+T for todo list
+  
+  // Sound settings - enabled by default with click sounds
+  soundsEnabled: true,
+  recordingStartSound: 'ButtonClickDown.mp3',
+  recordingStopSound: 'ButtonClickUp.mp3',
+  recordingCancelSound: 'AlertBonk.mp3',
 };
 
 /**

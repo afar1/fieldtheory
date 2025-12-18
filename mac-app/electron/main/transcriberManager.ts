@@ -10,25 +10,9 @@ import { ModelManager, ModelSize } from './modelManager';
 import { PreferencesManager } from './preferences';
 import { RecordingOverlay } from './recordingOverlay';
 import { ClipboardManager, ClipboardItem } from './clipboardManager';
+import { SoundManager } from './soundManager';
 
 const execAsync = promisify(exec);
-
-/**
- * Play a sound file using the system's audio player.
- * On macOS, uses `afplay` command.
- */
-function playSound(soundFile: string): void {
-  const soundPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'sounds', soundFile)
-    : path.join(__dirname, '../../public/sounds', soundFile);
-  
-  // Use afplay on macOS to play the sound asynchronously
-  exec(`afplay "${soundPath}"`, (error) => {
-    if (error) {
-      console.warn(`[TranscriberManager] Failed to play sound ${soundFile}:`, error.message);
-    }
-  });
-}
 
 /**
  * Transcription status states.
@@ -55,6 +39,7 @@ export class TranscriberManager extends EventEmitter {
   private nativeHelper: NativeHelper;
   private modelManager: ModelManager;
   private preferences: PreferencesManager;
+  private soundManager: SoundManager;
   private overlay: RecordingOverlay;
   private clipboardManager: ClipboardManager | null = null;
   private status: TranscriptionStatus = 'idle';
@@ -92,6 +77,7 @@ export class TranscriberManager extends EventEmitter {
     // ModelManager will be initialized with selected model in init()
     this.modelManager = new ModelManager();
     this.overlay = new RecordingOverlay();
+    this.soundManager = new SoundManager(preferences);
     
     // Listen for audio levels from native helper.
     // Track if we've detected any significant audio content.
@@ -280,8 +266,8 @@ export class TranscriberManager extends EventEmitter {
       // Register abandon hotkey (configurable, default: Escape) to cancel recording.
       this.registerAbandonHotkey();
       
-      // Play start recording sound
-      playSound('click.wav');
+      // Play start recording sound (user-configurable).
+      this.soundManager.play('recordingStart');
       
       await this.nativeHelper.startRecording();
       console.log('[TranscriberManager] Recording started');
@@ -307,8 +293,8 @@ export class TranscriberManager extends EventEmitter {
       // Unregister abandon hotkey.
       this.unregisterAbandonHotkey();
       
-      // Play stop recording sound
-      playSound('click.wav');
+      // Play stop recording sound (user-configurable).
+      this.soundManager.play('recordingStop');
       
       // Stop recording and get WAV file path
       const wavPath = await this.nativeHelper.stopRecording();
@@ -411,8 +397,8 @@ export class TranscriberManager extends EventEmitter {
 
     try {
       console.log('[TranscriberManager] Cancelling recording (abandon hotkey pressed)');
-      // Play error sound to indicate recording was abandoned.
-      playSound('error.wav');
+      // Play cancel sound to indicate recording was abandoned (user-configurable).
+      this.soundManager.play('recordingCancel');
       await this.nativeHelper.cancelRecording();
       this.setStatus('idle');
       this.hasAudioContent = false;
@@ -812,6 +798,13 @@ export class TranscriberManager extends EventEmitter {
    */
   getModelManager(): ModelManager {
     return this.modelManager;
+  }
+
+  /**
+   * Get the sound manager instance.
+   */
+  getSoundManager(): SoundManager {
+    return this.soundManager;
   }
 
   /**
