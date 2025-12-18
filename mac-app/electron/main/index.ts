@@ -660,6 +660,39 @@ function setupTranscribeIPCHandlers(): void {
     await transcriberManager.setAbandonConfirmation(enabled);
   });
 
+  // Sound settings handlers.
+  ipcMain.handle(TranscribeIPCChannels.GET_SOUND_CONFIG, () => {
+    if (!transcriberManager) {
+      return { enabled: true, recordingStart: undefined, recordingStop: undefined, recordingCancel: undefined };
+    }
+    return transcriberManager.getSoundManager().getConfig();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_SOUND_CONFIG, async (_event, config: {
+    enabled?: boolean;
+    recordingStart?: string;
+    recordingStop?: string;
+    recordingCancel?: string;
+  }) => {
+    if (!transcriberManager) {
+      throw new Error('TranscriberManager not initialized');
+    }
+    await transcriberManager.getSoundManager().setConfig(config);
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AVAILABLE_SOUNDS, () => {
+    // Import dynamically to avoid circular dependency issues.
+    const { getAllSounds } = require('./soundManager');
+    return getAllSounds();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.PREVIEW_SOUND, async (_event, soundId: string) => {
+    if (!transcriberManager) {
+      throw new Error('TranscriberManager not initialized');
+    }
+    transcriberManager.getSoundManager().preview(soundId);
+  });
+
   ipcMain.handle('transcribe:getStackCount', () => {
     if (!transcriberManager) {
       return 0;
