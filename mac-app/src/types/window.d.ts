@@ -67,6 +67,25 @@ interface VisionModelInfo {
 }
 
 /**
+ * Sound configuration for recording actions.
+ */
+interface SoundConfig {
+  enabled: boolean;
+  recordingStart: string | undefined;
+  recordingStop: string | undefined;
+  recordingCancel: string | undefined;
+}
+
+/**
+ * Sound option for UI display.
+ */
+interface SoundOption {
+  id: string;
+  name: string;
+  category: string;
+}
+
+/**
  * The transcription API exposed by the preload script.
  */
 interface TranscribeAPI {
@@ -86,6 +105,10 @@ interface TranscribeAPI {
   setAbandonHotkey?: (hotkey: string) => Promise<boolean>;
   getAbandonConfirmation?: () => Promise<boolean>;
   setAbandonConfirmation?: (enabled: boolean) => Promise<void>;
+  getSoundConfig?: () => Promise<SoundConfig>;
+  setSoundConfig?: (config: Partial<SoundConfig>) => Promise<void>;
+  getAvailableSounds?: () => Promise<SoundOption[]>;
+  previewSound?: (soundId: string) => Promise<void>;
   getStackCount: () => Promise<number>;
   onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
   onResult: (callback: (text: string) => void) => () => void;
