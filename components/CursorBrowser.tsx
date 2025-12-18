@@ -75,14 +75,7 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
     const [canGoForward, setCanGoForward] = useState(false);
     const [currentUrl, setCurrentUrl] = useState(CURSOR_AGENT_URL);
     const [hasError, setHasError] = useState(false);
-    
-    // Tracks whether Cursor's React app is mounted and the input field is available.
-    // This is different from isLoading - isLoading tracks WebView HTML load, 
-    // while isAppReady tracks whether Cursor's React app is functional.
     const [isAppReady, setIsAppReady] = useState(false);
-    
-    // Queue of text to paste once the page is ready.
-    // We use a ref to avoid stale closure issues in callbacks.
     const pendingPasteRef = useRef<string | null>(null);
     
     // Track last successful page load time for keep-alive mechanism
@@ -90,12 +83,9 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
     const keepAliveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const appStateRef = useRef<AppStateStatus>(AppState.currentState);
     
-    // Interval for polling page readiness
     const readyPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const readyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    // JavaScript to check if Cursor's React app has mounted and the input is available.
-    // Returns true if we find a textarea or contenteditable element that looks like the chat input.
     const checkAppReadyJS = `
       (function() {
         const selectors = [
@@ -120,9 +110,7 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
       })();
     `;
 
-    // Start polling for app readiness after the page loads.
     const startReadyPolling = useCallback(() => {
-      // Clear any existing polling
       if (readyPollIntervalRef.current) {
         clearInterval(readyPollIntervalRef.current);
       }
@@ -132,14 +120,12 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
 
       setIsAppReady(false);
 
-      // Poll for readiness
       readyPollIntervalRef.current = setInterval(() => {
         if (webViewRef.current && !hasError) {
           webViewRef.current.injectJavaScript(checkAppReadyJS);
         }
       }, PAGE_READY_POLL_INTERVAL_MS);
 
-      // Timeout - give up after PAGE_READY_TIMEOUT_MS
       readyTimeoutRef.current = setTimeout(() => {
         if (readyPollIntervalRef.current) {
           clearInterval(readyPollIntervalRef.current);
@@ -243,16 +229,7 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
       };
     }, [pingPage, isPageStale, ensureFresh]);
 
-    // Expose methods to parent component via ref.
     useImperativeHandle(ref, () => ({
-      /**
-       * Paste text into Cursor's chat input field.
-       * This uses JavaScript injection to find the input and set its value.
-       * Automatically ensures the page is fresh before pasting.
-       * 
-       * If the page is stale or the app isn't ready, the paste is queued
-       * and executed once the page is confirmed ready.
-       */
       pasteText: (text: string) => {
         if (isPageStale() || hasError) {
           pendingPasteRef.current = text;
@@ -279,8 +256,6 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
       },
 
       ensureFresh,
-      
-      // Check if the app is ready to receive paste operations.
       isReady: () => isAppReady && !isPageStale() && !hasError,
     }));
 
@@ -385,16 +360,10 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
       setCurrentUrl(navState.url || CURSOR_AGENT_URL);
     }, []);
 
-    // Handle page load complete.
-    // Note: This fires when the HTML is loaded, but Cursor's React app may not be mounted yet.
-    // We start polling for app readiness here.
     const handleLoadEnd = useCallback(() => {
       setIsLoading(false);
       setHasError(false);
-      // Track when we last successfully loaded the page
       lastRefreshRef.current = Date.now();
-      
-      // Start polling for Cursor's React app to be ready
       startReadyPolling();
       
       onReady?.();
