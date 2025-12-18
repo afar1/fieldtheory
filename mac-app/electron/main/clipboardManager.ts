@@ -72,6 +72,7 @@ interface ClipboardConfig {
   maxItems?: number;
   ignoreApps?: string[]; // Bundle IDs to ignore
   screenshotHotkey?: string;
+  desktopScreenshotHotkey?: string;
   historyHotkey?: string;
 }
 
@@ -95,6 +96,7 @@ const DEFAULT_CONFIG: ClipboardConfig = {
     'com.dashlane.dashlanephonefinal',
   ],
   screenshotHotkey: 'Alt+1',
+  desktopScreenshotHotkey: 'Command+3',
   historyHotkey: 'Control+Alt+Space',
 };
 
@@ -127,8 +129,10 @@ export class ClipboardManager extends EventEmitter {
   private lastContentHash: string = '';
   private config: ClipboardConfig;
   private screenshotHotkeyRegistered: boolean = false;
+  private desktopScreenshotHotkeyRegistered: boolean = false;
   private historyHotkeyRegistered: boolean = false;
   private screenshotCallback: ScreenshotCallback | null = null;
+  private desktopScreenshotCallback: ScreenshotCallback | null = null;
   private historyCallback: HistoryCallback | null = null;
   private onItemAddedCallback: ((id: number) => void) | null = null;
   
@@ -164,12 +168,15 @@ export class ClipboardManager extends EventEmitter {
   /**
    * Load hotkeys from preferences and update config.
    */
-  loadHotkeysFromPreferences(screenshotHotkey?: string, historyHotkey?: string): void {
+  loadHotkeysFromPreferences(screenshotHotkey?: string, historyHotkey?: string, desktopScreenshotHotkey?: string): void {
     if (screenshotHotkey) {
       this.config.screenshotHotkey = screenshotHotkey;
     }
     if (historyHotkey) {
       this.config.historyHotkey = historyHotkey;
+    }
+    if (desktopScreenshotHotkey) {
+      this.config.desktopScreenshotHotkey = desktopScreenshotHotkey;
     }
   }
 
@@ -930,31 +937,63 @@ export class ClipboardManager extends EventEmitter {
   /**
    * Capture screenshot and add to clipboard history.
    * When region=true, uses interactive selection (drag to select) like macOS Command+Shift+Control+4.
-   * @param region - Whether to use region selection mode
+   * @param options - Capture options
    * @param stackId - Optional stack ID to group this screenshot with other items
    */
-  async captureScreenshot(region: boolean = false, stackId?: string): Promise<number> {
+  async captureScreenshot(options: { region?: boolean; saveToDesktop?: boolean } = {}, stackId?: string): Promise<number> {
+    const { region = false, saveToDesktop = false } = options;
+    
     // Set flag to prevent polling from picking up the screenshot while we're capturing it.
     this.screenshotInProgress = true;
     
     try {
       if (region) {
-        // Interactive selection mode: drag to select area, saves directly to clipboard
-        // This matches macOS Command+Shift+Control+4 behavior
-        await execAsync('screencapture -i -c');
+        // Interactive selection mode: drag to select area
+        let capturePath: string | null = null;
+        let command = 'screencapture -i';
         
-        // Small delay to ensure clipboard is updated
+        if (saveToDesktop) {
+          // If saving to desktop, generate a timestamped filename
+          const now = new Date();
+          const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+          const desktopPath = app.getPath('desktop');
+          capturePath = path.join(desktopPath, `Field_Screenshot_${timestamp}.png`);
+          command += ` "${capturePath}"`;
+        } else {
+          // Default: save directly to clipboard
+          command += ' -c';
+        }
+
+        await execAsync(command);
+        
+        // Small delay to ensure clipboard or file is updated
         await new Promise(resolve => setTimeout(resolve, 100));
         
-        // Read from clipboard
-        const image = clipboard.readImage();
-        if (image.isEmpty()) {
-          console.warn('[ClipboardManager] Screenshot capture cancelled or failed');
-          this.screenshotInProgress = false;
-          return -1;
+        let image: Electron.NativeImage;
+        let imageBuffer: Buffer;
+
+        if (saveToDesktop && capturePath) {
+          const fs = await import('fs/promises');
+          try {
+            const fileBuffer = await fs.readFile(capturePath);
+            image = nativeImage.createFromBuffer(fileBuffer);
+            clipboard.writeImage(image);
+            imageBuffer = image.toPNG();
+          } catch (error) {
+            console.warn('[ClipboardManager] Failed to read desktop screenshot or capture was cancelled');
+            this.screenshotInProgress = false;
+            return -1;
+          }
+        } else {
+          // Read from clipboard
+          image = clipboard.readImage();
+          if (image.isEmpty()) {
+            console.warn('[ClipboardManager] Screenshot capture cancelled or failed');
+            this.screenshotInProgress = false;
+            return -1;
+          }
+          imageBuffer = image.toPNG();
         }
-        
-        const imageBuffer = image.toPNG();
         
         // Update lastContentHash to prevent polling from re-storing this image.
         this.lastContentHash = this.hashContent(imageBuffer.toString('base64'));
@@ -1025,6 +1064,27 @@ export class ClipboardManager extends EventEmitter {
   }
 
   /**
+   * Update desktop screenshot hotkey configuration.
+   */
+  setDesktopScreenshotHotkey(hotkey: string): boolean {
+    // Unregister old hotkey if registered
+    if (this.desktopScreenshotHotkeyRegistered && this.config.desktopScreenshotHotkey) {
+      globalShortcut.unregister(this.config.desktopScreenshotHotkey);
+      this.desktopScreenshotHotkeyRegistered = false;
+    }
+
+    // Update config
+    this.config.desktopScreenshotHotkey = hotkey;
+
+    // Re-register if callback exists
+    if (this.desktopScreenshotCallback && hotkey) {
+      return this.registerDesktopScreenshotHotkey(this.desktopScreenshotCallback);
+    }
+
+    return true;
+  }
+
+  /**
    * Update history hotkey configuration.
    */
   setHistoryHotkey(hotkey: string): boolean {
@@ -1078,6 +1138,38 @@ export class ClipboardManager extends EventEmitter {
   }
 
   /**
+   * Register desktop screenshot hotkey.
+   */
+  registerDesktopScreenshotHotkey(callback: ScreenshotCallback): boolean {
+    if (!this.config.desktopScreenshotHotkey) {
+      return false;
+    }
+
+    // Store callback
+    this.desktopScreenshotCallback = callback;
+
+    if (this.desktopScreenshotHotkeyRegistered) {
+      globalShortcut.unregister(this.config.desktopScreenshotHotkey);
+    }
+
+    const registered = globalShortcut.register(this.config.desktopScreenshotHotkey, () => {
+      const result = callback();
+      if (result instanceof Promise) {
+        result.catch(err => console.error('[ClipboardManager] Desktop screenshot callback error:', err));
+      }
+    });
+    this.desktopScreenshotHotkeyRegistered = registered;
+
+    if (registered) {
+      console.log(`[ClipboardManager] Registered desktop screenshot hotkey: ${this.config.desktopScreenshotHotkey}`);
+    } else {
+      console.warn(`[ClipboardManager] Failed to register desktop screenshot hotkey: ${this.config.desktopScreenshotHotkey}`);
+    }
+
+    return registered;
+  }
+
+  /**
    * Register clipboard history hotkey.
    */
   registerHistoryHotkey(callback: HistoryCallback): boolean {
@@ -1110,6 +1202,7 @@ export class ClipboardManager extends EventEmitter {
   getHotkeys(): ClipboardConfig {
     return {
       screenshotHotkey: this.config.screenshotHotkey,
+      desktopScreenshotHotkey: this.config.desktopScreenshotHotkey,
       historyHotkey: this.config.historyHotkey,
     };
   }
@@ -1517,6 +1610,10 @@ export class ClipboardManager extends EventEmitter {
     
     if (this.screenshotHotkeyRegistered && this.config.screenshotHotkey) {
       globalShortcut.unregister(this.config.screenshotHotkey);
+    }
+    
+    if (this.desktopScreenshotHotkeyRegistered && this.config.desktopScreenshotHotkey) {
+      globalShortcut.unregister(this.config.desktopScreenshotHotkey);
     }
     
     if (this.historyHotkeyRegistered && this.config.historyHotkey) {

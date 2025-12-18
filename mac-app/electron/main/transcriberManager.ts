@@ -317,6 +317,9 @@ export class TranscriberManager extends EventEmitter {
       this.setStatus('transcribing');
       this.overlay.showTranscribing();
       
+      // Play transcribing sound (user-configurable).
+      this.soundManager.play('transcribing');
+      
       // Transcribe
       const text = await this.transcribe(wavPath);
       console.log('[TranscriberManager] Transcription result:', text?.substring(0, 100) || '(empty)');

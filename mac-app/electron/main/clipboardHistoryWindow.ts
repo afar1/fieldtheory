@@ -2,6 +2,8 @@ import { app, BrowserWindow, BrowserWindowConstructorOptions, screen } from 'ele
 import path from 'path';
 import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
+import { PreferencesManager } from './preferences';
+import { SoundManager } from './soundManager';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -65,6 +67,15 @@ export class ClipboardHistoryWindow {
   
   // Track if recording is active - used to keep overlay visible when dismissing clipboard history
   private isRecordingActive: boolean = false;
+
+  // Sound manager for playing window open/close sounds.
+  private soundManager: SoundManager;
+
+  constructor(preferences?: PreferencesManager) {
+    // Create sound manager with preferences (or create new PreferencesManager if none provided).
+    const prefs = preferences || new PreferencesManager();
+    this.soundManager = new SoundManager(prefs);
+  }
 
   /**
    * Generate a display configuration hash to detect display arrangement changes.
@@ -181,6 +192,9 @@ export class ClipboardHistoryWindow {
    * @param showSettingsMode If true, open the window with settings panel visible
    */
   show(savedBounds?: { x: number; y: number; width: number; height: number }, showSettingsMode: boolean = false): void {
+    // Play window open sound.
+    this.soundManager.play('windowOpen');
+    
     // If window exists, reposition and show it.
     if (this.window && !this.window.isDestroyed()) {
       // Reposition window if bounds provided.
@@ -356,6 +370,9 @@ export class ClipboardHistoryWindow {
    * @param hideApp - Whether to hide the entire app. Set to false when other windows (like recording overlay) should remain visible.
    */
   hide(hideApp: boolean = true): void {
+    // Play window close sound.
+    this.soundManager.play('windowClose');
+    
     if (this.window && !this.window.isDestroyed()) {
       this.window.hide();
     }
