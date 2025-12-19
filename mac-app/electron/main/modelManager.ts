@@ -52,7 +52,7 @@ const MODELS: Record<ModelSize, ModelInfo> = {
 
 /**
  * Manages Whisper model downloads and storage.
- * Models are stored in ~/Library/Application Support/Oscar/models/
+ * Models are stored in ~/Library/Application Support/field-theory/models/
  */
 export class ModelManager {
   private modelsDir: string;
@@ -138,8 +138,10 @@ export class ModelManager {
    * Check if a specific model size is downloaded and valid.
    */
   async isModelAvailableForSize(size: ModelSize): Promise<boolean> {
+    const modelPath = this.getModelPathForSize(size);
+    console.log(`[ModelManager] Checking model availability for ${size} at: ${modelPath}`);
+    
     try {
-      const modelPath = this.getModelPathForSize(size);
       const stats = await fs.stat(modelPath);
       const modelInfo = MODELS[size];
       
@@ -148,13 +150,16 @@ export class ModelManager {
       const minSize = expectedSize * 0.8;
       const maxSize = expectedSize * 1.2;
       
+      console.log(`[ModelManager] Model ${size} found, size: ${(stats.size / 1024 / 1024).toFixed(2)}MB (expected ~${(expectedSize / 1024 / 1024).toFixed(0)}MB)`);
+      
       if (stats.size < minSize || stats.size > maxSize) {
-        console.warn(`[ModelManager] Model ${size} size suspicious: ${(stats.size / 1024 / 1024).toFixed(2)}MB (expected ~${(expectedSize / 1024 / 1024).toFixed(0)}MB)`);
+        console.warn(`[ModelManager] Model ${size} size suspicious - outside 80-120% range`);
         return false;
       }
       
       return true;
-    } catch {
+    } catch (err) {
+      console.log(`[ModelManager] Model ${size} not found at ${modelPath}:`, err instanceof Error ? err.message : err);
       return false;
     }
   }

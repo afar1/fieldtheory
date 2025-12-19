@@ -43,6 +43,15 @@ export default function SettingsPanel() {
   const [todoHotkey, setTodoHotkey] = useState('Command+Shift+T');
   const [isCapturingTodoHotkey, setIsCapturingTodoHotkey] = useState(false);
   
+  // Transcription hotkey configuration
+  const [transcriptionHotkey, setTranscriptionHotkey] = useState('Alt+Space');
+  const [isCapturingTranscriptionHotkey, setIsCapturingTranscriptionHotkey] = useState(false);
+  
+  // Abandon recording hotkey configuration
+  const [abandonHotkey, setAbandonHotkey] = useState('Escape');
+  const [isCapturingAbandonHotkey, setIsCapturingAbandonHotkey] = useState(false);
+  const [abandonConfirmation, setAbandonConfirmation] = useState(true);
+  
   // Mobile sync state - sign-in is handled via TeamView, we just listen for session.
   const [session, setSession] = useState<Session | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
@@ -85,6 +94,23 @@ export default function SettingsPanel() {
         if (hotkey) {
           setTodoHotkey(hotkey);
         }
+      });
+    }
+    
+    // Load transcription hotkeys
+    if (window.transcribeAPI) {
+      window.transcribeAPI.getHotkey().then(hotkey => {
+        if (hotkey) {
+          setTranscriptionHotkey(hotkey);
+        }
+      });
+      window.transcribeAPI.getAbandonHotkey?.().then(hotkey => {
+        if (hotkey) {
+          setAbandonHotkey(hotkey);
+        }
+      });
+      window.transcribeAPI.getAbandonConfirmation?.().then(enabled => {
+        setAbandonConfirmation(enabled);
       });
     }
   }, []);
@@ -319,7 +345,14 @@ export default function SettingsPanel() {
       }
     }
 
-    if (key === 'Meta' || key === 'Control' || key === 'Alt' || key === 'Shift') {
+    // Filter out modifier-only key presses (both the base name and Left/Right variants).
+    const modifierCodes = [
+      'Meta', 'MetaLeft', 'MetaRight',
+      'Control', 'ControlLeft', 'ControlRight',
+      'Alt', 'AltLeft', 'AltRight',
+      'Shift', 'ShiftLeft', 'ShiftRight'
+    ];
+    if (modifierCodes.includes(event.code)) {
       return '';
     }
 
@@ -455,13 +488,72 @@ export default function SettingsPanel() {
     }
   }, []);
   
-  // Capture hotkey when user is setting screenshot, history, continuous context, or todo shortcut.
+  // Handler for setting transcription hotkey
+  const handleSetTranscriptionHotkey = useCallback(async (hotkeyString: string) => {
+    setIsCapturingTranscriptionHotkey(false);
+    setHotkeyError(null);
+    
+    if (!window.transcribeAPI?.setHotkey) return;
+    
+    if (!hotkeyString || isModifierOnly(hotkeyString)) {
+      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+      return;
+    }
+
+    try {
+      const success = await window.transcribeAPI.setHotkey(hotkeyString);
+      if (!success) {
+        setHotkeyError('Failed to register transcription hotkey. It may be in use by another application.');
+      } else {
+        setTranscriptionHotkey(hotkeyString);
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set transcription hotkey');
+      console.error('Failed to set transcription hotkey:', err);
+    }
+  }, []);
+  
+  // Handler for setting abandon recording hotkey
+  const handleSetAbandonHotkey = useCallback(async (hotkeyString: string) => {
+    setIsCapturingAbandonHotkey(false);
+    setHotkeyError(null);
+    
+    if (!window.transcribeAPI?.setAbandonHotkey) return;
+    
+    // Abandon hotkey can be a single key like Escape
+    try {
+      const success = await window.transcribeAPI.setAbandonHotkey(hotkeyString);
+      if (!success) {
+        setHotkeyError('Failed to register abandon hotkey. It may be in use by another application.');
+      } else {
+        setAbandonHotkey(hotkeyString);
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set abandon hotkey');
+      console.error('Failed to set abandon hotkey:', err);
+    }
+  }, []);
+  
+  // Handler for toggling abandon confirmation
+  const handleAbandonConfirmationChange = useCallback(async (enabled: boolean) => {
+    if (!window.transcribeAPI?.setAbandonConfirmation) return;
+    try {
+      await window.transcribeAPI.setAbandonConfirmation(enabled);
+      setAbandonConfirmation(enabled);
+    } catch (err) {
+      console.error('Failed to set abandon confirmation:', err);
+    }
+  }, []);
+  
+  // Capture hotkey when user is setting any shortcut.
   useEffect(() => {
     const capturing = isCapturingScreenshotHotkey ? 'screenshot' 
       : isCapturingHistoryHotkey ? 'history' 
       : isCapturingDesktopScreenshotHotkey ? 'desktopScreenshot'
       : isCapturingContinuousContextHotkey ? 'continuousContext'
       : isCapturingTodoHotkey ? 'todo'
+      : isCapturingTranscriptionHotkey ? 'transcription'
+      : isCapturingAbandonHotkey ? 'abandon'
       : null;
     if (!capturing) return;
     
@@ -480,13 +572,17 @@ export default function SettingsPanel() {
           handleSetContinuousContextHotkey(hotkeyString);
         } else if (capturing === 'todo') {
           handleSetTodoHotkey(hotkeyString);
+        } else if (capturing === 'transcription') {
+          handleSetTranscriptionHotkey(hotkeyString);
+        } else if (capturing === 'abandon') {
+          handleSetAbandonHotkey(hotkeyString);
         }
       }
     };
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isCapturingScreenshotHotkey, isCapturingHistoryHotkey, isCapturingDesktopScreenshotHotkey, isCapturingContinuousContextHotkey, isCapturingTodoHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetDesktopScreenshotHotkey, handleSetContinuousContextHotkey, handleSetTodoHotkey]);
+  }, [isCapturingScreenshotHotkey, isCapturingHistoryHotkey, isCapturingDesktopScreenshotHotkey, isCapturingContinuousContextHotkey, isCapturingTodoHotkey, isCapturingTranscriptionHotkey, isCapturingAbandonHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetDesktopScreenshotHotkey, handleSetContinuousContextHotkey, handleSetTodoHotkey, handleSetTranscriptionHotkey, handleSetAbandonHotkey]);
 
   // Check permissions on mount and when status changes
   useEffect(() => {
@@ -553,7 +649,7 @@ export default function SettingsPanel() {
       <div style={styles.permissionsContent}>
         <h3 style={styles.permissionsTitle}>⚠️ Accessibility Permission Required</h3>
         <p style={styles.permissionsText}>
-          Oscar needs Accessibility permission to paste clipboard items.
+          Field Theory needs Accessibility permission to paste clipboard items.
         </p>
         <button
           onClick={() => {
@@ -578,6 +674,145 @@ export default function SettingsPanel() {
   return (
     <div style={styles.container}>
       {permissionsWarning}
+
+      {/* Keyboard Shortcuts Section - First for easy access */}
+      <div style={styles.section}>
+        <SectionHeader title="Keyboard Shortcuts" />
+        
+        {/* Transcription (Record) */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Transcription</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => { setIsCapturingTranscriptionHotkey(true); setHotkeyError(null); }}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
+              style={{ ...styles.btn, ...(isCapturingTranscriptionHotkey ? styles.btnActive : {}) }}
+            >
+              {isCapturingTranscriptionHotkey ? 'Press keys...' : transcriptionHotkey}
+            </button>
+            {isCapturingTranscriptionHotkey && (
+              <button onClick={() => { setIsCapturingTranscriptionHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+          </div>
+        </div>
+
+        {/* Abandon Recording */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Abandon Recording</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => { setIsCapturingAbandonHotkey(true); setHotkeyError(null); }}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
+              style={{ ...styles.btn, ...(isCapturingAbandonHotkey ? styles.btnActive : {}) }}
+            >
+              {isCapturingAbandonHotkey ? 'Press keys...' : abandonHotkey}
+            </button>
+            {isCapturingAbandonHotkey && (
+              <button onClick={() => { setIsCapturingAbandonHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+            <button
+              onClick={() => handleAbandonConfirmationChange(!abandonConfirmation)}
+              style={{ ...styles.toggle, backgroundColor: abandonConfirmation ? '#22c55e' : '#d1d5db' }}
+              title={abandonConfirmation ? 'Confirm before abandoning' : 'Abandon immediately'}
+            >
+              <span style={{ ...styles.toggleKnob, transform: abandonConfirmation ? 'translateX(20px)' : 'translateX(2px)' }} />
+            </button>
+          </div>
+        </div>
+
+        {/* Screenshot */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Screenshot</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => { setIsCapturingScreenshotHotkey(true); setHotkeyError(null); }}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
+              style={{ ...styles.btn, ...(isCapturingScreenshotHotkey ? styles.btnActive : {}) }}
+            >
+              {isCapturingScreenshotHotkey ? 'Press keys...' : clipboardHotkeys.screenshot || '⌘⇧4'}
+            </button>
+            {isCapturingScreenshotHotkey && (
+              <button onClick={() => { setIsCapturingScreenshotHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+          </div>
+        </div>
+
+        {/* Desktop Screenshot */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Desktop Screenshot</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => { setIsCapturingDesktopScreenshotHotkey(true); setHotkeyError(null); }}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
+              style={{ ...styles.btn, ...(isCapturingDesktopScreenshotHotkey ? styles.btnActive : {}) }}
+            >
+              {isCapturingDesktopScreenshotHotkey ? 'Press keys...' : clipboardHotkeys.desktopScreenshot || '⌘3'}
+            </button>
+            {isCapturingDesktopScreenshotHotkey && (
+              <button onClick={() => { setIsCapturingDesktopScreenshotHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+          </div>
+        </div>
+        
+        {/* Clipboard History */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Clipboard History</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => { setIsCapturingHistoryHotkey(true); setHotkeyError(null); }}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
+              style={{ ...styles.btn, ...(isCapturingHistoryHotkey ? styles.btnActive : {}) }}
+            >
+              {isCapturingHistoryHotkey ? 'Press keys...' : clipboardHotkeys.history || '⌘⇧V'}
+            </button>
+            {isCapturingHistoryHotkey && (
+              <button onClick={() => { setIsCapturingHistoryHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+          </div>
+        </div>
+        
+        {/* Continuous Context */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Continuous Context</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => handleToggleContinuousContext(!continuousContextEnabled)}
+              style={{ ...styles.toggle, backgroundColor: continuousContextEnabled ? '#10b981' : '#d1d5db' }}
+            >
+              <span style={{ ...styles.toggleKnob, transform: continuousContextEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+            </button>
+            <button
+              onClick={() => { setIsCapturingContinuousContextHotkey(true); setHotkeyError(null); }}
+              disabled={!continuousContextEnabled || isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
+              style={{ ...styles.btn, ...(isCapturingContinuousContextHotkey ? styles.btnActive : {}), opacity: continuousContextEnabled ? 1 : 0.5 }}
+            >
+              {isCapturingContinuousContextHotkey ? 'Press keys...' : continuousContextHotkey || '⌥⇧1'}
+            </button>
+            {isCapturingContinuousContextHotkey && (
+              <button onClick={() => { setIsCapturingContinuousContextHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+          </div>
+        </div>
+        
+        {/* Todo List */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Todo List</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => { setIsCapturingTodoHotkey(true); setHotkeyError(null); }}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
+              style={{ ...styles.btn, ...(isCapturingTodoHotkey ? styles.btnActive : {}) }}
+            >
+              {isCapturingTodoHotkey ? 'Press keys...' : todoHotkey || '⌘⇧T'}
+            </button>
+            {isCapturingTodoHotkey && (
+              <button onClick={() => { setIsCapturingTodoHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+          </div>
+        </div>
+        
+        {hotkeyError && <p style={styles.error}>{hotkeyError}</p>}
+      </div>
 
       {/* Audio Section */}
       <div style={styles.section}>
@@ -638,104 +873,6 @@ export default function SettingsPanel() {
         
         {/* Prompt Settings */}
         <PromptSettings />
-      </div>
-
-      {/* Keyboard Shortcuts Section */}
-      <div style={styles.section}>
-        <SectionHeader title="Keyboard Shortcuts" />
-        
-        {/* Screenshot */}
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Screenshot</span>
-          <div style={styles.rowControls}>
-            <button
-              onClick={() => { setIsCapturingScreenshotHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey}
-              style={{ ...styles.btn, ...(isCapturingScreenshotHotkey ? styles.btnActive : {}) }}
-            >
-              {isCapturingScreenshotHotkey ? 'Press keys...' : clipboardHotkeys.screenshot || '⌘⇧4'}
-            </button>
-            {isCapturingScreenshotHotkey && (
-              <button onClick={() => { setIsCapturingScreenshotHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
-            )}
-          </div>
-        </div>
-
-        {/* Desktop Screenshot */}
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Desktop Screenshot</span>
-          <div style={styles.rowControls}>
-            <button
-              onClick={() => { setIsCapturingDesktopScreenshotHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey}
-              style={{ ...styles.btn, ...(isCapturingDesktopScreenshotHotkey ? styles.btnActive : {}) }}
-            >
-              {isCapturingDesktopScreenshotHotkey ? 'Press keys...' : clipboardHotkeys.desktopScreenshot || '⌘3'}
-            </button>
-            {isCapturingDesktopScreenshotHotkey && (
-              <button onClick={() => { setIsCapturingDesktopScreenshotHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
-            )}
-          </div>
-        </div>
-        
-        {/* Clipboard History */}
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Clipboard History</span>
-          <div style={styles.rowControls}>
-            <button
-              onClick={() => { setIsCapturingHistoryHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey}
-              style={{ ...styles.btn, ...(isCapturingHistoryHotkey ? styles.btnActive : {}) }}
-            >
-              {isCapturingHistoryHotkey ? 'Press keys...' : clipboardHotkeys.history || '⌘⇧V'}
-            </button>
-            {isCapturingHistoryHotkey && (
-              <button onClick={() => { setIsCapturingHistoryHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
-            )}
-          </div>
-        </div>
-        
-        {/* Continuous Context */}
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Continuous Context</span>
-          <div style={styles.rowControls}>
-            <button
-              onClick={() => handleToggleContinuousContext(!continuousContextEnabled)}
-              style={{ ...styles.toggle, backgroundColor: continuousContextEnabled ? '#10b981' : '#d1d5db' }}
-            >
-              <span style={{ ...styles.toggleKnob, transform: continuousContextEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
-            </button>
-            <button
-              onClick={() => { setIsCapturingContinuousContextHotkey(true); setHotkeyError(null); }}
-              disabled={!continuousContextEnabled || isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey}
-              style={{ ...styles.btn, ...(isCapturingContinuousContextHotkey ? styles.btnActive : {}), opacity: continuousContextEnabled ? 1 : 0.5 }}
-            >
-              {isCapturingContinuousContextHotkey ? 'Press keys...' : continuousContextHotkey || '⌥⇧1'}
-            </button>
-            {isCapturingContinuousContextHotkey && (
-              <button onClick={() => { setIsCapturingContinuousContextHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
-            )}
-          </div>
-        </div>
-        
-        {/* Todo List */}
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Todo List</span>
-          <div style={styles.rowControls}>
-            <button
-              onClick={() => { setIsCapturingTodoHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey}
-              style={{ ...styles.btn, ...(isCapturingTodoHotkey ? styles.btnActive : {}) }}
-            >
-              {isCapturingTodoHotkey ? 'Press keys...' : todoHotkey || '⌘⇧T'}
-            </button>
-            {isCapturingTodoHotkey && (
-              <button onClick={() => { setIsCapturingTodoHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
-            )}
-          </div>
-        </div>
-        
-        {hotkeyError && <p style={styles.error}>{hotkeyError}</p>}
       </div>
 
       {/* Mobile Sync Section */}

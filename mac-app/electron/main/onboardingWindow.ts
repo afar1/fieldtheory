@@ -1,4 +1,4 @@
-import { app, BrowserWindow, screen, systemPreferences } from 'electron';
+import { app, BrowserWindow, screen, systemPreferences, shell } from 'electron';
 import path from 'path';
 
 /**
@@ -80,12 +80,12 @@ export class OnboardingWindow {
   }
 
   /**
-   * Open System Settings to the Accessibility pane.
+   * Open System Settings directly to the Accessibility pane.
    * Users must manually grant accessibility permission.
    */
   openAccessibilitySettings(): void {
-    // This triggers the system prompt and opens System Settings if needed.
-    systemPreferences.isTrustedAccessibilityClient(true);
+    // Open System Settings directly to Privacy & Security > Accessibility.
+    shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
   }
 
   /**

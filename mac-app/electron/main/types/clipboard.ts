@@ -271,7 +271,7 @@ export interface ClipboardAPI {
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
   pasteItem: (id: number) => Promise<void>;
-  pasteStack: (ids: number[]) => Promise<void>;
+  pasteStack: (ids: number[], targetBundleId?: string) => Promise<void>;
   separateIntoTasks: (id: number) => Promise<void>;
   onItemAdded: (callback: (item: ClipboardItem) => void) => () => void;
   onItemDeleted: (callback: (id: number) => void) => () => void;

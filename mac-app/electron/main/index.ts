@@ -114,11 +114,54 @@ function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
 if (process.env.EXPERIMENTAL === 'true') {
   const experimentalUserData = path.join(
     os.homedir(),
-    'Library/Application Support/Oscar Experimental'
+    'Library/Application Support/Field Theory Experimental'
   );
   app.setPath('userData', experimentalUserData);
   app.setName('Field Theory Experimental');
 }
+
+// Migrate data from old Oscar folder to new field-theory folder.
+// This runs once on first launch after the rename.
+function migrateFromOscar(): void {
+  const oldPath = path.join(os.homedir(), 'Library/Application Support/Oscar');
+  const newPath = app.getPath('userData');
+  const newDbPath = path.join(newPath, 'clipboard.db');
+  
+  // Only migrate if old folder exists and new db doesn't exist yet.
+  if (!fs.existsSync(oldPath) || fs.existsSync(newDbPath)) {
+    return;
+  }
+  
+  console.log('[Migration] Migrating data from Oscar to Field Theory...');
+  
+  // Ensure new directory exists.
+  if (!fs.existsSync(newPath)) {
+    fs.mkdirSync(newPath, { recursive: true });
+  }
+  
+  // Copy individual files (clipboard history and preferences).
+  for (const file of ['clipboard.db', 'preferences.json']) {
+    const src = path.join(oldPath, file);
+    const dst = path.join(newPath, file);
+    if (fs.existsSync(src)) {
+      fs.copyFileSync(src, dst);
+      console.log(`[Migration] Copied ${file}`);
+    }
+  }
+  
+  // Copy models directory if it exists (avoid re-downloading Whisper models).
+  const oldModels = path.join(oldPath, 'models');
+  const newModels = path.join(newPath, 'models');
+  if (fs.existsSync(oldModels) && !fs.existsSync(newModels)) {
+    fs.cpSync(oldModels, newModels, { recursive: true });
+    console.log('[Migration] Copied models directory');
+  }
+  
+  console.log('[Migration] Migration complete');
+}
+
+// Run migration before any other initialization.
+migrateFromOscar();
 
 // Configure autoUpdater for manual update flow (only in production builds).
 if (!process.env.ELECTRON_START_URL) {
@@ -885,7 +928,13 @@ function setupClipboardIPCHandlers(): void {
         history: 'Control+Alt+Space',
       };
     }
-    return clipboardManager.getHotkeys();
+    // Map internal property names to frontend-expected names.
+    const hotkeys = clipboardManager.getHotkeys();
+    return {
+      screenshot: hotkeys.screenshotHotkey,
+      desktopScreenshot: hotkeys.desktopScreenshotHotkey,
+      history: hotkeys.historyHotkey,
+    };
   });
 
   ipcMain.handle(ClipboardIPCChannels.SET_HOTKEYS, async (_event, hotkeys: { screenshot?: string; history?: string; desktopScreenshot?: string }) => {
@@ -997,7 +1046,7 @@ function setupClipboardIPCHandlers(): void {
     }
   });
 
-  ipcMain.handle(ClipboardIPCChannels.PASTE_STACK, async (_event, ids: number[]) => {
+  ipcMain.handle(ClipboardIPCChannels.PASTE_STACK, async (_event, ids: number[], targetBundleId?: string) => {
     try {
       if (!clipboardManager) {
         console.error('[Main] pasteStack: clipboardManager not initialized');
@@ -1023,7 +1072,7 @@ function setupClipboardIPCHandlers(): void {
         return;
       }
       
-      // Hide window and restore focus BEFORE pasting
+      // Hide window BEFORE pasting
       if (clipboardHistoryWindow) {
         clipboardHistoryWindow.hide();
       }
@@ -1032,6 +1081,18 @@ function setupClipboardIPCHandlers(): void {
       const { promisify } = require('util');
       const execAsync = promisify(exec);
       const { nativeImage } = require('electron');
+      
+      // If a specific target app was provided, activate it first
+      if (targetBundleId) {
+        try {
+          await execAsync(`osascript -e 'tell application id "${targetBundleId}" to activate'`);
+          // Small delay to let app activate
+          await new Promise(resolve => setTimeout(resolve, 50));
+        } catch (activateError) {
+          console.warn('[Main] pasteStack: failed to activate target app:', activateError);
+          // Continue anyway - will paste to whatever is frontmost
+        }
+      }
       
       // Paste each item sequentially with small delays
       for (const item of items) {
