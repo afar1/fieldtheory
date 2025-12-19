@@ -58,6 +58,9 @@ export class TranscriberManager extends EventEmitter {
   private currentStackId: string | null = null;
   private stackingHotkeyRegistered: boolean = false;
   
+  // Track the app that was active when recording started (for pasting back to it)
+  private sourceAppBundleId: string | null = null;
+  
   // Clipboard history visibility checker - allows escape key to dismiss clipboard history first
   private clipboardHistoryVisibilityChecker: (() => boolean) | null = null;
   
@@ -143,8 +146,8 @@ export class TranscriberManager extends EventEmitter {
     // Register global hotkey for normal transcription
     await this.registerHotkey(this.hotkey);
     
-    // Register stacking mode hotkey (Cmd + transcription hotkey)
-    this.registerStackingHotkey();
+    // Stacking mode disabled - users were accidentally triggering it.
+    // this.registerStackingHotkey();
 
     // Handle app quit - unregister all our hotkeys
     app.on('will-quit', () => {
@@ -152,7 +155,7 @@ export class TranscriberManager extends EventEmitter {
         globalShortcut.unregister(this.registeredHotkey);
         this.registeredHotkey = null;
       }
-      this.unregisterStackingHotkey();
+      // this.unregisterStackingHotkey();
     });
   }
 
@@ -209,17 +212,16 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Set a new hotkey and save to preferences.
-   * Also updates the stacking hotkey (Cmd + new hotkey).
    */
   async setHotkey(hotkey: string): Promise<boolean> {
-    // Unregister old stacking hotkey before changing main hotkey
-    this.unregisterStackingHotkey();
+    // Stacking mode disabled.
+    // this.unregisterStackingHotkey();
     
     const success = await this.registerHotkey(hotkey);
     if (success) {
       await this.preferences.save({ transcriptionHotkey: hotkey });
-      // Re-register stacking hotkey with new base hotkey
-      this.registerStackingHotkey();
+      // Stacking mode disabled.
+      // this.registerStackingHotkey();
       this.emit('hotkeyChanged', hotkey);
     }
     return success;
@@ -254,21 +256,26 @@ export class TranscriberManager extends EventEmitter {
     }
 
     try {
-      this.setStatus('recording');
+      // Capture the source app BEFORE we do anything that might change focus.
+      // This ensures we paste back to the correct app after transcription.
+      this.sourceAppBundleId = await this.getFrontmostAppBundleId();
+      console.log(`[TranscriberManager] Source app captured: ${this.sourceAppBundleId}`);
       
+      this.setStatus('recording');
+
       // Reset audio content tracking for new recording.
       this.hasAudioContent = false;
       this.pendingAbandonConfirmation = false;
-      
+
       // Show overlay
       this.overlay.showRecording();
-      
+
       // Register abandon hotkey (configurable, default: Escape) to cancel recording.
       this.registerAbandonHotkey();
-      
+
       // Play start recording sound (user-configurable).
       this.soundManager.play('recordingStart');
-      
+
       await this.nativeHelper.startRecording();
       console.log('[TranscriberManager] Recording started');
     } catch (error) {
@@ -276,6 +283,7 @@ export class TranscriberManager extends EventEmitter {
       this.setStatus('idle');
       this.overlay.dismiss();
       this.unregisterAbandonHotkey();
+      this.sourceAppBundleId = null;
       this.emit('error', error as Error);
     }
   }
@@ -405,12 +413,14 @@ export class TranscriberManager extends EventEmitter {
       await this.nativeHelper.cancelRecording();
       this.setStatus('idle');
       this.hasAudioContent = false;
+      this.sourceAppBundleId = null;
       this.overlay.dismiss();
       this.unregisterAbandonHotkey();
     } catch (error) {
       console.error('[TranscriberManager] Failed to cancel recording:', error);
       this.setStatus('idle');
       this.hasAudioContent = false;
+      this.sourceAppBundleId = null;
       this.overlay.dismiss();
       this.unregisterAbandonHotkey();
     }
@@ -744,10 +754,25 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
-   * Paste text into the active application using AppleScript.
+   * Paste text into the source application (the app that was active when recording started).
+   * Falls back to pasting to whatever is frontmost if source app activation fails.
    */
   private async pasteText(): Promise<void> {
     try {
+      // Activate the source app first (the app that was active when recording started).
+      // This ensures we paste back to the correct app, not to Field Theory's overlay.
+      if (this.sourceAppBundleId) {
+        console.log(`[TranscriberManager] Activating source app: ${this.sourceAppBundleId}`);
+        try {
+          await execAsync(`osascript -e 'tell application id "${this.sourceAppBundleId}" to activate'`);
+          // Small delay to ensure app is ready to receive paste.
+          await new Promise(resolve => setTimeout(resolve, 50));
+        } catch (activateError) {
+          console.warn('[TranscriberManager] Failed to activate source app:', activateError);
+          // Continue anyway - will paste to whatever is frontmost
+        }
+      }
+      
       // Use AppleScript to send Command+V
       await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
       console.log('[TranscriberManager] Text pasted successfully');

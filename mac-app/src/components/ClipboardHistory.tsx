@@ -658,14 +658,19 @@ export default function ClipboardHistory() {
   }, [statItems.length, currentStatIndex]);
   
   const [targetAppInfo, setTargetAppInfo] = useState<{
-    targetApp: RunningApp | null;
+    previousApp: RunningApp | null;  // Default paste destination (click)
+    targetApp: RunningApp | null;    // Option+click destination
     runningApps: RunningApp[];
     targetAppIndex: number;
   }>({
+    previousApp: null,
     targetApp: null,
     runningApps: [],
     targetAppIndex: 0,
   });
+  
+  // Track when Option key is held for UI feedback
+  const [optionHeld, setOptionHeld] = useState(false);
   
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -823,6 +828,7 @@ export default function ClipboardHistory() {
       }
       
       setTargetAppInfo({
+        previousApp: info.previousApp,
         targetApp: info.targetApp,
         runningApps: info.runningApps,
         targetAppIndex,
@@ -851,6 +857,37 @@ export default function ClipboardHistory() {
       unsubscribeDeleted();
     };
   }, [isMacOS, loadItems]);
+
+  // Track Option key held state for UI feedback.
+  // When Option is held, show targetApp as paste destination; otherwise show previousApp.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && !optionHeld) {
+        setOptionHeld(true);
+      }
+    };
+    
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (!e.altKey && optionHeld) {
+        setOptionHeld(false);
+      }
+    };
+    
+    // Also reset when window loses focus
+    const handleBlur = () => {
+      setOptionHeld(false);
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+    
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [optionHeld]);
 
   // Build list rows with stack grouping.
   // Stacked items are grouped together, non-stacked items appear individually.
@@ -1591,12 +1628,15 @@ export default function ClipboardHistory() {
           return;
         }
         
-        // Get the target bundle ID if user selected a specific target.
-        const targetBundleId = targetAppInfo.targetApp?.bundleId;
+        // Default paste goes to previousApp (the app you were just in).
+        // Option+Enter goes to targetApp (the user-selected target via Option+Tab).
+        const pasteBundleId = hasAlt
+          ? targetAppInfo.targetApp?.bundleId
+          : targetAppInfo.previousApp?.bundleId;
         
         if (selectedIds.size > 0) {
           // Paste multi-selected items
-          window.clipboardAPI?.pasteStack(Array.from(selectedIds));
+          window.clipboardAPI?.pasteStack(Array.from(selectedIds), pasteBundleId);
           window.clipboardAPI?.closeWindow();
           setSelectedIds(new Set());
           setIsMultiSelect(false);
@@ -1606,20 +1646,20 @@ export default function ClipboardHistory() {
           if (selectedRow?.type === 'stack') {
             // If there's an improved version, paste that instead
             if (improveResult?.stackId === selectedRow.stack.stackId) {
-              window.clipboardAPI?.pasteText?.(improveResult.refinedPrompt, targetBundleId);
+              window.clipboardAPI?.pasteText?.(improveResult.refinedPrompt, pasteBundleId);
             } else {
               // Paste all items in the stack
               const itemIds = selectedRow.items.map(i => i.id);
-              window.clipboardAPI?.pasteStack(itemIds);
+              window.clipboardAPI?.pasteStack(itemIds, pasteBundleId);
             }
             window.clipboardAPI?.closeWindow();
           } else if (selectedRow?.type === 'item') {
             // If there's an improved version, paste that instead
             if (improveResult?.stackId === `item-${selectedRow.item.id}`) {
-              window.clipboardAPI?.pasteText?.(improveResult.refinedPrompt, targetBundleId);
+              window.clipboardAPI?.pasteText?.(improveResult.refinedPrompt, pasteBundleId);
             } else {
               // Paste single item to target app
-              window.clipboardAPI?.pasteItem(selectedRow.item.id, targetBundleId);
+              window.clipboardAPI?.pasteItem(selectedRow.item.id, pasteBundleId);
             }
             window.clipboardAPI?.closeWindow();
           }
@@ -1886,14 +1926,18 @@ export default function ClipboardHistory() {
       setSelectedIndex(index);
       setLastClickedIndex(index);
     } else {
-      // Normal click: paste to target app
-      const targetBundleId = targetAppInfo.targetApp?.bundleId;
+      // Normal click: paste to previousApp (the app you were just in).
+      // Option+click: paste to targetApp (the user-selected target via Option+Tab).
+      const hasAlt = e?.altKey;
+      const pasteBundleId = hasAlt
+        ? targetAppInfo.targetApp?.bundleId
+        : targetAppInfo.previousApp?.bundleId;
       
       // If there's an improved version, paste that instead
       if (improveResult?.stackId === `item-${item.id}`) {
-        window.clipboardAPI?.pasteText?.(improveResult.refinedPrompt, targetBundleId);
+        window.clipboardAPI?.pasteText?.(improveResult.refinedPrompt, pasteBundleId);
       } else {
-        window.clipboardAPI?.pasteItem(item.id, targetBundleId);
+        window.clipboardAPI?.pasteItem(item.id, pasteBundleId);
       }
       window.clipboardAPI?.closeWindow();
     }
@@ -2545,7 +2589,11 @@ export default function ClipboardHistory() {
               const stackImages = stackItems.filter(i => (i.type === 'image' || i.type === 'screenshot') && i.imageData);
               const combinedText = combineStackText(stackItems);
               const hasText = combinedText.length > 0;
-              const targetAppName = targetAppInfo.targetApp?.name || 'app';
+              // Show previousApp by default, targetApp when Option is held.
+              // Fall back to previousApp name if targetApp isn't set.
+              const displayAppName = optionHeld
+                ? (targetAppInfo.targetApp?.name || targetAppInfo.previousApp?.name || 'app')
+                : (targetAppInfo.previousApp?.name || 'app');
               // "Show more" is controlled by actual overflow detection, not character count.
               const textIsOverflowing = overflowingTexts.has(stack.stackId);
 
@@ -2645,16 +2693,21 @@ export default function ClipboardHistory() {
                         return;
                       }
                       
-                      // Normal click: paste to target app
+                      // Normal click: paste to previousApp (the app you were just in).
+                      // Option+click: paste to targetApp (user-selected via Option+Tab).
+                      const hasAlt = e.altKey;
+                      const pasteBundleId = hasAlt
+                        ? targetAppInfo.targetApp?.bundleId
+                        : targetAppInfo.previousApp?.bundleId;
+                      
                       // If there's an improved version, paste that instead
                       if (improveResult?.stackId === stack.stackId) {
-                        const targetBundleId = targetAppInfo.targetApp?.bundleId;
-                        window.clipboardAPI?.pasteText?.(improveResult.refinedPrompt, targetBundleId);
+                        window.clipboardAPI?.pasteText?.(improveResult.refinedPrompt, pasteBundleId);
                         window.clipboardAPI?.closeWindow();
                       } else {
                         // Paste all items in the stack
                         const itemIds = stackItems.map(i => i.id);
-                        window.clipboardAPI?.pasteStack(itemIds);
+                        window.clipboardAPI?.pasteStack(itemIds, pasteBundleId);
                         window.clipboardAPI?.closeWindow();
                       }
                     }}
@@ -3078,14 +3131,20 @@ export default function ClipboardHistory() {
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={(e) => {
                             e.stopPropagation();
+                            // Normal click: paste to previousApp.
+                            // Option+click: paste to targetApp.
+                            const hasAlt = e.altKey;
+                            const pasteBundleId = hasAlt
+                              ? targetAppInfo.targetApp?.bundleId
+                              : targetAppInfo.previousApp?.bundleId;
+                            
                             // Paste stack content
                             if (improveResult?.stackId === stack.stackId) {
-                              const targetBundleId = targetAppInfo.targetApp?.bundleId;
-                              window.clipboardAPI?.pasteText?.(improveResult.refinedPrompt, targetBundleId);
+                              window.clipboardAPI?.pasteText?.(improveResult.refinedPrompt, pasteBundleId);
                               window.clipboardAPI?.closeWindow();
                             } else {
                               const itemIds = stackItems.map(i => i.id);
-                              window.clipboardAPI?.pasteStack(itemIds);
+                              window.clipboardAPI?.pasteStack(itemIds, pasteBundleId);
                               window.clipboardAPI?.closeWindow();
                             }
                           }}
@@ -3103,7 +3162,7 @@ export default function ClipboardHistory() {
                           onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                           onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
-                          <KeyCap>↵</KeyCap> paste ({targetAppName})
+                          <KeyCap>↵</KeyCap> paste ({displayAppName})
                         </button>
                       </div>
                     </div>
@@ -3691,7 +3750,7 @@ export default function ClipboardHistory() {
                         onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                         onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                       >
-                        <KeyCap>↵</KeyCap> paste ({targetAppInfo.targetApp?.name || 'app'})
+                        <KeyCap>↵</KeyCap> paste ({optionHeld ? (targetAppInfo.targetApp?.name || targetAppInfo.previousApp?.name || 'app') : (targetAppInfo.previousApp?.name || 'app')})
                       </button>
                     </div>
                   </div>
@@ -3994,7 +4053,19 @@ export default function ClipboardHistory() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '12px', fontSize: '9px', flex: 1 }}>
           {!showSettings && (
             <span style={{ color: theme.textSecondary, opacity: 0.7, display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <KeyCap small>option</KeyCap><KeyCap small>tab</KeyCap> target ({targetAppInfo.targetApp?.name || 'app'})
+              {optionHeld ? (
+                // When Option is held, show the target app they'll paste to
+                <>
+                  <KeyCap small>⌥</KeyCap> → {targetAppInfo.targetApp?.name || targetAppInfo.previousApp?.name || 'app'}
+                  <span style={{ marginLeft: '8px' }}><KeyCap small>tab</KeyCap> cycle</span>
+                </>
+              ) : (
+                // Default: show that click/Enter goes to previous app
+                <>
+                  <KeyCap small>↵</KeyCap> → {targetAppInfo.previousApp?.name || 'app'}
+                  <span style={{ marginLeft: '8px' }}><KeyCap small>⌥</KeyCap><KeyCap small>tab</KeyCap> target</span>
+                </>
+              )}
             </span>
           )}
           

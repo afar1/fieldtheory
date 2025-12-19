@@ -47,7 +47,6 @@ interface Preferences {
   overlayStyle: OverlayStyle;
   windowState?: WindowState;
   clipboardScreenshotHotkey?: string;
-  clipboardDesktopScreenshotHotkey?: string;
   clipboardHistoryHotkey?: string;
   priorityDeviceId?: string | null;
   clipboardHistoryBounds?: ClipboardHistoryBounds;
@@ -84,10 +83,6 @@ interface Preferences {
   recordingStartSound?: string;  // Sound file name to play when recording starts
   recordingStopSound?: string;   // Sound file name to play when recording stops
   recordingCancelSound?: string; // Sound file name to play when recording is cancelled
-  windowOpenSound?: string;     // Sound file name to play when field theory window opens
-  windowCloseSound?: string;    // Sound file name to play when field theory window closes
-  transcribingSound?: string;   // Sound file name to play when transcription starts
-  pasteSound?: string;          // Sound file name to play when an item is pasted
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
@@ -95,7 +90,6 @@ const DEFAULT_PREFERENCES: Preferences = {
   selectedModel: 'base',
   overlayStyle: 'rectangle',
   clipboardScreenshotHotkey: 'Alt+1',
-  clipboardDesktopScreenshotHotkey: 'Command+3',
   clipboardHistoryHotkey: 'Control+Alt+Space',
   continuousContextEnabled: false,
   continuousContextHotkey: 'Shift+Alt+1', // Default: Shift + screenshot hotkey
@@ -108,10 +102,6 @@ const DEFAULT_PREFERENCES: Preferences = {
   recordingStartSound: 'ButtonClickDown.mp3',
   recordingStopSound: 'ButtonClickUp.mp3',
   recordingCancelSound: 'AlertBonk.mp3',
-  windowOpenSound: 'WindowOpen.mp3',
-  windowCloseSound: 'WindowClose.mp3',
-  transcribingSound: 'ButtonClickUp.mp3', // Same as recording stop since transcribing happens right after
-  pasteSound: 'Click.mp3',
 };
 
 /**

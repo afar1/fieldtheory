@@ -383,7 +383,7 @@ export default function App() {
             Permissions Required
           </h1>
           <p style={{ fontSize: '16px', color: '#666', marginBottom: '32px', lineHeight: '1.5' }}>
-            Oscar needs Accessibility permission to paste clipboard items:
+            Field Theory needs Accessibility permission to paste clipboard items:
           </p>
 
           <div style={{ marginBottom: '24px', textAlign: 'left' }}>
