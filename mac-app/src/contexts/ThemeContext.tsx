@@ -1,67 +1,16 @@
 // =============================================================================
 // ThemeContext - Provides theme (light/dark) based on system preference
-// with glass effect toggle for performance
+// with glass effect toggle for performance.
+// Uses unified design tokens from www/styles.css for consistency.
 // =============================================================================
 
 import { createContext, useContext, useState, ReactNode } from 'react';
-
-type Theme = {
-  isDark: boolean;
-  glassEnabled: boolean;
-  bg: string;
-  bgSecondary: string;
-  text: string;
-  textSecondary: string;
-  border: string;
-  accent: string;
-  accentHover: string;
-  selectedBg: string;
-  selectedBorder: string;
-  inputBg: string;
-  inputBorder: string;
-};
-
-const lightTheme: Omit<Theme, 'isDark' | 'glassEnabled'> = {
-  bg: '#ffffff',
-  bgSecondary: '#fafafa',
-  text: '#333333',
-  textSecondary: '#666666',
-  border: '#e0e0e0',
-  accent: '#007AFF',
-  accentHover: '#0051D5',
-  selectedBg: 'rgba(20, 184, 166, 0.08)',  // Light teal for X-selected items
-  selectedBorder: '#5eead4',  // Muted teal border (less bright than J/K)
-  inputBg: '#ffffff',
-  inputBorder: '#e0e0e0',
-};
-
-const darkThemeSolid: Omit<Theme, 'isDark' | 'glassEnabled'> = {
-  bg: '#1e1e1e',
-  bgSecondary: '#2d2d2d',
-  text: '#ffffff',
-  textSecondary: '#aaaaaa',
-  border: 'rgba(255, 255, 255, 0.1)',
-  accent: '#0A84FF',
-  accentHover: '#409CFF',
-  selectedBg: 'rgba(45, 212, 191, 0.12)',  // Light teal for X-selected items
-  selectedBorder: '#5eead4',  // Muted teal border (less bright than J/K)
-  inputBg: '#2d2d2d',
-  inputBorder: 'rgba(255, 255, 255, 0.15)',
-};
-
-const darkThemeGlass: Omit<Theme, 'isDark' | 'glassEnabled'> = {
-  bg: 'rgba(30, 30, 30, 0.85)',
-  bgSecondary: 'rgba(45, 45, 45, 0.9)',
-  text: '#ffffff',
-  textSecondary: '#aaaaaa',
-  border: 'rgba(255, 255, 255, 0.1)',
-  accent: '#0A84FF',
-  accentHover: '#409CFF',
-  selectedBg: 'rgba(45, 212, 191, 0.12)',  // Light teal for X-selected items
-  selectedBorder: '#5eead4',  // Muted teal border (less bright than J/K)
-  inputBg: 'rgba(45, 45, 45, 0.9)',
-  inputBorder: 'rgba(255, 255, 255, 0.15)',
-};
+import {
+  Theme,
+  lightTheme,
+  darkThemeSolid,
+  darkThemeGlass,
+} from '../design/tokens';
 
 interface ThemeContextType {
   theme: Theme;
