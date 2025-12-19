@@ -16,12 +16,15 @@ function isElectronApp(bundleId: string, appName: string): boolean {
   const bundleIdLower = bundleId.toLowerCase();
   const currentAppName = app.getName().toLowerCase();
   
-  // Check if bundle ID or name matches our app
+  // Check if bundle ID or name matches our app.
   return (
+    bundleIdLower.includes('fieldtheory') ||
+    bundleIdLower.includes('field-theory') ||
     bundleIdLower.includes('oscar') ||
     bundleIdLower.includes('little-one') ||
     bundleIdLower.includes('littleai') ||
     bundleIdLower.includes('electron') ||
+    appNameLower.includes('field theory') ||
     appNameLower.includes('oscar') ||
     appNameLower.includes('little one') ||
     appNameLower === currentAppName ||
@@ -402,15 +405,21 @@ export class ClipboardHistoryWindow {
 
   /**
    * Send target app info to renderer.
-   * Includes current target, list of running apps, and index for Tab cycling.
+   * Includes previousApp (default paste destination), targetApp (Option+click destination),
+   * and list of running apps for Tab cycling.
    */
   private sendTargetAppInfo(): void {
     if (!this.window || this.window.isDestroyed()) {
       return;
     }
 
-    const targetApp = this.getTargetApp();
+    // previousApp = the app user was in before opening clipboard history (default paste destination)
+    // targetApp = user-selected target via Option+Tab (Option+click destination)
+    // If no selectedTargetApp, targetApp falls back to previousApp
+    const targetApp = this.selectedTargetApp || this.previousApp;
+    
     this.window.webContents.send('clipboard:targetAppInfo', {
+      previousApp: this.previousApp,
       targetApp,
       runningApps: this.runningApps,
     });
@@ -515,10 +524,11 @@ export class ClipboardHistoryWindow {
 
   /**
    * Capture the frontmost app BEFORE showing the window.
-   * Must be called before show() because once the window takes focus, Oscar becomes frontmost.
+   * Must be called before show() because once the window takes focus, Field Theory becomes frontmost.
    * Always resets selectedTargetApp since this is a fresh window open.
    */
   async capturePreviousAppBeforeShow(): Promise<void> {
+    console.log('[ClipboardHistoryWindow] Capturing previous app before show...');
     try {
       const script = `
         tell application "System Events"
@@ -529,11 +539,20 @@ export class ClipboardHistoryWindow {
       const { stdout } = await execAsync(`osascript -e '${script}'`);
       const [bundleId, name] = stdout.trim().split('|');
       
-      if (bundleId && name && !isElectronApp(bundleId, name)) {
-        this.previousApp = { bundleId, name };
-        // Reset selected target when opening window fresh.
-        this.selectedTargetApp = null;
-        console.log(`[ClipboardHistoryWindow] Captured previous app: ${name} (${bundleId})`);
+      console.log(`[ClipboardHistoryWindow] AppleScript returned: bundleId="${bundleId}", name="${name}"`);
+      
+      if (bundleId && name) {
+        const isOurs = isElectronApp(bundleId, name);
+        console.log(`[ClipboardHistoryWindow] Is our app: ${isOurs}`);
+        
+        if (!isOurs) {
+          this.previousApp = { bundleId, name };
+          // Reset selected target when opening window fresh.
+          this.selectedTargetApp = null;
+          console.log(`[ClipboardHistoryWindow] Set previousApp to: ${name} (${bundleId})`);
+        } else {
+          console.log(`[ClipboardHistoryWindow] Skipping our own app, keeping previousApp as: ${this.previousApp?.name || 'null'}`);
+        }
       }
     } catch (error) {
       console.error('[ClipboardHistoryWindow] Failed to capture previous app:', error);
@@ -568,7 +587,7 @@ export class ClipboardHistoryWindow {
   /**
    * Refresh app data in background after window is shown.
    * Only refreshes running apps list - previousApp is captured before show() via
-   * capturePreviousAppBeforeShow() to avoid race condition where Oscar becomes frontmost.
+   * capturePreviousAppBeforeShow() to avoid race condition where Field Theory becomes frontmost.
    */
   private async refreshAppDataInBackground(): Promise<void> {
     // Only refresh running apps - previousApp was captured before show().

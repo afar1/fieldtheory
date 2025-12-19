@@ -42,7 +42,7 @@ export class TrayManager {
     const iconPath = this.getIconPath('disconnected');
     const icon = nativeImage.createFromPath(iconPath);
     this.tray = new Tray(icon);
-    this.tray.setToolTip('Oscar');
+    this.tray.setToolTip('Field Theory');
 
     this.audioManager.on('stateChanged', (state: AudioState) => {
       this.updateTray(state);
@@ -220,7 +220,7 @@ export class TrayManager {
     });
 
     items.push({
-      label: 'Quit Oscar',
+      label: 'Quit Field Theory',
       role: 'quit',
     });
 

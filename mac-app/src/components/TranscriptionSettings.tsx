@@ -343,7 +343,9 @@ export default function TranscriptionSettings() {
 
       let key = event.key;
       
-      if (key === ' ') {
+      // Check for both regular space (char 32) and non-breaking space (char 160).
+      // macOS produces non-breaking space when Alt/Option is held with Space.
+      if (key === ' ' || key === '\u00A0') {
         key = 'Space';
       } else if (key === '`' || key === 'Backquote') {
         key = '`';
@@ -375,16 +377,25 @@ export default function TranscriptionSettings() {
         'End': 'End',
       };
 
-      if (keyMap[key]) {
-        key = keyMap[key];
-      }
-
-      if (key === 'Meta' || key === 'Control' || key === 'Alt' || key === 'Shift') {
+      // Check if this is a modifier-only keypress BEFORE transforming via keyMap.
+      // event.key for modifiers: 'Meta', 'Control', 'Alt', 'Shift'
+      const isModifierOnly = ['Meta', 'Control', 'Alt', 'Shift'].includes(event.key);
+      if (isModifierOnly) {
+        // If no other modifiers held, treat as a single modifier hotkey.
+        // Otherwise, ignore (user is still building the combo).
         if (parts.length === 0) {
-          handleSetHotkey(key);
-          return;
+          const modifierName = event.key === 'Meta' ? 'Command' : event.key;
+          if (capturing === 'transcription') {
+            handleSetHotkey(modifierName);
+          } else if (capturing === 'abandon') {
+            handleSetAbandonHotkey(modifierName);
+          }
         }
         return;
+      }
+
+      if (keyMap[key]) {
+        key = keyMap[key];
       }
 
       let hotkeyString: string;
@@ -441,23 +452,6 @@ export default function TranscriptionSettings() {
       </div>
 
       <div style={styles.row}>
-        <span style={styles.rowLabel}>Hotkey</span>
-        <div style={styles.rowControls}>
-          <button
-            onClick={handleStartCaptureHotkey}
-            disabled={isCapturingHotkey}
-            style={{ ...styles.btn, ...(isCapturingHotkey ? styles.btnActive : {}) }}
-          >
-            {isCapturingHotkey ? 'Press keys...' : hotkey}
-          </button>
-          {isCapturingHotkey && (
-            <button onClick={() => { setIsCapturingHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
-          )}
-        </div>
-      </div>
-      {hotkeyError && <p style={styles.error}>{hotkeyError}</p>}
-
-      <div style={styles.row}>
         <span style={styles.rowLabel}>Overlay</span>
         <select
           value={overlayStyle}
@@ -468,30 +462,6 @@ export default function TranscriptionSettings() {
           <option value="top-emerging">Dynamic Island</option>
         </select>
       </div>
-
-      <div style={styles.row}>
-        <span style={styles.rowLabel}>Abandon</span>
-        <div style={styles.rowControls}>
-          <button
-            onClick={() => { setIsCapturingAbandonHotkey(true); setAbandonHotkeyError(null); }}
-            disabled={isCapturingAbandonHotkey || isCapturingHotkey}
-            style={{ ...styles.btn, ...(isCapturingAbandonHotkey ? styles.btnActive : {}) }}
-          >
-            {isCapturingAbandonHotkey ? 'Press keys...' : abandonHotkey}
-          </button>
-          {isCapturingAbandonHotkey && (
-            <button onClick={() => { setIsCapturingAbandonHotkey(false); setAbandonHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
-          )}
-          <button
-            onClick={() => handleAbandonConfirmationChange(!abandonConfirmation)}
-            style={{ ...styles.toggle, backgroundColor: abandonConfirmation ? '#22c55e' : '#d1d5db' }}
-            title={abandonConfirmation ? 'Confirm enabled' : 'Confirm disabled'}
-          >
-            <span style={{ ...styles.toggleKnob, transform: abandonConfirmation ? 'translateX(20px)' : 'translateX(2px)' }} />
-          </button>
-        </div>
-      </div>
-      {abandonHotkeyError && <p style={styles.error}>{abandonHotkeyError}</p>}
 
       <div style={styles.soundsSection}>
         <div style={styles.sectionHeader}>

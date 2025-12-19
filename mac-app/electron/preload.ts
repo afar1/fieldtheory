@@ -455,7 +455,8 @@ type RunningApp = {
 };
 
 type TargetAppInfo = {
-  targetApp: RunningApp | null;
+  previousApp: RunningApp | null;  // App user was in before opening clipboard (default paste destination)
+  targetApp: RunningApp | null;    // User-selected target via Option+Tab (Option+click destination)
   runningApps: RunningApp[];
 };
 
@@ -523,7 +524,7 @@ export interface ClipboardAPI {
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
   pasteItem: (id: number, targetBundleId?: string) => Promise<void>;
-  pasteStack: (ids: number[]) => Promise<void>;
+  pasteStack: (ids: number[], targetBundleId?: string) => Promise<void>;
   pasteText: (text: string, targetBundleId?: string) => Promise<void>;
   separateIntoTasks: (id: number) => Promise<void>;
   // Target app management.
@@ -839,8 +840,8 @@ const clipboardAPI: ClipboardAPI = {
     return ipcRenderer.invoke(ClipboardIPCChannels.PASTE_ITEM, id, targetBundleId);
   },
 
-  pasteStack: async (ids: number[]): Promise<void> => {
-    return ipcRenderer.invoke(ClipboardIPCChannels.PASTE_STACK, ids);
+  pasteStack: async (ids: number[], targetBundleId?: string): Promise<void> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.PASTE_STACK, ids, targetBundleId);
   },
 
   pasteText: async (text: string, targetBundleId?: string): Promise<void> => {
