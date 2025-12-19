@@ -29,7 +29,7 @@ function ProgressDots({ currentStep, totalSteps }: { currentStep: number; totalS
           key={i}
           style={{
             ...styles.dot,
-            backgroundColor: i === currentStep ? '#3b82f6' : '#d1d5db',
+            backgroundColor: i === currentStep ? '#4a7c23' : '#d1d5db',
           }}
         />
       ))}
@@ -652,7 +652,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     height: '100vh',
-    backgroundColor: '#ffffff',
+    backgroundColor: '#faf9f7',  // Warm paper background from design system
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
     // Account for macOS title bar.
     paddingTop: '38px',
@@ -694,7 +694,7 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.6,
   },
   primaryButton: {
-    backgroundColor: '#3b82f6',
+    backgroundColor: '#4a7c23',  // Forest green accent from design system
     color: '#ffffff',
     border: 'none',
     borderRadius: '8px',
@@ -771,7 +771,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   successIcon: {
     fontSize: '16px',
-    color: '#22c55e',
+    color: '#4a7c23',  // Forest green accent from design system
   },
   warningBox: {
     display: 'flex',
@@ -814,7 +814,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     width: '24px',
     height: '24px',
-    backgroundColor: '#3b82f6',
+    backgroundColor: '#4a7c23',  // Forest green accent from design system
     color: '#ffffff',
     borderRadius: '50%',
     fontSize: '12px',
@@ -837,7 +837,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   progressFill: {
     height: '100%',
-    backgroundColor: '#3b82f6',
+    backgroundColor: '#4a7c23',  // Forest green accent from design system
     transition: 'width 0.3s ease',
   },
   progressPercent: {

@@ -743,7 +743,7 @@ export default function SettingsPanel() {
             )}
             <button
               onClick={() => handleAbandonConfirmationChange(!abandonConfirmation)}
-              style={{ ...styles.toggle, backgroundColor: abandonConfirmation ? '#22c55e' : '#d1d5db' }}
+              style={{ ...styles.toggle, backgroundColor: abandonConfirmation ? theme.accent : '#d1d5db' }}
               title={abandonConfirmation ? 'Confirm before abandoning' : 'Abandon immediately'}
             >
               <span style={{ ...styles.toggleKnob, transform: abandonConfirmation ? 'translateX(20px)' : 'translateX(2px)' }} />
@@ -808,7 +808,7 @@ export default function SettingsPanel() {
           <div style={styles.rowControls}>
             <button
               onClick={() => handleToggleContinuousContext(!continuousContextEnabled)}
-              style={{ ...styles.toggle, backgroundColor: continuousContextEnabled ? '#10b981' : '#d1d5db' }}
+              style={{ ...styles.toggle, backgroundColor: continuousContextEnabled ? theme.accent : '#d1d5db' }}
             >
               <span style={{ ...styles.toggleKnob, transform: continuousContextEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
             </button>
@@ -880,7 +880,7 @@ export default function SettingsPanel() {
           <div style={styles.rowControls}>
             {hasApiKey ? (
               <>
-                <span style={{ ...styles.rowValue, color: '#10b981' }}>✓ Configured</span>
+                <span style={{ ...styles.rowValue, color: theme.accent }}>✓ Configured</span>
                 <button onClick={handleClearApiKey} style={{ ...styles.btn, ...styles.btnDanger }}>
                   Clear
                 </button>
@@ -1052,9 +1052,9 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: 'center' as const,
   },
   btnActive: {
-    backgroundColor: '#3b82f6',
+    backgroundColor: '#4a7c23',
     color: '#fff',
-    borderColor: '#3b82f6',
+    borderColor: '#4a7c23',
   },
   btnDanger: {
     color: '#dc2626',
@@ -1063,8 +1063,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   btnSuccess: {
     color: '#fff',
-    backgroundColor: '#10b981',
-    borderColor: '#10b981',
+    backgroundColor: '#4a7c23',
+    borderColor: '#4a7c23',
   },
   btnGhost: {
     backgroundColor: 'transparent',
@@ -1132,7 +1132,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'inline-block',
     marginRight: '6px',
   },
-  statusGreen: { backgroundColor: '#22c55e' },
+  statusGreen: { backgroundColor: '#4a7c23' },
   statusYellow: { backgroundColor: '#f59e0b' },
   statusRed: { backgroundColor: '#ef4444' },
   statusGray: { backgroundColor: '#9ca3af' },
@@ -1203,7 +1203,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     width: '18px',
     height: '18px',
-    backgroundColor: '#10b981',
+    backgroundColor: '#4a7c23',
     color: '#fff',
     borderRadius: '50%',
     fontSize: '10px',
@@ -1248,9 +1248,9 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
   },
   hotkeyButtonActive: {
-    backgroundColor: '#3b82f6',
+    backgroundColor: '#4a7c23',
     color: '#fff',
-    borderColor: '#3b82f6',
+    borderColor: '#4a7c23',
   },
   cancelButton: {
     padding: '6px 8px',
@@ -1279,7 +1279,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '13px',
     fontWeight: 500,
     color: '#fff',
-    backgroundColor: '#007AFF',
+    backgroundColor: '#4a7c23',
     border: 'none',
     borderRadius: '6px',
     cursor: 'pointer',
