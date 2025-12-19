@@ -3753,7 +3753,7 @@ export default function ClipboardHistory() {
                         <span
                           style={{
                             fontSize: '9px',
-                            backgroundColor: '#007AFF',
+                            backgroundColor: theme.accent,
                             color: '#fff',
                             padding: '1px 4px',
                             borderRadius: '3px',
