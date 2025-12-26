@@ -31,9 +31,13 @@ import { ObservationList } from './components/ObservationList';
 import { CursorBrowser, CursorBrowserHandle } from './components/CursorBrowser';
 import { PullToCreate } from './components/PullToCreate';
 import { TranscriptItem } from './components/TranscriptItem';
+import { SketchCanvas } from './components/SketchCanvas';
+import { SketchList } from './components/SketchList';
 import { StorageService } from './services/storage';
+import { SketchStorageService } from './services/sketchStorage';
+import { syncAllPendingSketches } from './services/sketchSync';
 import { processTranscription } from './services/llm';
-import { Todo, Observation, Settings, TranscriptEntry, TranscriptSegment } from './types';
+import { Todo, Observation, Settings, TranscriptEntry, TranscriptSegment, SketchEntry } from './types';
 import { requestOtp, verifyOtp, getSession, signOut as supabaseSignOut } from './services/auth';
 import { syncAll, seedRemoteFromLocal } from './services/sync';
 import { supabase } from './services/supabase';
@@ -167,6 +171,10 @@ export default function App() {
   const [isDownloadingModel, setIsDownloadingModel] = useState(false);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [observations, setObservations] = useState<Observation[]>([]);
+  
+  // Sketch state - one-shot drawings that sync to Mac clipboard history.
+  const [sketches, setSketches] = useState<SketchEntry[]>([]);
+  const [showSketchCanvas, setShowSketchCanvas] = useState(false);
   // Default settings with all features enabled
   const [settings, setSettings] = useState<Settings>({
     autoStart: false,
@@ -242,16 +250,18 @@ export default function App() {
   useEffect(() => {
     async function loadData() {
       try {
-        const [loadedTodos, loadedObservations, loadedSettings, loadedTranscripts] = await Promise.all([
+        const [loadedTodos, loadedObservations, loadedSettings, loadedTranscripts, loadedSketches] = await Promise.all([
           StorageService.getTodos(),
           StorageService.getObservations(),
           StorageService.getSettings(),
           StorageService.getTranscripts(),
+          SketchStorageService.getSketches(),
         ]);
         setTodos(loadedTodos);
         setObservations(loadedObservations);
         setSettings(loadedSettings);
         setTranscripts(loadedTranscripts);
+        setSketches(loadedSketches);
       } catch (err) {
         console.error('Failed to load data from storage:', err);
         // Continue with empty state if storage fails
@@ -378,6 +388,11 @@ export default function App() {
         syncAll().catch((error) => {
           // Log error but don't interrupt user experience
           console.error('Background sync failed:', error);
+        });
+        
+        // Also sync any pending sketches.
+        syncAllPendingSketches().catch((error) => {
+          console.error('Background sketch sync failed:', error);
         });
       }
       
@@ -757,6 +772,43 @@ export default function App() {
     StorageService.saveObservations(newObservations).catch(console.error);
     return true;
   }, [observations]);
+
+  // Handle sketch completion - save the PNG and sync to cloud.
+  const handleSketchComplete = useCallback(async (data: { uri: string; width: number; height: number }) => {
+    try {
+      // Save the sketch locally.
+      const newSketch = await SketchStorageService.saveSketch(
+        data.uri,
+        data.width,
+        data.height
+      );
+      
+      // Add to state immediately.
+      setSketches((prev) => [newSketch, ...prev]);
+      
+      // Close the canvas.
+      setShowSketchCanvas(false);
+      
+      // Trigger haptic feedback.
+      Vibration.vibrate();
+      
+      // Sync in background if authenticated.
+      if (session) {
+        syncAllPendingSketches().catch((err) => {
+          console.error('Background sketch sync failed:', err);
+        });
+      }
+    } catch (error) {
+      console.error('Failed to save sketch:', error);
+      Alert.alert('Error', 'Failed to save sketch. Please try again.');
+    }
+  }, [session]);
+
+  // Refresh sketches list from storage.
+  const handleRefreshSketches = useCallback(async () => {
+    const loadedSketches = await SketchStorageService.getSketches();
+    setSketches(loadedSketches);
+  }, []);
 
   // Create a new transcript via pull-to-create.
   const handleCreateTranscript = useCallback((text: string): boolean => {
@@ -1302,7 +1354,21 @@ export default function App() {
             onCreateModeChange={handleObservationCreateModeChange}
           />
         </View>
+        <View key="sketches" style={styles.pageContainer}>
+          <SketchList
+            sketches={sketches}
+            onRefresh={handleRefreshSketches}
+            onNewSketch={() => setShowSketchCanvas(true)}
+          />
+        </View>
       </PagerView>
+      
+      {/* Sketch Canvas Modal - Full screen drawing experience */}
+      <SketchCanvas
+        visible={showSketchCanvas}
+        onComplete={handleSketchComplete}
+        onCancel={() => setShowSketchCanvas(false)}
+      />
 
       {/* BOTTOM BAR - Changes based on mode (create > selection > normal) */}
       <KeyboardAvoidingView
@@ -1469,6 +1535,21 @@ export default function App() {
                 </Text>
               </TouchableOpacity>
             )}
+
+            {/* Sketches Tab - New drawing feature */}
+            <TouchableOpacity 
+              style={styles.tabButton} 
+              onPress={() => pagerRef.current?.setPage(4)}
+            >
+              <Feather 
+                name="edit-3" 
+                size={22} 
+                color={pageIndex === 4 ? '#007AFF' : '#9CA3AF'} 
+              />
+              <Text style={[styles.tabLabel, pageIndex === 4 && styles.tabLabelActive]}>
+                Sketch
+              </Text>
+            </TouchableOpacity>
 
             {/* Settings Tab */}
             <TouchableOpacity 

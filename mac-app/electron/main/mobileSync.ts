@@ -47,6 +47,24 @@ interface TranscriptRow {
 }
 
 /**
+ * Row from the Supabase sketch_items table.
+ */
+interface SketchRow {
+  id: string;
+  user_id: string;
+  client_id: string;
+  image_path: string;
+  width: number;
+  height: number;
+  bytes: number;
+  sha256: string | null;
+  title: string | null;
+  client_created_at_ms: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
  * Row from the Supabase todos table.
  */
 interface TodoRow {
@@ -98,6 +116,9 @@ export class MobileSync extends EventEmitter {
 
   // Track which client_ids we've already synced to avoid duplicates.
   private syncedClientIds: Set<string> = new Set();
+  
+  // Track which sketch client_ids we've already synced.
+  private syncedSketchIds: Set<string> = new Set();
 
   // Track last failed token to avoid log spam when renderer retries with same stale token.
   private lastFailedToken: string | null = null;
@@ -510,7 +531,12 @@ export class MobileSync extends EventEmitter {
 
     // Run immediate sync.
     this.syncTranscripts().catch(err => {
-      console.error('[MobileSync] Initial sync failed:', err);
+      console.error('[MobileSync] Initial transcript sync failed:', err);
+    });
+    
+    // Also sync sketches immediately.
+    this.syncSketches().catch(err => {
+      console.error('[MobileSync] Initial sketch sync failed:', err);
     });
 
     // Sync every 60 seconds. Realtime handles instant updates for todos; this is the fallback.
@@ -525,6 +551,11 @@ export class MobileSync extends EventEmitter {
       // Sync todos periodically as fallback (Realtime handles instant updates when connected).
       this.syncTodos().catch(err => {
         console.error('[MobileSync] Todo sync failed:', err);
+      });
+      
+      // Sync sketches from iOS.
+      this.syncSketches().catch(err => {
+        console.error('[MobileSync] Sketch sync failed:', err);
       });
     }, 60000);
 
@@ -634,7 +665,112 @@ export class MobileSync extends EventEmitter {
   async forceSyncAll(): Promise<number> {
     this.lastSyncedAt = 0;
     this.syncedClientIds.clear();
-    return this.syncTranscripts();
+    this.syncedSketchIds.clear();
+    const transcriptCount = await this.syncTranscripts();
+    const sketchCount = await this.syncSketches();
+    return transcriptCount + sketchCount;
+  }
+
+  // ==========================================================================
+  // Sketch Sync - Fetch sketches from iOS and add to clipboard history
+  // ==========================================================================
+
+  /**
+   * Fetch new sketches from Supabase and add to clipboard history as images.
+   * Downloads the PNG from storage and stores it locally.
+   * 
+   * @returns Number of sketches synced
+   */
+  async syncSketches(): Promise<number> {
+    if (!this.supabase || !this.session) {
+      return 0;
+    }
+
+    try {
+      // Fetch sketch metadata from the sketch_items table.
+      // Only get sketches from the last 7 days to avoid huge downloads.
+      const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+      
+      const { data: sketches, error } = await this.supabase
+        .from('sketch_items')
+        .select('*')
+        .gt('client_created_at_ms', sevenDaysAgo)
+        .order('client_created_at_ms', { ascending: false });
+
+      if (error) {
+        throw error;
+      }
+
+      if (!sketches || sketches.length === 0) {
+        return 0;
+      }
+
+      let syncedCount = 0;
+
+      for (const sketch of sketches as SketchRow[]) {
+        // Skip if we've already synced this sketch.
+        if (this.syncedSketchIds.has(sketch.client_id)) {
+          continue;
+        }
+
+        try {
+          // Download the image from Supabase Storage.
+          const { data: imageData, error: downloadError } = await this.supabase.storage
+            .from('sketch-images')
+            .download(sketch.image_path);
+
+          if (downloadError || !imageData) {
+            console.error(`[MobileSync] Failed to download sketch ${sketch.client_id}:`, downloadError);
+            continue;
+          }
+
+          // Convert Blob to Buffer.
+          const arrayBuffer = await imageData.arrayBuffer();
+          const imageBuffer = Buffer.from(arrayBuffer);
+
+          // Create a NativeImage from the buffer.
+          const { nativeImage } = await import('electron');
+          const image = nativeImage.createFromBuffer(imageBuffer);
+
+          if (image.isEmpty()) {
+            console.error(`[MobileSync] Failed to create image from sketch ${sketch.client_id}`);
+            continue;
+          }
+
+          // Store in clipboard history as an image with source='ios'.
+          const itemId = await this.clipboardManager.storeImage(
+            image,
+            imageBuffer,
+            'image', // Type is 'image' for sketches
+            undefined, // No source app for iOS items.
+            undefined, // No stack ID.
+            'ios'
+          );
+
+          if (itemId > 0) {
+            // If the sketch has a title, update the item's content field.
+            if (sketch.title) {
+              this.clipboardManager.updateItemContent(itemId, `Sketch: ${sketch.title}`);
+            }
+            
+            this.syncedSketchIds.add(sketch.client_id);
+            syncedCount++;
+          }
+        } catch (sketchError) {
+          console.error(`[MobileSync] Error processing sketch ${sketch.client_id}:`, sketchError);
+          // Continue with other sketches.
+        }
+      }
+
+      if (syncedCount > 0) {
+        console.log(`[MobileSync] Synced ${syncedCount} new sketches from iOS`);
+      }
+
+      return syncedCount;
+    } catch (error) {
+      console.error('[MobileSync] Failed to sync sketches:', error);
+      throw error;
+    }
   }
 
   // ==========================================================================
