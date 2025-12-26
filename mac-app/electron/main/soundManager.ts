@@ -61,7 +61,7 @@ export function getAllSounds(): Array<{ id: string; name: string; category: stri
 /**
  * Sound event types that the app can trigger.
  */
-export type SoundEvent = 'recordingStart' | 'recordingStop' | 'recordingCancel';
+export type SoundEvent = 'recordingStart' | 'recordingStop' | 'recordingCancel' | 'windowOpen' | 'windowClose' | 'paste' | 'transcribing';
 
 /**
  * SoundManager handles playing UI sounds based on user preferences.
@@ -112,6 +112,18 @@ export class SoundManager {
       case 'recordingCancel':
         soundFile = this.preferences.getPreference('recordingCancelSound');
         break;
+      case 'windowOpen':
+        soundFile = this.preferences.getPreference('windowOpenSound');
+        break;
+      case 'windowClose':
+        soundFile = this.preferences.getPreference('windowCloseSound');
+        break;
+      case 'paste':
+        soundFile = this.preferences.getPreference('pasteSound');
+        break;
+      case 'transcribing':
+        soundFile = this.preferences.getPreference('transcribingSound');
+        break;
     }
     
     if (soundFile) {
@@ -134,12 +146,20 @@ export class SoundManager {
     recordingStart: string | undefined;
     recordingStop: string | undefined;
     recordingCancel: string | undefined;
+    windowOpen: string | undefined;
+    windowClose: string | undefined;
+    paste: string | undefined;
+    transcribing: string | undefined;
   } {
     return {
       enabled: this.preferences.getPreference('soundsEnabled') ?? true,
       recordingStart: this.preferences.getPreference('recordingStartSound'),
       recordingStop: this.preferences.getPreference('recordingStopSound'),
       recordingCancel: this.preferences.getPreference('recordingCancelSound'),
+      windowOpen: this.preferences.getPreference('windowOpenSound'),
+      windowClose: this.preferences.getPreference('windowCloseSound'),
+      paste: this.preferences.getPreference('pasteSound'),
+      transcribing: this.preferences.getPreference('transcribingSound'),
     };
   }
   
@@ -151,6 +171,10 @@ export class SoundManager {
     recordingStart?: string;
     recordingStop?: string;
     recordingCancel?: string;
+    windowOpen?: string;
+    windowClose?: string;
+    paste?: string;
+    transcribing?: string;
   }): Promise<void> {
     const updates: Record<string, unknown> = {};
     
@@ -165,6 +189,18 @@ export class SoundManager {
     }
     if (config.recordingCancel !== undefined) {
       updates.recordingCancelSound = config.recordingCancel;
+    }
+    if (config.windowOpen !== undefined) {
+      updates.windowOpenSound = config.windowOpen;
+    }
+    if (config.windowClose !== undefined) {
+      updates.windowCloseSound = config.windowClose;
+    }
+    if (config.paste !== undefined) {
+      updates.pasteSound = config.paste;
+    }
+    if (config.transcribing !== undefined) {
+      updates.transcribingSound = config.transcribing;
     }
     
     await this.preferences.save(updates);

@@ -921,6 +921,48 @@ function setupClipboardIPCHandlers(): void {
     return id;
   });
 
+  ipcMain.handle(ClipboardIPCChannels.SAVE_SKETCH, async (_event, imageData: string, width: number, height: number) => {
+    if (!clipboardManager) {
+      return -1;
+    }
+    
+    try {
+      // Convert base64 to Buffer
+      const imageBuffer = Buffer.from(imageData, 'base64');
+      
+      // Create NativeImage from buffer
+      const { nativeImage } = require('electron');
+      const image = nativeImage.createFromBuffer(imageBuffer);
+      
+      if (image.isEmpty()) {
+        console.error('[Main] Failed to create image from sketch data');
+        return -1;
+      }
+      
+      // Store in clipboard history as screenshot type
+      const id = await clipboardManager.storeImage(
+        image,
+        imageBuffer,
+        'screenshot',
+        undefined, // No source app for sketches
+        undefined, // No stack ID
+        'mac' // Source is Mac
+      );
+      
+      // Notify listeners
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
+        }
+      });
+      
+      return id;
+    } catch (error) {
+      console.error('[Main] Failed to save sketch:', error);
+      return -1;
+    }
+  });
+
   ipcMain.handle(ClipboardIPCChannels.GET_HOTKEYS, async () => {
     if (!clipboardManager) {
       return {
