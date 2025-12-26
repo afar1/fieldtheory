@@ -47,6 +47,7 @@ interface Preferences {
   overlayStyle: OverlayStyle;
   windowState?: WindowState;
   clipboardScreenshotHotkey?: string;
+  clipboardDesktopScreenshotHotkey?: string;
   clipboardHistoryHotkey?: string;
   priorityDeviceId?: string | null;
   clipboardHistoryBounds?: ClipboardHistoryBounds;
@@ -83,6 +84,10 @@ interface Preferences {
   recordingStartSound?: string;  // Sound file name to play when recording starts
   recordingStopSound?: string;   // Sound file name to play when recording stops
   recordingCancelSound?: string; // Sound file name to play when recording is cancelled
+  windowOpenSound?: string;      // Sound file name to play when window opens
+  windowCloseSound?: string;     // Sound file name to play when window closes
+  pasteSound?: string;           // Sound file name to play when pasting
+  transcribingSound?: string;    // Sound file name to play when transcribing starts
 }
 
 const DEFAULT_PREFERENCES: Preferences = {

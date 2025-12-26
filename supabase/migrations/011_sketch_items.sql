@@ -143,4 +143,4 @@ create policy "Users can delete own sketches"
 create trigger set_sketch_items_updated_at
   before update on public.sketch_items
   for each row
-  execute function public.trigger_set_updated_at();
+  execute function public.set_updated_at();

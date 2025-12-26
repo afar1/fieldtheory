@@ -10,6 +10,7 @@ import TodoView from './TodoView';
 import TeamView from './TeamView';
 import DMsView from './DMsView';
 import PopularCommands from './PopularCommands';
+import { SketchCanvas } from './SketchCanvas';
 import { useTheme } from '../contexts/ThemeContext';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
@@ -286,6 +287,7 @@ export default function ClipboardHistory() {
   const { theme } = useTheme();
   const [isVisible, setIsVisible] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showSketchCanvas, setShowSketchCanvas] = useState(false);
   
   // Initialize viewMode from localStorage, defaulting to 'clipboard'.
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
@@ -751,6 +753,8 @@ export default function ClipboardHistory() {
 
   // Check auth session for "Signed in as..." display in header.
   useEffect(() => {
+    if (!supabase) return;
+    
     supabase.auth.getSession().then(({ data: { session } }) => {
       setAuthSession(session);
     });
@@ -3824,6 +3828,37 @@ export default function ClipboardHistory() {
           })() : null}
         </DragOverlay>
         </DndContext>
+        
+        {/* Floating Action Button for New Sketch */}
+        {viewMode === 'clipboard' && !showSettings && (
+          <button
+            onClick={() => setShowSketchCanvas(true)}
+            style={{
+              position: 'absolute',
+              bottom: '24px',
+              right: '24px',
+              width: '56px',
+              height: '56px',
+              borderRadius: '28px',
+              backgroundColor: theme.accent,
+              border: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+              zIndex: 1000,
+              // @ts-ignore
+              WebkitAppRegion: 'no-drag',
+            }}
+            title="New Sketch"
+          >
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+            </svg>
+          </button>
+        )}
         </div>
       )}
 
@@ -4675,6 +4710,26 @@ export default function ClipboardHistory() {
           </div>
         </div>
       )}
+      
+      {/* Sketch Canvas Modal */}
+      <SketchCanvas
+        visible={showSketchCanvas}
+        onComplete={async (data) => {
+          setShowSketchCanvas(false);
+          try {
+            // Save sketch via IPC
+            const itemId = await window.clipboardAPI?.saveSketch?.(data.imageData, data.width, data.height);
+            if (itemId) {
+              // Reload items to show the new sketch
+              loadItems(true);
+            }
+          } catch (error) {
+            console.error('Failed to save sketch:', error);
+            window.alert('Failed to save sketch. Please try again.');
+          }
+        }}
+        onCancel={() => setShowSketchCanvas(false)}
+      />
     </div>
     </>
   );
