@@ -99,6 +99,7 @@ const ClipboardIPCChannels = {
   START_CONTINUOUS_CONTEXT: 'clipboard:startContinuousContext',
   STOP_CONTINUOUS_CONTEXT: 'clipboard:stopContinuousContext',
   CONTINUOUS_CONTEXT_CHANGED: 'clipboard:continuousContextChanged',
+  SAVE_SKETCH: 'clipboard:saveSketch',
 } as const;
 
 const OnboardingIPCChannels = {
@@ -521,6 +522,7 @@ export interface ClipboardAPI {
   restoreItem: (item: ClipboardItem) => Promise<number>;
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
+  saveSketch: (imageData: string, width: number, height: number) => Promise<number>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
   pasteItem: (id: number, targetBundleId?: string) => Promise<void>;
@@ -826,6 +828,10 @@ const clipboardAPI: ClipboardAPI = {
 
   captureScreenshot: async (region?: boolean): Promise<number> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.CAPTURE_SCREENSHOT, region);
+  },
+
+  saveSketch: async (imageData: string, width: number, height: number): Promise<number> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SAVE_SKETCH, imageData, width, height);
   },
 
   getHotkeys: async (): Promise<ClipboardHotkeys> => {
