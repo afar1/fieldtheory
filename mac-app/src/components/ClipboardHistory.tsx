@@ -10,7 +10,7 @@ import TodoView from './TodoView';
 import TeamView from './TeamView';
 import DMsView from './DMsView';
 import PopularCommands from './PopularCommands';
-import { SketchCanvas } from './SketchCanvas';
+import SketchView from './SketchView';
 import { useTheme } from '../contexts/ThemeContext';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
@@ -27,8 +27,8 @@ import {
   useDroppable,
 } from '@dnd-kit/core';
 
-// View mode: clipboard history, todo list, team clipboard, or DMs.
-type ViewMode = 'clipboard' | 'todo' | 'team' | 'dms' | 'commands';
+// View mode: clipboard history, todo list, team clipboard, DMs, commands, or sketch.
+type ViewMode = 'clipboard' | 'todo' | 'team' | 'dms' | 'commands' | 'sketch';
 
 type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
 type ClipboardSource = 'mac' | 'ios';
@@ -287,9 +287,8 @@ export default function ClipboardHistory() {
   const { theme } = useTheme();
   const [isVisible, setIsVisible] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [showSketchCanvas, setShowSketchCanvas] = useState(false);
-  
   // Initialize viewMode from localStorage, defaulting to 'clipboard'.
+  // Note: 'sketch' is not persisted - it's a temporary modal-like mode.
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     const saved = localStorage.getItem('fieldTheoryView');
     if (saved === 'clipboard' || saved === 'team' || saved === 'todo' || saved === 'dms' || saved === 'commands') {
@@ -297,6 +296,9 @@ export default function ClipboardHistory() {
     }
     return 'clipboard';
   });
+  
+  // State for editing an existing sketch (when clicking on a sketch clipboard item).
+  const [editingSketchItem, setEditingSketchItem] = useState<ClipboardItem | null>(null);
   const [items, setItems] = useState<ClipboardItem[]>([]);
   const [stacks, setStacks] = useState<StackInfo[]>([]);
   const [expandedStacks, setExpandedStacks] = useState<Set<string>>(new Set());
@@ -746,9 +748,60 @@ export default function ClipboardHistory() {
     setTimeout(() => setSharedToTeamId(null), 1500);
   }, []);
 
-  // Persist viewMode to localStorage when it changes.
+  // Save a sketch as a clipboard item (image type).
+  // Called when user saves from the SketchView.
+  const handleSketchSave = useCallback(async (imageData: { dataUrl: string; width: number; height: number }) => {
+    if (!window.clipboardAPI) return;
+    
+    try {
+      // Extract base64 data from data URL (remove "data:image/png;base64," prefix).
+      const base64Data = imageData.dataUrl.replace(/^data:image\/\w+;base64,/, '');
+      
+      // Estimate file size from base64 (base64 is ~33% larger than binary).
+      const imageSize = Math.round((base64Data.length * 3) / 4);
+      
+      // Create a clipboard item for the sketch.
+      const sketchItem = {
+        type: 'image' as const,
+        content: null,
+        imageData: base64Data,
+        imageWidth: imageData.width,
+        imageHeight: imageData.height,
+        imageSize: imageSize,
+        sourceApp: 'com.fieldtheory.sketch',
+        sourceAppName: 'Sketch',
+        wordCount: null,
+        charCount: null,
+        createdAt: Date.now(),
+        contentHash: `sketch-${Date.now()}`,
+        source: 'mac' as const,
+      };
+      
+      // Use restoreItem to save the sketch to clipboard.
+      await window.clipboardAPI?.restoreItem(sketchItem as any);
+      
+      // Close sketch view and switch back to clipboard.
+      setEditingSketchItem(null);
+      setViewMode('clipboard');
+      
+      // Refresh to show the new item.
+      loadItems(true);
+    } catch (error) {
+      console.error('Failed to save sketch:', error);
+    }
+  }, [loadItems]);
+
+  // Close sketch view without saving.
+  const handleSketchClose = useCallback(() => {
+    setEditingSketchItem(null);
+    setViewMode('clipboard');
+  }, []);
+
+  // Persist viewMode to localStorage when it changes (except sketch mode).
   useEffect(() => {
-    localStorage.setItem('fieldTheoryView', viewMode);
+    if (viewMode !== 'sketch') {
+      localStorage.setItem('fieldTheoryView', viewMode);
+    }
   }, [viewMode]);
 
   // Check auth session for "Signed in as..." display in header.
@@ -2295,7 +2348,7 @@ export default function ClipboardHistory() {
       </div>
       
       {/* View mode tabs - only show when not in settings */}
-      {!showSettings && (
+      {!showSettings && viewMode !== 'sketch' && (
         <div 
           ref={tabsRef}
           style={{
@@ -2347,6 +2400,40 @@ export default function ClipboardHistory() {
               )}
             </button>
           ))}
+          
+          {/* New Sketch button - opens the TLDraw canvas */}
+          <button
+            onClick={() => {
+              setEditingSketchItem(null);
+              setViewMode('sketch');
+            }}
+            tabIndex={0}
+            style={{
+              marginLeft: 'auto',
+              padding: '4px 10px',
+              fontSize: '10px',
+              fontWeight: 500,
+              backgroundColor: '#10b981',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              outline: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+            title="Create a new sketch (drawing)"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 19l7-7 3 3-7 7-3-3z" />
+              <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
+              <path d="M2 2l7.586 7.586" />
+              <circle cx="11" cy="11" r="2" />
+            </svg>
+            New Sketch
+          </button>
         </div>
       )}
 
@@ -2361,6 +2448,18 @@ export default function ClipboardHistory() {
         <DMsView />
       ) : viewMode === 'commands' ? (
         <PopularCommands />
+      ) : viewMode === 'sketch' ? (
+        // Sketch mode - full window TLDraw canvas.
+        <SketchView
+          onSave={handleSketchSave}
+          onClose={handleSketchClose}
+          existingSketch={editingSketchItem ? {
+            id: editingSketchItem.id,
+            imageData: editingSketchItem.imageData || '',
+            width: editingSketchItem.imageWidth || undefined,
+            height: editingSketchItem.imageHeight || undefined,
+          } : null}
+        />
       ) : (
         <div 
           style={{ 
@@ -3832,7 +3931,7 @@ export default function ClipboardHistory() {
         {/* Floating Action Button for New Sketch */}
         {viewMode === 'clipboard' && !showSettings && (
           <button
-            onClick={() => setShowSketchCanvas(true)}
+            onClick={() => setViewMode('sketch')}
             style={{
               position: 'absolute',
               bottom: '24px',
@@ -4710,26 +4809,6 @@ export default function ClipboardHistory() {
           </div>
         </div>
       )}
-      
-      {/* Sketch Canvas Modal */}
-      <SketchCanvas
-        visible={showSketchCanvas}
-        onComplete={async (data) => {
-          setShowSketchCanvas(false);
-          try {
-            // Save sketch via IPC
-            const itemId = await window.clipboardAPI?.saveSketch?.(data.imageData, data.width, data.height);
-            if (itemId) {
-              // Reload items to show the new sketch
-              loadItems(true);
-            }
-          } catch (error) {
-            console.error('Failed to save sketch:', error);
-            window.alert('Failed to save sketch. Please try again.');
-          }
-        }}
-        onCancel={() => setShowSketchCanvas(false)}
-      />
     </div>
     </>
   );
