@@ -23,6 +23,7 @@ export default function SketchView({ onSave, onClose, existingSketch, background
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const lastToolRef = useRef<string | null>(null);
 
   const initialData = useMemo(() => {
     const baseData: any = {
@@ -100,6 +101,11 @@ export default function SketchView({ onSave, onClose, existingSketch, background
       alert('Please draw something before saving.');
       return;
     }
+    
+    if (backgroundImage && activeElements.length === 1 && activeElements[0].type === 'image') {
+      alert('Please draw something on the image before saving.');
+      return;
+    }
 
     setIsSaving(true);
 
@@ -141,7 +147,7 @@ export default function SketchView({ onSave, onClose, existingSketch, background
 
   const handleClose = useCallback(() => {
     if (hasChanges) {
-      if (confirm('You have unsaved changes. Discard sketch?')) {
+      if (confirm('You have unsaved changes. Discard drawing?')) {
         onClose();
       }
     } else {
@@ -149,11 +155,35 @@ export default function SketchView({ onSave, onClose, existingSketch, background
     }
   }, [hasChanges, onClose]);
 
-  const handleChange = useCallback(() => {
-    if (excalidrawAPI) {
-      const elements = excalidrawAPI.getSceneElements();
-      const activeElements = elements.filter((el: any) => !el.isDeleted);
-      setHasChanges(activeElements.length > 0);
+  const prevElementCountRef = useRef(0);
+  const initialElementCountRef = useRef<number | null>(null);
+  
+  const handleChange = useCallback((elements: readonly any[], appState: any) => {
+    const activeElements = elements.filter((el: any) => !el.isDeleted);
+    
+    if (initialElementCountRef.current === null) {
+      initialElementCountRef.current = activeElements.length;
+    }
+    setHasChanges(activeElements.length !== initialElementCountRef.current);
+    
+    if (!excalidrawAPI) return;
+    
+    const currentTool = appState?.activeTool?.type;
+    const elementCount = activeElements.length;
+    const prevCount = prevElementCountRef.current;
+    prevElementCountRef.current = elementCount;
+    
+    if (currentTool && currentTool !== 'selection' && currentTool !== 'hand') {
+      lastToolRef.current = currentTool;
+    }
+    
+    const justAddedElement = elementCount > prevCount;
+    if (justAddedElement && currentTool === 'selection' && lastToolRef.current) {
+      requestAnimationFrame(() => {
+        if (excalidrawAPI && lastToolRef.current) {
+          excalidrawAPI.setActiveTool({ type: lastToolRef.current });
+        }
+      });
     }
   }, [excalidrawAPI]);
 
@@ -188,6 +218,15 @@ export default function SketchView({ onSave, onClose, existingSketch, background
           (el as HTMLElement).style.display = 'none';
         }
       });
+      
+      const buttons = document.querySelectorAll('.excalidraw button');
+      buttons.forEach((btn) => {
+        const text = btn.textContent?.trim() || '';
+        const ariaLabel = btn.getAttribute('aria-label') || '';
+        if (text === 'Library' || ariaLabel.toLowerCase().includes('diamond')) {
+          (btn as HTMLElement).style.display = 'none';
+        }
+      });
     };
 
     hideFooterLinks();
@@ -211,16 +250,18 @@ export default function SketchView({ onSave, onClose, existingSketch, background
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault();
+        e.stopPropagation();
         handleSave();
       }
       if (e.key === 'Escape') {
         e.preventDefault();
+        e.stopPropagation();
         handleClose();
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
   }, [handleSave, handleClose]);
 
   const dragStyle = { WebkitAppRegion: 'drag' } as React.CSSProperties;
@@ -244,11 +285,16 @@ export default function SketchView({ onSave, onClose, existingSketch, background
         padding: '8px 16px',
         borderBottom: '1px solid #e0e0e0',
         backgroundColor: '#fafafa',
+        position: 'relative',
+        zIndex: 100,
         ...dragStyle,
       }}>
         <button
           onClick={handleClose}
           style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
             padding: '6px 14px',
             fontSize: '13px',
             backgroundColor: 'transparent',
@@ -259,6 +305,13 @@ export default function SketchView({ onSave, onClose, existingSketch, background
             ...noDragStyle,
           }}
         >
+          <span style={{
+            fontSize: '10px',
+            backgroundColor: '#e8e8e8',
+            padding: '2px 5px',
+            borderRadius: '3px',
+            fontWeight: 500,
+          }}>Esc</span>
           Cancel
         </button>
 
@@ -268,7 +321,7 @@ export default function SketchView({ onSave, onClose, existingSketch, background
 
         <div style={{ display: 'flex', gap: '8px', ...noDragStyle }}>
           <button
-            onClick={() => handleSave(true)}
+            onClick={() => handleSave(false)}
             disabled={isSaving || !hasChanges}
             style={{
               padding: '6px 12px',
@@ -281,10 +334,10 @@ export default function SketchView({ onSave, onClose, existingSketch, background
               fontWeight: 500,
             }}
           >
-            Save & Paste
+            {isSaving ? 'Saving...' : 'Save'}
           </button>
           <button
-            onClick={() => handleSave(false)}
+            onClick={() => handleSave(true)}
             disabled={isSaving || !hasChanges}
             style={{
               padding: '6px 14px',
@@ -297,7 +350,7 @@ export default function SketchView({ onSave, onClose, existingSketch, background
               fontWeight: 500,
             }}
           >
-            {isSaving ? 'Saving...' : 'Save'}
+            Save & Paste
           </button>
         </div>
       </div>
@@ -346,7 +399,43 @@ export default function SketchView({ onSave, onClose, existingSketch, background
           }
           .excalidraw .ToolIcon_type_library,
           .excalidraw button[aria-label*="library" i],
-          .excalidraw button[aria-label*="shapes" i] {
+          .excalidraw button[aria-label*="shapes" i],
+          .excalidraw .library-button,
+          .excalidraw [class*="libraryButton"],
+          .excalidraw .Island button[aria-label*="Library" i],
+          .excalidraw aside,
+          .excalidraw .layer-ui__wrapper aside,
+          .excalidraw button:has(.ToolIcon_type_library),
+          .excalidraw [class*="library-unit"],
+          .excalidraw .library-unit,
+          .excalidraw .App-toolbar button[title*="Library" i],
+          .excalidraw button[title*="Library" i],
+          .excalidraw button[aria-label*="diamond" i],
+          .excalidraw button[title*="diamond" i],
+          .excalidraw .ToolIcon_type_diamond {
+            display: none !important;
+          }
+          /* Hide hamburger button, show menu content always */
+          .excalidraw .dropdown-menu-button,
+          .excalidraw button[aria-label="Menu"],
+          .excalidraw [class*="menu-button"] {
+            display: none !important;
+          }
+          .excalidraw .dropdown-menu-container {
+            display: block !important;
+            position: static !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+          }
+          /* Hide help dialog and shortcut hints */
+          .excalidraw .HelpDialog,
+          .excalidraw [class*="HelpDialog"],
+          .excalidraw [class*="help-dialog"],
+          .excalidraw [class*="ShortcutsDialog"],
+          .excalidraw [class*="shortcuts"],
+          .excalidraw .help-icon,
+          .excalidraw button[aria-label*="Help" i],
+          .excalidraw button[aria-label*="Keyboard" i] {
             display: none !important;
           }
         `}</style>
@@ -366,7 +455,7 @@ export default function SketchView({ onSave, onClose, existingSketch, background
               saveAsImage: false,
             },
             welcomeScreen: false,
-            tools: { image: false },
+            tools: { image: true },
           }}
           initialData={initialData}
         />
@@ -386,18 +475,15 @@ export default function SketchView({ onSave, onClose, existingSketch, background
       }}>
         <span><kbd style={kbdStyle}>⌘S</kbd> Save</span>
         <span><kbd style={kbdStyle}>Esc</kbd> Cancel</span>
-        <span style={{ marginLeft: '8px' }}>Tools:</span>
-        <span><kbd style={kbdStyle}>V</kbd> or <kbd style={kbdStyle}>1</kbd> Select</span>
-        <span><kbd style={kbdStyle}>R</kbd> or <kbd style={kbdStyle}>2</kbd> Rectangle</span>
-        <span><kbd style={kbdStyle}>D</kbd> or <kbd style={kbdStyle}>3</kbd> Diamond</span>
-        <span><kbd style={kbdStyle}>O</kbd> or <kbd style={kbdStyle}>4</kbd> Ellipse</span>
-        <span><kbd style={kbdStyle}>A</kbd> or <kbd style={kbdStyle}>5</kbd> Arrow</span>
-        <span><kbd style={kbdStyle}>L</kbd> or <kbd style={kbdStyle}>6</kbd> Line</span>
-        <span><kbd style={kbdStyle}>P</kbd> or <kbd style={kbdStyle}>7</kbd> Pencil</span>
-        <span><kbd style={kbdStyle}>T</kbd> or <kbd style={kbdStyle}>8</kbd> Text</span>
-        <span><kbd style={kbdStyle}>E</kbd> or <kbd style={kbdStyle}>0</kbd> Eraser</span>
-        <span><kbd style={kbdStyle}>F</kbd> Frame</span>
-        <span><kbd style={kbdStyle}>K</kbd> Laser</span>
+        <span style={{ margin: '0 4px', color: '#bbb' }}>|</span>
+        <span><kbd style={kbdStyle}>V</kbd> Select</span>
+        <span><kbd style={kbdStyle}>R</kbd> Rect</span>
+        <span><kbd style={kbdStyle}>O</kbd> Ellipse</span>
+        <span><kbd style={kbdStyle}>A</kbd> Arrow</span>
+        <span><kbd style={kbdStyle}>L</kbd> Line</span>
+        <span><kbd style={kbdStyle}>P</kbd> Pencil</span>
+        <span><kbd style={kbdStyle}>T</kbd> Text</span>
+        <span><kbd style={kbdStyle}>E</kbd> Eraser</span>
       </div>
     </div>
   );
@@ -407,10 +493,9 @@ const kbdStyle: React.CSSProperties = {
   display: 'inline-block',
   padding: '2px 5px',
   fontSize: '10px',
-  fontFamily: 'system-ui, -apple-system, sans-serif',
-  backgroundColor: '#fff',
-  border: '1px solid #ddd',
+  fontWeight: 500,
+  color: '#555',
+  backgroundColor: '#e8e8e8',
   borderRadius: '3px',
-  boxShadow: '0 1px 1px rgba(0,0,0,0.1)',
   marginRight: '4px',
 };

@@ -354,7 +354,7 @@ function DraggableDroppableRow({
 }
 
 // =============================================================================
-// KeyCap component - renders a keyboard key with 3D styling.
+// KeyCap component - renders a keyboard key with clean styling.
 // =============================================================================
 
 function KeyCap({ children, small = false }: { children: React.ReactNode; small?: boolean }) {
@@ -364,17 +364,12 @@ function KeyCap({ children, small = false }: { children: React.ReactNode; small?
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        minWidth: small ? '10px' : '12px',
-        height: small ? '10px' : '12px',
-        padding: '0 3px',
-        fontSize: small ? '7px' : '8px',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
+        padding: small ? '1px 4px' : '2px 5px',
+        fontSize: small ? '9px' : '10px',
         fontWeight: 500,
-        color: '#666',
-        backgroundColor: '#f0f0f0',
-        border: '1px solid #ccc',
-        borderRadius: '2px',
-        boxShadow: '0 1px 0 #aaa',
+        color: '#555',
+        backgroundColor: '#e8e8e8',
+        borderRadius: '3px',
         marginRight: '2px',
       }}
     >
@@ -2002,7 +1997,7 @@ export default function TeamView() {
                 gap: '4px',
               }}
             >
-              <KeyCap small>⌫</KeyCap> unshare
+              unshare <KeyCap small>⌫</KeyCap>
             </button>
             {selectedIds.size > 1 && (
               <button
@@ -2033,7 +2028,7 @@ export default function TeamView() {
                   gap: '4px',
                 }}
               >
-                <KeyCap small>s</KeyCap> stack
+                stack <KeyCap small>s</KeyCap>
               </button>
             )}
             <button
@@ -2056,7 +2051,7 @@ export default function TeamView() {
                 gap: '4px',
               }}
             >
-              <KeyCap small>esc</KeyCap> clear
+              clear <KeyCap small>esc</KeyCap>
             </button>
           </div>
         )}
@@ -2433,7 +2428,7 @@ export default function TeamView() {
                           cursor: unsharingId === stack.stackId ? 'wait' : 'pointer',
                         }}
                       >
-                        <KeyCap>t</KeyCap> {unsharingId === stack.stackId ? 'unsharing...' : 'unshare'}
+                        {unsharingId === stack.stackId ? 'unsharing...' : 'unshare'} <KeyCap>t</KeyCap>
                       </button>
                       <button
                         tabIndex={-1}
@@ -2450,7 +2445,7 @@ export default function TeamView() {
                           cursor: 'pointer',
                         }}
                       >
-                        <KeyCap>↵</KeyCap> paste stack
+                        paste stack <KeyCap>↵</KeyCap>
                       </button>
                     </div>
                   </div>
@@ -2658,7 +2653,7 @@ export default function TeamView() {
                         cursor: unsharingId === item.id ? 'wait' : 'pointer',
                       }}
                     >
-                      <KeyCap>t</KeyCap> {unsharingId === item.id ? 'unsharing...' : 'unshare'}
+                      {unsharingId === item.id ? 'unsharing...' : 'unshare'} <KeyCap>t</KeyCap>
                     </button>
                     <button
                       tabIndex={-1}
@@ -2676,7 +2671,7 @@ export default function TeamView() {
                         cursor: isCopying ? 'wait' : 'pointer',
                       }}
                     >
-                      <KeyCap>c</KeyCap> {isCopying ? 'copying...' : 'copy'}
+                      {isCopying ? 'copying...' : 'copy'} <KeyCap>c</KeyCap>
                     </button>
                     <button
                       tabIndex={-1}
@@ -2693,7 +2688,7 @@ export default function TeamView() {
                         cursor: 'pointer',
                       }}
                     >
-                      <KeyCap>↵</KeyCap> paste
+                      paste <KeyCap>↵</KeyCap>
                     </button>
                   </div>
                 </div>

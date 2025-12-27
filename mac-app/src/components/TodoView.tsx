@@ -18,7 +18,7 @@ interface Todo {
 }
 
 /**
- * KeyCap component - renders a keyboard key with 3D styling.
+ * KeyCap component - renders a keyboard key with clean styling.
  */
 function KeyCap({ children, small = false }: { children: React.ReactNode; small?: boolean }) {
   return (
@@ -27,17 +27,12 @@ function KeyCap({ children, small = false }: { children: React.ReactNode; small?
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        minWidth: small ? '10px' : '12px',
-        height: small ? '10px' : '12px',
-        padding: '0 3px',
-        fontSize: small ? '7px' : '8px',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
+        padding: small ? '1px 4px' : '2px 5px',
+        fontSize: small ? '9px' : '10px',
         fontWeight: 500,
-        color: '#666',
-        backgroundColor: '#f0f0f0',
-        border: '1px solid #ccc',
-        borderRadius: '2px',
-        boxShadow: '0 1px 0 #aaa',
+        color: '#555',
+        backgroundColor: '#e8e8e8',
+        borderRadius: '3px',
         marginRight: '2px',
       }}
     >
@@ -534,7 +529,7 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
           marginTop: '8px',
         }}>
           <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-            <KeyCap small>tab</KeyCap> clipboard
+            clipboard <KeyCap small>tab</KeyCap>
           </span>
         </div>
       </div>
@@ -652,8 +647,8 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
             fontSize: '10px',
             color: theme.textSecondary,
           }}>
-            <span><KeyCap small>↵</KeyCap> create</span>
-            <span><KeyCap small>esc</KeyCap> cancel</span>
+            <span>create <KeyCap small>↵</KeyCap></span>
+            <span>cancel <KeyCap small>esc</KeyCap></span>
           </div>
         </div>
       )}
@@ -688,7 +683,7 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
                 gap: '4px',
               }}
             >
-              <KeyCap small>e</KeyCap> done
+              done <KeyCap small>e</KeyCap>
             </button>
             <button
               onClick={handleDeleteSelected}
@@ -704,7 +699,7 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
                 gap: '4px',
               }}
             >
-              <KeyCap small>⌫</KeyCap> delete
+              delete <KeyCap small>⌫</KeyCap>
             </button>
             <button
               onClick={() => setSelectedIds(new Set())}
@@ -720,7 +715,7 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
                 gap: '4px',
               }}
             >
-              <KeyCap small>esc</KeyCap> clear
+              clear <KeyCap small>esc</KeyCap>
             </button>
           </div>
         </div>
@@ -805,8 +800,8 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
                       fontSize: '10px',
                       color: theme.textSecondary,
                     }}>
-                      <span><KeyCap small>⌘</KeyCap><KeyCap small>↵</KeyCap> save</span>
-                      <span><KeyCap small>esc</KeyCap> cancel</span>
+                      <span>save <KeyCap small>⌘</KeyCap><KeyCap small>↵</KeyCap></span>
+                      <span>cancel <KeyCap small>esc</KeyCap></span>
                     </div>
                   </div>
                 ) : (
@@ -869,8 +864,8 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
                         color: theme.textSecondary,
                         flexShrink: 0,
                       }}>
-                        <span><KeyCap small>e</KeyCap> done</span>
-                        <span><KeyCap small>↵</KeyCap> edit</span>
+                        <span>done <KeyCap small>e</KeyCap></span>
+                        <span>edit <KeyCap small>↵</KeyCap></span>
                       </div>
                     )}
                     {isSelected && todo.completed && (
@@ -881,8 +876,8 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
                         color: theme.textSecondary,
                         flexShrink: 0,
                       }}>
-                        <span><KeyCap small>e</KeyCap> undo</span>
-                        <span><KeyCap small>⌫</KeyCap> delete</span>
+                        <span>undo <KeyCap small>e</KeyCap></span>
+                        <span>delete <KeyCap small>⌫</KeyCap></span>
                       </div>
                     )}
                   </div>
@@ -904,14 +899,14 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
         color: theme.textSecondary,
       }}>
         <div style={{ display: 'flex', gap: '12px' }}>
-          <span><KeyCap small>j</KeyCap><KeyCap small>k</KeyCap> navigate</span>
-          <span><KeyCap small>c</KeyCap> create</span>
-          <span><KeyCap small>e</KeyCap> toggle</span>
-          <span><KeyCap small>r</KeyCap> refresh</span>
+          <span>navigate <KeyCap small>j</KeyCap><KeyCap small>k</KeyCap></span>
+          <span>create <KeyCap small>c</KeyCap></span>
+          <span>toggle <KeyCap small>e</KeyCap></span>
+          <span>refresh <KeyCap small>r</KeyCap></span>
         </div>
         <div style={{ display: 'flex', gap: '12px' }}>
-          <span><KeyCap small>⇧</KeyCap><KeyCap small>j</KeyCap><KeyCap small>k</KeyCap> multi-select</span>
-          <span><KeyCap small>tab</KeyCap> clipboard</span>
+          <span>multi-select <KeyCap small>⇧</KeyCap><KeyCap small>j</KeyCap><KeyCap small>k</KeyCap></span>
+          <span>clipboard <KeyCap small>tab</KeyCap></span>
         </div>
       </div>
 
