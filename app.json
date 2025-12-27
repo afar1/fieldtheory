@@ -20,7 +20,8 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "This app needs access to your microphone to transcribe speech."
+        "NSMicrophoneUsageDescription": "This app needs access to your microphone to transcribe speech.",
+        "UIBackgroundModes": ["audio"]
       },
       "bundleIdentifier": "com.afar1.littleai"
     },

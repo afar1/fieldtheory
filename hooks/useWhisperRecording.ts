@@ -90,22 +90,25 @@ export function useWhisperRecording(): UseWhisperRecordingReturn {
 
   /**
    * Request microphone permissions and start recording.
+   * Configures audio session to continue recording when screen is off.
    */
   const startRecording = useCallback(async () => {
     try {
       setError(null);
       setTranscription(null);
       
-      // Request microphone permissions
+      // Request microphone permissions.
       const permissionResponse = await Audio.requestPermissionsAsync();
       if (!permissionResponse.granted) {
         throw new Error('Microphone permission denied');
       }
       
-      // Configure audio mode for recording
+      // Configure audio mode for recording with background support.
+      // staysActiveInBackground allows recording to continue when screen is off.
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
+        staysActiveInBackground: true,
       });
       
       // Create and configure recording.

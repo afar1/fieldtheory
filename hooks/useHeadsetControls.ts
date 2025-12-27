@@ -3,6 +3,7 @@ import { Audio } from 'expo-av';
 
 /**
  * Hook to configure audio session for headset Play/Pause button support.
+ * Also enables background audio so recording continues when screen is off.
  * 
  * Note: Full headset button event handling in Expo requires native modules or
  * react-native-track-player. This hook configures the audio session properly
@@ -14,11 +15,12 @@ import { Audio } from 'expo-av';
  */
 export function useHeadsetControls() {
   useEffect(() => {
-    // Configure audio session to accept remote control commands
-    // This enables the app to respond to headset/media button presses
+    // Configure audio session to accept remote control commands.
+    // staysActiveInBackground allows recording to continue when screen is off.
     Audio.setAudioModeAsync({
       allowsRecordingIOS: true,
       playsInSilentModeIOS: true,
+      staysActiveInBackground: true,
       shouldDuckAndroid: true,
       playThroughEarpieceAndroid: false,
     }).catch((error) => {
