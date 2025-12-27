@@ -27,7 +27,6 @@ import {
   useDroppable,
 } from '@dnd-kit/core';
 
-// View mode: clipboard history, todo list, team clipboard, DMs, commands, or sketch.
 type ViewMode = 'clipboard' | 'todo' | 'team' | 'dms' | 'commands' | 'sketch';
 
 type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
@@ -287,8 +286,6 @@ export default function ClipboardHistory() {
   const { theme } = useTheme();
   const [isVisible, setIsVisible] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  // Initialize viewMode from localStorage, defaulting to 'clipboard'.
-  // Note: 'sketch' is not persisted - it's a temporary modal-like mode.
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     const saved = localStorage.getItem('fieldTheoryView');
     if (saved === 'clipboard' || saved === 'team' || saved === 'todo' || saved === 'dms' || saved === 'commands') {
@@ -297,8 +294,12 @@ export default function ClipboardHistory() {
     return 'clipboard';
   });
   
-  // State for editing an existing sketch (when clicking on a sketch clipboard item).
   const [editingSketchItem, setEditingSketchItem] = useState<ClipboardItem | null>(null);
+  const [sketchBackgroundImage, setSketchBackgroundImage] = useState<{
+    dataUrl: string;
+    width: number;
+    height: number;
+  } | null>(null);
   const [items, setItems] = useState<ClipboardItem[]>([]);
   const [stacks, setStacks] = useState<StackInfo[]>([]);
   const [expandedStacks, setExpandedStacks] = useState<Set<string>>(new Set());
@@ -748,78 +749,49 @@ export default function ClipboardHistory() {
     setTimeout(() => setSharedToTeamId(null), 1500);
   }, []);
 
-  // Save a sketch as a clipboard item (image type).
-  // Called when user saves from the SketchView.
-  const handleSketchSave = useCallback(async (imageData: { dataUrl: string; width: number; height: number }) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ClipboardHistory.tsx:753',message:'handleSketchSave called',data:{hasClipboardAPI:!!window.clipboardAPI,dataUrlLength:imageData.dataUrl?.length,width:imageData.width,height:imageData.height},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'E'})}).catch(()=>{});
-    // #endregion
+  const handleSketchSave = useCallback(async (imageData: { dataUrl: string; width: number; height: number }, andPaste?: boolean) => {
+    const api = window.clipboardAPI;
+    if (!api?.restoreItem) return;
     
-    if (!window.clipboardAPI) return;
+    const base64Data = imageData.dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    const createdAt = Date.now();
     
-    try {
-      // Extract base64 data from data URL (remove "data:image/png;base64," prefix).
-      const base64Data = imageData.dataUrl.replace(/^data:image\/\w+;base64,/, '');
-      
-      // Estimate file size from base64 (base64 is ~33% larger than binary).
-      const imageSize = Math.round((base64Data.length * 3) / 4);
-      
-      const createdAt = Date.now();
-      const contentHash = `sketch-${createdAt}`;
-      
-      // Create a clipboard item for the sketch.
-      const sketchItem = {
-        type: 'image' as const,
-        content: null,
-        imageData: base64Data,
-        imageWidth: imageData.width,
-        imageHeight: imageData.height,
-        imageSize: imageSize,
-        sourceApp: 'com.fieldtheory.sketch',
-        sourceAppName: 'Sketch',
-        wordCount: null,
-        charCount: null,
-        createdAt: createdAt,
-        contentHash: contentHash,
-        source: 'mac' as const,
-      };
-      
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ClipboardHistory.tsx:780',message:'Calling restoreItem',data:{contentHash,createdAt},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'F'})}).catch(()=>{});
-      // #endregion
-      
-      // Use restoreItem to save the sketch to clipboard.
-      const itemId = await window.clipboardAPI?.restoreItem(sketchItem as any);
-      
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ClipboardHistory.tsx:785',message:'restoreItem completed',data:{itemId},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'G'})}).catch(()=>{});
-      // #endregion
-      
-      // Close sketch view and switch back to clipboard.
-      setEditingSketchItem(null);
-      setViewMode('clipboard');
-      
-      // Refresh to show the new item.
-      loadItems(true);
-    } catch (error) {
-      console.error('Failed to save sketch:', error);
+    const newId = await api.restoreItem({
+      type: 'image',
+      content: null,
+      imageData: base64Data,
+      imageWidth: imageData.width,
+      imageHeight: imageData.height,
+      imageSize: Math.round((base64Data.length * 3) / 4),
+      sourceApp: 'com.fieldtheory.draw',
+      sourceAppName: 'Drawing',
+      wordCount: null,
+      charCount: null,
+      createdAt,
+      contentHash: `drawing-${createdAt}`,
+      source: 'mac',
+    } as any);
+    
+    if (andPaste && newId) {
+      await api.pasteItem(newId, targetAppInfo.previousApp?.bundleId);
     }
-  }, [loadItems]);
+    
+    setEditingSketchItem(null);
+    setViewMode('clipboard');
+    loadItems(true);
+  }, [loadItems, targetAppInfo.previousApp?.bundleId]);
 
-  // Close sketch view without saving.
   const handleSketchClose = useCallback(() => {
     setEditingSketchItem(null);
     setViewMode('clipboard');
   }, []);
 
-  // Persist viewMode to localStorage when it changes (except sketch mode).
   useEffect(() => {
     if (viewMode !== 'sketch') {
       localStorage.setItem('fieldTheoryView', viewMode);
     }
   }, [viewMode]);
 
-  // Check auth session for "Signed in as..." display in header.
   useEffect(() => {
     if (!supabase) return;
     
@@ -1202,15 +1174,27 @@ export default function ClipboardHistory() {
         return;
       }
       
-      // N - New Sketch (open sketch editor)
-      if (key === 'n' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
-        // Skip if typing in input
+      // D - Draw on image (open sketch editor on hovered/selected image)
+      if (key === 'd' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
-        // Only work in clipboard view, not already in sketch view
         if (viewMode === 'clipboard' && !showSettings) {
-          e.preventDefault();
-          setEditingSketchItem(null);
-          setViewMode('sketch');
+          // Priority: hovered image > selected image
+          const hoveredItem = hoveredImageId ? items.find(i => i.id === hoveredImageId) : null;
+          const selectedRow = listRows[selectedIndex];
+          const selectedItem = selectedRow?.type === 'item' ? selectedRow.item : null;
+          const imageItem = hoveredItem || (selectedItem?.imageData ? selectedItem : null);
+          
+          // Only open draw if there's an image
+          if (imageItem?.imageData) {
+            e.preventDefault();
+            setEditingSketchItem(null);
+            setSketchBackgroundImage({
+              dataUrl: `data:image/png;base64,${imageItem.imageData}`,
+              width: imageItem.imageWidth || 800,
+              height: imageItem.imageHeight || 600,
+            });
+            setViewMode('sketch');
+          }
         }
         return;
       }
@@ -1237,8 +1221,8 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // D - Open DM modal to send selected item to a contact.
-      if (key === 'd' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+      // M - Open DM modal to send selected item to a contact.
+      if (key === 'm' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         // Skip if typing in input
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
         e.preventDefault();
@@ -2429,21 +2413,22 @@ export default function ClipboardHistory() {
             </button>
           ))}
           
-          {/* New Sketch button - opens the Excalidraw canvas */}
+          {/* Draw button - opens blank canvas */}
           <button
             onClick={() => {
               setEditingSketchItem(null);
+              setSketchBackgroundImage(null);
               setViewMode('sketch');
             }}
             tabIndex={0}
             style={{
-              marginLeft: 'auto',
+              marginLeft: '8px',
               padding: '4px 10px',
               fontSize: '10px',
               fontWeight: 500,
-              backgroundColor: '#10b981',
-              color: '#fff',
-              border: 'none',
+              backgroundColor: 'transparent',
+              color: theme.textSecondary,
+              border: `1px solid ${theme.border}`,
               borderRadius: '4px',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
@@ -2452,15 +2437,22 @@ export default function ClipboardHistory() {
               alignItems: 'center',
               gap: '4px',
             }}
-            title="Create a new sketch (drawing)"
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
+              e.currentTarget.style.borderColor = theme.text;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+              e.currentTarget.style.borderColor = theme.border;
+            }}
+            title="Create a new drawing"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 19l7-7 3 3-7 7-3-3z" />
               <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
               <path d="M2 2l7.586 7.586" />
-              <circle cx="11" cy="11" r="2" />
             </svg>
-            New Sketch
+            Draw
           </button>
         </div>
       )}
@@ -2477,7 +2469,6 @@ export default function ClipboardHistory() {
       ) : viewMode === 'commands' ? (
         <PopularCommands />
       ) : viewMode === 'sketch' ? (
-        // Sketch mode - full window Excalidraw canvas.
         <SketchView
           onSave={handleSketchSave}
           onClose={handleSketchClose}
@@ -2487,6 +2478,7 @@ export default function ClipboardHistory() {
             width: editingSketchItem.imageWidth || undefined,
             height: editingSketchItem.imageHeight || undefined,
           } : null}
+          backgroundImage={sketchBackgroundImage}
         />
       ) : (
         <div 
@@ -2910,7 +2902,7 @@ export default function ClipboardHistory() {
                                   cursor: 'pointer',
                                 }}
                               />
-                              {/* Preview button overlay on hover - spacebar to open */}
+                              {/* Hover overlay with keyboard shortcuts */}
                               {hoveredImageId === item.id && (
                                 <div
                                   style={{
@@ -2918,16 +2910,21 @@ export default function ClipboardHistory() {
                                     top: '50%',
                                     left: '50%',
                                     transform: 'translate(-50%, -50%)',
-                                    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                                    backgroundColor: 'rgba(0, 0, 0, 0.75)',
                                     color: '#fff',
-                                    padding: '4px 8px',
-                                    borderRadius: '4px',
+                                    padding: '6px 10px',
+                                    borderRadius: '6px',
                                     fontSize: '10px',
-                                    fontWeight: 600,
+                                    fontWeight: 500,
                                     pointerEvents: 'none',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '4px',
+                                    alignItems: 'center',
                                   }}
                                 >
-                                  Preview <KeyCap small>space</KeyCap>
+                                  <span><KeyCap small>space</KeyCap> Preview</span>
+                                  <span><KeyCap small>D</KeyCap> Draw</span>
                                 </div>
                               )}
                             </div>
@@ -3654,25 +3651,6 @@ export default function ClipboardHistory() {
                                   cursor: 'pointer',
                                 }}
                               />
-                              {/* Preview button overlay on hover - spacebar to open */}
-                              {hoveredImageId === item.id && (
-                                <div
-                                  style={{
-                                    position: 'absolute',
-                                    inset: 0,
-                                    backgroundColor: 'rgba(0,0,0,0.5)',
-                                    borderRadius: '4px',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    cursor: 'pointer',
-                                  }}
-                                >
-                                  <span style={{ color: '#fff', fontSize: '10px', fontWeight: 500 }}>
-                                    Preview <KeyCap small>space</KeyCap>
-                                  </span>
-                                </div>
-                              )}
                             </div>
                           )}
                           <div style={{ flex: 1 }}>
@@ -3828,6 +3806,7 @@ export default function ClipboardHistory() {
                           onClick={(e) => {
                             e.stopPropagation();
                             setEditingSketchItem(item);
+                            setSketchBackgroundImage(null);
                             setViewMode('sketch');
                           }}
                           style={{
@@ -3886,6 +3865,69 @@ export default function ClipboardHistory() {
                           <><KeyCap>t</KeyCap> {sharingToTeam === item.id ? 'sharing...' : 'share'}</>
                         )}
                       </button>
+                      {/* Preview button - only for images */}
+                      {item.imageData && (
+                        <button
+                          tabIndex={-1}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPreview({
+                              type: 'image',
+                              data: item.imageData!,
+                              width: item.imageWidth || 0,
+                              height: item.imageHeight || 0,
+                            });
+                          }}
+                          style={{
+                            padding: '4px 6px',
+                            fontSize: '10px',
+                            fontWeight: 500,
+                            backgroundColor: 'transparent',
+                            color: theme.textSecondary,
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            transition: 'background-color 0.15s ease',
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        >
+                          <KeyCap>space</KeyCap> preview
+                        </button>
+                      )}
+                      {/* Annotate button - only for images */}
+                      {item.imageData && (
+                        <button
+                          tabIndex={-1}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingSketchItem(null);
+                            setSketchBackgroundImage({
+                              dataUrl: `data:image/png;base64,${item.imageData}`,
+                              width: item.imageWidth || 800,
+                              height: item.imageHeight || 600,
+                            });
+                            setViewMode('sketch');
+                          }}
+                          style={{
+                            padding: '4px 6px',
+                            fontSize: '10px',
+                            fontWeight: 500,
+                            backgroundColor: 'transparent',
+                            color: theme.textSecondary,
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            transition: 'background-color 0.15s ease',
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        >
+                          <KeyCap>D</KeyCap> draw
+                        </button>
+                      )}
                       {/* Paste hint button with target app - rightmost */}
                       <button
                         tabIndex={-1}
@@ -3983,36 +4025,6 @@ export default function ClipboardHistory() {
         </DragOverlay>
         </DndContext>
         
-        {/* Floating Action Button for New Sketch */}
-        {viewMode === 'clipboard' && !showSettings && (
-          <button
-            onClick={() => setViewMode('sketch')}
-            style={{
-              position: 'absolute',
-              bottom: '24px',
-              right: '24px',
-              width: '56px',
-              height: '56px',
-              borderRadius: '28px',
-              backgroundColor: theme.accent,
-              border: 'none',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
-              zIndex: 1000,
-              // @ts-ignore
-              WebkitAppRegion: 'no-drag',
-            }}
-            title="New Sketch"
-          >
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2">
-              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-            </svg>
-          </button>
-        )}
         </div>
       )}
 
@@ -4355,7 +4367,7 @@ export default function ClipboardHistory() {
               <span><KeyCap>/</KeyCap> search</span>
               <span><KeyCap>s</KeyCap> stack</span>
               
-              <span><KeyCap>n</KeyCap> new sketch</span>
+              <span><KeyCap>d</KeyCap> draw</span>
               <span><KeyCap>t</KeyCap> team share</span>
               
               <span><KeyCap>tab</KeyCap> view</span>
@@ -4363,7 +4375,7 @@ export default function ClipboardHistory() {
               
               <span><KeyCap>u</KeyCap> unstack</span>
               <span><KeyCap>↑</KeyCap><KeyCap>k</KeyCap> up</span>
-              <span><KeyCap>d</KeyCap> DM</span>
+              <span><KeyCap>m</KeyCap> DM</span>
               <span><KeyCap>f</KeyCap> feedback</span>
             </div>
           </div>
@@ -4664,19 +4676,52 @@ export default function ClipboardHistory() {
           }}
         >
           {preview.type === 'image' ? (
-            <img
-              src={`data:image/png;base64,${preview.data}`}
-              alt="Preview"
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                maxWidth: '90vw',
-                maxHeight: '90vh',
-                objectFit: 'contain',
-                borderRadius: '8px',
-                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
-                cursor: 'default',
-              }}
-            />
+            <div style={{ position: 'relative' }}>
+              <img
+                src={`data:image/png;base64,${preview.data}`}
+                alt="Preview"
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  maxWidth: '90vw',
+                  maxHeight: '90vh',
+                  objectFit: 'contain',
+                  borderRadius: '8px',
+                  boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+                  cursor: 'default',
+                }}
+              />
+              {/* Sketch button - opens the image in sketch mode */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSketchBackgroundImage({
+                    dataUrl: `data:image/png;base64,${preview.data}`,
+                    width: preview.width || 800,
+                    height: preview.height || 600,
+                  });
+                  setEditingSketchItem(null);
+                  dismissPreview();
+                  setViewMode('sketch');
+                }}
+                style={{
+                  position: 'absolute',
+                  bottom: '16px',
+                  right: '16px',
+                  padding: '8px 16px',
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                  backdropFilter: 'blur(8px)',
+                  WebkitBackdropFilter: 'blur(8px)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                }}
+              >
+                ✏️ Draw
+              </button>
+            </div>
           ) : (
             <div
               onClick={(e) => e.stopPropagation()}

@@ -1066,6 +1066,8 @@ function setupClipboardIPCHandlers(): void {
         clipboard.writeImage(image);
       }
       
+      clipboardManager.syncClipboardHash();
+      
       // Hide window first.
       if (clipboardHistoryWindow) {
         clipboardHistoryWindow.hide(); // This includes app.hide() to restore focus
@@ -1141,6 +1143,7 @@ function setupClipboardIPCHandlers(): void {
         try {
           if (item.type === 'text' || item.type === 'transcript') {
             clipboard.writeText(item.content || '');
+            clipboardManager.syncClipboardHash();
             await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
           } else if (item.imageData) {
             const imageBuffer = typeof item.imageData === 'string' 
@@ -1148,6 +1151,7 @@ function setupClipboardIPCHandlers(): void {
               : item.imageData;
             const image = nativeImage.createFromBuffer(imageBuffer);
             clipboard.writeImage(image);
+            clipboardManager.syncClipboardHash();
             await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
           }
           // Small delay between pastes to let the target app process
@@ -1177,6 +1181,8 @@ function setupClipboardIPCHandlers(): void {
       
       // Put text on clipboard first
       clipboard.writeText(text);
+      
+      if (clipboardManager) clipboardManager.syncClipboardHash();
       
       // Hide window first
       if (clipboardHistoryWindow) {
