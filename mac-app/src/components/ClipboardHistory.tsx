@@ -211,7 +211,7 @@ function DraggableDroppableRow({
 }
 
 /**
- * KeyCap component - renders a keyboard key with 3D styling.
+ * KeyCap component - renders a keyboard key with clean styling.
  * Used for displaying keyboard shortcuts with a visual key appearance.
  */
 function KeyCap({ children, small = false }: { children: React.ReactNode; small?: boolean }) {
@@ -221,17 +221,12 @@ function KeyCap({ children, small = false }: { children: React.ReactNode; small?
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        minWidth: small ? '10px' : '12px',
-        height: small ? '10px' : '12px',
-        padding: '0 3px',
-        fontSize: small ? '7px' : '8px',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
+        padding: small ? '1px 4px' : '2px 5px',
+        fontSize: small ? '9px' : '10px',
         fontWeight: 500,
-        color: '#666',
-        backgroundColor: '#f0f0f0',
-        border: '1px solid #ccc',
-        borderRadius: '2px',
-        boxShadow: '0 1px 0 #aaa',
+        color: '#555',
+        backgroundColor: '#e8e8e8',
+        borderRadius: '3px',
         marginRight: '2px',
       }}
     >
@@ -1392,6 +1387,29 @@ export default function ClipboardHistory() {
         setKeyboardNavActive(true);
         const newIndex = Math.min(selectedIndex + 1, listRows.length - 1);
         
+        if (hasShift) {
+          const newRow = listRows[newIndex];
+          if (newRow) {
+            const itemIdsToAdd: number[] = [];
+            if (newRow.type === 'item') {
+              itemIdsToAdd.push(newRow.item.id);
+            } else if (newRow.type === 'stack') {
+              newRow.items.forEach(i => itemIdsToAdd.push(i.id));
+            }
+            
+            setSelectedIds(prev => {
+              const next = new Set(prev);
+              itemIdsToAdd.forEach(id => next.add(id));
+              return next;
+            });
+            setIsMultiSelect(true);
+          }
+        } else {
+          if (selectedIds.size > 0) {
+            setSelectedIds(new Set());
+          }
+        }
+        
         // If preview is open, update preview for new row and reset stack index.
         if (preview && newIndex !== selectedIndex) {
           const newRow = listRows[newIndex];
@@ -1445,6 +1463,29 @@ export default function ClipboardHistory() {
         
         setKeyboardNavActive(true);
         const newIndex = Math.max(selectedIndex - 1, 0);
+        
+        if (hasShift) {
+          const newRow = listRows[newIndex];
+          if (newRow) {
+            const itemIdsToAdd: number[] = [];
+            if (newRow.type === 'item') {
+              itemIdsToAdd.push(newRow.item.id);
+            } else if (newRow.type === 'stack') {
+              newRow.items.forEach(i => itemIdsToAdd.push(i.id));
+            }
+            
+            setSelectedIds(prev => {
+              const next = new Set(prev);
+              itemIdsToAdd.forEach(id => next.add(id));
+              return next;
+            });
+            setIsMultiSelect(true);
+          }
+        } else {
+          if (selectedIds.size > 0) {
+            setSelectedIds(new Set());
+          }
+        }
         
         // If preview is open, update preview for new row and reset stack index.
         if (preview && newIndex !== selectedIndex) {
@@ -1936,28 +1977,26 @@ export default function ClipboardHistory() {
     const hasShift = e?.shiftKey;
     const hasMeta = e?.metaKey || e?.ctrlKey; // Cmd on Mac, Ctrl on Windows
     
-    // Shift+click (with or without Cmd): range selection
-    // Use lastClickedIndex as anchor, or selectedIndex if no previous click
     if (hasShift) {
       const anchorIndex = lastClickedIndex ?? selectedIndex;
       const start = Math.min(anchorIndex, index);
       const end = Math.max(anchorIndex, index);
       
-      // If Cmd is also held, add to existing selection; otherwise replace
-      const newSelectedIds = hasMeta ? new Set(selectedIds) : new Set<number>();
-      
-      // Add all items in range
-      for (let i = start; i <= end; i++) {
-        const row = listRows[i];
-        if (row?.type === 'item') {
-          newSelectedIds.add(row.item.id);
-        } else if (row?.type === 'stack') {
-          // For stacks, add all items in the stack
-          row.items.forEach(stackItem => newSelectedIds.add(stackItem.id));
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        
+        for (let i = start; i <= end; i++) {
+          const row = listRows[i];
+          if (row?.type === 'item') {
+            next.add(row.item.id);
+          } else if (row?.type === 'stack') {
+            // For stacks, add all items in the stack
+            row.items.forEach(stackItem => next.add(stackItem.id));
+          }
         }
-      }
-      
-      setSelectedIds(newSelectedIds);
+        
+        return next;
+      });
       setSelectedIndex(index);
       setIsMultiSelect(true);
       // Don't update lastClickedIndex on Shift+click - keep the anchor
@@ -2580,7 +2619,7 @@ export default function ClipboardHistory() {
                     gap: '4px',
                   }}
                 >
-                  <KeyCap small>⌫</KeyCap> delete
+                  delete <KeyCap small>⌫</KeyCap>
                 </button>
                 {/* Share to Team button */}
                 <button
@@ -2644,7 +2683,7 @@ export default function ClipboardHistory() {
                       gap: '4px',
                     }}
                   >
-                    <KeyCap small>s</KeyCap> stack
+                    stack <KeyCap small>s</KeyCap>
                   </button>
                 )}
                 <button
@@ -2668,7 +2707,7 @@ export default function ClipboardHistory() {
                     gap: '4px',
                   }}
                 >
-                  <KeyCap small>esc</KeyCap> clear
+                  clear <KeyCap small>esc</KeyCap>
                 </button>
               </div>
             )}
@@ -2748,27 +2787,25 @@ export default function ClipboardHistory() {
                       const hasShift = e.shiftKey;
                       const hasMeta = e.metaKey || e.ctrlKey; // Cmd on Mac, Ctrl on Windows
                       
-                      // Shift+click (with or without Cmd): range selection
                       if (hasShift) {
                         const anchorIndex = lastClickedIndex ?? selectedIndex;
                         const start = Math.min(anchorIndex, index);
                         const end = Math.max(anchorIndex, index);
                         
-                        // If Cmd is also held, add to existing selection; otherwise replace
-                        const newSelectedIds = hasMeta ? new Set(selectedIds) : new Set<number>();
-                        
-                        // Add all items in range
-                        for (let i = start; i <= end; i++) {
-                          const row = listRows[i];
-                          if (row?.type === 'item') {
-                            newSelectedIds.add(row.item.id);
-                          } else if (row?.type === 'stack') {
-                            // For stacks, add all items in the stack
-                            row.items.forEach(stackItem => newSelectedIds.add(stackItem.id));
+                        setSelectedIds(prev => {
+                          const next = new Set(prev);
+                          
+                          for (let i = start; i <= end; i++) {
+                            const row = listRows[i];
+                            if (row?.type === 'item') {
+                              next.add(row.item.id);
+                            } else if (row?.type === 'stack') {
+                              row.items.forEach(stackItem => next.add(stackItem.id));
+                            }
                           }
-                        }
-                        
-                        setSelectedIds(newSelectedIds);
+                          
+                          return next;
+                        });
                         setSelectedIndex(index);
                         setIsMultiSelect(true);
                         return;
@@ -2923,8 +2960,8 @@ export default function ClipboardHistory() {
                                     alignItems: 'center',
                                   }}
                                 >
-                                  <span><KeyCap small>space</KeyCap> Preview</span>
-                                  <span><KeyCap small>D</KeyCap> Draw</span>
+                                  <span>Preview <KeyCap small>space</KeyCap></span>
+                                  <span>Draw <KeyCap small>d</KeyCap></span>
                                 </div>
                               )}
                             </div>
@@ -3147,7 +3184,7 @@ export default function ClipboardHistory() {
                             onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                           >
-                            <KeyCap>u</KeyCap> unstack
+                            unstack <KeyCap>u</KeyCap>
                           </button>
                         )}
                         {/* Improve hint button - middle, only if stack has text */}
@@ -3250,7 +3287,7 @@ export default function ClipboardHistory() {
                           {sharedToTeamId === `stack-${stackItems.map(i => i.id).join(',')}` ? (
                             <>✓ shared</>
                           ) : (
-                            <><KeyCap>t</KeyCap> share</>
+                            <>share <KeyCap>t</KeyCap></>
                           )}
                         </button>
                         {/* Paste hint button - rightmost */}
@@ -3290,7 +3327,7 @@ export default function ClipboardHistory() {
                           onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                           onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
-                          <KeyCap>↵</KeyCap> paste ({displayAppName})
+                          paste ({displayAppName}) <KeyCap>↵</KeyCap>
                         </button>
                       </div>
                     </div>
@@ -3823,7 +3860,7 @@ export default function ClipboardHistory() {
                           onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                           onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
-                          <KeyCap>e</KeyCap> edit
+                          edit <KeyCap>e</KeyCap>
                         </button>
                       )}
                       {/* Share to Team button */}
@@ -3893,7 +3930,7 @@ export default function ClipboardHistory() {
                           onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                           onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
-                          <KeyCap>space</KeyCap> preview
+                          preview <KeyCap>space</KeyCap>
                         </button>
                       )}
                       {/* Annotate button - only for images */}
@@ -3925,7 +3962,7 @@ export default function ClipboardHistory() {
                           onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                           onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
-                          <KeyCap>D</KeyCap> draw
+                          draw <KeyCap>d</KeyCap>
                         </button>
                       )}
                       {/* Paste hint button with target app - rightmost */}
@@ -3950,7 +3987,7 @@ export default function ClipboardHistory() {
                         onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                         onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                       >
-                        <KeyCap>↵</KeyCap> paste ({optionHeld ? (targetAppInfo.targetApp?.name || targetAppInfo.previousApp?.name || 'app') : (targetAppInfo.previousApp?.name || 'app')})
+                        paste ({optionHeld ? (targetAppInfo.targetApp?.name || targetAppInfo.previousApp?.name || 'app') : (targetAppInfo.previousApp?.name || 'app')}) <KeyCap>↵</KeyCap>
                       </button>
                     </div>
                   </div>
@@ -4349,34 +4386,34 @@ export default function ClipboardHistory() {
               fontSize: '13px',
               color: theme.textSecondary,
             }}>
-              <span><KeyCap>esc</KeyCap> close</span>
-              <span><KeyCap>⌫</KeyCap> delete</span>
+              <span>close <KeyCap>esc</KeyCap></span>
+              <span>delete <KeyCap>⌫</KeyCap></span>
               
-              <span><KeyCap>↓</KeyCap><KeyCap>j</KeyCap> down</span>
-              <span><KeyCap>?</KeyCap> help</span>
+              <span>down <KeyCap>↓</KeyCap><KeyCap>j</KeyCap></span>
+              <span>help <KeyCap>?</KeyCap></span>
               
-              <span><KeyCap>⌘</KeyCap><KeyCap>↵</KeyCap> improve</span>
-              <span><KeyCap>↵</KeyCap> paste</span>
+              <span>improve <KeyCap>⌘</KeyCap><KeyCap>↵</KeyCap></span>
+              <span>paste <KeyCap>↵</KeyCap></span>
               
-              <span><KeyCap>space</KeyCap> preview</span>
-              <span><KeyCap>option</KeyCap><KeyCap>space</KeyCap> record audio</span>
+              <span>preview <KeyCap>space</KeyCap></span>
+              <span>record audio <KeyCap>option</KeyCap><KeyCap>space</KeyCap></span>
               
-              <span><KeyCap>x</KeyCap> select</span>
-              <span><KeyCap>option</KeyCap><KeyCap>1</KeyCap> screenshot</span>
+              <span>select <KeyCap>x</KeyCap></span>
+              <span>screenshot <KeyCap>option</KeyCap><KeyCap>1</KeyCap></span>
               
-              <span><KeyCap>/</KeyCap> search</span>
-              <span><KeyCap>s</KeyCap> stack</span>
+              <span>search <KeyCap>/</KeyCap></span>
+              <span>stack <KeyCap>s</KeyCap></span>
               
-              <span><KeyCap>d</KeyCap> draw</span>
-              <span><KeyCap>t</KeyCap> team share</span>
+              <span>draw <KeyCap>d</KeyCap></span>
+              <span>team share <KeyCap>t</KeyCap></span>
               
-              <span><KeyCap>tab</KeyCap> view</span>
-              <span><KeyCap>⌘</KeyCap><KeyCap>z</KeyCap> undo</span>
+              <span>view <KeyCap>tab</KeyCap></span>
+              <span>undo <KeyCap>⌘</KeyCap><KeyCap>z</KeyCap></span>
               
-              <span><KeyCap>u</KeyCap> unstack</span>
-              <span><KeyCap>↑</KeyCap><KeyCap>k</KeyCap> up</span>
-              <span><KeyCap>m</KeyCap> DM</span>
-              <span><KeyCap>f</KeyCap> feedback</span>
+              <span>unstack <KeyCap>u</KeyCap></span>
+              <span>up <KeyCap>↑</KeyCap><KeyCap>k</KeyCap></span>
+              <span>DM <KeyCap>m</KeyCap></span>
+              <span>feedback <KeyCap>f</KeyCap></span>
             </div>
           </div>
         </div>
@@ -4676,51 +4713,95 @@ export default function ClipboardHistory() {
           }}
         >
           {preview.type === 'image' ? (
-            <div style={{ position: 'relative' }}>
+            <div 
+              onClick={(e) => e.stopPropagation()}
+              style={{ 
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '16px',
+                cursor: 'default',
+              }}
+            >
               <img
                 src={`data:image/png;base64,${preview.data}`}
                 alt="Preview"
-                onClick={(e) => e.stopPropagation()}
                 style={{
                   maxWidth: '90vw',
-                  maxHeight: '90vh',
+                  maxHeight: 'calc(90vh - 60px)',
                   objectFit: 'contain',
                   borderRadius: '8px',
                   boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
-                  cursor: 'default',
                 }}
               />
-              {/* Sketch button - opens the image in sketch mode */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSketchBackgroundImage({
-                    dataUrl: `data:image/png;base64,${preview.data}`,
-                    width: preview.width || 800,
-                    height: preview.height || 600,
-                  });
-                  setEditingSketchItem(null);
-                  dismissPreview();
-                  setViewMode('sketch');
-                }}
-                style={{
-                  position: 'absolute',
-                  bottom: '16px',
-                  right: '16px',
-                  padding: '8px 16px',
-                  fontSize: '13px',
-                  fontWeight: 500,
-                  backgroundColor: 'rgba(0, 0, 0, 0.6)',
-                  backdropFilter: 'blur(8px)',
-                  WebkitBackdropFilter: 'blur(8px)',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                }}
-              >
-                ✏️ Draw
-              </button>
+              {/* Action bar - all available actions for images */}
+              <div style={{
+                display: 'flex',
+                gap: '8px',
+                backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                backdropFilter: 'blur(8px)',
+                WebkitBackdropFilter: 'blur(8px)',
+                borderRadius: '10px',
+                padding: '8px 12px',
+              }}>
+                {[
+                  { label: 'Paste', key: '↵', action: async () => {
+                    const selectedRow = listRows[selectedIndex];
+                    if (selectedRow?.type === 'item' && window.clipboardAPI) {
+                      const bundleId = targetAppInfo?.previousApp?.bundleId;
+                      await window.clipboardAPI.pasteItem(selectedRow.item.id, bundleId);
+                      window.clipboardAPI.closeWindow();
+                    }
+                  }},
+                  { label: 'Draw', key: 'd', action: () => {
+                    setSketchBackgroundImage({
+                      dataUrl: `data:image/png;base64,${preview.data}`,
+                      width: preview.width || 800,
+                      height: preview.height || 600,
+                    });
+                    setEditingSketchItem(null);
+                    dismissPreview();
+                    setViewMode('sketch');
+                  }},
+                  { label: 'Delete', key: '⌫', action: async () => {
+                    const selectedRow = listRows[selectedIndex];
+                    if (selectedRow?.type === 'item' && window.clipboardAPI) {
+                      await window.clipboardAPI.deleteItem(selectedRow.item.id);
+                      dismissPreview();
+                      loadItems(true);
+                    }
+                  }},
+                ].map((action) => (
+                  <button
+                    key={action.label}
+                    onClick={action.action}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '6px 12px',
+                      fontSize: '12px',
+                      fontWeight: 500,
+                      backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {action.label}
+                    <span style={{
+                      fontSize: '10px',
+                      opacity: 0.7,
+                      backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                      padding: '2px 5px',
+                      borderRadius: '3px',
+                    }}>
+                      {action.key}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
             <div
