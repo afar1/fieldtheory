@@ -2401,7 +2401,7 @@ export default function ClipboardHistory() {
             </button>
           ))}
           
-          {/* New Sketch button - opens the TLDraw canvas */}
+          {/* New Sketch button - opens the Excalidraw canvas */}
           <button
             onClick={() => {
               setEditingSketchItem(null);
@@ -2449,7 +2449,7 @@ export default function ClipboardHistory() {
       ) : viewMode === 'commands' ? (
         <PopularCommands />
       ) : viewMode === 'sketch' ? (
-        // Sketch mode - full window TLDraw canvas.
+        // Sketch mode - full window Excalidraw canvas.
         <SketchView
           onSave={handleSketchSave}
           onClose={handleSketchClose}
