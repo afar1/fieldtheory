@@ -751,6 +751,10 @@ export default function ClipboardHistory() {
   // Save a sketch as a clipboard item (image type).
   // Called when user saves from the SketchView.
   const handleSketchSave = useCallback(async (imageData: { dataUrl: string; width: number; height: number }) => {
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ClipboardHistory.tsx:753',message:'handleSketchSave called',data:{hasClipboardAPI:!!window.clipboardAPI,dataUrlLength:imageData.dataUrl?.length,width:imageData.width,height:imageData.height},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'E'})}).catch(()=>{});
+    // #endregion
+    
     if (!window.clipboardAPI) return;
     
     try {
@@ -759,6 +763,9 @@ export default function ClipboardHistory() {
       
       // Estimate file size from base64 (base64 is ~33% larger than binary).
       const imageSize = Math.round((base64Data.length * 3) / 4);
+      
+      const createdAt = Date.now();
+      const contentHash = `sketch-${createdAt}`;
       
       // Create a clipboard item for the sketch.
       const sketchItem = {
@@ -772,13 +779,21 @@ export default function ClipboardHistory() {
         sourceAppName: 'Sketch',
         wordCount: null,
         charCount: null,
-        createdAt: Date.now(),
-        contentHash: `sketch-${Date.now()}`,
+        createdAt: createdAt,
+        contentHash: contentHash,
         source: 'mac' as const,
       };
       
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ClipboardHistory.tsx:780',message:'Calling restoreItem',data:{contentHash,createdAt},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'F'})}).catch(()=>{});
+      // #endregion
+      
       // Use restoreItem to save the sketch to clipboard.
-      await window.clipboardAPI?.restoreItem(sketchItem as any);
+      const itemId = await window.clipboardAPI?.restoreItem(sketchItem as any);
+      
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ClipboardHistory.tsx:785',message:'restoreItem completed',data:{itemId},timestamp:Date.now(),sessionId:'debug-session',runId:'run2',hypothesisId:'G'})}).catch(()=>{});
+      // #endregion
       
       // Close sketch view and switch back to clipboard.
       setEditingSketchItem(null);
@@ -1184,6 +1199,19 @@ export default function ClipboardHistory() {
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
         e.preventDefault();
         inputRef.current?.focus();
+        return;
+      }
+      
+      // N - New Sketch (open sketch editor)
+      if (key === 'n' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+        // Skip if typing in input
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        // Only work in clipboard view, not already in sketch view
+        if (viewMode === 'clipboard' && !showSettings) {
+          e.preventDefault();
+          setEditingSketchItem(null);
+          setViewMode('sketch');
+        }
         return;
       }
       
@@ -3792,6 +3820,33 @@ export default function ClipboardHistory() {
                           <KeyCap>⌘</KeyCap><KeyCap>↵</KeyCap> {improvingStackId === `item-${item.id}` ? 'improving...' : (item.improvedContent ? 're-improve' : 'improve')}
                         </button>
                       )}
+                      {/* Edit Sketch button - only for sketch items */}
+                      {item.sourceApp === 'com.fieldtheory.sketch' && (
+                        <button
+                          tabIndex={-1}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingSketchItem(item);
+                            setViewMode('sketch');
+                          }}
+                          style={{
+                            padding: '4px 6px',
+                            fontSize: '10px',
+                            fontWeight: 500,
+                            backgroundColor: 'transparent',
+                            color: theme.textSecondary,
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            transition: 'background-color 0.15s ease',
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        >
+                          <KeyCap>e</KeyCap> edit
+                        </button>
+                      )}
                       {/* Share to Team button */}
                       <button
                         tabIndex={-1}
@@ -4300,7 +4355,9 @@ export default function ClipboardHistory() {
               <span><KeyCap>/</KeyCap> search</span>
               <span><KeyCap>s</KeyCap> stack</span>
               
+              <span><KeyCap>n</KeyCap> new sketch</span>
               <span><KeyCap>t</KeyCap> team share</span>
+              
               <span><KeyCap>tab</KeyCap> view</span>
               <span><KeyCap>⌘</KeyCap><KeyCap>z</KeyCap> undo</span>
               
