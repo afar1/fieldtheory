@@ -97,11 +97,13 @@ export default function SketchView({ onSave, onClose, existingSketch, background
     const elements = excalidrawAPI.getSceneElements();
     const activeElements = elements.filter((el: any) => !el.isDeleted);
     
+    // Require at least one element (drawing or image).
     if (activeElements.length === 0) {
       alert('Please draw something before saving.');
       return;
     }
     
+    // If only a background image exists with no drawings, warn user.
     if (backgroundImage && activeElements.length === 1 && activeElements[0].type === 'image') {
       alert('Please draw something on the image before saving.');
       return;
@@ -161,6 +163,8 @@ export default function SketchView({ onSave, onClose, existingSketch, background
   const handleChange = useCallback((elements: readonly any[], appState: any) => {
     const activeElements = elements.filter((el: any) => !el.isDeleted);
     
+    // Track initial element count (e.g., 1 if background image, 0 if blank).
+    // User has made changes if element count differs from initial.
     if (initialElementCountRef.current === null) {
       initialElementCountRef.current = activeElements.length;
     }
@@ -173,10 +177,12 @@ export default function SketchView({ onSave, onClose, existingSketch, background
     const prevCount = prevElementCountRef.current;
     prevElementCountRef.current = elementCount;
     
+    // Track when user selects a drawing tool (not selection/hand).
     if (currentTool && currentTool !== 'selection' && currentTool !== 'hand') {
       lastToolRef.current = currentTool;
     }
     
+    // After drawing, Excalidraw switches to selection. Restore the drawing tool.
     const justAddedElement = elementCount > prevCount;
     if (justAddedElement && currentTool === 'selection' && lastToolRef.current) {
       requestAnimationFrame(() => {
@@ -219,6 +225,7 @@ export default function SketchView({ onSave, onClose, existingSketch, background
         }
       });
       
+      // Hide Library button and diamond tool.
       const buttons = document.querySelectorAll('.excalidraw button');
       buttons.forEach((btn) => {
         const text = btn.textContent?.trim() || '';
@@ -250,18 +257,16 @@ export default function SketchView({ onSave, onClose, existingSketch, background
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault();
-        e.stopPropagation();
         handleSave();
       }
       if (e.key === 'Escape') {
         e.preventDefault();
-        e.stopPropagation();
         handleClose();
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown, true);
-    return () => window.removeEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleSave, handleClose]);
 
   const dragStyle = { WebkitAppRegion: 'drag' } as React.CSSProperties;

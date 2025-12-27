@@ -1387,29 +1387,6 @@ export default function ClipboardHistory() {
         setKeyboardNavActive(true);
         const newIndex = Math.min(selectedIndex + 1, listRows.length - 1);
         
-        if (hasShift) {
-          const newRow = listRows[newIndex];
-          if (newRow) {
-            const itemIdsToAdd: number[] = [];
-            if (newRow.type === 'item') {
-              itemIdsToAdd.push(newRow.item.id);
-            } else if (newRow.type === 'stack') {
-              newRow.items.forEach(i => itemIdsToAdd.push(i.id));
-            }
-            
-            setSelectedIds(prev => {
-              const next = new Set(prev);
-              itemIdsToAdd.forEach(id => next.add(id));
-              return next;
-            });
-            setIsMultiSelect(true);
-          }
-        } else {
-          if (selectedIds.size > 0) {
-            setSelectedIds(new Set());
-          }
-        }
-        
         // If preview is open, update preview for new row and reset stack index.
         if (preview && newIndex !== selectedIndex) {
           const newRow = listRows[newIndex];
@@ -1463,29 +1440,6 @@ export default function ClipboardHistory() {
         
         setKeyboardNavActive(true);
         const newIndex = Math.max(selectedIndex - 1, 0);
-        
-        if (hasShift) {
-          const newRow = listRows[newIndex];
-          if (newRow) {
-            const itemIdsToAdd: number[] = [];
-            if (newRow.type === 'item') {
-              itemIdsToAdd.push(newRow.item.id);
-            } else if (newRow.type === 'stack') {
-              newRow.items.forEach(i => itemIdsToAdd.push(i.id));
-            }
-            
-            setSelectedIds(prev => {
-              const next = new Set(prev);
-              itemIdsToAdd.forEach(id => next.add(id));
-              return next;
-            });
-            setIsMultiSelect(true);
-          }
-        } else {
-          if (selectedIds.size > 0) {
-            setSelectedIds(new Set());
-          }
-        }
         
         // If preview is open, update preview for new row and reset stack index.
         if (preview && newIndex !== selectedIndex) {
@@ -1977,26 +1931,28 @@ export default function ClipboardHistory() {
     const hasShift = e?.shiftKey;
     const hasMeta = e?.metaKey || e?.ctrlKey; // Cmd on Mac, Ctrl on Windows
     
+    // Shift+click (with or without Cmd): range selection
+    // Use lastClickedIndex as anchor, or selectedIndex if no previous click
     if (hasShift) {
       const anchorIndex = lastClickedIndex ?? selectedIndex;
       const start = Math.min(anchorIndex, index);
       const end = Math.max(anchorIndex, index);
       
-      setSelectedIds(prev => {
-        const next = new Set(prev);
-        
-        for (let i = start; i <= end; i++) {
-          const row = listRows[i];
-          if (row?.type === 'item') {
-            next.add(row.item.id);
-          } else if (row?.type === 'stack') {
-            // For stacks, add all items in the stack
-            row.items.forEach(stackItem => next.add(stackItem.id));
-          }
+      // If Cmd is also held, add to existing selection; otherwise replace
+      const newSelectedIds = hasMeta ? new Set(selectedIds) : new Set<number>();
+      
+      // Add all items in range
+      for (let i = start; i <= end; i++) {
+        const row = listRows[i];
+        if (row?.type === 'item') {
+          newSelectedIds.add(row.item.id);
+        } else if (row?.type === 'stack') {
+          // For stacks, add all items in the stack
+          row.items.forEach(stackItem => newSelectedIds.add(stackItem.id));
         }
-        
-        return next;
-      });
+      }
+      
+      setSelectedIds(newSelectedIds);
       setSelectedIndex(index);
       setIsMultiSelect(true);
       // Don't update lastClickedIndex on Shift+click - keep the anchor
@@ -2787,25 +2743,27 @@ export default function ClipboardHistory() {
                       const hasShift = e.shiftKey;
                       const hasMeta = e.metaKey || e.ctrlKey; // Cmd on Mac, Ctrl on Windows
                       
+                      // Shift+click (with or without Cmd): range selection
                       if (hasShift) {
                         const anchorIndex = lastClickedIndex ?? selectedIndex;
                         const start = Math.min(anchorIndex, index);
                         const end = Math.max(anchorIndex, index);
                         
-                        setSelectedIds(prev => {
-                          const next = new Set(prev);
-                          
-                          for (let i = start; i <= end; i++) {
-                            const row = listRows[i];
-                            if (row?.type === 'item') {
-                              next.add(row.item.id);
-                            } else if (row?.type === 'stack') {
-                              row.items.forEach(stackItem => next.add(stackItem.id));
-                            }
+                        // If Cmd is also held, add to existing selection; otherwise replace
+                        const newSelectedIds = hasMeta ? new Set(selectedIds) : new Set<number>();
+                        
+                        // Add all items in range
+                        for (let i = start; i <= end; i++) {
+                          const row = listRows[i];
+                          if (row?.type === 'item') {
+                            newSelectedIds.add(row.item.id);
+                          } else if (row?.type === 'stack') {
+                            // For stacks, add all items in the stack
+                            row.items.forEach(stackItem => newSelectedIds.add(stackItem.id));
                           }
-                          
-                          return next;
-                        });
+                        }
+                        
+                        setSelectedIds(newSelectedIds);
                         setSelectedIndex(index);
                         setIsMultiSelect(true);
                         return;
