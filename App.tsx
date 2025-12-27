@@ -326,8 +326,9 @@ export default function App() {
     };
   }, []);
 
+  // Sync pager to pageIndex state - use instant switching (no animation).
   useEffect(() => {
-    pagerRef.current?.setPage(pageIndex);
+    pagerRef.current?.setPageWithoutAnimation(pageIndex);
   }, [pageIndex]);
 
   // Ensure the Whisper model is available before we allow recordings.
@@ -917,8 +918,8 @@ export default function App() {
     // Cursor is always at page 1 (right after Transcripts).
     const cursorPageIndex = 1;
     
-    // Switch to the Cursor browser page.
-    pagerRef.current?.setPage(cursorPageIndex);
+    // Switch to the Cursor browser page instantly (no animation).
+    pagerRef.current?.setPageWithoutAnimation(cursorPageIndex);
     setPageIndex(cursorPageIndex);
     
     // Provide haptic feedback.
@@ -1228,6 +1229,15 @@ export default function App() {
 
       {/* Header removed - moved settings to bottom tab */}
 
+      {/* Recording Indicator - Orange dot with pulsing animation when recording. */}
+      {/* Shows at top of screen so it's visible on all tabs, even in background. */}
+      {isRecording && (
+        <View style={styles.recordingIndicator}>
+          <View style={styles.recordingDot} />
+          <Text style={styles.recordingText}>Recording...</Text>
+        </View>
+      )}
+
       {/* Model download status */}
       {isDownloadingModel && (
         <View style={styles.downloadContainer}>
@@ -1256,10 +1266,15 @@ export default function App() {
       {/* Pager View - Order: Transcripts → Cursor → Tasks → Observations */}
       {/* Swipe gestures are disabled because they conflict with the WebView on the Cursor page. */}
       {/* Users navigate via the bottom tab bar instead for reliable navigation. */}
+      {/* PagerView with animations disabled for instant tab switching. */}
+      {/* scrollEnabled=false prevents swipe conflicts with WebView. */}
+      {/* overdrag=false + overScrollMode prevent bounce animation. */}
       <PagerView
         ref={pagerRef}
         style={styles.pager}
         scrollEnabled={false}
+        overdrag={false}
+        overScrollMode="never"
         onPageSelected={(e) => {
           try {
             const newPageIndex = e.nativeEvent.position;
@@ -1454,7 +1469,7 @@ export default function App() {
             {/* Stacks Tab */}
             <TouchableOpacity 
               style={styles.tabButton} 
-              onPress={() => pagerRef.current?.setPage(0)}
+              onPress={() => pagerRef.current?.setPageWithoutAnimation(0)}
             >
               <Feather 
                 name="layers" 
@@ -1470,7 +1485,7 @@ export default function App() {
             {settings.showCursor && (
               <TouchableOpacity 
                 style={styles.tabButton} 
-                onPress={() => pagerRef.current?.setPage(1)}
+                onPress={() => pagerRef.current?.setPageWithoutAnimation(1)}
               >
                 <Feather 
                   name="terminal" 
@@ -1506,7 +1521,7 @@ export default function App() {
             {settings.showTodos && (
               <TouchableOpacity 
                 style={styles.tabButton} 
-                onPress={() => pagerRef.current?.setPage(2)}
+                onPress={() => pagerRef.current?.setPageWithoutAnimation(2)}
               >
                 <Feather 
                   name="check-square" 
@@ -1523,7 +1538,7 @@ export default function App() {
             {settings.showObservations && (
               <TouchableOpacity 
                 style={styles.tabButton} 
-                onPress={() => pagerRef.current?.setPage(3)}
+                onPress={() => pagerRef.current?.setPageWithoutAnimation(3)}
               >
                 <Feather 
                   name="eye" 
@@ -1539,7 +1554,7 @@ export default function App() {
             {/* Sketches Tab - New drawing feature */}
             <TouchableOpacity 
               style={styles.tabButton} 
-              onPress={() => pagerRef.current?.setPage(4)}
+              onPress={() => pagerRef.current?.setPageWithoutAnimation(4)}
             >
               <Feather 
                 name="edit-3" 
@@ -1758,6 +1773,27 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F5F5F5',
+  },
+  // Recording indicator - appears at top when recording is active.
+  recordingIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(234, 88, 12, 0.1)',
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  recordingDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#EA580C',
+  },
+  recordingText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#EA580C',
   },
   downloadContainer: {
     flexDirection: 'row',
