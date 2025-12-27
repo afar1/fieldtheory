@@ -380,18 +380,13 @@ export class ClipboardManager extends EventEmitter {
       if (text) {
         const hash = this.hashContent(text);
         if (hash !== this.lastContentHash) {
-          // Check database first to avoid storing duplicates
+          this.lastContentHash = hash;
           const existing = this.db
             .prepare('SELECT id FROM clipboard_items WHERE content_hash = ?')
             .get(hash) as { id: number } | undefined;
           
-          if (existing) {
-            // Item already exists, just update lastContentHash to avoid checking again
-            this.lastContentHash = hash;
-          } else {
-            // New item, store it (storeText will notify listeners)
+          if (!existing) {
             await this.storeText(text);
-            this.lastContentHash = hash;
           }
         }
         return;
@@ -403,19 +398,13 @@ export class ClipboardManager extends EventEmitter {
         const imageBuffer = image.toPNG();
         const hash = this.hashContent(imageBuffer.toString('base64'));
         if (hash !== this.lastContentHash) {
-          // Check database first to avoid storing duplicates
+          this.lastContentHash = hash;
           const existing = this.db
             .prepare('SELECT id FROM clipboard_items WHERE content_hash = ?')
             .get(hash) as { id: number } | undefined;
           
-          if (existing) {
-            // Item already exists, just update lastContentHash to avoid checking again
-            this.lastContentHash = hash;
-          } else {
-            // New item, store it
-            // storeImage will notify listeners
+          if (!existing) {
             await this.storeImage(image, imageBuffer);
-            this.lastContentHash = hash;
           }
         }
       }
@@ -1635,6 +1624,24 @@ export class ClipboardManager extends EventEmitter {
    */
   private hashContent(content: string): string {
     return crypto.createHash('sha256').update(content).digest('hex');
+  }
+
+  syncClipboardHash(): void {
+    try {
+      const text = clipboard.readText();
+      if (text) {
+        this.lastContentHash = this.hashContent(text);
+        return;
+      }
+      
+      const image = clipboard.readImage();
+      if (!image.isEmpty()) {
+        const imageBuffer = image.toPNG();
+        this.lastContentHash = this.hashContent(imageBuffer.toString('base64'));
+      }
+    } catch (error) {
+      console.debug('[ClipboardManager] Error syncing clipboard hash:', error);
+    }
   }
 
   /**
