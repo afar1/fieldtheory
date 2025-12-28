@@ -438,6 +438,12 @@ export default function TeamView() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
+  
+  // OTP auth state.
+  const [otpCode, setOtpCode] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [isRequestingOtp, setIsRequestingOtp] = useState(false);
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
 
   // Team members state.
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
@@ -629,26 +635,59 @@ export default function TeamView() {
     return () => subscription.unsubscribe();
   }, []);
 
-  const handleSignIn = async (e: React.FormEvent) => {
+  // Request OTP code via email.
+  const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     const email = authEmail.toLowerCase().trim();
-    const password = authPassword;
 
-    if (!email || !password) {
-      setAuthError('Please enter your email and password');
+    if (!email) {
+      setAuthError('Please enter your email address');
       return;
     }
 
-    setAuthLoading(true);
+    setIsRequestingOtp(true);
     setAuthError(null);
 
-    if (!window.authAPI?.signInWithPassword) {
-      setAuthError('Auth not available');
-      setAuthLoading(false);
+    if (!window.authAPI?.requestOtp) {
+      setAuthError('OTP auth not available');
+      setIsRequestingOtp(false);
       return;
     }
 
-    const result = await window.authAPI.signInWithPassword(email, password);
+    const result = await window.authAPI.requestOtp(email);
+
+    if (result?.error) {
+      setAuthError(result.error);
+    } else {
+      setOtpSent(true);
+      // Don't set successMessage here - it would hide the OTP input form.
+      // The inline "Code sent to {email}" message is sufficient.
+    }
+
+    setIsRequestingOtp(false);
+  };
+
+  // Verify OTP code and sign in.
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const email = authEmail.toLowerCase().trim();
+    const token = otpCode.trim();
+
+    if (!email || !token) {
+      setAuthError('Please enter your email and the code from your inbox');
+      return;
+    }
+
+    setIsVerifyingOtp(true);
+    setAuthError(null);
+
+    if (!window.authAPI?.verifyOtp) {
+      setAuthError('OTP verification not available');
+      setIsVerifyingOtp(false);
+      return;
+    }
+
+    const result = await window.authAPI.verifyOtp(email, token);
 
     if (result?.error) {
       setAuthError(result.error);
@@ -662,12 +701,14 @@ export default function TeamView() {
       }
       setSession(result.session);
       setAuthEmail('');
-      setAuthPassword('');
+      setOtpCode('');
+      setOtpSent(false);
+      setSuccessMessage(null);
     } else {
-      setAuthError('Sign in failed - no session returned');
+      setAuthError('Verification failed - no session returned');
     }
 
-    setAuthLoading(false);
+    setIsVerifyingOtp(false);
   };
 
   const handleSignUp = async (e: React.FormEvent) => {
@@ -748,6 +789,8 @@ export default function TeamView() {
     setSuccessMessage(null);
     setAuthPassword('');
     setConfirmPassword('');
+    setOtpCode('');
+    setOtpSent(false);
   };
 
   // ---------------------------------------------------------------------------
@@ -1565,7 +1608,7 @@ export default function TeamView() {
             </div>
           )}
 
-          {/* Sign In Form */}
+          {/* Sign In Form - OTP Flow */}
           {authMode === 'signIn' && !successMessage && (
             <>
               <h3 style={{ margin: '0 0 8px 0', fontSize: '16px', color: theme.text }}>
@@ -1575,61 +1618,104 @@ export default function TeamView() {
                 Share clipboard items with your team and sync across devices.
               </p>
 
-              <form onSubmit={handleSignIn}>
-                <input
-                  type="email"
-                  placeholder="Email"
-                  value={authEmail}
-                  onChange={(e) => setAuthEmail(e.target.value)}
-                  disabled={authLoading}
-                  style={inputStyle}
-                />
-                <input
-                  type="password"
-                  placeholder="Password"
-                  value={authPassword}
-                  onChange={(e) => setAuthPassword(e.target.value)}
-                  disabled={authLoading}
-                  style={{ ...inputStyle, marginBottom: '12px' }}
-                />
-                {authError && (
-                  <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: '#ef4444' }}>
-                    {authError}
-                  </p>
-                )}
-                <button
-                  type="submit"
-                  disabled={authLoading || !authEmail.trim() || !authPassword}
-                  style={{
-                    ...buttonStyle,
-                    opacity: authLoading || !authEmail.trim() || !authPassword ? 0.6 : 1,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '8px',
-                  }}
-                >
-                  {authLoading && (
-                    <span style={{
-                      width: '14px',
-                      height: '14px',
-                      border: '2px solid rgba(255,255,255,0.3)',
-                      borderTopColor: '#fff',
-                      borderRadius: '50%',
-                      animation: 'spin 0.8s linear infinite',
-                    }} />
+              {/* Step 1: Email input and Send Code button */}
+              {!otpSent ? (
+                <form onSubmit={handleRequestOtp}>
+                  <input
+                    type="email"
+                    placeholder="Email"
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    disabled={isRequestingOtp}
+                    style={{ ...inputStyle, marginBottom: '12px' }}
+                  />
+                  {authError && (
+                    <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: '#ef4444' }}>
+                      {authError}
+                    </p>
                   )}
-                  {authLoading ? 'Signing in...' : 'Sign In'}
-                </button>
-              </form>
+                  <button
+                    type="submit"
+                    disabled={isRequestingOtp || !authEmail.trim()}
+                    style={{
+                      ...buttonStyle,
+                      opacity: isRequestingOtp || !authEmail.trim() ? 0.6 : 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                    }}
+                  >
+                    {isRequestingOtp && (
+                      <span style={{
+                        width: '14px',
+                        height: '14px',
+                        border: '2px solid rgba(255,255,255,0.3)',
+                        borderTopColor: '#fff',
+                        borderRadius: '50%',
+                        animation: 'spin 0.8s linear infinite',
+                      }} />
+                    )}
+                    {isRequestingOtp ? 'Sending...' : 'Send Code'}
+                  </button>
+                </form>
+              ) : (
+                /* Step 2: OTP code input and Verify button */
+                <form onSubmit={handleVerifyOtp}>
+                  <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: theme.textSecondary }}>
+                    Code sent to {authEmail}
+                  </p>
+                  <input
+                    type="text"
+                    placeholder="Enter code"
+                    value={otpCode}
+                    onChange={(e) => setOtpCode(e.target.value)}
+                    disabled={isVerifyingOtp}
+                    style={{ ...inputStyle, marginBottom: '12px', textAlign: 'center', letterSpacing: '4px', fontSize: '18px' }}
+                    autoFocus
+                  />
+                  {authError && (
+                    <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: '#ef4444' }}>
+                      {authError}
+                    </p>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={isVerifyingOtp || !otpCode.trim()}
+                    style={{
+                      ...buttonStyle,
+                      opacity: isVerifyingOtp || !otpCode.trim() ? 0.6 : 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                    }}
+                  >
+                    {isVerifyingOtp && (
+                      <span style={{
+                        width: '14px',
+                        height: '14px',
+                        border: '2px solid rgba(255,255,255,0.3)',
+                        borderTopColor: '#fff',
+                        borderRadius: '50%',
+                        animation: 'spin 0.8s linear infinite',
+                      }} />
+                    )}
+                    {isVerifyingOtp ? 'Verifying...' : 'Verify Code'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setOtpSent(false); setOtpCode(''); setAuthError(null); }}
+                    style={{ ...linkStyle, marginTop: '12px', display: 'block', width: '100%', textAlign: 'center' }}
+                  >
+                    Use a different email
+                  </button>
+                </form>
+              )}
 
               <div style={{ marginTop: '16px', textAlign: 'center' }}>
                 <button onClick={() => switchAuthMode('signUp')} style={linkStyle}>
                   Don't have an account? Sign up
-                </button>
-                <span style={{ margin: '0 8px', color: theme.textSecondary }}>|</span>
-                <button onClick={() => switchAuthMode('forgotPassword')} style={linkStyle}>
-                  Forgot password?
                 </button>
               </div>
             </>

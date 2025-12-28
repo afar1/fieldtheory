@@ -89,6 +89,9 @@ export default function PopularCommands() {
     );
   }, [commands, searchQuery]);
 
+  // Split into top 10 and the rest.
+  const topCommands = useMemo(() => filteredCommands.slice(0, 10), [filteredCommands]);
+  const otherCommands = useMemo(() => filteredCommands.slice(10), [filteredCommands]);
 
   // Copy command to clipboard and increment counter.
   const handleCopy = useCallback(async (command: Command) => {
@@ -190,7 +193,7 @@ export default function PopularCommands() {
   }, [newCommandName, newCommandContent]);
 
   // Render a single command row.
-  const renderCommandRow = (command: Command) => {
+  const renderCommandRow = (command: Command, index: number, isTop: boolean) => {
     const isCopied = copiedId === command.id;
     
     return (
@@ -209,18 +212,40 @@ export default function PopularCommands() {
         }}
       >
         <div style={styles.commandLeft}>
+          {/* Rank badge for top 10 */}
+          {isTop && (
+            <span style={{
+              ...styles.rankBadge,
+              backgroundColor: index < 3 
+                ? (theme.isDark ? '#fbbf24' : '#f59e0b')
+                : (theme.isDark ? '#6b7280' : '#9ca3af'),
+              color: index < 3 ? '#000' : '#fff',
+            }}>
+              {index + 1}
+            </span>
+          )}
+          
           <div style={styles.commandInfo}>
-            <span style={{ ...styles.commandName, color: theme.text }}>
+            <span style={{
+              ...styles.commandName,
+              color: theme.text,
+            }}>
               {command.name}
             </span>
-            <span style={{ ...styles.commandPreview, color: theme.textSecondary }}>
+            <span style={{
+              ...styles.commandPreview,
+              color: theme.textSecondary,
+            }}>
               {truncateContent(command.content, 80)}
             </span>
           </div>
         </div>
         
         <div style={styles.commandRight}>
-          <span style={{ ...styles.copyCount, color: theme.textSecondary }}>
+          <span style={{
+            ...styles.copyCount,
+            color: theme.textSecondary,
+          }}>
             {isCopied ? '✓ Copied' : `${command.copy_count} copies`}
           </span>
         </div>
@@ -338,7 +363,27 @@ export default function PopularCommands() {
             </span>
           </div>
         ) : (
-          filteredCommands.map(cmd => renderCommandRow(cmd))
+          <>
+            {/* Top 10 section */}
+            {topCommands.length > 0 && (
+              <div style={styles.section}>
+                <h3 style={{ ...styles.sectionTitle, color: theme.textSecondary }}>
+                  🔥 Top Commands
+                </h3>
+                {topCommands.map((cmd, idx) => renderCommandRow(cmd, idx, true))}
+              </div>
+            )}
+
+            {/* Rest section */}
+            {otherCommands.length > 0 && (
+              <div style={styles.section}>
+                <h3 style={{ ...styles.sectionTitle, color: theme.textSecondary }}>
+                  More Commands
+                </h3>
+                {otherCommands.map((cmd, idx) => renderCommandRow(cmd, idx + 10, false))}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -497,6 +542,17 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'auto',
     padding: '8px 16px',
   },
+  section: {
+    marginBottom: '16px',
+  },
+  sectionTitle: {
+    fontSize: '11px',
+    fontWeight: 600,
+    textTransform: 'uppercase',
+    letterSpacing: '0.08em',
+    marginBottom: '8px',
+    marginTop: 0,
+  },
   commandRow: {
     display: 'flex',
     alignItems: 'center',
@@ -513,6 +569,17 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '10px',
     flex: 1,
     minWidth: 0,
+  },
+  rankBadge: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '22px',
+    height: '22px',
+    borderRadius: '50%',
+    fontSize: '11px',
+    fontWeight: 600,
+    flexShrink: 0,
   },
   commandInfo: {
     display: 'flex',

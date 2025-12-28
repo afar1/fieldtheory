@@ -301,6 +301,78 @@ export class MobileSync extends EventEmitter {
   }
 
   /**
+   * Request OTP code via email. Sends a 6-digit code to the user's email.
+   */
+  async requestOtp(email: string): Promise<{ error: string | null }> {
+    if (!this.supabase) {
+      return { error: 'Supabase not initialized' };
+    }
+
+    console.log('[MobileSync] Requesting OTP for:', email);
+
+    try {
+      const { error } = await this.supabase.auth.signInWithOtp({
+        email,
+        options: {
+          shouldCreateUser: true,
+        },
+      });
+
+      if (error) {
+        console.error('[MobileSync] OTP request failed:', error);
+        return { error: error.message };
+      }
+
+      console.log('[MobileSync] OTP sent to:', email);
+      return { error: null };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      console.error('[MobileSync] OTP request exception:', message);
+      return { error: message };
+    }
+  }
+
+  /**
+   * Verify OTP code and establish session.
+   */
+  async verifyOtp(email: string, token: string): Promise<{ error: string | null; session: Session | null }> {
+    if (!this.supabase) {
+      return { error: 'Supabase not initialized', session: null };
+    }
+
+    console.log('[MobileSync] Verifying OTP for:', email);
+
+    try {
+      const { data, error } = await this.supabase.auth.verifyOtp({
+        email,
+        token,
+        type: 'email',
+      });
+
+      if (error) {
+        console.error('[MobileSync] OTP verification failed:', error);
+        return { error: error.message, session: null };
+      }
+
+      if (data.session) {
+        console.log('[MobileSync] OTP verified, session established for:', data.session.user?.email);
+        
+        // Forward session to sync services.
+        await this.setSession(data.session.access_token, data.session.refresh_token);
+        
+        this.startPeriodicSync();
+        return { error: null, session: data.session };
+      }
+
+      return { error: 'No session returned', session: null };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      console.error('[MobileSync] OTP verification exception:', message);
+      return { error: message, session: null };
+    }
+  }
+
+  /**
    * Load password reset redirect URL from environment or .env.local file.
    * Falls back to localhost for development.
    */
