@@ -1,5 +1,8 @@
 // Data models for the app
 
+// Re-export tier types and constants.
+export * from './tiers';
+
 export interface Todo {
   id: string;
   text: string;
