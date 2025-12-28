@@ -928,7 +928,7 @@ export default function SettingsPanel() {
             <div style={styles.row}>
               <div style={styles.syncUserInfo}>
                 <span style={styles.syncUserIcon}>✓</span>
-                <span style={styles.rowValue}>{session.user.email}</span>
+                <span style={styles.rowValue}>{session.user.email === 'andrew.mfarah@gmail.com' ? 'A. Farah' : session.user.email}</span>
               </div>
               <div style={styles.rowControls}>
                 <button onClick={handleManualSync} disabled={isSyncing} style={styles.btn}>
@@ -1052,9 +1052,9 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: 'center' as const,
   },
   btnActive: {
-    backgroundColor: '#4a7c23',
+    backgroundColor: '#14372A',
     color: '#fff',
-    borderColor: '#4a7c23',
+    borderColor: '#14372A',
   },
   btnDanger: {
     color: '#dc2626',
@@ -1063,8 +1063,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   btnSuccess: {
     color: '#fff',
-    backgroundColor: '#4a7c23',
-    borderColor: '#4a7c23',
+    backgroundColor: '#14372A',
+    borderColor: '#14372A',
   },
   btnGhost: {
     backgroundColor: 'transparent',
@@ -1132,7 +1132,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'inline-block',
     marginRight: '6px',
   },
-  statusGreen: { backgroundColor: '#4a7c23' },
+  statusGreen: { backgroundColor: '#14372A' },
   statusYellow: { backgroundColor: '#f59e0b' },
   statusRed: { backgroundColor: '#ef4444' },
   statusGray: { backgroundColor: '#9ca3af' },
@@ -1203,7 +1203,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     width: '18px',
     height: '18px',
-    backgroundColor: '#4a7c23',
+    backgroundColor: '#14372A',
     color: '#fff',
     borderRadius: '50%',
     fontSize: '10px',
@@ -1248,9 +1248,9 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
   },
   hotkeyButtonActive: {
-    backgroundColor: '#4a7c23',
+    backgroundColor: '#14372A',
     color: '#fff',
-    borderColor: '#4a7c23',
+    borderColor: '#14372A',
   },
   cancelButton: {
     padding: '6px 8px',
@@ -1279,7 +1279,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '13px',
     fontWeight: 500,
     color: '#fff',
-    backgroundColor: '#4a7c23',
+    backgroundColor: '#14372A',
     border: 'none',
     borderRadius: '6px',
     cursor: 'pointer',

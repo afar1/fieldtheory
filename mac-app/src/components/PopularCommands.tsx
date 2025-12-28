@@ -31,6 +31,7 @@ export default function PopularCommands() {
   
   // Search state.
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
   
   // Share/contribute state.
   const [showShareForm, setShowShareForm] = useState(false);
@@ -212,16 +213,16 @@ export default function PopularCommands() {
         }}
       >
         <div style={styles.commandLeft}>
-          {/* Rank badge for top 10 */}
+          {/* Simple rank number for top 10 */}
           {isTop && (
             <span style={{
-              ...styles.rankBadge,
-              backgroundColor: index < 3 
-                ? (theme.isDark ? '#fbbf24' : '#f59e0b')
-                : (theme.isDark ? '#6b7280' : '#9ca3af'),
-              color: index < 3 ? '#000' : '#fff',
+              fontSize: '10px',
+              color: theme.textSecondary,
+              marginRight: '8px',
+              minWidth: '16px',
+              textAlign: 'right',
             }}>
-              {index + 1}
+              #{index + 1}
             </span>
           )}
           
@@ -268,27 +269,59 @@ export default function PopularCommands() {
     <div style={{ ...styles.container, backgroundColor: theme.bg }}>
       {/* Header with search and share */}
       <div style={styles.header}>
-        <input
-          type="text"
-          placeholder="Search commands..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          style={{
-            ...styles.searchInput,
-            backgroundColor: theme.isDark ? '#2d2d2d' : '#fff',
-            borderColor: theme.isDark ? '#404040' : '#d1d5db',
-            color: theme.text,
-          }}
-        />
+        <div style={{ position: 'relative', flex: 1 }}>
+          <input
+            type="text"
+            placeholder=""
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setSearchFocused(false)}
+            style={{
+              width: '100%',
+              padding: `6px 10px 6px ${!searchQuery && !searchFocused ? '32px' : '10px'}`,
+              border: `1px solid ${theme.inputBorder}`,
+              borderRadius: '6px',
+              fontSize: '11px',
+              outline: 'none',
+              boxSizing: 'border-box',
+              backgroundColor: theme.inputBg,
+              color: theme.text,
+              transition: 'padding-left 0.1s ease',
+            }}
+          />
+          {!searchQuery && !searchFocused && (
+            <div style={{
+              position: 'absolute',
+              left: '10px',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              pointerEvents: 'none',
+              color: theme.textSecondary,
+              fontSize: '11px',
+            }}>
+              <span>search...</span>
+            </div>
+          )}
+        </div>
         
         <button
           onClick={() => setShowShareForm(!showShareForm)}
           style={{
-            ...styles.shareButton,
+            padding: '4px 8px',
+            fontSize: '9px',
             backgroundColor: showShareForm 
               ? (theme.isDark ? '#4b5563' : '#d1d5db')
-              : (theme.isDark ? '#3b82f6' : '#2563eb'),
-            color: '#fff',
+              : 'transparent',
+            color: showShareForm ? '#fff' : theme.textSecondary,
+            border: `1px solid ${showShareForm ? (theme.isDark ? '#4b5563' : '#d1d5db') : theme.inputBorder}`,
+            borderRadius: '4px',
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+            outline: 'none',
           }}
         >
           {showShareForm ? 'Cancel' : '+ Share'}
@@ -367,9 +400,6 @@ export default function PopularCommands() {
             {/* Top 10 section */}
             {topCommands.length > 0 && (
               <div style={styles.section}>
-                <h3 style={{ ...styles.sectionTitle, color: theme.textSecondary }}>
-                  🔥 Top Commands
-                </h3>
                 {topCommands.map((cmd, idx) => renderCommandRow(cmd, idx, true))}
               </div>
             )}

@@ -424,7 +424,11 @@ function InitialsBadge({ email }: { email: string | null }) {
 // Component
 // =============================================================================
 
-export default function TeamView() {
+interface TeamViewProps {
+  onSyncingChange?: (syncing: boolean) => void;
+}
+
+export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
   const { theme } = useTheme();
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -848,6 +852,7 @@ export default function TeamView() {
     // If we have cached items, show background sync indicator instead of blocking loading.
     if (isBackgroundSync) {
       setBackgroundSyncing(true);
+      onSyncingChange?.(true);
     } else {
       setItemsLoading(true);
     }
@@ -874,6 +879,7 @@ export default function TeamView() {
     
     setItemsLoading(false);
     setBackgroundSyncing(false);
+    onSyncingChange?.(false);
   }, []);
 
   // ---------------------------------------------------------------------------
@@ -1843,53 +1849,6 @@ export default function TeamView() {
         padding: '0 16px 16px 16px',
       }}
     >
-      {/* Header with sync indicator and team members toggle */}
-      <div
-        style={{
-          marginBottom: '12px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}
-      >
-        {/* Background sync indicator */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {backgroundSyncing && (
-            <span style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '4px',
-              fontSize: '10px',
-              color: theme.textSecondary,
-              opacity: 0.7,
-            }}>
-              <span style={{
-                width: '8px',
-                height: '8px',
-                border: '1.5px solid rgba(128,128,128,0.3)',
-                borderTopColor: theme.accent,
-                borderRadius: '50%',
-                animation: 'spin 0.8s linear infinite',
-              }} />
-              syncing
-            </span>
-          )}
-        </div>
-        <button
-          onClick={() => setShowMembers(!showMembers)}
-          style={{
-            padding: '4px 8px',
-            fontSize: '10px',
-            backgroundColor: 'transparent',
-            color: theme.accent,
-            border: `1px solid ${theme.accent}`,
-            borderRadius: '4px',
-            cursor: 'pointer',
-          }}
-        >
-          {showMembers ? 'Hide' : 'Invite Others'}
-        </button>
-      </div>
 
       {/* Team members panel */}
       {showMembers && (
@@ -1989,52 +1948,74 @@ export default function TeamView() {
         </div>
       )}
 
-      {/* Search input with custom placeholder */}
+      {/* Search input with invite button inline */}
       <div style={{ 
-        position: 'relative',
+        display: 'flex',
+        gap: '8px',
         marginBottom: selectedIds.size > 0 ? '0' : '8px',
         transition: 'margin-bottom 0.15s ease',
       }}>
-        <input
-          ref={inputRef}
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          onFocus={() => setSearchFocused(true)}
-          onBlur={() => setSearchFocused(false)}
-          placeholder=""
+        <div style={{ 
+          position: 'relative',
+          flex: 1,
+        }}>
+          <input
+            ref={inputRef}
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setSearchFocused(false)}
+            placeholder=""
+            style={{
+              width: '100%',
+              padding: `6px 10px 6px ${!searchQuery && !searchFocused ? '32px' : '10px'}`,
+              border: `1px solid ${theme.inputBorder}`,
+              borderRadius: '6px',
+              fontSize: '11px',
+              outline: 'none',
+              boxSizing: 'border-box',
+              backgroundColor: theme.inputBg,
+              color: theme.text,
+              transition: 'padding-left 0.1s ease',
+              // @ts-ignore - prevent drag on input
+              WebkitAppRegion: 'no-drag',
+            }}
+          />
+          {/* Custom placeholder - hide when focused or has content */}
+          {!searchQuery && !searchFocused && (
+            <div style={{
+              position: 'absolute',
+              left: '10px',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              pointerEvents: 'none',
+              color: theme.textSecondary,
+              fontSize: '11px',
+            }}>
+              <span>search...</span>
+            </div>
+          )}
+        </div>
+        <button
+          onClick={() => setShowMembers(!showMembers)}
           style={{
-            width: '100%',
-            padding: `6px 10px 6px ${!searchQuery && !searchFocused ? '32px' : '10px'}`,
-            border: `1px solid ${theme.inputBorder}`,
-            borderRadius: '6px',
-            fontSize: '11px',
-            outline: 'none',
-            boxSizing: 'border-box',
-            backgroundColor: theme.inputBg,
-            color: theme.text,
-            transition: 'padding-left 0.1s ease',
-            // @ts-ignore - prevent drag on input
-            WebkitAppRegion: 'no-drag',
-          }}
-        />
-        {/* Custom placeholder - hide when focused or has content */}
-        {!searchQuery && !searchFocused && (
-          <div style={{
-            position: 'absolute',
-            left: '10px',
-            top: '50%',
-            transform: 'translateY(-50%)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-            pointerEvents: 'none',
+            padding: '4px 8px',
+            fontSize: '9px',
+            backgroundColor: 'transparent',
             color: theme.textSecondary,
-            fontSize: '11px',
-          }}>
-            <span>search...</span>
-          </div>
-        )}
+            border: `1px solid ${theme.inputBorder}`,
+            borderRadius: '4px',
+            cursor: 'pointer',
+            outline: 'none',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {showMembers ? 'Hide' : '+ Invite'}
+        </button>
       </div>
 
       {/* Selection actions bar - slides in when items are selected */}

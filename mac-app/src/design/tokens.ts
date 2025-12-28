@@ -14,7 +14,7 @@ export const colors = {
     bgAlt: '#f5f4f2',        // Slightly darker for cards/boxes
     text: '#1a1a1a',         // Dark ink for primary text
     textMuted: '#6b6b6b',    // Softer text for secondary content
-    accent: '#4a7c23',       // Forest green accent
+    accent: '#14372A',       // Deep forest green accent
     border: '#e0e0e0',       // Light border
     dots: '#d4d4d4',         // Dotted separator color
   },
@@ -23,7 +23,7 @@ export const colors = {
     bgAlt: '#2a2a2a',        // Slightly lighter for cards
     text: '#e8e8e8',         // Light text
     textMuted: '#999999',    // Muted secondary text
-    accent: '#7cb342',       // Lighter green for dark mode
+    accent: '#1a4a35',       // Lighter version for dark mode
     border: '#3a3a3a',       // Dark border
     dots: '#4a4a4a',         // Dotted separator in dark mode
   },
@@ -130,8 +130,8 @@ export const lightTheme: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   textSecondary: colors.light.textMuted,
   border: colors.light.border,
   accent: colors.light.accent,
-  accentHover: '#3d6a1c',  // Darker green on hover
-  selectedBg: 'rgba(74, 124, 35, 0.08)',  // Light green tint
+  accentHover: '#0f2a1f',  // Darker on hover
+  selectedBg: 'rgba(20, 55, 42, 0.08)',  // Light green tint
   selectedBorder: colors.light.accent,
   inputBg: '#ffffff',
   inputBorder: colors.light.border,
@@ -145,8 +145,8 @@ export const darkThemeSolid: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   textSecondary: colors.dark.textMuted,
   border: colors.dark.border,
   accent: colors.dark.accent,
-  accentHover: '#8bc34a',  // Lighter green on hover
-  selectedBg: 'rgba(124, 179, 66, 0.12)',  // Light green tint
+  accentHover: '#2a6a4f',  // Lighter green on hover
+  selectedBg: 'rgba(26, 74, 53, 0.12)',  // Light green tint
   selectedBorder: colors.dark.accent,
   inputBg: colors.dark.bgAlt,
   inputBorder: 'rgba(255, 255, 255, 0.15)',
@@ -160,8 +160,8 @@ export const darkThemeGlass: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   textSecondary: colors.dark.textMuted,
   border: colors.dark.border,
   accent: colors.dark.accent,
-  accentHover: '#8bc34a',
-  selectedBg: 'rgba(124, 179, 66, 0.12)',
+  accentHover: '#2a6a4f',
+  selectedBg: 'rgba(26, 74, 53, 0.12)',
   selectedBorder: colors.dark.accent,
   inputBg: 'rgba(42, 42, 42, 0.9)',
   inputBorder: 'rgba(255, 255, 255, 0.15)',
