@@ -171,10 +171,13 @@ export function useWhisperRecording(): UseWhisperRecordingReturn {
         throw new Error('No recording URI available');
       }
       
-      // Reset audio mode
+      // Reset audio mode.
+      // Must set staysActiveInBackground: false when playsInSilentModeIOS: false.
+      // iOS doesn't allow background audio without silent mode playback.
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: false,
         playsInSilentModeIOS: false,
+        staysActiveInBackground: false,
       });
       
       // Clean up recording reference

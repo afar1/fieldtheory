@@ -6,6 +6,9 @@ PODS:
     - ReactCommon/turbomodule/core
   - EXConstants (18.0.10):
     - ExpoModulesCore
+  - EXImageLoader (6.0.0):
+    - ExpoModulesCore
+    - React-Core
   - Expo (52.0.47):
     - ExpoModulesCore
   - ExpoAsset (12.0.10):
@@ -16,6 +19,10 @@ PODS:
     - ExpoModulesCore
   - ExpoFont (13.0.4):
     - ExpoModulesCore
+  - ExpoImageManipulator (14.0.8):
+    - EXImageLoader
+    - ExpoModulesCore
+    - SDWebImageWebPCoder
   - ExpoModulesCore (2.2.3):
     - DoubleConversion
     - glog
@@ -48,6 +55,18 @@ PODS:
   - hermes-engine (0.76.9):
     - hermes-engine/Pre-built (= 0.76.9)
   - hermes-engine/Pre-built (0.76.9)
+  - libwebp (1.5.0):
+    - libwebp/demux (= 1.5.0)
+    - libwebp/mux (= 1.5.0)
+    - libwebp/sharpyuv (= 1.5.0)
+    - libwebp/webp (= 1.5.0)
+  - libwebp/demux (1.5.0):
+    - libwebp/webp
+  - libwebp/mux (1.5.0):
+    - libwebp/demux
+  - libwebp/sharpyuv (1.5.0)
+  - libwebp/webp (1.5.0):
+    - libwebp/sharpyuv
   - RCT-Folly (2024.10.14.00):
     - boost
     - DoubleConversion
@@ -1349,6 +1368,27 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - Yoga
+  - react-native-view-shot (4.0.3):
+    - DoubleConversion
+    - glog
+    - hermes-engine
+    - RCT-Folly (= 2024.10.14.00)
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-ImageManager
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - Yoga
   - react-native-webview (13.16.0):
     - DoubleConversion
     - glog
@@ -1644,7 +1684,7 @@ PODS:
     - React-utils (= 0.76.9)
   - RNCAsyncStorage (1.23.1):
     - React-Core
-  - RNGestureHandler (2.20.2):
+  - RNGestureHandler (2.30.0):
     - DoubleConversion
     - glog
     - hermes-engine
@@ -1752,6 +1792,10 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - Yoga
+  - SDWebImage/Core (5.21.5)
+  - SDWebImageWebPCoder (0.15.0):
+    - libwebp (~> 1.0)
+    - SDWebImage/Core (~> 5.17)
   - SocketRocket (0.7.1)
   - whisper-rn (0.5.2):
     - React
@@ -1764,11 +1808,13 @@ DEPENDENCIES:
   - DoubleConversion (from `../node_modules/react-native/third-party-podspecs/DoubleConversion.podspec`)
   - EXAV (from `../node_modules/expo-av/ios`)
   - EXConstants (from `../node_modules/expo-constants/ios`)
+  - EXImageLoader (from `../node_modules/expo-image-loader/ios`)
   - Expo (from `../node_modules/expo`)
   - ExpoAsset (from `../node_modules/expo-asset/ios`)
   - ExpoClipboard (from `../node_modules/expo-clipboard/ios`)
   - ExpoFileSystem (from `../node_modules/expo-file-system/ios`)
   - ExpoFont (from `../node_modules/expo-font/ios`)
+  - ExpoImageManipulator (from `../node_modules/expo-image-manipulator/ios`)
   - ExpoModulesCore (from `../node_modules/expo-modules-core`)
   - ExpoWebBrowser (from `../node_modules/expo-web-browser/ios`)
   - fast_float (from `../node_modules/react-native/third-party-podspecs/fast_float.podspec`)
@@ -1809,6 +1855,7 @@ DEPENDENCIES:
   - React-microtasksnativemodule (from `../node_modules/react-native/ReactCommon/react/nativemodule/microtasks`)
   - react-native-get-random-values (from `../node_modules/react-native-get-random-values`)
   - react-native-pager-view (from `../node_modules/react-native-pager-view`)
+  - react-native-view-shot (from `../node_modules/react-native-view-shot`)
   - react-native-webview (from `../node_modules/react-native-webview`)
   - React-nativeconfig (from `../node_modules/react-native/ReactCommon`)
   - React-NativeModulesApple (from `../node_modules/react-native/ReactCommon/react/nativemodule/core/platform/ios`)
@@ -1845,6 +1892,9 @@ DEPENDENCIES:
 
 SPEC REPOS:
   trunk:
+    - libwebp
+    - SDWebImage
+    - SDWebImageWebPCoder
     - SocketRocket
 
 EXTERNAL SOURCES:
@@ -1856,6 +1906,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/expo-av/ios"
   EXConstants:
     :path: "../node_modules/expo-constants/ios"
+  EXImageLoader:
+    :path: "../node_modules/expo-image-loader/ios"
   Expo:
     :path: "../node_modules/expo"
   ExpoAsset:
@@ -1866,6 +1918,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/expo-file-system/ios"
   ExpoFont:
     :path: "../node_modules/expo-font/ios"
+  ExpoImageManipulator:
+    :path: "../node_modules/expo-image-manipulator/ios"
   ExpoModulesCore:
     :path: "../node_modules/expo-modules-core"
   ExpoWebBrowser:
@@ -1943,6 +1997,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native-get-random-values"
   react-native-pager-view:
     :path: "../node_modules/react-native-pager-view"
+  react-native-view-shot:
+    :path: "../node_modules/react-native-view-shot"
   react-native-webview:
     :path: "../node_modules/react-native-webview"
   React-nativeconfig:
@@ -2015,11 +2071,13 @@ SPEC CHECKSUMS:
   DoubleConversion: f16ae600a246532c4020132d54af21d0ddb2a385
   EXAV: 4c41f0a6ae54a0b96597abc90e37962ab2ee0d85
   EXConstants: fd688cef4e401dcf798a021cfb5d87c890c30ba3
+  EXImageLoader: 189e3476581efe3ad4d1d3fb4735b7179eb26f05
   Expo: 1687edb10c76b0c0f135306d6ae245379f50ed54
   ExpoAsset: d839c8eae8124470332408427327e8f88beb2dfd
   ExpoClipboard: 44fd1c8959ee8f6175d059dc011b154c9709a969
   ExpoFileSystem: 42d363d3b96f9afab980dcef60d5657a4443c655
   ExpoFont: f354e926f8feae5e831ec8087f36652b44a0b188
+  ExpoImageManipulator: 607a5c8c88085381639458a46cc55fb9d3869148
   ExpoModulesCore: 725faec070d590810d2ea5983d9f78f7cf6a38ec
   ExpoWebBrowser: a212e6b480d8857d3e441fba51e0c968333803b3
   fast_float: 06eeec4fe712a76acc9376682e4808b05ce978b6
@@ -2027,6 +2085,7 @@ SPEC CHECKSUMS:
   fmt: 01b82d4ca6470831d1cc0852a1af644be019e8f6
   glog: 08b301085f15bcbb6ff8632a8ebaf239aae04e6a
   hermes-engine: 9e868dc7be781364296d6ee2f56d0c1a9ef0bb11
+  libwebp: 02b23773aedb6ff1fd38cec7a77b81414c6842a8
   RCT-Folly: ea9d9256ba7f9322ef911169a9f696e5857b9e17
   RCTDeprecation: ebe712bb05077934b16c6bf25228bdec34b64f83
   RCTRequired: ca91e5dd26b64f577b528044c962baf171c6b716
@@ -2058,6 +2117,7 @@ SPEC CHECKSUMS:
   React-microtasksnativemodule: 5c3d795318c22ab8df55100e50b151384a4a60b3
   react-native-get-random-values: d16467cf726c618e9c7a8c3c39c31faa2244bbba
   react-native-pager-view: c319b46c0d5d8f53c41e56f348c7c089dd22e26d
+  react-native-view-shot: 7a423611e1ee8c1751e1446f0d8c9bca3bdd29cc
   react-native-webview: 290559634cdeb20d4e270e4d637a65ebc77b063f
   React-nativeconfig: 8efdb1ef1e9158c77098a93085438f7e7b463678
   React-NativeModulesApple: cebca2e5320a3d66e123cade23bd90a167ffce5e
@@ -2087,8 +2147,10 @@ SPEC CHECKSUMS:
   ReactCodegen: f853a20cc9125c5521c8766b4b49375fec20648b
   ReactCommon: 300d8d9c5cb1a6cd79a67cf5d8f91e4d477195f9
   RNCAsyncStorage: aa75595c1aefa18f868452091fa0c411a516ce11
-  RNGestureHandler: 32336458ef842088a459ccfcc10b583186de2633
+  RNGestureHandler: 62d94f3e18259451ed67a645638a713be5ce17a5
   RNReanimated: 6d22a1aec06a9787b797bc0c40fc2779be0599a5
+  SDWebImage: e9c98383c7572d713c1a0d7dd2783b10599b9838
+  SDWebImageWebPCoder: 0e06e365080397465cc73a7a9b472d8a3bd0f377
   SocketRocket: d4aabe649be1e368d1318fdf28a022d714d65748
   whisper-rn: 072397e5036590b33834da65ade9917184917811
   Yoga: feb4910aba9742cfedc059e2b2902e22ffe9954a
