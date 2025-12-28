@@ -29,7 +29,7 @@ function ProgressDots({ currentStep, totalSteps }: { currentStep: number; totalS
           key={i}
           style={{
             ...styles.dot,
-            backgroundColor: i === currentStep ? '#4a7c23' : '#d1d5db',
+            backgroundColor: i === currentStep ? '#14372A' : '#d1d5db',
           }}
         />
       ))}
@@ -694,7 +694,7 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.6,
   },
   primaryButton: {
-    backgroundColor: '#4a7c23',  // Forest green accent from design system
+    backgroundColor: '#14372A',  // Forest green accent from design system
     color: '#ffffff',
     border: 'none',
     borderRadius: '8px',
@@ -771,7 +771,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   successIcon: {
     fontSize: '16px',
-    color: '#4a7c23',  // Forest green accent from design system
+    color: '#14372A',  // Forest green accent from design system
   },
   warningBox: {
     display: 'flex',
@@ -814,7 +814,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     width: '24px',
     height: '24px',
-    backgroundColor: '#4a7c23',  // Forest green accent from design system
+    backgroundColor: '#14372A',  // Forest green accent from design system
     color: '#ffffff',
     borderRadius: '50%',
     fontSize: '12px',
@@ -837,7 +837,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   progressFill: {
     height: '100%',
-    backgroundColor: '#4a7c23',  // Forest green accent from design system
+    backgroundColor: '#14372A',  // Forest green accent from design system
     transition: 'width 0.3s ease',
   },
   progressPercent: {
