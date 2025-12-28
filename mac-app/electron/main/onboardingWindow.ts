@@ -1,4 +1,4 @@
-import { app, BrowserWindow, screen, systemPreferences, shell } from 'electron';
+import { app, BrowserWindow, screen, systemPreferences, shell, desktopCapturer } from 'electron';
 import path from 'path';
 
 /**
@@ -10,7 +10,8 @@ export enum OnboardingStep {
   MICROPHONE = 1,
   ACCESSIBILITY = 2,
   MODEL_DOWNLOAD = 3,
-  COMPLETE = 4,
+  SCREEN_RECORDING = 4,
+  COMPLETE = 5,
 }
 
 /**
@@ -19,6 +20,7 @@ export enum OnboardingStep {
 export interface PermissionStatus {
   microphone: 'granted' | 'denied' | 'not-determined';
   accessibility: boolean;
+  screenRecording: boolean;
 }
 
 /**
@@ -52,9 +54,15 @@ export class OnboardingWindow {
     // Check accessibility permission (needed for simulating keyboard input).
     const accessibilityStatus = systemPreferences.isTrustedAccessibilityClient(false);
     
+    // Check screen recording permission (needed for screenshots).
+    const screenStatusRaw = systemPreferences.getMediaAccessStatus('screen');
+    const screenRecordingStatus = screenStatusRaw === 'granted';
+    console.log('[Onboarding] Screen recording permission status:', screenStatusRaw, '→', screenRecordingStatus);
+    
     return {
       microphone: micStatus,
       accessibility: accessibilityStatus,
+      screenRecording: screenRecordingStatus,
     };
   }
 
@@ -80,12 +88,35 @@ export class OnboardingWindow {
   }
 
   /**
-   * Open System Settings directly to the Accessibility pane.
+   * Open System Settings to the Accessibility pane.
    * Users must manually grant accessibility permission.
    */
   openAccessibilitySettings(): void {
-    // Open System Settings directly to Privacy & Security > Accessibility.
-    shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+    // This triggers the system prompt and opens System Settings if needed.
+    systemPreferences.isTrustedAccessibilityClient(true);
+  }
+
+  /**
+   * Open System Settings to the Screen Recording pane.
+   * Users must manually grant screen recording permission for screenshots.
+   */
+  openScreenRecordingSettings(): void {
+    shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+  }
+
+  /**
+   * Trigger a screen capture attempt to add the app to the Screen Recording list.
+   * macOS will automatically add the app to the permissions list (but disabled).
+   * This saves users from having to manually click "+" to add the app.
+   */
+  async triggerScreenRecordingPrompt(): Promise<void> {
+    try {
+      // Attempting to get screen sources triggers macOS to add the app to the list.
+      await desktopCapturer.getSources({ types: ['screen'] });
+    } catch (error) {
+      // Expected to fail if permission not granted - that's fine.
+      console.log('[Onboarding] Screen capture triggered to add app to permissions list');
+    }
   }
 
   /**
@@ -133,7 +164,7 @@ export class OnboardingWindow {
       this.window.loadURL(`${startUrl}#/onboarding?step=${startStep}`);
     } else {
       // Production - load from built files.
-      const indexPath = path.join(app.getAppPath(), 'dist', 'index.html');
+      const indexPath = path.join(app.getAppPath(), 'electron-dist', 'index.html');
       this.window.loadFile(indexPath, { hash: `/onboarding?step=${startStep}` });
     }
 

@@ -65,6 +65,9 @@ export default function SettingsPanel() {
   const [apiKeySaving, setApiKeySaving] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   
+  // Permission banner state - whether to show reminders for missing permissions.
+  const [showPermissionReminders, setShowPermissionReminders] = useState(true);
+  
   // Load clipboard hotkeys on mount
   useEffect(() => {
     if (window.clipboardAPI) {
@@ -85,6 +88,11 @@ export default function SettingsPanel() {
       // Load API key status
       window.clipboardAPI.getApiKeyStatus?.().then(status => {
         setHasApiKey(status.hasKey);
+      });
+      
+      // Load permission banner setting
+      window.clipboardAPI.getHideScreenRecordingBanner?.().then(hide => {
+        setShowPermissionReminders(!hide);
       });
     }
     
@@ -156,7 +164,7 @@ export default function SettingsPanel() {
   // Handler for toggling continuous context enabled state
   const handleToggleContinuousContext = async (enabled: boolean) => {
     if (!window.clipboardAPI?.setContinuousContextEnabled) return;
-    
+
     try {
       const success = await window.clipboardAPI.setContinuousContextEnabled(enabled);
       if (success) {
@@ -164,6 +172,21 @@ export default function SettingsPanel() {
       }
     } catch (err) {
       console.error('Failed to toggle continuous context:', err);
+    }
+  };
+
+  // Handler for toggling permission reminders (screen recording banner)
+  const handleTogglePermissionReminders = async (show: boolean) => {
+    if (!window.clipboardAPI?.setHideScreenRecordingBanner) return;
+
+    try {
+      // Invert the value because we store "hide" but display as "show reminders"
+      const success = await window.clipboardAPI.setHideScreenRecordingBanner(!show);
+      if (success) {
+        setShowPermissionReminders(show);
+      }
+    } catch (err) {
+      console.error('Failed to toggle permission reminders:', err);
     }
   };
   
@@ -215,7 +238,15 @@ export default function SettingsPanel() {
       if (supabase) {
         await supabase.auth.signOut();
       }
+      
+      // Supabase persists session in localStorage. When signOut() fails with
+      // "Auth session missing!", it doesn't clear storage. We must clear it
+      // manually to prevent getSession() from restoring the old session.
+      const supabaseKeys = Object.keys(localStorage).filter(k => k.startsWith('sb-'));
+      supabaseKeys.forEach(k => localStorage.removeItem(k));
+      
       setSyncStatus(null);
+      setSession(null);
     } catch (err) {
       console.error('Sign out error:', err);
     } finally {
@@ -808,6 +839,19 @@ export default function SettingsPanel() {
             {isCapturingTodoHotkey && (
               <button onClick={() => { setIsCapturingTodoHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
             )}
+          </div>
+        </div>
+        
+        {/* Permission Reminders - show/hide the screen recording permission banner */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Permission Reminders</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => handleTogglePermissionReminders(!showPermissionReminders)}
+              style={{ ...styles.toggle, backgroundColor: showPermissionReminders ? theme.accent : '#d1d5db' }}
+            >
+              <span style={{ ...styles.toggleKnob, transform: showPermissionReminders ? 'translateX(20px)' : 'translateX(2px)' }} />
+            </button>
           </div>
         </div>
         

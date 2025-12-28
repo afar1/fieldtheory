@@ -321,6 +321,11 @@ export default function ClipboardHistory() {
   // Auth session state for showing "Signed in as..." in header.
   const [authSession, setAuthSession] = useState<Session | null>(null);
   
+  // Screen recording permission banner state.
+  // Shows a banner when permission is missing, unless user has dismissed it.
+  const [screenRecordingGranted, setScreenRecordingGranted] = useState(true);
+  const [hideScreenRecordingBanner, setHideScreenRecordingBanner] = useState(true);
+  
   // Improve feature - track loading state and result per stack
   const [improvingStackId, setImprovingStackId] = useState<string | null>(null);
   const [improveResult, setImproveResult] = useState<{
@@ -789,7 +794,7 @@ export default function ClipboardHistory() {
 
   useEffect(() => {
     if (!supabase) return;
-    
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       setAuthSession(session);
     });
@@ -800,6 +805,23 @@ export default function ClipboardHistory() {
     });
 
     return () => subscription.unsubscribe();
+  }, []);
+
+  // Check screen recording permission on mount and window focus.
+  // Shows banner if permission is missing and user hasn't dismissed it.
+  useEffect(() => {
+    const checkPermission = async () => {
+      const status = await window.onboardingAPI?.getPermissionStatus();
+      if (status) setScreenRecordingGranted(status.screenRecording);
+      
+      const hideBanner = await window.clipboardAPI?.getHideScreenRecordingBanner?.();
+      setHideScreenRecordingBanner(hideBanner ?? false);
+    };
+    
+    window.addEventListener('focus', checkPermission);
+    checkPermission();
+    
+    return () => window.removeEventListener('focus', checkPermission);
   }, []);
 
   useEffect(() => {
@@ -867,7 +889,7 @@ export default function ClipboardHistory() {
       }
       
       setTargetAppInfo({
-        previousApp: info.previousApp,
+        previousApp: info.previousApp ?? null,
         targetApp: info.targetApp,
         runningApps: info.runningApps,
         targetAppIndex,
@@ -1338,6 +1360,13 @@ export default function ClipboardHistory() {
       }
 
       if (key === 'Escape') {
+        // If dragging, cancel the drag first
+        if (activeDragId) {
+          e.preventDefault();
+          setActiveDragId(null);
+          setOverDropId(null);
+          return;
+        }
         // If preview is open, dismiss it first
         if (preview) {
           e.preventDefault();
@@ -1620,7 +1649,7 @@ export default function ClipboardHistory() {
         if (!hasText) return;
         
         // Trigger improve (simulate the button click logic)
-        if (stackId) {
+        if (stackId && selectedRow.type === 'stack') {
           // Improve stack - this is handled by the component, trigger via state
           setImprovingStackId(stackId);
           (async () => {
@@ -1654,15 +1683,16 @@ export default function ClipboardHistory() {
               setImprovingStackId(null);
             }
           })();
-        } else if (itemId) {
+        } else if (itemId && selectedRow.type === 'item') {
           // Improve individual item
           setImprovingStackId(`item-${itemId}`);
+          const itemStackId = selectedRow.item.stackId;
           (async () => {
             try {
               const tempStackId = crypto.randomUUID();
               await window.clipboardAPI?.updateStackId?.([itemId!], tempStackId);
               const result = await window.clipboardAPI?.engineerStack?.(tempStackId);
-              await window.clipboardAPI?.updateStackId?.([itemId!], selectedRow.item.stackId || null);
+              await window.clipboardAPI?.updateStackId?.([itemId!], itemStackId || null);
               if (result?.success && result.refinedPrompt) {
                 // Save improved content to database for persistence.
                 await window.clipboardAPI?.saveImprovedContent?.(itemId!, result.refinedPrompt);
@@ -1677,7 +1707,7 @@ export default function ClipboardHistory() {
               }
             } catch (err) {
               console.error('[Improve] Error:', err);
-              await window.clipboardAPI?.updateStackId?.([itemId!], selectedRow.item.stackId || null);
+              await window.clipboardAPI?.updateStackId?.([itemId!], itemStackId || null);
             } finally {
               setImprovingStackId(null);
             }
@@ -2485,6 +2515,44 @@ export default function ClipboardHistory() {
             padding: '0 16px 16px 16px',
           }}
         >
+          {/* Screen Recording Permission Banner */}
+          {!screenRecordingGranted && !hideScreenRecordingBanner && (
+            <div 
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '8px 12px',
+                marginBottom: '8px',
+                backgroundColor: theme.isDark ? 'rgba(245, 158, 11, 0.15)' : 'rgba(245, 158, 11, 0.1)',
+                border: `1px solid ${theme.isDark ? 'rgba(245, 158, 11, 0.3)' : 'rgba(245, 158, 11, 0.2)'}`,
+                borderRadius: '8px',
+                fontSize: '12px',
+                color: theme.text,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span>📸</span>
+                <span>Screen Recording permission needed for screenshots</span>
+              </div>
+              <button
+                onClick={() => window.onboardingAPI?.openScreenRecordingSettings()}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '11px',
+                  fontWeight: 500,
+                  backgroundColor: theme.isDark ? 'rgba(245, 158, 11, 0.3)' : 'rgba(245, 158, 11, 0.2)',
+                  border: 'none',
+                  borderRadius: '4px',
+                  color: theme.text,
+                  cursor: 'pointer',
+                }}
+              >
+                Enable
+              </button>
+            </div>
+          )}
+
           {/* Search input with custom placeholder */}
           <div style={{ 
             position: 'relative',
@@ -3977,8 +4045,28 @@ export default function ClipboardHistory() {
         )}
         </div>
 
-        {/* Drag overlay - shows ghost element matching original row size */}
-        <DragOverlay>
+        {/* Drag overlay - shows ghost element centered on cursor */}
+        <DragOverlay 
+          dropAnimation={null}
+          modifiers={[
+            // Snap ghost center to cursor, ignoring where user clicked on the row
+            ({ activatorEvent, draggingNodeRect, transform }) => {
+              if (!activatorEvent || !draggingNodeRect) return transform;
+              
+              // Get the click position within the dragged element
+              const event = activatorEvent as PointerEvent;
+              const offsetX = event.offsetX ?? draggingNodeRect.width / 2;
+              const offsetY = event.offsetY ?? draggingNodeRect.height / 2;
+              
+              // Adjust transform to center the ghost on cursor
+              return {
+                ...transform,
+                x: transform.x + offsetX - draggingNodeRect.width / 2,
+                y: transform.y + offsetY - draggingNodeRect.height / 2,
+              };
+            },
+          ]}
+        >
           {activeDragId ? (() => {
             // Find the dragged item/stack to show a content preview.
             const [type, id] = activeDragId.split(':');

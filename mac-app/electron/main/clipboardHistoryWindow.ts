@@ -16,15 +16,12 @@ function isElectronApp(bundleId: string, appName: string): boolean {
   const bundleIdLower = bundleId.toLowerCase();
   const currentAppName = app.getName().toLowerCase();
   
-  // Check if bundle ID or name matches our app.
+  // Check if bundle ID or name matches our app
   return (
-    bundleIdLower.includes('fieldtheory') ||
-    bundleIdLower.includes('field-theory') ||
     bundleIdLower.includes('oscar') ||
     bundleIdLower.includes('little-one') ||
     bundleIdLower.includes('littleai') ||
     bundleIdLower.includes('electron') ||
-    appNameLower.includes('field theory') ||
     appNameLower.includes('oscar') ||
     appNameLower.includes('little one') ||
     appNameLower === currentAppName ||
@@ -193,10 +190,13 @@ export class ClipboardHistoryWindow {
    * Shows window immediately, then fetches app data in background for instant UX.
    * @param savedBounds Optional saved bounds to restore position/size (absolute screen coords)
    * @param showSettingsMode If true, open the window with settings panel visible
+   * @param skipSound If true, skip playing open sound (used when sound was already played externally for faster feedback)
    */
-  show(savedBounds?: { x: number; y: number; width: number; height: number }, showSettingsMode: boolean = false): void {
-    // Play window open sound.
-    this.soundManager.play('windowOpen');
+  show(savedBounds?: { x: number; y: number; width: number; height: number }, showSettingsMode: boolean = false, skipSound: boolean = false): void {
+    // Play window open sound (unless caller already played it for faster feedback).
+    if (!skipSound) {
+      this.soundManager.play('windowOpen');
+    }
     
     // If window exists, reposition and show it.
     if (this.window && !this.window.isDestroyed()) {
@@ -373,8 +373,11 @@ export class ClipboardHistoryWindow {
    * @param hideApp - Whether to hide the entire app. Set to false when other windows (like recording overlay) should remain visible.
    */
   hide(hideApp: boolean = true): void {
-    // Play window close sound.
-    this.soundManager.play('windowClose');
+    // Only play sound if window is actually visible.
+    // This prevents double-play when blur event fires after direct hide() call.
+    if (this.window && !this.window.isDestroyed() && this.window.isVisible()) {
+      this.soundManager.play('windowClose');
+    }
     
     if (this.window && !this.window.isDestroyed()) {
       this.window.hide();
@@ -404,22 +407,24 @@ export class ClipboardHistoryWindow {
   }
 
   /**
+   * Play the window open sound immediately.
+   * Used for faster feedback when there's async work before show() is called.
+   */
+  playOpenSound(): void {
+    this.soundManager.play('windowOpen');
+  }
+
+  /**
    * Send target app info to renderer.
-   * Includes previousApp (default paste destination), targetApp (Option+click destination),
-   * and list of running apps for Tab cycling.
+   * Includes current target, list of running apps, and index for Tab cycling.
    */
   private sendTargetAppInfo(): void {
     if (!this.window || this.window.isDestroyed()) {
       return;
     }
 
-    // previousApp = the app user was in before opening clipboard history (default paste destination)
-    // targetApp = user-selected target via Option+Tab (Option+click destination)
-    // If no selectedTargetApp, targetApp falls back to previousApp
-    const targetApp = this.selectedTargetApp || this.previousApp;
-    
+    const targetApp = this.getTargetApp();
     this.window.webContents.send('clipboard:targetAppInfo', {
-      previousApp: this.previousApp,
       targetApp,
       runningApps: this.runningApps,
     });
@@ -524,11 +529,10 @@ export class ClipboardHistoryWindow {
 
   /**
    * Capture the frontmost app BEFORE showing the window.
-   * Must be called before show() because once the window takes focus, Field Theory becomes frontmost.
+   * Must be called before show() because once the window takes focus, Oscar becomes frontmost.
    * Always resets selectedTargetApp since this is a fresh window open.
    */
   async capturePreviousAppBeforeShow(): Promise<void> {
-    console.log('[ClipboardHistoryWindow] Capturing previous app before show...');
     try {
       const script = `
         tell application "System Events"
@@ -539,20 +543,14 @@ export class ClipboardHistoryWindow {
       const { stdout } = await execAsync(`osascript -e '${script}'`);
       const [bundleId, name] = stdout.trim().split('|');
       
-      console.log(`[ClipboardHistoryWindow] AppleScript returned: bundleId="${bundleId}", name="${name}"`);
-      
-      if (bundleId && name) {
-        const isOurs = isElectronApp(bundleId, name);
-        console.log(`[ClipboardHistoryWindow] Is our app: ${isOurs}`);
+      if (bundleId && name && !isElectronApp(bundleId, name)) {
+        this.previousApp = { bundleId, name };
+        // Reset selected target when opening window fresh.
+        this.selectedTargetApp = null;
+        console.log(`[ClipboardHistoryWindow] Captured previous app: ${name} (${bundleId})`);
         
-        if (!isOurs) {
-          this.previousApp = { bundleId, name };
-          // Reset selected target when opening window fresh.
-          this.selectedTargetApp = null;
-          console.log(`[ClipboardHistoryWindow] Set previousApp to: ${name} (${bundleId})`);
-        } else {
-          console.log(`[ClipboardHistoryWindow] Skipping our own app, keeping previousApp as: ${this.previousApp?.name || 'null'}`);
-        }
+        // Send updated target app info to renderer (in case window already shown).
+        this.sendTargetAppInfo();
       }
     } catch (error) {
       console.error('[ClipboardHistoryWindow] Failed to capture previous app:', error);
@@ -587,7 +585,7 @@ export class ClipboardHistoryWindow {
   /**
    * Refresh app data in background after window is shown.
    * Only refreshes running apps list - previousApp is captured before show() via
-   * capturePreviousAppBeforeShow() to avoid race condition where Field Theory becomes frontmost.
+   * capturePreviousAppBeforeShow() to avoid race condition where Oscar becomes frontmost.
    */
   private async refreshAppDataInBackground(): Promise<void> {
     // Only refresh running apps - previousApp was captured before show().

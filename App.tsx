@@ -18,6 +18,7 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -1592,8 +1593,15 @@ export default function App() {
         animationType="fade"
         onRequestClose={() => setShowSettings(false)}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView 
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
           <View style={styles.modalContent}>
+            <ScrollView 
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
             <Text style={styles.modalTitle}>Settings</Text>
 
             <View style={styles.settingRow}>
@@ -1681,7 +1689,7 @@ export default function App() {
 
                   <TextInput
                     style={styles.fieldInput}
-                    placeholder="6-digit code"
+                    placeholder="Enter code"
                     keyboardType="number-pad"
                     autoCapitalize="none"
                     value={otpCode}
@@ -1755,8 +1763,9 @@ export default function App() {
             >
               <Text style={styles.modalButtonText}>Close</Text>
             </TouchableOpacity>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
         </View>
         </SafeAreaView>

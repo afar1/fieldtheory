@@ -8,12 +8,14 @@ enum OnboardingStep {
   MICROPHONE = 1,
   ACCESSIBILITY = 2,
   MODEL_DOWNLOAD = 3,
-  COMPLETE = 4,
+  SCREEN_RECORDING = 4,
+  COMPLETE = 5,
 }
 
 type PermissionStatus = {
   microphone: 'granted' | 'denied' | 'not-determined';
   accessibility: boolean;
+  screenRecording: boolean;
 };
 
 /**
@@ -203,7 +205,90 @@ function AccessibilityScreen({
 }
 
 /**
- * Screen 4: Model Download - Download Whisper model.
+ * Screen 4: Screen Recording - Permission for screenshots.
+ */
+function ScreenRecordingScreen({
+  status,
+  onOpenSettings,
+  onRefresh,
+  onNext,
+  onSkip,
+}: {
+  status: boolean;
+  onOpenSettings: () => void;
+  onRefresh: () => void;
+  onNext: () => void;
+  onSkip: () => void;
+}) {
+  // Trigger screen capture on mount to add the app to the permissions list.
+  // This saves users from manually clicking "+" to add the app.
+  useEffect(() => {
+    window.onboardingAPI?.triggerScreenRecordingPrompt();
+  }, []);
+
+  return (
+    <div style={styles.screen}>
+      <div style={styles.iconLarge}>📸</div>
+      <h1 style={styles.title}>Screen Recording Permission</h1>
+      <p style={styles.subtitle}>
+        Field Theory needs screen recording access to capture screenshots for AI analysis.
+      </p>
+
+      <div style={styles.infoBox}>
+        <strong>Why this is needed:</strong>
+        <p style={{ margin: '8px 0 0 0' }}>
+          When you take a screenshot, Field Theory captures the selected area and sends it to
+          Claude for analysis. This requires screen recording permission.
+        </p>
+      </div>
+
+      {status ? (
+        <>
+          <div style={styles.successBox}>
+            <span style={styles.successIcon}>✓</span>
+            <span>Screen recording access granted</span>
+          </div>
+          <button style={styles.primaryButton} onClick={onNext}>
+            Continue
+          </button>
+        </>
+      ) : (
+        <>
+          <div style={styles.steps}>
+            <div style={styles.step}>
+              <span style={styles.stepNumber}>1</span>
+              <span>Click "Open Settings" below</span>
+            </div>
+            <div style={styles.step}>
+              <span style={styles.stepNumber}>2</span>
+              <span>Find "Field Theory" in the list and enable its toggle</span>
+            </div>
+            <div style={styles.step}>
+              <span style={styles.stepNumber}>3</span>
+              <span>Come back here and click "I've Enabled It"</span>
+            </div>
+          </div>
+
+          <div style={styles.buttonRow}>
+            <button style={styles.secondaryButton} onClick={onOpenSettings}>
+              Open Settings
+            </button>
+            <button style={styles.primaryButton} onClick={onRefresh}>
+              I've Enabled It
+            </button>
+          </div>
+        </>
+      )}
+
+      <button style={styles.skipButton} onClick={onSkip}>
+        Set up later
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Screen 5: Model Download - Download Whisper model.
  */
 function ModelDownloadScreen({
   downloaded,
@@ -333,6 +418,7 @@ export default function Onboarding() {
   const [permissions, setPermissions] = useState<PermissionStatus>({
     microphone: 'not-determined',
     accessibility: false,
+    screenRecording: false,
   });
   const [modelDownloaded, setModelDownloaded] = useState(false);
   const [modelDownloading, setModelDownloading] = useState(false);
@@ -418,6 +504,12 @@ export default function Onboarding() {
     await window.onboardingAPI.openAccessibilitySettings();
   }, []);
 
+  // Open screen recording settings.
+  const openScreenRecordingSettings = useCallback(async () => {
+    if (!window.onboardingAPI) return;
+    await window.onboardingAPI.openScreenRecordingSettings();
+  }, []);
+
   // Start model download.
   const downloadModel = useCallback(async () => {
     if (!window.transcribeAPI) return;
@@ -461,6 +553,14 @@ export default function Onboarding() {
     }
   }, [refreshPermissions, goToNext]);
 
+  // Check screen recording and proceed if granted.
+  const checkScreenRecordingAndProceed = useCallback(async () => {
+    const status = await refreshPermissions();
+    if (status?.screenRecording) {
+      goToNext();
+    }
+  }, [refreshPermissions, goToNext]);
+
   // Render current step.
   const renderStep = () => {
     switch (currentStep) {
@@ -500,6 +600,17 @@ export default function Onboarding() {
           />
         );
         
+      case OnboardingStep.SCREEN_RECORDING:
+        return (
+          <ScreenRecordingScreen
+            status={permissions.screenRecording}
+            onOpenSettings={openScreenRecordingSettings}
+            onRefresh={checkScreenRecordingAndProceed}
+            onNext={goToNext}
+            onSkip={skip}
+          />
+        );
+        
       case OnboardingStep.COMPLETE:
         return <CompleteScreen onFinish={finish} />;
         
@@ -527,7 +638,7 @@ export default function Onboarding() {
       <div style={styles.content}>
         {renderStep()}
       </div>
-      <ProgressDots currentStep={currentStep} totalSteps={5} />
+      <ProgressDots currentStep={currentStep} totalSteps={6} />
     </div>
   );
 }

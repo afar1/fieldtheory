@@ -129,12 +129,14 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
       
       // Ensure session is passed to main process (in case it wasn't on app start).
       // This handles the case where user was already logged in from a previous session.
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        await window.clipboardAPI?.setSyncSession?.(
-          session.access_token,
-          session.refresh_token
-        );
+      if (supabase) {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          await window.clipboardAPI?.setSyncSession?.(
+            session.access_token,
+            session.refresh_token
+          );
+        }
       }
       
       // Check authentication.

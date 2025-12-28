@@ -30,7 +30,6 @@ const TranscribeIPCChannels = {
   SET_SOUND_CONFIG: 'transcribe:setSoundConfig',
   GET_AVAILABLE_SOUNDS: 'transcribe:getAvailableSounds',
   PREVIEW_SOUND: 'transcribe:previewSound',
-  PLAY_PASTE_SOUND: 'transcribe:playPasteSound',
   STATUS_CHANGED: 'transcribe:statusChanged',
   RESULT: 'transcribe:result',
   ERROR: 'transcribe:error',
@@ -100,12 +99,16 @@ const ClipboardIPCChannels = {
   STOP_CONTINUOUS_CONTEXT: 'clipboard:stopContinuousContext',
   CONTINUOUS_CONTEXT_CHANGED: 'clipboard:continuousContextChanged',
   SAVE_SKETCH: 'clipboard:saveSketch',
+  GET_HIDE_SCREEN_RECORDING_BANNER: 'clipboard:getHideScreenRecordingBanner',
+  SET_HIDE_SCREEN_RECORDING_BANNER: 'clipboard:setHideScreenRecordingBanner',
 } as const;
 
 const OnboardingIPCChannels = {
   GET_PERMISSION_STATUS: 'onboarding:getPermissionStatus',
   REQUEST_MICROPHONE: 'onboarding:requestMicrophone',
   OPEN_ACCESSIBILITY_SETTINGS: 'onboarding:openAccessibilitySettings',
+  OPEN_SCREEN_RECORDING_SETTINGS: 'onboarding:openScreenRecordingSettings',
+  TRIGGER_SCREEN_RECORDING_PROMPT: 'onboarding:triggerScreenRecordingPrompt',
   GET_ONBOARDING_STATE: 'onboarding:getState',
   SET_ONBOARDING_STEP: 'onboarding:setStep',
   COMPLETE_ONBOARDING: 'onboarding:complete',
@@ -167,10 +170,6 @@ type SoundConfig = {
   recordingStart: string | undefined;
   recordingStop: string | undefined;
   recordingCancel: string | undefined;
-  windowOpen: string | undefined;
-  windowClose: string | undefined;
-  transcribing: string | undefined;
-  paste: string | undefined;
 };
 
 // Sound option for UI display.
@@ -249,7 +248,6 @@ type ClipboardQueryOptions = {
 
 type ClipboardHotkeys = {
   screenshot?: string;
-  desktopScreenshot?: string;
   history?: string;
   continuousContext?: string;
 };
@@ -441,6 +439,7 @@ type Todo = {
 type PermissionStatus = {
   microphone: 'granted' | 'denied' | 'not-determined';
   accessibility: boolean;
+  screenRecording: boolean;
 };
 
 type OnboardingState = {
@@ -456,8 +455,7 @@ type RunningApp = {
 };
 
 type TargetAppInfo = {
-  previousApp: RunningApp | null;  // App user was in before opening clipboard (default paste destination)
-  targetApp: RunningApp | null;    // User-selected target via Option+Tab (Option+click destination)
+  targetApp: RunningApp | null;
   runningApps: RunningApp[];
 };
 
@@ -490,7 +488,6 @@ export interface TranscribeAPI {
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
   getAvailableSounds: () => Promise<SoundOption[]>;
   previewSound: (soundId: string) => Promise<void>;
-  playPasteSound: () => Promise<void>;
   getStackCount: () => Promise<number>;
   getStackingMode: () => Promise<StackingModeState>;
   onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
@@ -526,7 +523,7 @@ export interface ClipboardAPI {
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
   pasteItem: (id: number, targetBundleId?: string) => Promise<void>;
-  pasteStack: (ids: number[], targetBundleId?: string) => Promise<void>;
+  pasteStack: (ids: number[]) => Promise<void>;
   pasteText: (text: string, targetBundleId?: string) => Promise<void>;
   separateIntoTasks: (id: number) => Promise<void>;
   // Target app management.
@@ -589,6 +586,10 @@ export interface ClipboardAPI {
   startContinuousContext: () => Promise<void>;
   stopContinuousContext: () => Promise<void>;
   onContinuousContextChanged: (callback: (state: ContinuousContextState) => void) => () => void;
+  
+  // Permission banner settings
+  getHideScreenRecordingBanner: () => Promise<boolean>;
+  setHideScreenRecordingBanner: (hide: boolean) => Promise<boolean>;
 }
 
 export interface PermissionsAPI {
@@ -706,10 +707,6 @@ const transcribeAPI: TranscribeAPI = {
 
   previewSound: async (soundId: string): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.PREVIEW_SOUND, soundId);
-  },
-  
-  playPasteSound: async (): Promise<void> => {
-    return ipcRenderer.invoke(TranscribeIPCChannels.PLAY_PASTE_SOUND);
   },
 
   onStatusChanged: (callback: (status: TranscriptionStatus) => void): (() => void) => {
@@ -846,8 +843,8 @@ const clipboardAPI: ClipboardAPI = {
     return ipcRenderer.invoke(ClipboardIPCChannels.PASTE_ITEM, id, targetBundleId);
   },
 
-  pasteStack: async (ids: number[], targetBundleId?: string): Promise<void> => {
-    return ipcRenderer.invoke(ClipboardIPCChannels.PASTE_STACK, ids, targetBundleId);
+  pasteStack: async (ids: number[]): Promise<void> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.PASTE_STACK, ids);
   },
 
   pasteText: async (text: string, targetBundleId?: string): Promise<void> => {
@@ -1087,6 +1084,15 @@ const clipboardAPI: ClipboardAPI = {
       ipcRenderer.removeListener(ClipboardIPCChannels.CONTINUOUS_CONTEXT_CHANGED, handler);
     };
   },
+
+  // Permission banner settings - get/set whether to hide the screen recording banner.
+  getHideScreenRecordingBanner: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_HIDE_SCREEN_RECORDING_BANNER);
+  },
+
+  setHideScreenRecordingBanner: async (hide: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SET_HIDE_SCREEN_RECORDING_BANNER, hide);
+  },
 };
 
 const visionAPI: VisionAPI = {
@@ -1199,6 +1205,16 @@ const onboardingAPI = {
   // Open System Settings to Accessibility pane.
   openAccessibilitySettings: async (): Promise<boolean> => {
     return ipcRenderer.invoke(OnboardingIPCChannels.OPEN_ACCESSIBILITY_SETTINGS);
+  },
+
+  // Open System Settings to Screen Recording pane.
+  openScreenRecordingSettings: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.OPEN_SCREEN_RECORDING_SETTINGS);
+  },
+
+  // Trigger screen capture to add app to permissions list (saves user from clicking "+").
+  triggerScreenRecordingPrompt: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.TRIGGER_SCREEN_RECORDING_PROMPT);
   },
 
   // Get current onboarding state (complete, step, permissions, model).
@@ -1396,6 +1412,14 @@ const authAPI = {
   // Sign in with email and password.
   signInWithPassword: (email: string, password: string) => 
     ipcRenderer.invoke('auth:signInWithPassword', email, password),
+  
+  // Request OTP code via email.
+  requestOtp: (email: string) => 
+    ipcRenderer.invoke('auth:requestOtp', email),
+  
+  // Verify OTP code and sign in.
+  verifyOtp: (email: string, token: string) => 
+    ipcRenderer.invoke('auth:verifyOtp', email, token),
   
   // Send password reset email.
   resetPasswordForEmail: (email: string) => 

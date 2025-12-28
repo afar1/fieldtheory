@@ -74,6 +74,10 @@ interface SoundConfig {
   recordingStart: string | undefined;
   recordingStop: string | undefined;
   recordingCancel: string | undefined;
+  windowOpen: string | undefined;
+  windowClose: string | undefined;
+  transcribing: string | undefined;
+  paste: string | undefined;
 }
 
 /**
@@ -203,6 +207,7 @@ interface ClipboardQueryOptions {
  */
 interface ClipboardHotkeys {
   screenshot?: string;
+  desktopScreenshot?: string;
   history?: string;
   continuousContext?: string;
 }
@@ -219,6 +224,7 @@ interface RunningApp {
  * Target app info sent when clipboard history window is shown.
  */
 interface TargetAppInfo {
+  previousApp?: RunningApp | null;
   targetApp: RunningApp | null;
   runningApps: RunningApp[];
 }
@@ -255,7 +261,7 @@ interface ClipboardAPI {
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
   pasteItem: (id: number, targetBundleId?: string) => Promise<void>;
-  pasteStack: (ids: number[]) => Promise<void>;
+  pasteStack: (ids: number[], targetBundleId?: string) => Promise<void>;
   separateIntoTasks: (id: number) => Promise<void>;
   // Target app management.
   getTargetApp: () => Promise<RunningApp | null>;
@@ -311,6 +317,10 @@ interface ClipboardAPI {
   startContinuousContext?: () => Promise<void>;
   stopContinuousContext?: () => Promise<void>;
   onContinuousContextChanged?: (callback: (state: ContinuousContextState) => void) => () => void;
+
+  // Permission banner settings
+  getHideScreenRecordingBanner?: () => Promise<boolean>;
+  setHideScreenRecordingBanner?: (hide: boolean) => Promise<boolean>;
 }
 
 /**
@@ -369,6 +379,7 @@ interface UpdateInfo {
 interface OnboardingPermissionStatus {
   microphone: 'granted' | 'denied' | 'not-determined';
   accessibility: boolean;
+  screenRecording: boolean;
 }
 
 /**
@@ -388,6 +399,8 @@ interface OnboardingAPI {
   getPermissionStatus: () => Promise<OnboardingPermissionStatus>;
   requestMicrophone: () => Promise<boolean>;
   openAccessibilitySettings: () => Promise<boolean>;
+  openScreenRecordingSettings: () => Promise<boolean>;
+  triggerScreenRecordingPrompt: () => Promise<boolean>;
   getState: () => Promise<OnboardingState>;
   setStep: (step: number) => Promise<boolean>;
   complete: () => Promise<boolean>;

@@ -1,4 +1,4 @@
-import { app, clipboard, globalShortcut, nativeImage } from 'electron';
+import { app, clipboard, globalShortcut, nativeImage, systemPreferences } from 'electron';
 import Database from 'better-sqlite3';
 import path from 'path';
 import { exec, spawn, ChildProcess } from 'child_process';
@@ -996,6 +996,10 @@ export class ClipboardManager extends EventEmitter {
    */
   async captureScreenshot(options: { region?: boolean; saveToDesktop?: boolean } = {}, stackId?: string): Promise<number> {
     const { region = false, saveToDesktop = false } = options;
+    
+    // Debug: Log screen recording permission status to diagnose Tahoe issues.
+    const screenPermission = systemPreferences.getMediaAccessStatus('screen');
+    console.log('[ClipboardManager] Attempting screenshot, screen permission:', screenPermission);
     
     // Set flag to prevent polling from picking up the screenshot while we're capturing it.
     this.screenshotInProgress = true;

@@ -88,6 +88,9 @@ interface Preferences {
   windowCloseSound?: string;     // Sound file name to play when window closes
   pasteSound?: string;           // Sound file name to play when pasting
   transcribingSound?: string;    // Sound file name to play when transcribing starts
+  
+  // Permission banner settings - hide banner prompting for Screen Recording permission.
+  hideScreenRecordingBanner?: boolean;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
@@ -95,6 +98,7 @@ const DEFAULT_PREFERENCES: Preferences = {
   selectedModel: 'base',
   overlayStyle: 'rectangle',
   clipboardScreenshotHotkey: 'Alt+1',
+  clipboardDesktopScreenshotHotkey: 'Command+3',
   clipboardHistoryHotkey: 'Control+Alt+Space',
   continuousContextEnabled: false,
   continuousContextHotkey: 'Shift+Alt+1', // Default: Shift + screenshot hotkey
@@ -107,6 +111,10 @@ const DEFAULT_PREFERENCES: Preferences = {
   recordingStartSound: 'ButtonClickDown.mp3',
   recordingStopSound: 'ButtonClickUp.mp3',
   recordingCancelSound: 'AlertBonk.mp3',
+  windowOpenSound: 'WindowOpen.mp3',
+  windowCloseSound: 'WindowClose.mp3',
+  pasteSound: 'Click.mp3',
+  transcribingSound: 'Beep.mp3',
 };
 
 /**

@@ -49,18 +49,18 @@ export default function App() {
     if (!window.clipboardAPI) return;
     
     // Load initial settings
-    window.clipboardAPI.getContinuousContextEnabled().then(enabled => {
+    window.clipboardAPI.getContinuousContextEnabled?.().then(enabled => {
       setContinuousContextEnabled(enabled);
     });
-    window.clipboardAPI.getContinuousContextHotkey().then(hotkey => {
+    window.clipboardAPI.getContinuousContextHotkey?.().then(hotkey => {
       setContinuousContextHotkey(hotkey);
     });
-    window.clipboardAPI.getContinuousContextState().then(state => {
+    window.clipboardAPI.getContinuousContextState?.().then(state => {
       setContinuousContextState(state);
     });
     
     // Listen for state changes
-    const unsubscribe = window.clipboardAPI.onContinuousContextChanged((state) => {
+    const unsubscribe = window.clipboardAPI.onContinuousContextChanged?.((state) => {
       setContinuousContextState(state);
     });
     
@@ -210,7 +210,7 @@ export default function App() {
     }
 
     try {
-      const success = await window.clipboardAPI.setContinuousContextHotkey(hotkeyString);
+      const success = await window.clipboardAPI.setContinuousContextHotkey?.(hotkeyString);
       if (!success) {
         setHotkeyError('Failed to register continuous context hotkey. It may be in use by another application.');
       } else {
@@ -227,7 +227,7 @@ export default function App() {
     if (!window.clipboardAPI) return;
     
     try {
-      const success = await window.clipboardAPI.setContinuousContextEnabled(enabled);
+      const success = await window.clipboardAPI.setContinuousContextEnabled?.(enabled);
       if (success) {
         setContinuousContextEnabled(enabled);
       }

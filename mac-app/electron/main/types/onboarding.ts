@@ -6,6 +6,8 @@ export const OnboardingIPCChannels = {
   GET_PERMISSION_STATUS: 'onboarding:getPermissionStatus',
   REQUEST_MICROPHONE: 'onboarding:requestMicrophone',
   OPEN_ACCESSIBILITY_SETTINGS: 'onboarding:openAccessibilitySettings',
+  OPEN_SCREEN_RECORDING_SETTINGS: 'onboarding:openScreenRecordingSettings',
+  TRIGGER_SCREEN_RECORDING_PROMPT: 'onboarding:triggerScreenRecordingPrompt',
   
   // Onboarding state
   GET_ONBOARDING_STATE: 'onboarding:getState',
@@ -24,6 +26,7 @@ export const OnboardingIPCChannels = {
 export interface PermissionStatus {
   microphone: 'granted' | 'denied' | 'not-determined';
   accessibility: boolean;
+  screenRecording: boolean;
 }
 
 /**

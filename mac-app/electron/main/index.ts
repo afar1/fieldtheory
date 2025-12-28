@@ -114,54 +114,11 @@ function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
 if (process.env.EXPERIMENTAL === 'true') {
   const experimentalUserData = path.join(
     os.homedir(),
-    'Library/Application Support/Field Theory Experimental'
+    'Library/Application Support/Oscar Experimental'
   );
   app.setPath('userData', experimentalUserData);
-  app.setName('Field Theory Experimental');
+  app.setName('Oscar Experimental');
 }
-
-// Migrate data from old Oscar folder to new field-theory folder.
-// This runs once on first launch after the rename.
-function migrateFromOscar(): void {
-  const oldPath = path.join(os.homedir(), 'Library/Application Support/Oscar');
-  const newPath = app.getPath('userData');
-  const newDbPath = path.join(newPath, 'clipboard.db');
-  
-  // Only migrate if old folder exists and new db doesn't exist yet.
-  if (!fs.existsSync(oldPath) || fs.existsSync(newDbPath)) {
-    return;
-  }
-  
-  console.log('[Migration] Migrating data from Oscar to Field Theory...');
-  
-  // Ensure new directory exists.
-  if (!fs.existsSync(newPath)) {
-    fs.mkdirSync(newPath, { recursive: true });
-  }
-  
-  // Copy individual files (clipboard history and preferences).
-  for (const file of ['clipboard.db', 'preferences.json']) {
-    const src = path.join(oldPath, file);
-    const dst = path.join(newPath, file);
-    if (fs.existsSync(src)) {
-      fs.copyFileSync(src, dst);
-      console.log(`[Migration] Copied ${file}`);
-    }
-  }
-  
-  // Copy models directory if it exists (avoid re-downloading Whisper models).
-  const oldModels = path.join(oldPath, 'models');
-  const newModels = path.join(newPath, 'models');
-  if (fs.existsSync(oldModels) && !fs.existsSync(newModels)) {
-    fs.cpSync(oldModels, newModels, { recursive: true });
-    console.log('[Migration] Copied models directory');
-  }
-  
-  console.log('[Migration] Migration complete');
-}
-
-// Run migration before any other initialization.
-migrateFromOscar();
 
 // Configure autoUpdater for manual update flow (only in production builds).
 if (!process.env.ELECTRON_START_URL) {
@@ -449,7 +406,7 @@ function restoreClipboardHistoryBounds(): { x: number; y: number; width: number;
  * Initialize clipboard history window with bounds change callback.
  */
 function initClipboardHistoryWindow(): ClipboardHistoryWindow {
-  const window = new ClipboardHistoryWindow(preferencesManager ?? undefined);
+  const window = new ClipboardHistoryWindow();
   
   // Set up callback to save bounds when window is moved/resized.
   window.setOnBoundsChanged(async (bounds) => {
@@ -706,16 +663,7 @@ function setupTranscribeIPCHandlers(): void {
   // Sound settings handlers.
   ipcMain.handle(TranscribeIPCChannels.GET_SOUND_CONFIG, () => {
     if (!transcriberManager) {
-      return { 
-        enabled: true, 
-        recordingStart: 'ButtonClickDown.mp3', 
-        recordingStop: 'ButtonClickUp.mp3', 
-        recordingCancel: 'AlertBonk.mp3',
-        windowOpen: 'WindowOpen.mp3',
-        windowClose: 'WindowClose.mp3',
-        transcribing: 'ButtonClickUp.mp3',
-        paste: 'Click.mp3'
-      };
+      return { enabled: true, recordingStart: undefined, recordingStop: undefined, recordingCancel: undefined };
     }
     return transcriberManager.getSoundManager().getConfig();
   });
@@ -725,10 +673,6 @@ function setupTranscribeIPCHandlers(): void {
     recordingStart?: string;
     recordingStop?: string;
     recordingCancel?: string;
-    windowOpen?: string;
-    windowClose?: string;
-    transcribing?: string;
-    paste?: string;
   }) => {
     if (!transcriberManager) {
       throw new Error('TranscriberManager not initialized');
@@ -747,13 +691,6 @@ function setupTranscribeIPCHandlers(): void {
       throw new Error('TranscriberManager not initialized');
     }
     transcriberManager.getSoundManager().preview(soundId);
-  });
-
-  ipcMain.handle(TranscribeIPCChannels.PLAY_PASTE_SOUND, async () => {
-    if (!transcriberManager) {
-      throw new Error('TranscriberManager not initialized');
-    }
-    transcriberManager.getSoundManager().play('paste');
   });
 
   ipcMain.handle('transcribe:getStackCount', () => {
@@ -918,6 +855,13 @@ function setupClipboardIPCHandlers(): void {
       return -1;
     }
     const id = await clipboardManager.captureScreenshot({ region: region || false });
+    if (id > 0) {
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
+        }
+      });
+    }
     return id;
   });
 
@@ -970,26 +914,16 @@ function setupClipboardIPCHandlers(): void {
         history: 'Control+Alt+Space',
       };
     }
-    // Map internal property names to frontend-expected names.
-    const hotkeys = clipboardManager.getHotkeys();
-    return {
-      screenshot: hotkeys.screenshotHotkey,
-      desktopScreenshot: hotkeys.desktopScreenshotHotkey,
-      history: hotkeys.historyHotkey,
-    };
+    return clipboardManager.getHotkeys();
   });
 
-  ipcMain.handle(ClipboardIPCChannels.SET_HOTKEYS, async (_event, hotkeys: { screenshot?: string; history?: string; desktopScreenshot?: string }) => {
+  ipcMain.handle(ClipboardIPCChannels.SET_HOTKEYS, async (_event, hotkeys: { screenshot?: string; history?: string }) => {
     if (!clipboardManager || !preferencesManager) {
       return false;
     }
     
     let success = true;
-    const prefsToSave: { 
-      clipboardScreenshotHotkey?: string; 
-      clipboardHistoryHotkey?: string;
-      clipboardDesktopScreenshotHotkey?: string;
-    } = {};
+    const prefsToSave: { clipboardScreenshotHotkey?: string; clipboardHistoryHotkey?: string } = {};
     
     if (hotkeys.screenshot !== undefined) {
       if (typeof hotkeys.screenshot !== 'string' || hotkeys.screenshot.trim() === '') {
@@ -1000,18 +934,6 @@ function setupClipboardIPCHandlers(): void {
         success = false;
       } else {
         prefsToSave.clipboardScreenshotHotkey = hotkeys.screenshot;
-      }
-    }
-
-    if (hotkeys.desktopScreenshot !== undefined) {
-      if (typeof hotkeys.desktopScreenshot !== 'string' || hotkeys.desktopScreenshot.trim() === '') {
-        return false;
-      }
-      const result = clipboardManager.setDesktopScreenshotHotkey(hotkeys.desktopScreenshot);
-      if (!result) {
-        success = false;
-      } else {
-        prefsToSave.clipboardDesktopScreenshotHotkey = hotkeys.desktopScreenshot;
       }
     }
     
@@ -1041,12 +963,6 @@ function setupClipboardIPCHandlers(): void {
         console.error('[Main] pasteItem: clipboardManager not initialized');
         return;
       }
-      
-      // Play paste sound
-      if (transcriberManager) {
-        transcriberManager.getSoundManager().play('paste');
-      }
-      
       const item = clipboardManager.getItem(id);
       if (!item) {
         console.error('[Main] pasteItem: item not found', id);
@@ -1090,7 +1006,7 @@ function setupClipboardIPCHandlers(): void {
     }
   });
 
-  ipcMain.handle(ClipboardIPCChannels.PASTE_STACK, async (_event, ids: number[], targetBundleId?: string) => {
+  ipcMain.handle(ClipboardIPCChannels.PASTE_STACK, async (_event, ids: number[]) => {
     try {
       if (!clipboardManager) {
         console.error('[Main] pasteStack: clipboardManager not initialized');
@@ -1099,11 +1015,6 @@ function setupClipboardIPCHandlers(): void {
       if (!ids || ids.length === 0) {
         console.error('[Main] pasteStack: no item IDs provided');
         return;
-      }
-      
-      // Play paste sound
-      if (transcriberManager) {
-        transcriberManager.getSoundManager().play('paste');
       }
       
       // Get all items from IDs
@@ -1116,7 +1027,7 @@ function setupClipboardIPCHandlers(): void {
         return;
       }
       
-      // Hide window BEFORE pasting
+      // Hide window and restore focus BEFORE pasting
       if (clipboardHistoryWindow) {
         clipboardHistoryWindow.hide();
       }
@@ -1125,18 +1036,6 @@ function setupClipboardIPCHandlers(): void {
       const { promisify } = require('util');
       const execAsync = promisify(exec);
       const { nativeImage } = require('electron');
-      
-      // If a specific target app was provided, activate it first
-      if (targetBundleId) {
-        try {
-          await execAsync(`osascript -e 'tell application id "${targetBundleId}" to activate'`);
-          // Small delay to let app activate
-          await new Promise(resolve => setTimeout(resolve, 50));
-        } catch (activateError) {
-          console.warn('[Main] pasteStack: failed to activate target app:', activateError);
-          // Continue anyway - will paste to whatever is frontmost
-        }
-      }
       
       // Paste each item sequentially with small delays
       for (const item of items) {
@@ -1172,11 +1071,6 @@ function setupClipboardIPCHandlers(): void {
       if (!text) {
         console.error('[Main] pasteText: no text provided');
         return;
-      }
-      
-      // Play paste sound
-      if (transcriberManager) {
-        transcriberManager.getSoundManager().play('paste');
       }
       
       // Put text on clipboard first
@@ -1262,11 +1156,6 @@ function setupClipboardIPCHandlers(): void {
   ipcMain.handle(ClipboardIPCChannels.PASTE_TO_APP, async (_event, bundleId: string) => {
     if (!clipboardHistoryWindow) {
       return false;
-    }
-    
-    // Play paste sound
-    if (transcriberManager) {
-      transcriberManager.getSoundManager().play('paste');
     }
     
     // Hide our window first.
@@ -1675,6 +1564,20 @@ function setupClipboardIPCHandlers(): void {
     return await mobileSync.signInWithPassword(email, password);
   });
 
+  ipcMain.handle('auth:requestOtp', async (_event, email: string) => {
+    if (!mobileSync) {
+      return { error: 'Mobile sync not initialized' };
+    }
+    return await mobileSync.requestOtp(email);
+  });
+
+  ipcMain.handle('auth:verifyOtp', async (_event, email: string, token: string) => {
+    if (!mobileSync) {
+      return { error: 'Mobile sync not initialized', session: null };
+    }
+    return await mobileSync.verifyOtp(email, token);
+  });
+
   ipcMain.handle('auth:resetPasswordForEmail', async (_event, email: string) => {
     if (!mobileSync) {
       return { error: 'Mobile sync not initialized' };
@@ -1912,6 +1815,22 @@ function setupClipboardIPCHandlers(): void {
       return;
     }
     clipboardManager.stopContinuousContext();
+  });
+
+  // Permission banner settings - allow user to hide screen recording permission banner.
+  ipcMain.handle(ClipboardIPCChannels.GET_HIDE_SCREEN_RECORDING_BANNER, async () => {
+    if (!preferencesManager) {
+      return false;
+    }
+    return preferencesManager.getPreference('hideScreenRecordingBanner') ?? false;
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SET_HIDE_SCREEN_RECORDING_BANNER, async (_event, hide: boolean) => {
+    if (!preferencesManager) {
+      return false;
+    }
+    await preferencesManager.save({ hideScreenRecordingBanner: hide });
+    return true;
   });
 
   // =========================================================================
@@ -2220,6 +2139,25 @@ function setupOnboardingIPCHandlers(): void {
     return true;
   });
 
+  // Open System Settings to Screen Recording pane.
+  ipcMain.handle(OnboardingIPCChannels.OPEN_SCREEN_RECORDING_SETTINGS, async () => {
+    if (!onboardingWindow) {
+      onboardingWindow = new OnboardingWindow();
+    }
+    onboardingWindow.openScreenRecordingSettings();
+    return true;
+  });
+
+  // Trigger screen capture to add app to Screen Recording permissions list.
+  // This saves users from manually clicking "+" to add the app.
+  ipcMain.handle(OnboardingIPCChannels.TRIGGER_SCREEN_RECORDING_PROMPT, async () => {
+    if (!onboardingWindow) {
+      onboardingWindow = new OnboardingWindow();
+    }
+    await onboardingWindow.triggerScreenRecordingPrompt();
+    return true;
+  });
+
   // Get current onboarding state (complete, step, permissions, model).
   ipcMain.handle(OnboardingIPCChannels.GET_ONBOARDING_STATE, async () => {
     const prefs = preferencesManager?.get();
@@ -2464,8 +2402,7 @@ async function initTranscriberSystem(): Promise<void> {
   const prefs = preferencesManager.get();
   clipboardManager.loadHotkeysFromPreferences(
     prefs.clipboardScreenshotHotkey,
-    prefs.clipboardHistoryHotkey,
-    prefs.clipboardDesktopScreenshotHotkey
+    prefs.clipboardHistoryHotkey
   );
   
   // Load continuous context preferences
@@ -2517,22 +2454,30 @@ async function initTranscriberSystem(): Promise<void> {
   
   // Register clipboard hotkeys
   clipboardManager.registerScreenshotHotkey(async () => {
+    // Get current stackId if in stacking mode
     const stackId = transcriberManager?.getCurrentStackId() || undefined;
+    
+    // Capture screenshot with region selection (drag to select)
+    // If in stacking mode, the screenshot is tagged with the current stackId
     const id = await clipboardManager!.captureScreenshot({ region: true }, stackId);
     if (id > 0) {
+      // Add screenshot to prompt stack tracking
       if (transcriberManager) {
         transcriberManager.addToStack(id);
         
+        // In stacking mode, auto-paste the screenshot to the target app
         const stackingMode = transcriberManager.getStackingMode();
         if (stackingMode.active && stackingMode.targetApp) {
           const { exec } = await import('child_process');
           const { promisify } = await import('util');
           const execAsync = promisify(exec);
           
+          // Activate target app
           try {
             await execAsync(`osascript -e 'tell application id "${stackingMode.targetApp}" to activate'`);
             await new Promise(resolve => setTimeout(resolve, 100));
             
+            // Read the screenshot and paste it
             const item = clipboardManager!.getItem(id);
             if (item?.imageData) {
               const { nativeImage } = await import('electron');
@@ -2546,27 +2491,19 @@ async function initTranscriberSystem(): Promise<void> {
         }
       }
       
+      // Queue for vision processing if vision processor is available
       if (visionProcessor) {
         visionProcessor.queueImage(id).catch((error) => {
           console.error('[Main] Failed to queue image for vision processing:', error);
         });
       }
-    }
-  });
-
-  clipboardManager.registerDesktopScreenshotHotkey(async () => {
-    const stackId = transcriberManager?.getCurrentStackId() || undefined;
-    const id = await clipboardManager!.captureScreenshot({ region: true, saveToDesktop: true }, stackId);
-    if (id > 0) {
-      if (transcriberManager) {
-        transcriberManager.addToStack(id);
-      }
       
-      if (visionProcessor) {
-        visionProcessor.queueImage(id).catch((error) => {
-          console.error('[Main] Failed to queue desktop image for vision processing:', error);
-        });
-      }
+      // Notify all windows (including clipboard history window)
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
+        }
+      });
     }
   });
   
@@ -2585,12 +2522,16 @@ async function initTranscriberSystem(): Promise<void> {
     const visible = clipboardHistoryWindow.isVisible();
 
     if (!visible) {
-      // Capture frontmost app before showing window.
-      // Must await to ensure target app is correct when sendTargetAppInfo() is called.
-      await clipboardHistoryWindow.capturePreviousAppBeforeShow();
+      // Play sound immediately for responsive feedback.
+      clipboardHistoryWindow.playOpenSound();
       
+      // Show window immediately for snappy UX.
       const boundsToUse = restoreClipboardHistoryBounds();
-      clipboardHistoryWindow.show(boundsToUse);
+      clipboardHistoryWindow.show(boundsToUse, false, true); // skipSound=true since we already played it
+      
+      // Capture frontmost app in background (updates target app info after window shows).
+      // Not awaited - window appears instantly, target app info updates ~200ms later.
+      clipboardHistoryWindow.capturePreviousAppBeforeShow();
     } else {
       // Hide window and restore focus to previous app.
       // Don't hide the entire app if recording overlay is visible.
@@ -2839,9 +2780,9 @@ if (!gotTheLock) {
     setupOnboardingIPCHandlers();
     setupDisplayListeners();
 
-    // Register keyboard shortcut to reset onboarding (Shift+Option+O).
+    // Register keyboard shortcut to reset onboarding (Cmd+Shift+R).
     // Useful for testing and development.
-    globalShortcut.register('Shift+Alt+O', async () => {
+    globalShortcut.register('Command+Shift+R', async () => {
       console.log('[Main] Reset onboarding shortcut triggered');
       if (!preferencesManager) return;
       
