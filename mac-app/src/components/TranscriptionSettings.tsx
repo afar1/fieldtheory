@@ -61,7 +61,7 @@ export default function TranscriptionSettings() {
           window.transcribeAPI!.getOverlayStyle(),
           window.transcribeAPI!.getAbandonHotkey?.() ?? 'Escape',
           window.transcribeAPI!.getAbandonConfirmation?.() ?? true,
-          window.transcribeAPI!.getSoundConfig?.() ?? { enabled: true, recordingStart: 'ButtonClickDown.mp3', recordingStop: 'ButtonClickUp.mp3', recordingCancel: 'AlertBonk.mp3' },
+          window.transcribeAPI!.getSoundConfig?.() ?? { enabled: true, recordingStart: 'ButtonClickDown.mp3', recordingStop: 'ButtonClickUp.mp3', recordingCancel: 'AlertBonk.mp3', windowOpen: 'WindowOpen.mp3', windowClose: 'WindowClose.mp3', transcribing: 'Beep.mp3', paste: 'ButtonClickUp.mp3' },
           window.transcribeAPI!.getAvailableSounds?.() ?? [],
         ]);
         setStatus(currentStatus);

@@ -62,6 +62,10 @@ export const ClipboardIPCChannels = {
   STOP_CONTINUOUS_CONTEXT: 'clipboard:stopContinuousContext',
   CONTINUOUS_CONTEXT_CHANGED: 'clipboard:continuousContextChanged',
 
+  // Permission banner settings
+  GET_HIDE_SCREEN_RECORDING_BANNER: 'clipboard:getHideScreenRecordingBanner',
+  SET_HIDE_SCREEN_RECORDING_BANNER: 'clipboard:setHideScreenRecordingBanner',
+
   // Mobile sync operations
   SET_SYNC_SESSION: 'clipboard:setSyncSession',
   CLEAR_SYNC_SESSION: 'clipboard:clearSyncSession',
@@ -156,6 +160,7 @@ export interface ClipboardQueryOptions {
  */
 export interface ClipboardHotkeys {
   screenshot?: string;
+  desktopScreenshot?: string;
   history?: string;
   continuousContext?: string;
 }

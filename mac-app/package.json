@@ -1,5 +1,5 @@
 {
-  "name": "field-theory",
+  "name": "littleai-mac",
   "version": "0.1.24+maxwell",
   "private": true,
   "main": "electron-dist/main/index.js",
@@ -53,15 +53,16 @@
   "build": {
     "appId": "com.fieldtheory.app",
     "productName": "Field Theory",
-    "afterSign": "scripts/notarize.js",
     "publish": {
       "provider": "github",
       "owner": "afar1",
       "repo": "field-releases"
     },
     "mac": {
-      "notarize": true,
       "category": "public.app-category.productivity",
+      "notarize": {
+        "teamId": "3244UJ94D8"
+      },
       "minimumSystemVersion": "13.0",
       "target": [
         "dmg",
