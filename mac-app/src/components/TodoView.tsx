@@ -42,20 +42,35 @@ function KeyCap({ children, small = false }: { children: React.ReactNode; small?
 }
 
 /**
- * Format timestamp to relative time (e.g., "2 minutes ago").
+ * Format timestamp to date/time in user's local timezone.
  */
 function formatRelativeTime(timestamp: number): string {
   const now = Date.now();
-  const diff = now - timestamp;
-  const seconds = Math.floor(diff / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-
-  if (days > 0) return `${days}d ago`;
-  if (hours > 0) return `${hours}h ago`;
-  if (minutes > 0) return `${minutes}m ago`;
-  return 'just now';
+  const date = new Date(timestamp);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const taskDate = new Date(date);
+  taskDate.setHours(0, 0, 0, 0);
+  
+  const timeStr = date.toLocaleTimeString('en-US', { 
+    hour: 'numeric', 
+    minute: '2-digit',
+    hour12: true 
+  });
+  
+  if (taskDate.getTime() === today.getTime()) {
+    return `Today ${timeStr}`;
+  } else if (taskDate.getTime() === yesterday.getTime()) {
+    return `Yesterday ${timeStr}`;
+  } else {
+    const dateStr = date.toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric' 
+    });
+    return `${dateStr}, ${timeStr}`;
+  }
 }
 
 interface TodoViewProps {
@@ -90,11 +105,14 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
   const [editText, setEditText] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [newTodoText, setNewTodoText] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
   
   // Refs.
   const listRef = useRef<HTMLDivElement>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
   const createInputRef = useRef<HTMLInputElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Sort todos: incomplete first (by creation date desc), then completed (by update date desc).
   const sortedTodos = useMemo(() => {
@@ -103,11 +121,23 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
     return [...incomplete, ...completed];
   }, [todos]);
 
-  // Filter based on showCompleted toggle.
+  // Filter based on showCompleted toggle and search query.
   const visibleTodos = useMemo(() => {
-    if (showCompleted) return sortedTodos;
-    return sortedTodos.filter(t => !t.completed);
-  }, [sortedTodos, showCompleted]);
+    let filtered = sortedTodos;
+    
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(t => t.text.toLowerCase().includes(query));
+    }
+    
+    // Apply completed filter
+    if (!showCompleted) {
+      filtered = filtered.filter(t => !t.completed);
+    }
+    
+    return filtered;
+  }, [sortedTodos, showCompleted, searchQuery]);
 
   // Count of completed todos (for toggle label).
   const completedCount = useMemo(() => todos.filter(t => t.completed).length, [todos]);
@@ -546,60 +576,104 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
       overflow: 'hidden',
       padding: '0 16px 16px 16px',
     }}>
-      {/* Header with toggle and sync status */}
+      {/* Top area: Search + Create new */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        marginBottom: '12px',
+      }}>
+        <div style={{ position: 'relative', flex: 1 }}>
+          <input
+            ref={searchInputRef}
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setSearchFocused(false)}
+            placeholder=""
+            style={{
+              width: '100%',
+              padding: `6px 10px 6px ${!searchQuery && !searchFocused ? '32px' : '10px'}`,
+              border: `1px solid ${theme.inputBorder}`,
+              borderRadius: '6px',
+              fontSize: '11px',
+              outline: 'none',
+              boxSizing: 'border-box',
+              backgroundColor: theme.inputBg,
+              color: theme.text,
+              transition: 'padding-left 0.1s ease',
+            }}
+          />
+          {!searchQuery && !searchFocused && (
+            <div style={{
+              position: 'absolute',
+              left: '10px',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              pointerEvents: 'none',
+              color: theme.textSecondary,
+              fontSize: '11px',
+            }}>
+              <span>search...</span>
+            </div>
+          )}
+        </div>
+        <button
+          onClick={() => {
+            setIsCreating(true);
+            setTimeout(() => createInputRef.current?.focus(), 0);
+          }}
+          style={{
+            padding: '6px 8px',
+            fontSize: '10px',
+            backgroundColor: 'transparent',
+            color: theme.textSecondary,
+            border: `1px solid ${theme.border}`,
+            borderRadius: '4px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+          }}
+        >
+          create new <KeyCap small>c</KeyCap>
+        </button>
+      </div>
+      
+      {/* Bottom area: Refresh + Hide done */}
       <div style={{
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         marginBottom: '12px',
-        paddingTop: '4px',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ 
-            fontSize: '13px', 
-            fontWeight: 600, 
-            color: theme.text,
-          }}>
-            Tasks
-          </span>
-          <span style={{ 
-            fontSize: '11px', 
+        <button
+          onClick={() => loadTodos(false)}
+          disabled={syncing || backgroundSyncing}
+          style={{
+            padding: '6px 8px',
+            fontSize: '10px',
             color: theme.textSecondary,
-          }}>
-            {visibleTodos.length} {visibleTodos.length === 1 ? 'task' : 'tasks'}
-          </span>
-          {syncing && (
-            <span style={{ fontSize: '10px', color: theme.accent }}>
-              syncing...
-            </span>
-          )}
-          {backgroundSyncing && !syncing && (
-            <span style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '4px',
-              fontSize: '10px',
-              color: theme.textSecondary,
-              opacity: 0.7,
-            }}>
-              <span style={{
-                width: '8px',
-                height: '8px',
-                border: '1.5px solid rgba(128,128,128,0.3)',
-                borderTopColor: theme.accent,
-                borderRadius: '50%',
-                animation: 'spin 0.8s linear infinite',
-              }} />
-              syncing
-            </span>
-          )}
-        </div>
-        
-        {/* Show/hide completed toggle */}
+            backgroundColor: 'transparent',
+            border: `1px solid ${theme.border}`,
+            borderRadius: '4px',
+            cursor: syncing || backgroundSyncing ? 'not-allowed' : 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            opacity: syncing || backgroundSyncing ? 0.5 : 1,
+          }}
+        >
+          refresh <KeyCap small>r</KeyCap>
+        </button>
         <button
           onClick={() => setShowCompleted(prev => !prev)}
           style={{
-            padding: '4px 8px',
+            padding: '6px 8px',
             fontSize: '10px',
             color: theme.textSecondary,
             backgroundColor: 'transparent',
@@ -611,10 +685,32 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
             gap: '4px',
           }}
         >
-          <KeyCap small>h</KeyCap>
-          {showCompleted ? `Hide done (${completedCount})` : `Show done (${completedCount})`}
+          hide done ({completedCount}) <KeyCap small>h</KeyCap>
         </button>
       </div>
+      
+      {/* Sync status indicator */}
+      {(syncing || backgroundSyncing) && (
+        <div style={{
+          marginBottom: '8px',
+          fontSize: '10px',
+          color: theme.textSecondary,
+          opacity: 0.7,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px',
+        }}>
+          <span style={{
+            width: '8px',
+            height: '8px',
+            border: '1.5px solid rgba(128,128,128,0.3)',
+            borderTopColor: theme.accent,
+            borderRadius: '50%',
+            animation: 'spin 0.8s linear infinite',
+          }} />
+          syncing
+        </div>
+      )}
 
       {/* Create new todo input (shown when pressing 'c') */}
       {isCreating && (
@@ -761,9 +857,9 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
                 onClick={() => setSelectedIndex(index)}
                 onDoubleClick={() => !todo.completed && startEditing(todo)}
                 style={{
-                  padding: '10px 12px',
-                  marginBottom: '4px',
-                  borderRadius: '8px',
+                  padding: '6px 10px',
+                  marginBottom: '2px',
+                  borderRadius: '6px',
                   backgroundColor: isSelected 
                     ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)')
                     : isInSelection
@@ -839,7 +935,7 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
                     {/* Content */}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{
-                        fontSize: '13px',
+                        fontSize: '12px',
                         color: todo.completed ? theme.textSecondary : theme.text,
                         textDecoration: todo.completed ? 'line-through' : 'none',
                         lineHeight: '1.4',
@@ -890,27 +986,6 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
         )}
       </div>
 
-      {/* Footer with keyboard shortcuts */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingTop: '8px',
-        borderTop: `1px solid ${theme.border}`,
-        fontSize: '10px',
-        color: theme.textSecondary,
-      }}>
-        <div style={{ display: 'flex', gap: '12px' }}>
-          <span>navigate <KeyCap small>j</KeyCap><KeyCap small>k</KeyCap></span>
-          <span>create <KeyCap small>c</KeyCap></span>
-          <span>toggle <KeyCap small>e</KeyCap></span>
-          <span>refresh <KeyCap small>r</KeyCap></span>
-        </div>
-        <div style={{ display: 'flex', gap: '12px' }}>
-          <span>multi-select <KeyCap small>⇧</KeyCap><KeyCap small>j</KeyCap><KeyCap small>k</KeyCap></span>
-          <span>clipboard <KeyCap small>tab</KeyCap></span>
-        </div>
-      </div>
 
       {/* CSS for spin animation */}
       <style>{`

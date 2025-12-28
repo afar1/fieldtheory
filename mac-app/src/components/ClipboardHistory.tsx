@@ -119,11 +119,37 @@ function truncateText(text: string, maxLength: number = 100): string {
 }
 
 /**
- * Smart truncation that shows beginning and end of text.
- * Returns an object with firstPart, lastPart, and whether truncation was needed.
- * When truncated, shows first ~15 words and last ~15 words for better context.
+ * Measure how many words fit in N lines by creating a temporary measurement element.
+ * Uses actual DOM measurement to account for variable window width.
  */
-function smartTruncateText(text: string, targetWords: number = 15): { 
+/**
+ * Estimate words per line based on container width.
+ * Uses average character width (~7px for 12px font) and average word length (~5 chars + space).
+ * This is called once when width changes, not per-item during render.
+ */
+function estimateWordsPerLine(containerWidth: number | null): number {
+  if (!containerWidth || containerWidth <= 0) {
+    return 10; // Reasonable default
+  }
+  // Account for item padding (~60px: 8px left/right padding on item + 16px on row + some buffer)
+  const textWidth = Math.max(containerWidth - 60, 100);
+  // Average character width for 12px font is ~7px, average word is ~5 chars + 1 space
+  const avgCharWidth = 7;
+  const avgWordChars = 6; // 5 letters + 1 space
+  const charsPerLine = Math.floor(textWidth / avgCharWidth);
+  const wordsPerLine = Math.floor(charsPerLine / avgWordChars);
+  return Math.max(wordsPerLine, 5); // At least 5 words per line
+}
+
+/**
+ * Smart truncation that shows beginning lines and end of text.
+ * Uses estimated words-per-line based on container width (no DOM ops during render).
+ */
+function smartTruncateText(
+  text: string, 
+  _targetWords: number = 15,
+  containerWidth: number | null = null
+): { 
   firstPart: string; 
   lastPart: string; 
   needsTruncation: boolean;
@@ -131,9 +157,10 @@ function smartTruncateText(text: string, targetWords: number = 15): {
 } {
   const trimmed = text.trim();
   const words = trimmed.split(/\s+/).filter(w => w.length > 0);
+  const lastPartWords = 5; // Last few words for context
   
-  // If text is short enough (less than double the target words), no truncation needed.
-  if (words.length <= targetWords * 2 + 2) {
+  // If text is very short, no truncation needed
+  if (words.length <= 15) {
     return { 
       firstPart: trimmed, 
       lastPart: '', 
@@ -142,13 +169,48 @@ function smartTruncateText(text: string, targetWords: number = 15): {
     };
   }
   
-  // Get first N words and last N words.
-  const firstWords = words.slice(0, targetWords);
-  const lastWords = words.slice(-targetWords);
+  // Calculate words per line based on container width
+  const wordsPerLine = estimateWordsPerLine(containerWidth);
+  const wordsFor1Line = wordsPerLine;
+  const wordsFor2Lines = wordsPerLine * 2;
+  const wordsFor3Lines = wordsPerLine * 3;
+  
+  // Determine how many lines we can show while leaving room for last words
+  let firstPartWords: number;
+  const totalNeeded = wordsFor3Lines + lastPartWords + 2; // Buffer for expand button
+  
+  if (words.length >= totalNeeded) {
+    // Enough for full 3 lines + last words
+    firstPartWords = wordsFor3Lines;
+  } else {
+    const totalNeeded2 = wordsFor2Lines + lastPartWords + 2;
+    if (words.length >= totalNeeded2) {
+      // Enough for full 2 lines + last words
+      firstPartWords = wordsFor2Lines;
+    } else {
+      const totalNeeded1 = wordsFor1Line + lastPartWords + 2;
+      if (words.length >= totalNeeded1) {
+        // Enough for full 1 line + last words
+        firstPartWords = wordsFor1Line;
+      } else {
+        // Not enough to truncate meaningfully
+        return {
+          firstPart: trimmed,
+          lastPart: '',
+          needsTruncation: false,
+          fullText: trimmed,
+        };
+      }
+    }
+  }
+  
+  // Get first part and last part
+  const firstWords = words.slice(0, firstPartWords);
+  const lastWords = words.slice(-lastPartWords);
   
   return {
     firstPart: firstWords.join(' '),
-    lastPart: lastWords.join(' '),
+    lastPart: '...' + lastWords.join(' '),
     needsTruncation: true,
     fullText: trimmed,
   };
@@ -451,6 +513,15 @@ export default function ClipboardHistory() {
     imageUrl: string | null;
   } | null>(null);
   const [hasUnreadDMs, setHasUnreadDMs] = useState(false);
+  const [teamSyncing, setTeamSyncing] = useState(false);
+  const [lastSeenItemId, setLastSeenItemId] = useState<number | string | null>(() => {
+    try {
+      const stored = localStorage.getItem('lastSeenItemId');
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  });
   
   // Update notification state.
   type UpdateStatus = 'idle' | 'available' | 'downloading' | 'ready' | 'error';
@@ -682,6 +753,7 @@ export default function ClipboardHistory() {
   const dialogRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
   const searchDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [containerWidth, setContainerWidth] = useState<number | null>(null);
   const ITEMS_PER_PAGE = 50;
 
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
@@ -919,6 +991,26 @@ export default function ClipboardHistory() {
     };
   }, [isMacOS, loadItems]);
 
+  // Measure container width for text truncation (updates on resize)
+  useEffect(() => {
+    if (!listRef.current) return;
+    
+    const updateWidth = () => {
+      if (listRef.current) {
+        setContainerWidth(listRef.current.getBoundingClientRect().width);
+      }
+    };
+    
+    // Initial measurement
+    updateWidth();
+    
+    // Update on resize
+    const resizeObserver = new ResizeObserver(updateWidth);
+    resizeObserver.observe(listRef.current);
+    
+    return () => resizeObserver.disconnect();
+  }, [isVisible]);
+
   // Track Option key held state for UI feedback.
   // When Option is held, show targetApp as paste destination; otherwise show previousApp.
   useEffect(() => {
@@ -993,6 +1085,28 @@ export default function ClipboardHistory() {
   
   // Memoize listRows so it's available in keyboard handler
   const listRows = useMemo(() => buildListRows(), [buildListRows]);
+
+  // Track last seen item for "new items" separator
+  useEffect(() => {
+    if (!isVisible || viewMode !== 'clipboard' || listRows.length === 0) return;
+    
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && listRows.length > 0) {
+        const topRow = listRows[0];
+        const topId = topRow.type === 'stack' ? topRow.stack.stackId : topRow.item.id;
+        setLastSeenItemId(topId);
+        localStorage.setItem('lastSeenItemId', JSON.stringify(topId));
+      }
+    };
+    
+    window.addEventListener('focus', handleVisibilityChange);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      window.removeEventListener('focus', handleVisibilityChange);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [isVisible, viewMode, listRows]);
 
   // ---------------------------------------------------------------------------
   // dnd-kit drag handlers.
@@ -1175,10 +1289,10 @@ export default function ClipboardHistory() {
         return;
       }
       
-      // Shift+? - Show shortcuts modal
+      // Shift+? - Toggle shortcuts modal
       if (key === '?' && hasShift) {
         e.preventDefault();
-        setShowShortcutsModal(true);
+        setShowShortcutsModal(prev => !prev);
         return;
       }
       
@@ -1373,8 +1487,9 @@ export default function ClipboardHistory() {
           dismissPreview();
           return;
         }
-        // If shortcuts modal is open, close it
+        // If shortcuts modal is open, close it (don't close window)
         if (showShortcutsModal) {
+          e.preventDefault();
           setShowShortcutsModal(false);
           return;
         }
@@ -1505,10 +1620,24 @@ export default function ClipboardHistory() {
         return;
       }
       
-      // U - Unstack the selected stack
+      // U - Unstack the selected stack, or unstack hovered image
       if (key === 'u' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         // Skip if typing in input
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        
+        // If hovering over an image in a stack, unstack just that image
+        if (hoveredImageId !== null) {
+          const hoveredItem = items.find(i => i.id === hoveredImageId);
+          if (hoveredItem?.stackId) {
+            e.preventDefault();
+            (async () => {
+              await window.clipboardAPI?.updateStackId?.([hoveredImageId], null);
+              setPendingItemSelection(hoveredImageId);
+              loadItems(true);
+            })();
+            return;
+          }
+        }
         
         const selectedRow = listRows[selectedIndex];
         if (selectedRow?.type === 'stack' && selectedRow.items.length > 1) {
@@ -1621,10 +1750,14 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // Cmd+Enter: Improve the selected item/stack
-      if (key === 'Enter' && hasMeta && !hasShift && selectedIds.size === 0) {
+      // I or Cmd+Enter: Improve the selected item/stack
+      if ((key === 'i' || (key === 'Enter' && hasMeta)) && !hasShift && selectedIds.size === 0) {
         // Skip if user is typing in an input field.
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
+          return;
+        }
+        // Skip if I key and user is typing (could be typing "improve" etc)
+        if (key === 'i' && document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
           return;
         }
         e.preventDefault();
@@ -2167,7 +2300,7 @@ export default function ClipboardHistory() {
       <div
         style={{
           height: '28px',
-          minHeight: '28px',
+          minHeight: '44px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'flex-start',
@@ -2181,20 +2314,46 @@ export default function ClipboardHistory() {
       >
         <span style={{ 
           fontSize: '12px', 
-          fontWeight: 600, 
-          color: theme.textSecondary,
+          fontWeight: 400, 
+          fontFamily: '"Inter", sans-serif',
+          color: '#333333',
           letterSpacing: '0.5px',
           marginRight: 'auto',
         }}>
           Field Theory
         </span>
         
+        {/* Sign in button when not authenticated */}
+        {!showSettings && !authSession?.user?.email && (
+          <button
+            onClick={() => {
+              setViewMode('team');
+              setShowSettings(false);
+            }}
+            style={{
+              fontSize: '10px',
+              color: theme.textSecondary,
+              backgroundColor: 'transparent',
+              border: `1px solid ${theme.border}`,
+              borderRadius: '4px',
+              padding: '2px 8px',
+              cursor: 'pointer',
+              marginRight: '12px',
+              // @ts-ignore - prevent drag
+              WebkitAppRegion: 'no-drag',
+            }}
+            title="Sign in to sync across devices"
+          >
+            Sign in
+          </button>
+        )}
+        
         {/* Signed in indicator - clickable to open settings */}
         {!showSettings && authSession?.user?.email && (
           <span
             onClick={() => setShowSettings(true)}
             style={{
-              fontSize: '9px',
+              fontSize: '10px',
               color: theme.textSecondary,
               opacity: 0.7,
               cursor: 'pointer',
@@ -2204,7 +2363,7 @@ export default function ClipboardHistory() {
             }}
             title="Click to open Settings"
           >
-            {authSession.user.email}
+            {authSession.user.email === 'andrew.mfarah@gmail.com' ? 'A. Farah  |  ' : authSession.user.email}
           </span>
         )}
         
@@ -2226,16 +2385,16 @@ export default function ClipboardHistory() {
               color: theme.textSecondary,
               opacity: 0.7,
             }}>
-              Priority Microphone:
+              Priority Mic:
             </span>
             <button
               onClick={() => setShowMicDropdown(!showMicDropdown)}
-              title="Priority Microphone"
+              title="Priority Mic"
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: '4px',
-                padding: '3px 8px',
+                padding: '6px 8px',
                 fontSize: '10px',
                 color: theme.textSecondary,
                 backgroundColor: 'transparent',
@@ -2362,11 +2521,12 @@ export default function ClipboardHistory() {
               display: 'flex',
               alignItems: 'center',
               gap: '4px',
-              padding: '2px 6px',
-              fontSize: '9px',
-              color: hotMicEnabled ? '#10b981' : theme.textSecondary,
-              backgroundColor: 'transparent',
-              border: `1px solid ${hotMicEnabled ? '#10b981' : theme.border}`,
+              marginLeft: '8px',
+              padding: '6px 8px',
+              fontSize: '10px',
+              color: hotMicEnabled ? '#fff' : theme.textSecondary,
+              backgroundColor: hotMicEnabled ? '#10b981' : (theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)'),
+              border: 'none',
               borderRadius: '4px',
               cursor: 'pointer',
               // @ts-ignore - prevent drag
@@ -2408,8 +2568,7 @@ export default function ClipboardHistory() {
               tabIndex={0}
               style={{
                 position: 'relative',
-                padding: '4px 10px',
-                paddingRight: mode === 'dms' ? '18px' : '10px', // Reserve space for orange dot
+                padding: '6px 8px',
                 fontSize: '10px',
                 fontWeight: 400,
                 backgroundColor: viewMode === mode ? theme.accent : 'transparent',
@@ -2420,19 +2579,29 @@ export default function ClipboardHistory() {
                 transition: 'all 0.15s ease',
                 outline: 'none',
               }}
+              onMouseEnter={(e) => {
+                if (viewMode !== mode) {
+                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
+                  e.currentTarget.style.borderColor = theme.text;
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (viewMode !== mode) {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                  e.currentTarget.style.borderColor = 'transparent';
+                }
+              }}
             >
-              {mode === 'clipboard' ? 'Clipboard' : mode === 'commands' ? 'Popular commands' : mode === 'team' ? 'Team' : mode === 'dms' ? 'Messages' : 'Tasks'}
+              {mode === 'clipboard' ? 'Clipboard' : mode === 'commands' ? 'Popular commands' : mode === 'team' ? 'Team Clipboard' : mode === 'dms' ? 'Messages' : 'Tasks'}
               {mode === 'dms' && hasUnreadDMs && viewMode !== 'dms' && (
                 <span style={{
                   position: 'absolute',
-                  right: '6px',
-                  top: '50%',
-                  transform: 'translateY(-50%)',
+                  top: '2px',
+                  right: '2px',
                   width: '6px',
                   height: '6px',
                   borderRadius: '50%',
                   backgroundColor: '#f59e0b',
-                  display: 'inline-block',
                 }} />
               )}
             </button>
@@ -2448,7 +2617,7 @@ export default function ClipboardHistory() {
             tabIndex={0}
             style={{
               marginLeft: '8px',
-              padding: '4px 10px',
+              padding: '6px 8px',
               fontSize: '10px',
               fontWeight: 500,
               backgroundColor: 'transparent',
@@ -2479,6 +2648,29 @@ export default function ClipboardHistory() {
             </svg>
             Draw
           </button>
+          {/* Team syncing indicator - right-aligned */}
+          {viewMode === 'team' && teamSyncing && (
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                fontSize: '10px',
+                color: theme.textSecondary,
+                opacity: 0.7,
+              }}>
+                <span style={{
+                  width: '8px',
+                  height: '8px',
+                  border: '1.5px solid rgba(128,128,128,0.3)',
+                  borderTopColor: theme.accent,
+                  borderRadius: '50%',
+                  animation: 'spin 0.8s linear infinite',
+                }} />
+                syncing
+              </span>
+            </div>
+          )}
         </div>
       )}
 
@@ -2488,7 +2680,7 @@ export default function ClipboardHistory() {
       ) : viewMode === 'todo' ? (
         <TodoView onSwitchToClipboard={() => setViewMode('clipboard')} />
       ) : viewMode === 'team' ? (
-        <TeamView />
+        <TeamView onSyncingChange={setTeamSyncing} />
       ) : viewMode === 'dms' ? (
         <DMsView />
       ) : viewMode === 'commands' ? (
@@ -2677,7 +2869,7 @@ export default function ClipboardHistory() {
                     gap: '4px',
                   }}
                 >
-                  <KeyCap>t</KeyCap> {sharingToTeam !== null ? 'Sharing...' : 'share to team'}
+                  {sharingToTeam !== null ? 'Sharing...' : 'share to team'} <KeyCap>t</KeyCap>
                 </button>
                 {selectedIds.size > 1 && (
                   <button
@@ -2778,8 +2970,8 @@ export default function ClipboardHistory() {
               // Show previousApp by default, targetApp when Option is held.
               // Fall back to previousApp name if targetApp isn't set.
               const displayAppName = optionHeld
-                ? (targetAppInfo.targetApp?.name || targetAppInfo.previousApp?.name || 'app')
-                : (targetAppInfo.previousApp?.name || 'app');
+                ? (targetAppInfo.targetApp?.name || targetAppInfo.previousApp?.name || 'most recent app')
+                : (targetAppInfo.previousApp?.name || 'most recent app');
               // "Show more" is controlled by actual overflow detection, not character count.
               const textIsOverflowing = overflowingTexts.has(stack.stackId);
 
@@ -2988,6 +3180,9 @@ export default function ClipboardHistory() {
                                 >
                                   <span>Preview <KeyCap small>space</KeyCap></span>
                                   <span>Draw <KeyCap small>d</KeyCap></span>
+                                  {item.stackId && (
+                                    <span>Unstack image <KeyCap small>u</KeyCap></span>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -3001,7 +3196,7 @@ export default function ClipboardHistory() {
                         const displayText = expanded && improveResult?.stackId === stack.stackId 
                           ? improveResult.refinedPrompt 
                           : combinedText;
-                        const truncated = smartTruncateText(displayText, 8);
+                        const truncated = smartTruncateText(displayText, 8, containerWidth);
                         const showSmartTruncation = !expanded && truncated.needsTruncation;
                         
                         if (expanded) {
@@ -3024,75 +3219,59 @@ export default function ClipboardHistory() {
                         }
                         
                         if (showSmartTruncation) {
-                          // Smart truncation: show first words ... [expand] ... last words.
+                          // Smart truncation: show first words ... [expand] ... last words inline.
                           return (
                             <div style={{ marginBottom: '4px' }}>
-                              {/* First part */}
-                              <span
+                              <div
                                 style={{
                                   fontSize: '12px',
                                   fontWeight: '500',
                                   color: theme.text,
                                   lineHeight: '1.5',
+                                  display: 'inline',
                                 }}
                               >
-                                {truncated.firstPart}
-                              </span>
-                              <span style={{ color: theme.textSecondary, fontSize: '12px' }}> … </span>
-                              
-                              {/* Expand button in the middle */}
-                              <button
-                                tabIndex={-1}
-                                onMouseDown={(e) => e.preventDefault()}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  toggleStackExpanded(stack.stackId);
-                                }}
-                                style={{
-                                  background: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
-                                  border: 'none',
-                                  padding: '2px 8px',
-                                  fontSize: '10px',
-                                  fontWeight: 500,
-                                  color: theme.textSecondary,
-                                  cursor: 'pointer',
-                                  borderRadius: '4px',
-                                  margin: '0 4px',
-                                  verticalAlign: 'middle',
-                                }}
-                              >
-                                {improveResult?.stackId === stack.stackId ? 'show improved' : 'expand'}
-                              </button>
-                              
-                              <span style={{ color: theme.textSecondary, fontSize: '12px' }}> … </span>
-                              {/* Last part */}
-                              <span
-                                style={{
-                                  fontSize: '12px',
-                                  fontWeight: '500',
-                                  color: theme.text,
-                                  lineHeight: '1.5',
-                                }}
-                              >
-                                {truncated.lastPart}
-                              </span>
-                              
-                              {/* Improved badge inline */}
-                              {improveResult?.stackId === stack.stackId && (
-                                <span style={{
-                                  display: 'inline-block',
-                                  fontSize: '9px',
-                                  fontWeight: 600,
-                                  color: '#34C759',
-                                  backgroundColor: '#e8f5e9',
-                                  padding: '2px 6px',
-                                  borderRadius: '3px',
-                                  marginLeft: '8px',
-                                  verticalAlign: 'middle',
-                                }}>
-                                  ✨ improved
-                                </span>
-                              )}
+                                {truncated.firstPart}...{' '}
+                                <button
+                                  tabIndex={-1}
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleStackExpanded(stack.stackId);
+                                  }}
+                                  style={{
+                                    background: 'transparent',
+                                    border: 'none',
+                                    padding: '0 4px',
+                                    fontSize: '10px',
+                                    fontWeight: 500,
+                                    color: theme.textSecondary,
+                                    cursor: 'pointer',
+                                    display: 'inline',
+                                    textDecoration: 'underline',
+                                  }}
+                                >
+                                  ...{improveResult?.stackId === stack.stackId ? 'show improved' : 'expand'}...
+                                </button>
+                                {' '}{truncated.lastPart}
+                                
+                                {/* Improved badge inline */}
+                                {improveResult?.stackId === stack.stackId && (
+                                  <span style={{
+                                    display: 'inline-block',
+                                    fontSize: '9px',
+                                    fontWeight: 600,
+                                    color: '#34C759',
+                                    backgroundColor: '#e8f5e9',
+                                    padding: '2px 6px',
+                                    borderRadius: '3px',
+                                    marginLeft: '8px',
+                                    verticalAlign: 'middle',
+                                  }}>
+                                    ✨ improved
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           );
                         }
@@ -3119,7 +3298,7 @@ export default function ClipboardHistory() {
                       })()}
                       
                       {/* Improved badge - shown for short text that doesn't use smart truncation */}
-                      {combinedText && !smartTruncateText(combinedText, 8).needsTruncation && improveResult?.stackId === stack.stackId && !expanded && (
+                      {combinedText && !smartTruncateText(combinedText, 8, containerWidth).needsTruncation && improveResult?.stackId === stack.stackId && !expanded && (
                         <span style={{
                           display: 'inline-block',
                           fontSize: '9px',
@@ -3166,9 +3345,9 @@ export default function ClipboardHistory() {
                       marginTop: '4px',
                     }}>
                       {/* Metadata - left side with stack icon */}
-                      <div style={{ fontSize: '10px', color: improveResult?.stackId === stack.stackId ? '#34C759' : '#FBBF24', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <div style={{ fontSize: '10px', color: improveResult?.stackId === stack.stackId ? '#34C759' : theme.textSecondary, display: 'flex', alignItems: 'center', gap: '4px' }}>
                         {/* Stack icon - layered rectangles */}
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={improveResult?.stackId === stack.stackId ? '#34C759' : '#F59E0B'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <rect x="4" y="4" width="16" height="6" rx="1" />
                           <rect x="4" y="14" width="16" height="6" rx="1" />
                         </svg>
@@ -3273,7 +3452,7 @@ export default function ClipboardHistory() {
                             onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                           >
-                            <KeyCap>⌘</KeyCap><KeyCap>↵</KeyCap> {improvingStackId === stack.stackId ? 'improving...' : 'improve'}
+                            {improvingStackId === stack.stackId ? 'improving...' : 'improve'} <KeyCap>⌘</KeyCap><KeyCap>↵</KeyCap>
                           </button>
                         )}
                         {/* Share to Team button */}
@@ -3358,7 +3537,16 @@ export default function ClipboardHistory() {
                       </div>
                     </div>
                   </DraggableDroppableRow>
-
+                  
+                  {/* New items separator - show below last seen item if there are newer items above */}
+                  {lastSeenItemId === stack.stackId && index > 0 && (
+                    <div style={{
+                      height: '1px',
+                      backgroundColor: theme.border,
+                      margin: '8px 16px',
+                      opacity: 0.4,
+                    }} />
+                  )}
                 </div>
               );
             } else {
@@ -3432,7 +3620,7 @@ export default function ClipboardHistory() {
                           const displayText = itemExpanded && improveResult?.stackId === `item-${item.id}`
                             ? improveResult.refinedPrompt
                             : item.content || 'Empty';
-                          const truncated = smartTruncateText(displayText, 8);
+                          const truncated = smartTruncateText(displayText, 8, containerWidth);
                           const showSmartTruncation = !itemExpanded && truncated.needsTruncation;
                           const colorValue = detectColor(item.content);
                           
@@ -3471,92 +3659,74 @@ export default function ClipboardHistory() {
                           }
                           
                           if (showSmartTruncation) {
-                            // Smart truncation: show first words ... [expand] ... last words.
+                            // Smart truncation: show first words ... [expand] ... last words inline.
                             return (
-                              <div style={{ marginBottom: '4px' }}>
-                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
-                                  {colorValue && (
-                                    <div
-                                      style={{
-                                        width: '20px',
-                                        height: '20px',
-                                        borderRadius: '4px',
-                                        backgroundColor: colorValue,
-                                        border: '1px solid #e0e0e0',
-                                        flexShrink: 0,
-                                        marginTop: '1px',
-                                      }}
-                                      title={colorValue}
-                                    />
+                              <div style={{ marginBottom: '4px', display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                                {/* Color swatch if present */}
+                                {colorValue && (
+                                  <div
+                                    style={{
+                                      width: '20px',
+                                      height: '20px',
+                                      borderRadius: '4px',
+                                      backgroundColor: colorValue,
+                                      border: '1px solid #e0e0e0',
+                                      flexShrink: 0,
+                                      marginTop: '1px',
+                                    }}
+                                    title={colorValue}
+                                  />
+                                )}
+                                <div
+                                  style={{
+                                    fontSize: '12px',
+                                    fontWeight: '500',
+                                    color: theme.text,
+                                    lineHeight: '1.5',
+                                    flex: 1,
+                                    display: 'inline',
+                                  }}
+                                >
+                                  {truncated.firstPart}...{' '}
+                                  <button
+                                    tabIndex={-1}
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      toggleItemExpanded(item.id);
+                                    }}
+                                    style={{
+                                      background: 'transparent',
+                                      border: 'none',
+                                      padding: '0 4px',
+                                      fontSize: '10px',
+                                      fontWeight: 500,
+                                      color: theme.textSecondary,
+                                      cursor: 'pointer',
+                                      display: 'inline',
+                                      textDecoration: 'underline',
+                                    }}
+                                  >
+                                    ...{improveResult?.stackId === `item-${item.id}` ? 'show improved' : 'expand'}...
+                                  </button>
+                                  {' '}{truncated.lastPart}
+                                  
+                                  {/* Improved badge inline */}
+                                  {improveResult?.stackId === `item-${item.id}` && (
+                                    <span style={{
+                                      display: 'inline-block',
+                                      fontSize: '9px',
+                                      fontWeight: 600,
+                                      color: '#34C759',
+                                      backgroundColor: '#e8f5e9',
+                                      padding: '2px 6px',
+                                      borderRadius: '3px',
+                                      marginLeft: '8px',
+                                      verticalAlign: 'middle',
+                                    }}>
+                                      ✨ improved
+                                    </span>
                                   )}
-                                  <span style={{ flex: 1 }}>
-                                    {/* First part */}
-                                    <span
-                                      style={{
-                                        fontSize: '12px',
-                                        fontWeight: '500',
-                                        color: theme.text,
-                                        lineHeight: '1.5',
-                                      }}
-                                    >
-                                      {truncated.firstPart}
-                                    </span>
-                                    <span style={{ color: theme.textSecondary, fontSize: '12px' }}> … </span>
-                                    
-                                    {/* Expand button in the middle */}
-                                    <button
-                                      tabIndex={-1}
-                                      onMouseDown={(e) => e.preventDefault()}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        toggleItemExpanded(item.id);
-                                      }}
-                                      style={{
-                                        background: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
-                                        border: 'none',
-                                        padding: '2px 8px',
-                                        fontSize: '10px',
-                                        fontWeight: 500,
-                                        color: theme.textSecondary,
-                                        cursor: 'pointer',
-                                        borderRadius: '4px',
-                                        margin: '0 4px',
-                                        verticalAlign: 'middle',
-                                      }}
-                                    >
-                                      {improveResult?.stackId === `item-${item.id}` ? 'show improved' : 'expand'}
-                                    </button>
-                                    
-                                    <span style={{ color: theme.textSecondary, fontSize: '12px' }}> … </span>
-                                    {/* Last part */}
-                                    <span
-                                      style={{
-                                        fontSize: '12px',
-                                        fontWeight: '500',
-                                        color: theme.text,
-                                        lineHeight: '1.5',
-                                      }}
-                                    >
-                                      {truncated.lastPart}
-                                    </span>
-                                    
-                                    {/* Improved badge inline */}
-                                    {improveResult?.stackId === `item-${item.id}` && (
-                                      <span style={{
-                                        display: 'inline-block',
-                                        fontSize: '9px',
-                                        fontWeight: 600,
-                                        color: '#34C759',
-                                        backgroundColor: '#e8f5e9',
-                                        padding: '2px 6px',
-                                        borderRadius: '3px',
-                                        marginLeft: '8px',
-                                        verticalAlign: 'middle',
-                                      }}>
-                                        ✨ improved
-                                      </span>
-                                    )}
-                                  </span>
                                 </div>
                               </div>
                             );
@@ -3858,7 +4028,7 @@ export default function ClipboardHistory() {
                           onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                           onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
-                          <KeyCap>⌘</KeyCap><KeyCap>↵</KeyCap> {improvingStackId === `item-${item.id}` ? 'improving...' : (item.improvedContent ? 're-improve' : 'improve')}
+                          {improvingStackId === `item-${item.id}` ? 'improving...' : (item.improvedContent ? 're-improve' : 'improve')} <KeyCap>⌘</KeyCap><KeyCap>↵</KeyCap>
                         </button>
                       )}
                       {/* Edit Sketch button - only for sketch items */}
@@ -3925,7 +4095,7 @@ export default function ClipboardHistory() {
                         {sharedToTeamId === `item-${item.id}` ? (
                           <>✓ shared</>
                         ) : (
-                          <><KeyCap>t</KeyCap> {sharingToTeam === item.id ? 'sharing...' : 'share'}</>
+                          <>{sharingToTeam === item.id ? 'sharing...' : 'share'} <KeyCap>t</KeyCap></>
                         )}
                       </button>
                       {/* Preview button - only for images */}
@@ -4013,11 +4183,21 @@ export default function ClipboardHistory() {
                         onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                         onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                       >
-                        paste ({optionHeld ? (targetAppInfo.targetApp?.name || targetAppInfo.previousApp?.name || 'app') : (targetAppInfo.previousApp?.name || 'app')}) <KeyCap>↵</KeyCap>
+                        paste ({optionHeld ? (targetAppInfo.targetApp?.name || targetAppInfo.previousApp?.name || 'most recent app') : (targetAppInfo.previousApp?.name || 'most recent app')}) <KeyCap>↵</KeyCap>
                       </button>
                     </div>
                   </div>
                   </DraggableDroppableRow>
+                  
+                  {/* New items separator - show below last seen item if there are newer items above */}
+                  {lastSeenItemId === item.id && index > 0 && (
+                    <div style={{
+                      height: '1px',
+                      backgroundColor: theme.border,
+                      margin: '8px 16px',
+                      opacity: 0.4,
+                    }} />
+                  )}
                 </div>
               );
             }
@@ -4333,26 +4513,8 @@ export default function ClipboardHistory() {
           )}
         </div>
 
-        {/* Right side: target app info and controls */}
+        {/* Right side: settings button only */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '12px', fontSize: '9px', flex: 1 }}>
-          {!showSettings && (
-            <span style={{ color: theme.textSecondary, opacity: 0.7, display: 'flex', alignItems: 'center', gap: '4px' }}>
-              {optionHeld ? (
-                // When Option is held, show the target app they'll paste to
-                <>
-                  <KeyCap small>⌥</KeyCap> → {targetAppInfo.targetApp?.name || targetAppInfo.previousApp?.name || 'app'}
-                  <span style={{ marginLeft: '8px' }}><KeyCap small>tab</KeyCap> cycle</span>
-                </>
-              ) : (
-                // Default: show that click/Enter goes to previous app
-                <>
-                  <KeyCap small>↵</KeyCap> → {targetAppInfo.previousApp?.name || 'app'}
-                  <span style={{ marginLeft: '8px' }}><KeyCap small>⌥</KeyCap><KeyCap small>tab</KeyCap> target</span>
-                </>
-              )}
-            </span>
-          )}
-          
           {/* Settings toggle button */}
           <button
             onClick={() => setShowSettings(!showSettings)}
@@ -4436,16 +4598,16 @@ export default function ClipboardHistory() {
               <span>delete <KeyCap>⌫</KeyCap></span>
               
               <span>down <KeyCap>↓</KeyCap><KeyCap>j</KeyCap></span>
-              <span>help <KeyCap>?</KeyCap></span>
+              <span>help <KeyCap>shift</KeyCap><KeyCap>?</KeyCap></span>
               
               <span>improve <KeyCap>⌘</KeyCap><KeyCap>↵</KeyCap></span>
               <span>paste <KeyCap>↵</KeyCap></span>
               
               <span>preview <KeyCap>space</KeyCap></span>
-              <span>record audio <KeyCap>option</KeyCap><KeyCap>space</KeyCap></span>
+              <span>expand/collapse <KeyCap>e</KeyCap></span>
               
               <span>select <KeyCap>x</KeyCap></span>
-              <span>screenshot <KeyCap>option</KeyCap><KeyCap>1</KeyCap></span>
+              <span>hot mic <KeyCap>h</KeyCap></span>
               
               <span>search <KeyCap>/</KeyCap></span>
               <span>stack <KeyCap>s</KeyCap></span>
@@ -4454,11 +4616,14 @@ export default function ClipboardHistory() {
               <span>team share <KeyCap>t</KeyCap></span>
               
               <span>view <KeyCap>tab</KeyCap></span>
-              <span>undo <KeyCap>⌘</KeyCap><KeyCap>z</KeyCap></span>
+              <span>target app <KeyCap>⌥</KeyCap><KeyCap>tab</KeyCap></span>
               
+              <span>undo <KeyCap>⌘</KeyCap><KeyCap>z</KeyCap></span>
               <span>unstack <KeyCap>u</KeyCap></span>
+              
               <span>up <KeyCap>↑</KeyCap><KeyCap>k</KeyCap></span>
               <span>DM <KeyCap>m</KeyCap></span>
+              
               <span>feedback <KeyCap>f</KeyCap></span>
             </div>
           </div>

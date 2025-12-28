@@ -182,14 +182,15 @@ export default function SketchView({ onSave, onClose, existingSketch, background
       lastToolRef.current = currentTool;
     }
     
-    // After drawing, Excalidraw switches to selection. Restore the drawing tool.
+    // Excalidraw auto-switches to selection after drawing. Restore the tool.
     const justAddedElement = elementCount > prevCount;
     if (justAddedElement && currentTool === 'selection' && lastToolRef.current) {
-      requestAnimationFrame(() => {
-        if (excalidrawAPI && lastToolRef.current) {
-          excalidrawAPI.setActiveTool({ type: lastToolRef.current });
+      const toolToRestore = lastToolRef.current;
+      setTimeout(() => {
+        if (excalidrawAPI) {
+          excalidrawAPI.setActiveTool({ type: toolToRestore });
         }
-      });
+      }, 50);
     }
   }, [excalidrawAPI]);
 

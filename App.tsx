@@ -691,9 +691,13 @@ export default function App() {
       setTranscripts(nextTranscripts);
       setSyncedAt(result.syncedAt);
       setSyncNotice('Synced with Supabase.');
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Sync failed:', err);
-      Alert.alert('Sync failed', err instanceof Error ? err.message : 'Unable to sync right now.');
+      // Handle both Error instances and Supabase error objects.
+      const message = err instanceof Error 
+        ? err.message 
+        : (err as { message?: string })?.message || 'Unable to sync right now.';
+      Alert.alert('Sync failed', message);
     } finally {
       setIsSyncingData(false);
     }
@@ -706,9 +710,13 @@ export default function App() {
     try {
       await seedRemoteFromLocal();
       setSyncNotice('Seeded current device data to Supabase.');
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Seed failed:', err);
-      Alert.alert('Seed failed', err instanceof Error ? err.message : 'Unable to seed right now.');
+      // Handle both Error instances and Supabase error objects.
+      const message = err instanceof Error 
+        ? err.message 
+        : (err as { message?: string })?.message || 'Unable to seed right now.';
+      Alert.alert('Seed failed', message);
     } finally {
       setIsSeeding(false);
     }
@@ -1609,6 +1617,7 @@ export default function App() {
               <Switch
                 value={settings.autoStart}
                 onValueChange={handleToggleAutoStart}
+                trackColor={{ false: '#d1d5db', true: '#14372A' }}
               />
             </View>
 
@@ -1620,6 +1629,7 @@ export default function App() {
               <Switch
                 value={settings.showTodos}
                 onValueChange={(value) => handleToggleSetting('showTodos', value)}
+                trackColor={{ false: '#d1d5db', true: '#14372A' }}
               />
             </View>
 
@@ -1628,6 +1638,7 @@ export default function App() {
               <Switch
                 value={settings.showObservations}
                 onValueChange={(value) => handleToggleSetting('showObservations', value)}
+                trackColor={{ false: '#d1d5db', true: '#14372A' }}
               />
             </View>
 
@@ -1636,6 +1647,7 @@ export default function App() {
               <Switch
                 value={settings.showCursor}
                 onValueChange={(value) => handleToggleSetting('showCursor', value)}
+                trackColor={{ false: '#d1d5db', true: '#14372A' }}
               />
             </View>
 
@@ -1654,13 +1666,14 @@ export default function App() {
               <Switch
                 value={settings.autoSeparate}
                 onValueChange={(value) => handleToggleSetting('autoSeparate', value)}
+                trackColor={{ false: '#d1d5db', true: '#14372A' }}
               />
             </View>
 
             <View style={styles.syncSection}>
               <Text style={styles.sectionHeading}>Supabase Sync</Text>
               <Text style={styles.syncStatusText}>
-                {session ? `Signed in as ${session.user.email}` : 'Not signed in'}
+                {session ? `Signed in as ${session.user.email === 'andrew.mfarah@gmail.com' ? 'A. Farah' : session.user.email}` : 'Not signed in'}
               </Text>
 
               <TextInput

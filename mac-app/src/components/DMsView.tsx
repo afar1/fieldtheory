@@ -468,7 +468,7 @@ export default function DMsView({ onSendDM }: DMsViewProps) {
               setSelectedFeedback(null);
             }}
             style={{
-              padding: '4px 10px',
+              padding: '6px 8px',
               fontSize: '10px',
               fontWeight: 400,
               backgroundColor: activeTab === tab ? theme.accent : 'transparent',
@@ -477,9 +477,20 @@ export default function DMsView({ onSendDM }: DMsViewProps) {
               borderRadius: '4px',
               cursor: 'pointer',
               outline: 'none',
+              transition: 'all 0.15s ease',
+            }}
+            onMouseEnter={(e) => {
+              if (activeTab !== tab) {
+                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (activeTab !== tab) {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }
             }}
           >
-            {tab === 'dms' ? 'Direct Messages' : 'Feedback'}
+            {tab === 'dms' ? 'Direct Messages' : 'Send Feedback'}
             {tab === 'feedback' && feedback.filter(f => f.feedbackStatus === 'open').length > 0 && (
               <span style={{
                 marginLeft: '4px',
@@ -645,18 +656,12 @@ export default function DMsView({ onSendDM }: DMsViewProps) {
                     {convo.unreadCount > 0 && (
                       <span style={{
                         marginLeft: 'auto',
-                        width: '16px',
-                        height: '16px',
+                        width: '6px',
+                        height: '6px',
                         borderRadius: '50%',
-                        backgroundColor: theme.accent,
-                        color: '#fff',
-                        fontSize: '9px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}>
-                        {convo.unreadCount}
-                      </span>
+                        backgroundColor: '#f59e0b',
+                        display: 'inline-block',
+                      }} />
                     )}
                   </div>
                   {convo.lastMessage && (
