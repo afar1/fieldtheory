@@ -315,7 +315,17 @@ export class TranscriberManager extends EventEmitter {
         // Silence detected - no paste needed
         console.log('[TranscriberManager] Silence detected - no paste');
         this.setStatus('idle');
-        this.handleOverlayAfterTranscription();
+        this.overlay.showStatus('No audio found');
+        return;
+      }
+      
+      // Check for bracketed-only content like [BLANK_AUDIO], [MUSIC], [SILENCE], etc.
+      // These are whisper artifacts indicating no transcribable speech.
+      const bracketedOnlyPattern = /^\s*\[[^\]]+\]\s*$/;
+      if (bracketedOnlyPattern.test(trimmedText)) {
+        console.log('[TranscriberManager] Bracketed-only content detected:', trimmedText);
+        this.setStatus('idle');
+        this.overlay.showStatus('No audio found');
         return;
       }
       
@@ -390,13 +400,13 @@ export class TranscriberManager extends EventEmitter {
       await this.nativeHelper.cancelRecording();
       this.setStatus('idle');
       this.hasAudioContent = false;
-      this.overlay.dismiss();
+      this.overlay.showStatus('Cancelled');
       this.unregisterAbandonHotkey();
     } catch (error) {
       console.error('[TranscriberManager] Failed to cancel recording:', error);
       this.setStatus('idle');
       this.hasAudioContent = false;
-      this.overlay.dismiss();
+      this.overlay.showStatus('Cancelled');
       this.unregisterAbandonHotkey();
     }
   }
