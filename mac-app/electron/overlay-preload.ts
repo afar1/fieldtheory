@@ -5,8 +5,8 @@ import { contextBridge, ipcRenderer } from 'electron';
  * Exposes IPC methods to the overlay React component.
  */
 contextBridge.exposeInMainWorld('overlayAPI', {
-  // State changes: recording, transcribing, dismiss, stacking-idle, or confirmation.
-  onStateChange: (callback: (state: 'recording' | 'transcribing' | 'dismiss' | 'stacking-idle' | 'confirmation') => void) => {
+  // State changes: recording, transcribing, dismiss, or confirmation.
+  onStateChange: (callback: (state: 'recording' | 'transcribing' | 'dismiss' | 'confirmation') => void) => {
     ipcRenderer.on('overlay-state', (_event, state) => callback(state));
   },
   
@@ -18,11 +18,6 @@ contextBridge.exposeInMainWorld('overlayAPI', {
   // Overlay style changes (rectangle vs top-emerging)
   onStyleChange: (callback: (style: 'rectangle' | 'top-emerging') => void) => {
     ipcRenderer.on('overlay-style', (_event, style) => callback(style));
-  },
-  
-  // Stacking mode on/off notification
-  onStackingModeChange: (callback: (active: boolean) => void) => {
-    ipcRenderer.on('overlay-stacking-mode', (_event, active) => callback(active));
   },
   
   // Send confirmation response (user confirmed abandoning recording).
@@ -39,4 +34,3 @@ contextBridge.exposeInMainWorld('overlayAPI', {
     ipcRenderer.removeAllListeners(channel);
   },
 });
-

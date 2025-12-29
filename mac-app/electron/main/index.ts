@@ -699,13 +699,6 @@ function setupTranscribeIPCHandlers(): void {
     }
     return transcriberManager.getCurrentStack().length;
   });
-
-  ipcMain.handle('transcribe:getStackingMode', () => {
-    if (!transcriberManager) {
-      return { active: false, stackId: null, targetApp: null };
-    }
-    return transcriberManager.getStackingMode();
-  });
 }
 
 /**
@@ -2311,13 +2304,6 @@ function broadcastTranscribeEvents(): void {
     });
   });
 
-  transcriberManager.on('stackingModeChanged', (active: boolean, stackId: string | null) => {
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send('transcribe:stackingModeChanged', active, stackId);
-      }
-    });
-  });
 }
 
 /**
@@ -2454,51 +2440,22 @@ async function initTranscriberSystem(): Promise<void> {
   
   // Register clipboard hotkeys
   clipboardManager.registerScreenshotHotkey(async () => {
-    // Get current stackId if in stacking mode
-    const stackId = transcriberManager?.getCurrentStackId() || undefined;
-    
-    // Capture screenshot with region selection (drag to select)
-    // If in stacking mode, the screenshot is tagged with the current stackId
-    const id = await clipboardManager!.captureScreenshot({ region: true }, stackId);
+    // Capture screenshot with region selection (drag to select).
+    const id = await clipboardManager!.captureScreenshot({ region: true });
     if (id > 0) {
-      // Add screenshot to prompt stack tracking
+      // Add screenshot to prompt stack tracking (for auto-stacking during recording).
       if (transcriberManager) {
         transcriberManager.addToStack(id);
-        
-        // In stacking mode, auto-paste the screenshot to the target app
-        const stackingMode = transcriberManager.getStackingMode();
-        if (stackingMode.active && stackingMode.targetApp) {
-          const { exec } = await import('child_process');
-          const { promisify } = await import('util');
-          const execAsync = promisify(exec);
-          
-          // Activate target app
-          try {
-            await execAsync(`osascript -e 'tell application id "${stackingMode.targetApp}" to activate'`);
-            await new Promise(resolve => setTimeout(resolve, 100));
-            
-            // Read the screenshot and paste it
-            const item = clipboardManager!.getItem(id);
-            if (item?.imageData) {
-              const { nativeImage } = await import('electron');
-              const image = nativeImage.createFromBuffer(item.imageData);
-              clipboard.writeImage(image);
-              await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-            }
-          } catch (err) {
-            console.error('[Main] Failed to auto-paste screenshot in stacking mode:', err);
-          }
-        }
       }
       
-      // Queue for vision processing if vision processor is available
+      // Queue for vision processing if vision processor is available.
       if (visionProcessor) {
         visionProcessor.queueImage(id).catch((error) => {
           console.error('[Main] Failed to queue image for vision processing:', error);
         });
       }
       
-      // Notify all windows (including clipboard history window)
+      // Notify all windows (including clipboard history window).
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);

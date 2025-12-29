@@ -1734,7 +1734,6 @@ export default function ClipboardHistory() {
       }
 
       // t: Share to Team - share selected items, stack, or multi-selected items.
-      // Using 't' for team to avoid conflict with 's' for stacking.
       if (key === 't' && !hasMeta && !hasCtrl && !hasShift) {
         // Skip if typing in input.
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;

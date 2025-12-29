@@ -27,7 +27,6 @@ export interface TranscriberEvents {
   result: (text: string) => void;
   error: (error: Error) => void;
   stackChanged: (count: number) => void;
-  stackingModeChanged: (active: boolean, stackId: string | null) => void;
 }
 
 /**
@@ -49,14 +48,10 @@ export class TranscriberManager extends EventEmitter {
   private abandonHotkeyRegistered: boolean = false;
   private registeredAbandonHotkey: string = 'Escape'; // Track currently registered abandon hotkey
   
-  // Current stack of items (transcriptions + screenshots) for prompt stacking
+  // Current stack of items (transcriptions + screenshots) during a recording session.
+  // Used for auto-stacking: if screenshots are taken during recording, they get
+  // grouped with the transcript into a stack when recording ends.
   private currentStack: number[] = [];
-  
-  // Stacking mode state - accumulates multiple items to paste to a target app
-  private isStackingMode: boolean = false;
-  private targetAppBundleId: string | null = null;
-  private currentStackId: string | null = null;
-  private stackingHotkeyRegistered: boolean = false;
   
   // Clipboard history visibility checker - allows escape key to dismiss clipboard history first
   private clipboardHistoryVisibilityChecker: (() => boolean) | null = null;
@@ -142,17 +137,13 @@ export class TranscriberManager extends EventEmitter {
 
     // Register global hotkey for normal transcription
     await this.registerHotkey(this.hotkey);
-    
-    // Register stacking mode hotkey (Cmd + transcription hotkey)
-    this.registerStackingHotkey();
 
-    // Handle app quit - unregister all our hotkeys
+    // Handle app quit - unregister hotkey
     app.on('will-quit', () => {
       if (this.registeredHotkey) {
         globalShortcut.unregister(this.registeredHotkey);
         this.registeredHotkey = null;
       }
-      this.unregisterStackingHotkey();
     });
   }
 
@@ -209,17 +200,11 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Set a new hotkey and save to preferences.
-   * Also updates the stacking hotkey (Cmd + new hotkey).
    */
   async setHotkey(hotkey: string): Promise<boolean> {
-    // Unregister old stacking hotkey before changing main hotkey
-    this.unregisterStackingHotkey();
-    
     const success = await this.registerHotkey(hotkey);
     if (success) {
       await this.preferences.save({ transcriptionHotkey: hotkey });
-      // Re-register stacking hotkey with new base hotkey
-      this.registerStackingHotkey();
       this.emit('hotkeyChanged', hotkey);
     }
     return success;
@@ -259,6 +244,9 @@ export class TranscriberManager extends EventEmitter {
       // Reset audio content tracking for new recording.
       this.hasAudioContent = false;
       this.pendingAbandonConfirmation = false;
+      
+      // Clear stack from previous recording session (for auto-stacking).
+      this.currentStack = [];
       
       // Show overlay
       this.overlay.showRecording();
@@ -324,20 +312,20 @@ export class TranscriberManager extends EventEmitter {
       // Check for silence (empty or whitespace-only text)
       const trimmedText = text ? text.trim() : '';
       if (trimmedText.length === 0) {
-        // Silence detected - don't paste but stay in stacking mode if active
+        // Silence detected - no paste needed
         console.log('[TranscriberManager] Silence detected - no paste');
         this.setStatus('idle');
         this.handleOverlayAfterTranscription();
         return;
       }
       
-      // Store transcription in clipboard history (with stackId if in stacking mode or continuous context)
+      // Store transcription in clipboard history.
       if (this.clipboardManager) {
-        // Check if continuous context mode is active - if so, use its stackId
+        // Check if continuous context mode is active - if so, use its stackId.
         const continuousContextState = this.clipboardManager.getContinuousContextState();
         const effectiveStackId = continuousContextState.active && continuousContextState.stackId
           ? continuousContextState.stackId
-          : (this.currentStackId || undefined);
+          : undefined;
         
         const itemId = await this.clipboardManager.storeText(
           trimmedText,
@@ -347,13 +335,20 @@ export class TranscriberManager extends EventEmitter {
         );
         if (itemId > 0) {
           this.currentStack.push(itemId);
+          
+          // Auto-stack: if screenshots were taken during recording, group them with transcript.
+          // Only auto-stack if we have more than one item (transcript + screenshots).
+          if (this.currentStack.length > 1) {
+            const stackId = crypto.randomUUID();
+            this.clipboardManager.updateStackId(this.currentStack, stackId);
+            console.log(`[TranscriberManager] Auto-stacked ${this.currentStack.length} items (stackId: ${stackId})`);
+          }
+          
           this.emit('stackChanged', this.currentStack.length);
         }
-      }
-      
-      // In stacking mode, activate target app before pasting
-      if (this.isStackingMode && this.targetAppBundleId) {
-        await this.activateTargetApp();
+        
+        // Clear stack after processing (ready for next recording).
+        this.currentStack = [];
       }
       
       // Speech detected - paste text
@@ -361,7 +356,7 @@ export class TranscriberManager extends EventEmitter {
       await this.pasteText();
       this.emit('result', trimmedText);
       
-      // Handle overlay state based on stacking mode
+      // Dismiss overlay
       this.setStatus('idle');
       this.handleOverlayAfterTranscription();
     } catch (error) {
@@ -374,17 +369,10 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Handle overlay state after transcription completes.
-   * In stacking mode, show the idle stacking indicator.
-   * Otherwise, dismiss the overlay.
+   * Dismiss the overlay.
    */
   private handleOverlayAfterTranscription(): void {
-    if (this.isStackingMode) {
-      // Stay visible with stacking idle indicator
-      this.overlay.showStackingIdle();
-    } else {
-      // Normal mode - dismiss overlay
-      this.overlay.dismiss();
-    }
+    this.overlay.dismiss();
   }
   
   /**
@@ -518,139 +506,6 @@ export class TranscriberManager extends EventEmitter {
    */
   getAbandonConfirmation(): boolean {
     return this.preferences.getPreference('abandonRecordingConfirmation') ?? true;
-  }
-
-  // =========================================================================
-  // Stacking Mode - accumulate multiple transcriptions/screenshots to paste
-  // to a recorded target app. Toggle with Cmd + transcription hotkey.
-  // =========================================================================
-
-  /**
-   * Register the stacking mode hotkey (Cmd + transcription hotkey).
-   * This toggles stacking mode on/off.
-   */
-  private registerStackingHotkey(): void {
-    if (this.stackingHotkeyRegistered) {
-      return;
-    }
-
-    // Build the stacking hotkey by adding Command to the base hotkey.
-    // e.g., "Alt+Space" becomes "CommandOrControl+Alt+Space"
-    const stackingHotkey = `CommandOrControl+${this.hotkey}`;
-    
-    const registered = globalShortcut.register(stackingHotkey, () => {
-      this.toggleStackingMode();
-    });
-
-    if (registered) {
-      this.stackingHotkeyRegistered = true;
-      console.log(`[TranscriberManager] Registered stacking hotkey: ${stackingHotkey}`);
-    } else {
-      console.warn(`[TranscriberManager] Failed to register stacking hotkey: ${stackingHotkey}`);
-    }
-  }
-
-  /**
-   * Unregister the stacking mode hotkey.
-   */
-  private unregisterStackingHotkey(): void {
-    if (!this.stackingHotkeyRegistered) {
-      return;
-    }
-
-    const stackingHotkey = `CommandOrControl+${this.hotkey}`;
-    globalShortcut.unregister(stackingHotkey);
-    this.stackingHotkeyRegistered = false;
-    console.log(`[TranscriberManager] Unregistered stacking hotkey: ${stackingHotkey}`);
-  }
-
-  /**
-   * Toggle stacking mode on/off.
-   * When turning on: captures the frontmost app as the target and generates a stack ID.
-   * When turning off: clears stacking state (items are already saved to history).
-   */
-  private async toggleStackingMode(): Promise<void> {
-    if (this.isStackingMode) {
-      // Turn off stacking mode
-      console.log('[TranscriberManager] Stacking mode OFF');
-      this.isStackingMode = false;
-      this.targetAppBundleId = null;
-      this.currentStackId = null;
-      this.currentStack = [];
-      
-      // Dismiss the stacking overlay
-      this.overlay.setStackingMode(false);
-      this.overlay.dismiss();
-      
-      this.emit('stackingModeChanged', false, null);
-      this.emit('stackChanged', 0);
-    } else {
-      // Turn on stacking mode
-      console.log('[TranscriberManager] Stacking mode ON');
-      
-      // Capture the frontmost app as our paste target
-      this.targetAppBundleId = await this.getFrontmostAppBundleId();
-      console.log(`[TranscriberManager] Target app: ${this.targetAppBundleId}`);
-      
-      // Generate a unique stack ID for this stacking session
-      this.currentStackId = crypto.randomUUID();
-      this.currentStack = [];
-      this.isStackingMode = true;
-      
-      // Show the stacking indicator overlay
-      this.overlay.setStackingMode(true);
-      this.overlay.showStackingIdle();
-      
-      this.emit('stackingModeChanged', true, this.currentStackId);
-    }
-  }
-
-  /**
-   * Get the bundle ID of the frontmost application.
-   */
-  private async getFrontmostAppBundleId(): Promise<string | null> {
-    try {
-      const { stdout } = await execAsync(
-        "osascript -e 'tell application \"System Events\" to get bundle identifier of first application process whose frontmost is true'"
-      );
-      return stdout.trim() || null;
-    } catch (error) {
-      console.error('[TranscriberManager] Failed to get frontmost app:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Activate (bring to front) the target app by bundle ID.
-   */
-  private async activateTargetApp(): Promise<boolean> {
-    if (!this.targetAppBundleId) {
-      return false;
-    }
-
-    try {
-      // Use AppleScript to activate the app by bundle ID
-      await execAsync(
-        `osascript -e 'tell application id "${this.targetAppBundleId}" to activate'`
-      );
-      // Small delay to ensure the app is fully activated
-      await new Promise(resolve => setTimeout(resolve, 100));
-      return true;
-    } catch (error) {
-      console.error('[TranscriberManager] Failed to activate target app:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Get the current stacking mode state.
-   */
-  getStackingMode(): { active: boolean; stackId: string | null; targetApp: string | null } {
-    return {
-      active: this.isStackingMode,
-      stackId: this.currentStackId,
-      targetApp: this.targetAppBundleId,
-    };
   }
 
   /**
@@ -920,18 +775,10 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
-   * Get the current stack ID (for screenshots to use when in stacking mode).
-   */
-  getCurrentStackId(): string | null {
-    return this.currentStackId;
-  }
-
-  /**
    * Cleanup resources.
    */
   destroy(): void {
     this.unregisterAbandonHotkey();
-    this.unregisterStackingHotkey();
     
     // Unregister transcription hotkey
     if (this.registeredHotkey) {
