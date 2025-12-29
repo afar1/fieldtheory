@@ -232,12 +232,6 @@ type EngineerResult = {
   error?: string;
 };
 
-type StackingModeState = {
-  active: boolean;
-  stackId: string | null;
-  targetApp: string | null;
-};
-
 type ClipboardQueryOptions = {
   type?: ClipboardItemType;
   search?: string;
@@ -489,14 +483,12 @@ export interface TranscribeAPI {
   getAvailableSounds: () => Promise<SoundOption[]>;
   previewSound: (soundId: string) => Promise<void>;
   getStackCount: () => Promise<number>;
-  getStackingMode: () => Promise<StackingModeState>;
   onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
   onResult: (callback: (text: string) => void) => () => void;
   onError: (callback: (error: string) => void) => () => void;
   onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
   onHotkeyChanged: (callback: (hotkey: string) => void) => () => void;
   onStackChanged: (callback: (count: number) => void) => () => void;
-  onStackingModeChanged: (callback: (active: boolean, stackId: string | null) => void) => () => void;
 }
 
 export interface VisionAPI {
@@ -773,10 +765,6 @@ const transcribeAPI: TranscribeAPI = {
     return ipcRenderer.invoke('transcribe:getStackCount');
   },
 
-  getStackingMode: async (): Promise<StackingModeState> => {
-    return ipcRenderer.invoke('transcribe:getStackingMode');
-  },
-
   onStackChanged: (callback: (count: number) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, count: number) => {
       callback(count);
@@ -786,18 +774,6 @@ const transcribeAPI: TranscribeAPI = {
 
     return () => {
       ipcRenderer.removeListener('transcribe:stackChanged', handler);
-    };
-  },
-
-  onStackingModeChanged: (callback: (active: boolean, stackId: string | null) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, active: boolean, stackId: string | null) => {
-      callback(active, stackId);
-    };
-
-    ipcRenderer.on('transcribe:stackingModeChanged', handler);
-
-    return () => {
-      ipcRenderer.removeListener('transcribe:stackingModeChanged', handler);
     };
   },
 };

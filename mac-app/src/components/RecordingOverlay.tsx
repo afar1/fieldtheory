@@ -1,17 +1,16 @@
 // =============================================================================
-// RecordingOverlay - Shows recording state and stacking mode indicator
+// RecordingOverlay - Shows recording state indicator
 // =============================================================================
 
 import { useEffect, useState } from 'react';
 
-type OverlayState = 'recording' | 'transcribing' | 'dismiss' | 'stacking-idle' | 'confirmation';
+type OverlayState = 'recording' | 'transcribing' | 'dismiss' | 'confirmation';
 type OverlayStyle = 'rectangle' | 'top-emerging';
 
 export default function RecordingOverlay() {
   const [state, setState] = useState<OverlayState>('recording');
   const [style, setStyle] = useState<OverlayStyle>('rectangle');
   const [stackCount, setStackCount] = useState<number>(0);
-  const [isStackingMode, setIsStackingMode] = useState<boolean>(false);
 
   // IPC listeners for overlay state and style
   useEffect(() => {
@@ -20,17 +19,13 @@ export default function RecordingOverlay() {
     if (window.overlayAPI.onStyleChange) {
       window.overlayAPI.onStyleChange(setStyle);
     }
-    if (window.overlayAPI.onStackingModeChange) {
-      window.overlayAPI.onStackingModeChange(setIsStackingMode);
-    }
     return () => {
       window.overlayAPI?.removeAllListeners('overlay-state');
       window.overlayAPI?.removeAllListeners('overlay-style');
-      window.overlayAPI?.removeAllListeners('overlay-stacking-mode');
     };
   }, []);
 
-  // Stack count listener
+  // Stack count listener (shows how many screenshots have been captured during recording)
   useEffect(() => {
     if (!window.transcribeAPI) return;
     
@@ -141,8 +136,7 @@ export default function RecordingOverlay() {
     );
   }
 
-  // In stacking mode, always use top-emerging style look
-  const isTopEmerging = style === 'top-emerging' || isStackingMode;
+  const isTopEmerging = style === 'top-emerging';
 
   return (
     <div style={{
@@ -159,22 +153,7 @@ export default function RecordingOverlay() {
       borderTopLeftRadius: isTopEmerging ? '20px' : '0',
       borderTopRightRadius: isTopEmerging ? '20px' : '0',
       boxShadow: isTopEmerging ? '0 4px 12px rgba(0, 0, 0, 0.3)' : 'none',
-      borderTop: isTopEmerging ? 'none' : 'none',
     }}>
-      {/* Stacking mode label - shown when stacking is active */}
-      {isStackingMode && (
-        <div style={{
-          fontSize: '11px',
-          fontWeight: 600,
-          color: '#fff',
-          textTransform: 'uppercase',
-          letterSpacing: '0.5px',
-          opacity: 0.9,
-        }}>
-          stacking
-        </div>
-      )}
-
       {/* Recording indicator - red dot when actively recording */}
       {state === 'recording' && (
         <div style={{
@@ -189,8 +168,8 @@ export default function RecordingOverlay() {
             background: '#ff3b30',
             boxShadow: isTopEmerging ? '0 0 12px rgba(255, 59, 48, 0.6)' : '0 0 8px #ff3b30',
           }} />
-          {/* Stack count indicator (when not in dedicated stacking mode) */}
-          {!isStackingMode && stackCount > 0 && (
+          {/* Stack count indicator - shows screenshots captured during recording */}
+          {stackCount > 0 && (
             <div style={{
               minWidth: isTopEmerging ? '18px' : '16px',
               height: isTopEmerging ? '18px' : '16px',
@@ -220,25 +199,6 @@ export default function RecordingOverlay() {
           boxShadow: isTopEmerging ? '0 0 12px rgba(175, 82, 222, 0.6)' : '0 0 8px #af52de',
         }} />
       )}
-
-      {/* Stack count badge - shown in stacking mode when items are accumulated */}
-      {isStackingMode && stackCount > 0 && (
-        <div style={{
-          minWidth: '20px',
-          height: '20px',
-          padding: '0 6px',
-          borderRadius: '10px',
-          background: 'rgba(255, 255, 255, 0.25)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: '11px',
-          fontWeight: 600,
-          color: '#fff',
-        }}>
-          {stackCount}
-        </div>
-      )}
     </div>
   );
 }
@@ -248,7 +208,6 @@ declare global {
     overlayAPI?: {
       onStateChange: (cb: (s: OverlayState) => void) => void;
       onStyleChange?: (cb: (s: OverlayStyle) => void) => void;
-      onStackingModeChange?: (cb: (active: boolean) => void) => void;
       confirmAbandon?: () => void;
       cancelAbandon?: () => void;
       removeAllListeners: (c: string) => void;
