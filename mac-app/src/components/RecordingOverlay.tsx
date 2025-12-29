@@ -4,24 +4,29 @@
 
 import { useEffect, useState } from 'react';
 
-type OverlayState = 'recording' | 'transcribing' | 'dismiss' | 'confirmation';
+type OverlayState = 'recording' | 'transcribing' | 'dismiss' | 'confirmation' | 'status';
 type OverlayStyle = 'rectangle' | 'top-emerging';
 
 export default function RecordingOverlay() {
   const [state, setState] = useState<OverlayState>('recording');
   const [style, setStyle] = useState<OverlayStyle>('rectangle');
   const [stackCount, setStackCount] = useState<number>(0);
+  const [statusMessage, setStatusMessage] = useState<string>('');
 
-  // IPC listeners for overlay state and style
+  // IPC listeners for overlay state, style, and status messages
   useEffect(() => {
     if (!window.overlayAPI) return;
     window.overlayAPI.onStateChange(setState);
     if (window.overlayAPI.onStyleChange) {
       window.overlayAPI.onStyleChange(setStyle);
     }
+    if (window.overlayAPI.onStatusMessage) {
+      window.overlayAPI.onStatusMessage(setStatusMessage);
+    }
     return () => {
       window.overlayAPI?.removeAllListeners('overlay-state');
       window.overlayAPI?.removeAllListeners('overlay-style');
+      window.overlayAPI?.removeAllListeners('overlay-status-message');
     };
   }, []);
 
@@ -135,6 +140,40 @@ export default function RecordingOverlay() {
       </div>
     );
   }
+  
+  // Handle status state - show brief message that fades away.
+  if (state === 'status') {
+    return (
+      <div style={{
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '8px 16px',
+        background: 'rgba(0, 0, 0, 0.85)',
+        borderRadius: '20px',
+        backdropFilter: 'blur(20px)',
+        animation: 'fadeInOut 1.5s ease-in-out',
+      }}>
+        <style>{`
+          @keyframes fadeInOut {
+            0% { opacity: 0; }
+            15% { opacity: 1; }
+            85% { opacity: 1; }
+            100% { opacity: 0; }
+          }
+        `}</style>
+        <span style={{
+          fontSize: '12px',
+          fontWeight: 500,
+          color: 'rgba(255, 255, 255, 0.9)',
+        }}>
+          {statusMessage}
+        </span>
+      </div>
+    );
+  }
 
   const isTopEmerging = style === 'top-emerging';
 
@@ -208,6 +247,7 @@ declare global {
     overlayAPI?: {
       onStateChange: (cb: (s: OverlayState) => void) => void;
       onStyleChange?: (cb: (s: OverlayStyle) => void) => void;
+      onStatusMessage?: (cb: (message: string) => void) => void;
       confirmAbandon?: () => void;
       cancelAbandon?: () => void;
       removeAllListeners: (c: string) => void;

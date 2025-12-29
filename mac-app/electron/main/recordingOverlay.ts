@@ -159,10 +159,28 @@ export class RecordingOverlay extends EventEmitter {
     }, 300);
   }
 
-  private sendState(state: 'recording' | 'transcribing' | 'dismiss' | 'confirmation'): void {
+  private sendState(state: 'recording' | 'transcribing' | 'dismiss' | 'confirmation' | 'status'): void {
     if (this.window && !this.window.isDestroyed()) {
       this.window.webContents.send('overlay-state', state);
     }
+  }
+
+  /**
+   * Show a brief status message that fades away.
+   * Used for feedback like "No audio found", "Cancelled", etc.
+   */
+  showStatus(message: string): void {
+    if (!this.window || this.window.isDestroyed()) {
+      return;
+    }
+    
+    this.window.webContents.send('overlay-status-message', message);
+    this.sendState('status');
+    
+    // Auto-dismiss after showing the status message.
+    setTimeout(() => {
+      this.dismiss();
+    }, 1500);
   }
 
   private sendStyle(style: OverlayStyle): void {
