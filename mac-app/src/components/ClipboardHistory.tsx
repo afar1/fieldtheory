@@ -826,7 +826,7 @@ export default function ClipboardHistory() {
     setTimeout(() => setSharedToTeamId(null), 1500);
   }, []);
 
-  const handleSketchSave = useCallback(async (imageData: { dataUrl: string; width: number; height: number }, andPaste?: boolean) => {
+  const handleSketchSave = useCallback(async (imageData: { dataUrl: string; width: number; height: number }, andCopy?: boolean) => {
     const api = window.clipboardAPI;
     if (!api?.restoreItem) return;
     
@@ -849,14 +849,20 @@ export default function ClipboardHistory() {
       source: 'mac',
     } as any);
     
-    if (andPaste && newId) {
-      await api.pasteItem(newId, targetAppInfo.previousApp?.bundleId);
+    // If recording is active, add drawing to the transcription stack (like screenshots).
+    if (newId && transcriptionStatus === 'recording') {
+      await window.transcribeAPI?.addToStack(newId);
+    }
+    
+    // Copy to system clipboard (without pasting) when "save & copy" is clicked.
+    if (andCopy && newId) {
+      await api.copyItem(newId);
     }
     
     setEditingSketchItem(null);
     setViewMode('clipboard');
     loadItems(true);
-  }, [loadItems, targetAppInfo.previousApp?.bundleId]);
+  }, [loadItems, transcriptionStatus]);
 
   const handleSketchClose = useCallback(() => {
     setEditingSketchItem(null);
@@ -2722,6 +2728,77 @@ export default function ClipboardHistory() {
               </span>
             </div>
           )}
+          
+          {/* Recording/Transcribing indicator - right-aligned in header */}
+          {(transcriptionStatus === 'recording' || transcriptionStatus === 'transcribing') && (
+            <div 
+              style={{ 
+                marginLeft: viewMode === 'team' && teamSyncing ? '8px' : 'auto', 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '4px',
+                position: 'relative',
+              }}
+              onMouseEnter={() => transcriptionStatus === 'recording' && setShowRecordingTooltip(true)}
+              onMouseLeave={() => setShowRecordingTooltip(false)}
+            >
+              <span
+                style={{
+                  width: '6px',
+                  height: '6px',
+                  backgroundColor: transcriptionStatus === 'recording' ? '#ef4444' : '#af52de',
+                  borderRadius: '50%',
+                  animation: 'pulse 1.5s ease-in-out infinite',
+                }}
+              />
+              <span style={{ 
+                fontSize: '9px', 
+                fontWeight: 500, 
+                color: transcriptionStatus === 'recording' ? '#ef4444' : '#af52de',
+                cursor: 'help',
+              }}>
+                {transcriptionStatus === 'recording' ? 'Recording' : 'Transcribing'}
+              </span>
+              {/* Tooltip explaining escape behavior */}
+              {transcriptionStatus === 'recording' && showRecordingTooltip && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '100%',
+                    right: 0,
+                    marginTop: '8px',
+                    backgroundColor: '#1a1a1a',
+                    color: '#fff',
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    fontSize: '11px',
+                    lineHeight: 1.4,
+                    whiteSpace: 'nowrap',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                    zIndex: 100,
+                    maxWidth: '280px',
+                  }}
+                >
+                  <div style={{ fontWeight: 600, marginBottom: '4px' }}>Escape key behavior:</div>
+                  <div style={{ opacity: 0.9 }}>• Window open: closes window, keeps recording</div>
+                  <div style={{ opacity: 0.9 }}>• Window closed: abandons recording</div>
+                  {/* Tooltip caret */}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      bottom: '100%',
+                      right: '12px',
+                      width: 0,
+                      height: 0,
+                      borderLeft: '6px solid transparent',
+                      borderRight: '6px solid transparent',
+                      borderBottom: '6px solid #1a1a1a',
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -2780,8 +2857,34 @@ export default function ClipboardHistory() {
             Draw
           </span>
           
-          {/* Right: Save buttons - styled exactly like cancel button */}
+          {/* Right: Recording indicator + Save buttons */}
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {/* Recording indicator in Draw mode - left of save buttons */}
+            {(transcriptionStatus === 'recording' || transcriptionStatus === 'transcribing') && (
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '4px',
+                marginRight: '4px',
+              }}>
+                <span
+                  style={{
+                    width: '6px',
+                    height: '6px',
+                    backgroundColor: transcriptionStatus === 'recording' ? '#ef4444' : '#af52de',
+                    borderRadius: '50%',
+                    animation: 'pulse 1.5s ease-in-out infinite',
+                  }}
+                />
+                <span style={{ 
+                  fontSize: '9px', 
+                  fontWeight: 500, 
+                  color: transcriptionStatus === 'recording' ? '#ef4444' : '#af52de',
+                }}>
+                  {transcriptionStatus === 'recording' ? 'Recording' : 'Transcribing'}
+                </span>
+              </div>
+            )}
             <button
               onClick={() => {
                 sketchViewRef.current?.save(false);
@@ -2844,7 +2947,7 @@ export default function ClipboardHistory() {
                 e.currentTarget.style.borderColor = theme.border;
               }}
             >
-              save & paste
+              save & copy
             </button>
           </div>
         </div>
@@ -4789,82 +4892,6 @@ export default function ClipboardHistory() {
         ) : (
           <div style={{ flex: 1 }} />
         )}
-
-        {/* Center: Recording/Transcribing state indicator with tooltip */}
-        <div 
-          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', position: 'relative' }}
-          onMouseEnter={() => transcriptionStatus === 'recording' && setShowRecordingTooltip(true)}
-          onMouseLeave={() => setShowRecordingTooltip(false)}
-        >
-          {transcriptionStatus === 'recording' && (
-            <>
-              <span
-                style={{
-                  width: '6px',
-                  height: '6px',
-                  backgroundColor: '#ef4444',
-                  borderRadius: '50%',
-                  animation: 'pulse 1.5s ease-in-out infinite',
-                }}
-              />
-              <span style={{ fontSize: '9px', fontWeight: 500, color: '#ef4444', cursor: 'help' }}>Recording</span>
-              {/* Tooltip explaining escape behavior */}
-              {showRecordingTooltip && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    bottom: '100%',
-                    left: '50%',
-                    transform: 'translateX(-50%)',
-                    marginBottom: '8px',
-                    backgroundColor: '#1a1a1a',
-                    color: '#fff',
-                    padding: '8px 12px',
-                    borderRadius: '6px',
-                    fontSize: '11px',
-                    lineHeight: 1.4,
-                    whiteSpace: 'nowrap',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-                    zIndex: 100,
-                    maxWidth: '280px',
-                  }}
-                >
-                  <div style={{ fontWeight: 600, marginBottom: '4px' }}>Escape key behavior:</div>
-                  <div style={{ opacity: 0.9 }}>• Window open: closes window, keeps recording</div>
-                  <div style={{ opacity: 0.9 }}>• Window closed: abandons recording</div>
-                  {/* Tooltip caret */}
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: '100%',
-                      left: '50%',
-                      transform: 'translateX(-50%)',
-                      width: 0,
-                      height: 0,
-                      borderLeft: '6px solid transparent',
-                      borderRight: '6px solid transparent',
-                      borderTop: '6px solid #1a1a1a',
-                    }}
-                  />
-                </div>
-              )}
-            </>
-          )}
-          {transcriptionStatus === 'transcribing' && (
-            <>
-              <span
-                style={{
-                  width: '6px',
-                  height: '6px',
-                  backgroundColor: '#af52de',
-                  borderRadius: '50%',
-                  animation: 'pulse 1.5s ease-in-out infinite',
-                }}
-              />
-              <span style={{ fontSize: '9px', fontWeight: 500, color: '#af52de', cursor: 'help' }}>Transcribing</span>
-            </>
-          )}
-        </div>
 
         {/* Right side: settings button only */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '12px', fontSize: '9px', flex: 1 }}>

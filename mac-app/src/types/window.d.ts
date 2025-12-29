@@ -114,6 +114,7 @@ interface TranscribeAPI {
   getAvailableSounds?: () => Promise<SoundOption[]>;
   previewSound?: (soundId: string) => Promise<void>;
   getStackCount: () => Promise<number>;
+  addToStack: (itemId: number) => Promise<void>;
   onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
   onResult: (callback: (text: string) => void) => () => void;
   onError: (callback: (error: string) => void) => () => void;
@@ -261,6 +262,7 @@ interface ClipboardAPI {
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
   pasteItem: (id: number, targetBundleId?: string) => Promise<void>;
+  copyItem: (id: number) => Promise<void>;
   pasteStack: (ids: number[], targetBundleId?: string) => Promise<void>;
   separateIntoTasks: (id: number) => Promise<void>;
   // Target app management.

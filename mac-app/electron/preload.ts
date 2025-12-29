@@ -35,6 +35,7 @@ const TranscribeIPCChannels = {
   ERROR: 'transcribe:error',
   MODEL_DOWNLOAD_PROGRESS: 'transcribe:modelDownloadProgress',
   HOTKEY_CHANGED: 'transcribe:hotkeyChanged',
+  ADD_TO_STACK: 'transcribe:addToStack',
 } as const;
 
 const VisionIPCChannels = {
@@ -60,6 +61,7 @@ const ClipboardIPCChannels = {
   GET_HOTKEYS: 'clipboard:getHotkeys',
   SET_HOTKEYS: 'clipboard:setHotkeys',
   PASTE_ITEM: 'clipboard:pasteItem',
+  COPY_ITEM: 'clipboard:copyItem',
   PASTE_STACK: 'clipboard:pasteStack',
   PASTE_TEXT: 'clipboard:pasteText',
   SEPARATE_INTO_TASKS: 'clipboard:separateIntoTasks',
@@ -483,6 +485,7 @@ export interface TranscribeAPI {
   getAvailableSounds: () => Promise<SoundOption[]>;
   previewSound: (soundId: string) => Promise<void>;
   getStackCount: () => Promise<number>;
+  addToStack: (itemId: number) => Promise<void>;
   onStatusChanged: (callback: (status: TranscriptionStatus) => void) => () => void;
   onResult: (callback: (text: string) => void) => () => void;
   onError: (callback: (error: string) => void) => () => void;
@@ -515,6 +518,7 @@ export interface ClipboardAPI {
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
   pasteItem: (id: number, targetBundleId?: string) => Promise<void>;
+  copyItem: (id: number) => Promise<void>;
   pasteStack: (ids: number[]) => Promise<void>;
   pasteText: (text: string, targetBundleId?: string) => Promise<void>;
   separateIntoTasks: (id: number) => Promise<void>;
@@ -764,6 +768,10 @@ const transcribeAPI: TranscribeAPI = {
   getStackCount: async (): Promise<number> => {
     return ipcRenderer.invoke('transcribe:getStackCount');
   },
+  
+  addToStack: async (itemId: number): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.ADD_TO_STACK, itemId);
+  },
 
   onStackChanged: (callback: (count: number) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, count: number) => {
@@ -817,6 +825,10 @@ const clipboardAPI: ClipboardAPI = {
 
   pasteItem: async (id: number, targetBundleId?: string): Promise<void> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.PASTE_ITEM, id, targetBundleId);
+  },
+  
+  copyItem: async (id: number): Promise<void> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.COPY_ITEM, id);
   },
 
   pasteStack: async (ids: number[]): Promise<void> => {

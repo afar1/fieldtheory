@@ -699,6 +699,13 @@ function setupTranscribeIPCHandlers(): void {
     }
     return transcriberManager.getCurrentStack().length;
   });
+  
+  ipcMain.handle('transcribe:addToStack', (_event, itemId: number) => {
+    if (!transcriberManager) {
+      return;
+    }
+    transcriberManager.addToStack(itemId);
+  });
 }
 
 /**
@@ -996,6 +1003,38 @@ function setupClipboardIPCHandlers(): void {
       }
     } catch (error) {
       console.error('[Main] pasteItem error:', error);
+    }
+  });
+
+  // Copy item to clipboard without pasting.
+  ipcMain.handle(ClipboardIPCChannels.COPY_ITEM, async (_event, id: number) => {
+    try {
+      if (!clipboardManager) {
+        console.error('[Main] copyItem: clipboardManager not initialized');
+        return;
+      }
+      const item = clipboardManager.getItem(id);
+      if (!item) {
+        console.error('[Main] copyItem: item not found', id);
+        return;
+      }
+      
+      // Put content on clipboard.
+      if (item.type === 'text' || item.type === 'transcript') {
+        clipboard.writeText(item.content || '');
+      } else if (item.imageData) {
+        const { nativeImage } = require('electron');
+        const imageBuffer = typeof item.imageData === 'string' 
+          ? Buffer.from(item.imageData, 'base64')
+          : item.imageData;
+        const image = nativeImage.createFromBuffer(imageBuffer);
+        clipboard.writeImage(image);
+      }
+      
+      clipboardManager.syncClipboardHash();
+      console.log('[Main] copyItem: copied item', id, 'to clipboard');
+    } catch (error) {
+      console.error('[Main] copyItem error:', error);
     }
   });
 
