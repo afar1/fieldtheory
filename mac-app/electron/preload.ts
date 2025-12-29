@@ -259,10 +259,10 @@ type ContinuousContextState = {
 };
 
 // =============================================================================
-// Team Clipboard Types - Shared clipboard for team collaboration
+// Shared Clipboard Types - Shared clipboard for collaboration
 // =============================================================================
 
-type TeamClipboardItem = {
+type SharedClipboardItem = {
   id: string;
   userId: string;
   sharedByEmail: string | null;
@@ -284,7 +284,7 @@ type TeamClipboardItem = {
   updatedAt: number;
 };
 
-type TeamStackInfo = {
+type SharedStackInfo = {
   stackId: string;
   name: string | null;
   itemCount: number;
@@ -295,7 +295,7 @@ type TeamStackInfo = {
   firstTextPreview: string | null;
 };
 
-type TeamClipboardQueryOptions = {
+type SharedClipboardQueryOptions = {
   type?: ClipboardItemType;
   search?: string;
   limit?: number;
@@ -303,7 +303,7 @@ type TeamClipboardQueryOptions = {
   stackId?: string;
 };
 
-const TeamClipboardIPCChannels = {
+const SharedClipboardIPCChannels = {
   QUERY_TEAM_ITEMS: 'teamClipboard:queryItems',
   GET_TEAM_ITEM: 'teamClipboard:getItem',
   SHARE_TO_TEAM: 'teamClipboard:shareItem',
@@ -1443,63 +1443,63 @@ const authAPI = {
 type AuthAPI = typeof authAPI;
 
 // =============================================================================
-// Team Clipboard API - Shared clipboard for team collaboration
+// Shared Clipboard API - Shared clipboard for team collaboration
 // =============================================================================
 
-const teamClipboardAPI = {
+const sharedClipboardAPI = {
   // Query team items with optional filters.
-  queryItems: async (options?: TeamClipboardQueryOptions): Promise<TeamClipboardItem[]> => {
-    return ipcRenderer.invoke(TeamClipboardIPCChannels.QUERY_TEAM_ITEMS, options);
+  queryItems: async (options?: SharedClipboardQueryOptions): Promise<SharedClipboardItem[]> => {
+    return ipcRenderer.invoke(SharedClipboardIPCChannels.QUERY_TEAM_ITEMS, options);
   },
 
   // Get a single team item by ID.
-  getItem: async (id: string): Promise<TeamClipboardItem | null> => {
-    return ipcRenderer.invoke(TeamClipboardIPCChannels.GET_TEAM_ITEM, id);
+  getItem: async (id: string): Promise<SharedClipboardItem | null> => {
+    return ipcRenderer.invoke(SharedClipboardIPCChannels.GET_TEAM_ITEM, id);
   },
 
   // Share a local clipboard item to the team.
-  shareToTeam: async (localItemId: number): Promise<TeamClipboardItem | null> => {
-    return ipcRenderer.invoke(TeamClipboardIPCChannels.SHARE_TO_TEAM, localItemId);
+  shareToTeam: async (localItemId: number): Promise<SharedClipboardItem | null> => {
+    return ipcRenderer.invoke(SharedClipboardIPCChannels.SHARE_TO_TEAM, localItemId);
   },
 
   // Share a stack of local items to the team.
   shareStackToTeam: async (localItemIds: number[]): Promise<string | null> => {
-    return ipcRenderer.invoke(TeamClipboardIPCChannels.SHARE_STACK_TO_TEAM, localItemIds);
+    return ipcRenderer.invoke(SharedClipboardIPCChannels.SHARE_STACK_TO_TEAM, localItemIds);
   },
 
   // Delete a team item (only owner can delete).
   deleteItem: async (id: string): Promise<boolean> => {
-    return ipcRenderer.invoke(TeamClipboardIPCChannels.DELETE_TEAM_ITEM, id);
+    return ipcRenderer.invoke(SharedClipboardIPCChannels.DELETE_TEAM_ITEM, id);
   },
 
   // Update stack ID for team items (move between stacks).
   updateStackId: async (itemIds: string[], stackId: string | null): Promise<boolean> => {
-    return ipcRenderer.invoke(TeamClipboardIPCChannels.UPDATE_TEAM_STACK_ID, itemIds, stackId);
+    return ipcRenderer.invoke(SharedClipboardIPCChannels.UPDATE_TEAM_STACK_ID, itemIds, stackId);
   },
 
   // Copy a team item to personal clipboard.
   copyToPersonal: async (teamItemId: string): Promise<number | null> => {
-    return ipcRenderer.invoke(TeamClipboardIPCChannels.COPY_TO_PERSONAL, teamItemId);
+    return ipcRenderer.invoke(SharedClipboardIPCChannels.COPY_TO_PERSONAL, teamItemId);
   },
 
   // Copy a team stack to personal clipboard.
   copyStackToPersonal: async (teamStackId: string): Promise<number[]> => {
-    return ipcRenderer.invoke(TeamClipboardIPCChannels.COPY_STACK_TO_PERSONAL, teamStackId);
+    return ipcRenderer.invoke(SharedClipboardIPCChannels.COPY_STACK_TO_PERSONAL, teamStackId);
   },
 
   // Get all team stacks with summary info.
-  getStacks: async (): Promise<TeamStackInfo[]> => {
-    return ipcRenderer.invoke(TeamClipboardIPCChannels.GET_TEAM_STACKS);
+  getStacks: async (): Promise<SharedStackInfo[]> => {
+    return ipcRenderer.invoke(SharedClipboardIPCChannels.GET_TEAM_STACKS);
   },
 
   // Listen for team item added events.
-  onTeamItemAdded: (callback: (item: TeamClipboardItem) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, item: TeamClipboardItem) => {
+  onTeamItemAdded: (callback: (item: SharedClipboardItem) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, item: SharedClipboardItem) => {
       callback(item);
     };
-    ipcRenderer.on(TeamClipboardIPCChannels.TEAM_ITEM_ADDED, handler);
+    ipcRenderer.on(SharedClipboardIPCChannels.TEAM_ITEM_ADDED, handler);
     return () => {
-      ipcRenderer.removeListener(TeamClipboardIPCChannels.TEAM_ITEM_ADDED, handler);
+      ipcRenderer.removeListener(SharedClipboardIPCChannels.TEAM_ITEM_ADDED, handler);
     };
   },
 
@@ -1508,9 +1508,9 @@ const teamClipboardAPI = {
     const handler = (_event: Electron.IpcRendererEvent, id: string) => {
       callback(id);
     };
-    ipcRenderer.on(TeamClipboardIPCChannels.TEAM_ITEM_DELETED, handler);
+    ipcRenderer.on(SharedClipboardIPCChannels.TEAM_ITEM_DELETED, handler);
     return () => {
-      ipcRenderer.removeListener(TeamClipboardIPCChannels.TEAM_ITEM_DELETED, handler);
+      ipcRenderer.removeListener(SharedClipboardIPCChannels.TEAM_ITEM_DELETED, handler);
     };
   },
 
@@ -1520,26 +1520,26 @@ const teamClipboardAPI = {
 
   // Get all team members (people you added + people who added you).
   getTeamMembers: async (): Promise<TeamMember[]> => {
-    return ipcRenderer.invoke(TeamClipboardIPCChannels.GET_TEAM_MEMBERS);
+    return ipcRenderer.invoke(SharedClipboardIPCChannels.GET_TEAM_MEMBERS);
   },
 
   // Add a team member by email.
   addTeamMember: async (email: string): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke(TeamClipboardIPCChannels.ADD_TEAM_MEMBER, email);
+    return ipcRenderer.invoke(SharedClipboardIPCChannels.ADD_TEAM_MEMBER, email);
   },
 
   // Remove a team member (can remove someone you added, or remove yourself).
   removeTeamMember: async (membershipId: string): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke(TeamClipboardIPCChannels.REMOVE_TEAM_MEMBER, membershipId);
+    return ipcRenderer.invoke(SharedClipboardIPCChannels.REMOVE_TEAM_MEMBER, membershipId);
   },
 
   // Check if the user has any teammates.
   hasTeammates: async (): Promise<boolean> => {
-    return ipcRenderer.invoke(TeamClipboardIPCChannels.HAS_TEAMMATES);
+    return ipcRenderer.invoke(SharedClipboardIPCChannels.HAS_TEAMMATES);
   },
 };
 
-type TeamClipboardAPI = typeof teamClipboardAPI;
+type SharedClipboardAPI = typeof sharedClipboardAPI;
 
 // =============================================================================
 // Social API - DMs, Feedback, Contacts, and Hot Mic
@@ -1682,7 +1682,7 @@ contextBridge.exposeInMainWorld('onboardingAPI', onboardingAPI);
 contextBridge.exposeInMainWorld('updaterAPI', updaterAPI);
 contextBridge.exposeInMainWorld('todoAPI', todoAPI);
 contextBridge.exposeInMainWorld('authAPI', authAPI);
-contextBridge.exposeInMainWorld('teamClipboardAPI', teamClipboardAPI);
+contextBridge.exposeInMainWorld('sharedClipboardAPI', sharedClipboardAPI);
 contextBridge.exposeInMainWorld('socialAPI', socialAPI);
 
 contextBridge.exposeInMainWorld('platform', {
@@ -1702,7 +1702,7 @@ declare global {
     updaterAPI: UpdaterAPI;
     todoAPI: TodoAPI;
     authAPI: AuthAPI;
-    teamClipboardAPI: TeamClipboardAPI;
+    sharedClipboardAPI: SharedClipboardAPI;
     socialAPI: SocialAPI;
     platform: {
       isMacOS: boolean;
