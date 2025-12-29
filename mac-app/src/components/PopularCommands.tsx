@@ -210,11 +210,11 @@ export default function PopularCommands() {
       clearTimeout(hoverTimerRef.current);
     }
     
-    // Start 2.25s delay timer.
+    // Start 500ms delay timer.
     hoverTimerRef.current = setTimeout(() => {
       setHoveredCommand(command);
       setHoverPosition({ x: rect.left, y: rect.bottom + 4 });
-    }, 2250);
+    }, 500);
   }, []);
 
   // Handle hover end - clear timer and tooltip.

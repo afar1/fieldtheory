@@ -13,6 +13,7 @@ export const ClipboardIPCChannels = {
   GET_HOTKEYS: 'clipboard:getHotkeys',
   SET_HOTKEYS: 'clipboard:setHotkeys',
   PASTE_ITEM: 'clipboard:pasteItem',
+  COPY_ITEM: 'clipboard:copyItem',
   PASTE_STACK: 'clipboard:pasteStack',
   PASTE_TEXT: 'clipboard:pasteText',
   SEPARATE_INTO_TASKS: 'clipboard:separateIntoTasks',
@@ -277,6 +278,7 @@ export interface ClipboardAPI {
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
   pasteItem: (id: number) => Promise<void>;
+  copyItem: (id: number) => Promise<void>;
   pasteStack: (ids: number[], targetBundleId?: string) => Promise<void>;
   separateIntoTasks: (id: number) => Promise<void>;
   onItemAdded: (callback: (item: ClipboardItem) => void) => () => void;
