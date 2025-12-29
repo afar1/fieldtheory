@@ -3,7 +3,7 @@ import { Excalidraw, exportToBlob } from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 
 interface SketchViewProps {
-  onSave: (imageData: { dataUrl: string; width: number; height: number }, andPaste?: boolean) => void;
+  onSave: (imageData: { dataUrl: string; width: number; height: number }, andCopy?: boolean) => void;
   onClose: () => void;
   existingSketch?: {
     id: number;
@@ -21,7 +21,7 @@ interface SketchViewProps {
 }
 
 export interface SketchViewHandle {
-  save: (andPaste?: boolean) => Promise<void>;
+  save: (andCopy?: boolean) => Promise<void>;
 }
 
 const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onClose, existingSketch, backgroundImage, hideHeader, onHasChangesChange }, ref) => {
@@ -96,7 +96,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
     };
   }, [backgroundImage]);
 
-  const handleSave = useCallback(async (andPaste: boolean = false) => {
+  const handleSave = useCallback(async (andCopy: boolean = false) => {
     if (!excalidrawAPI || isSaving) return;
 
     const elements = excalidrawAPI.getSceneElements();
@@ -137,7 +137,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           dataUrl,
           width: Math.round(appState.width || 800),
           height: Math.round(appState.height || 600),
-        }, andPaste);
+        }, andCopy);
       };
       reader.onerror = () => {
         console.error('Failed to read blob');
@@ -391,7 +391,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
                 fontWeight: 500,
               }}
             >
-              Save & Paste
+              Save & Copy
             </button>
           </div>
         </div>
@@ -454,7 +454,12 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           .excalidraw button[title*="Library" i],
           .excalidraw button[aria-label*="diamond" i],
           .excalidraw button[title*="diamond" i],
+          .excalidraw button[aria-label*="rhombus" i],
+          .excalidraw button[title*="rhombus" i],
+          .excalidraw button[data-testid="toolbar-diamond"],
           .excalidraw .ToolIcon_type_diamond,
+          .excalidraw .App-toolbar__extra-tools-trigger,
+          .excalidraw [class*="diamond"],
           .excalidraw .layer-ui__wrapper__top-right,
           .excalidraw [class*="top-right"],
           .excalidraw .App-menu_top__right {
