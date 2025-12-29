@@ -12,11 +12,11 @@
   <!-- Navigation -->
   <nav class="nav">
     <div class="container nav-inner">
-      <a href="/" class="nav-logo">Field Theory</a>
+      <a href="/" class="nav-logo"><img id="nav-logo-img" src="images/field-theory-log(blk).png" alt="Field Theory" class="nav-logo-img"></a>
       <ul class="nav-links">
         <li><a href="theory.html">Theory</a></li>
-        <li><a href="pricing.html">Pricing</a></li>
-        <li><a href="download.html">Download</a></li>
+        <li><a href="#pricing">Pricing</a></li>
+        <li><a href="#download">Download</a></li>
         <li><button class="theme-toggle" onclick="toggleTheme()">◐</button></li>
       </ul>
     </div>
@@ -46,17 +46,16 @@
 └─────────────────────────────────────────────────────────────┘</div>
 
       <div class="hero-buttons">
-        <a href="download.html" class="btn btn-primary">Download for Mac</a>
+        <a href="#download" class="btn btn-primary">Download for Mac</a>
         <a href="#features" class="btn btn-secondary">See how it works</a>
       </div>
     </div>
   </section>
 
-  <hr class="dotted-line container">
-
   <!-- Features Section -->
   <section id="features" class="features">
     <div class="container">
+      <hr class="dotted-line">
 
       <!-- Feature 1: Local Transcription -->
       <article class="feature">
@@ -256,41 +255,157 @@
     </div>
   </section>
 
-  <hr class="dotted-line container">
-
-  <!-- Pricing Preview -->
-  <section class="pricing">
+  <!-- Pricing Section -->
+  <section id="pricing" class="pricing">
     <div class="container">
-      <h2>Simple Pricing</h2>
+      <hr class="dotted-line">
+      <h2>Pricing</h2>
+      <p class="pricing-description">Pricing was designed to give all accounts access to all application features.</p>
       <div class="pricing-grid">
 
         <div class="pricing-card">
-          <h3>Free</h3>
-          <div class="price">$0</div>
+          <h3>Dev</h3>
+          <div class="price">$0 <span>/month</span></div>
           <ul>
-            <li>Local voice transcription</li>
-            <li>Clipboard history</li>
-            <li>Screenshot capture + vision</li>
-            <li>Input stacking</li>
-            <li>Mac ↔ iPhone sync</li>
-            <li>Priority microphone</li>
+            <li>100 min/mo Priority Mic</li>
+            <li>3 people Shared Clipboard</li>
+            <li>10 Prompt Improvements/mo</li>
+            <li>25 Tasks & Observations/mo</li>
+            <li>Search last 20 stacks</li>
+            <li><span class="feature-note">*</span>Unlimited Transcripts</li>
+            <li><span class="feature-note">*</span>Unlimited Stacks</li>
+            <li><span class="feature-note">*</span>Unlimited Drawings</li>
+            <li><span class="feature-note">*</span>Popular Commands</li>
+            <li>Unlimited DMs</li>
+            <li>Mobile Sync</li>
+            <li>Unlimited invites</li>
           </ul>
-          <a href="download.html" class="btn btn-secondary">Download</a>
+          <a href="#download" class="btn btn-secondary">Download</a>
+          <p class="pricing-card-note">Quantities reset monthly</p>
         </div>
 
         <div class="pricing-card featured">
-          <h3>Pro</h3>
-          <div class="price">$10 <span>/month</span></div>
+          <h3>Dev +</h3>
+          <div class="price">$15 <span>/user/month</span></div>
           <ul>
-            <li>Everything in Free</li>
-            <li>Unlimited prompt refinement</li>
-            <li>Hot Mic infinite history</li>
-            <li>Team clipboard sharing</li>
-            <li>Priority support</li>
+            <li>→ Everything in Dev</li>
+            <li>Unlimited Priority Mic</li>
+            <li>Unlimited Shared Clipboard</li>
+            <li>3 team members included (+$15/user after)</li>
+            <li>100 Prompt Improvements/mo</li>
+            <li>Unlimited Tasks & Observations</li>
+            <li>Unlimited Search</li>
           </ul>
-          <a href="pricing.html" class="btn btn-primary">Learn more</a>
+          <a href="#" class="btn btn-primary">Buy</a>
         </div>
 
+      </div>
+      <div class="pricing-footnotes">
+        <p><em><span class="feature-note">*</span> No account required to use</em></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Download Section -->
+  <section id="download" class="download-hero">
+    <div class="container">
+      <hr class="dotted-line">
+      <h2>Download</h2>
+      <p class="hero-tagline">
+        Available for Mac and iOS. All core features are free.
+      </p>
+
+      <div class="download-options">
+        
+        <div class="download-card">
+          <h3>Mac</h3>
+          <div class="feature-visual">
+┌───────────────────────────────┐
+│                               │
+│      ┌───────────────┐        │
+│      │    ⌥ + ␣      │        │
+│      │  push to talk │        │
+│      └───────────────┘        │
+│                               │
+│   macOS Sonoma+               │
+│   Apple Silicon (M1+)         │
+│                               │
+│   ░░░░░░░░░░░░░░░░░░░░░░░░░   │
+│   whisper.cpp · local AI      │
+└───────────────────────────────┘</div>
+          <a href="#" class="btn btn-primary">Download .dmg</a>
+          <p class="requirements">
+            Requires macOS 14+ and Apple Silicon (M1 or later)
+          </p>
+        </div>
+
+        <div class="download-card">
+          <h3>iOS</h3>
+          <div class="feature-visual">
+┌───────────────────────────────┐
+│                               │
+│      ┌───────────────┐        │
+│      │      ●        │        │
+│      │     REC       │        │
+│      └───────────────┘        │
+│                               │
+│   iPhone / iPad               │
+│   iOS 17+                     │
+│                               │
+│   ░░░░░░░░░░░░░░░░░░░░░░░░░   │
+│   whisper.rn · on-device      │
+└───────────────────────────────┘</div>
+          <a href="#" class="btn btn-primary">App Store</a>
+          <p class="requirements">
+            Requires iOS 17 or later
+          </p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="pricing">
+    <div class="container">
+      <hr class="dotted-line">
+      <div class="faq-container">
+        <h2 class="faq-title">Questions</h2>
+
+        <div class="faq-item">
+          <h3 class="faq-question">Why is most of it free?</h3>
+          <p class="faq-answer">
+            The core value—local transcription and clipboard history—costs us nothing to run. 
+            It happens entirely on your device. We charge for features that use cloud services 
+            (like prompt refinement with Claude) or require server infrastructure (like team features).
+          </p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-question">Can I use my own API key?</h3>
+          <p class="faq-answer">
+            Yes. You can bring your own Anthropic API key for prompt refinement instead of subscribing to Pro. 
+            You'll just pay Anthropic directly for usage.
+          </p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-question">Is there a team plan?</h3>
+          <p class="faq-answer">
+            Team features are included in Pro. If you need volume pricing or admin controls, 
+            reach out and we'll figure something out.
+          </p>
+        </div>
+
+        <div class="faq-item">
+          <h3 class="faq-question">What about privacy?</h3>
+          <p class="faq-answer">
+            Voice transcription is 100% local—your audio never leaves your device. 
+            Mac ↔ iPhone sync is end-to-end encrypted—we can't read your data even if we wanted to. 
+            The only time data touches our servers is if you explicitly use prompt refinement 
+            (which sends text to Claude, not audio).
+          </p>
+        </div>
       </div>
     </div>
   </section>
@@ -298,11 +413,11 @@
   <!-- Footer -->
   <footer class="footer">
     <div class="container footer-inner">
-      <p>&copy; 2024 Field Theory</p>
+      <p>&copy; 2026 Field Theory</p>
       <ul class="footer-links">
         <li><a href="theory.html">Theory</a></li>
-        <li><a href="pricing.html">Pricing</a></li>
-        <li><a href="download.html">Download</a></li>
+        <li><a href="#pricing">Pricing</a></li>
+        <li><a href="#download">Download</a></li>
       </ul>
     </div>
   </footer>
@@ -316,8 +431,23 @@
 
     function toggleTheme() {
       document.body.classList.toggle('dark');
-      localStorage.setItem('theme', document.body.classList.contains('dark') ? 'dark' : 'light');
+      const isDark = document.body.classList.contains('dark');
+      localStorage.setItem('theme', isDark ? 'dark' : 'light');
+      // Update logo based on theme
+      const logoImg = document.getElementById('nav-logo-img');
+      if (logoImg) {
+        logoImg.src = isDark ? 'images/field-theory-logo.png' : 'images/field-theory-log(blk).png';
+      }
     }
+    
+    // Update logo on page load based on saved theme
+    (function() {
+      const isDark = document.body.classList.contains('dark');
+      const logoImg = document.getElementById('nav-logo-img');
+      if (logoImg) {
+        logoImg.src = isDark ? 'images/field-theory-logo.png' : 'images/field-theory-log(blk).png';
+      }
+    })();
   </script>
 
 </body>

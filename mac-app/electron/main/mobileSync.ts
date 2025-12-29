@@ -283,7 +283,7 @@ export class MobileSync extends EventEmitter {
         console.log('[MobileSync] Signed in, session established for:', data.session.user?.email);
         
         // Call setSession to trigger the monkey-patched version in index.ts
-        // which forwards the session to TeamClipboardSync and SocialSync.
+        // which forwards the session to SharedClipboardSync and SocialSync.
         // This must be called BEFORE setting this.session so the early-return
         // check in the patched version doesn't skip forwarding.
         await this.setSession(data.session.access_token, data.session.refresh_token);
@@ -543,7 +543,7 @@ export class MobileSync extends EventEmitter {
     try {
       // Use setSession which handles everything: sets session via Supabase,
       // stores it locally, and triggers the monkey-patched version in index.ts
-      // that forwards to TeamClipboardSync and SocialSync.
+      // that forwards to SharedClipboardSync and SocialSync.
       await this.setSession(accessToken, refreshToken);
       
       const session = this.getSession();

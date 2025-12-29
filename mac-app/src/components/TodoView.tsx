@@ -644,50 +644,6 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
         </button>
       </div>
       
-      {/* Bottom area: Refresh + Hide done */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginBottom: '12px',
-      }}>
-        <button
-          onClick={() => loadTodos(false)}
-          disabled={syncing || backgroundSyncing}
-          style={{
-            padding: '6px 8px',
-            fontSize: '10px',
-            color: theme.textSecondary,
-            backgroundColor: 'transparent',
-            border: `1px solid ${theme.border}`,
-            borderRadius: '4px',
-            cursor: syncing || backgroundSyncing ? 'not-allowed' : 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-            opacity: syncing || backgroundSyncing ? 0.5 : 1,
-          }}
-        >
-          refresh <KeyCap small>r</KeyCap>
-        </button>
-        <button
-          onClick={() => setShowCompleted(prev => !prev)}
-          style={{
-            padding: '6px 8px',
-            fontSize: '10px',
-            color: theme.textSecondary,
-            backgroundColor: 'transparent',
-            border: `1px solid ${theme.border}`,
-            borderRadius: '4px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-          }}
-        >
-          hide done ({completedCount}) <KeyCap small>h</KeyCap>
-        </button>
-      </div>
       
       {/* Sync status indicator */}
       {(syncing || backgroundSyncing) && (
@@ -986,6 +942,57 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
         )}
       </div>
 
+      {/* Fixed bottom area: Refresh + Hide done - positioned above footer */}
+      <div style={{
+        position: 'fixed',
+        bottom: '48px',
+        left: '16px',
+        right: '16px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '8px 0',
+        backgroundColor: theme.bg,
+        borderTop: `1px solid ${theme.border}`,
+        zIndex: 10,
+      }}>
+        <button
+          onClick={() => loadTodos(false)}
+          disabled={syncing || backgroundSyncing}
+          style={{
+            padding: '6px 8px',
+            fontSize: '10px',
+            color: theme.textSecondary,
+            backgroundColor: 'transparent',
+            border: `1px solid ${theme.border}`,
+            borderRadius: '4px',
+            cursor: syncing || backgroundSyncing ? 'not-allowed' : 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            opacity: syncing || backgroundSyncing ? 0.5 : 1,
+          }}
+        >
+          refresh <KeyCap small>r</KeyCap>
+        </button>
+        <button
+          onClick={() => setShowCompleted(prev => !prev)}
+          style={{
+            padding: '6px 8px',
+            fontSize: '10px',
+            color: theme.textSecondary,
+            backgroundColor: 'transparent',
+            border: `1px solid ${theme.border}`,
+            borderRadius: '4px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+          }}
+        >
+          hide done ({completedCount}) <KeyCap small>h</KeyCap>
+        </button>
+      </div>
 
       {/* CSS for spin animation */}
       <style>{`

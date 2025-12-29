@@ -1,15 +1,15 @@
 /**
- * TeamClipboardSync - Syncs shared team clipboard items with Supabase.
+ * SharedClipboardSync - Syncs shared clipboard items with Supabase.
  * 
  * This enables collaborative clipboard sharing between users signed into
  * the same account. Users can:
- * - Share items to the team clipboard
- * - View team items (same UI as personal clipboard)
- * - Create and modify stacks in the team view
- * - Copy team items to their personal clipboard
+ * - Share items to the shared clipboard
+ * - View shared items (same UI as personal clipboard)
+ * - Create and modify stacks in the shared view
+ * - Copy shared items to their personal clipboard
  * 
  * Once copied to personal, items are independent snapshots - changes to
- * the team stack don't affect the personal copy.
+ * the shared stack don't affect the personal copy.
  */
 
 import { SupabaseClient, Session } from '@supabase/supabase-js';
@@ -22,9 +22,9 @@ import crypto from 'crypto';
 // =============================================================================
 
 /**
- * Team clipboard item from Supabase.
+ * Shared clipboard item from Supabase.
  */
-export interface TeamClipboardItem {
+export interface SharedClipboardItem {
   id: string;
   userId: string;
   sharedByEmail: string | null;
@@ -49,9 +49,9 @@ export interface TeamClipboardItem {
 }
 
 /**
- * Team stack info for UI display.
+ * Shared stack info for UI display.
  */
-export interface TeamStackInfo {
+export interface SharedStackInfo {
   stackId: string;
   name: string | null;
   itemCount: number;
@@ -63,9 +63,9 @@ export interface TeamStackInfo {
 }
 
 /**
- * Query options for fetching team items.
+ * Query options for fetching shared items.
  */
-export interface TeamClipboardQueryOptions {
+export interface SharedClipboardQueryOptions {
   type?: ClipboardItemType;
   search?: string;
   limit?: number;
@@ -76,7 +76,7 @@ export interface TeamClipboardQueryOptions {
 /**
  * Row from Supabase team_clipboard_items table.
  */
-interface TeamClipboardRow {
+interface SharedClipboardRow {
   id: string;
   user_id: string;
   shared_by_email: string | null;
@@ -133,14 +133,14 @@ export interface TeamMember {
 }
 
 // =============================================================================
-// TeamClipboardSync Class
+// SharedClipboardSync Class
 // =============================================================================
 
 /**
- * Manages team clipboard sync with Supabase.
+ * Manages shared clipboard sync with Supabase.
  * Works alongside ClipboardManager for local storage.
  */
-export class TeamClipboardSync extends EventEmitter {
+export class SharedClipboardSync extends EventEmitter {
   private clipboardManager: ClipboardManager;
   private supabase: SupabaseClient | null = null;
   private session: Session | null = null;
@@ -163,9 +163,9 @@ export class TeamClipboardSync extends EventEmitter {
   setSession(session: Session | null): void {
     this.session = session;
     if (session) {
-      console.log('[TeamClipboardSync] Session set for user:', session.user?.email);
+      console.log('[SharedClipboardSync] Session set for user:', session.user?.email);
     } else {
-      console.log('[TeamClipboardSync] Session cleared');
+      console.log('[SharedClipboardSync] Session cleared');
     }
   }
 
@@ -195,10 +195,10 @@ export class TeamClipboardSync extends EventEmitter {
   // ===========================================================================
 
   /**
-   * Convert Supabase row to TeamClipboardItem.
+   * Convert Supabase row to SharedClipboardItem.
    * Note: This is a sync conversion. For signed URLs, call rowToTeamItemAsync.
    */
-  private rowToTeamItem(row: TeamClipboardRow): TeamClipboardItem {
+  private rowToTeamItem(row: SharedClipboardRow): SharedClipboardItem {
     // Convert binary image data to base64 for IPC transport (legacy fallback).
     // Supabase can return bytea in different formats depending on context.
     let imageDataBase64: string | null = null;
@@ -226,7 +226,7 @@ export class TeamClipboardSync extends EventEmitter {
           }
         }
       } catch (err) {
-        console.error('[TeamClipboardSync] Failed to convert image_data:', err);
+        console.error('[SharedClipboardSync] Failed to convert image_data:', err);
       }
     }
 
@@ -256,10 +256,10 @@ export class TeamClipboardSync extends EventEmitter {
   }
 
   /**
-   * Convert row to TeamClipboardItem with signed URL for storage bucket images.
+   * Convert row to SharedClipboardItem with signed URL for storage bucket images.
    * Use this when fetching items for display.
    */
-  private async rowToTeamItemAsync(row: TeamClipboardRow): Promise<TeamClipboardItem> {
+  private async rowToTeamItemAsync(row: SharedClipboardRow): Promise<SharedClipboardItem> {
     const item = this.rowToTeamItem(row);
 
     // If we have an image_path, generate a signed URL.
@@ -272,10 +272,10 @@ export class TeamClipboardSync extends EventEmitter {
         if (data && !error) {
           item.imageUrl = data.signedUrl;
         } else if (error) {
-          console.error('[TeamClipboardSync] Failed to create signed URL:', error);
+          console.error('[SharedClipboardSync] Failed to create signed URL:', error);
         }
       } catch (err) {
-        console.error('[TeamClipboardSync] Error creating signed URL:', err);
+        console.error('[SharedClipboardSync] Error creating signed URL:', err);
       }
     }
 
@@ -283,10 +283,10 @@ export class TeamClipboardSync extends EventEmitter {
   }
 
   /**
-   * Batch convert rows to TeamClipboardItems with signed URLs.
+   * Batch convert rows to SharedClipboardItems with signed URLs.
    * More efficient than calling rowToTeamItemAsync individually.
    */
-  private async rowsToTeamItemsAsync(rows: TeamClipboardRow[]): Promise<TeamClipboardItem[]> {
+  private async rowsToTeamItemsAsync(rows: SharedClipboardRow[]): Promise<SharedClipboardItem[]> {
     // First, convert all rows synchronously.
     const items = rows.map(row => this.rowToTeamItem(row));
 
@@ -310,7 +310,7 @@ export class TeamClipboardSync extends EventEmitter {
             items[index].imageUrl = data.signedUrl;
           }
         } catch (err) {
-          console.error('[TeamClipboardSync] Error signing URL for', path, err);
+          console.error('[SharedClipboardSync] Error signing URL for', path, err);
         }
       });
 
@@ -321,12 +321,12 @@ export class TeamClipboardSync extends EventEmitter {
   }
 
   /**
-   * Query team clipboard items.
+   * Query shared clipboard items.
    * Generates signed URLs for storage bucket images.
    */
-  async queryItems(options: TeamClipboardQueryOptions = {}): Promise<TeamClipboardItem[]> {
+  async queryItems(options: SharedClipboardQueryOptions = {}): Promise<SharedClipboardItem[]> {
     if (!this.isAuthenticated()) {
-      console.warn('[TeamClipboardSync] Not authenticated');
+      console.warn('[SharedClipboardSync] Not authenticated');
       return [];
     }
 
@@ -357,24 +357,24 @@ export class TeamClipboardSync extends EventEmitter {
       const { data, error } = await query;
 
       if (error) {
-        console.error('[TeamClipboardSync] Query failed:', error);
+        console.error('[SharedClipboardSync] Query failed:', error);
         throw error;
       }
 
-      const rows = data as TeamClipboardRow[];
+      const rows = data as SharedClipboardRow[];
       
       // Use async conversion to get signed URLs for storage bucket images.
       return this.rowsToTeamItemsAsync(rows);
     } catch (error) {
-      console.error('[TeamClipboardSync] Failed to query team items:', error);
+      console.error('[SharedClipboardSync] Failed to query shared items:', error);
       return [];
     }
   }
 
   /**
-   * Get a single team item by ID.
+   * Get a single shared item by ID.
    */
-  async getItem(id: string): Promise<TeamClipboardItem | null> {
+  async getItem(id: string): Promise<SharedClipboardItem | null> {
     if (!this.isAuthenticated()) {
       return null;
     }
@@ -387,13 +387,13 @@ export class TeamClipboardSync extends EventEmitter {
         .single();
 
       if (error) {
-        console.error('[TeamClipboardSync] Get item failed:', error);
+        console.error('[SharedClipboardSync] Get item failed:', error);
         return null;
       }
 
-      return this.rowToTeamItemAsync(data as TeamClipboardRow);
+      return this.rowToTeamItemAsync(data as SharedClipboardRow);
     } catch (error) {
-      console.error('[TeamClipboardSync] Failed to get team item:', error);
+      console.error('[SharedClipboardSync] Failed to get shared item:', error);
       return null;
     }
   }
@@ -401,7 +401,7 @@ export class TeamClipboardSync extends EventEmitter {
   /**
    * Get items by stack ID.
    */
-  async getItemsByStackId(stackId: string): Promise<TeamClipboardItem[]> {
+  async getItemsByStackId(stackId: string): Promise<SharedClipboardItem[]> {
     if (!this.isAuthenticated()) {
       return [];
     }
@@ -414,13 +414,13 @@ export class TeamClipboardSync extends EventEmitter {
         .order('client_created_at_ms', { ascending: true });
 
       if (error) {
-        console.error('[TeamClipboardSync] Get stack items failed:', error);
+        console.error('[SharedClipboardSync] Get stack items failed:', error);
         return [];
       }
 
-      return this.rowsToTeamItemsAsync(data as TeamClipboardRow[]);
+      return this.rowsToTeamItemsAsync(data as SharedClipboardRow[]);
     } catch (error) {
-      console.error('[TeamClipboardSync] Failed to get stack items:', error);
+      console.error('[SharedClipboardSync] Failed to get stack items:', error);
       return [];
     }
   }
@@ -452,14 +452,14 @@ export class TeamClipboardSync extends EventEmitter {
         });
 
       if (error) {
-        console.error('[TeamClipboardSync] Image upload failed:', error);
+        console.error('[SharedClipboardSync] Image upload failed:', error);
         return null;
       }
 
-      console.log('[TeamClipboardSync] Uploaded image to storage:', filePath);
+      console.log('[SharedClipboardSync] Uploaded image to storage:', filePath);
       return filePath;
     } catch (err) {
-      console.error('[TeamClipboardSync] Error uploading image:', err);
+      console.error('[SharedClipboardSync] Error uploading image:', err);
       return null;
     }
   }
@@ -469,9 +469,9 @@ export class TeamClipboardSync extends EventEmitter {
    * Creates a copy in Supabase's team_clipboard_items table.
    * Images are uploaded to the storage bucket for better performance.
    */
-  async shareToTeam(localItemId: number): Promise<TeamClipboardItem | null> {
+  async shareToTeam(localItemId: number): Promise<SharedClipboardItem | null> {
     if (!this.isAuthenticated()) {
-      console.warn('[TeamClipboardSync] Not authenticated, cannot share');
+      console.warn('[SharedClipboardSync] Not authenticated, cannot share');
       return null;
     }
 
@@ -484,7 +484,7 @@ export class TeamClipboardSync extends EventEmitter {
     // Get the local item.
     const localItem = this.clipboardManager.getItem(localItemId);
     if (!localItem) {
-      console.error('[TeamClipboardSync] Local item not found:', localItemId);
+      console.error('[SharedClipboardSync] Local item not found:', localItemId);
       return null;
     }
 
@@ -529,18 +529,18 @@ export class TeamClipboardSync extends EventEmitter {
         .single();
 
       if (error) {
-        console.error('[TeamClipboardSync] Share to team failed:', error);
+        console.error('[SharedClipboardSync] Share to team failed:', error);
         throw error;
       }
 
-      console.log('[TeamClipboardSync] Shared item to team:', data.id);
+      console.log('[SharedClipboardSync] Shared item to team:', data.id);
       
       // Use async conversion to get signed URL for the uploaded image.
-      const teamItem = await this.rowToTeamItemAsync(data as TeamClipboardRow);
+      const teamItem = await this.rowToTeamItemAsync(data as SharedClipboardRow);
       this.emit('teamItemAdded', teamItem);
       return teamItem;
     } catch (error) {
-      console.error('[TeamClipboardSync] Failed to share to team:', error);
+      console.error('[SharedClipboardSync] Failed to share to team:', error);
       return null;
     }
   }
@@ -552,7 +552,7 @@ export class TeamClipboardSync extends EventEmitter {
    */
   async shareStackToTeam(localItemIds: number[]): Promise<string | null> {
     if (!this.isAuthenticated()) {
-      console.warn('[TeamClipboardSync] Not authenticated, cannot share stack');
+      console.warn('[SharedClipboardSync] Not authenticated, cannot share stack');
       return null;
     }
 
@@ -562,7 +562,7 @@ export class TeamClipboardSync extends EventEmitter {
       return null;
     }
 
-    // Generate a new team stack ID.
+    // Generate a new shared stack ID.
     const teamStackId = crypto.randomUUID();
 
     try {
@@ -577,7 +577,7 @@ export class TeamClipboardSync extends EventEmitter {
         });
 
       if (stackError) {
-        console.error('[TeamClipboardSync] Create team stack failed:', stackError);
+        console.error('[SharedClipboardSync] Create shared stack failed:', stackError);
         throw stackError;
       }
 
@@ -623,15 +623,15 @@ export class TeamClipboardSync extends EventEmitter {
           .insert(insertData);
 
         if (error) {
-          console.error('[TeamClipboardSync] Failed to share item in stack:', error);
+          console.error('[SharedClipboardSync] Failed to share item in stack:', error);
         }
       }
 
-      console.log(`[TeamClipboardSync] Shared stack to team: ${teamStackId} (${localItemIds.length} items)`);
+      console.log(`[SharedClipboardSync] Shared stack to team: ${teamStackId} (${localItemIds.length} items)`);
       this.emit('teamStackAdded', teamStackId);
       return teamStackId;
     } catch (error) {
-      console.error('[TeamClipboardSync] Failed to share stack to team:', error);
+      console.error('[SharedClipboardSync] Failed to share stack to team:', error);
       return null;
     }
   }
@@ -641,7 +641,7 @@ export class TeamClipboardSync extends EventEmitter {
   // ===========================================================================
 
   /**
-   * Delete a team item.
+   * Delete a shared item.
    * Only the owner can delete their items (enforced by RLS).
    * Also cleans up the image from storage if present.
    */
@@ -665,7 +665,7 @@ export class TeamClipboardSync extends EventEmitter {
         .eq('id', id);
 
       if (error) {
-        console.error('[TeamClipboardSync] Delete item failed:', error);
+        console.error('[SharedClipboardSync] Delete item failed:', error);
         return false;
       }
 
@@ -675,18 +675,18 @@ export class TeamClipboardSync extends EventEmitter {
           await this.supabase!.storage
             .from('team-clipboard-images')
             .remove([item.image_path]);
-          console.log('[TeamClipboardSync] Deleted image from storage:', item.image_path);
+          console.log('[SharedClipboardSync] Deleted image from storage:', item.image_path);
         } catch (storageErr) {
           // Non-fatal - the DB record is already deleted.
-          console.warn('[TeamClipboardSync] Failed to delete image from storage:', storageErr);
+          console.warn('[SharedClipboardSync] Failed to delete image from storage:', storageErr);
         }
       }
 
-      console.log('[TeamClipboardSync] Deleted team item:', id);
+      console.log('[SharedClipboardSync] Deleted shared item:', id);
       this.emit('teamItemDeleted', id);
       return true;
     } catch (error) {
-      console.error('[TeamClipboardSync] Failed to delete team item:', error);
+      console.error('[SharedClipboardSync] Failed to delete shared item:', error);
       return false;
     }
   }
@@ -696,7 +696,7 @@ export class TeamClipboardSync extends EventEmitter {
   // ===========================================================================
 
   /**
-   * Update stack ID for team items (move items between stacks).
+   * Update stack ID for shared items (move items between stacks).
    */
   async updateStackId(itemIds: string[], stackId: string | null): Promise<boolean> {
     if (!this.isAuthenticated() || itemIds.length === 0) {
@@ -736,22 +736,22 @@ export class TeamClipboardSync extends EventEmitter {
         .in('id', itemIds);
 
       if (error) {
-        console.error('[TeamClipboardSync] Update stack ID failed:', error);
+        console.error('[SharedClipboardSync] Update stack ID failed:', error);
         return false;
       }
 
-      console.log(`[TeamClipboardSync] Updated stack_id for ${itemIds.length} items to: ${stackId}`);
+      console.log(`[SharedClipboardSync] Updated stack_id for ${itemIds.length} items to: ${stackId}`);
       return true;
     } catch (error) {
-      console.error('[TeamClipboardSync] Failed to update stack ID:', error);
+      console.error('[SharedClipboardSync] Failed to update stack ID:', error);
       return false;
     }
   }
 
   /**
-   * Get all team stacks with summary info.
+   * Get all shared stacks with summary info.
    */
-  async getStacks(): Promise<TeamStackInfo[]> {
+  async getStacks(): Promise<SharedStackInfo[]> {
     if (!this.isAuthenticated()) {
       return [];
     }
@@ -764,12 +764,12 @@ export class TeamClipboardSync extends EventEmitter {
         .order('created_at', { ascending: false });
 
       if (stacksError) {
-        console.error('[TeamClipboardSync] Get stacks failed:', stacksError);
+        console.error('[SharedClipboardSync] Get stacks failed:', stacksError);
         return [];
       }
 
       // For each stack, get item counts and preview.
-      const stackInfos: TeamStackInfo[] = [];
+      const stackInfos: SharedStackInfo[] = [];
 
       for (const stack of stacks as TeamStackRow[]) {
         const { data: items } = await this.supabase!
@@ -805,7 +805,7 @@ export class TeamClipboardSync extends EventEmitter {
 
       return stackInfos;
     } catch (error) {
-      console.error('[TeamClipboardSync] Failed to get stacks:', error);
+      console.error('[SharedClipboardSync] Failed to get stacks:', error);
       return [];
     }
   }
@@ -827,7 +827,7 @@ export class TeamClipboardSync extends EventEmitter {
         .download(imagePath);
 
       if (error || !data) {
-        console.error('[TeamClipboardSync] Image download failed:', error);
+        console.error('[SharedClipboardSync] Image download failed:', error);
         return null;
       }
 
@@ -835,14 +835,14 @@ export class TeamClipboardSync extends EventEmitter {
       const arrayBuffer = await data.arrayBuffer();
       return Buffer.from(arrayBuffer);
     } catch (err) {
-      console.error('[TeamClipboardSync] Error downloading image:', err);
+      console.error('[SharedClipboardSync] Error downloading image:', err);
       return null;
     }
   }
 
   /**
-   * Copy a team item to personal clipboard.
-   * Creates a local copy that's independent of the team item.
+   * Copy a shared item to personal clipboard.
+   * Creates a local copy that's independent of the shared item.
    */
   async copyToPersonal(teamItemId: string): Promise<number | null> {
     if (!this.isAuthenticated()) {
@@ -851,7 +851,7 @@ export class TeamClipboardSync extends EventEmitter {
 
     const teamItem = await this.getItem(teamItemId);
     if (!teamItem) {
-      console.error('[TeamClipboardSync] Team item not found:', teamItemId);
+      console.error('[SharedClipboardSync] Team item not found:', teamItemId);
       return null;
     }
 
@@ -866,7 +866,7 @@ export class TeamClipboardSync extends EventEmitter {
           'mac', // Now local.
           teamItem.clientCreatedAtMs
         );
-        console.log(`[TeamClipboardSync] Copied team item ${teamItemId} to personal: ${localId}`);
+        console.log(`[SharedClipboardSync] Copied shared item ${teamItemId} to personal: ${localId}`);
         return localId;
       } else if (teamItem.type === 'image' || teamItem.type === 'screenshot') {
         // Get image data - prefer storage bucket, fall back to base64.
@@ -881,7 +881,7 @@ export class TeamClipboardSync extends EventEmitter {
         }
 
         if (!imageBuffer) {
-          console.error('[TeamClipboardSync] Team image has no data');
+          console.error('[SharedClipboardSync] Team image has no data');
           return null;
         }
 
@@ -896,19 +896,19 @@ export class TeamClipboardSync extends EventEmitter {
           undefined, // No stack.
           'mac'
         );
-        console.log(`[TeamClipboardSync] Copied team image ${teamItemId} to personal: ${localId}`);
+        console.log(`[SharedClipboardSync] Copied team image ${teamItemId} to personal: ${localId}`);
         return localId;
       }
 
       return null;
     } catch (error) {
-      console.error('[TeamClipboardSync] Failed to copy to personal:', error);
+      console.error('[SharedClipboardSync] Failed to copy to personal:', error);
       return null;
     }
   }
 
   /**
-   * Copy a team stack to personal clipboard.
+   * Copy a shared stack to personal clipboard.
    * Creates local copies of all items in the stack with a new local stack ID.
    */
   async copyStackToPersonal(teamStackId: string): Promise<number[]> {
@@ -918,7 +918,7 @@ export class TeamClipboardSync extends EventEmitter {
 
     const teamItems = await this.getItemsByStackId(teamStackId);
     if (teamItems.length === 0) {
-      console.warn('[TeamClipboardSync] Team stack is empty:', teamStackId);
+      console.warn('[SharedClipboardSync] Team stack is empty:', teamStackId);
       return [];
     }
 
@@ -969,10 +969,10 @@ export class TeamClipboardSync extends EventEmitter {
         }
       }
 
-      console.log(`[TeamClipboardSync] Copied team stack ${teamStackId} to personal: ${localIds.length} items`);
+      console.log(`[SharedClipboardSync] Copied shared stack ${teamStackId} to personal: ${localIds.length} items`);
       return localIds;
     } catch (error) {
-      console.error('[TeamClipboardSync] Failed to copy stack to personal:', error);
+      console.error('[SharedClipboardSync] Failed to copy stack to personal:', error);
       return localIds;
     }
   }
@@ -983,7 +983,7 @@ export class TeamClipboardSync extends EventEmitter {
 
   /**
    * Add a team member by email.
-   * The member can see team items once they create an account with that email.
+   * The member can see shared items once they create an account with that email.
    */
   async addTeamMember(email: string): Promise<{ success: boolean; error?: string }> {
     if (!this.isAuthenticated()) {
@@ -1014,15 +1014,15 @@ export class TeamClipboardSync extends EventEmitter {
         if (error.code === '23505') {
           return { success: false, error: 'This person is already on your team' };
         }
-        console.error('[TeamClipboardSync] Add team member failed:', error);
+        console.error('[SharedClipboardSync] Add team member failed:', error);
         return { success: false, error: error.message };
       }
 
-      console.log('[TeamClipboardSync] Added team member:', email);
+      console.log('[SharedClipboardSync] Added team member:', email);
       this.emit('teamMemberAdded', email);
       return { success: true };
     } catch (error) {
-      console.error('[TeamClipboardSync] Failed to add team member:', error);
+      console.error('[SharedClipboardSync] Failed to add team member:', error);
       return { success: false, error: 'Failed to add team member' };
     }
   }
@@ -1043,15 +1043,15 @@ export class TeamClipboardSync extends EventEmitter {
         .eq('id', membershipId);
 
       if (error) {
-        console.error('[TeamClipboardSync] Remove team member failed:', error);
+        console.error('[SharedClipboardSync] Remove team member failed:', error);
         return { success: false, error: error.message };
       }
 
-      console.log('[TeamClipboardSync] Removed team member:', membershipId);
+      console.log('[SharedClipboardSync] Removed team member:', membershipId);
       this.emit('teamMemberRemoved', membershipId);
       return { success: true };
     } catch (error) {
-      console.error('[TeamClipboardSync] Failed to remove team member:', error);
+      console.error('[SharedClipboardSync] Failed to remove team member:', error);
       return { success: false, error: 'Failed to remove team member' };
     }
   }
@@ -1078,7 +1078,7 @@ export class TeamClipboardSync extends EventEmitter {
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('[TeamClipboardSync] Get team members failed:', error);
+        console.error('[SharedClipboardSync] Get team members failed:', error);
         return [];
       }
 
@@ -1112,7 +1112,7 @@ export class TeamClipboardSync extends EventEmitter {
 
       return members;
     } catch (error) {
-      console.error('[TeamClipboardSync] Failed to get team members:', error);
+      console.error('[SharedClipboardSync] Failed to get team members:', error);
       return [];
     }
   }
@@ -1136,6 +1136,6 @@ export class TeamClipboardSync extends EventEmitter {
     this.session = null;
     this.supabase = null;
     this.removeAllListeners();
-    console.log('[TeamClipboardSync] Destroyed');
+    console.log('[SharedClipboardSync] Destroyed');
   }
 }

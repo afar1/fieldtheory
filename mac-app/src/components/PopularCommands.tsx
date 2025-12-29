@@ -4,7 +4,7 @@
 // Copy count (times copied) determines popularity ranking.
 // =============================================================================
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { supabase } from '../supabaseClient';
 
@@ -42,6 +42,14 @@ export default function PopularCommands() {
   
   // Feedback state for copy action.
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  
+  // Expanded state for "show more" functionality.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  
+  // Hover tooltip state - shows after 2.25s delay.
+  const [hoveredCommand, setHoveredCommand] = useState<Command | null>(null);
+  const [hoverPosition, setHoverPosition] = useState<{ x: number; y: number } | null>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Fetch commands on mount.
   useEffect(() => {
@@ -193,63 +201,145 @@ export default function PopularCommands() {
     }
   }, [newCommandName, newCommandContent]);
 
+  // Handle hover start - start timer for tooltip.
+  const handleMouseEnter = useCallback((command: Command, e: React.MouseEvent) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    
+    // Clear any existing timer.
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+    }
+    
+    // Start 2.25s delay timer.
+    hoverTimerRef.current = setTimeout(() => {
+      setHoveredCommand(command);
+      setHoverPosition({ x: rect.left, y: rect.bottom + 4 });
+    }, 2250);
+  }, []);
+
+  // Handle hover end - clear timer and tooltip.
+  const handleMouseLeave = useCallback(() => {
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    // Don't immediately close if hovering the tooltip itself.
+  }, []);
+
+  // Close tooltip when mouse leaves the tooltip area.
+  const closeTooltip = useCallback(() => {
+    setHoveredCommand(null);
+    setHoverPosition(null);
+  }, []);
+
+  // Format use count with proper pluralization.
+  const formatUseCount = (count: number): string => {
+    return count === 1 ? '1 use' : `${count} uses`;
+  };
+
   // Render a single command row.
   const renderCommandRow = (command: Command, index: number, isTop: boolean) => {
     const isCopied = copiedId === command.id;
+    const isExpanded = expandedId === command.id;
     
     return (
       <div
         key={command.id}
-        onClick={() => handleCopy(command)}
+        onMouseEnter={(e) => handleMouseEnter(command, e)}
+        onMouseLeave={handleMouseLeave}
         style={{
           ...styles.commandRow,
           backgroundColor: isCopied 
             ? (theme.isDark ? '#064e3b' : '#d1fae5')
-            : (theme.isDark ? '#2d2d2d' : '#fff'),
+            : (theme.isDark ? 'rgba(255,255,255,0.03)' : '#fff'),
           borderColor: isCopied
             ? (theme.isDark ? '#10b981' : '#34d399')
             : (theme.isDark ? '#404040' : '#e5e7eb'),
           cursor: 'pointer',
+          flexDirection: 'column',
+          alignItems: 'stretch',
         }}
       >
-        <div style={styles.commandLeft}>
-          {/* Simple rank number for top 10 */}
-          {isTop && (
-            <span style={{
-              fontSize: '10px',
-              color: theme.textSecondary,
-              marginRight: '8px',
-              minWidth: '16px',
-              textAlign: 'right',
-            }}>
-              #{index + 1}
-            </span>
-          )}
+        {/* Main row content */}
+        <div 
+          onClick={() => handleCopy(command)}
+          style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', width: '100%' }}
+        >
+          <div style={styles.commandLeft}>
+            {/* Simple rank number for top 10 */}
+            {isTop && (
+              <span style={{
+                fontSize: '9px',
+                color: theme.textSecondary,
+                marginRight: '6px',
+                minWidth: '14px',
+                textAlign: 'right',
+                flexShrink: 0,
+              }}>
+                #{index + 1}
+              </span>
+            )}
+            
+            <div style={styles.commandInfo}>
+              {/* Smaller name with slash prefix */}
+              <span style={{
+                fontSize: '11px',
+                fontWeight: 600,
+                color: theme.text,
+              }}>
+                /{command.name}
+              </span>
+              
+              {/* 2-line preview */}
+              <span style={{
+                fontSize: '11px',
+                color: theme.textSecondary,
+                display: '-webkit-box',
+                WebkitLineClamp: isExpanded ? undefined : 2,
+                WebkitBoxOrient: 'vertical',
+                overflow: isExpanded ? 'visible' : 'hidden',
+                lineHeight: '1.4',
+                whiteSpace: isExpanded ? 'pre-wrap' : undefined,
+              }}>
+                {isExpanded ? command.content : command.content}
+              </span>
+            </div>
+          </div>
           
-          <div style={styles.commandInfo}>
+          {/* Use count - smaller, positioned lower */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', flexShrink: 0, marginLeft: '8px' }}>
             <span style={{
-              ...styles.commandName,
-              color: theme.text,
-            }}>
-              {command.name}
-            </span>
-            <span style={{
-              ...styles.commandPreview,
+              fontSize: '9px',
               color: theme.textSecondary,
             }}>
-              {truncateContent(command.content, 80)}
+              {isCopied ? '✓' : formatUseCount(command.copy_count)}
             </span>
           </div>
         </div>
         
-        <div style={styles.commandRight}>
-          <span style={{
-            ...styles.copyCount,
-            color: theme.textSecondary,
-          }}>
-            {isCopied ? '✓ Copied' : `${command.copy_count} copies`}
-          </span>
-        </div>
+        {/* Show more / Show less toggle */}
+        {command.content.length > 120 && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpandedId(isExpanded ? null : command.id);
+            }}
+            style={{
+              alignSelf: 'flex-start',
+              marginTop: '4px',
+              marginLeft: isTop ? '20px' : '0',
+              padding: '2px 6px',
+              fontSize: '9px',
+              color: theme.isDark ? '#60a5fa' : '#2563eb',
+              backgroundColor: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              borderRadius: '3px',
+            }}
+          >
+            {isExpanded ? 'show less' : 'show more'}
+          </button>
+        )}
       </div>
     );
   };
@@ -288,6 +378,7 @@ export default function PopularCommands() {
               backgroundColor: theme.inputBg,
               color: theme.text,
               transition: 'padding-left 0.1s ease',
+              height: '28px',
             }}
           />
           {!searchQuery && !searchFocused && (
@@ -311,17 +402,21 @@ export default function PopularCommands() {
         <button
           onClick={() => setShowShareForm(!showShareForm)}
           style={{
-            padding: '4px 8px',
-            fontSize: '9px',
+            padding: '6px 8px',
+            fontSize: '10px',
+            height: '28px',
+            display: 'flex',
+            alignItems: 'center',
             backgroundColor: showShareForm 
               ? (theme.isDark ? '#4b5563' : '#d1d5db')
               : 'transparent',
             color: showShareForm ? '#fff' : theme.textSecondary,
             border: `1px solid ${showShareForm ? (theme.isDark ? '#4b5563' : '#d1d5db') : theme.inputBorder}`,
-            borderRadius: '4px',
+            borderRadius: '6px',
             cursor: 'pointer',
             whiteSpace: 'nowrap',
             outline: 'none',
+            boxSizing: 'border-box',
           }}
         >
           {showShareForm ? 'Cancel' : '+ Share'}
@@ -416,16 +511,54 @@ export default function PopularCommands() {
           </>
         )}
       </div>
+
+      {/* Hover tooltip - appears after 2.25s delay */}
+      {hoveredCommand && hoverPosition && (
+        <div
+          onMouseEnter={() => {
+            // Keep tooltip open when hovering over it.
+            if (hoverTimerRef.current) {
+              clearTimeout(hoverTimerRef.current);
+            }
+          }}
+          onMouseLeave={closeTooltip}
+          style={{
+            position: 'fixed',
+            left: hoverPosition.x,
+            top: hoverPosition.y,
+            maxWidth: '400px',
+            maxHeight: '200px',
+            overflowY: 'auto',
+            padding: '10px 12px',
+            backgroundColor: theme.isDark ? '#1f2937' : '#fff',
+            border: `1px solid ${theme.isDark ? '#374151' : '#e5e7eb'}`,
+            borderRadius: '8px',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+            zIndex: 1000,
+          }}
+        >
+          <div style={{
+            fontSize: '11px',
+            fontWeight: 600,
+            color: theme.text,
+            marginBottom: '6px',
+          }}>
+            /{hoveredCommand.name}
+          </div>
+          <div style={{
+            fontSize: '10px',
+            color: theme.textSecondary,
+            whiteSpace: 'pre-wrap',
+            lineHeight: '1.5',
+          }}>
+            {hoveredCommand.content}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-// Truncate content for preview.
-function truncateContent(content: string, maxLength: number): string {
-  const cleaned = content.replace(/\n+/g, ' ').trim();
-  if (cleaned.length <= maxLength) return cleaned;
-  return cleaned.substring(0, maxLength) + '...';
-}
 
 // Mock data for development/offline mode.
 function getMockCommands(): Command[] {
@@ -618,14 +751,12 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
   },
   commandName: {
-    fontSize: '13px',
+    fontSize: '11px',
     fontWeight: 600,
   },
   commandPreview: {
-    fontSize: '12px',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
+    fontSize: '11px',
+    lineHeight: '1.4',
   },
   commandRight: {
     display: 'flex',
@@ -635,8 +766,8 @@ const styles: Record<string, React.CSSProperties> = {
     marginLeft: '12px',
   },
   copyCount: {
-    fontSize: '12px',
-    fontWeight: 500,
+    fontSize: '9px',
+    fontWeight: 400,
   },
   emptyState: {
     display: 'flex',

@@ -12,9 +12,9 @@ import { ClipboardManager } from './clipboardManager';
 import { ModelSize } from './modelManager';
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
 import { MobileSync } from './mobileSync';
-import { TeamClipboardSync, TeamClipboardQueryOptions } from './teamClipboardSync';
+import { SharedClipboardSync, SharedClipboardQueryOptions } from './sharedClipboardSync';
 import { SocialSync } from './socialSync';
-import { TeamClipboardIPCChannels } from './types/clipboard';
+import { SharedClipboardIPCChannels } from './types/clipboard';
 import { SocialIPCChannels } from './types/social';
 import {
   AudioIPCChannels,
@@ -137,7 +137,7 @@ let clipboardHistoryWindow: ClipboardHistoryWindow | null = null;
 let visionModelManager: VisionModelManager | null = null;
 let visionProcessor: VisionProcessor | null = null;
 let mobileSync: MobileSync | null = null;
-let teamClipboardSync: TeamClipboardSync | null = null;
+let sharedClipboardSync: SharedClipboardSync | null = null;
 let socialSync: SocialSync | null = null;
 let onboardingWindow: OnboardingWindow | null = null;
 
@@ -1834,34 +1834,34 @@ function setupClipboardIPCHandlers(): void {
   });
 
   // =========================================================================
-  // Team Clipboard IPC Handlers - Shared clipboard for team collaboration
+  // Shared Clipboard IPC Handlers - Shared clipboard for collaboration
   // =========================================================================
 
-  ipcMain.handle(TeamClipboardIPCChannels.QUERY_TEAM_ITEMS, async (_event, options?: TeamClipboardQueryOptions) => {
-    if (!teamClipboardSync) {
+  ipcMain.handle(SharedClipboardIPCChannels.QUERY_TEAM_ITEMS, async (_event, options?: SharedClipboardQueryOptions) => {
+    if (!sharedClipboardSync) {
       return [];
     }
-    return await teamClipboardSync.queryItems(options);
+    return await sharedClipboardSync.queryItems(options);
   });
 
-  ipcMain.handle(TeamClipboardIPCChannels.GET_TEAM_ITEM, async (_event, id: string) => {
-    if (!teamClipboardSync) {
+  ipcMain.handle(SharedClipboardIPCChannels.GET_TEAM_ITEM, async (_event, id: string) => {
+    if (!sharedClipboardSync) {
       return null;
     }
-    return await teamClipboardSync.getItem(id);
+    return await sharedClipboardSync.getItem(id);
   });
 
-  ipcMain.handle(TeamClipboardIPCChannels.SHARE_TO_TEAM, async (_event, localItemId: number) => {
-    if (!teamClipboardSync) {
+  ipcMain.handle(SharedClipboardIPCChannels.SHARE_TO_TEAM, async (_event, localItemId: number) => {
+    if (!sharedClipboardSync) {
       return null;
     }
-    const teamItem = await teamClipboardSync.shareToTeam(localItemId);
+    const teamItem = await sharedClipboardSync.shareToTeam(localItemId);
     
     // Broadcast to all windows that a team item was added.
     if (teamItem) {
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
-          window.webContents.send(TeamClipboardIPCChannels.TEAM_ITEM_ADDED, teamItem);
+          window.webContents.send(SharedClipboardIPCChannels.TEAM_ITEM_ADDED, teamItem);
         }
       });
     }
@@ -1869,23 +1869,23 @@ function setupClipboardIPCHandlers(): void {
     return teamItem;
   });
 
-  ipcMain.handle(TeamClipboardIPCChannels.SHARE_STACK_TO_TEAM, async (_event, localItemIds: number[]) => {
-    if (!teamClipboardSync) {
+  ipcMain.handle(SharedClipboardIPCChannels.SHARE_STACK_TO_TEAM, async (_event, localItemIds: number[]) => {
+    if (!sharedClipboardSync) {
       return null;
     }
-    return await teamClipboardSync.shareStackToTeam(localItemIds);
+    return await sharedClipboardSync.shareStackToTeam(localItemIds);
   });
 
-  ipcMain.handle(TeamClipboardIPCChannels.DELETE_TEAM_ITEM, async (_event, id: string) => {
-    if (!teamClipboardSync) {
+  ipcMain.handle(SharedClipboardIPCChannels.DELETE_TEAM_ITEM, async (_event, id: string) => {
+    if (!sharedClipboardSync) {
       return false;
     }
-    const success = await teamClipboardSync.deleteItem(id);
+    const success = await sharedClipboardSync.deleteItem(id);
     
     if (success) {
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
-          window.webContents.send(TeamClipboardIPCChannels.TEAM_ITEM_DELETED, id);
+          window.webContents.send(SharedClipboardIPCChannels.TEAM_ITEM_DELETED, id);
         }
       });
     }
@@ -1893,35 +1893,35 @@ function setupClipboardIPCHandlers(): void {
     return success;
   });
 
-  ipcMain.handle(TeamClipboardIPCChannels.UPDATE_TEAM_STACK_ID, async (_event, itemIds: string[], stackId: string | null) => {
-    if (!teamClipboardSync) {
+  ipcMain.handle(SharedClipboardIPCChannels.UPDATE_TEAM_STACK_ID, async (_event, itemIds: string[], stackId: string | null) => {
+    if (!sharedClipboardSync) {
       return false;
     }
-    return await teamClipboardSync.updateStackId(itemIds, stackId);
+    return await sharedClipboardSync.updateStackId(itemIds, stackId);
   });
 
-  ipcMain.handle(TeamClipboardIPCChannels.COPY_TO_PERSONAL, async (_event, teamItemId: string) => {
-    if (!teamClipboardSync) {
+  ipcMain.handle(SharedClipboardIPCChannels.COPY_TO_PERSONAL, async (_event, teamItemId: string) => {
+    if (!sharedClipboardSync) {
       return null;
     }
-    return await teamClipboardSync.copyToPersonal(teamItemId);
+    return await sharedClipboardSync.copyToPersonal(teamItemId);
   });
 
-  ipcMain.handle(TeamClipboardIPCChannels.COPY_STACK_TO_PERSONAL, async (_event, teamStackId: string) => {
-    if (!teamClipboardSync) {
+  ipcMain.handle(SharedClipboardIPCChannels.COPY_STACK_TO_PERSONAL, async (_event, teamStackId: string) => {
+    if (!sharedClipboardSync) {
       return [];
     }
-    return await teamClipboardSync.copyStackToPersonal(teamStackId);
+    return await sharedClipboardSync.copyStackToPersonal(teamStackId);
   });
 
-  ipcMain.handle(TeamClipboardIPCChannels.GET_TEAM_STACKS, async () => {
-    if (!teamClipboardSync) {
+  ipcMain.handle(SharedClipboardIPCChannels.GET_TEAM_STACKS, async () => {
+    if (!sharedClipboardSync) {
       return [];
     }
-    return await teamClipboardSync.getStacks();
+    return await sharedClipboardSync.getStacks();
   });
 
-  ipcMain.handle(TeamClipboardIPCChannels.CREATE_TEAM_STACK, async () => {
+  ipcMain.handle(SharedClipboardIPCChannels.CREATE_TEAM_STACK, async () => {
     // Creating a team stack is implicit - when items are assigned a stack_id,
     // a stack record is created automatically in updateStackId.
     // This handler is here for future extensibility (e.g., creating named stacks).
@@ -1932,32 +1932,32 @@ function setupClipboardIPCHandlers(): void {
   // Team Membership IPC Handlers
   // =========================================================================
 
-  ipcMain.handle(TeamClipboardIPCChannels.GET_TEAM_MEMBERS, async () => {
-    if (!teamClipboardSync) {
+  ipcMain.handle(SharedClipboardIPCChannels.GET_TEAM_MEMBERS, async () => {
+    if (!sharedClipboardSync) {
       return [];
     }
-    return await teamClipboardSync.getTeamMembers();
+    return await sharedClipboardSync.getTeamMembers();
   });
 
-  ipcMain.handle(TeamClipboardIPCChannels.ADD_TEAM_MEMBER, async (_event, email: string) => {
-    if (!teamClipboardSync) {
+  ipcMain.handle(SharedClipboardIPCChannels.ADD_TEAM_MEMBER, async (_event, email: string) => {
+    if (!sharedClipboardSync) {
       return { success: false, error: 'Team sync not initialized' };
     }
-    return await teamClipboardSync.addTeamMember(email);
+    return await sharedClipboardSync.addTeamMember(email);
   });
 
-  ipcMain.handle(TeamClipboardIPCChannels.REMOVE_TEAM_MEMBER, async (_event, membershipId: string) => {
-    if (!teamClipboardSync) {
+  ipcMain.handle(SharedClipboardIPCChannels.REMOVE_TEAM_MEMBER, async (_event, membershipId: string) => {
+    if (!sharedClipboardSync) {
       return { success: false, error: 'Team sync not initialized' };
     }
-    return await teamClipboardSync.removeTeamMember(membershipId);
+    return await sharedClipboardSync.removeTeamMember(membershipId);
   });
 
-  ipcMain.handle(TeamClipboardIPCChannels.HAS_TEAMMATES, async () => {
-    if (!teamClipboardSync) {
+  ipcMain.handle(SharedClipboardIPCChannels.HAS_TEAMMATES, async () => {
+    if (!sharedClipboardSync) {
       return false;
     }
-    return await teamClipboardSync.hasTeammates();
+    return await sharedClipboardSync.hasTeammates();
   });
 
   // =========================================================================
@@ -2560,30 +2560,30 @@ async function initTranscriberSystem(): Promise<void> {
   mobileSync = new MobileSync(clipboardManager, preferencesManager);
   await mobileSync.init(envVars.supabaseUrl, envVars.supabaseAnonKey);
 
-  // Initialize team clipboard sync - shares Supabase client with mobileSync.
+  // Initialize shared clipboard sync - shares Supabase client with mobileSync.
   // This enables collaborative clipboard sharing between team members.
-  teamClipboardSync = new TeamClipboardSync(clipboardManager);
+  sharedClipboardSync = new SharedClipboardSync(clipboardManager);
   
   // Initialize social sync for DMs, Feedback, and Contacts.
   socialSync = new SocialSync(clipboardManager);
   
   // Check if mobileSync already has a session from stored credentials.
-  // If so, initialize teamClipboardSync and socialSync with it.
+  // If so, initialize sharedClipboardSync and socialSync with it.
   const existingSession = mobileSync.getSession();
   // @ts-ignore - Access internal supabase client.
   const existingSupabaseClient = mobileSync['supabase'];
   
   if (existingSession && existingSupabaseClient) {
     console.log('[Main] Found existing session on startup, initializing syncs');
-    teamClipboardSync.setSupabaseClient(existingSupabaseClient);
-    teamClipboardSync.setSession(existingSession);
+    sharedClipboardSync.setSupabaseClient(existingSupabaseClient);
+    sharedClipboardSync.setSession(existingSession);
     socialSync.setSupabaseClient(existingSupabaseClient);
     socialSync.setSession(existingSession);
   }
   
   // Set the Supabase client from mobileSync once a session is established.
   // The client is shared to avoid duplicate connections.
-  // When mobileSync sets a session, we forward it to teamClipboardSync and socialSync.
+  // When mobileSync sets a session, we forward it to sharedClipboardSync and socialSync.
   const originalSetSession = mobileSync.setSession.bind(mobileSync);
   mobileSync.setSession = async (accessToken: string, refreshToken: string) => {
     // Skip if we already have this exact session to prevent duplicate calls.
@@ -2594,15 +2594,15 @@ async function initTranscriberSystem(): Promise<void> {
     }
     
     await originalSetSession(accessToken, refreshToken);
-    // Forward session to teamClipboardSync and socialSync.
+    // Forward session to sharedClipboardSync and socialSync.
     const session = mobileSync!.getSession();
     // The Supabase client is available on mobileSync after init.
     // @ts-ignore - Access internal supabase client.
     const supabaseClient = mobileSync!['supabase'];
     
-    if (session && teamClipboardSync && supabaseClient) {
-      teamClipboardSync.setSupabaseClient(supabaseClient);
-      teamClipboardSync.setSession(session);
+    if (session && sharedClipboardSync && supabaseClient) {
+      sharedClipboardSync.setSupabaseClient(supabaseClient);
+      sharedClipboardSync.setSession(session);
     }
     
     if (session && socialSync && supabaseClient) {
@@ -2780,9 +2780,9 @@ if (!gotTheLock) {
     setupOnboardingIPCHandlers();
     setupDisplayListeners();
 
-    // Register keyboard shortcut to reset onboarding (Cmd+Shift+R).
+    // Register keyboard shortcut to reset onboarding (Cmd+Shift+O).
     // Useful for testing and development.
-    globalShortcut.register('Command+Shift+R', async () => {
+    globalShortcut.register('Command+Shift+O', async () => {
       console.log('[Main] Reset onboarding shortcut triggered');
       if (!preferencesManager) return;
       
@@ -2964,8 +2964,8 @@ if (!gotTheLock) {
       mobileSync.destroy();
     }
 
-    if (teamClipboardSync) {
-      teamClipboardSync.destroy();
+    if (sharedClipboardSync) {
+      sharedClipboardSync.destroy();
     }
 
     if (transcriberManager) {

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo, useImperativeHandle, forwardRef } from 'react';
 import { Excalidraw, exportToBlob } from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 
@@ -16,14 +16,19 @@ interface SketchViewProps {
     width: number;
     height: number;
   } | null;
+  hideHeader?: boolean;
+  onHasChangesChange?: (hasChanges: boolean) => void;
 }
 
-export default function SketchView({ onSave, onClose, existingSketch, backgroundImage }: SketchViewProps) {
+export interface SketchViewHandle {
+  save: (andPaste?: boolean) => Promise<void>;
+}
+
+const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onClose, existingSketch, backgroundImage, hideHeader, onHasChangesChange }, ref) => {
   const [excalidrawAPI, setExcalidrawAPI] = useState<any>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const lastToolRef = useRef<string | null>(null);
 
   const initialData = useMemo(() => {
     const baseData: any = {
@@ -145,7 +150,11 @@ export default function SketchView({ onSave, onClose, existingSketch, background
       alert('Failed to save sketch. Please try again.');
       setIsSaving(false);
     }
-  }, [excalidrawAPI, isSaving, onSave]);
+  }, [excalidrawAPI, isSaving, onSave, backgroundImage]);
+
+  useImperativeHandle(ref, () => ({
+    save: handleSave,
+  }), [handleSave]);
 
   const handleClose = useCallback(() => {
     if (hasChanges) {
@@ -168,7 +177,9 @@ export default function SketchView({ onSave, onClose, existingSketch, background
     if (initialElementCountRef.current === null) {
       initialElementCountRef.current = activeElements.length;
     }
-    setHasChanges(activeElements.length !== initialElementCountRef.current);
+    const newHasChanges = activeElements.length !== initialElementCountRef.current;
+    setHasChanges(newHasChanges);
+    onHasChangesChange?.(newHasChanges);
     
     if (!excalidrawAPI) return;
     
@@ -177,22 +188,15 @@ export default function SketchView({ onSave, onClose, existingSketch, background
     const prevCount = prevElementCountRef.current;
     prevElementCountRef.current = elementCount;
     
-    // Track when user selects a drawing tool (not selection/hand).
+    // When user selects a drawing tool, lock it so it stays active after drawing.
+    // Excalidraw's locked: true prevents auto-switch to selection after each stroke.
     if (currentTool && currentTool !== 'selection' && currentTool !== 'hand') {
-      lastToolRef.current = currentTool;
+      const currentAppState = excalidrawAPI.getAppState();
+      if (!currentAppState?.activeTool?.locked) {
+        excalidrawAPI.setActiveTool({ type: currentTool, locked: true });
+      }
     }
-    
-    // Excalidraw auto-switches to selection after drawing. Restore the tool.
-    const justAddedElement = elementCount > prevCount;
-    if (justAddedElement && currentTool === 'selection' && lastToolRef.current) {
-      const toolToRestore = lastToolRef.current;
-      setTimeout(() => {
-        if (excalidrawAPI) {
-          excalidrawAPI.setActiveTool({ type: toolToRestore });
-        }
-      }, 50);
-    }
-  }, [excalidrawAPI]);
+  }, [excalidrawAPI, onHasChangesChange]);
 
   useEffect(() => {
     const hideFooterLinks = () => {
@@ -231,9 +235,23 @@ export default function SketchView({ onSave, onClose, existingSketch, background
       buttons.forEach((btn) => {
         const text = btn.textContent?.trim() || '';
         const ariaLabel = btn.getAttribute('aria-label') || '';
-        if (text === 'Library' || ariaLabel.toLowerCase().includes('diamond')) {
+        const title = btn.getAttribute('title') || '';
+        if (
+          text === 'Library' || 
+          text.includes('Library') ||
+          ariaLabel.toLowerCase().includes('library') ||
+          title.toLowerCase().includes('library') ||
+          ariaLabel.toLowerCase().includes('diamond') ||
+          title.toLowerCase().includes('diamond')
+        ) {
           (btn as HTMLElement).style.display = 'none';
         }
+      });
+      
+      // Also hide any aside elements (Library sidebar).
+      const asides = document.querySelectorAll('.excalidraw aside');
+      asides.forEach((aside) => {
+        (aside as HTMLElement).style.display = 'none';
       });
     };
 
@@ -273,8 +291,21 @@ export default function SketchView({ onSave, onClose, existingSketch, background
   const dragStyle = { WebkitAppRegion: 'drag' } as React.CSSProperties;
   const noDragStyle = { WebkitAppRegion: 'no-drag' } as React.CSSProperties;
 
-  return (
-    <div style={{
+  // When hideHeader is true, we're embedded in ClipboardHistory's flex layout.
+  // Use relative positioning to fill the flex container instead of absolute overlay.
+  const containerStyle: React.CSSProperties = hideHeader
+    ? {
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        backgroundColor: '#fff',
+        overflow: 'hidden',
+        minHeight: 0,
+        borderTop: '1px solid #e0e0e0',
+        marginLeft: '16px',
+        marginRight: '16px',
+      }
+    : {
         position: 'absolute',
         top: 0,
         left: 0,
@@ -283,83 +314,88 @@ export default function SketchView({ onSave, onClose, existingSketch, background
         display: 'flex',
         flexDirection: 'column',
         backgroundColor: '#fff',
-      }}>
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '8px 16px',
-        borderBottom: '1px solid #e0e0e0',
-        backgroundColor: '#fafafa',
-        position: 'relative',
-        zIndex: 100,
-        ...dragStyle,
-      }}>
-        <button
-          onClick={handleClose}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '6px 14px',
-            fontSize: '13px',
-            backgroundColor: 'transparent',
-            border: '1px solid #ccc',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            color: '#666',
-            ...noDragStyle,
-          }}
-        >
-          <span style={{
-            fontSize: '10px',
-            backgroundColor: '#e8e8e8',
-            padding: '2px 5px',
-            borderRadius: '3px',
-            fontWeight: 500,
-          }}>Esc</span>
-          Cancel
-        </button>
+      };
 
-        <span style={{ fontSize: '13px', fontWeight: 500, color: '#333' }}>
-          {existingSketch ? 'Edit' : 'Draw'}
-        </span>
-
-        <div style={{ display: 'flex', gap: '8px', ...noDragStyle }}>
+  return (
+    <div style={containerStyle}>
+      {!hideHeader && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '8px 16px',
+          borderBottom: '1px solid #e0e0e0',
+          backgroundColor: '#fafafa',
+          position: 'relative',
+          zIndex: 100,
+          ...dragStyle,
+        }}>
           <button
-            onClick={() => handleSave(false)}
-            disabled={isSaving || !hasChanges}
+            onClick={handleClose}
             style={{
-              padding: '6px 12px',
-              fontSize: '12px',
-              backgroundColor: 'transparent',
-              border: `1px solid ${hasChanges ? '#999' : '#ccc'}`,
-              borderRadius: '6px',
-              cursor: hasChanges ? 'pointer' : 'default',
-              color: hasChanges ? '#666' : '#aaa',
-              fontWeight: 500,
-            }}
-          >
-            {isSaving ? 'Saving...' : 'Save'}
-          </button>
-          <button
-            onClick={() => handleSave(true)}
-            disabled={isSaving || !hasChanges}
-            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
               padding: '6px 14px',
               fontSize: '13px',
-              backgroundColor: hasChanges ? '#007AFF' : '#ccc',
-              border: 'none',
+              backgroundColor: 'transparent',
+              border: '1px solid #ccc',
               borderRadius: '6px',
-              cursor: hasChanges ? 'pointer' : 'default',
-              color: '#fff',
-              fontWeight: 500,
+              cursor: 'pointer',
+              color: '#666',
+              ...noDragStyle,
             }}
           >
-            Save & Paste
+            <span style={{
+              fontSize: '10px',
+              backgroundColor: '#e8e8e8',
+              padding: '2px 5px',
+              borderRadius: '3px',
+              fontWeight: 500,
+            }}>Esc</span>
+            Cancel
           </button>
+
+          <span style={{ fontSize: '13px', fontWeight: 500, color: '#333' }}>
+            {existingSketch ? 'Edit' : 'Draw'}
+          </span>
+
+          <div style={{ display: 'flex', gap: '8px', ...noDragStyle }}>
+            <button
+              onClick={() => handleSave(false)}
+              disabled={isSaving || !hasChanges}
+              style={{
+                padding: '6px 12px',
+                fontSize: '12px',
+                backgroundColor: 'transparent',
+                border: `1px solid ${hasChanges ? '#999' : '#ccc'}`,
+                borderRadius: '6px',
+                cursor: hasChanges ? 'pointer' : 'default',
+                color: hasChanges ? '#666' : '#aaa',
+                fontWeight: 500,
+              }}
+            >
+              {isSaving ? 'Saving...' : 'Save'}
+            </button>
+            <button
+              onClick={() => handleSave(true)}
+              disabled={isSaving || !hasChanges}
+              style={{
+                padding: '6px 14px',
+                fontSize: '13px',
+                backgroundColor: hasChanges ? '#007AFF' : '#ccc',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: hasChanges ? 'pointer' : 'default',
+                color: '#fff',
+                fontWeight: 500,
+              }}
+            >
+              Save & Paste
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       <div 
         ref={containerRef}
@@ -418,7 +454,10 @@ export default function SketchView({ onSave, onClose, existingSketch, background
           .excalidraw button[title*="Library" i],
           .excalidraw button[aria-label*="diamond" i],
           .excalidraw button[title*="diamond" i],
-          .excalidraw .ToolIcon_type_diamond {
+          .excalidraw .ToolIcon_type_diamond,
+          .excalidraw .layer-ui__wrapper__top-right,
+          .excalidraw [class*="top-right"],
+          .excalidraw .App-menu_top__right {
             display: none !important;
           }
           /* Hide hamburger button, show menu content always */
@@ -479,21 +518,25 @@ export default function SketchView({ onSave, onClose, existingSketch, background
         color: '#888',
         flexWrap: 'wrap',
       }}>
-        <span><kbd style={kbdStyle}>⌘S</kbd> Save</span>
-        <span><kbd style={kbdStyle}>Esc</kbd> Cancel</span>
+        <span>save <kbd style={kbdStyle}>⌘s</kbd></span>
+        <span>cancel <kbd style={kbdStyle}>esc</kbd></span>
         <span style={{ margin: '0 4px', color: '#bbb' }}>|</span>
-        <span><kbd style={kbdStyle}>V</kbd> Select</span>
-        <span><kbd style={kbdStyle}>R</kbd> Rect</span>
-        <span><kbd style={kbdStyle}>O</kbd> Ellipse</span>
-        <span><kbd style={kbdStyle}>A</kbd> Arrow</span>
-        <span><kbd style={kbdStyle}>L</kbd> Line</span>
-        <span><kbd style={kbdStyle}>P</kbd> Pencil</span>
-        <span><kbd style={kbdStyle}>T</kbd> Text</span>
-        <span><kbd style={kbdStyle}>E</kbd> Eraser</span>
+        <span>select <kbd style={kbdStyle}>v</kbd></span>
+        <span>rect <kbd style={kbdStyle}>r</kbd></span>
+        <span>ellipse <kbd style={kbdStyle}>o</kbd></span>
+        <span>arrow <kbd style={kbdStyle}>a</kbd></span>
+        <span>line <kbd style={kbdStyle}>l</kbd></span>
+        <span>pencil <kbd style={kbdStyle}>p</kbd></span>
+        <span>text <kbd style={kbdStyle}>t</kbd></span>
+        <span>eraser <kbd style={kbdStyle}>e</kbd></span>
       </div>
     </div>
   );
-}
+});
+
+SketchView.displayName = 'SketchView';
+
+export default SketchView;
 
 const kbdStyle: React.CSSProperties = {
   display: 'inline-block',
@@ -503,5 +546,5 @@ const kbdStyle: React.CSSProperties = {
   color: '#555',
   backgroundColor: '#e8e8e8',
   borderRadius: '3px',
-  marginRight: '4px',
+  marginLeft: '4px',
 };

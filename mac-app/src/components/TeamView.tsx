@@ -1,5 +1,5 @@
 // =============================================================================
-// TeamView - Team clipboard with auth gating and member management.
+// TeamView - Shared clipboard with auth gating and member management.
 // Shows sign-in form if not authenticated, otherwise shows team items and members.
 // Matches the same interaction model as ClipboardHistory (j/k nav, Enter paste, etc.)
 // =============================================================================
@@ -201,7 +201,7 @@ function CachedImage({
 // Types
 // =============================================================================
 
-interface TeamClipboardItem {
+interface SharedClipboardItem {
   id: string;
   userId: string;
   sharedByEmail: string | null;
@@ -233,7 +233,7 @@ interface TeamMember {
 }
 
 // Stack info for grouping items.
-interface TeamStackInfo {
+interface SharedStackInfo {
   stackId: string;
   itemCount: number;
   imageCount: number;
@@ -243,9 +243,9 @@ interface TeamStackInfo {
 }
 
 // List row can be an individual item or a stack of items.
-type TeamListRow =
-  | { type: 'item'; item: TeamClipboardItem }
-  | { type: 'stack'; stack: TeamStackInfo; items: TeamClipboardItem[]; expanded: boolean };
+type SharedListRow =
+  | { type: 'item'; item: SharedClipboardItem }
+  | { type: 'stack'; stack: SharedStackInfo; items: SharedClipboardItem[]; expanded: boolean };
 
 // =============================================================================
 // Helpers
@@ -302,7 +302,7 @@ function formatFileSize(bytes: number): string {
 }
 
 // Combine text from multiple items in a stack.
-function combineStackText(items: TeamClipboardItem[]): string {
+function combineStackText(items: SharedClipboardItem[]): string {
   return items
     .filter(item => item.type === 'text' || item.type === 'transcript')
     .map(item => item.content || '')
@@ -464,7 +464,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
 
   // Team items state.
   // Initialize from localStorage cache for instant display.
-  const [teamItems, setTeamItems] = useState<TeamClipboardItem[]>(() => {
+  const [teamItems, setTeamItems] = useState<SharedClipboardItem[]>(() => {
     try {
       const cached = localStorage.getItem('teamItemsCache');
       if (cached) {
@@ -492,7 +492,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
   const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
   
   // Undo state for delete operations.
-  const [deletedItems, setDeletedItems] = useState<TeamClipboardItem[]>([]);
+  const [deletedItems, setDeletedItems] = useState<SharedClipboardItem[]>([]);
   
   // Track which item is being unshared for visual feedback.
   const [unsharingId, setUnsharingId] = useState<string | null>(null);
@@ -532,7 +532,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
   const [stackPreviewItems, setStackPreviewItems] = useState<PreviewContent[]>([]);
 
   // Build the preview sequence for a stack: [image1, image2, ..., combinedText].
-  const getStackPreviewItems = useCallback((items: TeamClipboardItem[]): PreviewContent[] => {
+  const getStackPreviewItems = useCallback((items: SharedClipboardItem[]): PreviewContent[] => {
     const previewItems: PreviewContent[] = [];
 
     // Add each image as a separate preview item.
@@ -569,7 +569,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
   }, [preview, previewClosing]);
 
   // Get preview content for a given row.
-  const getPreviewForRow = useCallback((row: TeamListRow): PreviewContent | null => {
+  const getPreviewForRow = useCallback((row: SharedListRow): PreviewContent | null => {
     if (row.type === 'item') {
       const item = row.item;
       if (item.imageUrl || item.imageData) {
@@ -802,9 +802,9 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
   // ---------------------------------------------------------------------------
 
   const loadTeamMembers = useCallback(async () => {
-    if (!window.teamClipboardAPI) return;
+    if (!window.sharedClipboardAPI) return;
     setMembersLoading(true);
-    const members = await window.teamClipboardAPI.getTeamMembers();
+    const members = await window.sharedClipboardAPI.getTeamMembers();
     setTeamMembers(members);
     setMembersLoading(false);
   }, []);
@@ -821,7 +821,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
     setAddingMember(true);
     setAddMemberError(null);
 
-    const result = await window.teamClipboardAPI?.addTeamMember(email);
+    const result = await window.sharedClipboardAPI?.addTeamMember(email);
 
     if (result?.success) {
       setAddMemberEmail('');
@@ -835,7 +835,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
   };
 
   const handleRemoveMember = async (membershipId: string) => {
-    const result = await window.teamClipboardAPI?.removeTeamMember(membershipId);
+    const result = await window.sharedClipboardAPI?.removeTeamMember(membershipId);
     if (result?.success) {
       await loadTeamMembers();
       await loadTeamItems();
@@ -847,7 +847,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
   // ---------------------------------------------------------------------------
 
   const loadTeamItems = useCallback(async (isBackgroundSync: boolean = false) => {
-    if (!window.teamClipboardAPI) return;
+    if (!window.sharedClipboardAPI) return;
     
     // If we have cached items, show background sync indicator instead of blocking loading.
     if (isBackgroundSync) {
@@ -857,7 +857,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
       setItemsLoading(true);
     }
     
-    const items = await window.teamClipboardAPI.queryItems({ limit: 100 });
+    const items = await window.sharedClipboardAPI.queryItems({ limit: 100 });
     setTeamItems(items);
     
     // Save to localStorage cache for next time.
@@ -910,12 +910,12 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
       const draggedItemId = activeId;
       if (overType === 'stack') {
         // Item dropped on stack -> add to stack.
-        await window.teamClipboardAPI?.updateStackId([draggedItemId], overId);
+        await window.sharedClipboardAPI?.updateStackId([draggedItemId], overId);
       } else if (overType === 'item') {
         if (draggedItemId !== overId) {
           // Item dropped on item -> create new stack.
           const newStackId = crypto.randomUUID();
-          await window.teamClipboardAPI?.updateStackId([draggedItemId, overId], newStackId);
+          await window.sharedClipboardAPI?.updateStackId([draggedItemId, overId], newStackId);
         }
       }
     } else if (activeType === 'stack') {
@@ -925,11 +925,11 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
         const stackItems = teamItems.filter(i => i.stackId === draggedStackId);
         if (stackItems.length) {
           const itemIds = stackItems.map(i => i.id);
-          await window.teamClipboardAPI?.updateStackId(itemIds, overId);
+          await window.sharedClipboardAPI?.updateStackId(itemIds, overId);
         }
       } else if (overType === 'item') {
         // Stack dropped on item -> add item to the dragged stack.
-        await window.teamClipboardAPI?.updateStackId([overId], draggedStackId);
+        await window.sharedClipboardAPI?.updateStackId([overId], draggedStackId);
       }
     }
 
@@ -937,18 +937,18 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
   }, [loadTeamItems, teamItems]);
 
   const copyToPersonal = useCallback(async (teamItemId: string) => {
-    if (!window.teamClipboardAPI) return;
+    if (!window.sharedClipboardAPI) return;
     setCopyingToPersonal(teamItemId);
-    await window.teamClipboardAPI.copyToPersonal(teamItemId);
+    await window.sharedClipboardAPI.copyToPersonal(teamItemId);
     setCopyingToPersonal(null);
   }, []);
 
   // Paste item directly (copy to personal clipboard, then paste to target app).
-  const pasteItem = useCallback(async (item: TeamClipboardItem) => {
-    if (!window.clipboardAPI || !window.teamClipboardAPI) return;
+  const pasteItem = useCallback(async (item: SharedClipboardItem) => {
+    if (!window.clipboardAPI || !window.sharedClipboardAPI) return;
     
     // Copy to personal clipboard (this returns the new local item ID).
-    const localId = await window.teamClipboardAPI.copyToPersonal(item.id);
+    const localId = await window.sharedClipboardAPI.copyToPersonal(item.id);
     
     if (localId) {
       // Paste the local item and close the window.
@@ -958,13 +958,13 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
   }, []);
 
   // Paste an entire stack (copy all items, paste combined).
-  const pasteStack = useCallback(async (stackItems: TeamClipboardItem[]) => {
-    if (!window.clipboardAPI || !window.teamClipboardAPI) return;
+  const pasteStack = useCallback(async (stackItems: SharedClipboardItem[]) => {
+    if (!window.clipboardAPI || !window.sharedClipboardAPI) return;
 
     // Copy all items to personal clipboard.
     const localIds: number[] = [];
     for (const item of stackItems) {
-      const localId = await window.teamClipboardAPI.copyToPersonal(item.id);
+      const localId = await window.sharedClipboardAPI.copyToPersonal(item.id);
       if (localId) {
         localIds.push(localId);
       }
@@ -992,7 +992,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
 
   // Delete a team item.
   const deleteTeamItem = useCallback(async (itemId: string) => {
-    if (!window.teamClipboardAPI) return;
+    if (!window.sharedClipboardAPI) return;
     
     // Find the item to save for undo.
     const item = teamItems.find(i => i.id === itemId);
@@ -1000,7 +1000,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
       setDeletedItems([item]);
     }
     
-    const success = await window.teamClipboardAPI.deleteItem(itemId);
+    const success = await window.sharedClipboardAPI.deleteItem(itemId);
     if (success) {
       // Remove from local state immediately.
       setTeamItems(prev => prev.filter(i => i.id !== itemId));
@@ -1009,7 +1009,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
 
   // Delete multiple team items (for stack deletion).
   const deleteTeamItems = useCallback(async (itemIds: string[]) => {
-    if (!window.teamClipboardAPI) return;
+    if (!window.sharedClipboardAPI) return;
     
     // Save items for undo.
     const itemsToDelete = teamItems.filter(i => itemIds.includes(i.id));
@@ -1017,7 +1017,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
     
     // Delete each item.
     for (const id of itemIds) {
-      await window.teamClipboardAPI.deleteItem(id);
+      await window.sharedClipboardAPI.deleteItem(id);
     }
     
     // Remove from local state.
@@ -1026,14 +1026,14 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
 
   // Unstack a team stack (remove stack_id from all items).
   const unstackTeamItems = useCallback(async (stackId: string) => {
-    if (!window.teamClipboardAPI) return;
+    if (!window.sharedClipboardAPI) return;
     
     // Get all item IDs in this stack.
     const stackItems = teamItems.filter(i => i.stackId === stackId);
     const itemIds = stackItems.map(i => i.id);
     
     // Update stack_id to null for all items.
-    const success = await window.teamClipboardAPI.updateStackId(itemIds, null);
+    const success = await window.sharedClipboardAPI.updateStackId(itemIds, null);
     if (success) {
       // Update local state.
       setTeamItems(prev => prev.map(i => 
@@ -1059,8 +1059,8 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
   // Build List Rows (group items into stacks)
   // ---------------------------------------------------------------------------
 
-  const buildListRows = useCallback((): TeamListRow[] => {
-    const rows: TeamListRow[] = [];
+  const buildListRows = useCallback((): SharedListRow[] => {
+    const rows: SharedListRow[] = [];
     const seenStackIds = new Set<string>();
 
     // Filter items by search query if present.
@@ -1088,7 +1088,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
           const textCount = stackItems.filter(i => i.type === 'text' || i.type === 'transcript').length;
           
           // Build stack info.
-          const stackInfo: TeamStackInfo = {
+          const stackInfo: SharedStackInfo = {
             stackId: item.stackId,
             itemCount: stackItems.length,
             imageCount,
@@ -1486,7 +1486,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
           const newStackId = crypto.randomUUID();
           const itemIds = Array.from(selectedIds);
           (async () => {
-            const success = await window.teamClipboardAPI?.updateStackId(itemIds, newStackId);
+            const success = await window.sharedClipboardAPI?.updateStackId(itemIds, newStackId);
             if (success) {
               // Update local state to reflect the new stack.
               setTeamItems(prev => prev.map(i => 
@@ -2073,7 +2073,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
                 onClick={async () => {
                   const newStackId = crypto.randomUUID();
                   const itemIds = Array.from(selectedIds);
-                  const success = await window.teamClipboardAPI?.updateStackId(itemIds, newStackId);
+                  const success = await window.sharedClipboardAPI?.updateStackId(itemIds, newStackId);
                   if (success) {
                     setTeamItems(prev => prev.map(i => 
                       itemIds.includes(i.id) ? { ...i, stackId: newStackId } : i

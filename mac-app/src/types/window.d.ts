@@ -474,9 +474,9 @@ interface AuthAPI {
 }
 
 /**
- * Team clipboard item from Supabase.
+ * Shared clipboard item from Supabase.
  */
-interface TeamClipboardItem {
+interface SharedClipboardItem {
   id: string;
   userId: string;
   sharedByEmail: string | null;
@@ -503,7 +503,7 @@ interface TeamClipboardItem {
 /**
  * Team stack info.
  */
-interface TeamStackInfo {
+interface SharedStackInfo {
   stackId: string;
   name: string | null;
   itemCount: number;
@@ -517,7 +517,7 @@ interface TeamStackInfo {
 /**
  * Team clipboard query options.
  */
-interface TeamClipboardQueryOptions {
+interface SharedClipboardQueryOptions {
   type?: ClipboardItemType;
   search?: string;
   limit?: number;
@@ -536,19 +536,19 @@ interface TeamMember {
 }
 
 /**
- * Team Clipboard API for shared clipboard.
+ * Shared Clipboard API for shared clipboard.
  */
-interface TeamClipboardAPI {
-  queryItems: (options?: TeamClipboardQueryOptions) => Promise<TeamClipboardItem[]>;
-  getItem: (id: string) => Promise<TeamClipboardItem | null>;
-  shareToTeam: (localItemId: number) => Promise<TeamClipboardItem | null>;
+interface SharedClipboardAPI {
+  queryItems: (options?: SharedClipboardQueryOptions) => Promise<SharedClipboardItem[]>;
+  getItem: (id: string) => Promise<SharedClipboardItem | null>;
+  shareToTeam: (localItemId: number) => Promise<SharedClipboardItem | null>;
   shareStackToTeam: (localItemIds: number[]) => Promise<string | null>;
   deleteItem: (id: string) => Promise<boolean>;
   updateStackId: (itemIds: string[], stackId: string | null) => Promise<boolean>;
   copyToPersonal: (teamItemId: string) => Promise<number | null>;
   copyStackToPersonal: (teamStackId: string) => Promise<number[]>;
-  getStacks: () => Promise<TeamStackInfo[]>;
-  onTeamItemAdded?: (callback: (item: TeamClipboardItem) => void) => () => void;
+  getStacks: () => Promise<SharedStackInfo[]>;
+  onTeamItemAdded?: (callback: (item: SharedClipboardItem) => void) => () => void;
   onTeamItemDeleted?: (callback: (id: string) => void) => () => void;
   // Team membership.
   getTeamMembers: () => Promise<TeamMember[]>;
@@ -677,7 +677,7 @@ declare global {
     onboardingAPI?: OnboardingAPI;
     todoAPI?: TodoAPI;
     authAPI?: AuthAPI;
-    teamClipboardAPI?: TeamClipboardAPI;
+    sharedClipboardAPI?: SharedClipboardAPI;
     socialAPI?: SocialAPI;
     platform?: PlatformInfo;
   }

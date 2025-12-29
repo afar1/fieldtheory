@@ -175,14 +175,14 @@ export interface ContinuousContextState {
 }
 
 // =============================================================================
-// Team Clipboard Types - Shared clipboard items for team collaboration.
+// Shared Clipboard Types - Shared clipboard items for collaboration.
 // =============================================================================
 
 /**
- * Team clipboard item stored in Supabase.
- * Similar to ClipboardItem but with team-specific fields.
+ * Shared clipboard item stored in Supabase.
+ * Similar to ClipboardItem but with shared-specific fields.
  */
-export interface TeamClipboardItem {
+export interface SharedClipboardItem {
   id: string; // UUID from Supabase.
   userId: string; // Who shared this item.
   sharedByEmail: string | null; // Display name of who shared it.
@@ -205,9 +205,9 @@ export interface TeamClipboardItem {
 }
 
 /**
- * Summary info for a team stack.
+ * Summary info for a shared stack.
  */
-export interface TeamStackInfo {
+export interface SharedStackInfo {
   stackId: string;
   name: string | null;
   itemCount: number;
@@ -219,9 +219,9 @@ export interface TeamStackInfo {
 }
 
 /**
- * Options for querying team clipboard.
+ * Options for querying shared clipboard.
  */
-export interface TeamClipboardQueryOptions {
+export interface SharedClipboardQueryOptions {
   type?: ClipboardItemType;
   search?: string;
   limit?: number;
@@ -230,9 +230,9 @@ export interface TeamClipboardQueryOptions {
 }
 
 /**
- * IPC channels for team clipboard functionality.
+ * IPC channels for shared clipboard functionality.
  */
-export const TeamClipboardIPCChannels = {
+export const SharedClipboardIPCChannels = {
   // Query team items.
   QUERY_TEAM_ITEMS: 'teamClipboard:queryItems',
   GET_TEAM_ITEM: 'teamClipboard:getItem',
