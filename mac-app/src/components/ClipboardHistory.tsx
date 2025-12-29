@@ -10,7 +10,7 @@ import TodoView from './TodoView';
 import TeamView from './TeamView';
 import DMsView from './DMsView';
 import PopularCommands from './PopularCommands';
-import SketchView from './SketchView';
+import SketchView, { SketchViewHandle } from './SketchView';
 import { useTheme } from '../contexts/ThemeContext';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
@@ -376,7 +376,7 @@ export default function ClipboardHistory() {
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
   
-  // Team clipboard state (sharing to team from clipboard view).
+  // Shared clipboard state (sharing to shared clipboard from clipboard view).
   const [sharingToTeam, setSharingToTeam] = useState<number | null>(null);
   const [sharedToTeamId, setSharedToTeamId] = useState<string | null>(null); // For success flash.
   
@@ -495,6 +495,7 @@ export default function ClipboardHistory() {
   };
   
   const [isRecording, setIsRecording] = useState(false);
+  const [transcriptionStatus, setTranscriptionStatus] = useState<'idle' | 'recording' | 'transcribing'>('idle');
   
   // Audio state for Priority Mic dropdown.
   type AudioDevice = { id: string; name: string; isInput: boolean };
@@ -514,6 +515,7 @@ export default function ClipboardHistory() {
   } | null>(null);
   const [hasUnreadDMs, setHasUnreadDMs] = useState(false);
   const [teamSyncing, setTeamSyncing] = useState(false);
+  const [sketchHasChanges, setSketchHasChanges] = useState(false);
   const [lastSeenItemId, setLastSeenItemId] = useState<number | string | null>(() => {
     try {
       const stored = localStorage.getItem('lastSeenItemId');
@@ -552,6 +554,7 @@ export default function ClipboardHistory() {
     
     const cleanup = window.transcribeAPI.onStatusChanged((status) => {
       setIsRecording(status === 'recording');
+      setTranscriptionStatus(status);
     });
     
     return cleanup;
@@ -618,6 +621,7 @@ export default function ClipboardHistory() {
     
     return unsubscribe;
   }, [isRecording]);
+  
   
   // Close mic dropdown when clicking outside.
   useEffect(() => {
@@ -750,6 +754,7 @@ export default function ClipboardHistory() {
   
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const sketchViewRef = useRef<SketchViewHandle>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
   const searchDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -801,21 +806,21 @@ export default function ClipboardHistory() {
     }
   }, [isMacOS, debouncedSearchQuery, offset, stacks, sourceFilter]);
 
-  // Share an item to the team clipboard.
+  // Share an item to the shared clipboard.
   const shareToTeam = useCallback(async (localItemId: number) => {
-    if (!window.teamClipboardAPI) return;
+    if (!window.sharedClipboardAPI) return;
     setSharingToTeam(localItemId);
-    await window.teamClipboardAPI.shareToTeam(localItemId);
+    await window.sharedClipboardAPI.shareToTeam(localItemId);
     setSharingToTeam(null);
     // Show success flash.
     setSharedToTeamId(`item-${localItemId}`);
     setTimeout(() => setSharedToTeamId(null), 1500);
   }, []);
 
-  // Share a stack to the team clipboard.
+  // Share a stack to the shared clipboard.
   const shareStackToTeam = useCallback(async (itemIds: number[]) => {
-    if (!window.teamClipboardAPI) return;
-    await window.teamClipboardAPI.shareStackToTeam(itemIds);
+    if (!window.sharedClipboardAPI) return;
+    await window.sharedClipboardAPI.shareStackToTeam(itemIds);
     // Show success flash.
     setSharedToTeamId(`stack-${itemIds.join(',')}`);
     setTimeout(() => setSharedToTeamId(null), 1500);
@@ -1249,8 +1254,21 @@ export default function ClipboardHistory() {
           }
           e.preventDefault();
 
-          if (hasAlt) {
-            // Option+Tab - cycle through target apps.
+          if (hasAlt && hasShift) {
+            // Shift+Option+Tab - cycle backwards through target apps.
+            if (targetAppInfo.runningApps.length === 0) {
+              return;
+            }
+            const prevIndex = (targetAppInfo.targetAppIndex - 1 + targetAppInfo.runningApps.length) % targetAppInfo.runningApps.length;
+            const newApp = targetAppInfo.runningApps[prevIndex];
+            setTargetAppInfo(prev => ({
+              ...prev,
+              targetApp: newApp,
+              targetAppIndex: prevIndex,
+            }));
+            window.clipboardAPI?.setTargetApp(newApp);
+          } else if (hasAlt) {
+            // Option+Tab - cycle forwards through target apps.
             if (targetAppInfo.runningApps.length === 0) {
               return;
             }
@@ -1750,8 +1768,8 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // I or Cmd+Enter: Improve the selected item/stack
-      if ((key === 'i' || (key === 'Enter' && hasMeta)) && !hasShift && selectedIds.size === 0) {
+      // I: Improve the selected item/stack
+      if (key === 'i' && !hasShift && !hasMeta && !hasCtrl && !hasAlt && selectedIds.size === 0) {
         // Skip if user is typing in an input field.
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
           return;
@@ -1857,8 +1875,9 @@ export default function ClipboardHistory() {
         
         // Default paste goes to previousApp (the app you were just in).
         // Option+Enter goes to targetApp (the user-selected target via Option+Tab).
+        // Fallback to previousApp if targetApp is not set.
         const pasteBundleId = hasAlt
-          ? targetAppInfo.targetApp?.bundleId
+          ? (targetAppInfo.targetApp?.bundleId ?? targetAppInfo.previousApp?.bundleId)
           : targetAppInfo.previousApp?.bundleId;
         
         if (selectedIds.size > 0) {
@@ -1921,8 +1940,21 @@ export default function ClipboardHistory() {
         }
         e.preventDefault();
 
-        if (hasAlt) {
-          // Option+Tab - cycle through target apps.
+        if (hasAlt && hasShift) {
+          // Shift+Option+Tab - cycle backwards through target apps.
+          if (targetAppInfo.runningApps.length === 0) {
+            return;
+          }
+          const prevIndex = (targetAppInfo.targetAppIndex - 1 + targetAppInfo.runningApps.length) % targetAppInfo.runningApps.length;
+          const newApp = targetAppInfo.runningApps[prevIndex];
+          setTargetAppInfo(prev => ({
+            ...prev,
+            targetApp: newApp,
+            targetAppIndex: prevIndex,
+          }));
+          window.clipboardAPI?.setTargetApp(newApp);
+        } else if (hasAlt) {
+          // Option+Tab - cycle forwards through target apps.
           if (targetAppInfo.runningApps.length === 0) {
             return;
           }
@@ -2156,8 +2188,9 @@ export default function ClipboardHistory() {
       // Normal click: paste to previousApp (the app you were just in).
       // Option+click: paste to targetApp (the user-selected target via Option+Tab).
       const hasAlt = e?.altKey;
+      // Fallback to previousApp if targetApp is not set.
       const pasteBundleId = hasAlt
-        ? targetAppInfo.targetApp?.bundleId
+        ? (targetAppInfo.targetApp?.bundleId ?? targetAppInfo.previousApp?.bundleId)
         : targetAppInfo.previousApp?.bundleId;
       
       // If there's an improved version, paste that instead
@@ -2312,16 +2345,15 @@ export default function ClipboardHistory() {
           // Native window roundedCorners handles the border radius.
         }}
       >
-        <span style={{ 
-          fontSize: '12px', 
-          fontWeight: 400, 
-          fontFamily: '"Inter", sans-serif',
-          color: '#333333',
-          letterSpacing: '0.5px',
-          marginRight: 'auto',
-        }}>
-          Field Theory
-        </span>
+        <img 
+          src={theme.isDark ? "field-theory-logo.png" : "field-theory-log(blk).png"} 
+          alt="Field Theory" 
+          style={{ 
+            height: '20px',
+            width: 'auto',
+            marginRight: 'auto',
+          }}
+        />
         
         {/* Sign in button when not authenticated */}
         {!showSettings && !authSession?.user?.email && (
@@ -2348,23 +2380,49 @@ export default function ClipboardHistory() {
           </button>
         )}
         
-        {/* Signed in indicator - clickable to open settings */}
+        {/* Signed in indicator and Priority Mic - with proper spacing */}
         {!showSettings && authSession?.user?.email && (
-          <span
-            onClick={() => setShowSettings(true)}
+          <div
             style={{
-              fontSize: '10px',
-              color: theme.textSecondary,
-              opacity: 0.7,
-              cursor: 'pointer',
-              marginRight: '12px',
+              display: 'flex',
+              alignItems: 'center',
               // @ts-ignore - prevent drag
               WebkitAppRegion: 'no-drag',
             }}
-            title="Click to open Settings"
           >
-            {authSession.user.email === 'andrew.mfarah@gmail.com' ? 'A. Farah  |  ' : authSession.user.email}
-          </span>
+            <span
+              onClick={() => setShowSettings(true)}
+              style={{
+                fontSize: '10px',
+                fontStyle: 'italic',
+                color: theme.textSecondary,
+                opacity: 0.7,
+                cursor: 'pointer',
+              }}
+              title="Click to open Settings"
+            >
+              {authSession.user.email === 'andrew.mfarah@gmail.com' ? 'A. Farah' : authSession.user.email}
+            </span>
+            {audioDevices.length > 0 && (
+              <>
+                <span style={{ 
+                  fontSize: '10px', 
+                  color: theme.textSecondary,
+                  opacity: 0.5,
+                  margin: '0 10px',
+                }}>
+                  |
+                </span>
+                <span style={{ 
+                  fontSize: '10px', 
+                  color: theme.textSecondary,
+                  opacity: 0.7,
+                }}>
+                  Priority Mic:
+                </span>
+              </>
+            )}
+          </div>
         )}
         
         {/* Mic Lock dropdown */}
@@ -2375,18 +2433,12 @@ export default function ClipboardHistory() {
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
+              marginLeft: '6px',
               // @ts-ignore - prevent drag on dropdown
               WebkitAppRegion: 'no-drag',
             }} 
             data-mic-dropdown
           >
-            <span style={{ 
-              fontSize: '10px', 
-              color: theme.textSecondary,
-              opacity: 0.7,
-            }}>
-              Priority Mic:
-            </span>
             <button
               onClick={() => setShowMicDropdown(!showMicDropdown)}
               title="Priority Mic"
@@ -2516,7 +2568,7 @@ export default function ClipboardHistory() {
                 setHotMicEnabled(newState);
               }
             }}
-            title={`Hot Mic: ${hotMicEnabled ? 'ON' : 'OFF'} (H to toggle)`}
+            title={`Hot Mic: ${hotMicEnabled ? 'on' : 'off'} (H to toggle)`}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -2537,9 +2589,9 @@ export default function ClipboardHistory() {
               width: '6px', 
               height: '6px', 
               borderRadius: '50%',
-              backgroundColor: hotMicEnabled ? '#10b981' : theme.textSecondary,
+              backgroundColor: hotMicEnabled ? '#fff' : theme.textSecondary,
             }} />
-            Hot Mic {hotMicEnabled ? 'ON' : 'OFF'}
+            Hot Mic: {hotMicEnabled ? 'on' : 'off'}
           </button>
         )}
       </div>
@@ -2592,7 +2644,7 @@ export default function ClipboardHistory() {
                 }
               }}
             >
-              {mode === 'clipboard' ? 'Clipboard' : mode === 'commands' ? 'Popular commands' : mode === 'team' ? 'Team Clipboard' : mode === 'dms' ? 'Messages' : 'Tasks'}
+              {mode === 'clipboard' ? 'Clipboard' : mode === 'commands' ? 'Popular Commands' : mode === 'team' ? 'Shared Clipboard' : mode === 'dms' ? 'Messages' : 'Tasks'}
               {mode === 'dms' && hasUnreadDMs && viewMode !== 'dms' && (
                 <span style={{
                   position: 'absolute',
@@ -2674,6 +2726,131 @@ export default function ClipboardHistory() {
         </div>
       )}
 
+      {/* Draw mode navigation - show when in sketch mode */}
+      {!showSettings && viewMode === 'sketch' && (
+        <div 
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            padding: '0 16px 8px 16px',
+            marginBottom: '8px',
+            position: 'relative',
+          }}>
+          {/* Left: Cancel button - styled like Draw button */}
+          <button
+            onClick={handleSketchClose}
+            tabIndex={0}
+            style={{
+              padding: '6px 8px',
+              fontSize: '10px',
+              fontWeight: 500,
+              backgroundColor: 'transparent',
+              color: theme.textSecondary,
+              border: `1px solid ${theme.border}`,
+              borderRadius: '4px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              outline: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
+              e.currentTarget.style.borderColor = theme.text;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+              e.currentTarget.style.borderColor = theme.border;
+            }}
+          >
+            cancel <KeyCap small>esc</KeyCap>
+          </button>
+          
+          {/* Center: Draw header */}
+          <span
+            style={{
+              position: 'absolute',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              fontSize: '12px',
+              fontWeight: 600,
+              color: theme.text,
+            }}
+          >
+            Draw
+          </span>
+          
+          {/* Right: Save buttons - styled exactly like cancel button */}
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+              onClick={() => {
+                sketchViewRef.current?.save(false);
+              }}
+              disabled={!sketchHasChanges}
+              tabIndex={0}
+              style={{
+                padding: '6px 8px',
+                fontSize: '10px',
+                fontWeight: 500,
+                backgroundColor: 'transparent',
+                color: theme.textSecondary,
+                opacity: sketchHasChanges ? 1 : 0.5,
+                border: `1px solid ${theme.border}`,
+                borderRadius: '4px',
+                cursor: sketchHasChanges ? 'pointer' : 'default',
+                transition: 'all 0.15s ease',
+                outline: 'none',
+              }}
+              onMouseEnter={(e) => {
+                if (sketchHasChanges) {
+                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
+                  e.currentTarget.style.borderColor = theme.text;
+                }
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+                e.currentTarget.style.borderColor = theme.border;
+              }}
+            >
+              save
+            </button>
+            <button
+              onClick={() => {
+                sketchViewRef.current?.save(true);
+              }}
+              disabled={!sketchHasChanges}
+              tabIndex={0}
+              style={{
+                padding: '6px 8px',
+                fontSize: '10px',
+                fontWeight: 500,
+                backgroundColor: 'transparent',
+                color: theme.textSecondary,
+                opacity: sketchHasChanges ? 1 : 0.5,
+                border: `1px solid ${theme.border}`,
+                borderRadius: '4px',
+                cursor: sketchHasChanges ? 'pointer' : 'default',
+                transition: 'all 0.15s ease',
+                outline: 'none',
+              }}
+              onMouseEnter={(e) => {
+                if (sketchHasChanges) {
+                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
+                  e.currentTarget.style.borderColor = theme.text;
+                }
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+                e.currentTarget.style.borderColor = theme.border;
+              }}
+            >
+              save & paste
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Conditionally show Settings, Todo View, Team View, DMs View, or Clipboard History */}
       {showSettings ? (
         <SettingsPanel />
@@ -2687,6 +2864,7 @@ export default function ClipboardHistory() {
         <PopularCommands />
       ) : viewMode === 'sketch' ? (
         <SketchView
+          ref={sketchViewRef}
           onSave={handleSketchSave}
           onClose={handleSketchClose}
           existingSketch={editingSketchItem ? {
@@ -2696,6 +2874,8 @@ export default function ClipboardHistory() {
             height: editingSketchItem.imageHeight || undefined,
           } : null}
           backgroundImage={sketchBackgroundImage}
+          hideHeader={true}
+          onHasChangesChange={setSketchHasChanges}
         />
       ) : (
         <div 
@@ -2869,7 +3049,7 @@ export default function ClipboardHistory() {
                     gap: '4px',
                   }}
                 >
-                  {sharingToTeam !== null ? 'Sharing...' : 'share to team'} <KeyCap>t</KeyCap>
+                  {sharingToTeam !== null ? 'Sharing...' : 'share'} <KeyCap>t</KeyCap>
                 </button>
                 {selectedIds.size > 1 && (
                   <button
@@ -3074,8 +3254,9 @@ export default function ClipboardHistory() {
                       // Normal click: paste to previousApp (the app you were just in).
                       // Option+click: paste to targetApp (user-selected via Option+Tab).
                       const hasAlt = e.altKey;
+                      // Fallback to previousApp if targetApp is not set.
                       const pasteBundleId = hasAlt
-                        ? targetAppInfo.targetApp?.bundleId
+                        ? (targetAppInfo.targetApp?.bundleId ?? targetAppInfo.previousApp?.bundleId)
                         : targetAppInfo.previousApp?.bundleId;
                       
                       // If there's an improved version, paste that instead
@@ -3097,7 +3278,9 @@ export default function ClipboardHistory() {
                           ? theme.selectedBg 
                           : selectedIndex === index 
                             ? theme.bgSecondary 
-                            : 'transparent',
+                            : hoveredRowIndex === index
+                              ? (theme.isDark ? 'rgba(255,255,255,0.05)' : '#f9f9f9')
+                              : (theme.isDark ? 'rgba(255,255,255,0.03)' : '#ffffff'),
                       // J/K highlight gets darker gray borders for definition
                       borderTop: selectedIndex === index ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
                       borderBottom: selectedIndex === index ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : `1px solid ${theme.border}`,
@@ -3452,7 +3635,7 @@ export default function ClipboardHistory() {
                             onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                           >
-                            {improvingStackId === stack.stackId ? 'improving...' : 'improve'} <KeyCap>⌘</KeyCap><KeyCap>↵</KeyCap>
+                            {improvingStackId === stack.stackId ? 'improving...' : 'improve'} <KeyCap>I</KeyCap>
                           </button>
                         )}
                         {/* Share to Team button */}
@@ -3504,8 +3687,9 @@ export default function ClipboardHistory() {
                             // Normal click: paste to previousApp.
                             // Option+click: paste to targetApp.
                             const hasAlt = e.altKey;
+                            // Fallback to previousApp if targetApp is not set.
                             const pasteBundleId = hasAlt
-                              ? targetAppInfo.targetApp?.bundleId
+                              ? (targetAppInfo.targetApp?.bundleId ?? targetAppInfo.previousApp?.bundleId)
                               : targetAppInfo.previousApp?.bundleId;
                             
                             // Paste stack content
@@ -3588,7 +3772,13 @@ export default function ClipboardHistory() {
                     onClick={(e) => handleItemClick(item, index, e)}
                     style={{
                       padding: '12px 16px',
-                      backgroundColor: isInStack ? theme.selectedBg : isRowSelected ? theme.bgSecondary : 'transparent',
+                      backgroundColor: isInStack 
+                        ? theme.selectedBg 
+                        : isRowSelected 
+                          ? theme.bgSecondary 
+                          : hoveredRowIndex === index
+                            ? (theme.isDark ? 'rgba(255,255,255,0.05)' : '#f9f9f9')
+                            : (theme.isDark ? 'rgba(255,255,255,0.03)' : '#ffffff'),
                       // J/K highlight gets darker gray borders for definition
                       borderTop: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
                       borderBottom: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : `1px solid ${theme.border}`,
@@ -4028,7 +4218,7 @@ export default function ClipboardHistory() {
                           onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                           onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
-                          {improvingStackId === `item-${item.id}` ? 'improving...' : (item.improvedContent ? 're-improve' : 'improve')} <KeyCap>⌘</KeyCap><KeyCap>↵</KeyCap>
+                          {improvingStackId === `item-${item.id}` ? 'improving...' : (item.improvedContent ? 're-improve' : 'improve')} <KeyCap>I</KeyCap>
                         </button>
                       )}
                       {/* Edit Sketch button - only for sketch items */}
@@ -4451,13 +4641,13 @@ export default function ClipboardHistory() {
           <div style={{ flex: 1 }} />
         )}
 
-        {/* Center: Recording state indicator with tooltip */}
+        {/* Center: Recording/Transcribing state indicator with tooltip */}
         <div 
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', position: 'relative' }}
-          onMouseEnter={() => isRecording && setShowRecordingTooltip(true)}
+          onMouseEnter={() => transcriptionStatus === 'recording' && setShowRecordingTooltip(true)}
           onMouseLeave={() => setShowRecordingTooltip(false)}
         >
-          {isRecording && (
+          {transcriptionStatus === 'recording' && (
             <>
               <span
                 style={{
@@ -4509,6 +4699,20 @@ export default function ClipboardHistory() {
                   />
                 </div>
               )}
+            </>
+          )}
+          {transcriptionStatus === 'transcribing' && (
+            <>
+              <span
+                style={{
+                  width: '6px',
+                  height: '6px',
+                  backgroundColor: '#af52de',
+                  borderRadius: '50%',
+                  animation: 'pulse 1.5s ease-in-out infinite',
+                }}
+              />
+              <span style={{ fontSize: '9px', fontWeight: 500, color: '#af52de', cursor: 'help' }}>Transcribing</span>
             </>
           )}
         </div>
@@ -4600,7 +4804,7 @@ export default function ClipboardHistory() {
               <span>down <KeyCap>↓</KeyCap><KeyCap>j</KeyCap></span>
               <span>help <KeyCap>shift</KeyCap><KeyCap>?</KeyCap></span>
               
-              <span>improve <KeyCap>⌘</KeyCap><KeyCap>↵</KeyCap></span>
+              <span>improve <KeyCap>I</KeyCap></span>
               <span>paste <KeyCap>↵</KeyCap></span>
               
               <span>preview <KeyCap>space</KeyCap></span>

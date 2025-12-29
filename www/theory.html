@@ -12,11 +12,11 @@
   <!-- Navigation -->
   <nav class="nav">
     <div class="container nav-inner">
-      <a href="/" class="nav-logo">Field Theory</a>
+      <a href="/" class="nav-logo"><img id="nav-logo-img" src="images/field-theory-log(blk).png" alt="Field Theory" class="nav-logo-img"></a>
       <ul class="nav-links">
         <li><a href="theory.html">Theory</a></li>
-        <li><a href="pricing.html">Pricing</a></li>
-        <li><a href="download.html">Download</a></li>
+        <li><a href="/#pricing">Pricing</a></li>
+        <li><a href="/#download">Download</a></li>
         <li><button class="theme-toggle" onclick="toggleTheme()">◐</button></li>
       </ul>
     </div>
@@ -108,9 +108,9 @@
 
     <hr class="dotted-line">
 
-    <p style="text-align: center; margin-top: 3rem;">
-      <a href="download.html" class="btn btn-primary">Try Field Theory</a>
-    </p>
+      <p class="cta">
+        <a href="/#download" class="btn btn-primary">Try Field Theory</a>
+      </p>
   </main>
 
   <!-- Footer -->
@@ -119,8 +119,8 @@
       <p>&copy; 2024 Field Theory</p>
       <ul class="footer-links">
         <li><a href="theory.html">Theory</a></li>
-        <li><a href="pricing.html">Pricing</a></li>
-        <li><a href="download.html">Download</a></li>
+        <li><a href="/#pricing">Pricing</a></li>
+        <li><a href="/#download">Download</a></li>
       </ul>
     </div>
   </footer>
@@ -133,8 +133,23 @@
 
     function toggleTheme() {
       document.body.classList.toggle('dark');
-      localStorage.setItem('theme', document.body.classList.contains('dark') ? 'dark' : 'light');
+      const isDark = document.body.classList.contains('dark');
+      localStorage.setItem('theme', isDark ? 'dark' : 'light');
+      // Update logo based on theme
+      const logoImg = document.getElementById('nav-logo-img');
+      if (logoImg) {
+        logoImg.src = isDark ? 'images/field-theory-logo.png' : 'images/field-theory-log(blk).png';
+      }
     }
+    
+    // Update logo on page load based on saved theme
+    (function() {
+      const isDark = document.body.classList.contains('dark');
+      const logoImg = document.getElementById('nav-logo-img');
+      if (logoImg) {
+        logoImg.src = isDark ? 'images/field-theory-logo.png' : 'images/field-theory-log(blk).png';
+      }
+    })();
   </script>
 
 </body>
