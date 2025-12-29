@@ -2643,7 +2643,7 @@ export default function ClipboardHistory() {
                 }
               }}
             >
-              {mode === 'clipboard' ? 'Clipboard' : mode === 'commands' ? 'Popular Commands' : mode === 'team' ? 'Shared Clipboard' : mode === 'dms' ? 'Messages' : 'Tasks'}
+              {mode === 'clipboard' ? 'Context' : mode === 'commands' ? 'Popular Commands' : mode === 'team' ? 'Shared Context' : mode === 'dms' ? 'Messages' : 'Tasks'}
               {mode === 'dms' && hasUnreadDMs && viewMode !== 'dms' && (
                 <span style={{
                   position: 'absolute',
@@ -3634,7 +3634,7 @@ export default function ClipboardHistory() {
                             onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                           >
-                            {improvingStackId === stack.stackId ? 'improving...' : 'improve'} <KeyCap>I</KeyCap>
+                            {improvingStackId === stack.stackId ? 'improving...' : 'improve'} <KeyCap>i</KeyCap>
                           </button>
                         )}
                         {/* Share to Team button */}
@@ -3676,6 +3676,68 @@ export default function ClipboardHistory() {
                           ) : (
                             <>share <KeyCap>t</KeyCap></>
                           )}
+                        </button>
+                        {/* DM button */}
+                        <button
+                          tabIndex={-1}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedIndex(index);
+                            setDmRecipientQuery('');
+                            setSelectedDmContactIndex(0);
+                            setShowDMModal(true);
+                          }}
+                          style={{
+                            padding: '4px 6px',
+                            fontSize: '10px',
+                            fontWeight: 500,
+                            backgroundColor: 'transparent',
+                            color: theme.textSecondary,
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            transition: 'background-color 0.15s ease',
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        >
+                          message <KeyCap>m</KeyCap>
+                        </button>
+                        {/* Delete button */}
+                        <button
+                          tabIndex={-1}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            const itemsToDelete: typeof items = [];
+                            for (const stackItem of stackItems) {
+                              const itemToDelete = await window.clipboardAPI?.getItem(stackItem.id);
+                              if (itemToDelete) {
+                                itemsToDelete.push(itemToDelete);
+                              }
+                            }
+                            setDeletedItems(itemsToDelete);
+                            for (const stackItem of stackItems) {
+                              await window.clipboardAPI?.deleteItem(stackItem.id);
+                            }
+                            loadItems(true);
+                          }}
+                          style={{
+                            padding: '4px 6px',
+                            fontSize: '10px',
+                            fontWeight: 500,
+                            backgroundColor: 'transparent',
+                            color: theme.textSecondary,
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            transition: 'background-color 0.15s ease',
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        >
+                          delete <KeyCap>⌫</KeyCap>
                         </button>
                         {/* Paste hint button - rightmost */}
                         <button
@@ -3724,11 +3786,27 @@ export default function ClipboardHistory() {
                   {/* New items separator - show below last seen item if there are newer items above */}
                   {lastSeenItemId === stack.stackId && index > 0 && (
                     <div style={{
-                      height: '1px',
-                      backgroundColor: theme.border,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
                       margin: '8px 16px',
-                      opacity: 0.4,
-                    }} />
+                    }}>
+                      <div style={{ flex: 1, height: '1px', backgroundColor: theme.border, opacity: 0.4 }} />
+                      <span style={{
+                        fontSize: '9px',
+                        color: theme.textSecondary,
+                        opacity: 0.6,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}>
+                        <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="18 15 12 9 6 15" />
+                        </svg>
+                        context collected since last paste
+                      </span>
+                      <div style={{ flex: 1, height: '1px', backgroundColor: theme.border, opacity: 0.4 }} />
+                    </div>
                   )}
                 </div>
               );
@@ -4217,7 +4295,7 @@ export default function ClipboardHistory() {
                           onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                           onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
-                          {improvingStackId === `item-${item.id}` ? 'improving...' : (item.improvedContent ? 're-improve' : 'improve')} <KeyCap>I</KeyCap>
+                          {improvingStackId === `item-${item.id}` ? 'improving...' : (item.improvedContent ? 're-improve' : 'improve')} <KeyCap>i</KeyCap>
                         </button>
                       )}
                       {/* Edit Sketch button - only for sketch items */}
@@ -4286,6 +4364,62 @@ export default function ClipboardHistory() {
                         ) : (
                           <>{sharingToTeam === item.id ? 'sharing...' : 'share'} <KeyCap>t</KeyCap></>
                         )}
+                      </button>
+                      {/* DM button */}
+                      <button
+                        tabIndex={-1}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedIndex(index);
+                          setDmRecipientQuery('');
+                          setSelectedDmContactIndex(0);
+                          setShowDMModal(true);
+                        }}
+                        style={{
+                          padding: '4px 6px',
+                          fontSize: '10px',
+                          fontWeight: 500,
+                          backgroundColor: 'transparent',
+                          color: theme.textSecondary,
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          transition: 'background-color 0.15s ease',
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                      >
+                        message <KeyCap>m</KeyCap>
+                      </button>
+                      {/* Delete button */}
+                      <button
+                        tabIndex={-1}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          const itemToDelete = await window.clipboardAPI?.getItem(item.id);
+                          if (itemToDelete) {
+                            setDeletedItems([itemToDelete]);
+                          }
+                          await window.clipboardAPI?.deleteItem(item.id);
+                          loadItems(true);
+                        }}
+                        style={{
+                          padding: '4px 6px',
+                          fontSize: '10px',
+                          fontWeight: 500,
+                          backgroundColor: 'transparent',
+                          color: theme.textSecondary,
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          transition: 'background-color 0.15s ease',
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                      >
+                        delete <KeyCap>⌫</KeyCap>
                       </button>
                       {/* Preview button - only for images */}
                       {item.imageData && (
@@ -4381,11 +4515,27 @@ export default function ClipboardHistory() {
                   {/* New items separator - show below last seen item if there are newer items above */}
                   {lastSeenItemId === item.id && index > 0 && (
                     <div style={{
-                      height: '1px',
-                      backgroundColor: theme.border,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
                       margin: '8px 16px',
-                      opacity: 0.4,
-                    }} />
+                    }}>
+                      <div style={{ flex: 1, height: '1px', backgroundColor: theme.border, opacity: 0.4 }} />
+                      <span style={{
+                        fontSize: '9px',
+                        color: theme.textSecondary,
+                        opacity: 0.6,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}>
+                        <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="18 15 12 9 6 15" />
+                        </svg>
+                        context collected since last paste
+                      </span>
+                      <div style={{ flex: 1, height: '1px', backgroundColor: theme.border, opacity: 0.4 }} />
+                    </div>
                   )}
                 </div>
               );
@@ -4803,7 +4953,7 @@ export default function ClipboardHistory() {
               <span>down <KeyCap>↓</KeyCap><KeyCap>j</KeyCap></span>
               <span>help <KeyCap>shift</KeyCap><KeyCap>?</KeyCap></span>
               
-              <span>improve <KeyCap>I</KeyCap></span>
+              <span>improve <KeyCap>i</KeyCap></span>
               <span>paste <KeyCap>↵</KeyCap></span>
               
               <span>preview <KeyCap>space</KeyCap></span>
