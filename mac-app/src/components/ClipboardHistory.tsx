@@ -771,28 +771,39 @@ export default function ClipboardHistory() {
   const feedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [containerWidth, setContainerWidth] = useState<number | null>(null);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const [hasItemsAbove, setHasItemsAbove] = useState(false);
   const ITEMS_PER_PAGE = 50;
 
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
 
-  // Push action to undo stack (clears redo stack per standard behavior)
   const pushUndo = useCallback((action: UndoAction) => {
     setUndoStack(prev => [...prev.slice(-(MAX_UNDO - 1)), action]);
-    setRedoStack([]); // Clear redo on new action
+    setRedoStack([]);
   }, []);
 
-  // Show transient action feedback in header
   const showFeedback = useCallback((message: string) => {
     if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
     setActionFeedback(message);
     feedbackTimeoutRef.current = setTimeout(() => setActionFeedback(null), 3000);
   }, []);
 
-  // Cleanup feedback timeout on unmount
   useEffect(() => {
     return () => {
       if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
     };
+  }, []);
+  
+  // Track scroll position for "more items above" indicator.
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    
+    const handleScroll = () => {
+      setHasItemsAbove(list.scrollTop > 20);
+    };
+    
+    list.addEventListener('scroll', handleScroll, { passive: true });
+    return () => list.removeEventListener('scroll', handleScroll);
   }, []);
 
   // Load items from clipboard history plus stack info.
@@ -1310,6 +1321,12 @@ export default function ClipboardHistory() {
       // When not in clipboard view, only handle global shortcuts (Tab for view switching).
       // Let TeamView/TodoView/DMsView handle their own navigation and preview.
       if (viewMode !== 'clipboard') {
+        // In sketch mode, let SketchView handle Escape (returns to clipboard view).
+        // Don't close the window - SketchView's handler calls handleSketchClose.
+        if (viewMode === 'sketch' && key === 'Escape') {
+          return;
+        }
+        
         // Tab/Shift+Tab cycles through view modes (global shortcut).
         // But allow normal Tab navigation when focused on tab buttons themselves.
         if (key === 'Tab' && !hasCtrl && !hasMeta) {
@@ -2160,18 +2177,14 @@ export default function ClipboardHistory() {
         return;
       }
       
-      // Arrow keys when preview is open:
-      // Left/Right - navigate between images in stack only (stop at boundaries)
-      // Up/Down - change rows while keeping preview open
+      // Arrow keys when preview is open: L/R navigates within stack, U/D changes rows
       if (preview && stackPreviewItems.length > 1) {
-        // Left/Right - navigate within stack images only, stop at boundaries
         if (e.key === 'ArrowRight') {
           e.preventDefault();
           if (stackPreviewIndex < stackPreviewItems.length - 1) {
             setStackPreviewIndex(stackPreviewIndex + 1);
             setPreview(stackPreviewItems[stackPreviewIndex + 1]);
           }
-          // At last image - do nothing (stop at boundary)
           return;
         }
         if (e.key === 'ArrowLeft') {
@@ -2180,11 +2193,9 @@ export default function ClipboardHistory() {
             setStackPreviewIndex(stackPreviewIndex - 1);
             setPreview(stackPreviewItems[stackPreviewIndex - 1]);
           }
-          // At first image - do nothing (stop at boundary)
           return;
         }
         
-        // Up/Down - change rows while keeping preview open
         if (e.key === 'ArrowDown') {
           e.preventDefault();
           const nextRowIndex = Math.min(selectedIndex + 1, listRows.length - 1);
@@ -3431,6 +3442,38 @@ export default function ClipboardHistory() {
             onDragOver={handleDragOver}
             onDragEnd={handleDragEnd}
           >
+          <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            {/* Scroll indicator: more items above */}
+            {hasItemsAbove && (
+              <div
+                onClick={() => listRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: 28,
+                  background: `linear-gradient(to bottom, ${theme.bg}ee, ${theme.bg}00)`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  zIndex: 10,
+                  cursor: 'pointer',
+                  pointerEvents: 'auto',
+                }}
+              >
+                <span style={{
+                  fontSize: 10,
+                  color: theme.textSecondary,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}>
+                  <span style={{ transform: 'rotate(180deg)', display: 'inline-block' }}>▼</span>
+                  scroll to top
+                </span>
+              </div>
+            )}
           <div
             ref={listRef}
             style={{
@@ -4852,6 +4895,7 @@ export default function ClipboardHistory() {
             {loading ? 'Loading...' : 'Load More'}
           </button>
         )}
+        </div>
         </div>
 
         {/* Drag overlay - shows ghost element centered on cursor */}
