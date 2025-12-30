@@ -306,9 +306,11 @@ function handleDisplayRemoved(_event: Electron.Event, removedDisplay: Electron.D
   }
 }
 
+let displayMetricsDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
 /**
  * Handle display metrics changes - recalculate window position if needed.
- * When a display's resolution or position changes, we need to update the window position.
+ * Debounced since display changes fire many events in quick succession.
  */
 function handleDisplayMetricsChanged(_event: Electron.Event, _changedDisplay: Electron.Display): void {
   if (!clipboardHistoryWindow || !clipboardHistoryWindow.isVisible()) {
@@ -319,18 +321,20 @@ function handleDisplayMetricsChanged(_event: Electron.Event, _changedDisplay: El
     return;
   }
 
-  console.log('[ClipboardHistoryWindow] Display metrics changed, repositioning window');
-  
-  // Recalculate position - restoreClipboardHistoryBounds will handle finding the correct display
-  // or falling back to primary if the saved display ID no longer matches
-  const boundsToUse = restoreClipboardHistoryBounds();
-  if (boundsToUse) {
-    clipboardHistoryWindow.show(boundsToUse);
-  } else {
-    // If no saved bounds, window will use default position (cursor display)
-    // which is already handled by show() when called without bounds
-    clipboardHistoryWindow.show();
+  if (displayMetricsDebounceTimer) {
+    clearTimeout(displayMetricsDebounceTimer);
   }
+  
+  displayMetricsDebounceTimer = setTimeout(() => {
+    displayMetricsDebounceTimer = null;
+    if (!clipboardHistoryWindow || !clipboardHistoryWindow.isVisible()) return;
+    
+    console.log('[ClipboardHistoryWindow] Display metrics changed, repositioning window');
+    const boundsToUse = restoreClipboardHistoryBounds();
+    if (boundsToUse) {
+      clipboardHistoryWindow.reposition(boundsToUse);
+    }
+  }, 200);
 }
 
 /**

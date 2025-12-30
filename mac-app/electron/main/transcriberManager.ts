@@ -330,7 +330,6 @@ export class TranscriberManager extends EventEmitter {
       // Check for silence (empty or whitespace-only text)
       const trimmedText = text ? text.trim() : '';
       if (trimmedText.length === 0) {
-        // Silence detected - no paste needed
         console.log('[TranscriberManager] Silence detected - no paste');
         this.setStatus('idle');
         this.overlay.showStatus('No audio found');
@@ -769,12 +768,14 @@ export class TranscriberManager extends EventEmitter {
    * Skips paste if sketch mode is active to avoid pasting into Excalidraw.
    */
   async pasteStack(): Promise<void> {
+    const sketchModeActive = this.sketchModeChecker?.() ?? false;
+    
     if (!this.clipboardManager || this.currentStack.length === 0) {
       return;
     }
     
     // Skip paste if draw canvas is open - user can manually Cmd+V if needed.
-    if (this.sketchModeChecker?.()) {
+    if (sketchModeActive) {
       console.log('[TranscriberManager] Sketch mode active, skipping auto-paste');
       this.clearStack();
       return;
@@ -788,7 +789,11 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
-    for (const item of items) {
+    // Reverse order: paste newest items first (most recent at top).
+    // When building prompts over time, you want the latest context first.
+    const reversedItems = [...items].reverse();
+
+    for (const item of reversedItems) {
       if (item.type === 'text' || item.type === 'transcript') {
         clipboard.writeText(item.content || '');
         await this.pasteText();

@@ -236,6 +236,21 @@ export class ClipboardHistoryWindow {
   }
   
   /**
+   * Reposition the window without triggering show/focus/sound.
+   * Used for display metrics changes when the window is already visible.
+   */
+  reposition(bounds: { x: number; y: number; width: number; height: number }): void {
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.setBounds({
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+      });
+    }
+  }
+  
+  /**
    * Create the clipboard history window.
    * Uses native macOS vibrancy for blur effect (like Alfred/Spotlight).
    * Window is sized to dialog dimensions, not full-screen overlay.
