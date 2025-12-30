@@ -497,6 +497,9 @@ export default function ClipboardHistory() {
   const [isRecording, setIsRecording] = useState(false);
   const [transcriptionStatus, setTranscriptionStatus] = useState<'idle' | 'recording' | 'transcribing'>('idle');
   
+  // Toast message for paste failure feedback.
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  
   // Audio state for Priority Mic dropdown.
   type AudioDevice = { id: string; name: string; isInput: boolean };
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
@@ -555,6 +558,19 @@ export default function ClipboardHistory() {
     const cleanup = window.transcribeAPI.onStatusChanged((status) => {
       setIsRecording(status === 'recording');
       setTranscriptionStatus(status);
+    });
+    
+    return cleanup;
+  }, []);
+  
+  // Listen for paste failure to show in-app toast.
+  useEffect(() => {
+    if (!window.transcribeAPI?.onPasteFailed) return;
+    
+    const cleanup = window.transcribeAPI.onPasteFailed((message) => {
+      setToastMessage(message);
+      // Auto-dismiss after 3 seconds.
+      setTimeout(() => setToastMessage(null), 3000);
     });
     
     return cleanup;
@@ -2197,6 +2213,20 @@ export default function ClipboardHistory() {
       const pasteBundleId = hasAlt
         ? (targetAppInfo.targetApp?.bundleId ?? targetAppInfo.previousApp?.bundleId)
         : targetAppInfo.previousApp?.bundleId;
+      
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ClipboardHistory.tsx:handleItemClick',message:'paste attempt',data:{pasteBundleId,hasAlt,previousApp:targetAppInfo.previousApp?.name},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H6'})}).catch(()=>{});
+      // #endregion
+      
+      // If no target app to paste to, show toast and copy to clipboard only.
+      if (!pasteBundleId) {
+        // Copy to clipboard.
+        window.clipboardAPI?.copyItem?.(item.id);
+        // Show standalone toast window (visible even after this window closes).
+        window.clipboardAPI?.showToast?.('No target input field. Copied to clipboard.');
+        window.clipboardAPI?.closeWindow();
+        return;
+      }
       
       // If there's an improved version, paste that instead
       if (improveResult?.stackId === `item-${item.id}`) {
@@ -5581,6 +5611,29 @@ export default function ClipboardHistory() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+      
+      {/* Toast notification for paste failure */}
+      {toastMessage && (
+        <div
+          style={{
+            position: 'fixed',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            backgroundColor: theme.isDark ? 'rgba(0, 0, 0, 0.9)' : 'rgba(0, 0, 0, 0.85)',
+            color: '#fff',
+            padding: '12px 20px',
+            borderRadius: '8px',
+            fontSize: '13px',
+            fontWeight: 500,
+            boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+            zIndex: 10000,
+            animation: 'fadeIn 0.2s ease-out',
+          }}
+        >
+          {toastMessage}
         </div>
       )}
     </div>

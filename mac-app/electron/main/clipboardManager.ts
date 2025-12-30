@@ -1004,6 +1004,9 @@ export class ClipboardManager extends EventEmitter {
     // Set flag to prevent polling from picking up the screenshot while we're capturing it.
     this.screenshotInProgress = true;
     
+    // Emit event so transcriberManager can pause abandon hotkey during screenshot selection.
+    this.emit('screenshotStart');
+    
     try {
       if (region) {
         // Interactive selection mode: drag to select area
@@ -1040,6 +1043,7 @@ export class ClipboardManager extends EventEmitter {
           } catch (error) {
             console.warn('[ClipboardManager] Failed to read desktop screenshot or capture was cancelled');
             this.screenshotInProgress = false;
+            this.emit('screenshotEnd');
             return -1;
           }
         } else {
@@ -1048,6 +1052,7 @@ export class ClipboardManager extends EventEmitter {
           if (image.isEmpty()) {
             console.warn('[ClipboardManager] Screenshot capture cancelled or failed');
             this.screenshotInProgress = false;
+            this.emit('screenshotEnd');
             return -1;
           }
           imageBuffer = image.toPNG();
@@ -1060,6 +1065,7 @@ export class ClipboardManager extends EventEmitter {
         const id = await this.storeImage(image, imageBuffer, 'screenshot', undefined, stackId);
         
         this.screenshotInProgress = false;
+        this.emit('screenshotEnd');
         return id;
       } else {
         // Full screen capture
@@ -1083,6 +1089,7 @@ export class ClipboardManager extends EventEmitter {
           await fs.unlink(tempPath);
           
           this.screenshotInProgress = false;
+          this.emit('screenshotEnd');
           return id;
         } catch (error) {
           // Clean up temp file even on error
@@ -1090,14 +1097,24 @@ export class ClipboardManager extends EventEmitter {
             await fs.unlink(tempPath);
           } catch {}
           this.screenshotInProgress = false;
+          this.emit('screenshotEnd');
           throw error;
         }
       }
     } catch (error) {
       console.error('[ClipboardManager] Screenshot capture failed:', error);
       this.screenshotInProgress = false;
+      this.emit('screenshotEnd');
       return -1;
     }
+  }
+
+  /**
+   * Check if a screenshot capture is currently in progress.
+   * Used to prevent escape key from canceling recording while user is selecting screenshot region.
+   */
+  isScreenshotInProgress(): boolean {
+    return this.screenshotInProgress;
   }
 
   /**

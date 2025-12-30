@@ -492,6 +492,7 @@ export interface TranscribeAPI {
   onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
   onHotkeyChanged: (callback: (hotkey: string) => void) => () => void;
   onStackChanged: (callback: (count: number) => void) => () => void;
+  onPasteFailed: (callback: (message: string) => void) => () => void;
 }
 
 export interface VisionAPI {
@@ -536,6 +537,7 @@ export interface ClipboardAPI {
   onTargetAppInfo: (callback: (info: TargetAppInfo) => void) => () => void;
   saveBounds: (bounds: { x: number; y: number; width: number; height: number }) => Promise<void>;
   closeWindow: () => Promise<void>;
+  showToast: (message: string) => Promise<void>;
   
   // Stack operations for prompt stacking feature
   queryItemsByStackId: (stackId: string) => Promise<ClipboardItem[]>;
@@ -784,6 +786,18 @@ const transcribeAPI: TranscribeAPI = {
       ipcRenderer.removeListener('transcribe:stackChanged', handler);
     };
   },
+  
+  onPasteFailed: (callback: (message: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, message: string) => {
+      callback(message);
+    };
+
+    ipcRenderer.on('transcribe:pasteFailed', handler);
+
+    return () => {
+      ipcRenderer.removeListener('transcribe:pasteFailed', handler);
+    };
+  },
 };
 
 const clipboardAPI: ClipboardAPI = {
@@ -937,6 +951,10 @@ const clipboardAPI: ClipboardAPI = {
   closeWindow: async (): Promise<void> => {
     // Send IPC to main process to close the current window
     ipcRenderer.send('clipboard:closeWindow');
+  },
+  
+  showToast: async (message: string): Promise<void> => {
+    ipcRenderer.send('clipboard:showToast', message);
   },
 
   // Stack operations for prompt stacking feature
