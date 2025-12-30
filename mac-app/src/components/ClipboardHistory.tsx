@@ -1354,6 +1354,15 @@ export default function ClipboardHistory() {
         return;
       }
       
+      // Cmd+D - Open blank draw canvas
+      if (key === 'd' && hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+        e.preventDefault();
+        setEditingSketchItem(null);
+        setSketchBackgroundImage(null);
+        setViewMode('sketch');
+        return;
+      }
+      
       // D - Draw on image (open sketch editor on hovered/selected image)
       if (key === 'd' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
@@ -3486,21 +3495,21 @@ export default function ClipboardHistory() {
                                     transform: 'translate(-50%, -50%)',
                                     backgroundColor: 'rgba(0, 0, 0, 0.75)',
                                     color: '#fff',
-                                    padding: '6px 10px',
+                                    padding: '5px 8px',
                                     borderRadius: '6px',
-                                    fontSize: '10px',
+                                    fontSize: '9px',
                                     fontWeight: 500,
                                     pointerEvents: 'none',
                                     display: 'flex',
                                     flexDirection: 'column',
-                                    gap: '4px',
+                                    gap: '3px',
                                     alignItems: 'center',
                                   }}
                                 >
-                                  <span>Preview <KeyCap small>space</KeyCap></span>
-                                  <span>Draw <KeyCap small>d</KeyCap></span>
+                                  <span>preview <KeyCap small>space</KeyCap></span>
+                                  <span>draw <KeyCap small>d</KeyCap></span>
                                   {item.stackId && (
-                                    <span>Unstack image <KeyCap small>u</KeyCap></span>
+                                    <span>unstack <KeyCap small>u</KeyCap></span>
                                   )}
                                 </div>
                               )}
@@ -5024,7 +5033,9 @@ export default function ClipboardHistory() {
               <span>search <KeyCap>/</KeyCap></span>
               <span>stack <KeyCap>s</KeyCap></span>
               
-              <span>draw <KeyCap>d</KeyCap></span>
+              <span>draw on image <KeyCap>d</KeyCap></span>
+              <span>new draw <KeyCap>⌘</KeyCap><KeyCap>d</KeyCap></span>
+              
               <span>team share <KeyCap>t</KeyCap></span>
               
               <span>view <KeyCap>tab</KeyCap></span>
