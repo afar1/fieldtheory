@@ -1207,9 +1207,6 @@ function setupClipboardIPCHandlers(): void {
   });
   
   ipcMain.on('clipboard:showToast', async (_event, message: string) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.ts:showToast',message:'showToast IPC received',data:{message,toastWindowExists:!!toastWindow},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H6'})}).catch(()=>{});
-    // #endregion
     if (toastWindow) {
       toastWindow.show(message);
     }
@@ -2355,19 +2352,9 @@ function broadcastTranscribeEvents(): void {
   });
   
   transcriberManager.on('paste-failed', (message) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.ts:paste-failed-listener',message:'paste-failed event received',data:{message,toastWindowExists:!!toastWindow},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1,H3'})}).catch(()=>{});
-    // #endregion
-    // Show toast window (visible even when main window is closed).
     if (toastWindow) {
       toastWindow.show(message);
     }
-    // Also send to renderer windows (if any are open).
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send('transcribe:pasteFailed', message);
-      }
-    });
   });
 
 }
@@ -2419,17 +2406,12 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   trayManager = new TrayManager(audioManager);
   trayManager.init(showSettingsInClipboardWindow, checkForUpdatesCallback);
   
-  // Initialize toast window for error messages.
   toastWindow = new ToastWindow();
   toastWindow.setShowWindowCallback(() => {
-    // Open the clipboard history window when toast is clicked.
     if (clipboardHistoryWindow) {
       clipboardHistoryWindow.show();
     }
   });
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.ts:init-toast',message:'ToastWindow initialized',data:{toastWindowExists:!!toastWindow},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1'})}).catch(()=>{});
-  // #endregion
 
   console.log('[Main] Audio system initialized');
 }

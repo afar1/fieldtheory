@@ -121,7 +121,6 @@ interface TranscribeAPI {
   onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
   onHotkeyChanged: (callback: (hotkey: string) => void) => () => void;
   onStackChanged: (callback: (count: number) => void) => () => void;
-  onPasteFailed?: (callback: (message: string) => void) => () => void;
 }
 
 /**
