@@ -46,10 +46,6 @@ export class ToastWindow {
    * Show a toast message centered on screen.
    */
   show(message: string, duration: number = 4000): void {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'toastWindow.ts:show',message:'ToastWindow.show() called',data:{message,duration},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H4'})}).catch(()=>{});
-    // #endregion
-    // Close existing toast if any.
     this.dismiss();
 
     // Use the display where the cursor is (for multi-monitor support).
@@ -98,13 +94,8 @@ export class ToastWindow {
       }
       const logoBuffer = fs.readFileSync(logoPath);
       logoDataUrl = `data:image/png;base64,${logoBuffer.toString('base64')}`;
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'toastWindow.ts:logoPath',message:'Logo loaded as base64',data:{logoPath,base64Length:logoDataUrl.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H7-logo'})}).catch(()=>{});
-      // #endregion
     } catch (err) {
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'toastWindow.ts:logoError',message:'Failed to load logo',data:{error:String(err)},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H7-logo'})}).catch(()=>{});
-      // #endregion
+      // Logo loading failed, continue without logo
     }
 
     // Load inline HTML with Field Theory styling.
@@ -216,12 +207,6 @@ export class ToastWindow {
 
     this.window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
     this.window.showInactive();
-    
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'toastWindow.ts:show-after',message:'ToastWindow shown',data:{isVisible:this.window?.isVisible(),bounds:this.window?.getBounds()},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H5'})}).catch(()=>{});
-    // #endregion
-
-    // Auto-dismiss after duration.
     this.startDismissTimer(duration);
 
     console.log('[ToastWindow] Showing toast:', message);
