@@ -537,6 +537,7 @@ export interface ClipboardAPI {
   saveBounds: (bounds: { x: number; y: number; width: number; height: number }) => Promise<void>;
   closeWindow: () => Promise<void>;
   showToast: (message: string) => Promise<void>;
+  setSketchMode: (active: boolean) => void;
   
   // Stack operations for prompt stacking feature
   queryItemsByStackId: (stackId: string) => Promise<ClipboardItem[]>;
@@ -942,6 +943,10 @@ const clipboardAPI: ClipboardAPI = {
   
   showToast: async (message: string): Promise<void> => {
     ipcRenderer.send('clipboard:showToast', message);
+  },
+  
+  setSketchMode: (active: boolean): void => {
+    ipcRenderer.send('clipboard:setSketchMode', active);
   },
 
   // Stack operations for prompt stacking feature

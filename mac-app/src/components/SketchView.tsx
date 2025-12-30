@@ -2,6 +2,12 @@ import { useState, useCallback, useEffect, useRef, useMemo, useImperativeHandle,
 import { Excalidraw, exportToBlob } from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 
+type TranscriptItem = {
+  id: number;
+  content: string | null;
+  createdAt: number;
+};
+
 interface SketchViewProps {
   onSave: (imageData: { dataUrl: string; width: number; height: number }, andCopy?: boolean) => void;
   onClose: () => void;
@@ -18,17 +24,24 @@ interface SketchViewProps {
   } | null;
   hideHeader?: boolean;
   onHasChangesChange?: (hasChanges: boolean) => void;
+  associatedTranscripts?: TranscriptItem[];
+  onUnstackTranscript?: (transcriptId: number) => void;
 }
 
 export interface SketchViewHandle {
   save: (andCopy?: boolean) => Promise<void>;
 }
 
-const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onClose, existingSketch, backgroundImage, hideHeader, onHasChangesChange }, ref) => {
+const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onClose, existingSketch, backgroundImage, hideHeader, onHasChangesChange, associatedTranscripts, onUnstackTranscript }, ref) => {
   const [excalidrawAPI, setExcalidrawAPI] = useState<any>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  
+  // Floating transcript panel state.
+  const [transcriptPanelExpanded, setTranscriptPanelExpanded] = useState(false);
+  const [transcriptPanelVisible, setTranscriptPanelVisible] = useState(false);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const initialData = useMemo(() => {
     const baseData: any = {
@@ -510,6 +523,165 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           initialData={initialData}
         />
       </div>
+
+      {/* Floating transcript panel - positioned over the canvas */}
+      {associatedTranscripts && associatedTranscripts.length > 0 && (
+        <div
+          onMouseEnter={() => {
+            if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+            hoverTimerRef.current = setTimeout(() => setTranscriptPanelVisible(true), 500);
+          }}
+          onMouseLeave={() => {
+            if (hoverTimerRef.current) {
+              clearTimeout(hoverTimerRef.current);
+              hoverTimerRef.current = null;
+            }
+            if (!transcriptPanelExpanded) setTranscriptPanelVisible(false);
+          }}
+          style={{
+            position: 'absolute',
+            top: hideHeader ? 12 : 56,
+            right: 28,
+            zIndex: 100,
+          }}
+        >
+          {!transcriptPanelExpanded && (
+            <button
+              onClick={() => setTranscriptPanelExpanded(true)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 32,
+                height: 32,
+                borderRadius: '8px',
+                backgroundColor: transcriptPanelVisible ? '#fff' : 'rgba(255,255,255,0.9)',
+                border: '1px solid #ddd',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                cursor: 'pointer',
+                fontSize: 14,
+              }}
+              title="View attached transcript"
+            >
+              Aa
+            </button>
+          )}
+          
+          {transcriptPanelExpanded && (
+            <div
+              style={{
+                width: 280,
+                maxHeight: 200,
+                backgroundColor: '#fff',
+                border: '1px solid #ddd',
+                borderRadius: '8px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                overflow: 'hidden',
+              }}
+            >
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '8px 10px',
+                borderBottom: '1px solid #eee',
+                backgroundColor: '#fafafa',
+              }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: '#333' }}>
+                  Attached Transcript{associatedTranscripts.length > 1 ? 's' : ''}
+                </span>
+                <button
+                  onClick={() => setTranscriptPanelExpanded(false)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: 14,
+                    color: '#666',
+                    padding: '2px 4px',
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+              <div style={{ padding: '8px 10px', maxHeight: 140, overflowY: 'auto' }}>
+                {associatedTranscripts.map((t, i) => (
+                  <div key={t.id} style={{ marginBottom: i < associatedTranscripts.length - 1 ? 8 : 0 }}>
+                    <div style={{
+                      fontSize: 11,
+                      color: '#444',
+                      lineHeight: 1.5,
+                      whiteSpace: 'pre-wrap',
+                    }}>
+                      {t.content || '(empty)'}
+                    </div>
+                    {onUnstackTranscript && (
+                      <button
+                        onClick={() => onUnstackTranscript(t.id)}
+                        style={{
+                          marginTop: 4,
+                          fontSize: 10,
+                          color: '#888',
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          padding: 0,
+                          textDecoration: 'underline',
+                        }}
+                      >
+                        Unstack
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {transcriptPanelVisible && !transcriptPanelExpanded && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 36,
+                right: 0,
+                width: 260,
+                maxHeight: 160,
+                backgroundColor: '#fff',
+                border: '1px solid #ddd',
+                borderRadius: '8px',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                padding: '10px 12px',
+                overflow: 'hidden',
+              }}
+              onMouseEnter={() => {
+                if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+              }}
+              onMouseLeave={() => {
+                setTranscriptPanelVisible(false);
+              }}
+            >
+              <div style={{ fontSize: 10, fontWeight: 600, color: '#666', marginBottom: 6 }}>
+                Attached Transcript
+              </div>
+              <div style={{
+                fontSize: 11,
+                color: '#444',
+                lineHeight: 1.5,
+                whiteSpace: 'pre-wrap',
+                maxHeight: 110,
+                overflowY: 'auto',
+              }}>
+                {associatedTranscripts[0]?.content || '(empty)'}
+              </div>
+              {associatedTranscripts.length > 1 && (
+                <div style={{ fontSize: 10, color: '#888', marginTop: 6 }}>
+                  +{associatedTranscripts.length - 1} more
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{
         display: 'flex',
