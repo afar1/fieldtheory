@@ -492,7 +492,6 @@ export interface TranscribeAPI {
   onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
   onHotkeyChanged: (callback: (hotkey: string) => void) => () => void;
   onStackChanged: (callback: (count: number) => void) => () => void;
-  onPasteFailed: (callback: (message: string) => void) => () => void;
 }
 
 export interface VisionAPI {
@@ -784,18 +783,6 @@ const transcribeAPI: TranscribeAPI = {
 
     return () => {
       ipcRenderer.removeListener('transcribe:stackChanged', handler);
-    };
-  },
-  
-  onPasteFailed: (callback: (message: string) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, message: string) => {
-      callback(message);
-    };
-
-    ipcRenderer.on('transcribe:pasteFailed', handler);
-
-    return () => {
-      ipcRenderer.removeListener('transcribe:pasteFailed', handler);
     };
   },
 };

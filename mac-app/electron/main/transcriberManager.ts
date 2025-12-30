@@ -435,10 +435,6 @@ export class TranscriberManager extends EventEmitter {
     this.registeredAbandonHotkey = abandonHotkey;
     
     const registered = globalShortcut.register(abandonHotkey, () => {
-      // Note: Screenshot priority is handled by pausing this hotkey during screenshot capture.
-      // When screenshot is in progress, this handler won't be called because the hotkey is unregistered.
-      
-      // Priority 1: If confirmation dialog is showing, treat this as confirmation.
       if (this.pendingAbandonConfirmation) {
         this.pendingAbandonConfirmation = false;
         this.overlay.hideConfirmation();
@@ -446,14 +442,11 @@ export class TranscriberManager extends EventEmitter {
         return;
       }
       
-      // Priority 3: If clipboard history is visible, dismiss it instead of canceling recording.
       if (this.clipboardHistoryVisibilityChecker?.()) {
         console.log(`[TranscriberManager] ${abandonHotkey}: dismissing clipboard history (recording continues)`);
         this.emit('dismiss-clipboard-history');
         return;
       }
-      
-      // Priority 4: Check if confirmation is required.
       const confirmationEnabled = this.preferences.getPreference('abandonRecordingConfirmation') ?? true;
       
       if (confirmationEnabled && this.hasAudioContent) {
@@ -658,10 +651,6 @@ export class TranscriberManager extends EventEmitter {
       // If paste fails (e.g., no input field selected), text is still in clipboard.
       const errorMsg = error instanceof Error ? error.message : String(error);
       console.warn('[TranscriberManager] Failed to paste text (no input field selected):', errorMsg);
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'transcriberManager.ts:pasteText',message:'paste-failed event emitting',data:{errorMsg},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H2'})}).catch(()=>{});
-      // #endregion
-      // Emit event for in-app toast instead of system notification.
       this.emit('paste-failed', 'No active input field found - copied to clipboard');
     }
   }
