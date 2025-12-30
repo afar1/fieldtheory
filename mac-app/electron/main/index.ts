@@ -1211,6 +1211,10 @@ function setupClipboardIPCHandlers(): void {
       toastWindow.show(message);
     }
   });
+  
+  ipcMain.on('clipboard:setSketchMode', async (_event, active: boolean) => {
+    clipboardHistoryWindow?.setSketchModeActive(active);
+  });
 
   // Stack operations for prompt stacking feature
   ipcMain.handle(ClipboardIPCChannels.QUERY_ITEMS_BY_STACK, async (_event, stackId: string) => {
@@ -2564,6 +2568,11 @@ async function initTranscriberSystem(): Promise<void> {
   // Set up escape key priority: dismiss clipboard history before canceling recording
   transcriberManager.setClipboardHistoryVisibilityChecker(() => {
     return clipboardHistoryWindow?.isVisible() ?? false;
+  });
+  
+  // Skip auto-paste only when draw canvas is actively visible
+  transcriberManager.setSketchModeChecker(() => {
+    return (clipboardHistoryWindow?.isSketchModeActive() && clipboardHistoryWindow?.isVisible()) ?? false;
   });
   
   // Listen for dismiss event from escape key handler

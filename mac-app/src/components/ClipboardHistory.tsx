@@ -357,6 +357,7 @@ export default function ClipboardHistory() {
     width: number;
     height: number;
   } | null>(null);
+  const [sketchAssociatedTranscripts, setSketchAssociatedTranscripts] = useState<ClipboardItem[]>([]);
   const [items, setItems] = useState<ClipboardItem[]>([]);
   const [stacks, setStacks] = useState<StackInfo[]>([]);
   const [expandedStacks, setExpandedStacks] = useState<Set<string>>(new Set());
@@ -866,13 +867,37 @@ export default function ClipboardHistory() {
 
   const handleSketchClose = useCallback(() => {
     setEditingSketchItem(null);
+    setSketchAssociatedTranscripts([]);
     setViewMode('clipboard');
+  }, []);
+
+  const openSketchForEditing = useCallback(async (item: ClipboardItem) => {
+    setEditingSketchItem(item);
+    setSketchBackgroundImage(null);
+    setViewMode('sketch');
+    
+    // Query associated transcripts if this item is part of a stack.
+    if (item.stackId && window.clipboardAPI?.queryItemsByStackId) {
+      const stackItems = await window.clipboardAPI.queryItemsByStackId(item.stackId);
+      const transcripts = stackItems.filter(i => i.type === 'transcript' && i.id !== item.id);
+      setSketchAssociatedTranscripts(transcripts);
+    } else {
+      setSketchAssociatedTranscripts([]);
+    }
+  }, []);
+
+  const handleUnstackTranscript = useCallback(async (transcriptId: number) => {
+    if (!window.clipboardAPI?.updateStackId) return;
+    await window.clipboardAPI.updateStackId([transcriptId], null);
+    setSketchAssociatedTranscripts(prev => prev.filter(t => t.id !== transcriptId));
   }, []);
 
   useEffect(() => {
     if (viewMode !== 'sketch') {
       localStorage.setItem('fieldTheoryView', viewMode);
     }
+    // Notify main process of sketch mode changes so it can skip auto-paste into Excalidraw.
+    window.clipboardAPI?.setSketchMode?.(viewMode === 'sketch');
   }, [viewMode]);
 
   useEffect(() => {
@@ -2985,6 +3010,8 @@ export default function ClipboardHistory() {
           backgroundImage={sketchBackgroundImage}
           hideHeader={true}
           onHasChangesChange={setSketchHasChanges}
+          associatedTranscripts={sketchAssociatedTranscripts}
+          onUnstackTranscript={handleUnstackTranscript}
         />
       ) : (
         <div 
@@ -4415,9 +4442,7 @@ export default function ClipboardHistory() {
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={(e) => {
                             e.stopPropagation();
-                            setEditingSketchItem(item);
-                            setSketchBackgroundImage(null);
-                            setViewMode('sketch');
+                            openSketchForEditing(item);
                           }}
                           style={{
                             padding: '4px 6px',

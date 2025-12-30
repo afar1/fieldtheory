@@ -281,6 +281,7 @@ interface ClipboardAPI {
   onKeyEvent: (callback: (event: { characters: string; keyCode: number; modifiers: string[] }) => void) => () => void;
   closeWindow: () => Promise<void>;
   showToast?: (message: string) => Promise<void>;
+  setSketchMode?: (active: boolean) => void;
   
   // Stack operations for prompt stacking feature
   queryItemsByStackId?: (stackId: string) => Promise<ClipboardItem[]>;
