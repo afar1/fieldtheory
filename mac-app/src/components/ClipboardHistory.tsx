@@ -65,6 +65,14 @@ type ListRow =
   | { type: 'item'; item: ClipboardItem }
   | { type: 'stack'; stack: StackInfo; items: ClipboardItem[]; expanded: boolean };
 
+// Undo/redo action types for standard Cmd+Z / Cmd+Shift+Z behavior
+type UndoAction = 
+  | { type: 'delete'; items: ClipboardItem[] }
+  | { type: 'stack'; itemIds: number[]; previousStackIds: (string | null)[]; newStackId: string }
+  | { type: 'unstack'; itemIds: number[]; previousStackId: string };
+
+const MAX_UNDO = 20; // Limit undo stack size to prevent memory bloat with images
+
 type FilterType = 'all' | 'transcript' | 'screenshot';
 
 // Source filter: which device's items to show
@@ -372,7 +380,8 @@ export default function ClipboardHistory() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [isMultiSelect, setIsMultiSelect] = useState(false);
   const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
-  const [deletedItems, setDeletedItems] = useState<ClipboardItem[]>([]);
+  const [undoStack, setUndoStack] = useState<UndoAction[]>([]);
+  const [redoStack, setRedoStack] = useState<UndoAction[]>([]);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -759,10 +768,32 @@ export default function ClipboardHistory() {
   const dialogRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef<HTMLDivElement>(null);
   const searchDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const feedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [containerWidth, setContainerWidth] = useState<number | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const ITEMS_PER_PAGE = 50;
 
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
+
+  // Push action to undo stack (clears redo stack per standard behavior)
+  const pushUndo = useCallback((action: UndoAction) => {
+    setUndoStack(prev => [...prev.slice(-(MAX_UNDO - 1)), action]);
+    setRedoStack([]); // Clear redo on new action
+  }, []);
+
+  // Show transient action feedback in header
+  const showFeedback = useCallback((message: string) => {
+    if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
+    setActionFeedback(message);
+    feedbackTimeoutRef.current = setTimeout(() => setActionFeedback(null), 3000);
+  }, []);
+
+  // Cleanup feedback timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
+    };
+  }, []);
 
   // Load items from clipboard history plus stack info.
   const loadItems = useCallback(async (reset: boolean = false) => {
@@ -888,9 +919,15 @@ export default function ClipboardHistory() {
 
   const handleUnstackTranscript = useCallback(async (transcriptId: number) => {
     if (!window.clipboardAPI?.updateStackId) return;
+    const item = await window.clipboardAPI.getItem?.(transcriptId);
+    const previousStackId = item?.stackId;
     await window.clipboardAPI.updateStackId([transcriptId], null);
+    if (previousStackId) {
+      pushUndo({ type: 'unstack', itemIds: [transcriptId], previousStackId });
+      showFeedback('item unstacked');
+    }
     setSketchAssociatedTranscripts(prev => prev.filter(t => t.id !== transcriptId));
-  }, []);
+  }, [pushUndo, showFeedback]);
 
   useEffect(() => {
     if (viewMode !== 'sketch') {
@@ -1410,9 +1447,23 @@ export default function ClipboardHistory() {
         
         if (selectedIds.size > 1) {
           e.preventDefault();
-          // Create a new stack from selected items
-          const newStackId = crypto.randomUUID();
-          window.clipboardAPI?.updateStackId?.(Array.from(selectedIds), newStackId).then(() => {
+          (async () => {
+            // Capture previous stackIds for undo
+            const itemIds = Array.from(selectedIds);
+            const previousStackIds: (string | null)[] = [];
+            for (const id of itemIds) {
+              const item = await window.clipboardAPI?.getItem(id);
+              previousStackIds.push(item?.stackId ?? null);
+            }
+            
+            // Create a new stack from selected items
+            const newStackId = crypto.randomUUID();
+            await window.clipboardAPI?.updateStackId?.(itemIds, newStackId);
+            
+            // Push to undo stack
+            pushUndo({ type: 'stack', itemIds, previousStackIds, newStackId });
+            showFeedback(`${itemIds.length} items stacked`);
+            
             setSelectedIds(new Set());
             setIsMultiSelect(false);
             // Flash the newly created stack and select it
@@ -1420,7 +1471,7 @@ export default function ClipboardHistory() {
             setPendingStackSelection(newStackId);
             setTimeout(() => setRecentlyStackedId(null), 1500);
             loadItems(true);
-          });
+          })();
         }
         return;
       }
@@ -1703,8 +1754,11 @@ export default function ClipboardHistory() {
           const hoveredItem = items.find(i => i.id === hoveredImageId);
           if (hoveredItem?.stackId) {
             e.preventDefault();
+            const previousStackId = hoveredItem.stackId;
             (async () => {
               await window.clipboardAPI?.updateStackId?.([hoveredImageId], null);
+              pushUndo({ type: 'unstack', itemIds: [hoveredImageId], previousStackId });
+              showFeedback('item unstacked');
               setPendingItemSelection(hoveredImageId);
               loadItems(true);
             })();
@@ -1716,14 +1770,18 @@ export default function ClipboardHistory() {
         if (selectedRow?.type === 'stack' && selectedRow.items.length > 1) {
           e.preventDefault();
           const itemIds = selectedRow.items.map(i => i.id);
+          const previousStackId = selectedRow.stack.stackId;
           // After unstack, select the first (most recent) item from the stack
           const firstItemId = selectedRow.items[0]?.id;
-          window.clipboardAPI?.updateStackId?.(itemIds, null).then(() => {
+          (async () => {
+            await window.clipboardAPI?.updateStackId?.(itemIds, null);
+            pushUndo({ type: 'unstack', itemIds, previousStackId });
+            showFeedback('stack unstacked');
             if (firstItemId) {
               setPendingItemSelection(firstItemId);
             }
             loadItems(true);
-          });
+          })();
         }
         return;
       }
@@ -1765,10 +1823,11 @@ export default function ClipboardHistory() {
         (async () => {
           if (selectedRow?.type === 'item') {
             const item = await window.clipboardAPI?.getItem(selectedRow.item.id);
-            if (item) {
-              setDeletedItems([item]);
-            }
             await window.clipboardAPI?.deleteItem(selectedRow.item.id);
+            if (item) {
+              pushUndo({ type: 'delete', items: [item] });
+              showFeedback('item deleted');
+            }
             loadItems(true);
           } else if (selectedRow?.type === 'stack') {
             const itemsToDelete: ClipboardItem[] = [];
@@ -1778,9 +1837,12 @@ export default function ClipboardHistory() {
                 itemsToDelete.push(item);
               }
             }
-            setDeletedItems(itemsToDelete);
             for (const item of selectedRow.items) {
               await window.clipboardAPI?.deleteItem(item.id);
+            }
+            if (itemsToDelete.length > 0) {
+              pushUndo({ type: 'delete', items: itemsToDelete });
+              showFeedback(itemsToDelete.length === 1 ? 'item deleted' : `${itemsToDelete.length} items deleted`);
             }
             loadItems(true);
           }
@@ -1967,19 +2029,66 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // Cmd+Z: Undo deletion
-      if (key === 'z' && hasMeta && !hasShift && deletedItems.length > 0) {
+      // Cmd+Z: Undo last action
+      if (key === 'z' && hasMeta && !hasShift && undoStack.length > 0) {
         e.preventDefault();
-        // Restore deleted items
         (async () => {
-          for (const item of deletedItems) {
-            if (window.clipboardAPI?.restoreItem) {
-            await window.clipboardAPI.restoreItem(item);
+          const action = undoStack[undoStack.length - 1];
+          setUndoStack(prev => prev.slice(0, -1));
+          
+          if (action.type === 'delete') {
+            // Restore deleted items
+            for (const item of action.items) {
+              if (window.clipboardAPI?.restoreItem) {
+                await window.clipboardAPI.restoreItem(item);
+              }
+            }
+            // Push to redo stack (redo will re-delete)
+            setRedoStack(prev => [...prev, action]);
+          } else if (action.type === 'stack') {
+            // Restore previous stackIds
+            for (let i = 0; i < action.itemIds.length; i++) {
+              const itemId = action.itemIds[i];
+              const prevStackId = action.previousStackIds[i];
+              await window.clipboardAPI?.updateStackId?.([itemId], prevStackId);
+            }
+            setRedoStack(prev => [...prev, action]);
+          } else if (action.type === 'unstack') {
+            // Re-stack items back to their previous stack
+            await window.clipboardAPI?.updateStackId?.(action.itemIds, action.previousStackId);
+            setRedoStack(prev => [...prev, action]);
           }
+          
+          showFeedback('undone');
+          loadItems(true);
+        })();
+        return;
+      }
+      
+      // Cmd+Shift+Z: Redo last undone action
+      if (key === 'z' && hasMeta && hasShift && redoStack.length > 0) {
+        e.preventDefault();
+        (async () => {
+          const action = redoStack[redoStack.length - 1];
+          setRedoStack(prev => prev.slice(0, -1));
+          
+          if (action.type === 'delete') {
+            // Re-delete items
+            for (const item of action.items) {
+              await window.clipboardAPI?.deleteItem(item.id);
+            }
+            setUndoStack(prev => [...prev, action]);
+          } else if (action.type === 'stack') {
+            // Re-stack items with the new stackId
+            await window.clipboardAPI?.updateStackId?.(action.itemIds, action.newStackId);
+            setUndoStack(prev => [...prev, action]);
+          } else if (action.type === 'unstack') {
+            // Re-unstack items (set stackId to null)
+            await window.clipboardAPI?.updateStackId?.(action.itemIds, null);
+            setUndoStack(prev => [...prev, action]);
           }
-          // Clear undo buffer
-          setDeletedItems([]);
-          // Reload items to show restored items
+          
+          showFeedback('redone');
           loadItems(true);
         })();
         return;
@@ -2313,12 +2422,15 @@ export default function ClipboardHistory() {
       }
     }
     
-    // Store in undo buffer
-    setDeletedItems(itemsToDelete);
-    
     // Delete all selected items
     for (const id of selectedIds) {
       await window.clipboardAPI?.deleteItem(id);
+    }
+    
+    // Push to undo stack and show feedback
+    if (itemsToDelete.length > 0) {
+      pushUndo({ type: 'delete', items: itemsToDelete });
+      showFeedback(itemsToDelete.length === 1 ? 'item deleted' : `${itemsToDelete.length} items deleted`);
     }
     
     // Clear selection and reload
@@ -2814,11 +2926,25 @@ export default function ClipboardHistory() {
             </div>
           )}
           
+          {/* Action feedback - shows recent action like "item deleted" */}
+          {actionFeedback && (
+            <span 
+              style={{ 
+                marginLeft: 'auto',
+                fontSize: '9px', 
+                fontWeight: 500,
+                color: theme.textSecondary,
+              }}
+            >
+              {actionFeedback}
+            </span>
+          )}
+          
           {/* Recording/Transcribing indicator - right-aligned in header */}
           {(transcriptionStatus === 'recording' || transcriptionStatus === 'transcribing') && (
             <div 
               style={{ 
-                marginLeft: viewMode === 'team' && teamSyncing ? '8px' : 'auto', 
+                marginLeft: viewMode === 'team' && teamSyncing ? '8px' : (actionFeedback ? '8px' : 'auto'), 
                 display: 'flex', 
                 alignItems: 'center', 
                 gap: '4px',
@@ -3872,16 +3998,19 @@ export default function ClipboardHistory() {
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={async (e) => {
                             e.stopPropagation();
-                            const itemsToDelete: typeof items = [];
+                            const itemsToDelete: ClipboardItem[] = [];
                             for (const stackItem of stackItems) {
                               const itemToDelete = await window.clipboardAPI?.getItem(stackItem.id);
                               if (itemToDelete) {
                                 itemsToDelete.push(itemToDelete);
                               }
                             }
-                            setDeletedItems(itemsToDelete);
                             for (const stackItem of stackItems) {
                               await window.clipboardAPI?.deleteItem(stackItem.id);
+                            }
+                            if (itemsToDelete.length > 0) {
+                              pushUndo({ type: 'delete', items: itemsToDelete });
+                              showFeedback('stack deleted');
                             }
                             loadItems(true);
                           }}
@@ -4559,10 +4688,11 @@ export default function ClipboardHistory() {
                         onClick={async (e) => {
                           e.stopPropagation();
                           const itemToDelete = await window.clipboardAPI?.getItem(item.id);
-                          if (itemToDelete) {
-                            setDeletedItems([itemToDelete]);
-                          }
                           await window.clipboardAPI?.deleteItem(item.id);
+                          if (itemToDelete) {
+                            pushUndo({ type: 'delete', items: [itemToDelete] });
+                            showFeedback('item deleted');
+                          }
                           loadItems(true);
                         }}
                         style={{
@@ -5058,11 +5188,12 @@ export default function ClipboardHistory() {
               <span>target app <KeyCap>⌥</KeyCap><KeyCap>tab</KeyCap></span>
               
               <span>undo <KeyCap>⌘</KeyCap><KeyCap>z</KeyCap></span>
+              <span>redo <KeyCap>⌘</KeyCap><KeyCap>⇧</KeyCap><KeyCap>z</KeyCap></span>
+              
               <span>unstack <KeyCap>u</KeyCap></span>
-              
               <span>up <KeyCap>↑</KeyCap><KeyCap>k</KeyCap></span>
-              <span>DM <KeyCap>m</KeyCap></span>
               
+              <span>DM <KeyCap>m</KeyCap></span>
               <span>feedback <KeyCap>f</KeyCap></span>
             </div>
           </div>
@@ -5416,7 +5547,12 @@ export default function ClipboardHistory() {
                   { label: 'delete', key: '⌫', action: async () => {
                     const selectedRow = listRows[selectedIndex];
                     if (selectedRow?.type === 'item' && window.clipboardAPI) {
+                      const item = await window.clipboardAPI.getItem(selectedRow.item.id);
                       await window.clipboardAPI.deleteItem(selectedRow.item.id);
+                      if (item) {
+                        pushUndo({ type: 'delete', items: [item] });
+                        showFeedback('item deleted');
+                      }
                       dismissPreview();
                       loadItems(true);
                     }
