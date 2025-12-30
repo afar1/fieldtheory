@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { app, globalShortcut, clipboard, Notification } from 'electron';
+import { app, globalShortcut, clipboard, nativeImage, Notification } from 'electron';
 import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import { exec } from 'child_process';
@@ -367,14 +367,9 @@ export class TranscriberManager extends EventEmitter {
           
           this.emit('stackChanged', this.currentStack.length);
         }
-        
-        // Clear stack after processing (ready for next recording).
-        this.currentStack = [];
       }
       
-      // Speech detected - paste text
-      clipboard.writeText(trimmedText);
-      await this.pasteText();
+      await this.pasteStack();
       this.emit('result', trimmedText);
       
       // Dismiss overlay
@@ -761,7 +756,7 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Paste all items in the current stack.
-   * Combines text items and images for multimodal paste.
+   * Pastes text and images sequentially with delays between each.
    */
   async pasteStack(): Promise<void> {
     if (!this.clipboardManager || this.currentStack.length === 0) {
@@ -776,25 +771,21 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
-    // Separate text and images
-    const textItems = items.filter(item => item.type === 'text' || item.type === 'transcript');
-    const imageItems = items.filter(item => item.type === 'image' || item.type === 'screenshot');
-
-    // Combine text items
-    if (textItems.length > 0) {
-      const combinedText = textItems
-        .map(item => item.content)
-        .filter(Boolean)
-        .join('\n\n');
-      
-      clipboard.writeText(combinedText);
-      await this.pasteText();
+    for (const item of items) {
+      if (item.type === 'text' || item.type === 'transcript') {
+        clipboard.writeText(item.content || '');
+        await this.pasteText();
+      } else if (item.imageData) {
+        const imageBuffer = typeof item.imageData === 'string'
+          ? Buffer.from(item.imageData, 'base64')
+          : item.imageData;
+        const image = nativeImage.createFromBuffer(imageBuffer);
+        clipboard.writeImage(image);
+        await this.pasteText();
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
 
-    // For images, we'd need to handle multimodal paste differently
-    // For now, just paste the text. Images can be pasted individually from clipboard history.
-    
-    // Clear stack after paste
     this.clearStack();
   }
 
