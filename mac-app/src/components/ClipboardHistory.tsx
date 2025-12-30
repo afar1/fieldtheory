@@ -1363,9 +1363,24 @@ export default function ClipboardHistory() {
         return;
       }
       
-      // D - Draw on image (open sketch editor on hovered/selected image)
+      // D - Draw on image (open sketch editor on hovered/selected image OR preview image)
       if (key === 'd' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        
+        // If preview is open with an image, draw on that
+        if (preview && preview.type === 'image') {
+          e.preventDefault();
+          setSketchBackgroundImage({
+            dataUrl: `data:image/png;base64,${preview.data}`,
+            width: preview.width || 800,
+            height: preview.height || 600,
+          });
+          setEditingSketchItem(null);
+          dismissPreview();
+          setViewMode('sketch');
+          return;
+        }
+        
         if (viewMode === 'clipboard' && !showSettings) {
           // Priority: hovered image > selected image
           const hoveredItem = hoveredImageId ? items.find(i => i.id === hoveredImageId) : null;
@@ -2036,47 +2051,76 @@ export default function ClipboardHistory() {
         return;
       }
       
-      // Arrow keys - navigate within stack preview when preview is open.
-      // →/↓ go forward through stack items, then move to next row when at end.
-      // ←/↑ go back through stack items (stop at first item).
+      // Arrow keys when preview is open:
+      // Left/Right - navigate between images in stack only (stop at boundaries)
+      // Up/Down - change rows while keeping preview open
       if (preview && stackPreviewItems.length > 1) {
-        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        // Left/Right - navigate within stack images only, stop at boundaries
+        if (e.key === 'ArrowRight') {
           e.preventDefault();
           if (stackPreviewIndex < stackPreviewItems.length - 1) {
-            // Still more items in this stack - advance within stack.
             setStackPreviewIndex(stackPreviewIndex + 1);
             setPreview(stackPreviewItems[stackPreviewIndex + 1]);
-          } else {
-            // At the end of stack - move to next row in list.
-            const nextRowIndex = Math.min(selectedIndex + 1, listRows.length - 1);
-            if (nextRowIndex !== selectedIndex) {
-              setSelectedIndex(nextRowIndex);
-              const nextRow = listRows[nextRowIndex];
-              if (nextRow) {
-                if (nextRow.type === 'stack') {
-                  const previewItems = getStackPreviewItems(nextRow.items);
-                  if (previewItems.length > 0) {
-                    setStackPreviewItems(previewItems);
-                    setStackPreviewIndex(0);
-                    setPreview(previewItems[0]);
-                  }
-                } else {
-                  setStackPreviewItems([]);
+          }
+          // At last image - do nothing (stop at boundary)
+          return;
+        }
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          if (stackPreviewIndex > 0) {
+            setStackPreviewIndex(stackPreviewIndex - 1);
+            setPreview(stackPreviewItems[stackPreviewIndex - 1]);
+          }
+          // At first image - do nothing (stop at boundary)
+          return;
+        }
+        
+        // Up/Down - change rows while keeping preview open
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          const nextRowIndex = Math.min(selectedIndex + 1, listRows.length - 1);
+          if (nextRowIndex !== selectedIndex) {
+            setSelectedIndex(nextRowIndex);
+            const nextRow = listRows[nextRowIndex];
+            if (nextRow) {
+              if (nextRow.type === 'stack') {
+                const previewItems = getStackPreviewItems(nextRow.items);
+                if (previewItems.length > 0) {
+                  setStackPreviewItems(previewItems);
                   setStackPreviewIndex(0);
-                  const newContent = getPreviewForRow(nextRow);
-                  if (newContent) setPreview(newContent);
+                  setPreview(previewItems[0]);
                 }
+              } else {
+                setStackPreviewItems([]);
+                setStackPreviewIndex(0);
+                const newContent = getPreviewForRow(nextRow);
+                if (newContent) setPreview(newContent);
               }
             }
           }
           return;
         }
-        if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        if (e.key === 'ArrowUp') {
           e.preventDefault();
-          const prevIndex = Math.max(stackPreviewIndex - 1, 0);
-          if (prevIndex !== stackPreviewIndex) {
-            setStackPreviewIndex(prevIndex);
-            setPreview(stackPreviewItems[prevIndex]);
+          const prevRowIndex = Math.max(selectedIndex - 1, 0);
+          if (prevRowIndex !== selectedIndex) {
+            setSelectedIndex(prevRowIndex);
+            const prevRow = listRows[prevRowIndex];
+            if (prevRow) {
+              if (prevRow.type === 'stack') {
+                const previewItems = getStackPreviewItems(prevRow.items);
+                if (previewItems.length > 0) {
+                  setStackPreviewItems(previewItems);
+                  setStackPreviewIndex(0);
+                  setPreview(previewItems[0]);
+                }
+              } else {
+                setStackPreviewItems([]);
+                setStackPreviewIndex(0);
+                const newContent = getPreviewForRow(prevRow);
+                if (newContent) setPreview(newContent);
+              }
+            }
           }
           return;
         }
