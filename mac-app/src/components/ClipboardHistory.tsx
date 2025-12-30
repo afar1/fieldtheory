@@ -7,7 +7,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import SettingsPanel from './SettingsPanel';
 import TodoView from './TodoView';
-import TeamView from './TeamView';
+import SharedClipboardView from './SharedClipboardView';
 import DMsView from './DMsView';
 import PopularCommands from './PopularCommands';
 import SketchView, { SketchViewHandle } from './SketchView';
@@ -3181,7 +3181,7 @@ export default function ClipboardHistory() {
       ) : viewMode === 'todo' ? (
         <TodoView onSwitchToClipboard={() => setViewMode('clipboard')} />
       ) : viewMode === 'team' ? (
-        <TeamView onSyncingChange={setTeamSyncing} />
+        <SharedClipboardView onSyncingChange={setTeamSyncing} onFeedback={showFeedback} />
       ) : viewMode === 'dms' ? (
         <DMsView />
       ) : viewMode === 'commands' ? (
