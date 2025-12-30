@@ -20,6 +20,124 @@ import type { BaseClipboardItem, StackInfo } from './ClipboardList/types';
 import { KeyCap } from './ClipboardList/components';
 
 // =============================================================================
+// Image Cache - stores fetched images as blob URLs to avoid re-downloading.
+// Uses localStorage for persistence across sessions.
+// =============================================================================
+
+const IMAGE_CACHE_KEY = 'teamImageCache';
+const IMAGE_CACHE_MAX_SIZE = 50;
+
+// In-memory cache for blob URLs (faster than localStorage for rendering).
+const blobUrlCache = new Map<string, string>();
+
+function getImageCacheMetadata(): Map<string, { timestamp: number; base64: string }> {
+  try {
+    const stored = localStorage.getItem(IMAGE_CACHE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      return new Map(Object.entries(parsed));
+    }
+  } catch (e) {
+    // Ignore parse errors.
+  }
+  return new Map();
+}
+
+function saveImageCacheMetadata(cache: Map<string, { timestamp: number; base64: string }>) {
+  try {
+    const entries = Array.from(cache.entries());
+    if (entries.length > IMAGE_CACHE_MAX_SIZE) {
+      entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+      const toKeep = entries.slice(-IMAGE_CACHE_MAX_SIZE);
+      cache = new Map(toKeep);
+    }
+    localStorage.setItem(IMAGE_CACHE_KEY, JSON.stringify(Object.fromEntries(cache)));
+  } catch (e) {
+    // Ignore storage errors (quota exceeded, etc.).
+  }
+}
+
+async function getCachedImageUrl(imageUrl: string | null, imageData: string | null, itemId: string): Promise<string> {
+  // If we have base64 data, use it directly (already local).
+  if (imageData) {
+    return `data:image/png;base64,${imageData}`;
+  }
+
+  if (!imageUrl) {
+    return '';
+  }
+
+  // Check in-memory cache first.
+  if (blobUrlCache.has(itemId)) {
+    return blobUrlCache.get(itemId)!;
+  }
+
+  // Check localStorage cache.
+  const metadata = getImageCacheMetadata();
+  const cached = metadata.get(itemId);
+  if (cached?.base64) {
+    const blobUrl = `data:image/png;base64,${cached.base64}`;
+    blobUrlCache.set(itemId, blobUrl);
+    return blobUrl;
+  }
+
+  // Fetch from URL and cache.
+  try {
+    const response = await fetch(imageUrl);
+    if (!response.ok) throw new Error('Failed to fetch image');
+    
+    const blob = await response.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    blobUrlCache.set(itemId, blobUrl);
+
+    // Also store as base64 in localStorage for persistence.
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64 = (reader.result as string).split(',')[1];
+      const updatedMetadata = getImageCacheMetadata();
+      updatedMetadata.set(itemId, { timestamp: Date.now(), base64 });
+      saveImageCacheMetadata(updatedMetadata);
+    };
+    reader.readAsDataURL(blob);
+
+    return blobUrl;
+  } catch (e) {
+    console.error('[SharedClipboardView] Failed to fetch image:', e);
+    return imageUrl; // Fallback to direct URL
+  }
+}
+
+// Build stack info from items array
+function buildStacksFromItems(items: SharedClipboardItem[]): StackInfo[] {
+  const stackMap = new Map<string, SharedClipboardItem[]>();
+  for (const item of items) {
+    if (item.stackId) {
+      const existing = stackMap.get(item.stackId) || [];
+      existing.push(item);
+      stackMap.set(item.stackId, existing);
+    }
+  }
+
+  const stackInfos: StackInfo[] = [];
+  stackMap.forEach((stackItems, stackId) => {
+    if (stackItems.length > 1) {
+      const imageCount = stackItems.filter(i => i.type === 'image' || i.type === 'screenshot').length;
+      const textCount = stackItems.filter(i => i.type === 'text' || i.type === 'transcript').length;
+      const firstTextItem = stackItems.find(i => i.content);
+      stackInfos.push({
+        stackId,
+        itemCount: stackItems.length,
+        imageCount,
+        textCount,
+        createdAt: Math.min(...stackItems.map(i => i.createdAt)),
+        firstTextPreview: firstTextItem?.content?.substring(0, 100) || null,
+      });
+    }
+  });
+  return stackInfos;
+}
+
+// =============================================================================
 // Types
 // =============================================================================
 
@@ -105,9 +223,24 @@ export default function SharedClipboardView({ onSyncingChange, onFeedback }: Sha
     }
     return [];
   });
-  const [stacks, setStacks] = useState<StackInfo[]>([]);
+  const [stacks, setStacks] = useState<StackInfo[]>(() => {
+    // Build initial stacks from cached items
+    try {
+      const cached = localStorage.getItem('teamItemsCache');
+      if (cached) {
+        const cachedItems = JSON.parse(cached) as SharedClipboardItem[];
+        return buildStacksFromItems(cachedItems);
+      }
+    } catch (e) {
+      // Ignore parse errors
+    }
+    return [];
+  });
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+
+  // Track if we've done initial load to prevent double fetch
+  const hasLoadedRef = useRef(false);
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -215,7 +348,10 @@ export default function SharedClipboardView({ onSyncingChange, onFeedback }: Sha
     setTeamMembers(members);
   }, []);
 
-  const loadItems = useCallback(async (isBackgroundSync: boolean = false) => {
+  // Load items from shared clipboard API. Uses ref-based callbacks to avoid
+  // re-triggering the useEffect when callbacks change.
+  const loadItemsRef = useRef<(isBackgroundSync: boolean) => Promise<void>>();
+  loadItemsRef.current = async (isBackgroundSync: boolean) => {
     if (!window.sharedClipboardAPI) return;
 
     if (isBackgroundSync) {
@@ -228,34 +364,7 @@ export default function SharedClipboardView({ onSyncingChange, onFeedback }: Sha
     try {
       const fetchedItems = await window.sharedClipboardAPI.queryItems({ limit: 100 });
       setItems(fetchedItems as SharedClipboardItem[]);
-
-      // Build stacks from items
-      const stackMap = new Map<string, SharedClipboardItem[]>();
-      for (const item of fetchedItems) {
-        if (item.stackId) {
-          const existing = stackMap.get(item.stackId) || [];
-          existing.push(item);
-          stackMap.set(item.stackId, existing);
-        }
-      }
-
-      const stackInfos: StackInfo[] = [];
-      stackMap.forEach((stackItems, stackId) => {
-        if (stackItems.length > 1) {
-          const imageCount = stackItems.filter(i => i.type === 'image' || i.type === 'screenshot').length;
-          const textCount = stackItems.filter(i => i.type === 'text' || i.type === 'transcript').length;
-          const firstTextItem = stackItems.find(i => i.content);
-          stackInfos.push({
-            stackId,
-            itemCount: stackItems.length,
-            imageCount,
-            textCount,
-            createdAt: Math.min(...stackItems.map(i => i.createdAt)),
-            firstTextPreview: firstTextItem?.content?.substring(0, 100) || null,
-          });
-        }
-      });
-      setStacks(stackInfos);
+      setStacks(buildStacksFromItems(fetchedItems as SharedClipboardItem[]));
 
       // Save to localStorage cache
       try {
@@ -270,16 +379,20 @@ export default function SharedClipboardView({ onSyncingChange, onFeedback }: Sha
       setSyncing(false);
       onSyncingChange?.(false);
     }
-  }, [onSyncingChange]);
+  };
 
-  // Load data when authenticated
+  // Load data when authenticated. Use refs to avoid dependency issues that cause double fetch.
   useEffect(() => {
-    if (session) {
-      const hasCachedItems = items.length > 0;
-      loadTeamMembers();
-      loadItems(hasCachedItems);
-    }
-  }, [session, loadTeamMembers, loadItems]);
+    if (!session) return;
+    if (hasLoadedRef.current) return; // Prevent double load
+
+    hasLoadedRef.current = true;
+    const hasCachedItems = items.length > 0;
+
+    loadTeamMembers();
+    // If we have cached items, do a background sync. Otherwise, show loading state.
+    loadItemsRef.current?.(hasCachedItems);
+  }, [session]); // Only depend on session, not on callbacks (loadTeamMembers has no deps)
 
   // Persist showMembers state
   useEffect(() => {
@@ -341,8 +454,11 @@ export default function SharedClipboardView({ onSyncingChange, onFeedback }: Sha
       ids.includes(item.id) ? { ...item, stackId: newStackId } : item
     ));
 
-    loadItems(true);
-  }, [loadItems]);
+    // Refresh stacks
+    setStacks(prev => buildStacksFromItems(items.map(item =>
+      ids.includes(item.id) ? { ...item, stackId: newStackId } : item
+    )));
+  }, [items]);
 
   const handleUnstack = useCallback(async (stackId: string) => {
     if (!window.sharedClipboardAPI) return;
@@ -353,12 +469,12 @@ export default function SharedClipboardView({ onSyncingChange, onFeedback }: Sha
     await window.sharedClipboardAPI.updateStackId(itemIds, null);
 
     // Optimistically update local state
-    setItems(prev => prev.map(item =>
+    const updatedItems = items.map(item =>
       itemIds.includes(item.id) ? { ...item, stackId: null } : item
-    ));
-
-    loadItems(true);
-  }, [items, loadItems]);
+    );
+    setItems(updatedItems);
+    setStacks(buildStacksFromItems(updatedItems));
+  }, [items]);
 
   const handleCopyToPersonal = useCallback(async (item: SharedClipboardItem) => {
     if (!window.sharedClipboardAPI) return;
