@@ -56,6 +56,9 @@ export class TranscriberManager extends EventEmitter {
   // Clipboard history visibility checker - allows escape key to dismiss clipboard history first
   private clipboardHistoryVisibilityChecker: (() => boolean) | null = null;
   
+  // Sketch mode checker - used to skip auto-paste when draw canvas is open
+  private sketchModeChecker: (() => boolean) | null = null;
+  
   // Track if audio content has been recorded (non-silence detected).
   // Used to determine whether to show confirmation on abandon.
   private hasAudioContent: boolean = false;
@@ -123,6 +126,10 @@ export class TranscriberManager extends EventEmitter {
    */
   setClipboardHistoryVisibilityChecker(checker: () => boolean): void {
     this.clipboardHistoryVisibilityChecker = checker;
+  }
+
+  setSketchModeChecker(checker: () => boolean): void {
+    this.sketchModeChecker = checker;
   }
 
   /**
@@ -330,11 +337,13 @@ export class TranscriberManager extends EventEmitter {
         return;
       }
       
-      // Check for bracketed-only content like [BLANK_AUDIO], [MUSIC], [SILENCE], etc.
-      // These are whisper artifacts indicating no transcribable speech.
-      const bracketedOnlyPattern = /^\s*\[[^\]]+\]\s*$/;
-      if (bracketedOnlyPattern.test(trimmedText)) {
-        console.log('[TranscriberManager] Bracketed-only content detected:', trimmedText);
+      // Strip bracketed content like [BLANK_AUDIO], [MUSIC], [SILENCE] from anywhere in the text.
+      // These are whisper artifacts that shouldn't appear in final transcription.
+      const cleanedText = trimmedText.replace(/\s*\[[^\]]+\]\s*/g, ' ').trim();
+      
+      // If nothing remains after stripping brackets, treat as silence.
+      if (cleanedText.length === 0) {
+        console.log('[TranscriberManager] Only bracketed content detected:', trimmedText);
         this.setStatus('idle');
         this.overlay.showStatus('No audio found');
         return;
@@ -349,7 +358,7 @@ export class TranscriberManager extends EventEmitter {
           : undefined;
         
         const itemId = await this.clipboardManager.storeText(
-          trimmedText,
+          cleanedText,
           'transcript',
           undefined, // sourceApp - let it auto-detect
           effectiveStackId
@@ -370,7 +379,7 @@ export class TranscriberManager extends EventEmitter {
       }
       
       await this.pasteStack();
-      this.emit('result', trimmedText);
+      this.emit('result', cleanedText);
       
       // Dismiss overlay
       this.setStatus('idle');
@@ -757,9 +766,17 @@ export class TranscriberManager extends EventEmitter {
   /**
    * Paste all items in the current stack.
    * Pastes text and images sequentially with delays between each.
+   * Skips paste if sketch mode is active to avoid pasting into Excalidraw.
    */
   async pasteStack(): Promise<void> {
     if (!this.clipboardManager || this.currentStack.length === 0) {
+      return;
+    }
+    
+    // Skip paste if draw canvas is open - user can manually Cmd+V if needed.
+    if (this.sketchModeChecker?.()) {
+      console.log('[TranscriberManager] Sketch mode active, skipping auto-paste');
+      this.clearStack();
       return;
     }
 

@@ -67,6 +67,9 @@ export class ClipboardHistoryWindow {
   
   // Track if recording is active - used to keep overlay visible when dismissing clipboard history
   private isRecordingActive: boolean = false;
+  
+  // Track if sketch/draw mode is active - used to skip auto-paste into Excalidraw
+  private sketchModeActive: boolean = false;
 
   // Sound manager for playing window open/close sounds.
   private soundManager: SoundManager;
@@ -471,6 +474,14 @@ export class ClipboardHistoryWindow {
    */
   getRecordingActive(): boolean {
     return this.isRecordingActive;
+  }
+
+  setSketchModeActive(active: boolean): void {
+    this.sketchModeActive = active;
+  }
+
+  isSketchModeActive(): boolean {
+    return this.sketchModeActive;
   }
 
   /**
