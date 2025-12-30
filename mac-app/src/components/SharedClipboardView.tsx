@@ -856,6 +856,10 @@ export default function SharedClipboardView({ onSyncingChange, onFeedback }: Sha
   // Render: Authenticated
   // ==========================================================================
 
+  // #region agent log
+  fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'SharedClipboardView.tsx:RENDER_AUTHENTICATED',message:'Rendering authenticated view',data:{itemsCount:items.length,stacksCount:stacks.length,loading,syncing},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3-H4'})}).catch(()=>{});
+  // #endregion
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', padding: '0 16px 16px 16px' }}>
       {/* Team members panel */}
