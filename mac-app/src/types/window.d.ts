@@ -121,6 +121,7 @@ interface TranscribeAPI {
   onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
   onHotkeyChanged: (callback: (hotkey: string) => void) => () => void;
   onStackChanged: (callback: (count: number) => void) => () => void;
+  onPasteFailed?: (callback: (message: string) => void) => () => void;
 }
 
 /**
@@ -280,6 +281,7 @@ interface ClipboardAPI {
   saveBounds: (bounds: { x: number; y: number; width: number; height: number }) => Promise<void>;
   onKeyEvent: (callback: (event: { characters: string; keyCode: number; modifiers: string[] }) => void) => () => void;
   closeWindow: () => Promise<void>;
+  showToast?: (message: string) => Promise<void>;
   
   // Stack operations for prompt stacking feature
   queryItemsByStackId?: (stackId: string) => Promise<ClipboardItem[]>;

@@ -42,7 +42,7 @@ export class TrayManager {
     const iconPath = this.getIconPath('disconnected');
     const icon = nativeImage.createFromPath(iconPath);
     this.tray = new Tray(icon);
-    this.tray.setToolTip('Oscar');
+    this.tray.setToolTip('Field Theory');
 
     this.audioManager.on('stateChanged', (state: AudioState) => {
       this.updateTray(state);
@@ -64,9 +64,11 @@ export class TrayManager {
 
   /**
    * Get the path to a tray icon based on the current state.
+   * Now uses Field Theory icon for all states.
    */
   private getIconPath(state: 'disconnected' | 'connected' | 'active'): string {
-    const filename = `littleone-${state}Template.png`;
+    // Use Field Theory icon for all states (single icon, no state variations).
+    const filename = 'fieldtheory-iconTemplate.png';
 
     if (app.isPackaged) {
       return path.join(process.resourcesPath, 'assets', filename);
@@ -220,7 +222,7 @@ export class TrayManager {
     });
 
     items.push({
-      label: 'Quit Oscar',
+      label: 'Quit Field Theory',
       role: 'quit',
     });
 

@@ -74,6 +74,17 @@ export class TranscriberManager extends EventEmitter {
     this.overlay = new RecordingOverlay();
     this.soundManager = new SoundManager(preferences);
     
+    // Listen for screenshot events to pause/resume abandon hotkey.
+    // This allows Escape to cancel screenshot selection instead of recording.
+    if (this.clipboardManager) {
+      this.clipboardManager.on('screenshotStart', () => {
+        this.pauseAbandonHotkey();
+      });
+      this.clipboardManager.on('screenshotEnd', () => {
+        this.resumeAbandonHotkey();
+      });
+    }
+    
     // Listen for audio levels from native helper.
     // Track if we've detected any significant audio content.
     this.nativeHelper.on('audioLevel', (level: number) => {
@@ -424,7 +435,10 @@ export class TranscriberManager extends EventEmitter {
     this.registeredAbandonHotkey = abandonHotkey;
     
     const registered = globalShortcut.register(abandonHotkey, () => {
-      // If confirmation dialog is showing, treat this as confirmation.
+      // Note: Screenshot priority is handled by pausing this hotkey during screenshot capture.
+      // When screenshot is in progress, this handler won't be called because the hotkey is unregistered.
+      
+      // Priority 1: If confirmation dialog is showing, treat this as confirmation.
       if (this.pendingAbandonConfirmation) {
         this.pendingAbandonConfirmation = false;
         this.overlay.hideConfirmation();
@@ -432,14 +446,14 @@ export class TranscriberManager extends EventEmitter {
         return;
       }
       
-      // If clipboard history is visible, dismiss it instead of canceling recording.
+      // Priority 3: If clipboard history is visible, dismiss it instead of canceling recording.
       if (this.clipboardHistoryVisibilityChecker?.()) {
         console.log(`[TranscriberManager] ${abandonHotkey}: dismissing clipboard history (recording continues)`);
         this.emit('dismiss-clipboard-history');
         return;
       }
       
-      // Check if confirmation is required.
+      // Priority 4: Check if confirmation is required.
       const confirmationEnabled = this.preferences.getPreference('abandonRecordingConfirmation') ?? true;
       
       if (confirmationEnabled && this.hasAudioContent) {
@@ -474,6 +488,33 @@ export class TranscriberManager extends EventEmitter {
     this.abandonHotkeyRegistered = false;
     this.pendingAbandonConfirmation = false;
     console.log(`[TranscriberManager] Abandon hotkey (${this.registeredAbandonHotkey}) unregistered`);
+  }
+  
+  /**
+   * Temporarily pause the abandon hotkey (e.g., during screenshot selection).
+   * This allows Escape to be handled by the system instead of our global shortcut.
+   */
+  pauseAbandonHotkey(): void {
+    if (!this.abandonHotkeyRegistered) {
+      return;
+    }
+    globalShortcut.unregister(this.registeredAbandonHotkey);
+    this.abandonHotkeyRegistered = false;
+    console.log(`[TranscriberManager] Abandon hotkey paused for screenshot`);
+  }
+  
+  /**
+   * Resume the abandon hotkey after it was paused.
+   */
+  resumeAbandonHotkey(): void {
+    if (this.status !== 'recording') {
+      return;
+    }
+    if (this.abandonHotkeyRegistered) {
+      return; // Already registered
+    }
+    this.registerAbandonHotkey();
+    console.log(`[TranscriberManager] Abandon hotkey resumed after screenshot`);
   }
   
   /**
@@ -614,14 +655,14 @@ export class TranscriberManager extends EventEmitter {
       await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
       console.log('[TranscriberManager] Text pasted successfully');
     } catch (error) {
-      // If paste fails (e.g., no input field selected), text is still in clipboard
+      // If paste fails (e.g., no input field selected), text is still in clipboard.
       const errorMsg = error instanceof Error ? error.message : String(error);
       console.warn('[TranscriberManager] Failed to paste text (no input field selected):', errorMsg);
-      // Show friendly notification instead of error - user can manually paste with Cmd+V
-      new Notification({
-        title: 'Transcription Ready',
-        body: 'Saved to clipboard - paste with Cmd+V',
-      }).show();
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'transcriberManager.ts:pasteText',message:'paste-failed event emitting',data:{errorMsg},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H2'})}).catch(()=>{});
+      // #endregion
+      // Emit event for in-app toast instead of system notification.
+      this.emit('paste-failed', 'No active input field found - copied to clipboard');
     }
   }
 
