@@ -3485,34 +3485,6 @@ export default function ClipboardHistory() {
                                   cursor: 'pointer',
                                 }}
                               />
-                              {/* Hover overlay with keyboard shortcuts */}
-                              {hoveredImageId === item.id && (
-                                <div
-                                  style={{
-                                    position: 'absolute',
-                                    top: '50%',
-                                    left: '50%',
-                                    transform: 'translate(-50%, -50%)',
-                                    backgroundColor: 'rgba(0, 0, 0, 0.75)',
-                                    color: '#fff',
-                                    padding: '5px 8px',
-                                    borderRadius: '6px',
-                                    fontSize: '9px',
-                                    fontWeight: 500,
-                                    pointerEvents: 'none',
-                                    display: 'flex',
-                                    flexDirection: 'column',
-                                    gap: '3px',
-                                    alignItems: 'center',
-                                  }}
-                                >
-                                  <span>preview <KeyCap small>space</KeyCap></span>
-                                  <span>draw <KeyCap small>d</KeyCap></span>
-                                  {item.stackId && (
-                                    <span>unstack <KeyCap small>u</KeyCap></span>
-                                  )}
-                                </div>
-                              )}
                             </div>
                           ))}
                         </div>
@@ -5379,7 +5351,7 @@ export default function ClipboardHistory() {
                 padding: '8px 12px',
               }}>
                 {[
-                  { label: 'Paste', key: '↵', action: async () => {
+                  { label: 'paste', key: '↵', action: async () => {
                     const selectedRow = listRows[selectedIndex];
                     if (selectedRow?.type === 'item' && window.clipboardAPI) {
                       const bundleId = targetAppInfo?.previousApp?.bundleId;
@@ -5387,7 +5359,7 @@ export default function ClipboardHistory() {
                       window.clipboardAPI.closeWindow();
                     }
                   }},
-                  { label: 'Draw', key: 'd', action: () => {
+                  { label: 'draw', key: 'd', action: () => {
                     setSketchBackgroundImage({
                       dataUrl: `data:image/png;base64,${preview.data}`,
                       width: preview.width || 800,
@@ -5397,7 +5369,7 @@ export default function ClipboardHistory() {
                     dismissPreview();
                     setViewMode('sketch');
                   }},
-                  { label: 'Delete', key: '⌫', action: async () => {
+                  { label: 'delete', key: '⌫', action: async () => {
                     const selectedRow = listRows[selectedIndex];
                     if (selectedRow?.type === 'item' && window.clipboardAPI) {
                       await window.clipboardAPI.deleteItem(selectedRow.item.id);
