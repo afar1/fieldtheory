@@ -2650,8 +2650,7 @@ async function initTranscriberSystem(): Promise<void> {
     });
   });
 
-  // Forward todo realtime events to all renderer windows.
-  // These provide granular updates for more efficient state management.
+  // Forward todo realtime events to renderer.
   mobileSync.on('todoAdded', (todo) => {
     console.log('[Main] Realtime: todo added:', todo.id);
     BrowserWindow.getAllWindows().forEach((window) => {

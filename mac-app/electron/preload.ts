@@ -1399,7 +1399,6 @@ const todoAPI = {
     };
   },
 
-  // Listen for individual todo added events (realtime).
   onTodoAdded: (callback: (todo: Todo) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, todo: Todo) => {
       callback(todo);
@@ -1410,7 +1409,6 @@ const todoAPI = {
     };
   },
 
-  // Listen for individual todo updated events (realtime).
   onTodoUpdated: (callback: (todo: Todo) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, todo: Todo) => {
       callback(todo);
@@ -1421,7 +1419,6 @@ const todoAPI = {
     };
   },
 
-  // Listen for individual todo deleted events (realtime).
   onTodoDeleted: (callback: (id: string) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, id: string) => {
       callback(id);

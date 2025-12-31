@@ -71,6 +71,12 @@ export class ClipboardHistoryWindow {
   // Track if sketch/draw mode is active - used to skip auto-paste into Excalidraw
   private sketchModeActive: boolean = false;
 
+  // Saved window bounds before sketch mode expansion (to restore on exit).
+  private normalBounds: Electron.Rectangle | null = null;
+  
+  // Timer for smooth window resize animation.
+  private animationTimer: ReturnType<typeof setInterval> | null = null;
+
   // Sound manager for playing window open/close sounds.
   private soundManager: SoundManager;
 
@@ -391,6 +397,19 @@ export class ClipboardHistoryWindow {
    * @param hideApp - Whether to hide the entire app. Set to false when other windows (like recording overlay) should remain visible.
    */
   hide(hideApp: boolean = true): void {
+    // Cancel any in-progress animation and reset sketch state.
+    if (this.animationTimer) {
+      clearInterval(this.animationTimer);
+      this.animationTimer = null;
+    }
+    
+    // Restore normal bounds if we were in expanded sketch mode.
+    if (this.normalBounds && this.window && !this.window.isDestroyed()) {
+      this.window.setBounds(this.normalBounds);
+    }
+    this.normalBounds = null;
+    this.sketchModeActive = false;
+    
     // Only play sound if window is actually visible.
     // This prevents double-play when blur event fires after direct hide() call.
     if (this.window && !this.window.isDestroyed() && this.window.isVisible()) {
@@ -477,6 +496,45 @@ export class ClipboardHistoryWindow {
   }
 
   /**
+   * Animate window bounds from current position to target over duration.
+   * Uses easeOutQuad for smooth deceleration.
+   */
+  private animateBounds(targetBounds: Electron.Rectangle, duration: number = 150): void {
+    if (!this.window || this.window.isDestroyed()) return;
+    
+    // Cancel any in-progress animation.
+    if (this.animationTimer) {
+      clearInterval(this.animationTimer);
+      this.animationTimer = null;
+    }
+    
+    const startBounds = this.window.getBounds();
+    const steps = 6;
+    const stepDuration = duration / steps;
+    let currentStep = 0;
+    
+    this.animationTimer = setInterval(() => {
+      currentStep++;
+      const t = currentStep / steps;
+      const eased = 1 - (1 - t) * (1 - t); // easeOutQuad
+      
+      const newBounds = {
+        x: Math.round(startBounds.x + (targetBounds.x - startBounds.x) * eased),
+        y: Math.round(startBounds.y + (targetBounds.y - startBounds.y) * eased),
+        width: Math.round(startBounds.width + (targetBounds.width - startBounds.width) * eased),
+        height: Math.round(startBounds.height + (targetBounds.height - startBounds.height) * eased),
+      };
+      
+      this.window?.setBounds(newBounds);
+      
+      if (currentStep >= steps) {
+        clearInterval(this.animationTimer!);
+        this.animationTimer = null;
+      }
+    }, stepDuration);
+  }
+
+  /**
    * Set recording state - used to decide whether to hide the entire app when dismissing.
    * When recording is active, we want to keep the recording overlay visible.
    */
@@ -494,6 +552,38 @@ export class ClipboardHistoryWindow {
 
   setSketchModeActive(active: boolean): void {
     this.sketchModeActive = active;
+    
+    if (!this.window || this.window.isDestroyed()) return;
+    
+    if (active) {
+      // Save current bounds before expanding.
+      this.normalBounds = this.window.getBounds();
+      
+      // Calculate expanded bounds (20% larger, centered expansion).
+      const expandFactor = 1.2;
+      const current = this.normalBounds;
+      const newWidth = Math.round(current.width * expandFactor);
+      const newHeight = Math.round(current.height * expandFactor);
+      const newX = Math.round(current.x - (newWidth - current.width) / 2);
+      const newY = Math.round(current.y - (newHeight - current.height) / 2);
+      
+      // Clamp to screen bounds so window doesn't go off-screen.
+      const display = screen.getDisplayNearestPoint({ x: current.x, y: current.y });
+      const workArea = display.workArea;
+      
+      const clampedBounds = {
+        x: Math.max(workArea.x, Math.min(newX, workArea.x + workArea.width - newWidth)),
+        y: Math.max(workArea.y, Math.min(newY, workArea.y + workArea.height - newHeight)),
+        width: Math.min(newWidth, workArea.width),
+        height: Math.min(newHeight, workArea.height),
+      };
+      
+      this.animateBounds(clampedBounds);
+    } else if (this.normalBounds) {
+      // Animate back to original size.
+      this.animateBounds(this.normalBounds);
+      this.normalBounds = null;
+    }
   }
 
   isSketchModeActive(): boolean {

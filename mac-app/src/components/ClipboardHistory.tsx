@@ -359,6 +359,19 @@ export default function ClipboardHistory() {
     return 'clipboard';
   });
   
+  // Track if SharedContextView has ever been shown.
+  // Once shown, we keep it mounted (hidden via CSS) to preserve state.
+  // This "lazy mount then keep mounted" pattern prevents loading issues from mounting too early.
+  const [hasShownTeamView, setHasShownTeamView] = useState(() => {
+    const saved = localStorage.getItem('fieldTheoryView');
+    return saved === 'team';
+  });
+  
+  // Mark team view as "has been shown" when user first switches to it.
+  if (viewMode === 'team' && !hasShownTeamView) {
+    setHasShownTeamView(true);
+  }
+  
   const [editingSketchItem, setEditingSketchItem] = useState<ClipboardItem | null>(null);
   const [sketchBackgroundImage, setSketchBackgroundImage] = useState<{
     dataUrl: string;
@@ -3150,13 +3163,37 @@ export default function ClipboardHistory() {
         </div>
       )}
 
-      {/* Conditionally show Settings, Todo View, Team View, DMs View, or Clipboard History */}
+      {/* SharedContextView uses "lazy mount then keep mounted" pattern:
+          - First mount happens when user first visits the team tab (hasShownTeamView becomes true)
+          - After that, it stays mounted but hidden via CSS when not active
+          - This prevents both: early mount issues AND remount flash on tab switch */}
+      {hasShownTeamView && (
+        <div style={{ 
+          display: viewMode === 'team' && !showSettings ? 'flex' : 'none',
+          flex: 1,
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}>
+          <SharedContextView
+            onOpenSketch={(imageDataUrl, width, height) => {
+              setSketchBackgroundImage({
+                dataUrl: imageDataUrl,
+                width,
+                height,
+              });
+              setViewMode('sketch');
+            }}
+          />
+        </div>
+      )}
+
+      {/* Conditionally show Settings, Todo View, DMs View, or Clipboard History */}
       {showSettings ? (
         <SettingsPanel />
       ) : viewMode === 'todo' ? (
         <TodoView onSwitchToClipboard={() => setViewMode('clipboard')} />
       ) : viewMode === 'team' ? (
-        <SharedContextView />
+        null
       ) : viewMode === 'dms' ? (
         <DMsView />
       ) : viewMode === 'commands' ? (
