@@ -46,6 +46,7 @@ import {
 import { OnboardingWindow, OnboardingStep } from './onboardingWindow';
 import { OnboardingIPCChannels } from './types/onboarding';
 import { TodoIPCChannels } from './types/todo';
+import { CursorStatusManager, CursorStatusState } from './cursorStatusManager';
 
 // Load environment variables from .env.local for Supabase credentials.
 // In development, the file is in the mac-app directory.
@@ -142,6 +143,7 @@ let mobileSync: MobileSync | null = null;
 let sharedClipboardSync: SharedClipboardSync | null = null;
 let socialSync: SocialSync | null = null;
 let onboardingWindow: OnboardingWindow | null = null;
+let cursorStatusManager: CursorStatusManager | null = null;
 
 // Track pending update state so windows can query it when they open.
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
@@ -1881,6 +1883,23 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
+  // Cursor status indicator settings - show dot next to cursor during recording/transcribing.
+  ipcMain.handle(ClipboardIPCChannels.GET_CURSOR_STATUS_ENABLED, async () => {
+    if (!preferencesManager) {
+      return true; // Default enabled
+    }
+    return preferencesManager.getPreference('cursorStatusEnabled') ?? true;
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SET_CURSOR_STATUS_ENABLED, async (_event, enabled: boolean) => {
+    if (!preferencesManager) {
+      return false;
+    }
+    await preferencesManager.save({ cursorStatusEnabled: enabled });
+    cursorStatusManager?.setEnabled(enabled);
+    return true;
+  });
+
   // =========================================================================
   // Shared Clipboard IPC Handlers - Shared clipboard for collaboration
   // =========================================================================
@@ -2325,6 +2344,14 @@ function broadcastTranscribeEvents(): void {
     // Update clipboard history window's recording state
     // This ensures blur event doesn't hide the app when recording is active
     clipboardHistoryWindow?.setRecordingActive(status === 'recording');
+    
+    // Update cursor status indicator to show recording/transcribing state
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.ts:statusChanged',message:'TranscriberManager statusChanged event',data:{status,hasCursorManager:!!cursorStatusManager},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
+    if (cursorStatusManager) {
+      cursorStatusManager.setState(status as CursorStatusState);
+    }
   });
 
   transcriberManager.on('result', (text) => {
@@ -2568,6 +2595,11 @@ async function initTranscriberSystem(): Promise<void> {
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager);
   await transcriberManager.init();
   broadcastTranscribeEvents();
+  
+  // Initialize cursor status indicator - shows dot next to cursor during recording/transcribing.
+  cursorStatusManager = new CursorStatusManager();
+  const cursorStatusEnabled = preferencesManager.getPreference('cursorStatusEnabled') ?? true;
+  cursorStatusManager.setEnabled(cursorStatusEnabled);
 
   // Set up escape key priority: dismiss clipboard history before canceling recording
   transcriberManager.setClipboardHistoryVisibilityChecker(() => {

@@ -68,6 +68,9 @@ export default function SettingsPanel() {
   // Permission banner state - whether to show reminders for missing permissions.
   const [showPermissionReminders, setShowPermissionReminders] = useState(true);
   
+  // Cursor status indicator - shows dot next to cursor during recording/transcribing.
+  const [cursorStatusEnabled, setCursorStatusEnabled] = useState(true);
+  
   // Load clipboard hotkeys on mount
   useEffect(() => {
     if (window.clipboardAPI) {
@@ -93,6 +96,11 @@ export default function SettingsPanel() {
       // Load permission banner setting
       window.clipboardAPI.getHideScreenRecordingBanner?.().then(hide => {
         setShowPermissionReminders(!hide);
+      });
+      
+      // Load cursor status indicator setting
+      window.clipboardAPI.getCursorStatusEnabled?.().then(enabled => {
+        setCursorStatusEnabled(enabled);
       });
     }
     
@@ -187,6 +195,20 @@ export default function SettingsPanel() {
       }
     } catch (err) {
       console.error('Failed to toggle permission reminders:', err);
+    }
+  };
+  
+  // Handler for toggling cursor status indicator
+  const handleToggleCursorStatus = async (enabled: boolean) => {
+    if (!window.clipboardAPI?.setCursorStatusEnabled) return;
+
+    try {
+      const success = await window.clipboardAPI.setCursorStatusEnabled(enabled);
+      if (success) {
+        setCursorStatusEnabled(enabled);
+      }
+    } catch (err) {
+      console.error('Failed to toggle cursor status indicator:', err);
     }
   };
   
@@ -851,6 +873,19 @@ export default function SettingsPanel() {
               style={{ ...styles.toggle, backgroundColor: showPermissionReminders ? theme.accent : '#d1d5db' }}
             >
               <span style={{ ...styles.toggleKnob, transform: showPermissionReminders ? 'translateX(20px)' : 'translateX(2px)' }} />
+            </button>
+          </div>
+        </div>
+        
+        {/* Cursor Status Indicator - shows dot next to cursor during recording/transcribing */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Cursor Status Indicator</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => handleToggleCursorStatus(!cursorStatusEnabled)}
+              style={{ ...styles.toggle, backgroundColor: cursorStatusEnabled ? theme.accent : '#d1d5db' }}
+            >
+              <span style={{ ...styles.toggleKnob, transform: cursorStatusEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
             </button>
           </div>
         </div>
