@@ -555,11 +555,10 @@ export class ClipboardHistoryWindow {
     
     if (!this.window || this.window.isDestroyed()) return;
     
-    if (active) {
-      // Save current bounds before expanding.
+    if (active && !this.normalBounds) {
+      // Expand window when entering sketch mode.
       this.normalBounds = this.window.getBounds();
       
-      // Calculate expanded bounds (20% larger, centered expansion).
       const expandFactor = 1.2;
       const current = this.normalBounds;
       const newWidth = Math.round(current.width * expandFactor);
@@ -567,7 +566,6 @@ export class ClipboardHistoryWindow {
       const newX = Math.round(current.x - (newWidth - current.width) / 2);
       const newY = Math.round(current.y - (newHeight - current.height) / 2);
       
-      // Clamp to screen bounds so window doesn't go off-screen.
       const display = screen.getDisplayNearestPoint({ x: current.x, y: current.y });
       const workArea = display.workArea;
       
@@ -579,8 +577,8 @@ export class ClipboardHistoryWindow {
       };
       
       this.animateBounds(clampedBounds);
-    } else if (this.normalBounds) {
-      // Animate back to original size.
+    } else if (!active && this.normalBounds) {
+      // Contract window when exiting sketch mode.
       this.animateBounds(this.normalBounds);
       this.normalBounds = null;
     }
