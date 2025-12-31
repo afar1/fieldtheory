@@ -52,7 +52,7 @@ export class TranscriberManager extends EventEmitter {
   // Used for auto-stacking: if screenshots are taken during recording, they get
   // grouped with the transcript into a stack when recording ends.
   private currentStack: number[] = [];
-  private lastTranscription: string = ''; // Store last transcription for paste-failed fallback
+  private lastTranscription: string = '';
   
   // Clipboard history visibility checker - allows escape key to dismiss clipboard history first
   private clipboardHistoryVisibilityChecker: (() => boolean) | null = null;
@@ -395,24 +395,17 @@ export class TranscriberManager extends EventEmitter {
       
       this.lastTranscription = cleanedText;
       
-      // Always paste first - don't gate on accessibility check.
-      // Start accessibility check in parallel to determine UI feedback.
+      // Paste first, check accessibility in parallel for UI feedback
       const accessibilityCheckPromise = this.nativeHelper.checkFocusedTextInput();
-      
       await this.pasteStack();
       this.emit('result', cleanedText);
       
-      // Use accessibility result to decide which UI feedback to show.
-      // This is a hint, not a gate - paste already happened.
+      // Use accessibility result to choose UI feedback (paste already happened)
       const hasTextInput = await accessibilityCheckPromise;
-      
       if (hasTextInput) {
-        // Accessibility detected text input - show brief "Pasted" confirmation
         this.emit('paste-success', cleanedText);
       } else {
-        // Accessibility didn't detect text input - show transcript + fallback message.
-        // Paste may have still worked; this is just a UI hint for recovery.
-        console.log('[TranscriberManager] Accessibility check: no text input detected - showing fallback UI');
+        console.log('[TranscriberManager] Accessibility: no text input - showing fallback UI');
         this.emit('paste-failed', 'No text input focused', cleanedText);
       }
       
