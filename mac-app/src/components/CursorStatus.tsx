@@ -5,7 +5,7 @@
 
 import { useEffect, useState, useRef } from 'react';
 
-type StatusState = 'idle' | 'recording' | 'transcribing' | 'done';
+type StatusState = 'idle' | 'recording' | 'transcribing' | 'done' | 'confirmation' | 'paste-failed';
 
 // Colors for each state
 const STATE_COLORS: Record<StatusState, string> = {
@@ -13,6 +13,8 @@ const STATE_COLORS: Record<StatusState, string> = {
   recording: '#ff3b30',      // Red
   transcribing: '#af52de',   // Purple
   done: '#34c759',           // Green
+  confirmation: '#ff3b30',   // Red (still recording)
+  'paste-failed': '#ff9500', // Orange
 };
 
 // Glow colors (slightly transparent for the shadow effect)
@@ -21,7 +23,12 @@ const STATE_GLOWS: Record<StatusState, string> = {
   recording: 'rgba(255, 59, 48, 0.5)',
   transcribing: 'rgba(175, 82, 222, 0.5)',
   done: 'rgba(52, 199, 89, 0.5)',
+  confirmation: 'rgba(255, 59, 48, 0.5)',
+  'paste-failed': 'rgba(255, 149, 0, 0.5)',
 };
+
+// Confirmation countdown duration
+const CONFIRMATION_COUNTDOWN_SECONDS = 7;
 
 export default function CursorStatus() {
   const [state, setState] = useState<StatusState>('idle');
@@ -30,9 +37,18 @@ export default function CursorStatus() {
   const [textVisible, setTextVisible] = useState(false);
   const [showRecordingText, setShowRecordingText] = useState(false);
   
+  // Confirmation countdown state
+  const [countdownSeconds, setCountdownSeconds] = useState(CONFIRMATION_COUNTDOWN_SECONDS);
+  
+  // Paste-failed state: shows transcription text briefly, then "Saved to Field Theory"
+  const [pasteFailedText, setPasteFailedText] = useState<string>('');
+  const [showSavedMessage, setShowSavedMessage] = useState(false);
+  
   // Refs for animation intervals
-  const dotIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const recordingTextTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const dotIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingTextTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pasteFailedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Listen for state changes from main process
   useEffect(() => {
@@ -41,18 +57,29 @@ export default function CursorStatus() {
     window.cursorStatusAPI.onStateChange((newState) => {
       setState(newState);
       
-      // When recording starts, show "Recording..." text briefly then fade it out
+      // When recording starts, show "Think outloud..." text briefly then fade it out
       if (newState === 'recording') {
         setShowRecordingText(true);
         // Clear any existing timeout
         if (recordingTextTimeoutRef.current) {
           clearTimeout(recordingTextTimeoutRef.current);
         }
-        // Fade out "Recording..." after 1.5s, leaving just the pulsing dot
+        // Fade out text after 2.52s (20% longer than 2.1s), leaving just the pulsing dot
         recordingTextTimeoutRef.current = setTimeout(() => {
           setShowRecordingText(false);
           recordingTextTimeoutRef.current = null;
-        }, 1500);
+        }, 2520);
+      }
+      
+      // When confirmation starts, begin countdown
+      if (newState === 'confirmation') {
+        setCountdownSeconds(CONFIRMATION_COUNTDOWN_SECONDS);
+      }
+      
+      // Reset paste-failed state when leaving it
+      if (newState !== 'paste-failed') {
+        setPasteFailedText('');
+        setShowSavedMessage(false);
       }
     });
     
@@ -60,11 +87,31 @@ export default function CursorStatus() {
       setIsIdle(idle);
     });
     
+    // Listen for data (transcription text for paste-failed state)
+    window.cursorStatusAPI.onDataChange?.((data) => {
+      if (data?.transcription) {
+        setPasteFailedText(data.transcription);
+        setShowSavedMessage(false);
+        // After 1.5s, switch to "Saved to Field Theory"
+        if (pasteFailedTimeoutRef.current) {
+          clearTimeout(pasteFailedTimeoutRef.current);
+        }
+        pasteFailedTimeoutRef.current = setTimeout(() => {
+          setShowSavedMessage(true);
+          pasteFailedTimeoutRef.current = null;
+        }, 1500);
+      }
+    });
+    
     return () => {
       window.cursorStatusAPI?.removeAllListeners('cursor-status-state');
       window.cursorStatusAPI?.removeAllListeners('cursor-status-idle');
+      window.cursorStatusAPI?.removeAllListeners('cursor-status-data');
       if (recordingTextTimeoutRef.current) {
         clearTimeout(recordingTextTimeoutRef.current);
+      }
+      if (pasteFailedTimeoutRef.current) {
+        clearTimeout(pasteFailedTimeoutRef.current);
       }
     };
   }, []);
@@ -101,6 +148,54 @@ export default function CursorStatus() {
       }
     };
   }, [state, textVisible]);
+  
+  // Confirmation countdown timer (7 seconds)
+  useEffect(() => {
+    if (state !== 'confirmation') {
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+        countdownIntervalRef.current = null;
+      }
+      return;
+    }
+    
+    countdownIntervalRef.current = setInterval(() => {
+      setCountdownSeconds(prev => {
+        if (prev <= 1) {
+          // Countdown finished - continue recording (cancel confirmation)
+          window.cursorStatusAPI?.sendConfirmationResponse?.(false);
+          return CONFIRMATION_COUNTDOWN_SECONDS;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    
+    return () => {
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+      }
+    };
+  }, [state]);
+  
+  // Keyboard handler for confirmation state
+  useEffect(() => {
+    if (state !== 'confirmation') return;
+    
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        // Esc = abandon recording
+        e.preventDefault();
+        window.cursorStatusAPI?.sendConfirmationResponse?.(true);
+      } else {
+        // Any other key = continue recording (dismiss confirmation)
+        e.preventDefault();
+        window.cursorStatusAPI?.sendConfirmationResponse?.(false);
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [state]);
 
   // Don't render anything if idle state
   if (state === 'idle') {
@@ -110,10 +205,27 @@ export default function CursorStatus() {
   // Get text label based on state
   const getLabel = (): string => {
     if (state === 'recording' && showRecordingText) {
-      return 'Recording...';
+      return 'Think outloud...';
     }
     if (state === 'transcribing') {
       return 'Transcribing' + '.'.repeat(dotCount);
+    }
+    if (state === 'done') {
+      return 'Pasted';
+    }
+    if (state === 'confirmation') {
+      return `Do nothing to continue recording ${countdownSeconds}`;
+    }
+    if (state === 'paste-failed') {
+      if (showSavedMessage) {
+        return 'Saved to Field Theory';
+      }
+      // Truncate long transcriptions
+      const maxLen = 30;
+      if (pasteFailedText.length > maxLen) {
+        return pasteFailedText.slice(0, maxLen) + '...';
+      }
+      return pasteFailedText || 'Saved to Field Theory';
     }
     return '';
   };
@@ -121,17 +233,22 @@ export default function CursorStatus() {
   const color = STATE_COLORS[state];
   const glow = STATE_GLOWS[state];
   const label = getLabel();
-  const showLabel = (state === 'recording' && showRecordingText) || (state === 'transcribing' && textVisible);
+  const showLabel = 
+    (state === 'recording' && showRecordingText) || 
+    (state === 'transcribing' && textVisible) ||
+    state === 'done' ||
+    state === 'confirmation' ||
+    state === 'paste-failed';
 
   return (
     <div style={styles.container}>
-      {/* Colored dot - always visible during active state, pulses for recording */}
+      {/* Colored dot - always visible during active state, pulses for recording/confirmation */}
       <div 
         style={{
           ...styles.dot,
           backgroundColor: color,
           boxShadow: `0 0 6px ${glow}`,
-          animation: state === 'recording' ? 'pulse 1.5s ease-in-out infinite' : 'none',
+          animation: (state === 'recording' || state === 'confirmation') ? 'pulse 1.8s ease-in-out infinite' : 'none',
         }} 
       />
       
@@ -139,7 +256,11 @@ export default function CursorStatus() {
       {showLabel && label && (
         <div style={{
           ...styles.labelContainer,
-          animation: state === 'recording' && showRecordingText ? 'fadeInOut 1.5s ease-out forwards' : 'fadeIn 150ms ease-out',
+          animation: state === 'recording' && showRecordingText 
+            ? 'fadeInOut 2.52s ease-out forwards' 
+            : state === 'done' 
+              ? 'fadeIn 150ms ease-out' 
+              : 'fadeIn 150ms ease-out',
         }}>
           <span style={styles.label}>{label}</span>
         </div>
@@ -157,8 +278,8 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '0 4px',
   },
   dot: {
-    width: '8px',
-    height: '8px',
+    width: '7px',
+    height: '7px',
     borderRadius: '50%',
     flexShrink: 0,
   },
@@ -196,13 +317,4 @@ styleSheet.textContent = `
 `;
 document.head.appendChild(styleSheet);
 
-// Type declaration for the cursor status API
-declare global {
-  interface Window {
-    cursorStatusAPI?: {
-      onStateChange: (callback: (state: StatusState) => void) => void;
-      onIdleChange: (callback: (isIdle: boolean) => void) => void;
-      removeAllListeners: (channel: string) => void;
-    };
-  }
-}
+// Note: CursorStatusAPI is declared in src/types/window.d.ts
