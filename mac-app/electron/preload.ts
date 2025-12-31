@@ -1512,6 +1512,17 @@ const sharedClipboardAPI = {
     };
   },
 
+  // Listen for team item updated events (e.g., stack changes).
+  onTeamItemUpdated: (callback: (item: SharedClipboardItem) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, item: SharedClipboardItem) => {
+      callback(item);
+    };
+    ipcRenderer.on(SharedClipboardIPCChannels.TEAM_ITEM_UPDATED, handler);
+    return () => {
+      ipcRenderer.removeListener(SharedClipboardIPCChannels.TEAM_ITEM_UPDATED, handler);
+    };
+  },
+
   // =========================================================================
   // Team Membership
   // =========================================================================

@@ -2689,6 +2689,37 @@ async function initTranscriberSystem(): Promise<void> {
     });
   }
 
+  // Forward sharedClipboardSync realtime events to renderer windows.
+  // This enables instant updates when teammates add, modify, or delete items.
+  if (sharedClipboardSync) {
+    sharedClipboardSync.on('teamItemAdded', (item) => {
+      console.log('[Main] Realtime: team item added:', item.id);
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(SharedClipboardIPCChannels.TEAM_ITEM_ADDED, item);
+        }
+      });
+    });
+
+    sharedClipboardSync.on('teamItemUpdated', (item) => {
+      console.log('[Main] Realtime: team item updated:', item.id);
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(SharedClipboardIPCChannels.TEAM_ITEM_UPDATED, item);
+        }
+      });
+    });
+
+    sharedClipboardSync.on('teamItemDeleted', (id) => {
+      console.log('[Main] Realtime: team item deleted:', id);
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(SharedClipboardIPCChannels.TEAM_ITEM_DELETED, id);
+        }
+      });
+    });
+  }
+
   // Register todo hotkey (Cmd+Shift+T by default).
   // This hotkey toggles between todo view and clipboard view.
   const todoHotkey = prefs.todoHotkey || 'Command+Shift+T';

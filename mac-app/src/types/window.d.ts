@@ -554,6 +554,7 @@ interface SharedClipboardAPI {
   getStacks: () => Promise<SharedStackInfo[]>;
   onTeamItemAdded?: (callback: (item: SharedClipboardItem) => void) => () => void;
   onTeamItemDeleted?: (callback: (id: string) => void) => () => void;
+  onTeamItemUpdated?: (callback: (item: SharedClipboardItem) => void) => () => void;
   // Team membership.
   getTeamMembers: () => Promise<TeamMember[]>;
   addTeamMember: (email: string) => Promise<{ success: boolean; error?: string }>;
