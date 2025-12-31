@@ -325,6 +325,10 @@ interface ClipboardAPI {
   // Permission banner settings
   getHideScreenRecordingBanner?: () => Promise<boolean>;
   setHideScreenRecordingBanner?: (hide: boolean) => Promise<boolean>;
+  
+  // Cursor status indicator settings
+  getCursorStatusEnabled?: () => Promise<boolean>;
+  setCursorStatusEnabled?: (enabled: boolean) => Promise<boolean>;
 }
 
 /**
@@ -673,7 +677,7 @@ interface SocialAPI {
 /**
  * Cursor status indicator state.
  */
-type CursorStatusState = 'idle' | 'recording' | 'transcribing' | 'done';
+type CursorStatusState = 'idle' | 'recording' | 'transcribing' | 'done' | 'confirmation' | 'paste-failed';
 
 /**
  * API for the cursor status indicator overlay.
@@ -682,6 +686,8 @@ type CursorStatusState = 'idle' | 'recording' | 'transcribing' | 'done';
 interface CursorStatusAPI {
   onStateChange: (callback: (state: CursorStatusState) => void) => void;
   onIdleChange: (callback: (isIdle: boolean) => void) => void;
+  onDataChange?: (callback: (data: { transcription?: string }) => void) => void;
+  sendConfirmationResponse?: (abandon: boolean) => void;
   removeAllListeners: (channel: string) => void;
 }
 
