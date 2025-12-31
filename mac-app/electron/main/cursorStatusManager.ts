@@ -34,27 +34,27 @@ export class CursorStatusManager extends EventEmitter {
   
   // Done state timeout - for showing brief green dot after transcribing
   private doneTimeout: NodeJS.Timeout | null = null;
-  private readonly DONE_DURATION_MS = 2500; // Show transcription text for 2.5s
+  private readonly DONE_DURATION_MS = 2500;
   
   // Paste-failed state timeout
   private pasteFailedTimeout: NodeJS.Timeout | null = null;
-  private readonly PASTE_FAILED_DURATION_MS = 3000; // Show for 3s total
+  private readonly PASTE_FAILED_DURATION_MS = 3000;
   
   // Store last transcription for done state display
   private lastTranscription: string = '';
   
   // Timing constants
-  private readonly POLL_INTERVAL_MS = 33; // ~30fps for smooth following
-  private readonly IDLE_THRESHOLD_MS = 100; // Show text after 100ms of stillness
-  private readonly MOVEMENT_THRESHOLD_PX = 3; // Pixels of movement to reset idle
+  private readonly POLL_INTERVAL_MS = 33;
+  private readonly IDLE_THRESHOLD_MS = 100;
+  private readonly MOVEMENT_THRESHOLD_PX = 3;
   
   // Window dimensions and offset from cursor (positioned immediately to the right)
   private readonly WINDOW_WIDTH_NORMAL = 140;
-  private readonly WINDOW_WIDTH_WIDE = 345; // 15% wider than 300 for longer text
-  private readonly WINDOW_HEIGHT_NORMAL = 28; // Increased from 22 to fit text with padding
-  private readonly WINDOW_HEIGHT_TALL = 96; // 20% taller than 80 for wrapped text
-  private readonly CURSOR_OFFSET_X = 16;  // To the right of cursor
-  private readonly CURSOR_OFFSET_Y = 1;   // Just below cursor tip
+  private readonly WINDOW_WIDTH_WIDE = 345;
+  private readonly WINDOW_HEIGHT_NORMAL = 28;
+  private readonly WINDOW_HEIGHT_TALL = 96;
+  private readonly CURSOR_OFFSET_X = 16;
+  private readonly CURSOR_OFFSET_Y = 1;
   
   constructor() {
     super();
