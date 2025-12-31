@@ -69,7 +69,6 @@ export default function CursorStatus() {
         if (recordingTextTimeoutRef.current) {
           clearTimeout(recordingTextTimeoutRef.current);
         }
-        // Fade out text after 2.52s (20% longer than 2.1s), leaving just the pulsing dot
         recordingTextTimeoutRef.current = setTimeout(() => {
           setShowRecordingText(false);
           recordingTextTimeoutRef.current = null;
@@ -229,12 +228,9 @@ export default function CursorStatus() {
       return 'Transcribing' + '.'.repeat(dotCount);
     }
     if (state === 'done') {
-      // Always show transcription, then "saved" message
-      // (We can't reliably detect if paste actually worked)
       if (showDoneSavedMessage) {
         return 'Transcript saved to Field Theory. ⌘V to paste';
       }
-      // Show transcription (will be truncated via CSS)
       return doneTranscription || 'Saved';
     }
     if (state === 'confirmation') {
@@ -301,14 +297,14 @@ const styles: Record<string, React.CSSProperties> = {
     height: '7px',
     borderRadius: '50%',
     flexShrink: 0,
-    marginTop: '6px', // Vertically center with first line of text (11px font + 4px padding)
+    marginTop: '6px',
   },
   labelContainer: {
     backgroundColor: 'rgba(30, 30, 30, 0.85)',
     borderRadius: '4px',
     padding: '4px 8px',
-    maxWidth: '320px', // 15% wider
-    maxHeight: '80px', // ~5-6 lines
+    maxWidth: '320px',
+    maxHeight: '80px',
     overflow: 'hidden',
   },
   label: {
@@ -319,7 +315,7 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
     display: '-webkit-box',
-    WebkitLineClamp: 5, // Show ~5 lines then ellipsis
+    WebkitLineClamp: 5,
     WebkitBoxOrient: 'vertical',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
