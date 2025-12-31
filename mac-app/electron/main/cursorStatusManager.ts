@@ -50,9 +50,9 @@ export class CursorStatusManager extends EventEmitter {
   
   // Window dimensions and offset from cursor (positioned immediately to the right)
   private readonly WINDOW_WIDTH_NORMAL = 140;
-  private readonly WINDOW_WIDTH_WIDE = 300; // For confirmation/paste-failed/done with longer text
+  private readonly WINDOW_WIDTH_WIDE = 345; // 15% wider than 300 for longer text
   private readonly WINDOW_HEIGHT_NORMAL = 22;
-  private readonly WINDOW_HEIGHT_TALL = 80; // For wrapped text
+  private readonly WINDOW_HEIGHT_TALL = 96; // 20% taller than 80 for wrapped text
   private readonly CURSOR_OFFSET_X = 16;  // To the right of cursor
   private readonly CURSOR_OFFSET_Y = 1;   // Just below cursor tip
   
@@ -111,9 +111,12 @@ export class CursorStatusManager extends EventEmitter {
       this.state = 'done';
       this.updateWindowSize('done');
       this.sendStateToRenderer('done');
-      // Send transcription text for display
+      // Send transcription text for display (pasteFailed: false means paste succeeded)
       if (this.lastTranscription && this.window && !this.window.isDestroyed()) {
-        this.window.webContents.send('cursor-status-data', { transcription: this.lastTranscription });
+        this.window.webContents.send('cursor-status-data', { 
+          transcription: this.lastTranscription,
+          pasteFailed: false 
+        });
       }
       
       this.doneTimeout = setTimeout(() => {
@@ -139,21 +142,26 @@ export class CursorStatusManager extends EventEmitter {
   /**
    * Set state with additional data (e.g., transcription text for paste-failed).
    */
-  setStateWithData(state: CursorStatusState, data: { transcription?: string }): void {
+  setStateWithData(state: CursorStatusState, data: { transcription?: string; pasteFailed?: boolean }): void {
     this.setState(state);
     
     if (state === 'paste-failed') {
-      // Send data to renderer
+      // Send data to renderer with pasteFailed flag
       if (this.window && !this.window.isDestroyed()) {
-        this.window.webContents.send('cursor-status-data', data);
+        this.window.webContents.send('cursor-status-data', { ...data, pasteFailed: true });
       }
       
-      // Auto-hide after duration
+      // Also store for any subsequent done state
+      if (data.transcription) {
+        this.lastTranscription = data.transcription;
+      }
+      
+      // Auto-hide after duration (longer to allow reading message)
       this.pasteFailedTimeout = setTimeout(() => {
         this.pasteFailedTimeout = null;
         this.state = 'idle';
         this.hide();
-      }, this.PASTE_FAILED_DURATION_MS);
+      }, this.PASTE_FAILED_DURATION_MS + 1500); // Extra time for "saved to FT" message
     }
   }
   

@@ -686,7 +686,7 @@ type CursorStatusState = 'idle' | 'recording' | 'transcribing' | 'done' | 'confi
 interface CursorStatusAPI {
   onStateChange: (callback: (state: CursorStatusState) => void) => void;
   onIdleChange: (callback: (isIdle: boolean) => void) => void;
-  onDataChange?: (callback: (data: { transcription?: string }) => void) => void;
+  onDataChange?: (callback: (data: { transcription?: string; pasteFailed?: boolean }) => void) => void;
   sendConfirmationResponse?: (abandon: boolean) => void;
   removeAllListeners: (channel: string) => void;
 }
