@@ -459,6 +459,9 @@ interface TodoAPI {
   setHotkey: (hotkey: string) => Promise<boolean>;
   onTodosChanged: (callback: (todos: Todo[]) => void) => () => void;
   onShowTodos: (callback: () => void) => () => void;
+  onTodoAdded?: (callback: (todo: Todo) => void) => () => void;
+  onTodoUpdated?: (callback: (todo: Todo) => void) => () => void;
+  onTodoDeleted?: (callback: (id: string) => void) => () => void;
 }
 
 /**

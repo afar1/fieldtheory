@@ -5,7 +5,7 @@
  * Todos: Synced bidirectionally - changes on Mac push back to Supabase.
  */
 
-import { createClient, SupabaseClient, Session, SupportedStorage } from '@supabase/supabase-js';
+import { createClient, SupabaseClient, Session, SupportedStorage, RealtimeChannel } from '@supabase/supabase-js';
 import { ClipboardManager } from './clipboardManager';
 import { PreferencesManager } from './preferences';
 import { EventEmitter } from 'events';
@@ -126,6 +126,10 @@ export class MobileSync extends EventEmitter {
   // Local cache of todos for the UI.
   private todos: Todo[] = [];
 
+  // Realtime subscription for todos.
+  private todoRealtimeChannel: RealtimeChannel | null = null;
+  private todoRealtimeConnected: boolean = false;
+
   constructor(clipboardManager: ClipboardManager, preferences: PreferencesManager) {
     super();
     this.clipboardManager = clipboardManager;
@@ -201,12 +205,16 @@ export class MobileSync extends EventEmitter {
 
     // Start periodic sync now that we're authenticated.
     this.startPeriodicSync();
+    
+    // Setup realtime subscription for instant todo updates.
+    this.setupTodoRealtimeSubscription();
   }
 
   /**
    * Clear the session (e.g., when user signs out).
    */
   clearSession(): void {
+    this.teardownTodoRealtimeSubscription();
     this.session = null;
     this.stopPeriodicSync();
     console.log('[MobileSync] Session cleared');
@@ -611,7 +619,7 @@ export class MobileSync extends EventEmitter {
       console.error('[MobileSync] Initial sketch sync failed:', err);
     });
 
-    // Sync every 60 seconds. Realtime handles instant updates for todos; this is the fallback.
+    // Sync every 60 seconds. Realtime handles instant updates for todos; polling is fallback only.
     this.syncInterval = setInterval(() => {
       if (!this.syncEnabled || !this.session) {
         return;
@@ -620,10 +628,12 @@ export class MobileSync extends EventEmitter {
         console.error('[MobileSync] Periodic sync failed:', err);
       });
       
-      // Sync todos periodically as fallback (Realtime handles instant updates when connected).
-      this.syncTodos().catch(err => {
-        console.error('[MobileSync] Todo sync failed:', err);
-      });
+      // Only sync todos via polling if realtime is not connected.
+      if (!this.todoRealtimeConnected) {
+        this.syncTodos().catch(err => {
+          console.error('[MobileSync] Todo sync failed:', err);
+        });
+      }
       
       // Sync sketches from iOS.
       this.syncSketches().catch(err => {
@@ -643,6 +653,132 @@ export class MobileSync extends EventEmitter {
       this.syncInterval = null;
       console.log('[MobileSync] Periodic sync stopped');
     }
+  }
+
+  // ===========================================================================
+  // Todo Realtime Subscription
+  // ===========================================================================
+
+  /**
+   * Subscribe to realtime changes on the todos table.
+   * This enables instant updates when todos are added/updated/deleted from any device.
+   */
+  private setupTodoRealtimeSubscription(): void {
+    if (!this.supabase || !this.session) return;
+
+    // Teardown existing subscription first.
+    this.teardownTodoRealtimeSubscription();
+
+    console.log('[MobileSync] Setting up realtime subscription for todos');
+
+    this.todoRealtimeChannel = this.supabase
+      .channel('todos-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'todos',
+        },
+        (payload) => {
+          console.log('[MobileSync] Realtime INSERT todo:', payload.new?.id);
+          const row = payload.new as TodoRow;
+          const todo: Todo = {
+            id: row.id,
+            clientId: row.client_id,
+            text: row.text,
+            completed: row.completed,
+            createdAt: row.client_created_at_ms,
+            updatedAt: new Date(row.updated_at).getTime(),
+          };
+          // Add to local cache if not already present.
+          if (!this.todos.some(t => t.id === todo.id)) {
+            this.todos = [todo, ...this.todos];
+            this.emit('todoAdded', todo);
+            this.emit('todosChanged', this.todos);
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'todos',
+        },
+        (payload) => {
+          console.log('[MobileSync] Realtime UPDATE todo:', payload.new?.id);
+          const row = payload.new as TodoRow;
+          const todo: Todo = {
+            id: row.id,
+            clientId: row.client_id,
+            text: row.text,
+            completed: row.completed,
+            createdAt: row.client_created_at_ms,
+            updatedAt: new Date(row.updated_at).getTime(),
+          };
+          // Update in local cache.
+          this.todos = this.todos.map(t => t.id === todo.id ? todo : t);
+          this.emit('todoUpdated', todo);
+          this.emit('todosChanged', this.todos);
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'todos',
+        },
+        (payload) => {
+          console.log('[MobileSync] Realtime DELETE todo:', payload.old?.id);
+          const oldRow = payload.old as { id?: string };
+          if (oldRow?.id) {
+            // Remove from local cache.
+            this.todos = this.todos.filter(t => t.id !== oldRow.id);
+            this.emit('todoDeleted', oldRow.id);
+            this.emit('todosChanged', this.todos);
+          }
+        }
+      )
+      .subscribe((status, err) => {
+        console.log('[MobileSync] Todo realtime subscription status:', status);
+        if (err) {
+          console.error('[MobileSync] Todo realtime subscription error:', err);
+        }
+
+        // Handle different states.
+        if (status === 'TIMED_OUT') {
+          console.log('[MobileSync] Todo realtime timed out, retrying in 3 seconds...');
+          setTimeout(() => {
+            if (this.isAuthenticated()) {
+              this.setupTodoRealtimeSubscription();
+            }
+          }, 3000);
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('[MobileSync] Todo realtime channel error, retrying in 5 seconds...');
+          setTimeout(() => {
+            if (this.isAuthenticated()) {
+              this.setupTodoRealtimeSubscription();
+            }
+          }, 5000);
+        } else if (status === 'SUBSCRIBED') {
+          console.log('[MobileSync] Todo realtime subscription active');
+          this.todoRealtimeConnected = true;
+        }
+      });
+  }
+
+  /**
+   * Unsubscribe from todo realtime updates.
+   */
+  private teardownTodoRealtimeSubscription(): void {
+    if (this.todoRealtimeChannel) {
+      console.log('[MobileSync] Tearing down todo realtime subscription');
+      this.supabase?.removeChannel(this.todoRealtimeChannel);
+      this.todoRealtimeChannel = null;
+    }
+    this.todoRealtimeConnected = false;
   }
 
   /**
@@ -1152,6 +1288,7 @@ export class MobileSync extends EventEmitter {
    * Cleanup resources.
    */
   destroy(): void {
+    this.teardownTodoRealtimeSubscription();
     this.stopPeriodicSync();
     this.session = null;
     this.removeAllListeners();

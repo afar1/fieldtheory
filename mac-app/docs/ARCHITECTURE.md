@@ -44,7 +44,7 @@ Field's Mac app is an **Electron application** with three main layers:
 │                                                                             │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐  │
 │  │ MobileSync  │ │ SocialSync  │ │ Audio       │ │ Preferences         │  │
-│  │ (iOS sync)  │ │ (DMs, HotMic│ │ Manager     │ │ Manager             │  │
+│  │ (iOS todos) │ │ (DMs, HotMic│ │ Manager     │ │ Manager             │  │
 │  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────────────┘  │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -215,7 +215,7 @@ Each "domain" has a dedicated manager class:
 |---------|---------------|-----------|-----------|
 | `ClipboardManager` | Local clipboard history (SQLite) | No | No |
 | `SharedClipboardSync` | Team clipboard collaboration | Yes | **Yes** |
-| `MobileSync` | iOS transcript sync | Yes | No (polls) |
+| `MobileSync` | iOS transcripts, todos, sketches | Yes | **Yes** (todos) |
 | `SocialSync` | DMs, Hot Mic, Contacts | Yes | **Yes** |
 | `TranscriberManager` | Whisper transcription | No | No |
 | `VisionProcessor` | MLX image captioning | No | No |

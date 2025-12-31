@@ -96,7 +96,6 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [backgroundSyncing, setBackgroundSyncing] = useState(false);
   const [showCompleted, setShowCompleted] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   
@@ -146,16 +145,13 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
   // Data Loading
   // ==========================================================================
 
-  const loadTodos = useCallback(async (isBackgroundSync = false) => {
+  // Load todos from server. Only called on initial load if cache is empty.
+  // Realtime subscription handles all subsequent updates.
+  const loadTodos = useCallback(async () => {
     if (!window.todoAPI) return;
     
     try {
-      // Use background syncing if we have cached data, otherwise show loading state.
-      if (isBackgroundSync) {
-        setBackgroundSyncing(true);
-      } else {
-        setSyncing(true);
-      }
+      setSyncing(true);
       
       // Ensure session is passed to main process (in case it wasn't on app start).
       // This handles the case where user was already logged in from a previous session.
@@ -176,7 +172,6 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
       if (!authed) {
         setLoading(false);
         setSyncing(false);
-        setBackgroundSyncing(false);
         return;
       }
       
@@ -194,27 +189,80 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
     } finally {
       setLoading(false);
       setSyncing(false);
-      setBackgroundSyncing(false);
     }
   }, []);
 
-  // Initial load - use background sync if we have cached data.
+  // Initial load - only fetch if cache is empty. Realtime handles everything else.
   useEffect(() => {
-    const hasCachedData = todos.length > 0;
-    loadTodos(hasCachedData);
+    if (todos.length === 0) {
+      loadTodos();
+    } else {
+      // Check auth status even if we have cached data.
+      (async () => {
+        const authed = await window.todoAPI?.isAuthenticated();
+        setIsAuthenticated(authed ?? false);
+        setLoading(false);
+      })();
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Listen for todo changes from other windows or sync.
+  // Helper to update cache after any change.
+  const updateCache = useCallback((newTodos: Todo[]) => {
+    try {
+      localStorage.setItem('todosCache', JSON.stringify(newTodos));
+    } catch (e) {
+      console.error('[TodoView] Failed to cache todos:', e);
+    }
+  }, []);
+
+  // Subscribe to realtime events for todos.
+  // These events are pushed from the server when todos are added/updated/deleted.
   useEffect(() => {
     if (!window.todoAPI) return;
     
-    const unsubscribe = window.todoAPI.onTodosChanged((newTodos) => {
+    // Handle bulk changes (from polling fallback or full sync).
+    const unsubChanged = window.todoAPI.onTodosChanged((newTodos) => {
       setTodos(newTodos);
+      updateCache(newTodos);
+    });
+
+    // Handle individual todo added (realtime).
+    const unsubAdded = window.todoAPI.onTodoAdded?.((todo) => {
+      setTodos(prev => {
+        // Avoid duplicates.
+        if (prev.some(t => t.id === todo.id)) return prev;
+        const next = [todo, ...prev];
+        updateCache(next);
+        return next;
+      });
+    });
+
+    // Handle individual todo updated (realtime).
+    const unsubUpdated = window.todoAPI.onTodoUpdated?.((todo) => {
+      setTodos(prev => {
+        const next = prev.map(t => t.id === todo.id ? todo : t);
+        updateCache(next);
+        return next;
+      });
+    });
+
+    // Handle individual todo deleted (realtime).
+    const unsubDeleted = window.todoAPI.onTodoDeleted?.((id) => {
+      setTodos(prev => {
+        const next = prev.filter(t => t.id !== id);
+        updateCache(next);
+        return next;
+      });
     });
     
-    return () => unsubscribe?.();
-  }, []);
+    return () => {
+      unsubChanged?.();
+      unsubAdded?.();
+      unsubUpdated?.();
+      unsubDeleted?.();
+    };
+  }, [updateCache]);
 
   // ==========================================================================
   // Actions
@@ -646,7 +694,7 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
       
       
       {/* Sync status indicator */}
-      {(syncing || backgroundSyncing) && (
+      {syncing && (
         <div style={{
           marginBottom: '8px',
           fontSize: '10px',
@@ -957,8 +1005,8 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
         zIndex: 10,
       }}>
         <button
-          onClick={() => loadTodos(false)}
-          disabled={syncing || backgroundSyncing}
+          onClick={() => loadTodos()}
+          disabled={syncing}
           style={{
             padding: '6px 8px',
             fontSize: '10px',
@@ -966,11 +1014,11 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
             backgroundColor: 'transparent',
             border: `1px solid ${theme.border}`,
             borderRadius: '4px',
-            cursor: syncing || backgroundSyncing ? 'not-allowed' : 'pointer',
+            cursor: syncing ? 'not-allowed' : 'pointer',
             display: 'flex',
             alignItems: 'center',
             gap: '4px',
-            opacity: syncing || backgroundSyncing ? 0.5 : 1,
+            opacity: syncing ? 0.5 : 1,
           }}
         >
           refresh <KeyCap small>r</KeyCap>

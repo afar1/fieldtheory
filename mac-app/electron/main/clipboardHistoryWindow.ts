@@ -443,6 +443,7 @@ export class ClipboardHistoryWindow {
 
     const targetApp = this.getTargetApp();
     this.window.webContents.send('clipboard:targetAppInfo', {
+      previousApp: this.previousApp,
       targetApp,
       runningApps: this.runningApps,
     });
