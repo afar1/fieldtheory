@@ -229,16 +229,13 @@ export default function CursorStatus() {
       return 'Transcribing' + '.'.repeat(dotCount);
     }
     if (state === 'done') {
-      // If paste was successful, just show "Pasted" briefly (no transcription)
-      if (pasteWasSuccessful) {
-        return 'Pasted';
-      }
-      // Paste failed: show transcription, then "saved" message
+      // Always show transcription, then "saved" message
+      // (We can't reliably detect if paste actually worked)
       if (showDoneSavedMessage) {
         return 'Transcript saved to Field Theory. ⌘V to paste';
       }
       // Show transcription (will be truncated via CSS)
-      return doneTranscription || 'Saved to Field Theory';
+      return doneTranscription || 'Saved';
     }
     if (state === 'confirmation') {
       return `Abandon transcript? (${countdownSeconds}) Do nothing to continue recording`;
