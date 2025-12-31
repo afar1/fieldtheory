@@ -12,7 +12,7 @@
  * the shared stack don't affect the personal copy.
  */
 
-import { SupabaseClient, Session } from '@supabase/supabase-js';
+import { SupabaseClient, Session, RealtimeChannel } from '@supabase/supabase-js';
 import { ClipboardManager, ClipboardItem as LocalClipboardItem, ClipboardItemType } from './clipboardManager';
 import { EventEmitter } from 'events';
 import crypto from 'crypto';
@@ -144,6 +144,7 @@ export class SharedClipboardSync extends EventEmitter {
   private clipboardManager: ClipboardManager;
   private supabase: SupabaseClient | null = null;
   private session: Session | null = null;
+  private realtimeChannel: RealtimeChannel | null = null;
 
   constructor(clipboardManager: ClipboardManager) {
     super();
@@ -159,13 +160,20 @@ export class SharedClipboardSync extends EventEmitter {
 
   /**
    * Set the authenticated session.
+   * Manages realtime subscription lifecycle.
    */
   setSession(session: Session | null): void {
+    const wasAuthenticated = this.isAuthenticated();
     this.session = session;
+    
     if (session) {
       console.log('[SharedClipboardSync] Session set for user:', session.user?.email);
+      if (!wasAuthenticated) {
+        this.setupRealtimeSubscription();
+      }
     } else {
       console.log('[SharedClipboardSync] Session cleared');
+      this.teardownRealtimeSubscription();
     }
   }
 
@@ -188,6 +196,107 @@ export class SharedClipboardSync extends EventEmitter {
    */
   private getUserId(): string | null {
     return this.session?.user?.id || null;
+  }
+
+  // ===========================================================================
+  // Realtime Subscription
+  // ===========================================================================
+
+  /**
+   * Subscribe to realtime changes on team_clipboard_items.
+   * This enables instant updates when teammates add, modify, or delete items.
+   */
+  private setupRealtimeSubscription(): void {
+    if (!this.supabase || !this.session) return;
+
+    // Teardown existing subscription first.
+    this.teardownRealtimeSubscription();
+
+    console.log('[SharedClipboardSync] Setting up realtime subscription for team items');
+
+    // Subscribe to all changes on team_clipboard_items.
+    // RLS ensures we only see items we're authorized to see.
+    this.realtimeChannel = this.supabase
+      .channel('team-clipboard-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'team_clipboard_items',
+        },
+        async (payload) => {
+          console.log('[SharedClipboardSync] Realtime INSERT:', payload.new?.id);
+          const row = payload.new as SharedClipboardRow;
+          const item = await this.rowToTeamItemAsync(row);
+          this.emit('teamItemAdded', item);
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'team_clipboard_items',
+        },
+        async (payload) => {
+          console.log('[SharedClipboardSync] Realtime UPDATE:', payload.new?.id);
+          const row = payload.new as SharedClipboardRow;
+          const item = await this.rowToTeamItemAsync(row);
+          this.emit('teamItemUpdated', item);
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'team_clipboard_items',
+        },
+        (payload) => {
+          console.log('[SharedClipboardSync] Realtime DELETE:', payload.old?.id);
+          const oldRow = payload.old as { id?: string };
+          if (oldRow?.id) {
+            this.emit('teamItemDeleted', oldRow.id);
+          }
+        }
+      )
+      .subscribe((status, err) => {
+        console.log('[SharedClipboardSync] Realtime subscription status:', status);
+        if (err) {
+          console.error('[SharedClipboardSync] Realtime subscription error:', err);
+        }
+
+        // Handle reconnection on errors.
+        if (status === 'TIMED_OUT') {
+          console.log('[SharedClipboardSync] Realtime timed out, retrying in 3 seconds...');
+          setTimeout(() => {
+            if (this.isAuthenticated()) {
+              this.setupRealtimeSubscription();
+            }
+          }, 3000);
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error('[SharedClipboardSync] Realtime channel error, retrying in 5 seconds...');
+          setTimeout(() => {
+            if (this.isAuthenticated()) {
+              this.setupRealtimeSubscription();
+            }
+          }, 5000);
+        } else if (status === 'SUBSCRIBED') {
+          console.log('[SharedClipboardSync] Realtime subscription active');
+        }
+      });
+  }
+
+  /**
+   * Unsubscribe from realtime updates.
+   */
+  private teardownRealtimeSubscription(): void {
+    if (this.realtimeChannel) {
+      console.log('[SharedClipboardSync] Tearing down realtime subscription');
+      this.supabase?.removeChannel(this.realtimeChannel);
+      this.realtimeChannel = null;
+    }
   }
 
   // ===========================================================================
@@ -1133,6 +1242,7 @@ export class SharedClipboardSync extends EventEmitter {
    * Cleanup resources.
    */
   destroy(): void {
+    this.teardownRealtimeSubscription();
     this.session = null;
     this.supabase = null;
     this.removeAllListeners();

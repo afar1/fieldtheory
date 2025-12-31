@@ -431,11 +431,7 @@ function InitialsBadge({ email }: { email: string | null }) {
 // Component
 // =============================================================================
 
-interface SharedContextViewProps {
-  onSyncingChange?: (syncing: boolean) => void;
-}
-
-export default function SharedContextView({ onSyncingChange }: SharedContextViewProps = {}) {
+export default function SharedContextView() {
   const { theme } = useTheme();
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -467,6 +463,7 @@ export default function SharedContextView({ onSyncingChange }: SharedContextView
   });
 
   // Team items state - initialized from cache for instant display.
+  // Realtime subscription handles updates after initial load.
   const [teamItems, setTeamItems] = useState<SharedClipboardItem[]>(() => {
     try {
       const cached = localStorage.getItem('sharedContextItemsCache');
@@ -479,7 +476,6 @@ export default function SharedContextView({ onSyncingChange }: SharedContextView
     return [];
   });
   const [itemsLoading, setItemsLoading] = useState(false);
-  const [backgroundSyncing, setBackgroundSyncing] = useState(false);
   const [copyingToPersonal, setCopyingToPersonal] = useState<string | null>(null);
 
   // Selection and navigation state.
@@ -745,16 +741,12 @@ export default function SharedContextView({ onSyncingChange }: SharedContextView
   // Team Items
   // ---------------------------------------------------------------------------
 
-  const loadTeamItemsRef = useRef<(isBackgroundSync?: boolean) => Promise<void>>();
-  loadTeamItemsRef.current = async (isBackgroundSync: boolean = false) => {
+  // Load team items from server. Only called on initial load if cache is empty.
+  // Realtime subscription handles all subsequent updates.
+  const loadTeamItems = useCallback(async () => {
     if (!window.sharedClipboardAPI) return;
     
-    if (isBackgroundSync) {
-      setBackgroundSyncing(true);
-      onSyncingChange?.(true);
-    } else {
-      setItemsLoading(true);
-    }
+    setItemsLoading(true);
     
     const items = await window.sharedClipboardAPI.queryItems({ limit: 100 });
     setTeamItems(items);
@@ -774,12 +766,6 @@ export default function SharedContextView({ onSyncingChange }: SharedContextView
       });
     
     setItemsLoading(false);
-    setBackgroundSyncing(false);
-    onSyncingChange?.(false);
-  };
-
-  const loadTeamItems = useCallback(async (isBackgroundSync: boolean = false) => {
-    await loadTeamItemsRef.current?.(isBackgroundSync);
   }, []);
 
   // ---------------------------------------------------------------------------
@@ -826,9 +812,8 @@ export default function SharedContextView({ onSyncingChange }: SharedContextView
         await window.sharedClipboardAPI?.updateStackId([overId], draggedStackId);
       }
     }
-
-    loadTeamItems(true);
-  }, [loadTeamItems, teamItems]);
+    // Realtime subscription will handle the update - no need to re-fetch.
+  }, [teamItems]);
 
   // ---------------------------------------------------------------------------
   // Item Actions
@@ -979,15 +964,75 @@ export default function SharedContextView({ onSyncingChange }: SharedContextView
   // Effects
   // ---------------------------------------------------------------------------
 
-  // Load data when authenticated - with double-fetch prevention.
+  // Load data when authenticated.
+  // Only fetch from server if cache is empty. Realtime handles updates.
   useEffect(() => {
     if (session && !hasLoadedRef.current) {
       hasLoadedRef.current = true;
-      const hasCachedItems = teamItems.length > 0;
       loadTeamMembers();
-      loadTeamItems(hasCachedItems);
+      // Only fetch if cache is empty - realtime handles everything else.
+      if (teamItems.length === 0) {
+        loadTeamItems();
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
+
+  // Subscribe to realtime events for team items.
+  // These events are pushed from the server when teammates add/update/delete items.
+  useEffect(() => {
+    if (!session || !window.sharedClipboardAPI) return;
+
+    // Helper to update cache after any change.
+    const updateCache = (items: SharedClipboardItem[]) => {
+      try {
+        localStorage.setItem('sharedContextItemsCache', JSON.stringify(items));
+      } catch (e) {
+        // Ignore storage errors.
+      }
+    };
+
+    // Handle new items from teammates (or self via realtime).
+    const unsubAdd = window.sharedClipboardAPI.onTeamItemAdded?.((item) => {
+      setTeamItems(prev => {
+        // Avoid duplicates - check if item already exists.
+        if (prev.some(i => i.id === item.id)) {
+          return prev;
+        }
+        // Add new item at the beginning (most recent first).
+        const next = [item, ...prev];
+        updateCache(next);
+        // Pre-cache the image if it has one.
+        if (item.imageUrl && !item.imageData) {
+          getCachedImageUrl(item.imageUrl, item.imageData, item.id).catch(() => {});
+        }
+        return next;
+      });
+    });
+
+    // Handle item updates (e.g., stack changes).
+    const unsubUpdate = window.sharedClipboardAPI.onTeamItemUpdated?.((item) => {
+      setTeamItems(prev => {
+        const next = prev.map(i => i.id === item.id ? item : i);
+        updateCache(next);
+        return next;
+      });
+    });
+
+    // Handle item deletions.
+    const unsubDelete = window.sharedClipboardAPI.onTeamItemDeleted?.((id) => {
+      setTeamItems(prev => {
+        const next = prev.filter(i => i.id !== id);
+        updateCache(next);
+        return next;
+      });
+    });
+
+    return () => {
+      unsubAdd?.();
+      unsubUpdate?.();
+      unsubDelete?.();
+    };
   }, [session]);
 
   // Reset selection when list rows change.
@@ -1358,7 +1403,7 @@ export default function SharedContextView({ onSyncingChange }: SharedContextView
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [session, listRows, selectedIndex, selectedIds, deletedItems, pasteItem, pasteStack, copyToPersonal, preview, dismissPreview, getPreviewForRow, getStackPreviewItems, hoveredImageId, teamItems, deleteTeamItem, deleteTeamItems, unstackTeamItems, loadTeamItems, toggleStackExpanded, toggleItemExpanded, stackPreviewIndex, stackPreviewItems]);
+  }, [session, listRows, selectedIndex, selectedIds, deletedItems, pasteItem, pasteStack, copyToPersonal, preview, dismissPreview, getPreviewForRow, getStackPreviewItems, hoveredImageId, teamItems, deleteTeamItem, deleteTeamItems, unstackTeamItems, toggleStackExpanded, toggleItemExpanded, stackPreviewIndex, stackPreviewItems]);
 
   // ---------------------------------------------------------------------------
   // Render: Loading
@@ -1573,9 +1618,6 @@ export default function SharedContextView({ onSyncingChange }: SharedContextView
         >
           {showMembers ? '▼' : '▶'} Team ({teamMembers.length})
         </button>
-        {backgroundSyncing && (
-          <span style={{ fontSize: '10px', color: theme.textSecondary }}>syncing...</span>
-        )}
       </div>
 
       {/* Team Members Panel */}
