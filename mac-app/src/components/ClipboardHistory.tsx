@@ -359,15 +359,12 @@ export default function ClipboardHistory() {
     return 'clipboard';
   });
   
-  // Track if SharedContextView has ever been shown.
-  // Once shown, we keep it mounted (hidden via CSS) to preserve state.
-  // This "lazy mount then keep mounted" pattern prevents loading issues from mounting too early.
+  // Lazy mount SharedContextView: once shown, keep mounted (hidden via CSS) to preserve state.
   const [hasShownTeamView, setHasShownTeamView] = useState(() => {
     const saved = localStorage.getItem('fieldTheoryView');
     return saved === 'team';
   });
   
-  // Mark team view as "has been shown" when user first switches to it.
   if (viewMode === 'team' && !hasShownTeamView) {
     setHasShownTeamView(true);
   }
@@ -402,6 +399,7 @@ export default function ClipboardHistory() {
   // Shared clipboard state (sharing to shared clipboard from clipboard view).
   const [sharingToTeam, setSharingToTeam] = useState<number | null>(null);
   const [sharedToTeamId, setSharedToTeamId] = useState<string | null>(null); // For success flash.
+  const [copiedItemId, setCopiedItemId] = useState<string | null>(null); // For "copied" flash.
   
   // Auth session state for showing "Signed in as..." in header.
   const [authSession, setAuthSession] = useState<Session | null>(null);
@@ -709,6 +707,7 @@ export default function ClipboardHistory() {
   const [keyboardNavActive, setKeyboardNavActive] = useState(false);
   const [hoveredRowIndex, setHoveredRowIndex] = useState<number | null>(null);
   const [recentlyStackedId, setRecentlyStackedId] = useState<string | null>(null);
+  const [separatorHovered, setSeparatorHovered] = useState(false);
   const [pendingStackSelection, setPendingStackSelection] = useState<string | null>(null);
   const [pendingItemSelection, setPendingItemSelection] = useState<number | null>(null);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
@@ -784,6 +783,7 @@ export default function ClipboardHistory() {
   const [containerWidth, setContainerWidth] = useState<number | null>(null);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [hasItemsAbove, setHasItemsAbove] = useState(false);
+  const [showScrollTop, setShowScrollTop] = useState(false);
   const ITEMS_PER_PAGE = 50;
 
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
@@ -805,18 +805,24 @@ export default function ClipboardHistory() {
     };
   }, []);
   
-  // Track scroll position for "more items above" indicator.
+  // Track scroll position for "scroll to top" indicator.
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
     
-    const handleScroll = () => {
-      setHasItemsAbove(list.scrollTop > 20);
-    };
-    
+    const handleScroll = () => setHasItemsAbove(list.scrollTop > 20);
     list.addEventListener('scroll', handleScroll, { passive: true });
     return () => list.removeEventListener('scroll', handleScroll);
   }, []);
+
+  // Delay showing scroll-to-top button by 500ms.
+  useEffect(() => {
+    if (hasItemsAbove) {
+      const timer = setTimeout(() => setShowScrollTop(true), 500);
+      return () => clearTimeout(timer);
+    }
+    setShowScrollTop(false);
+  }, [hasItemsAbove]);
 
   // Load items from clipboard history plus stack info.
   const loadItems = useCallback(async (reset: boolean = false) => {
@@ -879,6 +885,40 @@ export default function ClipboardHistory() {
     // Show success flash.
     setSharedToTeamId(`stack-${itemIds.join(',')}`);
     setTimeout(() => setSharedToTeamId(null), 1500);
+  }, []);
+
+  // Copy item to system clipboard and show flash.
+  const copyItem = useCallback(async (itemId: number, rowKey: string) => {
+    if (!window.clipboardAPI?.copyItem) return;
+    await window.clipboardAPI.copyItem(itemId);
+    setCopiedItemId(rowKey);
+    setTimeout(() => setCopiedItemId(null), 1500);
+  }, []);
+
+  // Copy stack: concatenate text (oldest first) or copy first image.
+  const copyStack = useCallback(async (stackItems: ClipboardItem[], rowKey: string) => {
+    if (!window.clipboardAPI) return;
+    
+    const sorted = [...stackItems].sort((a, b) => a.createdAt - b.createdAt);
+    const textParts: string[] = [];
+    let imageItem: ClipboardItem | null = null;
+    
+    for (const item of sorted) {
+      if ((item.type === 'text' || item.type === 'transcript') && item.content) {
+        textParts.push(item.content);
+      } else if ((item.type === 'image' || item.type === 'screenshot') && item.imageData && !imageItem) {
+        imageItem = item;
+      }
+    }
+    
+    if (textParts.length > 0) {
+      await navigator.clipboard.writeText(textParts.join('\n\n'));
+    } else if (imageItem) {
+      await window.clipboardAPI.copyItem(imageItem.id);
+    }
+    
+    setCopiedItemId(rowKey);
+    setTimeout(() => setCopiedItemId(null), 1500);
   }, []);
 
   const handleSketchSave = useCallback(async (imageData: { dataUrl: string; width: number; height: number }, andCopy?: boolean) => {
@@ -1181,6 +1221,32 @@ export default function ClipboardHistory() {
   
   // Memoize listRows so it's available in keyboard handler
   const listRows = useMemo(() => buildListRows(), [buildListRows]);
+
+  // Stack all items above the "context collected" separator.
+  const stackItemsAboveSeparator = useCallback(async (separatorIndex: number) => {
+    if (!window.clipboardAPI?.updateStackId) return;
+    
+    const itemIdsAbove: number[] = [];
+    for (let i = 0; i < separatorIndex; i++) {
+      const row = listRows[i];
+      if (row.type === 'item') {
+        itemIdsAbove.push(row.item.id);
+      } else if (row.type === 'stack') {
+        row.items.forEach(item => itemIdsAbove.push(item.id));
+      }
+    }
+    
+    if (itemIdsAbove.length < 2) return;
+    
+    const newStackId = crypto.randomUUID();
+    await window.clipboardAPI.updateStackId(itemIdsAbove, newStackId);
+    
+    setLastSeenItemId(null);
+    localStorage.removeItem('lastSeenItemId');
+    
+    showFeedback(`stacked ${itemIdsAbove.length} items`);
+    loadItems(true);
+  }, [listRows, loadItems, showFeedback]);
 
   // Track last seen item for "new items" separator
   useEffect(() => {
@@ -2054,6 +2120,19 @@ export default function ClipboardHistory() {
             }
             window.clipboardAPI?.closeWindow();
           }
+        }
+        return;
+      }
+
+      // Cmd+C: Copy selected/hovered item to clipboard
+      if (key === 'c' && hasMeta && !hasShift) {
+        const selectedRow = listRows[selectedIndex];
+        if (selectedRow?.type === 'item') {
+          e.preventDefault();
+          copyItem(selectedRow.item.id, `item-${selectedRow.item.id}`);
+        } else if (selectedRow?.type === 'stack' && selectedRow.items.length > 0) {
+          e.preventDefault();
+          copyStack(selectedRow.items, `stack-${selectedRow.items.map(i => i.id).join(',')}`);
         }
         return;
       }
@@ -3456,36 +3535,37 @@ export default function ClipboardHistory() {
           >
           <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             {/* Scroll indicator: more items above */}
-            {hasItemsAbove && (
-              <div
-                onClick={() => listRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  height: 28,
-                  background: `linear-gradient(to bottom, ${theme.bg}ee, ${theme.bg}00)`,
+            <div
+              onClick={() => listRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                height: 28,
+                background: `linear-gradient(to bottom, ${theme.bg}ee, ${theme.bg}00)`,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 10,
+                cursor: showScrollTop ? 'pointer' : 'default',
+                pointerEvents: showScrollTop ? 'auto' : 'none',
+                opacity: showScrollTop ? 1 : 0,
+                transition: 'opacity 0.2s ease',
+              }}
+            >
+              <span style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: '50%',
+                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  zIndex: 10,
-                  cursor: 'pointer',
-                  pointerEvents: 'auto',
-                }}
-              >
-                <span style={{
-                  fontSize: 10,
+                  fontSize: 12,
                   color: theme.textSecondary,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 4,
-                }}>
-                  <span style={{ transform: 'rotate(180deg)', display: 'inline-block' }}>▼</span>
-                  scroll to top
-                </span>
-              </div>
-            )}
+                }}>↑</span>
+            </div>
           <div
             ref={listRef}
             style={{
@@ -3882,7 +3962,8 @@ export default function ClipboardHistory() {
                       {/* Buttons - right side (show on J/K focus or mouse hover) */}
                       <div style={{ 
                         display: 'flex', 
-                        gap: '4px',
+                        gap: '2px',
+                        flexWrap: 'nowrap',
                         visibility: selectedIndex === index || hoveredRowIndex === index ? 'visible' : 'hidden',
                       }}>
                         {/* Unstack button - leftmost, only for multi-item stacks */}
@@ -4085,6 +4166,45 @@ export default function ClipboardHistory() {
                         >
                           delete <KeyCap>⌫</KeyCap>
                         </button>
+                        {/* Preview button for stacks */}
+                        <button
+                          tabIndex={-1}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const previewData = getPreviewData(row);
+                            if (previewData) {
+                              if (previewData.type === 'image') {
+                                setPreview({
+                                  type: 'image',
+                                  data: previewData.data,
+                                  width: previewData.width,
+                                  height: previewData.height,
+                                });
+                              } else if (previewData.type === 'text') {
+                                setPreview({
+                                  type: 'text',
+                                  data: previewData.content,
+                                });
+                              }
+                            }
+                          }}
+                          style={{
+                            padding: '4px 6px',
+                            fontSize: '10px',
+                            fontWeight: 500,
+                            backgroundColor: 'transparent',
+                            color: theme.textSecondary,
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            transition: 'background-color 0.15s ease',
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        >
+                          preview <KeyCap style={{ minWidth: 28 }}>␣</KeyCap>
+                        </button>
                         {/* Paste hint button - rightmost */}
                         <button
                           tabIndex={-1}
@@ -4131,27 +4251,35 @@ export default function ClipboardHistory() {
                   
                   {/* New items separator - show below last seen item if there are newer items above */}
                   {lastSeenItemId === stack.stackId && index > 0 && (
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      margin: '8px 16px',
-                    }}>
-                      <div style={{ flex: 1, height: '1px', backgroundColor: theme.border, opacity: 0.4 }} />
+                    <div
+                      onMouseEnter={() => setSeparatorHovered(true)}
+                      onMouseLeave={() => setSeparatorHovered(false)}
+                      onClick={() => stackItemsAboveSeparator(index)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        margin: '8px 16px',
+                        cursor: 'pointer',
+                        transition: 'opacity 0.15s ease',
+                      }}
+                    >
+                      <div style={{ flex: 1, height: '1px', backgroundColor: separatorHovered ? theme.accent : theme.border, opacity: separatorHovered ? 0.8 : 0.4, transition: 'all 0.15s ease' }} />
                       <span style={{
                         fontSize: '9px',
-                        color: theme.textSecondary,
-                        opacity: 0.6,
+                        color: separatorHovered ? theme.accent : theme.textSecondary,
+                        opacity: separatorHovered ? 1 : 0.6,
                         display: 'flex',
                         alignItems: 'center',
                         gap: '4px',
+                        transition: 'all 0.15s ease',
                       }}>
                         <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <polyline points="18 15 12 9 6 15" />
                         </svg>
-                        context collected since last paste
+                        {separatorHovered ? 'stack all context above?' : 'context collected since last paste'}
                       </span>
-                      <div style={{ flex: 1, height: '1px', backgroundColor: theme.border, opacity: 0.4 }} />
+                      <div style={{ flex: 1, height: '1px', backgroundColor: separatorHovered ? theme.accent : theme.border, opacity: separatorHovered ? 0.8 : 0.4, transition: 'all 0.15s ease' }} />
                     </div>
                   )}
                 </div>
@@ -4222,8 +4350,36 @@ export default function ClipboardHistory() {
                       display: 'flex',
                       flexDirection: 'column',
                       userSelect: 'none',
+                      position: 'relative',
                     }}
                   >
+                  {/* Copy icon - top right */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      copyItem(item.id, `item-${item.id}`);
+                    }}
+                    style={{
+                      position: 'absolute',
+                      top: 6,
+                      right: 6,
+                      padding: '2px 4px',
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      borderRadius: 4,
+                      cursor: 'pointer',
+                      opacity: copiedItemId === `item-${item.id}` ? 1 : (isRowSelected || hoveredRowIndex === index ? 0.5 : 0),
+                      transition: 'opacity 0.15s ease',
+                      fontSize: copiedItemId === `item-${item.id}` ? 8 : 11,
+                      color: copiedItemId === `item-${item.id}` ? theme.text : theme.textSecondary,
+                      display: 'flex',
+                      alignItems: 'center',
+                    }}
+                    onMouseEnter={(e) => { if (copiedItemId !== `item-${item.id}`) e.currentTarget.style.opacity = '1'; }}
+                    onMouseLeave={(e) => { if (copiedItemId !== `item-${item.id}`) e.currentTarget.style.opacity = isRowSelected || hoveredRowIndex === index ? '0.5' : '0'; }}
+                  >
+                    {copiedItemId === `item-${item.id}` ? 'copied' : '⧉'}
+                  </button>
                   {/* Content section - full width */}
                   <div>
                     {item.type === 'text' || item.type === 'transcript' ? (
@@ -4576,7 +4732,8 @@ export default function ClipboardHistory() {
                     {/* Buttons - right side (show on J/K focus or mouse hover) */}
                     <div style={{ 
                       display: 'flex', 
-                      gap: '4px',
+                      gap: '2px',
+                      flexWrap: 'nowrap',
                       visibility: isRowSelected || hoveredRowIndex === index ? 'visible' : 'hidden',
                     }}>
                       {/* Improve hint button - only if item has text */}
@@ -4680,8 +4837,9 @@ export default function ClipboardHistory() {
                         }}
                         disabled={sharingToTeam === item.id}
                         style={{
-                          padding: '4px 6px',
-                          fontSize: '10px',
+                          padding: '3px 4px',
+                          fontSize: '9px',
+                          whiteSpace: 'nowrap',
                           fontWeight: 500,
                           backgroundColor: sharedToTeamId === `item-${item.id}` 
                             ? (theme.isDark ? 'rgba(16, 185, 129, 0.2)' : 'rgba(16, 185, 129, 0.15)')
@@ -4721,8 +4879,9 @@ export default function ClipboardHistory() {
                           setShowDMModal(true);
                         }}
                         style={{
-                          padding: '4px 6px',
-                          fontSize: '10px',
+                          padding: '3px 4px',
+                          fontSize: '9px',
+                          whiteSpace: 'nowrap',
                           fontWeight: 500,
                           backgroundColor: 'transparent',
                           color: theme.textSecondary,
@@ -4751,8 +4910,9 @@ export default function ClipboardHistory() {
                           loadItems(true);
                         }}
                         style={{
-                          padding: '4px 6px',
-                          fontSize: '10px',
+                          padding: '3px 4px',
+                          fontSize: '9px',
+                          whiteSpace: 'nowrap',
                           fontWeight: 500,
                           backgroundColor: 'transparent',
                           color: theme.textSecondary,
@@ -4794,7 +4954,7 @@ export default function ClipboardHistory() {
                           onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                           onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
-                          preview <KeyCap>space</KeyCap>
+                          preview <KeyCap style={{ minWidth: 28 }}>␣</KeyCap>
                         </button>
                       )}
                       {/* Annotate button - only for images */}
@@ -4838,8 +4998,9 @@ export default function ClipboardHistory() {
                           handleItemClick(item, index, e as unknown as React.MouseEvent);
                         }}
                         style={{
-                          padding: '4px 6px',
-                          fontSize: '10px',
+                          padding: '3px 4px',
+                          fontSize: '9px',
+                          whiteSpace: 'nowrap',
                           fontWeight: 500,
                           backgroundColor: 'transparent',
                           color: theme.textSecondary,
@@ -4859,27 +5020,35 @@ export default function ClipboardHistory() {
                   
                   {/* New items separator - show below last seen item if there are newer items above */}
                   {lastSeenItemId === item.id && index > 0 && (
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      margin: '8px 16px',
-                    }}>
-                      <div style={{ flex: 1, height: '1px', backgroundColor: theme.border, opacity: 0.4 }} />
+                    <div
+                      onMouseEnter={() => setSeparatorHovered(true)}
+                      onMouseLeave={() => setSeparatorHovered(false)}
+                      onClick={() => stackItemsAboveSeparator(index)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        margin: '8px 16px',
+                        cursor: 'pointer',
+                        transition: 'opacity 0.15s ease',
+                      }}
+                    >
+                      <div style={{ flex: 1, height: '1px', backgroundColor: separatorHovered ? theme.accent : theme.border, opacity: separatorHovered ? 0.8 : 0.4, transition: 'all 0.15s ease' }} />
                       <span style={{
                         fontSize: '9px',
-                        color: theme.textSecondary,
-                        opacity: 0.6,
+                        color: separatorHovered ? theme.accent : theme.textSecondary,
+                        opacity: separatorHovered ? 1 : 0.6,
                         display: 'flex',
                         alignItems: 'center',
                         gap: '4px',
+                        transition: 'all 0.15s ease',
                       }}>
                         <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <polyline points="18 15 12 9 6 15" />
                         </svg>
-                        context collected since last paste
+                        {separatorHovered ? 'stack all context above?' : 'context collected since last paste'}
                       </span>
-                      <div style={{ flex: 1, height: '1px', backgroundColor: theme.border, opacity: 0.4 }} />
+                      <div style={{ flex: 1, height: '1px', backgroundColor: separatorHovered ? theme.accent : theme.border, opacity: separatorHovered ? 0.8 : 0.4, transition: 'all 0.15s ease' }} />
                     </div>
                   )}
                 </div>
@@ -5209,48 +5378,42 @@ export default function ClipboardHistory() {
             }}>
               Shortcuts
             </div>
-            {/* Two column grid of shortcuts */}
+            {/* Two column grid of shortcuts - alphabetized, column-first flow */}
             <div style={{ 
               display: 'grid', 
               gridTemplateColumns: 'auto auto', 
+              gridTemplateRows: 'repeat(12, auto)',
+              gridAutoFlow: 'column',
               gap: '10px 32px',
               fontSize: '13px',
               color: theme.textSecondary,
             }}>
+              {/* Left column (A-N) */}
+              <span>change view <KeyCap>tab</KeyCap></span>
               <span>close <KeyCap>esc</KeyCap></span>
+              <span>copy <KeyCap>⌘</KeyCap><KeyCap>c</KeyCap></span>
               <span>delete <KeyCap>⌫</KeyCap></span>
-              
-              <span>down <KeyCap>↓</KeyCap><KeyCap>j</KeyCap></span>
-              <span>help <KeyCap>shift</KeyCap><KeyCap>?</KeyCap></span>
-              
-              <span>improve <KeyCap>i</KeyCap></span>
-              <span>paste <KeyCap>↵</KeyCap></span>
-              
-              <span>preview <KeyCap>space</KeyCap></span>
-              <span>expand/collapse <KeyCap>e</KeyCap></span>
-              
-              <span>select <KeyCap>x</KeyCap></span>
-              <span>hot mic <KeyCap>h</KeyCap></span>
-              
-              <span>search <KeyCap>/</KeyCap></span>
-              <span>stack <KeyCap>s</KeyCap></span>
-              
-              <span>draw on image <KeyCap>d</KeyCap></span>
-              <span>new draw <KeyCap>⌘</KeyCap><KeyCap>d</KeyCap></span>
-              
-              <span>team share <KeyCap>t</KeyCap></span>
-              
-              <span>view <KeyCap>tab</KeyCap></span>
-              <span>target app <KeyCap>⌥</KeyCap><KeyCap>tab</KeyCap></span>
-              
-              <span>undo <KeyCap>⌘</KeyCap><KeyCap>z</KeyCap></span>
-              <span>redo <KeyCap>⌘</KeyCap><KeyCap>⇧</KeyCap><KeyCap>z</KeyCap></span>
-              
-              <span>unstack <KeyCap>u</KeyCap></span>
-              <span>up <KeyCap>↑</KeyCap><KeyCap>k</KeyCap></span>
-              
               <span>DM <KeyCap>m</KeyCap></span>
+              <span>down <KeyCap>↓</KeyCap> <span style={{ opacity: 0.5, fontSize: '0.85em' }}>(or</span> <KeyCap>j</KeyCap><span style={{ opacity: 0.5, fontSize: '0.85em' }}>)</span></span>
+              <span>draw on image <KeyCap>d</KeyCap></span>
+              <span>expand/collapse <KeyCap>e</KeyCap></span>
               <span>feedback <KeyCap>f</KeyCap></span>
+              <span>help <KeyCap>shift</KeyCap><KeyCap>?</KeyCap></span>
+              <span>hot mic <KeyCap>h</KeyCap></span>
+              <span>improve <KeyCap>i</KeyCap></span>
+              {/* Right column (N-U) */}
+              <span>new draw <KeyCap>⌘</KeyCap><KeyCap>d</KeyCap></span>
+              <span>paste <KeyCap>↵</KeyCap></span>
+              <span>preview <KeyCap>␣</KeyCap> <span style={{ opacity: 0.5, fontSize: '0.85em' }}>(space)</span></span>
+              <span>redo <KeyCap>⌘</KeyCap><KeyCap>⇧</KeyCap><KeyCap>z</KeyCap></span>
+              <span>search <KeyCap>/</KeyCap></span>
+              <span>select <KeyCap>x</KeyCap></span>
+              <span>stack <KeyCap>s</KeyCap></span>
+              <span>target app <KeyCap>⌥</KeyCap><KeyCap>tab</KeyCap></span>
+              <span>team share <KeyCap>t</KeyCap></span>
+              <span>undo <KeyCap>⌘</KeyCap><KeyCap>z</KeyCap></span>
+              <span>unstack <KeyCap>u</KeyCap></span>
+              <span>up <KeyCap>↑</KeyCap> <span style={{ opacity: 0.5, fontSize: '0.85em' }}>(or</span> <KeyCap>k</KeyCap><span style={{ opacity: 0.5, fontSize: '0.85em' }}>)</span></span>
             </div>
           </div>
         </div>

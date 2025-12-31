@@ -532,6 +532,9 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
   // Undo state.
   const [deletedItems, setDeletedItems] = useState<SharedClipboardItem[]>([]);
   
+  // Copy feedback state.
+  const [copiedItemId, setCopiedItemId] = useState<string | null>(null);
+  
   // Track which item is being unshared.
   const [unsharingId, setUnsharingId] = useState<string | null>(null);
 
@@ -551,6 +554,7 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
 
   // Scroll indicator.
   const [hasItemsAbove, setHasItemsAbove] = useState(false);
+  const [showScrollTop, setShowScrollTop] = useState(false);
 
   // Pointer sensor with distance activation.
   const sensors = useSensors(
@@ -896,6 +900,46 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
     }
   }, []);
 
+  // Copy shared item to system clipboard (via local copy first).
+  const copyItemToClipboard = useCallback(async (item: SharedClipboardItem, rowKey: string) => {
+    if (!window.clipboardAPI || !window.sharedClipboardAPI) return;
+    const localId = await window.sharedClipboardAPI.copyToPersonal(item.id);
+    if (localId) {
+      await window.clipboardAPI.copyItem(localId);
+      setCopiedItemId(rowKey);
+      setTimeout(() => setCopiedItemId(null), 1500);
+    }
+  }, []);
+
+  // Copy stack: concatenate text (oldest first) or copy first image.
+  const copyStackToClipboard = useCallback(async (stackItems: SharedClipboardItem[], rowKey: string) => {
+    if (!window.clipboardAPI || !window.sharedClipboardAPI) return;
+    
+    const sorted = [...stackItems].sort((a, b) => 
+      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+    const textParts: string[] = [];
+    let imageItem: SharedClipboardItem | null = null;
+    
+    for (const item of sorted) {
+      if ((item.type === 'text' || item.type === 'transcript') && item.content) {
+        textParts.push(item.content);
+      } else if ((item.type === 'image' || item.type === 'screenshot') && (item.imageData || item.imageUrl) && !imageItem) {
+        imageItem = item;
+      }
+    }
+    
+    if (textParts.length > 0) {
+      await navigator.clipboard.writeText(textParts.join('\n\n'));
+    } else if (imageItem) {
+      const localId = await window.sharedClipboardAPI.copyToPersonal(imageItem.id);
+      if (localId) await window.clipboardAPI.copyItem(localId);
+    }
+    
+    setCopiedItemId(rowKey);
+    setTimeout(() => setCopiedItemId(null), 1500);
+  }, []);
+
   const toggleStackExpanded = useCallback((stackId: string) => {
     setExpandedStacks(prev => {
       const next = new Set(prev);
@@ -1114,6 +1158,16 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
     return () => list.removeEventListener('scroll', handleScroll);
   }, []);
 
+  // Delay showing scroll-to-top button by 500ms to avoid flicker.
+  useEffect(() => {
+    if (hasItemsAbove) {
+      const timer = setTimeout(() => setShowScrollTop(true), 500);
+      return () => clearTimeout(timer);
+    } else {
+      setShowScrollTop(false);
+    }
+  }, [hasItemsAbove]);
+
   // Measure container width for text truncation.
   useEffect(() => {
     if (!listRef.current) return;
@@ -1145,8 +1199,8 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Don't handle keys when this view is hidden (e.g., when sketch mode is active).
-      // The container is hidden via CSS display:none when another view is active.
-      if (containerRef.current && getComputedStyle(containerRef.current).display === 'none') {
+      // offsetParent is null when element or any ancestor has display:none.
+      if (containerRef.current?.offsetParent === null) {
         return;
       }
 
@@ -1227,6 +1281,18 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
           }
           return;
         }
+      }
+
+      // Cmd+C - Copy selected/hovered item to clipboard.
+      if (key === 'c' && hasMeta && !hasShift) {
+        if (selectedRow?.type === 'item') {
+          e.preventDefault();
+          copyItemToClipboard(selectedRow.item, `item-${selectedRow.item.id}`);
+        } else if (selectedRow?.type === 'stack' && selectedRow.items.length > 0) {
+          e.preventDefault();
+          copyStackToClipboard(selectedRow.items, `stack-${selectedRow.items.map(i => i.id).join(',')}`);
+        }
+        return;
       }
 
       // X - Toggle selection.
@@ -1917,30 +1983,37 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragOver={handleDragOver} onDragEnd={handleDragEnd}>
         <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           {/* Scroll indicator */}
-          {hasItemsAbove && (
-            <div
-              onClick={() => listRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                right: 0,
-                height: 28,
-                background: `linear-gradient(to bottom, ${theme.bg}ee, ${theme.bg}00)`,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                zIndex: 10,
-                cursor: 'pointer',
-                pointerEvents: 'auto',
-              }}
-            >
-              <span style={{ fontSize: 10, color: theme.textSecondary, display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ transform: 'rotate(180deg)', display: 'inline-block' }}>▼</span>
-                scroll to top
-              </span>
-            </div>
-          )}
+          <div
+            onClick={() => listRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 28,
+              background: `linear-gradient(to bottom, ${theme.bg}ee, ${theme.bg}00)`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 10,
+              cursor: showScrollTop ? 'pointer' : 'default',
+              pointerEvents: showScrollTop ? 'auto' : 'none',
+              opacity: showScrollTop ? 1 : 0,
+              transition: 'opacity 0.2s ease',
+            }}
+          >
+            <span style={{
+              width: 24,
+              height: 24,
+              borderRadius: '50%',
+              backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 12,
+              color: theme.textSecondary,
+            }}>↑</span>
+          </div>
 
           <div
             ref={listRef}
@@ -2176,6 +2249,30 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
                           <button
                             tabIndex={-1}
                             onMouseDown={(e) => e.preventDefault()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              // Preview the first available content
+                              const imageItem = stackItems.find(i => i.imageUrl || i.imageData);
+                              const textItem = stackItems.find(i => (i.type === 'text' || i.type === 'transcript') && i.content);
+                              if (imageItem) {
+                                const url = imageItem.imageUrl || `data:image/png;base64,${imageItem.imageData}`;
+                                setPreview({
+                                  type: 'image',
+                                  url,
+                                  width: imageItem.imageWidth || 0,
+                                  height: imageItem.imageHeight || 0,
+                                });
+                              } else if (textItem && textItem.content) {
+                                setPreview({ type: 'text', data: textItem.content });
+                              }
+                            }}
+                            style={{ padding: '4px 6px', fontSize: '10px', fontWeight: 500, backgroundColor: 'transparent', color: theme.textSecondary, border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                          >
+                            preview <KeyCap style={{ minWidth: 28 }}>␣</KeyCap>
+                          </button>
+                          <button
+                            tabIndex={-1}
+                            onMouseDown={(e) => e.preventDefault()}
                             onClick={(e) => { e.stopPropagation(); pasteStack(stackItems); }}
                             style={{ padding: '4px 6px', fontSize: '10px', fontWeight: 500, backgroundColor: 'transparent', color: theme.textSecondary, border: 'none', borderRadius: '4px', cursor: 'pointer' }}
                           >
@@ -2238,8 +2335,36 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
                         transition: 'background-color 0.3s ease, border-left 0.3s ease, box-shadow 0.3s ease',
                         cursor: activeDragId ? 'grabbing' : 'grab',
                         userSelect: 'none',
+                        position: 'relative',
                       }}
                     >
+                      {/* Copy icon - top right */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          copyItemToClipboard(item, `item-${item.id}`);
+                        }}
+                        style={{
+                          position: 'absolute',
+                          top: 6,
+                          right: 6,
+                          padding: '2px 4px',
+                          backgroundColor: 'transparent',
+                          border: 'none',
+                          borderRadius: 4,
+                          cursor: 'pointer',
+                          opacity: copiedItemId === `item-${item.id}` ? 1 : (isRowSelected || isHovered ? 0.5 : 0),
+                          transition: 'opacity 0.15s ease',
+                          fontSize: copiedItemId === `item-${item.id}` ? 8 : 11,
+                          color: copiedItemId === `item-${item.id}` ? theme.text : theme.textSecondary,
+                          display: 'flex',
+                          alignItems: 'center',
+                        }}
+                        onMouseEnter={(e) => { if (copiedItemId !== `item-${item.id}`) e.currentTarget.style.opacity = '1'; }}
+                        onMouseLeave={(e) => { if (copiedItemId !== `item-${item.id}`) e.currentTarget.style.opacity = isRowSelected || isHovered ? '0.5' : '0'; }}
+                      >
+                        {copiedItemId === `item-${item.id}` ? 'copied' : '⧉'}
+                      </button>
                       <div>
                         {/* Image */}
                         {isImage && (item.imageUrl || item.imageData) && (

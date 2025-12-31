@@ -467,7 +467,13 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           [data-testid="library-menu"],
           .excalidraw-library-menu,
           .excalidraw [class*="library"],
-          .excalidraw [class*="Library"] {
+          .excalidraw [class*="Library"],
+          .excalidraw .mobile-misc-tools-container,
+          .excalidraw [class*="mobile"],
+          .excalidraw .App-toolbar-container button[aria-label*="Library" i],
+          .excalidraw .shapes-section button[aria-label*="shapes" i],
+          .excalidraw .Island .ToolIcon__library,
+          .excalidraw button.ToolIcon_type_button[aria-label*="Library" i] {
             display: none !important;
           }
           .excalidraw .ToolIcon_type_library,
