@@ -2650,6 +2650,35 @@ async function initTranscriberSystem(): Promise<void> {
     });
   });
 
+  // Forward todo realtime events to all renderer windows.
+  // These provide granular updates for more efficient state management.
+  mobileSync.on('todoAdded', (todo) => {
+    console.log('[Main] Realtime: todo added:', todo.id);
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(TodoIPCChannels.TODO_ADDED, todo);
+      }
+    });
+  });
+
+  mobileSync.on('todoUpdated', (todo) => {
+    console.log('[Main] Realtime: todo updated:', todo.id);
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(TodoIPCChannels.TODO_UPDATED, todo);
+      }
+    });
+  });
+
+  mobileSync.on('todoDeleted', (id) => {
+    console.log('[Main] Realtime: todo deleted:', id);
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(TodoIPCChannels.TODO_DELETED, id);
+      }
+    });
+  });
+
   // Forward socialSync messageReceived events to all renderer windows for Hot Mic.
   if (socialSync) {
     socialSync.on('messageReceived', async (message: { id: string; type: string }) => {

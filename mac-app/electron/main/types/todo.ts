@@ -20,6 +20,11 @@ export const TodoIPCChannels = {
   // Main -> Renderer (send pattern)
   TODOS_CHANGED: 'todo:todosChanged',
   SHOW_TODOS: 'todo:showTodos',
+  
+  // Realtime events (granular updates from Supabase subscription)
+  TODO_ADDED: 'todo:todoAdded',
+  TODO_UPDATED: 'todo:todoUpdated',
+  TODO_DELETED: 'todo:todoDeleted',
 } as const;
 
 /**
@@ -50,5 +55,8 @@ export interface TodoAPI {
   setHotkey: (hotkey: string) => Promise<boolean>;
   onTodosChanged: (callback: (todos: Todo[]) => void) => () => void;
   onShowTodos: (callback: () => void) => () => void;
+  onTodoAdded?: (callback: (todo: Todo) => void) => () => void;
+  onTodoUpdated?: (callback: (todo: Todo) => void) => () => void;
+  onTodoDeleted?: (callback: (id: string) => void) => () => void;
 }
 
