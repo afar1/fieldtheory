@@ -44,8 +44,10 @@ export default function CursorStatus() {
   const [pasteFailedText, setPasteFailedText] = useState<string>('');
   const [showSavedMessage, setShowSavedMessage] = useState(false);
   
-  // Done state: shows transcription text briefly before fading
+  // Done state: for paste failure, shows transcription then "saved" message
   const [doneTranscription, setDoneTranscription] = useState<string>('');
+  const [showDoneSavedMessage, setShowDoneSavedMessage] = useState(false);
+  const [pasteWasSuccessful, setPasteWasSuccessful] = useState(true);
   
   // Refs for animation intervals
   const dotIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -93,19 +95,27 @@ export default function CursorStatus() {
     // Listen for data (transcription text for paste-failed or done state)
     window.cursorStatusAPI.onDataChange?.((data) => {
       if (data?.transcription) {
-        // For paste-failed: show text then switch to "Saved to Field Theory"
-        setPasteFailedText(data.transcription);
-        setShowSavedMessage(false);
-        if (pasteFailedTimeoutRef.current) {
-          clearTimeout(pasteFailedTimeoutRef.current);
-        }
-        pasteFailedTimeoutRef.current = setTimeout(() => {
-          setShowSavedMessage(true);
-          pasteFailedTimeoutRef.current = null;
-        }, 1500);
-        
-        // Also store for done state
+        // Store transcription
         setDoneTranscription(data.transcription);
+        setPasteFailedText(data.transcription);
+        
+        // Track if paste was successful (paste-failed means it wasn't)
+        const isFailed = data.pasteFailed === true;
+        setPasteWasSuccessful(!isFailed);
+        
+        if (isFailed) {
+          // For paste-failed: show text then switch to "Saved to Field Theory"
+          setShowSavedMessage(false);
+          setShowDoneSavedMessage(false);
+          if (pasteFailedTimeoutRef.current) {
+            clearTimeout(pasteFailedTimeoutRef.current);
+          }
+          pasteFailedTimeoutRef.current = setTimeout(() => {
+            setShowSavedMessage(true);
+            setShowDoneSavedMessage(true);
+            pasteFailedTimeoutRef.current = null;
+          }, 2000);
+        }
       }
     });
     
@@ -219,20 +229,23 @@ export default function CursorStatus() {
       return 'Transcribing' + '.'.repeat(dotCount);
     }
     if (state === 'done') {
-      // Show transcription text if available, otherwise just "Pasted"
-      return doneTranscription || 'Pasted';
+      // If paste was successful, just show "Pasted" briefly (no transcription)
+      if (pasteWasSuccessful) {
+        return 'Pasted';
+      }
+      // Paste failed: show transcription, then "saved" message
+      if (showDoneSavedMessage) {
+        return 'Transcript saved to Field Theory. ⌘V to paste';
+      }
+      // Show transcription (will be truncated via CSS)
+      return doneTranscription || 'Saved to Field Theory';
     }
     if (state === 'confirmation') {
       return `Abandon transcript? (${countdownSeconds}) Do nothing to continue recording`;
     }
     if (state === 'paste-failed') {
       if (showSavedMessage) {
-        return 'Saved to Field Theory';
-      }
-      // Truncate long transcriptions
-      const maxLen = 30;
-      if (pasteFailedText.length > maxLen) {
-        return pasteFailedText.slice(0, maxLen) + '...';
+        return 'Transcript saved to Field Theory. ⌘V to paste';
       }
       return pasteFailedText || 'Saved to Field Theory';
     }
@@ -281,21 +294,25 @@ export default function CursorStatus() {
 const styles: Record<string, React.CSSProperties> = {
   container: {
     display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start', // Pin dot to top-left
     gap: '5px',
     height: '100%',
-    padding: '0 4px',
+    padding: '4px',
   },
   dot: {
     width: '7px',
     height: '7px',
     borderRadius: '50%',
     flexShrink: 0,
+    marginTop: '2px', // Align with first line of text
   },
   labelContainer: {
-    backgroundColor: 'rgba(30, 30, 30, 0.85)', // Softer, less aggressive black
+    backgroundColor: 'rgba(30, 30, 30, 0.85)',
     borderRadius: '4px',
-    padding: '3px 6px',
+    padding: '4px 8px',
+    maxWidth: '320px', // 15% wider
+    maxHeight: '80px', // ~5-6 lines
+    overflow: 'hidden',
   },
   label: {
     fontSize: '11px',
@@ -304,7 +321,11 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
-    maxWidth: '280px',
+    display: '-webkit-box',
+    WebkitLineClamp: 5, // Show ~5 lines then ellipsis
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
 };
 
