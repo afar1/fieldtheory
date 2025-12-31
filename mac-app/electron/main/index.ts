@@ -2357,6 +2357,8 @@ function broadcastTranscribeEvents(): void {
         window.webContents.send(TranscribeIPCChannels.RESULT, text);
       }
     });
+    // Store transcription for cursor status done state display
+    cursorStatusManager?.setLastTranscription(text);
   });
 
   transcriberManager.on('error', (error) => {

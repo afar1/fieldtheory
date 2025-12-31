@@ -34,11 +34,14 @@ export class CursorStatusManager extends EventEmitter {
   
   // Done state timeout - for showing brief green dot after transcribing
   private doneTimeout: NodeJS.Timeout | null = null;
-  private readonly DONE_DURATION_MS = 500;
+  private readonly DONE_DURATION_MS = 2500; // Show transcription text for 2.5s
   
   // Paste-failed state timeout
   private pasteFailedTimeout: NodeJS.Timeout | null = null;
   private readonly PASTE_FAILED_DURATION_MS = 3000; // Show for 3s total
+  
+  // Store last transcription for done state display
+  private lastTranscription: string = '';
   
   // Timing constants
   private readonly POLL_INTERVAL_MS = 33; // ~30fps for smooth following
@@ -47,8 +50,9 @@ export class CursorStatusManager extends EventEmitter {
   
   // Window dimensions and offset from cursor (positioned immediately to the right)
   private readonly WINDOW_WIDTH_NORMAL = 140;
-  private readonly WINDOW_WIDTH_WIDE = 280; // For confirmation/paste-failed with longer text
-  private readonly WINDOW_HEIGHT = 22;
+  private readonly WINDOW_WIDTH_WIDE = 300; // For confirmation/paste-failed/done with longer text
+  private readonly WINDOW_HEIGHT_NORMAL = 22;
+  private readonly WINDOW_HEIGHT_TALL = 80; // For wrapped text
   private readonly CURSOR_OFFSET_X = 16;  // To the right of cursor
   private readonly CURSOR_OFFSET_Y = 1;   // Just below cursor tip
   
@@ -76,6 +80,13 @@ export class CursorStatusManager extends EventEmitter {
       this.hide();
     }
   }
+  
+  /**
+   * Set the last transcription text (for showing in done state).
+   */
+  setLastTranscription(text: string): void {
+    this.lastTranscription = text;
+  }
 
   /**
    * Update the current state. Shows indicator if state is active, hides if idle.
@@ -100,6 +111,10 @@ export class CursorStatusManager extends EventEmitter {
       this.state = 'done';
       this.updateWindowSize('done');
       this.sendStateToRenderer('done');
+      // Send transcription text for display
+      if (this.lastTranscription && this.window && !this.window.isDestroyed()) {
+        this.window.webContents.send('cursor-status-data', { transcription: this.lastTranscription });
+      }
       
       this.doneTimeout = setTimeout(() => {
         this.doneTimeout = null;
@@ -148,12 +163,15 @@ export class CursorStatusManager extends EventEmitter {
   private updateWindowSize(state: CursorStatusState): void {
     if (!this.window || this.window.isDestroyed()) return;
     
-    const needsWide = state === 'confirmation' || state === 'paste-failed';
+    // Done state also needs wide window to show transcription text
+    const needsWide = state === 'confirmation' || state === 'paste-failed' || state === 'done';
+    const needsTall = state === 'done' || state === 'paste-failed'; // For wrapped text
     const width = needsWide ? this.WINDOW_WIDTH_WIDE : this.WINDOW_WIDTH_NORMAL;
+    const height = needsTall ? this.WINDOW_HEIGHT_TALL : this.WINDOW_HEIGHT_NORMAL;
     
-    const [currentWidth] = this.window.getSize();
-    if (currentWidth !== width) {
-      this.window.setSize(width, this.WINDOW_HEIGHT);
+    const [currentWidth, currentHeight] = this.window.getSize();
+    if (currentWidth !== width || currentHeight !== height) {
+      this.window.setSize(width, height);
     }
   }
   
@@ -201,7 +219,7 @@ export class CursorStatusManager extends EventEmitter {
     
     this.window = new BrowserWindow({
       width: this.WINDOW_WIDTH_NORMAL,
-      height: this.WINDOW_HEIGHT,
+      height: this.WINDOW_HEIGHT_NORMAL,
       x: cursorPos.x + this.CURSOR_OFFSET_X,
       y: cursorPos.y + this.CURSOR_OFFSET_Y,
       frame: false,
@@ -321,9 +339,10 @@ export class CursorStatusManager extends EventEmitter {
       // Flip to left side of cursor if too close to right edge
       newX = cursorPos.x - this.CURSOR_OFFSET_X - windowWidth;
     }
-    if (newY + this.WINDOW_HEIGHT > bounds.y + bounds.height) {
+    const [, windowHeight] = this.window.getSize();
+    if (newY + windowHeight > bounds.y + bounds.height) {
       // Flip to above cursor if too close to bottom edge
-      newY = cursorPos.y - this.CURSOR_OFFSET_Y - this.WINDOW_HEIGHT;
+      newY = cursorPos.y - this.CURSOR_OFFSET_Y - windowHeight;
     }
     
     // Ensure we don't go off the left or top edges
