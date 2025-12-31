@@ -617,8 +617,8 @@ final class KeyboardMonitor {
     
     /// Check if a text input field is currently focused.
     /// Uses Accessibility API to get the focused UI element and check its role.
+    /// Handles web content and nested elements by checking the hierarchy.
     func checkFocusedTextInput() -> Bool {
-        // Get the system-wide accessibility element
         let systemWideElement = AXUIElementCreateSystemWide()
         
         // Get the focused element
@@ -630,47 +630,102 @@ final class KeyboardMonitor {
         )
         
         guard result == .success, let element = focusedElement else {
+            sendLog(level: "debug", message: "checkFocusedTextInput: No focused element found")
             return false
         }
         
-        // Get the role of the focused element
+        let axElement = element as! AXUIElement
+        
+        // Check the focused element and its ancestors for text input characteristics
+        return isTextInputElement(axElement) || hasTextInputAncestor(axElement)
+    }
+    
+    /// Check if an element is a text input type.
+    private func isTextInputElement(_ element: AXUIElement) -> Bool {
+        // Get role
         var roleValue: CFTypeRef?
-        let roleResult = AXUIElementCopyAttributeValue(
-            element as! AXUIElement,
-            kAXRoleAttribute as CFString,
-            &roleValue
-        )
+        let roleResult = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleValue)
+        let role = (roleResult == .success) ? (roleValue as? String ?? "") : ""
         
-        guard roleResult == .success, let role = roleValue as? String else {
-            return false
-        }
+        // Get subrole (some elements use this)
+        var subroleValue: CFTypeRef?
+        let subroleResult = AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subroleValue)
+        let subrole = (subroleResult == .success) ? (subroleValue as? String ?? "") : ""
         
-        // Check if the role is a text input type
+        // Log for debugging
+        sendLog(level: "debug", message: "checkFocusedTextInput: role=\(role), subrole=\(subrole)")
+        
+        // Known text input roles
         let textInputRoles: Set<String> = [
-            kAXTextFieldRole as String,
-            kAXTextAreaRole as String,
-            kAXComboBoxRole as String,
-            "AXSearchField",  // Search field role (constant not always available)
-            "AXWebArea"  // Web content areas often accept text
+            "AXTextField",
+            "AXTextArea", 
+            "AXComboBox",
+            "AXSearchField",
+            "AXWebArea",
+            "AXStaticText"  // Some apps use this for editable text
         ]
         
-        if textInputRoles.contains(role) {
+        // Known text input subroles
+        let textInputSubroles: Set<String> = [
+            "AXSearchField",
+            "AXSecureTextField",
+            "AXPlainText"
+        ]
+        
+        if textInputRoles.contains(role) || textInputSubroles.contains(subrole) {
             return true
         }
         
-        // Also check for editable attribute (some custom elements)
+        // Check for editable attribute
         var editableValue: CFTypeRef?
-        let editableResult = AXUIElementCopyAttributeValue(
-            element as! AXUIElement,
-            "AXEditable" as CFString,
-            &editableValue
-        )
-        
+        let editableResult = AXUIElementCopyAttributeValue(element, "AXEditable" as CFString, &editableValue)
         if editableResult == .success, let editable = editableValue as? Bool, editable {
+            sendLog(level: "debug", message: "checkFocusedTextInput: Element is editable")
             return true
+        }
+        
+        // For groups and containers in web content, check if they might be editable
+        if role == "AXGroup" || role == "AXUnknown" {
+            // Check contenteditable-style elements
+            var roleDescValue: CFTypeRef?
+            let roleDescResult = AXUIElementCopyAttributeValue(element, kAXRoleDescriptionAttribute as CFString, &roleDescValue)
+            if roleDescResult == .success, let roleDesc = roleDescValue as? String {
+                let editableDescriptions = ["text field", "text area", "edit text", "input", "textbox"]
+                for desc in editableDescriptions {
+                    if roleDesc.lowercased().contains(desc) {
+                        sendLog(level: "debug", message: "checkFocusedTextInput: Detected via role description: \(roleDesc)")
+                        return true
+                    }
+                }
+            }
         }
         
         return false
+    }
+    
+    /// Walk up the accessibility hierarchy to find if any ancestor is a text input.
+    /// This helps with web content where the focused element might be nested.
+    private func hasTextInputAncestor(_ element: AXUIElement, depth: Int = 0) -> Bool {
+        // Limit depth to prevent infinite loops
+        guard depth < 5 else { return false }
+        
+        // Get parent
+        var parentValue: CFTypeRef?
+        let parentResult = AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &parentValue)
+        
+        guard parentResult == .success, let parent = parentValue else {
+            return false
+        }
+        
+        let parentElement = parent as! AXUIElement
+        
+        // Check if parent is a text input
+        if isTextInputElement(parentElement) {
+            return true
+        }
+        
+        // Continue up the tree
+        return hasTextInputAncestor(parentElement, depth: depth + 1)
     }
     
     /// Start monitoring keyboard events.
