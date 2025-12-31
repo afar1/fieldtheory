@@ -2385,15 +2385,19 @@ function broadcastTranscribeEvents(): void {
     });
   });
   
+  transcriberManager.on('paste-success', (transcription) => {
+    // Paste worked - show brief "Pasted" message, no transcript needed
+    if (cursorStatusManager) {
+      cursorStatusManager.setStateWithData('done', { transcription, pasteFailed: false });
+    }
+  });
+  
   transcriberManager.on('paste-failed', (message, transcription) => {
-    // Show in cursor status widget with transcription text
+    // Paste failed - show transcript with "Saved to Field Theory" message
     if (cursorStatusManager) {
       cursorStatusManager.setStateWithData('paste-failed', { transcription: transcription || message });
     }
-    // Also show in toast as fallback
-    if (toastWindow) {
-      toastWindow.show(message);
-    }
+    // Toast window no longer used - cursor widget handles all UI
   });
   
   // Confirmation state events for cursor status widget

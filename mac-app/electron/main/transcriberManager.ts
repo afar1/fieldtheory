@@ -394,8 +394,22 @@ export class TranscriberManager extends EventEmitter {
       }
       
       this.lastTranscription = cleanedText;
-      await this.pasteStack();
-      this.emit('result', cleanedText);
+      
+      // Check if a text input is focused before attempting to paste
+      const hasTextInput = await this.nativeHelper.checkFocusedTextInput();
+      
+      if (hasTextInput) {
+        // Text input found - paste and emit success
+        await this.pasteStack();
+        this.emit('result', cleanedText);
+        this.emit('paste-success', cleanedText);
+      } else {
+        // No text input - don't attempt paste, emit failure
+        // Content is still stored in clipboard history
+        console.log('[TranscriberManager] No focused text input - skipping paste');
+        this.emit('result', cleanedText);
+        this.emit('paste-failed', 'No text input focused', cleanedText);
+      }
       
       // Dismiss overlay
       this.setStatus('idle');
@@ -661,62 +675,17 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
-   * Check if there's a focused text input element using Accessibility APIs.
-   */
-  private async hasFocusedTextInput(): Promise<boolean> {
-    try {
-      // AppleScript to check if the focused element is a text input
-      const script = `
-        tell application "System Events"
-          set frontApp to first application process whose frontmost is true
-          try
-            set focusedElement to focused of frontApp
-            if focusedElement is not missing value then
-              set elementRole to role of focusedElement
-              -- Check for text input roles
-              if elementRole is "AXTextField" or elementRole is "AXTextArea" or elementRole is "AXComboBox" or elementRole is "AXSearchField" then
-                return "true"
-              end if
-              -- Check if it's a web area (browsers handle their own text inputs)
-              if elementRole is "AXWebArea" then
-                return "true"
-              end if
-            end if
-          end try
-        end tell
-        return "false"
-      `;
-      const { stdout } = await execAsync(`osascript -e '${script.replace(/'/g, "'\"'\"'")}'`);
-      return stdout.trim() === 'true';
-    } catch (error) {
-      // If check fails, assume there might be a text field (be optimistic)
-      console.warn('[TranscriberManager] Failed to check focused element:', error);
-      return true;
-    }
-  }
-
-  /**
    * Paste text into the active application using AppleScript.
-   * First checks if there's a focused text input.
    */
   private async pasteText(): Promise<void> {
     try {
-      // Check if there's a focused text input before pasting
-      const hasTextInput = await this.hasFocusedTextInput();
-      
-      if (!hasTextInput) {
-        console.log('[TranscriberManager] No focused text input detected');
-        this.emit('paste-failed', 'No active input field found - copied to clipboard', this.lastTranscription);
-        return;
-      }
-      
       // Use AppleScript to send Command+V
       await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
       console.log('[TranscriberManager] Text pasted successfully');
     } catch (error) {
-      // If paste fails, text is still in clipboard
+      // If paste fails (e.g., no input field selected), text is still in clipboard.
       const errorMsg = error instanceof Error ? error.message : String(error);
-      console.warn('[TranscriberManager] Failed to paste text:', errorMsg);
+      console.warn('[TranscriberManager] Failed to paste text (no input field selected):', errorMsg);
       this.emit('paste-failed', 'No active input field found - copied to clipboard', this.lastTranscription);
     }
   }
