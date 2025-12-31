@@ -16,7 +16,7 @@ contextBridge.exposeInMainWorld('cursorStatusAPI', {
   },
   
   // Data changes (e.g., transcription text for paste-failed state)
-  onDataChange: (callback: (data: { transcription?: string }) => void) => {
+  onDataChange: (callback: (data: { transcription?: string; pasteFailed?: boolean }) => void) => {
     ipcRenderer.on('cursor-status-data', (_event, data) => callback(data));
   },
   
