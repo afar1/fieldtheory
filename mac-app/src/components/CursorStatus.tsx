@@ -301,7 +301,7 @@ const styles: Record<string, React.CSSProperties> = {
     height: '7px',
     borderRadius: '50%',
     flexShrink: 0,
-    marginTop: '2px', // Align with first line of text
+    marginTop: '6px', // Vertically center with first line of text (11px font + 4px padding)
   },
   labelContainer: {
     backgroundColor: 'rgba(30, 30, 30, 0.85)',
