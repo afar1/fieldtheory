@@ -524,7 +524,6 @@ export default function ClipboardHistory() {
     imageUrl: string | null;
   } | null>(null);
   const [hasUnreadDMs, setHasUnreadDMs] = useState(false);
-  const [teamSyncing, setTeamSyncing] = useState(false);
   const [sketchHasChanges, setSketchHasChanges] = useState(false);
   const [lastSeenItemId, setLastSeenItemId] = useState<number | string | null>(() => {
     try {
@@ -2913,30 +2912,6 @@ export default function ClipboardHistory() {
             </svg>
             Draw
           </button>
-          {/* Team syncing indicator - right-aligned */}
-          {viewMode === 'team' && teamSyncing && (
-            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <span style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '4px',
-                fontSize: '10px',
-                color: theme.textSecondary,
-                opacity: 0.7,
-              }}>
-                <span style={{
-                  width: '8px',
-                  height: '8px',
-                  border: '1.5px solid rgba(128,128,128,0.3)',
-                  borderTopColor: theme.accent,
-                  borderRadius: '50%',
-                  animation: 'spin 0.8s linear infinite',
-                }} />
-                syncing
-              </span>
-            </div>
-          )}
-          
           {/* Action feedback - shows recent action like "item deleted" */}
           {actionFeedback && (
             <span 
@@ -2955,7 +2930,7 @@ export default function ClipboardHistory() {
           {(transcriptionStatus === 'recording' || transcriptionStatus === 'transcribing') && (
             <div 
               style={{ 
-                marginLeft: viewMode === 'team' && teamSyncing ? '8px' : (actionFeedback ? '8px' : 'auto'), 
+                marginLeft: actionFeedback ? '8px' : 'auto', 
                 display: 'flex', 
                 alignItems: 'center', 
                 gap: '4px',
@@ -3181,7 +3156,7 @@ export default function ClipboardHistory() {
       ) : viewMode === 'todo' ? (
         <TodoView onSwitchToClipboard={() => setViewMode('clipboard')} />
       ) : viewMode === 'team' ? (
-        <SharedContextView onSyncingChange={setTeamSyncing} />
+        <SharedContextView />
       ) : viewMode === 'dms' ? (
         <DMsView />
       ) : viewMode === 'commands' ? (
