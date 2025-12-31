@@ -306,6 +306,38 @@ export class NativeHelper extends EventEmitter {
     });
   }
 
+  /**
+   * Check if a text input field is currently focused.
+   * Uses Accessibility API to detect if paste will work.
+   */
+  async checkFocusedTextInput(): Promise<boolean> {
+    await this.waitForReady();
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        // On timeout, assume no text input (safer than assuming yes)
+        resolve(false);
+      }, 1000); // Short timeout - we need this to be fast
+
+      const onMessage = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'focusedTextInputStatus') {
+          cleanup();
+          resolve(msg.hasTextInput);
+        } else if (msg.type === 'error') {
+          cleanup();
+          resolve(false); // On error, assume no text input
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', onMessage);
+      };
+
+      this.on('message', onMessage);
+      this.send({ type: 'checkFocusedTextInput' });
+    });
+  }
 
   /**
    * Determine the path to the helper binary based on the environment.

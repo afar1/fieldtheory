@@ -31,6 +31,7 @@ enum MessageType: String, Codable {
     case stopRecording
     case cancelRecording
     case checkPermissions
+    case checkFocusedTextInput
     case startKeyboardMonitoring
     case stopKeyboardMonitoring
 }
@@ -130,6 +131,16 @@ struct PermissionsStatusMessage: Codable {
         case type
         case accessibilityGranted
         case inputMonitoringGranted
+    }
+}
+
+struct FocusedTextInputStatusMessage: Codable {
+    let type = "focusedTextInputStatus"
+    let hasTextInput: Bool
+    
+    enum CodingKeys: String, CodingKey {
+        case type
+        case hasTextInput
     }
 }
 
@@ -604,6 +615,64 @@ final class KeyboardMonitor {
         return AXIsProcessTrustedWithOptions(options)
     }
     
+    /// Check if a text input field is currently focused.
+    /// Uses Accessibility API to get the focused UI element and check its role.
+    func checkFocusedTextInput() -> Bool {
+        // Get the system-wide accessibility element
+        let systemWideElement = AXUIElementCreateSystemWide()
+        
+        // Get the focused element
+        var focusedElement: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(
+            systemWideElement,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedElement
+        )
+        
+        guard result == .success, let element = focusedElement else {
+            return false
+        }
+        
+        // Get the role of the focused element
+        var roleValue: CFTypeRef?
+        let roleResult = AXUIElementCopyAttributeValue(
+            element as! AXUIElement,
+            kAXRoleAttribute as CFString,
+            &roleValue
+        )
+        
+        guard roleResult == .success, let role = roleValue as? String else {
+            return false
+        }
+        
+        // Check if the role is a text input type
+        let textInputRoles: Set<String> = [
+            kAXTextFieldRole as String,
+            kAXTextAreaRole as String,
+            kAXComboBoxRole as String,
+            "AXSearchField",  // Search field role (constant not always available)
+            "AXWebArea"  // Web content areas often accept text
+        ]
+        
+        if textInputRoles.contains(role) {
+            return true
+        }
+        
+        // Also check for editable attribute (some custom elements)
+        var editableValue: CFTypeRef?
+        let editableResult = AXUIElementCopyAttributeValue(
+            element as! AXUIElement,
+            "AXEditable" as CFString,
+            &editableValue
+        )
+        
+        if editableResult == .success, let editable = editableValue as? Bool, editable {
+            return true
+        }
+        
+        return false
+    }
+    
     /// Start monitoring keyboard events.
     /// Only captures events when clipboard history window is visible.
     func startMonitoring() -> Bool {
@@ -940,9 +1009,6 @@ final class RecordingHelper {
         // Check file size
         if let attributes = try? FileManager.default.attributesOfItem(atPath: path),
            let fileSize = attributes[.size] as? Int64 {
-            // #region agent log - Log file size for debugging empty files
-            sendLog(level: "debug", message: "[DEBUG-H2,H5] Recording file size: \(fileSize) bytes, path: \(path)")
-            // #endregion
             sendLog(level: "info", message: "Recording stopped: \(path) (\(fileSize) bytes)")
         } else {
             sendLog(level: "info", message: "Recording stopped: \(path)")
@@ -1104,6 +1170,11 @@ final class MessageHandler {
                 accessibilityGranted: accessibilityGranted,
                 inputMonitoringGranted: inputMonitoringGranted
             )
+            sendJSON(response)
+            
+        case .checkFocusedTextInput:
+            let hasTextInput = KeyboardMonitor.shared.checkFocusedTextInput()
+            let response = FocusedTextInputStatusMessage(hasTextInput: hasTextInput)
             sendJSON(response)
             
         case .startKeyboardMonitoring:
