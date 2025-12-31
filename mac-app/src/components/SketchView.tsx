@@ -38,6 +38,23 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
   const [hasChanges, setHasChanges] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   
+  // Track container dimensions for responsive canvas sizing.
+  const [containerSize, setContainerSize] = useState({ width: 1200, height: 800 });
+  
+  // Update container size on mount and resize.
+  useEffect(() => {
+    const updateSize = () => {
+      if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        setContainerSize({ width: rect.width || 1200, height: rect.height || 800 });
+      }
+    };
+    
+    updateSize();
+    window.addEventListener('resize', updateSize);
+    return () => window.removeEventListener('resize', updateSize);
+  }, []);
+  
   // Floating transcript panel state.
   const [transcriptPanelExpanded, setTranscriptPanelExpanded] = useState(false);
   const [transcriptPanelVisible, setTranscriptPanelVisible] = useState(false);
@@ -50,9 +67,10 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
     
     if (!backgroundImage) return baseData;
 
-    const containerWidth = 1200;
-    const containerHeight = 800;
-    const maxScale = 0.6;
+    // Use actual container dimensions instead of hardcoded values.
+    const containerWidth = containerSize.width;
+    const containerHeight = containerSize.height;
+    const maxScale = 0.5;
     const maxWidth = containerWidth * maxScale;
     const maxHeight = containerHeight * maxScale;
     
@@ -107,7 +125,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
         },
       },
     };
-  }, [backgroundImage]);
+  }, [backgroundImage, containerSize]);
 
   const handleSave = useCallback(async (andCopy: boolean = false) => {
     if (!excalidrawAPI || isSaving) return;
