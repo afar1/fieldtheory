@@ -133,6 +133,10 @@ const TodoIPCChannels = {
   SHOW_TODOS: 'todo:showTodos',
   GET_TODO_HOTKEY: 'todo:getHotkey',
   SET_TODO_HOTKEY: 'todo:setHotkey',
+  // Realtime events (granular updates from Supabase subscription).
+  TODO_ADDED: 'todo:todoAdded',
+  TODO_UPDATED: 'todo:todoUpdated',
+  TODO_DELETED: 'todo:todoDeleted',
 } as const;
 
 const UpdaterIPCChannels = {
@@ -1392,6 +1396,39 @@ const todoAPI = {
     ipcRenderer.on(TodoIPCChannels.SHOW_TODOS, handler);
     return () => {
       ipcRenderer.removeListener(TodoIPCChannels.SHOW_TODOS, handler);
+    };
+  },
+
+  // Listen for individual todo added events (realtime).
+  onTodoAdded: (callback: (todo: Todo) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, todo: Todo) => {
+      callback(todo);
+    };
+    ipcRenderer.on(TodoIPCChannels.TODO_ADDED, handler);
+    return () => {
+      ipcRenderer.removeListener(TodoIPCChannels.TODO_ADDED, handler);
+    };
+  },
+
+  // Listen for individual todo updated events (realtime).
+  onTodoUpdated: (callback: (todo: Todo) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, todo: Todo) => {
+      callback(todo);
+    };
+    ipcRenderer.on(TodoIPCChannels.TODO_UPDATED, handler);
+    return () => {
+      ipcRenderer.removeListener(TodoIPCChannels.TODO_UPDATED, handler);
+    };
+  },
+
+  // Listen for individual todo deleted events (realtime).
+  onTodoDeleted: (callback: (id: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, id: string) => {
+      callback(id);
+    };
+    ipcRenderer.on(TodoIPCChannels.TODO_DELETED, handler);
+    return () => {
+      ipcRenderer.removeListener(TodoIPCChannels.TODO_DELETED, handler);
     };
   },
 };
