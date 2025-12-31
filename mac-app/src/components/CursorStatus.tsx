@@ -44,6 +44,9 @@ export default function CursorStatus() {
   const [pasteFailedText, setPasteFailedText] = useState<string>('');
   const [showSavedMessage, setShowSavedMessage] = useState(false);
   
+  // Done state: shows transcription text briefly before fading
+  const [doneTranscription, setDoneTranscription] = useState<string>('');
+  
   // Refs for animation intervals
   const dotIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingTextTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -87,12 +90,12 @@ export default function CursorStatus() {
       setIsIdle(idle);
     });
     
-    // Listen for data (transcription text for paste-failed state)
+    // Listen for data (transcription text for paste-failed or done state)
     window.cursorStatusAPI.onDataChange?.((data) => {
       if (data?.transcription) {
+        // For paste-failed: show text then switch to "Saved to Field Theory"
         setPasteFailedText(data.transcription);
         setShowSavedMessage(false);
-        // After 1.5s, switch to "Saved to Field Theory"
         if (pasteFailedTimeoutRef.current) {
           clearTimeout(pasteFailedTimeoutRef.current);
         }
@@ -100,6 +103,9 @@ export default function CursorStatus() {
           setShowSavedMessage(true);
           pasteFailedTimeoutRef.current = null;
         }, 1500);
+        
+        // Also store for done state
+        setDoneTranscription(data.transcription);
       }
     });
     
@@ -163,6 +169,8 @@ export default function CursorStatus() {
       setCountdownSeconds(prev => {
         if (prev <= 1) {
           // Countdown finished - continue recording (cancel confirmation)
+          // Don't reshow "Think aloud..." - just keep the pulsing dot
+          setShowRecordingText(false);
           window.cursorStatusAPI?.sendConfirmationResponse?.(false);
           return CONFIRMATION_COUNTDOWN_SECONDS;
         }
@@ -211,10 +219,11 @@ export default function CursorStatus() {
       return 'Transcribing' + '.'.repeat(dotCount);
     }
     if (state === 'done') {
-      return 'Pasted';
+      // Show transcription text if available, otherwise just "Pasted"
+      return doneTranscription || 'Pasted';
     }
     if (state === 'confirmation') {
-      return `Do nothing to continue recording ${countdownSeconds}`;
+      return `Abandon transcript? (${countdownSeconds}) Do nothing to continue recording`;
     }
     if (state === 'paste-failed') {
       if (showSavedMessage) {
@@ -293,7 +302,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 500,
     color: 'rgba(255, 255, 255, 0.9)',
     fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
-    whiteSpace: 'nowrap',
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    maxWidth: '280px',
   },
 };
 
