@@ -1,21 +1,27 @@
-import { BrowserWindow, screen, app } from 'electron';
+import { BrowserWindow, screen, app, ipcMain } from 'electron';
+import { EventEmitter } from 'events';
 import path from 'path';
 
 /**
  * Status states for the cursor indicator.
  * - idle: No indicator shown
- * - recording: Red pulsing dot with "Recording..." that fades away
+ * - recording: Red pulsing dot with "Think outloud..." that fades away
  * - transcribing: Purple dot, "Transcribing..." text when cursor is still
- * - done: Green dot, shown briefly after transcribing completes before hiding
+ * - done: Green dot with "Pasted", shown briefly after transcribing completes
+ * - confirmation: Red pulsing dot with countdown, awaiting abandon/continue decision
+ * - paste-failed: Orange dot, shows transcription then "Saved to Field Theory"
  */
-export type CursorStatusState = 'idle' | 'recording' | 'transcribing' | 'done';
+export type CursorStatusState = 'idle' | 'recording' | 'transcribing' | 'done' | 'confirmation' | 'paste-failed';
 
 /**
  * Manages the cursor-following status indicator overlay.
  * Shows a colored dot that follows the cursor during active states,
  * with a text label that appears when the cursor is still.
+ * 
+ * Emits:
+ * - 'confirmation-response': { abandon: boolean } when user responds to confirmation
  */
-export class CursorStatusManager {
+export class CursorStatusManager extends EventEmitter {
   private window: BrowserWindow | null = null;
   private state: CursorStatusState = 'idle';
   private enabled: boolean = true;
@@ -30,16 +36,36 @@ export class CursorStatusManager {
   private doneTimeout: NodeJS.Timeout | null = null;
   private readonly DONE_DURATION_MS = 500;
   
+  // Paste-failed state timeout
+  private pasteFailedTimeout: NodeJS.Timeout | null = null;
+  private readonly PASTE_FAILED_DURATION_MS = 3000; // Show for 3s total
+  
   // Timing constants
   private readonly POLL_INTERVAL_MS = 33; // ~30fps for smooth following
   private readonly IDLE_THRESHOLD_MS = 100; // Show text after 100ms of stillness
   private readonly MOVEMENT_THRESHOLD_PX = 3; // Pixels of movement to reset idle
   
   // Window dimensions and offset from cursor (positioned immediately to the right)
-  private readonly WINDOW_WIDTH = 140;
-  private readonly WINDOW_HEIGHT = 24;
-  private readonly CURSOR_OFFSET_X = 14; // Closer to cursor
-  private readonly CURSOR_OFFSET_Y = 2;  // Almost vertically aligned with cursor
+  private readonly WINDOW_WIDTH_NORMAL = 140;
+  private readonly WINDOW_WIDTH_WIDE = 280; // For confirmation/paste-failed with longer text
+  private readonly WINDOW_HEIGHT = 22;
+  private readonly CURSOR_OFFSET_X = 16;  // To the right of cursor
+  private readonly CURSOR_OFFSET_Y = 1;   // Just below cursor tip
+  
+  constructor() {
+    super();
+    
+    // Listen for confirmation responses from renderer
+    ipcMain.on('cursor-status-confirmation-response', (_event, abandon: boolean) => {
+      if (this.state === 'confirmation') {
+        this.emit('confirmation-response', { abandon });
+        // Return to recording state (the TranscriberManager will handle actual abandon/continue)
+        if (!abandon) {
+          this.setState('recording');
+        }
+      }
+    });
+  }
 
   /**
    * Enable or disable the cursor status indicator.
@@ -56,10 +82,14 @@ export class CursorStatusManager {
    * When transitioning from transcribing to idle, briefly shows 'done' state first.
    */
   setState(state: CursorStatusState): void {
-    // Clear any pending done timeout
+    // Clear any pending timeouts
     if (this.doneTimeout) {
       clearTimeout(this.doneTimeout);
       this.doneTimeout = null;
+    }
+    if (this.pasteFailedTimeout) {
+      clearTimeout(this.pasteFailedTimeout);
+      this.pasteFailedTimeout = null;
     }
     
     const wasTranscribing = this.state === 'transcribing';
@@ -68,6 +98,7 @@ export class CursorStatusManager {
     // When transcribing finishes, show 'done' briefly before hiding
     if (wasTranscribing && state === 'idle' && this.enabled) {
       this.state = 'done';
+      this.updateWindowSize('done');
       this.sendStateToRenderer('done');
       
       this.doneTimeout = setTimeout(() => {
@@ -79,6 +110,7 @@ export class CursorStatusManager {
     }
     
     this.state = state;
+    this.updateWindowSize(state);
     
     if (isActive && this.enabled) {
       this.show();
@@ -87,6 +119,42 @@ export class CursorStatusManager {
     }
     
     this.sendStateToRenderer(state);
+  }
+  
+  /**
+   * Set state with additional data (e.g., transcription text for paste-failed).
+   */
+  setStateWithData(state: CursorStatusState, data: { transcription?: string }): void {
+    this.setState(state);
+    
+    if (state === 'paste-failed') {
+      // Send data to renderer
+      if (this.window && !this.window.isDestroyed()) {
+        this.window.webContents.send('cursor-status-data', data);
+      }
+      
+      // Auto-hide after duration
+      this.pasteFailedTimeout = setTimeout(() => {
+        this.pasteFailedTimeout = null;
+        this.state = 'idle';
+        this.hide();
+      }, this.PASTE_FAILED_DURATION_MS);
+    }
+  }
+  
+  /**
+   * Update window size based on state (wider for text-heavy states).
+   */
+  private updateWindowSize(state: CursorStatusState): void {
+    if (!this.window || this.window.isDestroyed()) return;
+    
+    const needsWide = state === 'confirmation' || state === 'paste-failed';
+    const width = needsWide ? this.WINDOW_WIDTH_WIDE : this.WINDOW_WIDTH_NORMAL;
+    
+    const [currentWidth] = this.window.getSize();
+    if (currentWidth !== width) {
+      this.window.setSize(width, this.WINDOW_HEIGHT);
+    }
   }
   
   /**
@@ -132,7 +200,7 @@ export class CursorStatusManager {
     const cursorPos = screen.getCursorScreenPoint();
     
     this.window = new BrowserWindow({
-      width: this.WINDOW_WIDTH,
+      width: this.WINDOW_WIDTH_NORMAL,
       height: this.WINDOW_HEIGHT,
       x: cursorPos.x + this.CURSOR_OFFSET_X,
       y: cursorPos.y + this.CURSOR_OFFSET_Y,
@@ -242,13 +310,16 @@ export class CursorStatusManager {
     const display = screen.getDisplayNearestPoint(cursorPos);
     const bounds = display.bounds;
     
+    // Get current window width (may be wide for confirmation/paste-failed)
+    const [windowWidth] = this.window.getSize();
+    
     let newX = cursorPos.x + this.CURSOR_OFFSET_X;
     let newY = cursorPos.y + this.CURSOR_OFFSET_Y;
     
     // Clamp to screen bounds
-    if (newX + this.WINDOW_WIDTH > bounds.x + bounds.width) {
+    if (newX + windowWidth > bounds.x + bounds.width) {
       // Flip to left side of cursor if too close to right edge
-      newX = cursorPos.x - this.CURSOR_OFFSET_X - this.WINDOW_WIDTH;
+      newX = cursorPos.x - this.CURSOR_OFFSET_X - windowWidth;
     }
     if (newY + this.WINDOW_HEIGHT > bounds.y + bounds.height) {
       // Flip to above cursor if too close to bottom edge
@@ -278,9 +349,14 @@ export class CursorStatusManager {
       clearTimeout(this.doneTimeout);
       this.doneTimeout = null;
     }
+    if (this.pasteFailedTimeout) {
+      clearTimeout(this.pasteFailedTimeout);
+      this.pasteFailedTimeout = null;
+    }
     if (this.window && !this.window.isDestroyed()) {
       this.window.close();
     }
     this.window = null;
+    ipcMain.removeAllListeners('cursor-status-confirmation-response');
   }
 }

@@ -2346,9 +2346,6 @@ function broadcastTranscribeEvents(): void {
     clipboardHistoryWindow?.setRecordingActive(status === 'recording');
     
     // Update cursor status indicator to show recording/transcribing state
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'index.ts:statusChanged',message:'TranscriberManager statusChanged event',data:{status,hasCursorManager:!!cursorStatusManager},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
     if (cursorStatusManager) {
       cursorStatusManager.setState(status as CursorStatusState);
     }
@@ -2386,9 +2383,28 @@ function broadcastTranscribeEvents(): void {
     });
   });
   
-  transcriberManager.on('paste-failed', (message) => {
+  transcriberManager.on('paste-failed', (message, transcription) => {
+    // Show in cursor status widget with transcription text
+    if (cursorStatusManager) {
+      cursorStatusManager.setStateWithData('paste-failed', { transcription: transcription || message });
+    }
+    // Also show in toast as fallback
     if (toastWindow) {
       toastWindow.show(message);
+    }
+  });
+  
+  // Confirmation state events for cursor status widget
+  transcriberManager.on('confirmation-show', () => {
+    if (cursorStatusManager) {
+      cursorStatusManager.setState('confirmation');
+    }
+  });
+  
+  transcriberManager.on('confirmation-hide', () => {
+    // Return to recording state (recording continues during confirmation)
+    if (cursorStatusManager) {
+      cursorStatusManager.setState('recording');
     }
   });
 
@@ -2600,6 +2616,11 @@ async function initTranscriberSystem(): Promise<void> {
   cursorStatusManager = new CursorStatusManager();
   const cursorStatusEnabled = preferencesManager.getPreference('cursorStatusEnabled') ?? true;
   cursorStatusManager.setEnabled(cursorStatusEnabled);
+  
+  // Wire up confirmation response from cursor status widget to transcriber manager
+  cursorStatusManager.on('confirmation-response', ({ abandon }) => {
+    transcriberManager?.handleConfirmationResponse(abandon);
+  });
 
   // Set up escape key priority: dismiss clipboard history before canceling recording
   transcriberManager.setClipboardHistoryVisibilityChecker(() => {

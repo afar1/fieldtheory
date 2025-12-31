@@ -52,6 +52,7 @@ export class TranscriberManager extends EventEmitter {
   // Used for auto-stacking: if screenshots are taken during recording, they get
   // grouped with the transcript into a stack when recording ends.
   private currentStack: number[] = [];
+  private lastTranscription: string = ''; // Store last transcription for paste-failed fallback
   
   // Clipboard history visibility checker - allows escape key to dismiss clipboard history first
   private clipboardHistoryVisibilityChecker: (() => boolean) | null = null;
@@ -102,14 +103,29 @@ export class TranscriberManager extends EventEmitter {
     
     // Listen for confirmation responses from overlay.
     this.overlay.on('abandon-confirmed', () => {
-      this.pendingAbandonConfirmation = false;
-      this.cancelRecording();
+      this.handleConfirmationResponse(true);
     });
     
     this.overlay.on('abandon-cancelled', () => {
-      this.pendingAbandonConfirmation = false;
-      this.overlay.hideConfirmation();
+      this.handleConfirmationResponse(false);
     });
+  }
+  
+  /**
+   * Handle confirmation response (from overlay or cursorStatusManager).
+   * @param abandon - true to abandon recording, false to continue
+   */
+  handleConfirmationResponse(abandon: boolean): void {
+    if (!this.pendingAbandonConfirmation) return;
+    
+    this.pendingAbandonConfirmation = false;
+    this.overlay.hideConfirmation();
+    this.emit('confirmation-hide');
+    
+    if (abandon) {
+      this.cancelRecording();
+    }
+    // If not abandoning, recording continues (no action needed)
   }
 
   /**
@@ -377,6 +393,7 @@ export class TranscriberManager extends EventEmitter {
         }
       }
       
+      this.lastTranscription = cleanedText;
       await this.pasteStack();
       this.emit('result', cleanedText);
       
@@ -457,6 +474,7 @@ export class TranscriberManager extends EventEmitter {
         console.log('[TranscriberManager] Showing abandon confirmation (audio content detected)');
         this.pendingAbandonConfirmation = true;
         this.overlay.showConfirmation();
+        this.emit('confirmation-show');
         return;
       }
       
@@ -594,10 +612,6 @@ export class TranscriberManager extends EventEmitter {
       this.whisperProcess.on('close', (code) => {
         this.whisperProcess = null;
 
-        // #region agent log
-        fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'transcriberManager.ts:transcribe:close',message:'Whisper process closed',data:{code,stdoutLength:stdout.length,stderrLength:stderr.length,stdoutPreview:stdout.substring(0,200),stderrPreview:stderr.substring(0,200)},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H2,H5'})}).catch(()=>{});
-        // #endregion
-
         if (code !== 0) {
           reject(new Error(`whisper-cli exited with code ${code}: ${stderr}`));
           return;
@@ -658,7 +672,7 @@ export class TranscriberManager extends EventEmitter {
       // If paste fails (e.g., no input field selected), text is still in clipboard.
       const errorMsg = error instanceof Error ? error.message : String(error);
       console.warn('[TranscriberManager] Failed to paste text (no input field selected):', errorMsg);
-      this.emit('paste-failed', 'No active input field found - copied to clipboard');
+      this.emit('paste-failed', 'No active input field found - copied to clipboard', this.lastTranscription);
     }
   }
 
