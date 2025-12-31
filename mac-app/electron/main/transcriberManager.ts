@@ -395,19 +395,24 @@ export class TranscriberManager extends EventEmitter {
       
       this.lastTranscription = cleanedText;
       
-      // Check if a text input is focused before attempting to paste
-      const hasTextInput = await this.nativeHelper.checkFocusedTextInput();
+      // Always paste first - don't gate on accessibility check.
+      // Start accessibility check in parallel to determine UI feedback.
+      const accessibilityCheckPromise = this.nativeHelper.checkFocusedTextInput();
+      
+      await this.pasteStack();
+      this.emit('result', cleanedText);
+      
+      // Use accessibility result to decide which UI feedback to show.
+      // This is a hint, not a gate - paste already happened.
+      const hasTextInput = await accessibilityCheckPromise;
       
       if (hasTextInput) {
-        // Text input found - paste and emit success
-        await this.pasteStack();
-        this.emit('result', cleanedText);
+        // Accessibility detected text input - show brief "Pasted" confirmation
         this.emit('paste-success', cleanedText);
       } else {
-        // No text input - don't attempt paste, emit failure
-        // Content is still stored in clipboard history
-        console.log('[TranscriberManager] No focused text input - skipping paste');
-        this.emit('result', cleanedText);
+        // Accessibility didn't detect text input - show transcript + fallback message.
+        // Paste may have still worked; this is just a UI hint for recovery.
+        console.log('[TranscriberManager] Accessibility check: no text input detected - showing fallback UI');
         this.emit('paste-failed', 'No text input focused', cleanedText);
       }
       
@@ -821,11 +826,9 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
-    // Reverse order: paste newest items first (most recent at top).
-    // When building prompts over time, you want the latest context first.
-    const reversedItems = [...items].reverse();
-
-    for (const item of reversedItems) {
+    // Paste in chronological order: oldest first (top), newest last (bottom).
+    // This preserves the natural flow of conversation/context building.
+    for (const item of items) {
       if (item.type === 'text' || item.type === 'transcript') {
         clipboard.writeText(item.content || '');
         await this.pasteText();
