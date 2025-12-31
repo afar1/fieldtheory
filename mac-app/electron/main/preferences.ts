@@ -91,6 +91,9 @@ interface Preferences {
   
   // Permission banner settings - hide banner prompting for Screen Recording permission.
   hideScreenRecordingBanner?: boolean;
+  
+  // Cursor status indicator - shows colored dot next to cursor during recording/transcribing.
+  cursorStatusEnabled?: boolean;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
@@ -115,6 +118,9 @@ const DEFAULT_PREFERENCES: Preferences = {
   windowCloseSound: 'WindowClose.mp3',
   pasteSound: 'Click.mp3',
   transcribingSound: 'Beep.mp3',
+  
+  // Cursor status indicator - enabled by default
+  cursorStatusEnabled: true,
 };
 
 /**

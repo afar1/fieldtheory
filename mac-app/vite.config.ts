@@ -20,6 +20,7 @@ export default defineConfig(({ mode }) => {
           main: path.resolve(__dirname, 'index.html'),
           overlay: path.resolve(__dirname, 'overlay.html'),
           clipboardHistory: path.resolve(__dirname, 'clipboard-history.html'),
+          cursorStatus: path.resolve(__dirname, 'cursor-status.html'),
         },
       },
     },

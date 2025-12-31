@@ -103,6 +103,8 @@ const ClipboardIPCChannels = {
   SAVE_SKETCH: 'clipboard:saveSketch',
   GET_HIDE_SCREEN_RECORDING_BANNER: 'clipboard:getHideScreenRecordingBanner',
   SET_HIDE_SCREEN_RECORDING_BANNER: 'clipboard:setHideScreenRecordingBanner',
+  GET_CURSOR_STATUS_ENABLED: 'clipboard:getCursorStatusEnabled',
+  SET_CURSOR_STATUS_ENABLED: 'clipboard:setCursorStatusEnabled',
 } as const;
 
 const OnboardingIPCChannels = {
@@ -592,6 +594,10 @@ export interface ClipboardAPI {
   // Permission banner settings
   getHideScreenRecordingBanner: () => Promise<boolean>;
   setHideScreenRecordingBanner: (hide: boolean) => Promise<boolean>;
+  
+  // Cursor status indicator settings
+  getCursorStatusEnabled: () => Promise<boolean>;
+  setCursorStatusEnabled: (enabled: boolean) => Promise<boolean>;
 }
 
 export interface PermissionsAPI {
@@ -1094,6 +1100,15 @@ const clipboardAPI: ClipboardAPI = {
 
   setHideScreenRecordingBanner: async (hide: boolean): Promise<boolean> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.SET_HIDE_SCREEN_RECORDING_BANNER, hide);
+  },
+
+  // Cursor status indicator - shows dot next to cursor during recording/transcribing.
+  getCursorStatusEnabled: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_CURSOR_STATUS_ENABLED);
+  },
+
+  setCursorStatusEnabled: async (enabled: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SET_CURSOR_STATUS_ENABLED, enabled);
   },
 };
 

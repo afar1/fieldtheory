@@ -671,6 +671,21 @@ interface SocialAPI {
 }
 
 /**
+ * Cursor status indicator state.
+ */
+type CursorStatusState = 'idle' | 'recording' | 'transcribing' | 'done';
+
+/**
+ * API for the cursor status indicator overlay.
+ * Used by the cursor-status.html overlay window.
+ */
+interface CursorStatusAPI {
+  onStateChange: (callback: (state: CursorStatusState) => void) => void;
+  onIdleChange: (callback: (isIdle: boolean) => void) => void;
+  removeAllListeners: (channel: string) => void;
+}
+
+/**
  * Extend the Window interface with our custom APIs.
  */
 declare global {
@@ -687,6 +702,7 @@ declare global {
     authAPI?: AuthAPI;
     sharedClipboardAPI?: SharedClipboardAPI;
     socialAPI?: SocialAPI;
+    cursorStatusAPI?: CursorStatusAPI;
     platform?: PlatformInfo;
   }
 }
