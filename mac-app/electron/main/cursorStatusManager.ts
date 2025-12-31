@@ -51,7 +51,7 @@ export class CursorStatusManager extends EventEmitter {
   // Window dimensions and offset from cursor (positioned immediately to the right)
   private readonly WINDOW_WIDTH_NORMAL = 140;
   private readonly WINDOW_WIDTH_WIDE = 345; // 15% wider than 300 for longer text
-  private readonly WINDOW_HEIGHT_NORMAL = 22;
+  private readonly WINDOW_HEIGHT_NORMAL = 28; // Increased from 22 to fit text with padding
   private readonly WINDOW_HEIGHT_TALL = 96; // 20% taller than 80 for wrapped text
   private readonly CURSOR_OFFSET_X = 16;  // To the right of cursor
   private readonly CURSOR_OFFSET_Y = 1;   // Just below cursor tip

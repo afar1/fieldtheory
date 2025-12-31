@@ -105,6 +105,7 @@ export type HelperOutgoingMessageType =
   | 'recordingCancelled'
   | 'audioLevel'
   | 'permissionsStatus'
+  | 'focusedTextInputStatus'
   | 'keyEvent'
   | 'keyboardMonitoringDisabled';
 
@@ -203,6 +204,15 @@ export interface PermissionsStatusMessage extends HelperMessage {
 }
 
 /**
+ * Focused text input status message from the helper.
+ * Used to detect if paste will work before attempting.
+ */
+export interface FocusedTextInputStatusMessage extends HelperMessage {
+  type: 'focusedTextInputStatus';
+  hasTextInput: boolean;
+}
+
+/**
  * Key event message from the helper (for global keyboard capture).
  */
 export interface KeyEventMessage extends HelperMessage {
@@ -232,6 +242,7 @@ export type HelperOutgoingMessage =
   | RecordingCancelledMessage
   | AudioLevelMessage
   | PermissionsStatusMessage
+  | FocusedTextInputStatusMessage
   | KeyEventMessage
   | KeyboardMonitoringDisabledMessage;
 
@@ -271,6 +282,10 @@ export interface CheckPermissionsCommand {
   type: 'checkPermissions';
 }
 
+export interface CheckFocusedTextInputCommand {
+  type: 'checkFocusedTextInput';
+}
+
 export interface StartKeyboardMonitoringCommand {
   type: 'startKeyboardMonitoring';
 }
@@ -291,5 +306,6 @@ export type HelperIncomingCommand =
   | StopRecordingCommand
   | CancelRecordingCommand
   | CheckPermissionsCommand
+  | CheckFocusedTextInputCommand
   | StartKeyboardMonitoringCommand
   | StopKeyboardMonitoringCommand;
