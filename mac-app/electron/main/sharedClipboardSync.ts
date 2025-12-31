@@ -465,6 +465,10 @@ export class SharedClipboardSync extends EventEmitter {
 
       const { data, error } = await query;
 
+      // #region agent log
+      console.log('[SharedClipboardSync] Query result - error:', error, 'rowCount:', data?.length ?? 0);
+      // #endregion
+
       if (error) {
         console.error('[SharedClipboardSync] Query failed:', error);
         throw error;

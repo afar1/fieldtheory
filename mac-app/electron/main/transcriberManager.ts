@@ -594,6 +594,10 @@ export class TranscriberManager extends EventEmitter {
       this.whisperProcess.on('close', (code) => {
         this.whisperProcess = null;
 
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'transcriberManager.ts:transcribe:close',message:'Whisper process closed',data:{code,stdoutLength:stdout.length,stderrLength:stderr.length,stdoutPreview:stdout.substring(0,200),stderrPreview:stderr.substring(0,200)},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H2,H5'})}).catch(()=>{});
+        // #endregion
+
         if (code !== 0) {
           reject(new Error(`whisper-cli exited with code ${code}: ${stderr}`));
           return;

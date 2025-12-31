@@ -68,13 +68,22 @@ async function getCachedImageUrl(imageUrl: string | null, imageData: string | nu
   const metadata = getImageCacheMetadata();
   const cached = metadata.get(itemId);
   if (cached?.base64) {
-    const blobUrl = `data:image/png;base64,${cached.base64}`;
-    blobUrlCache.set(itemId, blobUrl);
-    return blobUrl;
+    // Validate base64 is a real image (PNG starts with iVBORw0, JPEG with /9j/).
+    // Corrupted entries (e.g., JSON stored as base64) should be skipped.
+    const isValidImage = cached.base64.startsWith('iVBORw0') || cached.base64.startsWith('/9j/');
+    if (isValidImage) {
+      const blobUrl = `data:image/png;base64,${cached.base64}`;
+      blobUrlCache.set(itemId, blobUrl);
+      return blobUrl;
+    } else {
+      // Remove corrupted cache entry.
+      metadata.delete(itemId);
+      saveImageCacheMetadata(metadata);
+    }
   }
   try {
     const response = await fetch(imageUrl);
-    if (!response.ok) throw new Error('Failed to fetch image');
+    if (!response.ok) throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
     const blob = await response.blob();
     const blobUrl = URL.createObjectURL(blob);
     blobUrlCache.set(itemId, blobUrl);
@@ -89,13 +98,21 @@ async function getCachedImageUrl(imageUrl: string | null, imageData: string | nu
     reader.readAsDataURL(blob);
     return blobUrl;
   } catch (e) {
-    return imageUrl;
+    // Don't return the failed URL - it will also fail in the browser causing broken image icons.
+    // Return empty string so the placeholder is shown instead.
+    return '';
   }
 }
 
 function getCachedImageUrlSync(imageUrl: string | null, imageData: string | null, itemId: string): string {
   if (imageData) {
-    return `data:image/png;base64,${imageData}`;
+    // Validate imageData is a real image before using it.
+    const isValidImage = imageData.startsWith('iVBORw0') || imageData.startsWith('/9j/');
+    if (isValidImage) {
+      return `data:image/png;base64,${imageData}`;
+    }
+    // imageData is corrupted (e.g., JSON stored as base64), skip it.
+    return '';
   }
   if (!imageUrl) {
     return '';
@@ -106,9 +123,16 @@ function getCachedImageUrlSync(imageUrl: string | null, imageData: string | null
   const metadata = getImageCacheMetadata();
   const cached = metadata.get(itemId);
   if (cached?.base64) {
-    const blobUrl = `data:image/png;base64,${cached.base64}`;
-    blobUrlCache.set(itemId, blobUrl);
-    return blobUrl;
+    // Validate cached base64 is a real image.
+    const isValidImage = cached.base64.startsWith('iVBORw0') || cached.base64.startsWith('/9j/');
+    if (isValidImage) {
+      const blobUrl = `data:image/png;base64,${cached.base64}`;
+      blobUrlCache.set(itemId, blobUrl);
+      return blobUrl;
+    }
+    // Remove corrupted cache entry.
+    metadata.delete(itemId);
+    saveImageCacheMetadata(metadata);
   }
   return '';
 }
@@ -133,6 +157,8 @@ function CachedImage({
   const [src, setSrc] = useState<string>(() => 
     getCachedImageUrlSync(imageUrl, imageData, itemId)
   );
+  const [loadError, setLoadError] = useState<string | null>(null);
+
 
   useEffect(() => {
     if (src) return;
@@ -155,7 +181,16 @@ function CachedImage({
     );
   }
 
-  return <img src={src} alt={alt} style={style} />;
+  return (
+    <img 
+      src={src} 
+      alt={alt} 
+      style={style}
+      onError={() => {
+        setLoadError('Failed to load');
+      }}
+    />
+  );
 }
 
 // =============================================================================
@@ -431,8 +466,13 @@ function InitialsBadge({ email }: { email: string | null }) {
 // Component
 // =============================================================================
 
-export default function SharedContextView() {
+interface SharedContextViewProps {
+  onOpenSketch?: (imageDataUrl: string, width: number, height: number) => void;
+}
+
+export default function SharedContextView({ onOpenSketch }: SharedContextViewProps = {}) {
   const { theme } = useTheme();
+  const containerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   // Prevent double fetch on mount.
@@ -463,7 +503,6 @@ export default function SharedContextView() {
   });
 
   // Team items state - initialized from cache for instant display.
-  // Realtime subscription handles updates after initial load.
   const [teamItems, setTeamItems] = useState<SharedClipboardItem[]>(() => {
     try {
       const cached = localStorage.getItem('sharedContextItemsCache');
@@ -612,22 +651,28 @@ export default function SharedContextView() {
       return;
     }
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      // IMPORTANT: Must set sync session BEFORE updating React state.
+      // Otherwise, the useEffect that calls loadTeamItems() fires before
+      // the main process has the session, causing queryItems to return empty.
+      if (session) {
+        await window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
+      }
       setSession(session);
       setCheckingAuth(false);
-      if (session) {
-        window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
-      }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      setCheckingAuth(false);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      // IMPORTANT: Must set sync session BEFORE updating React state.
+      // Otherwise, the useEffect that calls loadTeamItems() fires before
+      // the main process has the session, causing queryItems to return empty.
       if (session) {
-        window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
+        await window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
       } else {
         window.clipboardAPI?.clearSyncSession?.();
       }
+      setSession(session);
+      setCheckingAuth(false);
     });
 
     return () => subscription.unsubscribe();
@@ -741,12 +786,14 @@ export default function SharedContextView() {
   // Team Items
   // ---------------------------------------------------------------------------
 
-  // Load team items from server. Only called on initial load if cache is empty.
-  // Realtime subscription handles all subsequent updates.
   const loadTeamItems = useCallback(async () => {
     if (!window.sharedClipboardAPI) return;
     
     setItemsLoading(true);
+    
+    // Clear the in-memory blob URL cache. Fresh items from Supabase have fresh
+    // signed URLs, so we don't want stale blob URLs pointing to old fetches.
+    blobUrlCache.clear();
     
     const items = await window.sharedClipboardAPI.queryItems({ limit: 100 });
     setTeamItems(items);
@@ -812,7 +859,6 @@ export default function SharedContextView() {
         await window.sharedClipboardAPI?.updateStackId([overId], draggedStackId);
       }
     }
-    // Realtime subscription will handle the update - no need to re-fetch.
   }, [teamItems]);
 
   // ---------------------------------------------------------------------------
@@ -964,26 +1010,22 @@ export default function SharedContextView() {
   // Effects
   // ---------------------------------------------------------------------------
 
-  // Load data when authenticated.
-  // Only fetch from server if cache is empty. Realtime handles updates.
   useEffect(() => {
     if (session && !hasLoadedRef.current) {
       hasLoadedRef.current = true;
       loadTeamMembers();
-      // Only fetch if cache is empty - realtime handles everything else.
-      if (teamItems.length === 0) {
-        loadTeamItems();
-      }
+      // Always fetch fresh data from Supabase. The localStorage cache is just for
+      // instant display while real data loads. Signed URLs in cached items expire,
+      // so we must always refresh to get valid URLs.
+      loadTeamItems();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
   // Subscribe to realtime events for team items.
-  // These events are pushed from the server when teammates add/update/delete items.
   useEffect(() => {
     if (!session || !window.sharedClipboardAPI) return;
 
-    // Helper to update cache after any change.
     const updateCache = (items: SharedClipboardItem[]) => {
       try {
         localStorage.setItem('sharedContextItemsCache', JSON.stringify(items));
@@ -992,7 +1034,6 @@ export default function SharedContextView() {
       }
     };
 
-    // Handle new items from teammates (or self via realtime).
     const unsubAdd = window.sharedClipboardAPI.onTeamItemAdded?.((item) => {
       setTeamItems(prev => {
         // Avoid duplicates - check if item already exists.
@@ -1010,7 +1051,6 @@ export default function SharedContextView() {
       });
     });
 
-    // Handle item updates (e.g., stack changes).
     const unsubUpdate = window.sharedClipboardAPI.onTeamItemUpdated?.((item) => {
       setTeamItems(prev => {
         const next = prev.map(i => i.id === item.id ? item : i);
@@ -1019,7 +1059,6 @@ export default function SharedContextView() {
       });
     });
 
-    // Handle item deletions.
     const unsubDelete = window.sharedClipboardAPI.onTeamItemDeleted?.((id) => {
       setTeamItems(prev => {
         const next = prev.filter(i => i.id !== id);
@@ -1105,6 +1144,12 @@ export default function SharedContextView() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't handle keys when this view is hidden (e.g., when sketch mode is active).
+      // The container is hidden via CSS display:none when another view is active.
+      if (containerRef.current && getComputedStyle(containerRef.current).display === 'none') {
+        return;
+      }
+
       const key = e.key;
       const hasMeta = e.metaKey;
       const hasShift = e.shiftKey;
@@ -1399,11 +1444,38 @@ export default function SharedContextView() {
         })();
         return;
       }
+
+      // d: Draw on previewed or selected image.
+      if (key === 'd' && !hasMeta && !hasCtrl && !hasAlt && !hasShift && onOpenSketch) {
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+
+        // If preview is open with an image, draw on that.
+        if (preview && preview.type === 'image') {
+          e.preventDefault();
+          onOpenSketch(preview.url, preview.width || 800, preview.height || 600);
+          dismissPreview();
+          return;
+        }
+
+        // Otherwise check hovered or selected item.
+        const hoveredItem = hoveredImageId !== null
+          ? teamItems.find(i => i.id === hoveredImageId)
+          : null;
+        const selectedItem = selectedRow?.type === 'item' ? selectedRow.item : null;
+        const imageItem = hoveredItem || selectedItem;
+
+        if (imageItem && (imageItem.imageUrl || imageItem.imageData)) {
+          e.preventDefault();
+          const url = imageItem.imageUrl || `data:image/png;base64,${imageItem.imageData}`;
+          onOpenSketch(url, imageItem.imageWidth || 800, imageItem.imageHeight || 600);
+          return;
+        }
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [session, listRows, selectedIndex, selectedIds, deletedItems, pasteItem, pasteStack, copyToPersonal, preview, dismissPreview, getPreviewForRow, getStackPreviewItems, hoveredImageId, teamItems, deleteTeamItem, deleteTeamItems, unstackTeamItems, toggleStackExpanded, toggleItemExpanded, stackPreviewIndex, stackPreviewItems]);
+  }, [session, listRows, selectedIndex, selectedIds, deletedItems, pasteItem, pasteStack, copyToPersonal, preview, dismissPreview, getPreviewForRow, getStackPreviewItems, hoveredImageId, teamItems, deleteTeamItem, deleteTeamItems, unstackTeamItems, toggleStackExpanded, toggleItemExpanded, stackPreviewIndex, stackPreviewItems, onOpenSketch]);
 
   // ---------------------------------------------------------------------------
   // Render: Loading
@@ -1600,7 +1672,7 @@ export default function SharedContextView() {
   // ---------------------------------------------------------------------------
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '0 16px 16px 16px' }}>
+    <div ref={containerRef} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '0 16px 16px 16px' }}>
       {/* Team Members Toggle */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
         <button
@@ -1951,6 +2023,11 @@ export default function SharedContextView() {
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   if (item.imageUrl || item.imageData) {
+                                    // Build preview items from all images in this stack for navigation.
+                                    const previewItems = getStackPreviewItems(stackItems);
+                                    const clickedIndex = stackImages.findIndex(img => img.id === item.id);
+                                    setStackPreviewItems(previewItems);
+                                    setStackPreviewIndex(Math.max(0, clickedIndex));
                                     setPreview({
                                       type: 'image',
                                       url: item.imageUrl || `data:image/png;base64,${item.imageData}`,
@@ -2078,6 +2155,24 @@ export default function SharedContextView() {
                           >
                             copy <KeyCap>c</KeyCap>
                           </button>
+                          {onOpenSketch && (() => {
+                            const imageItem = stackItems.find(i => i.imageUrl || i.imageData);
+                            if (!imageItem) return null;
+                            return (
+                              <button
+                                tabIndex={-1}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const url = imageItem.imageUrl || `data:image/png;base64,${imageItem.imageData}`;
+                                  onOpenSketch(url, imageItem.imageWidth || 800, imageItem.imageHeight || 600);
+                                }}
+                                style={{ padding: '4px 6px', fontSize: '10px', fontWeight: 500, backgroundColor: 'transparent', color: theme.textSecondary, border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                              >
+                                draw <KeyCap>d</KeyCap>
+                              </button>
+                            );
+                          })()}
                           <button
                             tabIndex={-1}
                             onMouseDown={(e) => e.preventDefault()}
@@ -2268,6 +2363,20 @@ export default function SharedContextView() {
                           >
                             {isCopying ? 'copying...' : 'copy'} <KeyCap>c</KeyCap>
                           </button>
+                          {(item.imageUrl || item.imageData) && onOpenSketch && (
+                            <button
+                              tabIndex={-1}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const url = item.imageUrl || `data:image/png;base64,${item.imageData}`;
+                                onOpenSketch(url, item.imageWidth || 800, item.imageHeight || 600);
+                              }}
+                              style={{ padding: '4px 6px', fontSize: '10px', fontWeight: 500, backgroundColor: 'transparent', color: theme.textSecondary, border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                            >
+                              draw <KeyCap>d</KeyCap>
+                            </button>
+                          )}
                           <button
                             tabIndex={-1}
                             onMouseDown={(e) => e.preventDefault()}
@@ -2359,18 +2468,93 @@ export default function SharedContextView() {
           }}
         >
           {preview.type === 'image' ? (
-            <img
-              src={preview.url}
-              alt="Preview"
+            <div
               onClick={(e) => e.stopPropagation()}
               style={{
-                maxWidth: '90vw',
-                maxHeight: '90vh',
-                objectFit: 'contain',
-                borderRadius: '8px',
-                boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '16px',
               }}
-            />
+            >
+              <img
+                src={preview.url}
+                alt="Preview"
+                style={{
+                  maxWidth: '90vw',
+                  maxHeight: '75vh',
+                  objectFit: 'contain',
+                  borderRadius: '8px',
+                  boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+                }}
+              />
+              {/* Action bar - paste, draw, delete */}
+              <div style={{
+                display: 'flex',
+                gap: '8px',
+                backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                backdropFilter: 'blur(8px)',
+                WebkitBackdropFilter: 'blur(8px)',
+                borderRadius: '10px',
+                padding: '8px 12px',
+              }}>
+                {[
+                  { label: 'paste', key: '↵', action: async () => {
+                    // Get the currently selected/previewed item and paste it.
+                    const selectedRow = listRows[selectedIndex];
+                    if (selectedRow?.type === 'item') {
+                      await pasteItem(selectedRow.item);
+                    } else if (selectedRow?.type === 'stack') {
+                      await pasteStack(selectedRow.items);
+                    }
+                  }},
+                  ...(onOpenSketch ? [{ label: 'draw', key: 'd', action: () => {
+                    // Open sketch mode with this image.
+                    onOpenSketch(preview.url, preview.width || 800, preview.height || 600);
+                    dismissPreview();
+                  }}] : []),
+                  { label: 'delete', key: '⌫', action: async () => {
+                    const selectedRow = listRows[selectedIndex];
+                    if (selectedRow?.type === 'item') {
+                      await deleteTeamItem(selectedRow.item.id);
+                      dismissPreview();
+                    } else if (selectedRow?.type === 'stack') {
+                      await deleteTeamItems(selectedRow.items.map(i => i.id));
+                      dismissPreview();
+                    }
+                  }},
+                ].map((action) => (
+                  <button
+                    key={action.label}
+                    onClick={action.action}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '6px 12px',
+                      fontSize: '12px',
+                      fontWeight: 500,
+                      backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {action.label}
+                    <span style={{
+                      fontSize: '10px',
+                      opacity: 0.7,
+                      backgroundColor: 'rgba(255, 255, 255, 0.15)',
+                      padding: '2px 5px',
+                      borderRadius: '3px',
+                    }}>
+                      {action.key}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
           ) : (
             <div
               onClick={(e) => e.stopPropagation()}

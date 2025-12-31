@@ -145,8 +145,6 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
   // Data Loading
   // ==========================================================================
 
-  // Load todos from server. Only called on initial load if cache is empty.
-  // Realtime subscription handles all subsequent updates.
   const loadTodos = useCallback(async () => {
     if (!window.todoAPI) return;
     
@@ -192,7 +190,6 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
     }
   }, []);
 
-  // Initial load - only fetch if cache is empty. Realtime handles everything else.
   useEffect(() => {
     if (todos.length === 0) {
       loadTodos();
@@ -207,7 +204,6 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Helper to update cache after any change.
   const updateCache = useCallback((newTodos: Todo[]) => {
     try {
       localStorage.setItem('todosCache', JSON.stringify(newTodos));
@@ -216,8 +212,7 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
     }
   }, []);
 
-  // Subscribe to realtime events for todos.
-  // These events are pushed from the server when todos are added/updated/deleted.
+  // Subscribe to realtime events.
   useEffect(() => {
     if (!window.todoAPI) return;
     
@@ -227,7 +222,6 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
       updateCache(newTodos);
     });
 
-    // Handle individual todo added (realtime).
     const unsubAdded = window.todoAPI.onTodoAdded?.((todo) => {
       setTodos(prev => {
         // Avoid duplicates.
@@ -238,7 +232,6 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
       });
     });
 
-    // Handle individual todo updated (realtime).
     const unsubUpdated = window.todoAPI.onTodoUpdated?.((todo) => {
       setTodos(prev => {
         const next = prev.map(t => t.id === todo.id ? todo : t);
@@ -247,7 +240,6 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
       });
     });
 
-    // Handle individual todo deleted (realtime).
     const unsubDeleted = window.todoAPI.onTodoDeleted?.((id) => {
       setTodos(prev => {
         const next = prev.filter(t => t.id !== id);

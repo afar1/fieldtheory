@@ -940,6 +940,9 @@ final class RecordingHelper {
         // Check file size
         if let attributes = try? FileManager.default.attributesOfItem(atPath: path),
            let fileSize = attributes[.size] as? Int64 {
+            // #region agent log - Log file size for debugging empty files
+            sendLog(level: "debug", message: "[DEBUG-H2,H5] Recording file size: \(fileSize) bytes, path: \(path)")
+            // #endregion
             sendLog(level: "info", message: "Recording stopped: \(path) (\(fileSize) bytes)")
         } else {
             sendLog(level: "info", message: "Recording stopped: \(path)")
