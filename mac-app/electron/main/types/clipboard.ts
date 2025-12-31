@@ -67,6 +67,10 @@ export const ClipboardIPCChannels = {
   GET_HIDE_SCREEN_RECORDING_BANNER: 'clipboard:getHideScreenRecordingBanner',
   SET_HIDE_SCREEN_RECORDING_BANNER: 'clipboard:setHideScreenRecordingBanner',
 
+  // Cursor status indicator settings
+  GET_CURSOR_STATUS_ENABLED: 'clipboard:getCursorStatusEnabled',
+  SET_CURSOR_STATUS_ENABLED: 'clipboard:setCursorStatusEnabled',
+
   // Mobile sync operations
   SET_SYNC_SESSION: 'clipboard:setSyncSession',
   CLEAR_SYNC_SESSION: 'clipboard:clearSyncSession',
