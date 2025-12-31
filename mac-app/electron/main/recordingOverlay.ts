@@ -13,6 +13,9 @@ export class RecordingOverlay extends EventEmitter {
   private overlayStyle: OverlayStyle = 'rectangle';
   private isShowingConfirmation: boolean = false;
   
+  // When true, overlay window is hidden (cursor status widget shows UI instead)
+  private visuallyDisabled: boolean = true;
+  
   // Rectangle style dimensions
   private readonly RECTANGLE_WIDTH = 100;
   private readonly RECTANGLE_HEIGHT = 36;
@@ -57,9 +60,15 @@ export class RecordingOverlay extends EventEmitter {
 
   /**
    * Show the overlay window in recording state.
+   * Note: When visuallyDisabled is true, the cursor status widget handles the UI.
    */
   showRecording(): void {
     console.log('[RecordingOverlay] showRecording() called');
+    
+    // Skip window display when cursor status widget handles the UI
+    if (this.visuallyDisabled) {
+      return;
+    }
     
     if (this.window && !this.window.isDestroyed()) {
       this.window.showInactive();
@@ -138,7 +147,10 @@ export class RecordingOverlay extends EventEmitter {
   }
 
   showTranscribing(): void {
-    this.sendState('transcribing');
+    // Cursor status widget handles the UI when visuallyDisabled
+    if (!this.visuallyDisabled) {
+      this.sendState('transcribing');
+    }
   }
 
   /**
@@ -170,6 +182,11 @@ export class RecordingOverlay extends EventEmitter {
    * Used for feedback like "No audio found", "Cancelled", etc.
    */
   showStatus(message: string): void {
+    // Cursor status widget handles the UI when visuallyDisabled
+    if (this.visuallyDisabled) {
+      return;
+    }
+    
     if (!this.window || this.window.isDestroyed()) {
       return;
     }
@@ -192,13 +209,20 @@ export class RecordingOverlay extends EventEmitter {
   /**
    * Show confirmation dialog for abandoning recording.
    * Expands the overlay to show a confirmation message.
+   * Note: When visuallyDisabled, cursor status widget handles the UI.
    */
   showConfirmation(): void {
-    if (!this.window || this.window.isDestroyed()) {
+    this.isShowingConfirmation = true;
+    console.log('[RecordingOverlay] Showing abandon confirmation');
+    
+    // Cursor status widget handles the UI when visuallyDisabled
+    if (this.visuallyDisabled) {
       return;
     }
     
-    this.isShowingConfirmation = true;
+    if (!this.window || this.window.isDestroyed()) {
+      return;
+    }
     
     // Resize window to fit confirmation message.
     const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
@@ -212,18 +236,22 @@ export class RecordingOverlay extends EventEmitter {
     });
     
     this.sendState('confirmation');
-    console.log('[RecordingOverlay] Showing abandon confirmation');
   }
   
   /**
    * Hide confirmation dialog and return to recording state.
    */
   hideConfirmation(): void {
-    if (!this.window || this.window.isDestroyed() || !this.isShowingConfirmation) {
+    this.isShowingConfirmation = false;
+    
+    // Cursor status widget handles the UI when visuallyDisabled
+    if (this.visuallyDisabled) {
       return;
     }
     
-    this.isShowingConfirmation = false;
+    if (!this.window || this.window.isDestroyed()) {
+      return;
+    }
     
     // Resize window back to normal recording size.
     const isTopEmerging = this.overlayStyle === 'top-emerging';
