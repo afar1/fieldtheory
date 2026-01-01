@@ -315,9 +315,8 @@ export class NativeHelper extends EventEmitter {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         cleanup();
-        // On timeout, assume no text input (safer than assuming yes)
         resolve(false);
-      }, 1000); // Short timeout - we need this to be fast
+      }, 1000);
 
       const onMessage = (msg: HelperOutgoingMessage) => {
         if (msg.type === 'focusedTextInputStatus') {
@@ -325,7 +324,7 @@ export class NativeHelper extends EventEmitter {
           resolve(msg.hasTextInput);
         } else if (msg.type === 'error') {
           cleanup();
-          resolve(false); // On error, assume no text input
+          resolve(false);
         }
       };
 
@@ -418,6 +417,7 @@ export class NativeHelper extends EventEmitter {
         break;
 
       case 'permissionsStatus':
+      case 'focusedTextInputStatus':
         this.emit('message', msg);
         break;
 

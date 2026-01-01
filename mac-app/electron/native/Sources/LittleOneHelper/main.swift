@@ -8,6 +8,7 @@ import CoreAudio
 import AudioToolbox
 import AVFoundation
 import ApplicationServices
+import AppKit
 
 // MARK: - Data Models
 
@@ -619,24 +620,45 @@ final class KeyboardMonitor {
     /// Uses Accessibility API to get the focused UI element and check its role.
     /// Handles web content and nested elements by checking the hierarchy.
     func checkFocusedTextInput() -> Bool {
-        let systemWideElement = AXUIElementCreateSystemWide()
+        let isTrusted = AXIsProcessTrusted()
+        sendLog(level: "debug", message: "checkFocusedTextInput: isTrusted=\(isTrusted)")
         
-        // Get the focused element
+        // Try system-wide focused element first
+        let systemWideElement = AXUIElementCreateSystemWide()
         var focusedElement: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(
+        var result = AXUIElementCopyAttributeValue(
             systemWideElement,
             kAXFocusedUIElementAttribute as CFString,
             &focusedElement
         )
         
+        // If system-wide fails, try frontmost application
+        if result != .success {
+            sendLog(level: "debug", message: "checkFocusedTextInput: System-wide failed (error=\(result.rawValue)), trying frontmost app")
+            
+            // Get frontmost application
+            if let frontApp = NSWorkspace.shared.frontmostApplication {
+                let pid = frontApp.processIdentifier
+                let appElement = AXUIElementCreateApplication(pid)
+                sendLog(level: "debug", message: "checkFocusedTextInput: Frontmost app=\(frontApp.localizedName ?? "unknown"), pid=\(pid)")
+                
+                // Get focused element from frontmost app
+                result = AXUIElementCopyAttributeValue(
+                    appElement,
+                    kAXFocusedUIElementAttribute as CFString,
+                    &focusedElement
+                )
+            }
+        }
+        
+        sendLog(level: "debug", message: "checkFocusedTextInput: AXError=\(result.rawValue)")
+        
         guard result == .success, let element = focusedElement else {
-            sendLog(level: "debug", message: "checkFocusedTextInput: No focused element found")
+            sendLog(level: "debug", message: "checkFocusedTextInput: No focused element found (error=\(result.rawValue))")
             return false
         }
         
         let axElement = element as! AXUIElement
-        
-        // Check the focused element and its ancestors for text input characteristics
         return isTextInputElement(axElement) || hasTextInputAncestor(axElement)
     }
     

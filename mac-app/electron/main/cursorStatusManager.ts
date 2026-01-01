@@ -34,11 +34,11 @@ export class CursorStatusManager extends EventEmitter {
   
   // Done state timeout - for showing brief green dot after transcribing
   private doneTimeout: NodeJS.Timeout | null = null;
-  private readonly DONE_DURATION_MS = 2500;
+  private readonly DONE_DURATION_MS = 800;
   
   // Paste-failed state timeout
   private pasteFailedTimeout: NodeJS.Timeout | null = null;
-  private readonly PASTE_FAILED_DURATION_MS = 3000;
+  private readonly PASTE_FAILED_DURATION_MS = 5000;
   
   // Store last transcription for done state display
   private lastTranscription: string = '';
@@ -51,10 +51,10 @@ export class CursorStatusManager extends EventEmitter {
   // Window dimensions and offset from cursor (positioned immediately to the right)
   private readonly WINDOW_WIDTH_NORMAL = 140;
   private readonly WINDOW_WIDTH_WIDE = 345;
-  private readonly WINDOW_HEIGHT_NORMAL = 28;
-  private readonly WINDOW_HEIGHT_TALL = 96;
+  private readonly WINDOW_HEIGHT_NORMAL = 40;
+  private readonly WINDOW_HEIGHT_TALL = 160;
   private readonly CURSOR_OFFSET_X = 16;
-  private readonly CURSOR_OFFSET_Y = 1;
+  private readonly CURSOR_OFFSET_Y = -1;
   
   constructor() {
     super();
@@ -67,6 +67,22 @@ export class CursorStatusManager extends EventEmitter {
         if (!abandon) {
           this.setState('recording');
         }
+      }
+    });
+    
+    // Listen for dismiss requests from renderer (e.g., click to dismiss paste-failed)
+    ipcMain.on('cursor-status-dismiss', () => {
+      if (this.state === 'paste-failed' || this.state === 'done') {
+        if (this.pasteFailedTimeout) {
+          clearTimeout(this.pasteFailedTimeout);
+          this.pasteFailedTimeout = null;
+        }
+        if (this.doneTimeout) {
+          clearTimeout(this.doneTimeout);
+          this.doneTimeout = null;
+        }
+        this.state = 'idle';
+        this.hide();
       }
     });
   }
@@ -167,13 +183,14 @@ export class CursorStatusManager extends EventEmitter {
   
   /**
    * Update window size based on state (wider for text-heavy states).
+   * Also toggles mouse event handling - allow clicks in paste-failed/done states for dismiss.
    */
   private updateWindowSize(state: CursorStatusState): void {
     if (!this.window || this.window.isDestroyed()) return;
     
-    // Done state also needs wide window to show transcription text
-    const needsWide = state === 'confirmation' || state === 'paste-failed' || state === 'done';
-    const needsTall = state === 'done' || state === 'paste-failed'; // For wrapped text
+    // Done state just shows "Pasted" - no wide window needed
+    const needsWide = state === 'confirmation' || state === 'paste-failed';
+    const needsTall = state === 'paste-failed'; // For wrapped transcript text
     const width = needsWide ? this.WINDOW_WIDTH_WIDE : this.WINDOW_WIDTH_NORMAL;
     const height = needsTall ? this.WINDOW_HEIGHT_TALL : this.WINDOW_HEIGHT_NORMAL;
     
@@ -181,6 +198,11 @@ export class CursorStatusManager extends EventEmitter {
     if (currentWidth !== width || currentHeight !== height) {
       this.window.setSize(width, height);
     }
+    
+    // Allow mouse events for paste-failed/done states (click to dismiss)
+    // Ignore mouse events for other states so they pass through
+    const allowMouse = state === 'paste-failed' || state === 'done';
+    this.window.setIgnoreMouseEvents(!allowMouse);
   }
   
   /**
@@ -246,6 +268,9 @@ export class CursorStatusManager extends EventEmitter {
       },
     });
 
+    // Show on all workspaces including full-screen apps
+    this.window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    
     // Ignore mouse events so clicks pass through
     this.window.setIgnoreMouseEvents(true);
 
@@ -385,5 +410,6 @@ export class CursorStatusManager extends EventEmitter {
     }
     this.window = null;
     ipcMain.removeAllListeners('cursor-status-confirmation-response');
+    ipcMain.removeAllListeners('cursor-status-dismiss');
   }
 }
