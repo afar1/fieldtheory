@@ -25,6 +25,11 @@ contextBridge.exposeInMainWorld('cursorStatusAPI', {
     ipcRenderer.send('cursor-status-confirmation-response', abandon);
   },
   
+  // Dismiss the indicator (click to dismiss for paste-failed/done states)
+  dismiss: () => {
+    ipcRenderer.send('cursor-status-dismiss');
+  },
+  
   removeAllListeners: (channel: string) => {
     ipcRenderer.removeAllListeners(channel);
   },
