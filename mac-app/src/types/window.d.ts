@@ -688,6 +688,7 @@ interface CursorStatusAPI {
   onIdleChange: (callback: (isIdle: boolean) => void) => void;
   onDataChange?: (callback: (data: { transcription?: string; pasteFailed?: boolean }) => void) => void;
   sendConfirmationResponse?: (abandon: boolean) => void;
+  dismiss?: () => void;
   removeAllListeners: (channel: string) => void;
 }
 

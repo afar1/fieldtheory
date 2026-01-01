@@ -62,7 +62,7 @@ export default function CursorStatus() {
     window.cursorStatusAPI.onStateChange((newState) => {
       setState(newState);
       
-      // When recording starts, show "Think outloud..." text briefly then fade it out
+      // When recording starts, show "fielding theories..." text briefly then fade it out
       if (newState === 'recording') {
         setShowRecordingText(true);
         // Clear any existing timeout
@@ -213,6 +213,21 @@ export default function CursorStatus() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [state]);
+  
+  // Keyboard handler for paste-failed state - Escape to dismiss
+  useEffect(() => {
+    if (state !== 'paste-failed') return;
+    
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        window.cursorStatusAPI?.dismiss?.();
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [state]);
 
   // Don't render anything if idle state
   if (state === 'idle') {
@@ -222,24 +237,20 @@ export default function CursorStatus() {
   // Get text label based on state
   const getLabel = (): string => {
     if (state === 'recording' && showRecordingText) {
-      return 'Think outloud...';
+      return 'fielding theories...';
     }
     if (state === 'transcribing') {
-      return 'Transcribing' + '.'.repeat(dotCount);
+      return 'transcribing' + '.'.repeat(dotCount);
     }
     if (state === 'done') {
-      if (showDoneSavedMessage) {
-        return 'Transcript saved to Field Theory. ⌘V to paste';
-      }
-      return doneTranscription || 'Saved';
+      // Success: no text, just green dot
+      return '';
     }
     if (state === 'confirmation') {
       return `Abandon transcript? (${countdownSeconds}) Do nothing to continue recording`;
     }
     if (state === 'paste-failed') {
-      if (showSavedMessage) {
-        return 'Transcript saved to Field Theory. ⌘V to paste';
-      }
+      // Transcript is rendered separately with help text below
       return pasteFailedText || 'Saved to Field Theory';
     }
     return '';
@@ -251,19 +262,35 @@ export default function CursorStatus() {
   const showLabel = 
     (state === 'recording' && showRecordingText) || 
     (state === 'transcribing' && textVisible) ||
-    state === 'done' ||
     state === 'confirmation' ||
     state === 'paste-failed';
 
+  // Handle click to dismiss (for paste-failed/done states)
+  const handleClick = () => {
+    if (state === 'paste-failed' || state === 'done') {
+      window.cursorStatusAPI?.dismiss?.();
+    }
+  };
+
   return (
-    <div style={styles.container}>
-      {/* Colored dot - always visible during active state, pulses for recording/confirmation */}
+    <div 
+      style={{
+        ...styles.container,
+        cursor: (state === 'paste-failed' || state === 'done') ? 'pointer' : 'default',
+      }}
+      onClick={handleClick}
+    >
+      {/* Colored dot - always visible during active state, pulses for recording/confirmation, fades for done */}
       <div 
         style={{
           ...styles.dot,
           backgroundColor: color,
           boxShadow: `0 0 6px ${glow}`,
-          animation: (state === 'recording' || state === 'confirmation') ? 'pulse 1.8s ease-in-out infinite' : 'none',
+          animation: (state === 'recording' || state === 'confirmation') 
+            ? 'pulse 1.8s ease-in-out infinite' 
+            : state === 'done' 
+              ? 'fadeOutDot 0.8s ease-out forwards'
+              : 'none',
         }} 
       />
       
@@ -273,11 +300,16 @@ export default function CursorStatus() {
           ...styles.labelContainer,
           animation: state === 'recording' && showRecordingText 
             ? 'fadeInOut 2.52s ease-out forwards' 
-            : state === 'done' 
-              ? 'fadeIn 150ms ease-out' 
-              : 'fadeIn 150ms ease-out',
+            : 'fadeIn 150ms ease-out',
         }}>
-          <span style={styles.label}>{label}</span>
+          {state === 'paste-failed' && pasteFailedText ? (
+            <>
+              <span style={styles.label}>{pasteFailedText}</span>
+              <div style={styles.helpText}>(Saved to Field Theory)</div>
+            </>
+          ) : (
+            <span style={styles.label}>{label}</span>
+          )}
         </div>
       )}
     </div>
@@ -287,38 +319,44 @@ export default function CursorStatus() {
 const styles: Record<string, React.CSSProperties> = {
   container: {
     display: 'flex',
-    alignItems: 'flex-start', // Pin dot to top-left
+    alignItems: 'flex-start',
     gap: '5px',
-    height: '100%',
-    padding: '4px',
+    padding: '0px 4px 4px 4px',
+    boxSizing: 'border-box',
   },
   dot: {
     width: '7px',
     height: '7px',
     borderRadius: '50%',
     flexShrink: 0,
-    marginTop: '6px',
+    marginTop: '4px',
+    marginLeft: '2px',
   },
   labelContainer: {
     backgroundColor: 'rgba(30, 30, 30, 0.85)',
     borderRadius: '4px',
-    padding: '4px 8px',
+    padding: '4px 4px 4px 4px',
     maxWidth: '320px',
-    maxHeight: '80px',
-    overflow: 'hidden',
+    marginTop: '-6px',
   },
   label: {
     fontSize: '11px',
     fontWeight: 500,
+    lineHeight: '14px',
     color: 'rgba(255, 255, 255, 0.9)',
     fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
-    display: '-webkit-box',
-    WebkitLineClamp: 5,
-    WebkitBoxOrient: 'vertical',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
+  },
+  helpText: {
+    fontSize: '10px',
+    fontWeight: 400,
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+    textAlign: 'center' as const,
+    marginTop: '6px',
+    paddingTop: '4px',
+    borderTop: '1px solid rgba(255, 255, 255, 0.1)',
   },
 };
 
@@ -338,6 +376,11 @@ styleSheet.textContent = `
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
+  }
+  @keyframes fadeOutDot {
+    0% { opacity: 1; }
+    70% { opacity: 1; }
+    100% { opacity: 0; }
   }
 `;
 document.head.appendChild(styleSheet);

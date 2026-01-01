@@ -400,6 +400,11 @@ export class TranscriberManager extends EventEmitter {
       await this.pasteStack();
       this.emit('result', cleanedText);
       
+      // Set status to idle BEFORE emitting paste events.
+      // This prevents the idle transition from overriding paste-failed UI.
+      this.setStatus('idle');
+      this.handleOverlayAfterTranscription();
+      
       // Use accessibility result to choose UI feedback (paste already happened)
       const hasTextInput = await accessibilityCheckPromise;
       if (hasTextInput) {
@@ -408,10 +413,6 @@ export class TranscriberManager extends EventEmitter {
         console.log('[TranscriberManager] Accessibility: no text input - showing fallback UI');
         this.emit('paste-failed', 'No text input focused', cleanedText);
       }
-      
-      // Dismiss overlay
-      this.setStatus('idle');
-      this.handleOverlayAfterTranscription();
     } catch (error) {
       console.error('[TranscriberManager] Transcription failed:', error);
       this.setStatus('idle');
