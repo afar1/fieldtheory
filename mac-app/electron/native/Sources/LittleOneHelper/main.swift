@@ -616,6 +616,48 @@ final class KeyboardMonitor {
         return AXIsProcessTrustedWithOptions(options)
     }
     
+    /// Get the PID of the app that owns the window at the cursor position.
+    /// Uses CGWindowListCopyWindowInfo to find the topmost window under the cursor.
+    private func getAppPIDAtCursorPosition() -> pid_t? {
+        let mouseLocation = NSEvent.mouseLocation
+        guard let mainScreen = NSScreen.main else { return nil }
+        
+        // Convert from bottom-left origin (NSEvent) to top-left origin (CGWindow)
+        let screenHeight = mainScreen.frame.height
+        let cursorPoint = CGPoint(x: mouseLocation.x, y: screenHeight - mouseLocation.y)
+        
+        // Get all on-screen windows, ordered front-to-back
+        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+        
+        // Find the topmost window that contains the cursor
+        for windowInfo in windowList {
+            guard let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = boundsDict["X"],
+                  let y = boundsDict["Y"],
+                  let width = boundsDict["Width"],
+                  let height = boundsDict["Height"],
+                  let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? pid_t else {
+                continue
+            }
+            
+            let windowRect = CGRect(x: x, y: y, width: width, height: height)
+            if windowRect.contains(cursorPoint) {
+                // Skip windows with layer > 0 (menu bar, dock, etc.)
+                if let layer = windowInfo[kCGWindowLayer as String] as? Int, layer > 0 {
+                    continue
+                }
+                
+                let ownerName = windowInfo[kCGWindowOwnerName as String] as? String ?? "unknown"
+                sendLog(level: "debug", message: "getAppPIDAtCursorPosition: Found window at cursor - app=\(ownerName), pid=\(ownerPID)")
+                return ownerPID
+            }
+        }
+        
+        return nil
+    }
+    
     /// Check if a text input field is currently focused.
     /// Uses Accessibility API to get the focused UI element and check its role.
     /// Handles web content and nested elements by checking the hierarchy.
@@ -632,22 +674,30 @@ final class KeyboardMonitor {
             &focusedElement
         )
         
-        // If system-wide fails, try frontmost application
+        // If system-wide fails, try the app at the cursor position (more reliable than frontmostApplication)
         if result != .success {
-            sendLog(level: "debug", message: "checkFocusedTextInput: System-wide failed (error=\(result.rawValue)), trying frontmost app")
+            sendLog(level: "debug", message: "checkFocusedTextInput: System-wide failed (error=\(result.rawValue)), trying app at cursor")
             
-            // Get frontmost application
-            if let frontApp = NSWorkspace.shared.frontmostApplication {
-                let pid = frontApp.processIdentifier
+            if let pid = getAppPIDAtCursorPosition() {
                 let appElement = AXUIElementCreateApplication(pid)
-                sendLog(level: "debug", message: "checkFocusedTextInput: Frontmost app=\(frontApp.localizedName ?? "unknown"), pid=\(pid)")
-                
-                // Get focused element from frontmost app
                 result = AXUIElementCopyAttributeValue(
                     appElement,
                     kAXFocusedUIElementAttribute as CFString,
                     &focusedElement
                 )
+            } else {
+                // Fallback to frontmost application if cursor detection fails
+                sendLog(level: "debug", message: "checkFocusedTextInput: Cursor detection failed, trying frontmost app")
+                if let frontApp = NSWorkspace.shared.frontmostApplication {
+                    let pid = frontApp.processIdentifier
+                    let appElement = AXUIElementCreateApplication(pid)
+                    sendLog(level: "debug", message: "checkFocusedTextInput: Frontmost app=\(frontApp.localizedName ?? "unknown"), pid=\(pid)")
+                    result = AXUIElementCopyAttributeValue(
+                        appElement,
+                        kAXFocusedUIElementAttribute as CFString,
+                        &focusedElement
+                    )
+                }
             }
         }
         
