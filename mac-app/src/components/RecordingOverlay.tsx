@@ -2,16 +2,23 @@
 // RecordingOverlay - Shows recording state indicator
 // =============================================================================
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 
 type OverlayState = 'recording' | 'transcribing' | 'dismiss' | 'confirmation' | 'status';
 type OverlayStyle = 'rectangle' | 'top-emerging';
 
+// Track which pipe indices have been animated (for fade-in effect).
+interface PipeState {
+  count: number;
+  animatedIndices: Set<number>;
+}
+
 export default function RecordingOverlay() {
   const [state, setState] = useState<OverlayState>('recording');
   const [style, setStyle] = useState<OverlayStyle>('rectangle');
-  const [stackCount, setStackCount] = useState<number>(0);
+  const [pipeState, setPipeState] = useState<PipeState>({ count: 0, animatedIndices: new Set() });
   const [statusMessage, setStatusMessage] = useState<string>('');
+  const prevCountRef = useRef<number>(0);
 
   // IPC listeners for overlay state, style, and status messages
   useEffect(() => {
@@ -31,15 +38,38 @@ export default function RecordingOverlay() {
   }, []);
 
   // Stack count listener (shows how many screenshots have been captured during recording)
+  // When count increases, mark the new indices as needing animation.
   useEffect(() => {
     if (!window.transcribeAPI) return;
     
     window.transcribeAPI.getStackCount().then(count => {
-      setStackCount(count || 0);
+      const c = count || 0;
+      setPipeState({ count: c, animatedIndices: new Set(Array.from({ length: c }, (_, i) => i)) });
+      prevCountRef.current = c;
     });
     
     const unsubscribe = window.transcribeAPI.onStackChanged?.((count: number) => {
-      setStackCount(count);
+      setPipeState(prev => {
+        // For new pipes, start them as not-yet-animated (will trigger fade-in).
+        const newAnimated = new Set(prev.animatedIndices);
+        // When count increases, new pipes need to animate in.
+        // When count decreases (new recording), reset all.
+        if (count < prev.count) {
+          // Reset - new recording started.
+          return { count, animatedIndices: new Set() };
+        }
+        // Add new indices to animated set after a brief delay (for fade-in).
+        for (let i = prev.count; i < count; i++) {
+          setTimeout(() => {
+            setPipeState(p => ({
+              ...p,
+              animatedIndices: new Set([...p.animatedIndices, i]),
+            }));
+          }, 50); // Small delay so CSS transition can see the change.
+        }
+        return { count, animatedIndices: newAnimated };
+      });
+      prevCountRef.current = count;
     });
     
     return () => {
@@ -207,22 +237,40 @@ export default function RecordingOverlay() {
             background: '#ff3b30',
             boxShadow: isTopEmerging ? '0 0 12px rgba(255, 59, 48, 0.6)' : '0 0 8px #ff3b30',
           }} />
-          {/* Stack count indicator - shows screenshots captured during recording */}
-          {stackCount > 0 && (
+          {/* Stack pipe indicator - shows screenshots captured during recording */}
+          {pipeState.count > 0 && (
             <div style={{
-              minWidth: isTopEmerging ? '18px' : '16px',
-              height: isTopEmerging ? '18px' : '16px',
-              padding: '0 4px',
-              borderRadius: isTopEmerging ? '9px' : '8px',
-              background: isTopEmerging ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.1)',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: isTopEmerging ? '10px' : '9px',
-              fontWeight: 600,
-              color: isTopEmerging ? '#fff' : '#333',
+              gap: '2px',
+              marginLeft: '4px',
             }}>
-              {stackCount}
+              {/* Render up to 3 pipes, each with fade-in animation */}
+              {Array.from({ length: Math.min(pipeState.count, 3) }, (_, i) => (
+                <div
+                  key={i}
+                  style={{
+                    width: '2px',
+                    height: isTopEmerging ? '12px' : '10px',
+                    backgroundColor: isTopEmerging ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.4)',
+                    borderRadius: '1px',
+                    opacity: pipeState.animatedIndices.has(i) ? 1 : 0,
+                    transition: 'opacity 0.2s ease-in',
+                  }}
+                />
+              ))}
+              {/* Show +N for overflow beyond 3 screenshots */}
+              {pipeState.count > 3 && (
+                <span style={{
+                  fontSize: isTopEmerging ? '9px' : '8px',
+                  color: isTopEmerging ? 'rgba(255, 255, 255, 0.6)' : 'rgba(0, 0, 0, 0.4)',
+                  marginLeft: '2px',
+                  opacity: pipeState.animatedIndices.has(3) ? 1 : 0,
+                  transition: 'opacity 0.2s ease-in',
+                }}>
+                  +{pipeState.count - 3}
+                </span>
+              )}
             </div>
           )}
         </div>
