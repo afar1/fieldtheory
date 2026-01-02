@@ -5319,58 +5319,70 @@ export default function ClipboardHistory() {
               )}
             </div>
           ) : (
-            // Version + Stats/Quotas (both visible when no update)
-            // Free users see quota usage, Pro users see all-time stats.
+            // Plan info: Dev (quotas) or Dev Plus (analytics)
             <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: '8px',
+                gap: '6px',
                 fontSize: '9px',
                 color: theme.textSecondary,
                 userSelect: 'none',
                 flex: 1,
               }}
             >
-              <span
-                onMouseEnter={() => setVersionHovered(true)}
-                onMouseLeave={() => setVersionHovered(false)}
-                onClick={() => window.updaterAPI?.checkForUpdates?.()}
-                style={{ cursor: 'pointer' }}
-                title="Check for updates"
-              >
-                {versionHovered ? 'Check for updates' : `v${appVersion}`}
-              </span>
-              {cachedTier === 'pro' && statItems.length > 0 ? (
-                // Pro users see all-time stats.
+              {cachedTier === 'pro' ? (
+                // Dev Plus Plan: show analytics
                 <>
-                  <span style={{ opacity: 0.4 }}>·</span>
-                  <span
-                    style={{
-                      opacity: statFading ? 0 : 1,
-                      transition: 'opacity 0.15s ease',
-                      cursor: 'pointer',
-                    }}
-                    onClick={nextStat}
-                  >
-                    {formatNumber(statItems[currentStatIndex]?.value ?? 0)} {statItems[currentStatIndex]?.value === 1 
-                      ? statItems[currentStatIndex]?.singular 
-                      : statItems[currentStatIndex]?.plural}
-                  </span>
-                  <span style={{ fontSize: '10px' }}>
-                    ({timeIntervals[currentIntervalIndex]})
-                  </span>
+                  <span style={{ fontWeight: 500 }}>Dev Plus Plan:</span>
+                  {statItems.length > 0 ? (
+                    <>
+                      <span
+                        style={{
+                          opacity: statFading ? 0 : 1,
+                          transition: 'opacity 0.15s ease',
+                          cursor: 'pointer',
+                        }}
+                        onClick={nextStat}
+                      >
+                        {formatNumber(statItems[currentStatIndex]?.value ?? 0)} {statItems[currentStatIndex]?.value === 1 
+                          ? statItems[currentStatIndex]?.singular 
+                          : statItems[currentStatIndex]?.plural}
+                      </span>
+                      <span style={{ fontSize: '10px' }}>
+                        ({timeIntervals[currentIntervalIndex]})
+                      </span>
+                    </>
+                  ) : (
+                    <span style={{ opacity: 0.5 }}>No activity yet</span>
+                  )}
                 </>
               ) : quotaUsage ? (
-                // Free users see quota usage.
+                // Dev Plan: show quotas with info tooltip + upgrade link
                 <>
+                  <span style={{ fontWeight: 500 }}>Dev Plan:</span>
+                  <span>{quotaUsage.priorityMic}</span>
                   <span style={{ opacity: 0.4 }}>·</span>
-                  <span style={{ fontSize: '9px' }}>
-                    {quotaUsage.priorityMic}
+                  <span>{quotaUsage.autoStack}</span>
+                  <span
+                    title="Priority minutes and auto-stacks reset monthly on the first"
+                    style={{ 
+                      opacity: 0.4, 
+                      cursor: 'help',
+                      fontSize: '10px',
+                    }}
+                  >
+                    ⓘ
                   </span>
-                  <span style={{ opacity: 0.4 }}>·</span>
-                  <span style={{ fontSize: '9px' }}>
-                    {quotaUsage.autoStack}
+                  <span
+                    onClick={() => window.open('https://buy.stripe.com/YOUR_CHECKOUT_LINK', '_blank')}
+                    style={{ 
+                      color: theme.accent, 
+                      cursor: 'pointer',
+                      textDecoration: 'underline',
+                    }}
+                  >
+                    Upgrade
                   </span>
                 </>
               ) : null}
@@ -5380,8 +5392,18 @@ export default function ClipboardHistory() {
           <div style={{ flex: 1 }} />
         )}
 
-        {/* Right side: settings button only */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '12px', fontSize: '9px', flex: 1 }}>
+        {/* Right side: version + settings button */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', fontSize: '9px', flex: 1 }}>
+          {/* Version number */}
+          <span
+            onMouseEnter={() => setVersionHovered(true)}
+            onMouseLeave={() => setVersionHovered(false)}
+            onClick={() => window.updaterAPI?.checkForUpdates?.()}
+            style={{ cursor: 'pointer', color: theme.textSecondary }}
+            title="Check for updates"
+          >
+            {versionHovered ? 'Check for updates' : `v${appVersion}`}
+          </span>
           {/* Settings toggle button */}
           <button
             onClick={() => setShowSettings(!showSettings)}

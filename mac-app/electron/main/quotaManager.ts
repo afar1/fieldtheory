@@ -257,24 +257,28 @@ export class QuotaManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Format priority mic usage for display (in minutes).
-   * Returns string like "23 of 500 min" or "Unlimited".
+   * Format priority mic usage for display.
+   * Returns "0 of 500 min priority mic" or "0 of ∞ min priority mic".
    */
   formatPriorityMicUsage(): string {
     const status = this.getPriorityMicStatus();
-    if (isUnlimited(status.limit)) return 'Unlimited';
     const usedMinutes = Math.floor(status.used / 60);
+    if (isUnlimited(status.limit)) {
+      return `${usedMinutes} of ∞ min priority mic`;
+    }
     const limitMinutes = Math.floor(status.limit / 60);
-    return `${usedMinutes} of ${limitMinutes} min`;
+    return `${usedMinutes} of ${limitMinutes} min priority mic`;
   }
 
   /**
    * Format auto-stack usage for display.
-   * Returns string like "12 of 50 auto-stacks" or "Unlimited".
+   * Returns "7 of 50 auto-stacks" or "7 of ∞ auto-stacks".
    */
   formatAutoStackUsage(): string {
     const status = this.getAutoStackStatus();
-    if (isUnlimited(status.limit)) return 'Unlimited';
+    if (isUnlimited(status.limit)) {
+      return `${status.used} of ∞ auto-stacks`;
+    }
     return `${status.used} of ${status.limit} auto-stacks`;
   }
 
