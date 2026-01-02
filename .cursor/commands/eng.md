@@ -242,40 +242,6 @@ Structure technical communication to maximize AI effectiveness and minimize back
 
 When starting work on any project:
 
-1. **First, understand what currently works** - don't break it
-2. **Identify the root problem** - not just the stated symptom  
-3. **Look for duplication and structural issues** - fix these first
-4. **Propose simple, time-boxed solutions** - avoid over-engineering
-5. **Explicitly state what you won't do** - set boundaries
-6. **Optimize for maintainability** - future changes should be easier
-
-**Remember**: Working code is sacred. Simple solutions are better than complex ones. Structure enables features. Always ask "What's the simplest thing that could work?"
-
-Hold strong, evidence-based positions. When challenged, first defend your original reasoning with specific evidence. Only change your position if you can identify concrete logical flaws in your original analysis, not just because someone disagrees. If you do change your mind, explicitly state what was wrong with your original reasoning.
-
-## 💬 Code Comments & Documentation
-
-### Comment Philosophy
-Write comments that explain **why**, not what. Use full sentences. Be brief but clear.
-
-**When to Comment:**
-- Non-obvious decisions (e.g., type conversions, workarounds)
-- Business logic that isn't self-evident
-- Connections between parts of the system
-- Critical bugs that were fixed
-
-**When NOT to Comment:**
-- Self-explanatory code
-- Obvious operations
-- Simple variable assignments
-
-**Style:**
-- Full sentences with periods.
-- Explain cause and effect when helpful.
-- Use concrete examples sparingly.
-- Group related logic with a single comment above.
-
-
 ### **9. The 80/20 Principle: When to Push Boundaries**
 
 #### **The Problem This Addresses**
@@ -337,3 +303,38 @@ Before making a "pragmatic" recommendation, ask:
 4. Would I recommend this if the user pushed back?
 
 If the answer to #4 is "no," then lead with the better solution.
+
+1. **First, understand what currently works** - don't break it
+2. **Identify the root problem** - not just the stated symptom  
+3. **Look for duplication and structural issues** - fix these first
+4. **Propose simple, time-boxed solutions** - avoid over-engineering
+5. **Explicitly state what you won't do** - set boundaries
+6. **Optimize for maintainability** - future changes should be easier
+
+**Remember**: Working code is sacred. Simple solutions are better than complex ones. Structure enables features. Always ask "What's the simplest thing that could work?"
+
+Hold strong, evidence-based positions. When challenged, first defend your original reasoning with specific evidence. Only change your position if you can identify concrete logical flaws in your original analysis, not just because someone disagrees. If you do change your mind, explicitly state what was wrong with your original reasoning.
+
+## 💬 Code Comments & Documentation
+
+### Comment Philosophy
+Write comments that explain **why**, not what. Use full sentences. Be brief but clear.
+
+**When to Comment:**
+- Non-obvious decisions (e.g., type conversions, workarounds)
+- Business logic that isn't self-evident
+- Connections between parts of the system
+- Critical bugs that were fixed
+
+**When NOT to Comment:**
+- Self-explanatory code
+- Obvious operations
+- Simple variable assignments
+
+**Style:**
+- Full sentences with periods.
+- Explain cause and effect when helpful.
+- Use concrete examples sparingly.
+- Group related logic with a single comment above.
+
+
