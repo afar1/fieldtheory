@@ -7,6 +7,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { supabase } from '../supabaseClient';
+import type { Session } from '@supabase/supabase-js';
 
 type Command = {
   id: string;
@@ -50,6 +51,29 @@ export default function PopularCommands() {
   const [hoveredCommand, setHoveredCommand] = useState<Command | null>(null);
   const [hoverPosition, setHoverPosition] = useState<{ x: number; y: number } | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // Auth state - required for sharing commands.
+  const [session, setSession] = useState<Session | null>(null);
+  const [showSignInPrompt, setShowSignInPrompt] = useState(false);
+
+  // Subscribe to auth state changes.
+  useEffect(() => {
+    if (!supabase) return;
+    
+    // Get initial session.
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+    });
+    
+    // Listen for changes.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      // Auto-close sign-in prompt if user signed in.
+      if (newSession) setShowSignInPrompt(false);
+    });
+    
+    return () => subscription.unsubscribe();
+  }, []);
 
   // Fetch commands on mount.
   useEffect(() => {
@@ -400,7 +424,14 @@ export default function PopularCommands() {
         </div>
         
         <button
-          onClick={() => setShowShareForm(!showShareForm)}
+          onClick={() => {
+            // Require sign-in to share commands.
+            if (!session) {
+              setShowSignInPrompt(true);
+              return;
+            }
+            setShowShareForm(!showShareForm);
+          }}
           style={{
             padding: '6px 8px',
             fontSize: '10px',
@@ -422,9 +453,42 @@ export default function PopularCommands() {
           {showShareForm ? 'Cancel' : '+ Share'}
         </button>
       </div>
+      
+      {/* Sign-in prompt for sharing (shown when user clicks Share without being logged in) */}
+      {showSignInPrompt && !session && (
+        <div style={{
+          padding: '12px',
+          marginBottom: '8px',
+          backgroundColor: theme.isDark ? '#1f2937' : '#f9fafb',
+          borderRadius: '8px',
+          border: `1px solid ${theme.isDark ? '#374151' : '#e5e7eb'}`,
+          textAlign: 'center',
+        }}>
+          <p style={{ margin: '0 0 8px 0', fontSize: '12px', color: theme.text }}>
+            Sign in to share commands with the community
+          </p>
+          <p style={{ margin: '0 0 12px 0', fontSize: '11px', color: theme.textSecondary }}>
+            Go to Shared Fields tab to sign in
+          </p>
+          <button
+            onClick={() => setShowSignInPrompt(false)}
+            style={{
+              padding: '4px 12px',
+              fontSize: '11px',
+              backgroundColor: 'transparent',
+              border: `1px solid ${theme.inputBorder}`,
+              borderRadius: '4px',
+              color: theme.textSecondary,
+              cursor: 'pointer',
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
-      {/* Share form (collapsible) */}
-      {showShareForm && (
+      {/* Share form (collapsible) - only shown when authenticated */}
+      {showShareForm && session && (
         <div style={{
           ...styles.shareForm,
           backgroundColor: theme.isDark ? '#1f2937' : '#f9fafb',

@@ -687,9 +687,61 @@ interface CursorStatusAPI {
   onStateChange: (callback: (state: CursorStatusState) => void) => void;
   onIdleChange: (callback: (isIdle: boolean) => void) => void;
   onDataChange?: (callback: (data: { transcription?: string; pasteFailed?: boolean }) => void) => void;
+  onStackChange?: (callback: (count: number) => void) => void;
+  onHideLabelsChange?: (callback: (hide: boolean) => void) => void;
+  onScreenshotModeChange?: (callback: (active: boolean) => void) => void;
   sendConfirmationResponse?: (abandon: boolean) => void;
   dismiss?: () => void;
   removeAllListeners: (channel: string) => void;
+}
+
+// =============================================================================
+// Quota API - Local usage tracking for quota-limited features
+// =============================================================================
+
+/**
+ * Quota status for a single feature (priority mic or auto-stacking).
+ */
+interface QuotaStatus {
+  used: number;
+  limit: number;
+  remaining: number;
+  allowed: boolean;
+  percentUsed: number;
+}
+
+/**
+ * Result of checking a specific quota.
+ */
+interface QuotaCheckResult {
+  allowed: boolean;
+  used: number;
+  limit: number;
+  feature: 'priorityMic' | 'autoStack';
+}
+
+/**
+ * Data sent when a quota is exhausted.
+ */
+interface QuotaExhaustedData {
+  feature: 'priorityMic' | 'autoStack';
+  used: number;
+  limit: number;
+  featureName: string;
+  limitDisplay: string;
+}
+
+/**
+ * API for tracking and displaying quota usage.
+ * Free users have monthly limits on priority mic and auto-stacking.
+ */
+interface QuotaAPI {
+  getQuotas: () => Promise<{ priorityMic: QuotaStatus; autoStack: QuotaStatus } | null>;
+  checkQuota: (feature: 'priorityMic' | 'autoStack') => Promise<QuotaCheckResult>;
+  getFormattedUsage: () => Promise<{ priorityMic: string; autoStack: string }>;
+  getResetDate: () => Promise<Date>;
+  onQuotaExhausted: (callback: (data: QuotaExhaustedData) => void) => () => void;
+  onQuotaChanged: (callback: (data: { priorityMic: string; autoStack: string }) => void) => () => void;
 }
 
 /**
@@ -710,6 +762,7 @@ declare global {
     sharedClipboardAPI?: SharedClipboardAPI;
     socialAPI?: SocialAPI;
     cursorStatusAPI?: CursorStatusAPI;
+    quotaAPI?: QuotaAPI;
     platform?: PlatformInfo;
   }
 }

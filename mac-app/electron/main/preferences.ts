@@ -39,6 +39,18 @@ interface ClipboardHistoryBounds {
 export type OverlayStyle = 'rectangle' | 'top-emerging';
 
 /**
+ * Local quota tracking for anonymous users.
+ * Resets on calendar month boundary (YYYY-MM format).
+ */
+export interface LocalQuotas {
+  period: string;                  // "YYYY-MM" format (e.g., "2026-01")
+  priorityMicSecondsUsed: number;  // Seconds of priority mic used this month
+  autoStackSessionsUsed: number;   // Recording sessions with auto-stacking
+  cachedTier: 'free' | 'pro';      // Cached tier for offline access
+  cachedTierUpdatedAt: string;     // ISO timestamp of last tier sync
+}
+
+/**
  * Application preferences stored in userData directory.
  */
 interface Preferences {
@@ -94,6 +106,12 @@ interface Preferences {
   
   // Cursor status indicator - shows colored dot next to cursor during recording/transcribing.
   cursorStatusEnabled?: boolean;
+  
+  // Hide status text labels - show only colored dots (red/purple/green).
+  hideStatusLabels?: boolean;
+  
+  // Local quota tracking for anonymous users.
+  localQuotas?: LocalQuotas;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
@@ -121,6 +139,9 @@ const DEFAULT_PREFERENCES: Preferences = {
   
   // Cursor status indicator - enabled by default
   cursorStatusEnabled: true,
+  
+  // Hide status text labels - show only colored dots (red/purple/green). Disabled by default.
+  hideStatusLabels: false,
 };
 
 /**

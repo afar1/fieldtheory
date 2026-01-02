@@ -11,6 +11,8 @@ import { PreferencesManager } from './preferences';
 import { RecordingOverlay } from './recordingOverlay';
 import { ClipboardManager, ClipboardItem } from './clipboardManager';
 import { SoundManager } from './soundManager';
+import { QuotaManager } from './quotaManager';
+import { AudioManager } from './audioManager';
 
 const execAsync = promisify(exec);
 
@@ -67,12 +69,19 @@ export class TranscriberManager extends EventEmitter {
   
   // Confirmation state for abandoning recording
   private pendingAbandonConfirmation: boolean = false;
+  
+  // Quota tracking for priority mic and auto-stacking.
+  private quotaManager: QuotaManager | null = null;
+  private audioManager: AudioManager | null = null;
+  private recordingStartTime: number = 0;
 
-  constructor(nativeHelper: NativeHelper, preferences: PreferencesManager, clipboardManager?: ClipboardManager) {
+  constructor(nativeHelper: NativeHelper, preferences: PreferencesManager, clipboardManager?: ClipboardManager, quotaManager?: QuotaManager, audioManager?: AudioManager) {
     super();
     this.nativeHelper = nativeHelper;
     this.preferences = preferences;
     this.clipboardManager = clipboardManager || null;
+    this.quotaManager = quotaManager || null;
+    this.audioManager = audioManager || null;
     // ModelManager will be initialized with selected model in init()
     this.modelManager = new ModelManager();
     this.overlay = new RecordingOverlay();
@@ -272,8 +281,24 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
+    // Check priority mic quota if a priority device is selected.
+    if (this.quotaManager && this.audioManager) {
+      const state = this.audioManager.getState();
+      if (state.priorityDeviceId) {
+        const quotaCheck = this.quotaManager.checkQuota('priorityMic');
+        if (!quotaCheck.allowed) {
+          console.log('[TranscriberManager] Priority mic quota exhausted');
+          this.emit('quotaExhausted', quotaCheck);
+          return;
+        }
+      }
+    }
+
     try {
       this.setStatus('recording');
+      
+      // Track recording start time for quota calculation.
+      this.recordingStartTime = Date.now();
       
       // Reset audio content tracking for new recording.
       this.hasAudioContent = false;
@@ -321,6 +346,9 @@ export class TranscriberManager extends EventEmitter {
       // Stop recording and get WAV file path
       const wavPath = await this.nativeHelper.stopRecording();
       console.log('[TranscriberManager] Recording stopped, file:', wavPath);
+      
+      // Track priority mic usage if a priority device was selected during recording.
+      await this.trackPriorityMicUsage();
 
       // Check if model is available
       console.log('[TranscriberManager] Checking model availability...');
@@ -347,6 +375,8 @@ export class TranscriberManager extends EventEmitter {
       const trimmedText = text ? text.trim() : '';
       if (trimmedText.length === 0) {
         console.log('[TranscriberManager] Silence detected - no paste');
+        // Still stack screenshots if any were taken during recording (no audio).
+        await this.stackScreenshotsIfAny();
         this.setStatus('idle');
         this.overlay.showStatus('No audio found');
         return;
@@ -359,6 +389,8 @@ export class TranscriberManager extends EventEmitter {
       // If nothing remains after stripping brackets, treat as silence.
       if (cleanedText.length === 0) {
         console.log('[TranscriberManager] Only bracketed content detected:', trimmedText);
+        // Still stack screenshots if any were taken during recording (no audio).
+        await this.stackScreenshotsIfAny();
         this.setStatus('idle');
         this.overlay.showStatus('No audio found');
         return;
@@ -387,6 +419,18 @@ export class TranscriberManager extends EventEmitter {
             const stackId = crypto.randomUUID();
             this.clipboardManager.updateStackId(this.currentStack, stackId);
             console.log(`[TranscriberManager] Auto-stacked ${this.currentStack.length} items (stackId: ${stackId})`);
+            
+            // Track auto-stack quota usage and check if quota is now exhausted.
+            await this.trackAutoStackUsage();
+            
+            // After auto-stacking, check if quota is exhausted to show upgrade prompt.
+            if (this.quotaManager) {
+              const quotaCheck = this.quotaManager.checkQuota('autoStack');
+              if (!quotaCheck.allowed) {
+                // Emit event to show upgrade prompt (stack was still saved, just prompt for future).
+                this.emit('quotaExhausted', quotaCheck);
+              }
+            }
           }
           
           this.emit('stackChanged', this.currentStack.length);
@@ -586,6 +630,37 @@ export class TranscriberManager extends EventEmitter {
     return this.preferences.getPreference('abandonRecordingConfirmation') ?? true;
   }
 
+  // ---------------------------------------------------------------------------
+  // Quota Tracking
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Track priority mic usage if a priority device was selected during recording.
+   * Only counts time when the user has explicitly chosen a priority device.
+   */
+  private async trackPriorityMicUsage(): Promise<void> {
+    if (!this.quotaManager || !this.audioManager) return;
+    
+    const state = this.audioManager.getState();
+    if (!state.priorityDeviceId) return; // No priority device selected
+    
+    const recordingDurationSeconds = Math.floor((Date.now() - this.recordingStartTime) / 1000);
+    if (recordingDurationSeconds > 0) {
+      await this.quotaManager.incrementPriorityMic(recordingDurationSeconds);
+      console.log(`[TranscriberManager] Tracked ${recordingDurationSeconds}s of priority mic usage`);
+    }
+  }
+
+  /**
+   * Track auto-stack session usage. Called once per recording that has screenshots.
+   */
+  private async trackAutoStackUsage(): Promise<void> {
+    if (!this.quotaManager) return;
+    
+    await this.quotaManager.incrementAutoStack();
+    console.log('[TranscriberManager] Tracked 1 auto-stack session');
+  }
+
   /**
    * Transcribe audio file using whisper-cli.
    */
@@ -781,6 +856,35 @@ export class TranscriberManager extends EventEmitter {
   clearStack(): void {
     this.currentStack = [];
     this.emit('stackChanged', 0);
+  }
+
+  /**
+   * Stack screenshots together even when no audio was detected.
+   * Called when recording ends with silence but screenshots were taken.
+   */
+  private async stackScreenshotsIfAny(): Promise<void> {
+    if (!this.clipboardManager || this.currentStack.length === 0) {
+      return;
+    }
+    
+    // Group screenshots under a single stack ID.
+    const stackId = crypto.randomUUID();
+    this.clipboardManager.updateStackId(this.currentStack, stackId);
+    console.log(`[TranscriberManager] Stacked ${this.currentStack.length} screenshots (no audio, stackId: ${stackId})`);
+    
+    // Track auto-stack quota if more than 1 screenshot (counts as one auto-stack session).
+    if (this.currentStack.length > 1) {
+      await this.trackAutoStackUsage();
+      
+      if (this.quotaManager) {
+        const quotaCheck = this.quotaManager.checkQuota('autoStack');
+        if (!quotaCheck.allowed) {
+          this.emit('quotaExhausted', quotaCheck);
+        }
+      }
+    }
+    
+    this.emit('stackChanged', this.currentStack.length);
   }
 
   /**

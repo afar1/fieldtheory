@@ -595,15 +595,6 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
         }}>
           Go to <strong>Settings → Mobile Sync</strong> and sign in with your iOS app account to see your tasks here.
         </div>
-        <div style={{
-          display: 'flex',
-          gap: '8px',
-          marginTop: '8px',
-        }}>
-          <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-            clipboard <KeyCap small>tab</KeyCap>
-          </span>
-        </div>
       </div>
     );
   }

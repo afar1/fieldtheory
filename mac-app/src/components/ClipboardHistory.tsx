@@ -558,6 +558,10 @@ export default function ClipboardHistory() {
   const [allTimeStats, setAllTimeStats] = useState<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>({
     stacks: 0, transcriptions: 0, screenshots: 0, improved: 0, words: 0,
   });
+  
+  // Quota usage for free users (priority mic + auto-stacking).
+  const [quotaUsage, setQuotaUsage] = useState<{ priorityMic: string; autoStack: string } | null>(null);
+  const [cachedTier, setCachedTier] = useState<'free' | 'pro'>('free');
 
   useEffect(() => {
     if (!isVisible || !window.clipboardAPI?.getAllTimeStats) return;
@@ -568,6 +572,63 @@ export default function ClipboardHistory() {
       console.error('[ClipboardHistory] Failed to load all-time stats:', err);
     });
   }, [isVisible]);
+  
+  // Fetch quota usage on mount and when visibility changes.
+  useEffect(() => {
+    if (!isVisible || !window.quotaAPI) return;
+    
+    const fetchQuotas = async () => {
+      try {
+        const formatted = await window.quotaAPI.getFormattedUsage();
+        setQuotaUsage(formatted);
+        
+        // Also get the cached tier for determining what to show.
+        const quotas = await window.quotaAPI.getQuotas();
+        if (quotas) {
+          // Pro users have unlimited (Infinity) limits.
+          const isPro = quotas.priorityMic.limit === Infinity;
+          setCachedTier(isPro ? 'pro' : 'free');
+        }
+      } catch (err) {
+        console.error('[ClipboardHistory] Failed to load quota usage:', err);
+      }
+    };
+    
+    fetchQuotas();
+  }, [isVisible]);
+  
+  // Quota exhausted modal state.
+  const [quotaExhausted, setQuotaExhausted] = useState<{
+    feature: 'priorityMic' | 'autoStack';
+    featureName: string;
+    limitDisplay: string;
+  } | null>(null);
+  
+  // Listen for quota exhausted events.
+  useEffect(() => {
+    if (!window.quotaAPI?.onQuotaExhausted) return;
+    
+    const cleanup = window.quotaAPI.onQuotaExhausted((data) => {
+      setQuotaExhausted({
+        feature: data.feature,
+        featureName: data.featureName,
+        limitDisplay: data.limitDisplay,
+      });
+    });
+    
+    return cleanup;
+  }, []);
+  
+  // Listen for quota changes to update footer in real-time.
+  useEffect(() => {
+    if (!window.quotaAPI?.onQuotaChanged) return;
+    
+    const cleanup = window.quotaAPI.onQuotaChanged((formatted) => {
+      setQuotaUsage(formatted);
+    });
+    
+    return cleanup;
+  }, []);
 
   useEffect(() => {
     if (!window.transcribeAPI?.onStatusChanged) return;
@@ -2948,7 +3009,7 @@ export default function ClipboardHistory() {
                 }
               }}
             >
-              {mode === 'clipboard' ? 'Context' : mode === 'commands' ? 'Popular Commands' : mode === 'team' ? 'Shared Context' : mode === 'dms' ? 'Messages' : 'Tasks'}
+              {mode === 'clipboard' ? 'Fields' : mode === 'commands' ? 'Popular Commands' : mode === 'team' ? 'Shared Fields' : mode === 'dms' ? 'Messages' : 'Tasks'}
               {mode === 'dms' && hasUnreadDMs && viewMode !== 'dms' && (
                 <span style={{
                   position: 'absolute',
@@ -5258,7 +5319,8 @@ export default function ClipboardHistory() {
               )}
             </div>
           ) : (
-            // Version + Stats (both visible when no update)
+            // Version + Stats/Quotas (both visible when no update)
+            // Free users see quota usage, Pro users see all-time stats.
             <div
               style={{
                 display: 'flex',
@@ -5279,7 +5341,8 @@ export default function ClipboardHistory() {
               >
                 {versionHovered ? 'Check for updates' : `v${appVersion}`}
               </span>
-              {statItems.length > 0 && (
+              {cachedTier === 'pro' && statItems.length > 0 ? (
+                // Pro users see all-time stats.
                 <>
                   <span style={{ opacity: 0.4 }}>·</span>
                   <span
@@ -5298,7 +5361,19 @@ export default function ClipboardHistory() {
                     ({timeIntervals[currentIntervalIndex]})
                   </span>
                 </>
-              )}
+              ) : quotaUsage ? (
+                // Free users see quota usage.
+                <>
+                  <span style={{ opacity: 0.4 }}>·</span>
+                  <span style={{ fontSize: '9px' }}>
+                    {quotaUsage.priorityMic}
+                  </span>
+                  <span style={{ opacity: 0.4 }}>·</span>
+                  <span style={{ fontSize: '9px' }}>
+                    {quotaUsage.autoStack}
+                  </span>
+                </>
+              ) : null}
             </div>
           )
         ) : (
@@ -5339,6 +5414,86 @@ export default function ClipboardHistory() {
           </button>
         </div>
       </div>
+      
+      {/* Quota exhausted modal */}
+      {quotaExhausted && (
+        <div
+          onClick={() => setQuotaExhausted(null)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            backdropFilter: 'blur(4px)',
+            WebkitBackdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10002,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: theme.bg,
+              borderRadius: '12px',
+              padding: '24px',
+              maxWidth: '360px',
+              width: '90%',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+              border: `1px solid ${theme.border}`,
+            }}
+          >
+            <h3 style={{ margin: '0 0 12px 0', fontSize: '16px', color: theme.text, fontWeight: '600' }}>
+              Quota Reached
+            </h3>
+            <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: theme.textSecondary, lineHeight: '1.5' }}>
+              You've used all your {quotaExhausted.featureName} for this month ({quotaExhausted.limitDisplay}).
+              Resets on the 1st.
+            </p>
+            <p style={{ margin: '0 0 20px 0', fontSize: '13px', color: theme.textSecondary, lineHeight: '1.5' }}>
+              Subscribe to Pro for unlimited access.
+            </p>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setQuotaExhausted(null)}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '12px',
+                  backgroundColor: 'transparent',
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '6px',
+                  color: theme.textSecondary,
+                  cursor: 'pointer',
+                }}
+              >
+                Later
+              </button>
+              <button
+                onClick={() => {
+                  // Open Stripe checkout in browser.
+                  window.open('https://buy.stripe.com/YOUR_CHECKOUT_LINK', '_blank');
+                  setQuotaExhausted(null);
+                }}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '12px',
+                  backgroundColor: theme.accent,
+                  border: 'none',
+                  borderRadius: '6px',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  fontWeight: '500',
+                }}
+              >
+                Subscribe
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* Keyboard shortcuts modal - compact 2-column design */}
       {showShortcutsModal && (

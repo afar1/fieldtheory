@@ -47,6 +47,7 @@ import { OnboardingWindow, OnboardingStep } from './onboardingWindow';
 import { OnboardingIPCChannels } from './types/onboarding';
 import { TodoIPCChannels } from './types/todo';
 import { CursorStatusManager, CursorStatusState } from './cursorStatusManager';
+import { QuotaManager } from './quotaManager';
 
 // Load environment variables from .env.local for Supabase credentials.
 // In development, the file is in the mac-app directory.
@@ -144,6 +145,7 @@ let sharedClipboardSync: SharedClipboardSync | null = null;
 let socialSync: SocialSync | null = null;
 let onboardingWindow: OnboardingWindow | null = null;
 let cursorStatusManager: CursorStatusManager | null = null;
+let quotaManager: QuotaManager | null = null;
 
 // Track pending update state so windows can query it when they open.
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
@@ -1900,6 +1902,75 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
+  // Hide status labels - show only colored dots (red/purple/green).
+  ipcMain.handle('clipboard:getHideStatusLabels', async () => {
+    if (!preferencesManager) {
+      return false;
+    }
+    return preferencesManager.getPreference('hideStatusLabels') ?? false;
+  });
+
+  ipcMain.handle('clipboard:setHideStatusLabels', async (_event, hide: boolean) => {
+    if (!preferencesManager) {
+      return false;
+    }
+    await preferencesManager.save({ hideStatusLabels: hide });
+    // Notify cursor status window to update labels visibility.
+    cursorStatusManager?.setHideLabels(hide);
+    return true;
+  });
+
+  // Sounds enabled - master toggle for all sounds.
+  ipcMain.handle('clipboard:getSoundsEnabled', async () => {
+    if (!preferencesManager) {
+      return true;
+    }
+    return preferencesManager.getPreference('soundsEnabled') ?? true;
+  });
+
+  ipcMain.handle('clipboard:setSoundsEnabled', async (_event, enabled: boolean) => {
+    if (!preferencesManager) {
+      return false;
+    }
+    await preferencesManager.save({ soundsEnabled: enabled });
+    return true;
+  });
+
+  // =========================================================================
+  // Quota IPC Handlers - Local usage tracking
+  // =========================================================================
+
+  ipcMain.handle('quota:getQuotas', async () => {
+    if (!quotaManager) {
+      return null;
+    }
+    return quotaManager.getQuotas();
+  });
+
+  ipcMain.handle('quota:checkQuota', async (_event, feature: 'priorityMic' | 'autoStack') => {
+    if (!quotaManager) {
+      return { allowed: true, used: 0, limit: Infinity, remaining: Infinity, percentUsed: 0 };
+    }
+    return quotaManager.checkQuota(feature);
+  });
+
+  ipcMain.handle('quota:getFormattedUsage', async () => {
+    if (!quotaManager) {
+      return { priorityMic: 'Unlimited', autoStack: 'Unlimited' };
+    }
+    return {
+      priorityMic: quotaManager.formatPriorityMicUsage(),
+      autoStack: quotaManager.formatAutoStackUsage(),
+    };
+  });
+
+  ipcMain.handle('quota:getResetDate', async () => {
+    if (!quotaManager) {
+      return new Date();
+    }
+    return quotaManager.getResetDate();
+  });
+
   // =========================================================================
   // Shared Clipboard IPC Handlers - Shared clipboard for collaboration
   // =========================================================================
@@ -2383,6 +2454,8 @@ function broadcastTranscribeEvents(): void {
         window.webContents.send('transcribe:stackChanged', count);
       }
     });
+    // Update cursor status with screenshot count (for pipe indicator).
+    cursorStatusManager?.setScreenshotCount(count);
   });
   
   transcriberManager.on('paste-success', (transcription) => {
@@ -2409,6 +2482,22 @@ function broadcastTranscribeEvents(): void {
     if (cursorStatusManager) {
       cursorStatusManager.setState('recording');
     }
+  });
+  
+  // Handle quota exhausted events - show upgrade prompt.
+  transcriberManager.on('quotaExhausted', (data: { feature: 'priorityMic' | 'autoStack'; used: number; limit: number }) => {
+    const { feature, used, limit } = data;
+    const featureName = feature === 'priorityMic' ? 'priority mic minutes' : 'auto-stacks';
+    const limitDisplay = feature === 'priorityMic' ? `${Math.floor(limit / 60)} minutes` : `${limit} stacks`;
+    
+    // Broadcast to all windows to show quota exhausted modal.
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send('quota:exhausted', { feature, used, limit, featureName, limitDisplay });
+      }
+    });
+    
+    console.log(`[Main] Quota exhausted: ${featureName} (${used}/${limit})`);
   });
 
 }
@@ -2611,7 +2700,23 @@ async function initTranscriberSystem(): Promise<void> {
     }
   });
 
-  transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager);
+  // Initialize quota manager for tracking local usage.
+  quotaManager = new QuotaManager(preferencesManager);
+  
+  // Broadcast quota changes to all windows so UI can update in real-time.
+  quotaManager.on('quotaChanged', (quotas) => {
+    const formatted = {
+      priorityMic: quotaManager!.formatPriorityMicUsage(),
+      autoStack: quotaManager!.formatAutoStackUsage(),
+    };
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send('quota:changed', formatted);
+      }
+    });
+  });
+  
+  transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined);
   await transcriberManager.init();
   broadcastTranscribeEvents();
   
@@ -2619,10 +2724,20 @@ async function initTranscriberSystem(): Promise<void> {
   cursorStatusManager = new CursorStatusManager();
   const cursorStatusEnabled = preferencesManager.getPreference('cursorStatusEnabled') ?? true;
   cursorStatusManager.setEnabled(cursorStatusEnabled);
+  const hideStatusLabels = preferencesManager.getPreference('hideStatusLabels') ?? false;
+  cursorStatusManager.setHideLabels(hideStatusLabels);
   
   // Wire up confirmation response from cursor status widget to transcriber manager
   cursorStatusManager.on('confirmation-response', ({ abandon }) => {
     transcriberManager?.handleConfirmationResponse(abandon);
+  });
+  
+  // Shift cursor status indicator right during screenshot to avoid overlap.
+  clipboardManager.on('screenshotStart', () => {
+    cursorStatusManager?.setScreenshotMode(true);
+  });
+  clipboardManager.on('screenshotEnd', () => {
+    cursorStatusManager?.setScreenshotMode(false);
   });
 
   // Set up escape key priority: dismiss clipboard history before canceling recording
