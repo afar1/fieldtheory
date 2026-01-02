@@ -71,6 +71,15 @@ export default function SettingsPanel() {
   // Cursor status indicator - shows dot next to cursor during recording/transcribing.
   const [cursorStatusEnabled, setCursorStatusEnabled] = useState(true);
   
+  // Hide status labels - show only colored dots.
+  const [hideStatusLabels, setHideStatusLabels] = useState(false);
+  
+  // Sounds enabled - master toggle for all sounds.
+  const [soundsEnabled, setSoundsEnabled] = useState(true);
+  
+  // Subscription tier state - 'free' or 'pro'.
+  const [userTier, setUserTier] = useState<'free' | 'pro'>('free');
+  
   // Load clipboard hotkeys on mount
   useEffect(() => {
     if (window.clipboardAPI) {
@@ -102,6 +111,16 @@ export default function SettingsPanel() {
       window.clipboardAPI.getCursorStatusEnabled?.().then(enabled => {
         setCursorStatusEnabled(enabled);
       });
+      
+      // Load hide status labels setting
+      window.clipboardAPI.getHideStatusLabels?.().then(hide => {
+        setHideStatusLabels(hide);
+      });
+      
+      // Load sounds enabled setting
+      window.clipboardAPI.getSoundsEnabled?.().then(enabled => {
+        setSoundsEnabled(enabled);
+      });
     }
     
     // Load todo hotkey
@@ -127,6 +146,15 @@ export default function SettingsPanel() {
       });
       window.transcribeAPI.getAbandonConfirmation?.().then(enabled => {
         setAbandonConfirmation(enabled);
+      });
+    }
+    
+    // Load user tier from quota manager.
+    if (window.quotaAPI?.getQuotas) {
+      window.quotaAPI.getQuotas().then(quotas => {
+        if (quotas) {
+          setUserTier(quotas.tier);
+        }
       });
     }
   }, []);
@@ -212,6 +240,19 @@ export default function SettingsPanel() {
     }
   };
   
+  // Handler for toggling hide status labels (show only dots, no text).
+  const handleToggleHideStatusLabels = async (hide: boolean) => {
+    if (!window.clipboardAPI?.setHideStatusLabels) return;
+
+    try {
+      const success = await window.clipboardAPI.setHideStatusLabels(hide);
+      if (success) {
+        setHideStatusLabels(hide);
+      }
+    } catch (err) {
+      console.error('Failed to toggle hide status labels:', err);
+    }
+  };
   
   // Check Supabase auth state on mount and listen for changes.
   // When authenticated, pass session to main process for mobile sync.
@@ -847,20 +888,20 @@ export default function SettingsPanel() {
           </div>
         </div>
         
-        {/* Todo List */}
+        {/* Sounds Enabled - master toggle for all sounds */}
         <div style={styles.row}>
-          <span style={styles.rowLabel}>Todo List</span>
+          <span style={styles.rowLabel}>Sounds</span>
           <div style={styles.rowControls}>
             <button
-              onClick={() => { setIsCapturingTodoHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
-              style={{ ...styles.btn, ...(isCapturingTodoHotkey ? styles.btnActive : {}) }}
+              onClick={async () => {
+                const newValue = !soundsEnabled;
+                const success = await window.clipboardAPI?.setSoundsEnabled?.(newValue);
+                if (success) setSoundsEnabled(newValue);
+              }}
+              style={{ ...styles.toggle, backgroundColor: soundsEnabled ? theme.accent : '#d1d5db' }}
             >
-              {isCapturingTodoHotkey ? 'Press keys...' : todoHotkey || '⌘⇧T'}
+              <span style={{ ...styles.toggleKnob, transform: soundsEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
             </button>
-            {isCapturingTodoHotkey && (
-              <button onClick={() => { setIsCapturingTodoHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
-            )}
           </div>
         </div>
         
@@ -889,6 +930,28 @@ export default function SettingsPanel() {
             </button>
           </div>
         </div>
+        
+        {/* Hide Status Labels - show only colored dots (requires cursor status enabled) */}
+        {cursorStatusEnabled && (
+          <div style={styles.row}>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={styles.rowLabel}>Show Status Labels</span>
+              <span style={{ ...styles.rowHint, marginTop: 0 }}>When off, show only colored dots</span>
+            </div>
+            <div style={styles.rowControls}>
+              <button
+                onClick={async () => {
+                  const newValue = !hideStatusLabels;
+                  const success = await window.clipboardAPI?.setHideStatusLabels?.(newValue);
+                  if (success) setHideStatusLabels(newValue);
+                }}
+                style={{ ...styles.toggle, backgroundColor: !hideStatusLabels ? theme.accent : '#d1d5db' }}
+              >
+                <span style={{ ...styles.toggleKnob, transform: !hideStatusLabels ? 'translateX(20px)' : 'translateX(2px)' }} />
+              </button>
+            </div>
+          </div>
+        )}
         
         {hotkeyError && <p style={styles.error}>{hotkeyError}</p>}
       </div>
@@ -987,6 +1050,90 @@ export default function SettingsPanel() {
             </span>
           </div>
         )}
+      </div>
+      
+      {/* Experimental Section */}
+      <div style={styles.section}>
+        <SectionHeader title="Experimental" />
+        
+        {/* Todo List hotkey */}
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span style={styles.rowLabel}>Tasks Tab</span>
+            <span style={{ ...styles.rowHint, marginTop: 0 }}>Syncs todos from iOS app</span>
+          </div>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => { setIsCapturingTodoHotkey(true); setHotkeyError(null); }}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
+              style={{ ...styles.btn, ...(isCapturingTodoHotkey ? styles.btnActive : {}) }}
+            >
+              {isCapturingTodoHotkey ? 'Press keys...' : todoHotkey || '⌘⇧T'}
+            </button>
+            {isCapturingTodoHotkey && (
+              <button onClick={() => { setIsCapturingTodoHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+          </div>
+        </div>
+      </div>
+      
+      {/* Subscription Section */}
+      <div style={styles.section}>
+        <SectionHeader title="Subscription" />
+        
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={styles.rowLabel}>Current Plan</span>
+              <span style={{
+                padding: '2px 8px',
+                borderRadius: '4px',
+                fontSize: '10px',
+                fontWeight: 600,
+                textTransform: 'uppercase' as const,
+                backgroundColor: userTier === 'pro' ? theme.accent : theme.bgSecondary,
+                color: userTier === 'pro' ? '#fff' : theme.textSecondary,
+              }}>
+                {userTier}
+              </span>
+            </div>
+            <p style={{ ...styles.rowHint, marginTop: 0 }}>
+              {userTier === 'free' 
+                ? 'Upgrade to Pro for unlimited priority mic and auto-stacking ($15/month).'
+                : 'Unlimited priority mic and auto-stacking, plus all-time stats.'}
+            </p>
+          </div>
+          <div style={styles.rowControls}>
+            {userTier === 'free' ? (
+              <button 
+                onClick={() => {
+                  // Open Stripe checkout in default browser (avoids Apple 30% tax).
+                  // TODO: Replace with actual Stripe checkout URL.
+                  window.open('https://buy.stripe.com/YOUR_CHECKOUT_LINK', '_blank');
+                }}
+                style={{
+                  ...styles.btn,
+                  backgroundColor: theme.accent,
+                  color: '#fff',
+                  border: 'none',
+                }}
+              >
+                Upgrade to Pro
+              </button>
+            ) : (
+              <button 
+                onClick={() => {
+                  // Open Stripe Customer Portal for subscription management.
+                  // TODO: Replace with actual Stripe portal URL.
+                  window.open('https://billing.stripe.com/p/login/YOUR_PORTAL_LINK', '_blank');
+                }}
+                style={styles.btn}
+              >
+                Manage Subscription
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

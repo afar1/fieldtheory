@@ -20,6 +20,21 @@ contextBridge.exposeInMainWorld('cursorStatusAPI', {
     ipcRenderer.on('cursor-status-data', (_event, data) => callback(data));
   },
   
+  // Stack count changes (for pipe indicator showing screenshots during recording).
+  onStackChange: (callback: (count: number) => void) => {
+    ipcRenderer.on('cursor-status-stack', (_event, count) => callback(count));
+  },
+  
+  // Hide labels setting changes (show only colored dots without text).
+  onHideLabelsChange: (callback: (hide: boolean) => void) => {
+    ipcRenderer.on('cursor-status-hide-labels', (_event, hide) => callback(hide));
+  },
+  
+  // Screenshot mode changes (shifts indicator right to avoid overlap).
+  onScreenshotModeChange: (callback: (active: boolean) => void) => {
+    ipcRenderer.on('cursor-status-screenshot-mode', (_event, active) => callback(active));
+  },
+  
   // Send confirmation response (true = abandon, false = continue)
   sendConfirmationResponse: (abandon: boolean) => {
     ipcRenderer.send('cursor-status-confirmation-response', abandon);

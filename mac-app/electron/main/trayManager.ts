@@ -145,7 +145,7 @@ export class TrayManager {
       },
       { type: 'separator' },
       {
-        label: 'Priority Device',
+        label: 'Priority Microphone',
         submenu: [
           {
             label: 'None',
@@ -168,7 +168,7 @@ export class TrayManager {
       },
       { type: 'separator' },
       {
-        label: 'Lock to Priority Device',
+        label: 'Enable Priority Microphone',
         type: 'checkbox',
         checked: priorityMode,
         enabled: !!priorityDeviceId,
@@ -190,13 +190,13 @@ export class TrayManager {
     if (priorityDeviceId) {
       items.push({
         label: priorityMode
-          ? `When locked, ${priorityDeviceName} stays your mic`
-          : `Select "${priorityDeviceName}" to enable locking`,
+          ? 'Your microphone will not auto-switch while enabled'
+          : `Select "${priorityDeviceName}" to enable`,
         enabled: false,
       });
     } else {
       items.push({
-        label: 'Select a device above to enable priority locking',
+        label: 'Select a microphone above to enable priority',
         enabled: false,
       });
     }

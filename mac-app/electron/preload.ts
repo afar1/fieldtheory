@@ -598,6 +598,14 @@ export interface ClipboardAPI {
   // Cursor status indicator settings
   getCursorStatusEnabled: () => Promise<boolean>;
   setCursorStatusEnabled: (enabled: boolean) => Promise<boolean>;
+  
+  // Hide status labels (show only colored dots)
+  getHideStatusLabels?: () => Promise<boolean>;
+  setHideStatusLabels?: (hide: boolean) => Promise<boolean>;
+  
+  // Sounds enabled (master toggle)
+  getSoundsEnabled?: () => Promise<boolean>;
+  setSoundsEnabled?: (enabled: boolean) => Promise<boolean>;
 }
 
 export interface PermissionsAPI {
@@ -1109,6 +1117,24 @@ const clipboardAPI: ClipboardAPI = {
 
   setCursorStatusEnabled: async (enabled: boolean): Promise<boolean> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.SET_CURSOR_STATUS_ENABLED, enabled);
+  },
+
+  // Hide status labels (show only colored dots).
+  getHideStatusLabels: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:getHideStatusLabels');
+  },
+
+  setHideStatusLabels: async (hide: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:setHideStatusLabels', hide);
+  },
+
+  // Sounds enabled (master toggle for all sounds).
+  getSoundsEnabled: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:getSoundsEnabled');
+  },
+
+  setSoundsEnabled: async (enabled: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:setSoundsEnabled', enabled);
   },
 };
 
@@ -1732,6 +1758,50 @@ const socialAPI = {
 
 type SocialAPI = typeof socialAPI;
 
+// =============================================================================
+// Quota API - Local usage tracking for free users
+// =============================================================================
+
+const quotaAPI = {
+  // Get current quota status for both features.
+  getQuotas: () => ipcRenderer.invoke('quota:getQuotas'),
+  
+  // Check if a specific quota is exhausted.
+  checkQuota: (feature: 'priorityMic' | 'autoStack') => 
+    ipcRenderer.invoke('quota:checkQuota', feature),
+  
+  // Get formatted usage strings for display.
+  getFormattedUsage: () => ipcRenderer.invoke('quota:getFormattedUsage'),
+  
+  // Get the quota reset date (first of next month).
+  getResetDate: () => ipcRenderer.invoke('quota:getResetDate'),
+  
+  // Listen for quota exhausted events.
+  onQuotaExhausted: (callback: (data: { feature: 'priorityMic' | 'autoStack'; used: number; limit: number; featureName: string; limitDisplay: string }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { feature: 'priorityMic' | 'autoStack'; used: number; limit: number; featureName: string; limitDisplay: string }) => {
+      callback(data);
+    };
+    ipcRenderer.on('quota:exhausted', handler);
+    return () => {
+      ipcRenderer.removeListener('quota:exhausted', handler);
+    };
+  },
+  
+  // Listen for quota changes (updates in real-time after auto-stack or priority mic usage).
+  onQuotaChanged: (callback: (data: { priorityMic: string; autoStack: string }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { priorityMic: string; autoStack: string }) => {
+      callback(data);
+    };
+    ipcRenderer.on('quota:changed', handler);
+    return () => {
+      ipcRenderer.removeListener('quota:changed', handler);
+    };
+  },
+};
+
+type QuotaAPI = typeof quotaAPI;
+
+contextBridge.exposeInMainWorld('quotaAPI', quotaAPI);
 contextBridge.exposeInMainWorld('audioAPI', audioAPI);
 contextBridge.exposeInMainWorld('transcribeAPI', transcribeAPI);
 contextBridge.exposeInMainWorld('clipboardAPI', clipboardAPI);
@@ -1762,6 +1832,7 @@ declare global {
     authAPI: AuthAPI;
     sharedClipboardAPI: SharedClipboardAPI;
     socialAPI: SocialAPI;
+    quotaAPI: QuotaAPI;
     platform: {
       isMacOS: boolean;
       isWindows: boolean;

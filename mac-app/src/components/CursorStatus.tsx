@@ -49,6 +49,16 @@ export default function CursorStatus() {
   const [showDoneSavedMessage, setShowDoneSavedMessage] = useState(false);
   const [pasteWasSuccessful, setPasteWasSuccessful] = useState(true);
   
+  // Stack count state for pipe indicator (screenshots during recording).
+  const [pipeCount, setPipeCount] = useState<number>(0);
+  const [animatedPipes, setAnimatedPipes] = useState<Set<number>>(new Set());
+  
+  // Hide labels setting - show only colored dots without text.
+  const [hideLabels, setHideLabels] = useState<boolean>(false);
+  
+  // Screenshot mode - shifts indicator right to avoid overlap with screenshot UI.
+  const [screenshotMode, setScreenshotMode] = useState<boolean>(false);
+  
   // Refs for animation intervals
   const dotIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingTextTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -128,6 +138,62 @@ export default function CursorStatus() {
       if (pasteFailedTimeoutRef.current) {
         clearTimeout(pasteFailedTimeoutRef.current);
       }
+    };
+  }, []);
+  
+  // Listen for stack count changes (screenshots during recording).
+  useEffect(() => {
+    if (!window.cursorStatusAPI?.onStackChange) return;
+    
+    window.cursorStatusAPI.onStackChange((count) => {
+      if (count < pipeCount) {
+        // Count decreased - reset for new recording.
+        setPipeCount(count);
+        setAnimatedPipes(new Set());
+      } else if (count > pipeCount) {
+        // New screenshot - animate in the new pipe.
+        setPipeCount(count);
+        // Trigger animation after a brief delay so CSS sees the change.
+        setTimeout(() => {
+          setAnimatedPipes(prev => {
+            const next = new Set(prev);
+            for (let i = pipeCount; i < count; i++) {
+              next.add(i);
+            }
+            return next;
+          });
+        }, 50);
+      }
+    });
+    
+    return () => {
+      window.cursorStatusAPI?.removeAllListeners('cursor-status-stack');
+    };
+  }, [pipeCount]);
+  
+  // Listen for hide labels setting changes.
+  useEffect(() => {
+    if (!window.cursorStatusAPI?.onHideLabelsChange) return;
+    
+    window.cursorStatusAPI.onHideLabelsChange((hide) => {
+      setHideLabels(hide);
+    });
+    
+    return () => {
+      window.cursorStatusAPI?.removeAllListeners('cursor-status-hide-labels');
+    };
+  }, []);
+  
+  // Listen for screenshot mode changes (shifts indicator right during screenshot).
+  useEffect(() => {
+    if (!window.cursorStatusAPI?.onScreenshotModeChange) return;
+    
+    window.cursorStatusAPI.onScreenshotModeChange((active) => {
+      setScreenshotMode(active);
+    });
+    
+    return () => {
+      window.cursorStatusAPI?.removeAllListeners('cursor-status-screenshot-mode');
     };
   }, []);
 
@@ -243,11 +309,11 @@ export default function CursorStatus() {
       return 'transcribing' + '.'.repeat(dotCount);
     }
     if (state === 'done') {
-      // Success: no text, just green dot
-      return '';
+      // Keep showing "transcribing" text briefly during green state for continuity.
+      return 'transcribing...';
     }
     if (state === 'confirmation') {
-      return `Abandon transcript? (${countdownSeconds}) Do nothing to continue recording`;
+      return `ESC to cancel recording. Ignore to continue (${countdownSeconds}).`;
     }
     if (state === 'paste-failed') {
       // Transcript is rendered separately with help text below
@@ -259,11 +325,13 @@ export default function CursorStatus() {
   const color = STATE_COLORS[state];
   const glow = STATE_GLOWS[state];
   const label = getLabel();
-  const showLabel = 
+  // Hide labels when hideLabels is true, but always show error/confirmation states.
+  // User should always see: paste-failed ("Saved to Field Theory") and confirmation (escape prompt).
+  const showLabel = state === 'paste-failed' || state === 'confirmation' || (!hideLabels && (
     (state === 'recording' && showRecordingText) || 
     (state === 'transcribing' && textVisible) ||
-    state === 'confirmation' ||
-    state === 'paste-failed';
+    state === 'done'
+  ));
 
   // Handle click to dismiss (for paste-failed/done states)
   const handleClick = () => {
@@ -284,6 +352,8 @@ export default function CursorStatus() {
       <div 
         style={{
           ...styles.dot,
+          marginLeft: screenshotMode ? '16px' : '3px', // Shift right during screenshot to avoid overlap
+          transition: 'margin-left 0.15s ease-out', // Smooth animation for screenshot mode
           backgroundColor: color,
           boxShadow: `0 0 6px ${glow}`,
           animation: (state === 'recording' || state === 'confirmation') 
@@ -294,13 +364,52 @@ export default function CursorStatus() {
         }} 
       />
       
+      {/* Pipe indicator - shows screenshots captured during recording */}
+      {state === 'recording' && pipeCount > 0 && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '2px',
+          marginTop: '3px',
+        }}>
+          {/* Render up to 3 pipes, each with fade-in animation */}
+          {Array.from({ length: Math.min(pipeCount, 3) }, (_, i) => (
+            <div
+              key={i}
+              style={{
+                width: '2px',
+                height: '10px',
+                backgroundColor: 'rgba(255, 255, 255, 0.6)',
+                borderRadius: '1px',
+                opacity: animatedPipes.has(i) ? 1 : 0,
+                transition: 'opacity 0.2s ease-in',
+              }}
+            />
+          ))}
+          {/* Show +N for overflow beyond 3 screenshots */}
+          {pipeCount > 3 && (
+            <span style={{
+              fontSize: '8px',
+              color: 'rgba(255, 255, 255, 0.5)',
+              marginLeft: '2px',
+              opacity: animatedPipes.has(3) ? 1 : 0,
+              transition: 'opacity 0.2s ease-in',
+            }}>
+              +{pipeCount - 3}
+            </span>
+          )}
+        </div>
+      )}
+      
       {/* Text label - fades in/out based on state */}
       {showLabel && label && (
         <div style={{
           ...styles.labelContainer,
           animation: state === 'recording' && showRecordingText 
             ? 'fadeInOut 2.52s ease-out forwards' 
-            : 'fadeIn 150ms ease-out',
+            : state === 'done'
+              ? 'fadeOutLabel 0.8s ease-out forwards' // Fade out with dot
+              : 'fadeIn 150ms ease-out',
         }}>
           {state === 'paste-failed' && pasteFailedText ? (
             <>
@@ -327,10 +436,17 @@ const styles: Record<string, React.CSSProperties> = {
   dot: {
     width: '7px',
     height: '7px',
+    minWidth: '7px',
+    minHeight: '7px',
+    maxWidth: '7px',
+    maxHeight: '7px',
+    aspectRatio: '1 / 1', // Force perfect circle
     borderRadius: '50%',
     flexShrink: 0,
+    flexGrow: 0,
+    flexBasis: '7px', // Prevent flexbox from altering size
     marginTop: '4px',
-    marginLeft: '2px',
+    marginLeft: '3px', // Moved 1px right to avoid overlap with screen recording measurement UI.
   },
   labelContainer: {
     backgroundColor: 'rgba(30, 30, 30, 0.85)',
@@ -345,8 +461,7 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: '14px',
     color: 'rgba(255, 255, 255, 0.9)',
     fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-word',
+    whiteSpace: 'nowrap', // Prevent text wrapping for short labels like "fielding theories..."
   },
   helpText: {
     fontSize: '10px',
@@ -378,6 +493,11 @@ styleSheet.textContent = `
     50% { opacity: 0.5; }
   }
   @keyframes fadeOutDot {
+    0% { opacity: 1; }
+    70% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  @keyframes fadeOutLabel {
     0% { opacity: 1; }
     70% { opacity: 1; }
     100% { opacity: 0; }

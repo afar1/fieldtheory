@@ -143,9 +143,9 @@ export default function AudioSettingsPanel() {
         <span style={styles.rowValue}>{currentDefault?.name || 'None'}</span>
       </div>
 
-      {/* Priority device selector */}
+      {/* Priority microphone selector */}
       <div style={styles.row}>
-        <span style={styles.rowLabel}>Priority</span>
+        <span style={styles.rowLabel}>Priority Mic</span>
         <div style={styles.rowControls}>
           <select
             value={audioState.priorityDeviceId || ''}
@@ -162,9 +162,9 @@ export default function AudioSettingsPanel() {
         </div>
       </div>
 
-      {/* Priority lock toggle */}
+      {/* Priority microphone enable toggle */}
       <div style={styles.row}>
-        <span style={styles.rowLabel}>Lock</span>
+        <span style={styles.rowLabel}>Enabled</span>
         <div style={styles.rowControls}>
           <button
             onClick={handleTogglePriority}
@@ -188,6 +188,15 @@ export default function AudioSettingsPanel() {
           )}
         </div>
       </div>
+      
+      {/* Priority microphone helper text */}
+      {audioState.priorityDeviceId && (
+        <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '12px', paddingLeft: '2px' }}>
+          {audioState.priorityMode 
+            ? 'Your microphone will not auto-switch while enabled.' 
+            : 'Enable to prevent your microphone from auto-switching.'}
+        </div>
+      )}
 
       {/* Devices list with sub-header */}
       <div style={styles.devicesSection}>

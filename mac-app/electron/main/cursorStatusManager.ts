@@ -43,6 +43,12 @@ export class CursorStatusManager extends EventEmitter {
   // Store last transcription for done state display
   private lastTranscription: string = '';
   
+  // Screenshot count for pipe indicator during recording
+  private screenshotCount: number = 0;
+  
+  // Whether to hide text labels (show only colored dots)
+  private hideLabels: boolean = false;
+  
   // Timing constants
   private readonly POLL_INTERVAL_MS = 33;
   private readonly IDLE_THRESHOLD_MS = 100;
@@ -103,6 +109,36 @@ export class CursorStatusManager extends EventEmitter {
   setLastTranscription(text: string): void {
     this.lastTranscription = text;
   }
+  
+  /**
+   * Set the screenshot count for the pipe indicator during recording.
+   * Only sends updates when recording is active.
+   */
+  setScreenshotCount(count: number): void {
+    this.screenshotCount = count;
+    if (this.state === 'recording' && this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send('cursor-status-stack', count);
+    }
+  }
+  
+  /**
+   * Set whether to hide text labels (show only colored dots).
+   */
+  setHideLabels(hide: boolean): void {
+    this.hideLabels = hide;
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send('cursor-status-hide-labels', hide);
+    }
+  }
+  
+  /**
+   * Set screenshot mode - shifts the indicator right to avoid overlap with screenshot UI.
+   */
+  setScreenshotMode(active: boolean): void {
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send('cursor-status-screenshot-mode', active);
+    }
+  }
 
   /**
    * Update the current state. Shows indicator if state is active, hides if idle.
@@ -145,6 +181,14 @@ export class CursorStatusManager extends EventEmitter {
     
     this.state = state;
     this.updateWindowSize(state);
+    
+    // Reset screenshot count when recording starts.
+    if (state === 'recording') {
+      this.screenshotCount = 0;
+      if (this.window && !this.window.isDestroyed()) {
+        this.window.webContents.send('cursor-status-stack', 0);
+      }
+    }
     
     if (isActive && this.enabled) {
       this.show();
@@ -290,11 +334,12 @@ export class CursorStatusManager extends EventEmitter {
       this.stopTracking();
     });
 
-    // Send initial state once loaded
+    // Send initial state once loaded.
     this.window.webContents.once('did-finish-load', () => {
       if (this.window && !this.window.isDestroyed()) {
         this.window.webContents.send('cursor-status-state', this.state);
         this.window.webContents.send('cursor-status-idle', this.isIdle);
+        this.window.webContents.send('cursor-status-hide-labels', this.hideLabels);
       }
     });
   }

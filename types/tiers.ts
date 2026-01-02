@@ -15,7 +15,8 @@ export const PRICING = {
 // Use Infinity for unlimited features.
 export const TIER_LIMITS = {
   free: {
-    priorityMicMinutes: 100,
+    priorityMicMinutes: 500,
+    autoStackSessions: 50,
     sharedClipboardPeople: 3,
     promptImprovementsPerMonth: 10,
     tasksAndObservationsPerMonth: 25,
@@ -29,6 +30,7 @@ export const TIER_LIMITS = {
   },
   pro: {
     priorityMicMinutes: Infinity,
+    autoStackSessions: Infinity,
     sharedClipboardPeople: Infinity, // Each beyond 3 incurs extra cost
     promptImprovementsPerMonth: 100,
     tasksAndObservationsPerMonth: Infinity,
@@ -79,6 +81,7 @@ export type NoAccountFeature = (typeof NO_ACCOUNT_FEATURES)[number];
 export interface MonthlyUsage {
   periodStart: string; // ISO date string (first day of billing month)
   priorityMicSeconds: number;
+  autoStackSessions: number;
   promptImprovements: number;
   tasksCreated: number;
   observationsCreated: number;
