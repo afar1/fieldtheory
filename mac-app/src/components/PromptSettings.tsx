@@ -62,8 +62,8 @@ export default function PromptSettings() {
   // Track if user has unsaved changes
   const [hasChanges, setHasChanges] = useState(false);
   
-  // Example section state
-  const [showExample, setShowExample] = useState(true);
+  // Example section state - collapsed by default so user sees the prompt editor first.
+  const [showExample, setShowExample] = useState(false);
   
   // Load current system prompt on mount
   useEffect(() => {

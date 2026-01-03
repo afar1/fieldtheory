@@ -302,11 +302,12 @@ function formatFileSize(bytes: number): string {
 }
 
 // Combine text from multiple items in a stack.
+// Sorted chronologically (oldest first, newest last) for natural reading order.
 function combineStackText(items: SharedClipboardItem[]): string {
   return items
-    .filter(item => item.type === 'text' || item.type === 'transcript')
-    .map(item => item.content || '')
-    .filter(Boolean)
+    .filter(item => (item.type === 'text' || item.type === 'transcript') && item.content)
+    .sort((a, b) => a.createdAt - b.createdAt) // Oldest first, newest last
+    .map(item => item.content!)
     .join('\n\n');
 }
 

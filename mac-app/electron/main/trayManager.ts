@@ -128,24 +128,24 @@ export class TrayManager {
 
   /**
    * Build the context menu items based on current state.
+   * 
+   * Shows: Priority Mic: [name] at top, then device submenu, then helper text.
+   * The "Enable Priority Microphone" toggle is removed - priority mode is auto-enabled
+   * when a priority device is selected.
    */
   private buildContextMenu(state: AudioState): MenuItemConstructorOptions[] {
     const { priorityMode, priorityDeviceId, userOverrideId, defaultInputId, devices } = state;
 
     const currentDefaultDevice = devices.find((d) => d.id === defaultInputId);
-    const currentDefaultName = currentDefaultDevice?.name || 'None';
+    const currentDefaultName = currentDefaultDevice?.name || 'Unknown';
     const inputDevices = devices.filter((d) => d.isInput);
     const priorityDevice = devices.find((d) => d.id === priorityDeviceId);
     const priorityDeviceName = priorityDevice?.name || 'None';
 
+    // Menu structure: Set Priority Mic submenu, then Current mic, then helper text.
     const items: MenuItemConstructorOptions[] = [
       {
-        label: `Current mic: ${currentDefaultName}`,
-        enabled: false,
-      },
-      { type: 'separator' },
-      {
-        label: 'Priority Microphone',
+        label: 'Set Priority Mic',
         submenu: [
           {
             label: 'None',
@@ -161,43 +161,34 @@ export class TrayManager {
             type: 'radio' as const,
             checked: device.id === priorityDeviceId,
             click: async () => {
+              // Auto-enable priority mode when selecting a device.
               await this.audioManager.setPriorityDevice(device.id);
+              if (!priorityMode) {
+                await this.audioManager.setPriorityMode(true);
+              }
             },
           })),
         ],
       },
-      { type: 'separator' },
       {
-        label: 'Enable Priority Microphone',
-        type: 'checkbox',
-        checked: priorityMode,
-        enabled: !!priorityDeviceId,
-        click: async (menuItem) => {
-          await this.audioManager.setPriorityMode(menuItem.checked);
-        },
+        label: `Current: ${currentDefaultName}`,
+        enabled: false,
+      },
+      {
+        label: priorityDeviceId
+          ? 'Selected mic will not auto-switch'
+          : 'Select a mic to lock it',
+        enabled: false,
       },
     ];
 
+    // Show reset option if user has manually overridden the priority device.
     if (userOverrideId && priorityMode && priorityDeviceId) {
       items.push({
         label: `Reset to ${priorityDeviceName}`,
         click: async () => {
           await this.audioManager.clearUserOverride();
         },
-      });
-    }
-
-    if (priorityDeviceId) {
-      items.push({
-        label: priorityMode
-          ? 'Your microphone will not auto-switch while enabled'
-          : `Select "${priorityDeviceName}" to enable`,
-        enabled: false,
-      });
-    } else {
-      items.push({
-        label: 'Select a microphone above to enable priority',
-        enabled: false,
       });
     }
 

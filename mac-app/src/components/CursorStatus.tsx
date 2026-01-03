@@ -59,6 +59,9 @@ export default function CursorStatus() {
   // Screenshot mode - shifts indicator right to avoid overlap with screenshot UI.
   const [screenshotMode, setScreenshotMode] = useState<boolean>(false);
   
+  // Tutorial hint - custom text shown during onboarding, overrides default recording text.
+  const [tutorialHint, setTutorialHint] = useState<string | null>(null);
+  
   // Refs for animation intervals
   const dotIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingTextTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -197,6 +200,19 @@ export default function CursorStatus() {
     };
   }, []);
 
+  // Listen for tutorial hint changes (onboarding prompts shown next to cursor dot).
+  useEffect(() => {
+    if (!window.cursorStatusAPI?.onTutorialHint) return;
+    
+    window.cursorStatusAPI.onTutorialHint((hint: string | null) => {
+      setTutorialHint(hint);
+    });
+    
+    return () => {
+      window.cursorStatusAPI?.removeAllListeners('cursor-status-tutorial-hint');
+    };
+  }, []);
+
   // Handle text visibility with fade-in when idle (for transcribing only)
   useEffect(() => {
     if (isIdle && state === 'transcribing') {
@@ -302,6 +318,10 @@ export default function CursorStatus() {
 
   // Get text label based on state
   const getLabel = (): string => {
+    // Tutorial hints override default recording text (used during onboarding).
+    if (state === 'recording' && tutorialHint) {
+      return tutorialHint;
+    }
     if (state === 'recording' && showRecordingText) {
       return 'fielding theories...';
     }
@@ -316,8 +336,8 @@ export default function CursorStatus() {
       return `ESC to cancel recording. Ignore to continue (${countdownSeconds}).`;
     }
     if (state === 'paste-failed') {
-      // Transcript is rendered separately with help text below
-      return pasteFailedText || 'Saved to Field Theory';
+      // Just show simple message, don't display the transcript.
+      return 'Transcript saved to Field Theory';
     }
     return '';
   };
@@ -326,12 +346,14 @@ export default function CursorStatus() {
   const glow = STATE_GLOWS[state];
   const label = getLabel();
   // Hide labels when hideLabels is true, but always show error/confirmation states.
-  // User should always see: paste-failed ("Saved to Field Theory") and confirmation (escape prompt).
-  const showLabel = state === 'paste-failed' || state === 'confirmation' || (!hideLabels && (
-    (state === 'recording' && showRecordingText) || 
-    (state === 'transcribing' && textVisible) ||
-    state === 'done'
-  ));
+  // User should always see: paste-failed, confirmation, and tutorial hints.
+  const showLabel = state === 'paste-failed' || state === 'confirmation' || 
+    (state === 'recording' && tutorialHint) ||  // Always show tutorial hints
+    (!hideLabels && (
+      (state === 'recording' && showRecordingText) || 
+      (state === 'transcribing' && textVisible) ||
+      state === 'done'
+    ));
 
   // Handle click to dismiss (for paste-failed/done states)
   const handleClick = () => {
@@ -414,14 +436,7 @@ export default function CursorStatus() {
               ? 'fadeOutLabel 0.8s ease-out forwards' // Fade out with dot
               : 'fadeIn 150ms ease-out',
         }}>
-          {state === 'paste-failed' && pasteFailedText ? (
-            <>
-              <span style={styles.label}>{pasteFailedText}</span>
-              <div style={styles.helpText}>(Saved to Field Theory)</div>
-            </>
-          ) : (
-            <span style={styles.label}>{label}</span>
-          )}
+          <span style={styles.label}>{label}</span>
         </div>
       )}
     </div>

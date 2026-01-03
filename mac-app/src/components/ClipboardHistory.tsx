@@ -226,15 +226,15 @@ function smartTruncateText(
 
 /**
  * Combine text content from stack items into a single paragraph.
+ * Items are sorted chronologically (oldest first, newest last) so reading
+ * flows naturally like a paragraph being spoken over time.
  */
 function combineStackText(items: ClipboardItem[]): string {
-  const textParts: string[] = [];
-  for (const item of items) {
-    if ((item.type === 'text' || item.type === 'transcript') && item.content) {
-      textParts.push(item.content.trim());
-    }
-  }
-  return textParts.join('\n\n');
+  return items
+    .filter(item => (item.type === 'text' || item.type === 'transcript') && item.content)
+    .sort((a, b) => a.createdAt - b.createdAt) // Oldest first, newest last
+    .map(item => item.content!.trim())
+    .join('\n\n');
 }
 
 
@@ -284,7 +284,7 @@ function DraggableDroppableRow({
  * KeyCap component - renders a keyboard key with clean styling.
  * Used for displaying keyboard shortcuts with a visual key appearance.
  */
-function KeyCap({ children, small = false }: { children: React.ReactNode; small?: boolean }) {
+function KeyCap({ children, small = false, style }: { children: React.ReactNode; small?: boolean; style?: React.CSSProperties }) {
   return (
     <span
       style={{
@@ -297,7 +297,7 @@ function KeyCap({ children, small = false }: { children: React.ReactNode; small?
         color: '#555',
         backgroundColor: '#e8e8e8',
         borderRadius: '3px',
-        marginRight: '2px',
+        ...style,
       }}
     >
       {children}
@@ -432,7 +432,7 @@ export default function ClipboardHistory() {
   const [hoveredImageId, setHoveredImageId] = useState<number | null>(null);
   
   type PreviewContent = 
-    | { type: 'image'; data: string; width: number; height: number }
+    | { type: 'image'; data: string; width: number; height: number; itemId: number; stackId: string | null }
     | { type: 'text'; content: string };
   const [preview, setPreview] = useState<PreviewContent | null>(null);
   const [previewClosing, setPreviewClosing] = useState(false);
@@ -446,7 +446,7 @@ export default function ClipboardHistory() {
   const getStackPreviewItems = (items: ClipboardItem[]): PreviewContent[] => {
     const previewItems: PreviewContent[] = [];
     
-    // Add each image as a separate preview item.
+    // Add each image as a separate preview item with its ID and stackId.
     for (const item of items) {
       if (item.imageData) {
         previewItems.push({
@@ -454,6 +454,8 @@ export default function ClipboardHistory() {
           data: item.imageData,
           width: item.imageWidth || 0,
           height: item.imageHeight || 0,
+          itemId: item.id,
+          stackId: item.stackId,
         });
       }
     }
@@ -489,6 +491,8 @@ export default function ClipboardHistory() {
           data: row.item.imageData,
           width: row.item.imageWidth || 0,
           height: row.item.imageHeight || 0,
+          itemId: row.item.id,
+          stackId: row.item.stackId,
         };
       } else if (row.item.content) {
         return { type: 'text', content: row.item.content };
@@ -501,6 +505,8 @@ export default function ClipboardHistory() {
           data: imageItem.imageData,
           width: imageItem.imageWidth || 0,
           height: imageItem.imageHeight || 0,
+          itemId: imageItem.id,
+          stackId: imageItem.stackId,
         };
       } else {
         const combinedText = row.items
@@ -2440,6 +2446,8 @@ export default function ClipboardHistory() {
               data: hoveredItem.imageData,
               width: hoveredItem.imageWidth || 0,
               height: hoveredItem.imageHeight || 0,
+              itemId: hoveredItem.id,
+              stackId: hoveredItem.stackId,
             });
           }
           return;
@@ -2460,6 +2468,8 @@ export default function ClipboardHistory() {
                 data: selectedRow.item.imageData,
                 width: selectedRow.item.imageWidth || 0,
                 height: selectedRow.item.imageHeight || 0,
+                itemId: selectedRow.item.id,
+                stackId: selectedRow.item.stackId,
               });
             } else if (selectedRow.item.content) {
               setPreview({ type: 'text', content: selectedRow.item.content });
@@ -3846,6 +3856,8 @@ export default function ClipboardHistory() {
                                     data: item.imageData,
                                     width: item.imageWidth || 0,
                                     height: item.imageHeight || 0,
+                                    itemId: item.id,
+                                    stackId: item.stackId,
                                   });
                                 }
                               }}
@@ -4243,21 +4255,9 @@ export default function ClipboardHistory() {
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={(e) => {
                             e.stopPropagation();
-                            const previewData = getPreviewData(row);
+                            const previewData = getPreviewForRow(row);
                             if (previewData) {
-                              if (previewData.type === 'image') {
-                                setPreview({
-                                  type: 'image',
-                                  data: previewData.data,
-                                  width: previewData.width,
-                                  height: previewData.height,
-                                });
-                              } else if (previewData.type === 'text') {
-                                setPreview({
-                                  type: 'text',
-                                  data: previewData.content,
-                                });
-                              }
+                              setPreview(previewData);
                             }
                           }}
                           style={{
@@ -4274,7 +4274,7 @@ export default function ClipboardHistory() {
                           onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                           onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
-                          preview <KeyCap style={{ minWidth: 28 }}>␣</KeyCap>
+                          preview <KeyCap>␣</KeyCap>
                         </button>
                         {/* Paste hint button - rightmost */}
                         <button
@@ -4710,6 +4710,8 @@ export default function ClipboardHistory() {
                                   data: item.imageData!,
                                   width: item.imageWidth || 0,
                                   height: item.imageHeight || 0,
+                                  itemId: item.id,
+                                  stackId: item.stackId,
                                 });
                               }}
                             >
@@ -5009,6 +5011,8 @@ export default function ClipboardHistory() {
                               data: item.imageData!,
                               width: item.imageWidth || 0,
                               height: item.imageHeight || 0,
+                              itemId: item.id,
+                              stackId: item.stackId,
                             });
                           }}
                           style={{
@@ -5025,7 +5029,7 @@ export default function ClipboardHistory() {
                           onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                           onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
-                          preview <KeyCap style={{ minWidth: 28 }}>␣</KeyCap>
+                          preview <KeyCap>␣</KeyCap>
                         </button>
                       )}
                       {/* Annotate button - only for images */}
@@ -5972,6 +5976,12 @@ export default function ClipboardHistory() {
                       window.clipboardAPI.closeWindow();
                     }
                   }},
+                  { label: 'copy', key: 'c', action: async () => {
+                    if (preview.type === 'image' && window.clipboardAPI) {
+                      await window.clipboardAPI.copyItem(preview.itemId);
+                      showFeedback('copied to clipboard');
+                    }
+                  }},
                   { label: 'draw', key: 'd', action: () => {
                     setSketchBackgroundImage({
                       dataUrl: `data:image/png;base64,${preview.data}`,
@@ -5982,6 +5992,18 @@ export default function ClipboardHistory() {
                     dismissPreview();
                     setViewMode('sketch');
                   }},
+                  // Unstack button - only show when image is part of a stack.
+                  ...(preview.type === 'image' && preview.stackId ? [{
+                    label: 'unstack', key: 'u', action: async () => {
+                      if (preview.type === 'image' && preview.stackId && window.clipboardAPI) {
+                        await window.clipboardAPI.updateStackId?.([preview.itemId], null);
+                        pushUndo({ type: 'unstack', itemIds: [preview.itemId], previousStackId: preview.stackId });
+                        showFeedback('image unstacked');
+                        dismissPreview();
+                        loadItems(true);
+                      }
+                    }
+                  }] : []),
                   { label: 'delete', key: '⌫', action: async () => {
                     const selectedRow = listRows[selectedIndex];
                     if (selectedRow?.type === 'item' && window.clipboardAPI) {

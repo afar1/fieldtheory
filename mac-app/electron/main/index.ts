@@ -2403,6 +2403,14 @@ function setupOnboardingIPCHandlers(): void {
     if (!onboardingWindow) return;
     onboardingWindow.expandWindow();
   });
+
+  // Set tutorial hint to display next to cursor status dot.
+  // Used during onboarding to guide users through the tutorial.
+  ipcMain.on('onboarding:set-tutorial-hint', (_event, hint: string | null) => {
+    if (cursorStatusManager) {
+      cursorStatusManager.setTutorialHint(hint);
+    }
+  });
 }
 
 
