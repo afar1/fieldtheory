@@ -36,7 +36,7 @@ export default function SettingsPanel() {
   
   // Continuous Context configuration
   const [continuousContextEnabled, setContinuousContextEnabled] = useState(false);
-  const [continuousContextHotkey, setContinuousContextHotkey] = useState('Shift+Alt+1');
+  const [continuousContextHotkey, setContinuousContextHotkey] = useState('Shift+Command+4');
   const [isCapturingContinuousContextHotkey, setIsCapturingContinuousContextHotkey] = useState(false);
   
   // Todo hotkey configuration
@@ -44,7 +44,7 @@ export default function SettingsPanel() {
   const [isCapturingTodoHotkey, setIsCapturingTodoHotkey] = useState(false);
   
   // Transcription hotkey configuration
-  const [transcriptionHotkey, setTranscriptionHotkey] = useState('Alt+Space');
+  const [transcriptionHotkey, setTranscriptionHotkey] = useState('Command+\\');
   const [isCapturingTranscriptionHotkey, setIsCapturingTranscriptionHotkey] = useState(false);
   
   // Abandon recording hotkey configuration

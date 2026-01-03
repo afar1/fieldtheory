@@ -16,7 +16,7 @@ export default function TranscriptionSettings() {
   const [downloadProgress, setDownloadProgress] = useState<{ downloaded: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
-  const [hotkey, setHotkey] = useState<string>('Alt+Space');
+  const [hotkey, setHotkey] = useState<string>('Command+\\');
   const [isCapturingHotkey, setIsCapturingHotkey] = useState(false);
   const [hotkeyError, setHotkeyError] = useState<string | null>(null);
   const [availableModels, setAvailableModels] = useState<Record<string, ModelInfo>>({});
