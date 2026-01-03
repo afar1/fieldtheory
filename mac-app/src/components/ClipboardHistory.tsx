@@ -5374,18 +5374,13 @@ export default function ClipboardHistory() {
                   onMouseLeave={() => setUsageHovered(false)}
                   style={{ display: 'flex', alignItems: 'center', gap: '6px', position: 'relative' }}
                 >
-                  <span style={{ fontWeight: 500 }}>Usage:</span>
-                  <span>{quotaUsage.priorityMic}</span>
-                  <span style={{ opacity: 0.4 }}>·</span>
-                  <span>{quotaUsage.autoStack}</span>
-                  {/* Info icon with tooltip on hover */}
+                  {/* Info icon with tooltip on hover - left of Usage */}
                   <span
                     onMouseEnter={() => setInfoHovered(true)}
                     onMouseLeave={() => setInfoHovered(false)}
                     style={{ 
                       position: 'relative',
                       opacity: 0.4, 
-                      cursor: 'help',
                       fontSize: '10px',
                     }}
                   >
@@ -5412,6 +5407,10 @@ export default function ClipboardHistory() {
                       </span>
                     )}
                   </span>
+                  <span style={{ fontWeight: 500 }}>Usage:</span>
+                  <span>{quotaUsage.priorityMic}</span>
+                  <span style={{ opacity: 0.4 }}>·</span>
+                  <span>{quotaUsage.autoStack}</span>
                   {/* Upgrade button - shimmer fade in on hover */}
                   <span
                     onClick={() => window.open('https://buy.stripe.com/YOUR_CHECKOUT_LINK', '_blank')}
