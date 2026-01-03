@@ -110,6 +110,9 @@ interface Preferences {
   // Hide status text labels - show only colored dots (red/purple/green).
   hideStatusLabels?: boolean;
   
+  // Tasks tab - experimental feature, hidden by default.
+  tasksTabEnabled?: boolean;
+  
   // Local quota tracking for anonymous users.
   localQuotas?: LocalQuotas;
 }
@@ -142,6 +145,9 @@ const DEFAULT_PREFERENCES: Preferences = {
   
   // Hide status text labels - show only colored dots (red/purple/green). Disabled by default.
   hideStatusLabels: false,
+  
+  // Tasks tab - experimental feature, hidden by default.
+  tasksTabEnabled: false,
 };
 
 /**

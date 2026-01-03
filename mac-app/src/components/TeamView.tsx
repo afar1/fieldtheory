@@ -2257,6 +2257,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
                                 borderRadius: '4px',
                                 border: `1px solid ${theme.border}`,
                               }}
+                              onError={(e) => { e.currentTarget.style.display = 'none'; }}
                             />
                           ) : (
                             <div style={{
@@ -2431,6 +2432,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
                                     src={item.imageUrl || `data:image/png;base64,${item.imageData}`}
                                     alt=""
                                     style={{ height: '30px', borderRadius: '3px', border: `1px solid ${theme.border}` }}
+                                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
                                   />
                                 ) : (
                                   <span>{item.type === 'screenshot' ? '📷' : '🖼️'}</span>
@@ -2585,6 +2587,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
                               borderRadius: '4px',
                               border: `1px solid ${theme.border}`,
                             }}
+                            onError={(e) => { e.currentTarget.style.display = 'none'; }}
                           />
                         ) : (
                           <div style={{

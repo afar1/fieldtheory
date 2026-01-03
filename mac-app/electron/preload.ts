@@ -606,6 +606,10 @@ export interface ClipboardAPI {
   // Sounds enabled (master toggle)
   getSoundsEnabled?: () => Promise<boolean>;
   setSoundsEnabled?: (enabled: boolean) => Promise<boolean>;
+  
+  // Tasks tab (experimental feature)
+  getTasksTabEnabled?: () => Promise<boolean>;
+  setTasksTabEnabled?: (enabled: boolean) => Promise<boolean>;
 }
 
 export interface PermissionsAPI {
@@ -1135,6 +1139,15 @@ const clipboardAPI: ClipboardAPI = {
 
   setSoundsEnabled: async (enabled: boolean): Promise<boolean> => {
     return ipcRenderer.invoke('clipboard:setSoundsEnabled', enabled);
+  },
+
+  // Tasks tab (experimental feature).
+  getTasksTabEnabled: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:getTasksTabEnabled');
+  },
+
+  setTasksTabEnabled: async (enabled: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:setTasksTabEnabled', enabled);
   },
 };
 
