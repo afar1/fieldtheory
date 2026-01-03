@@ -77,6 +77,9 @@ export default function SettingsPanel() {
   // Sounds enabled - master toggle for all sounds.
   const [soundsEnabled, setSoundsEnabled] = useState(true);
   
+  // Tasks tab - experimental feature.
+  const [tasksTabEnabled, setTasksTabEnabled] = useState(false);
+  
   // Subscription tier state - 'free' or 'pro'.
   const [userTier, setUserTier] = useState<'free' | 'pro'>('free');
   
@@ -120,6 +123,11 @@ export default function SettingsPanel() {
       // Load sounds enabled setting
       window.clipboardAPI.getSoundsEnabled?.().then(enabled => {
         setSoundsEnabled(enabled);
+      });
+      
+      // Load tasks tab enabled setting
+      window.clipboardAPI.getTasksTabEnabled?.().then(enabled => {
+        setTasksTabEnabled(enabled);
       });
     }
     
@@ -1056,25 +1064,47 @@ export default function SettingsPanel() {
       <div style={styles.section}>
         <SectionHeader title="Experimental" />
         
-        {/* Todo List hotkey */}
+        {/* Tasks Tab toggle */}
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             <span style={styles.rowLabel}>Tasks Tab</span>
-            <span style={{ ...styles.rowHint, marginTop: 0 }}>Syncs todos from iOS app</span>
+            <span style={{ ...styles.rowHint, marginTop: 0 }}>Show Tasks tab (syncs todos from iOS)</span>
           </div>
           <div style={styles.rowControls}>
             <button
-              onClick={() => { setIsCapturingTodoHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
-              style={{ ...styles.btn, ...(isCapturingTodoHotkey ? styles.btnActive : {}) }}
+              onClick={async () => {
+                const newValue = !tasksTabEnabled;
+                const success = await window.clipboardAPI?.setTasksTabEnabled?.(newValue);
+                if (success) setTasksTabEnabled(newValue);
+              }}
+              style={{ ...styles.toggle, backgroundColor: tasksTabEnabled ? theme.accent : '#d1d5db' }}
             >
-              {isCapturingTodoHotkey ? 'Press keys...' : todoHotkey || '⌘⇧T'}
+              <span style={{ ...styles.toggleKnob, transform: tasksTabEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
             </button>
-            {isCapturingTodoHotkey && (
-              <button onClick={() => { setIsCapturingTodoHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
-            )}
           </div>
         </div>
+        
+        {/* Tasks hotkey (only show if tasks enabled) */}
+        {tasksTabEnabled && (
+          <div style={styles.row}>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={styles.rowLabel}>Tasks Hotkey</span>
+              <span style={{ ...styles.rowHint, marginTop: 0 }}>Open Tasks from anywhere</span>
+            </div>
+            <div style={styles.rowControls}>
+              <button
+                onClick={() => { setIsCapturingTodoHotkey(true); setHotkeyError(null); }}
+                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
+                style={{ ...styles.btn, ...(isCapturingTodoHotkey ? styles.btnActive : {}) }}
+              >
+                {isCapturingTodoHotkey ? 'Press keys...' : todoHotkey || '⌘⇧T'}
+              </button>
+              {isCapturingTodoHotkey && (
+                <button onClick={() => { setIsCapturingTodoHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
       
       {/* Subscription Section */}

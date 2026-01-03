@@ -774,6 +774,7 @@ export default function DMsView({ onSendDM }: DMsViewProps) {
                               borderRadius: '4px',
                               marginBottom: msg.contentText ? '4px' : 0,
                             }}
+                            onError={(e) => { e.currentTarget.style.display = 'none'; }}
                           />
                         )}
                         {msg.contentText && (
@@ -908,6 +909,7 @@ export default function DMsView({ onSendDM }: DMsViewProps) {
                       borderRadius: '4px',
                       marginBottom: selectedFeedback.contentText ? '8px' : 0,
                     }}
+                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
                   />
                 )}
                 {selectedFeedback.contentText && (

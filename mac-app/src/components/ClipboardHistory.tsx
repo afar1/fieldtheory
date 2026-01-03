@@ -562,6 +562,9 @@ export default function ClipboardHistory() {
   // Quota usage for free users (priority mic + auto-stacking).
   const [quotaUsage, setQuotaUsage] = useState<{ priorityMic: string; autoStack: string } | null>(null);
   const [cachedTier, setCachedTier] = useState<'free' | 'pro'>('free');
+  const [usageHovered, setUsageHovered] = useState(false);
+  const [infoHovered, setInfoHovered] = useState(false);
+  const [tasksTabEnabled, setTasksTabEnabled] = useState(false);
 
   useEffect(() => {
     if (!isVisible || !window.clipboardAPI?.getAllTimeStats) return;
@@ -570,6 +573,13 @@ export default function ClipboardHistory() {
       setAllTimeStats(stats);
     }).catch(err => {
       console.error('[ClipboardHistory] Failed to load all-time stats:', err);
+    });
+  }, [isVisible]);
+  
+  // Load tasks tab setting.
+  useEffect(() => {
+    window.clipboardAPI?.getTasksTabEnabled?.().then(enabled => {
+      setTasksTabEnabled(enabled);
     });
   }, [isVisible]);
   
@@ -2299,22 +2309,22 @@ export default function ClipboardHistory() {
           }));
           window.clipboardAPI?.setTargetApp(newApp);
         } else if (hasShift) {
-          // Shift+Tab - cycle backwards: clipboard ← commands ← todo ← dms ← team ← clipboard.
+          // Shift+Tab - cycle backwards through available modes.
           setShowSettings(false);
           setViewMode(prev => {
             if (prev === 'clipboard') return 'commands';
-            if (prev === 'commands') return 'todo';
+            if (prev === 'commands') return tasksTabEnabled ? 'todo' : 'dms';
             if (prev === 'todo') return 'dms';
             if (prev === 'dms') return 'team';
             return 'clipboard';
           });
         } else {
-          // Tab - cycle forwards: clipboard → team → dms → todo → commands → clipboard.
+          // Tab - cycle forwards through available modes.
           setShowSettings(false);
           setViewMode(prev => {
             if (prev === 'clipboard') return 'team';
             if (prev === 'team') return 'dms';
-            if (prev === 'dms') return 'todo';
+            if (prev === 'dms') return tasksTabEnabled ? 'todo' : 'commands';
             if (prev === 'todo') return 'commands';
             return 'clipboard';
           });
@@ -2972,7 +2982,7 @@ export default function ClipboardHistory() {
             padding: '0 16px',
             marginBottom: '8px',
           }}>
-          {(['clipboard', 'team', 'dms', 'todo', 'commands'] as ViewMode[]).map((mode) => (
+          {(['clipboard', 'team', 'dms', ...(tasksTabEnabled ? ['todo'] : []), 'commands'] as ViewMode[]).map((mode) => (
             <button
               key={mode}
               onClick={() => {
@@ -5332,9 +5342,9 @@ export default function ClipboardHistory() {
               }}
             >
               {cachedTier === 'pro' ? (
-                // Dev Plus Plan: show analytics
+                // Pro: show analytics
                 <>
-                  <span style={{ fontWeight: 500 }}>Dev Plus Plan:</span>
+                  <span style={{ fontWeight: 500 }}>Usage:</span>
                   {statItems.length > 0 ? (
                     <>
                       <span
@@ -5358,33 +5368,66 @@ export default function ClipboardHistory() {
                   )}
                 </>
               ) : quotaUsage ? (
-                // Dev Plan: show quotas with info tooltip + upgrade link
-                <>
-                  <span style={{ fontWeight: 500 }}>Dev Plan:</span>
+                // Usage: show quotas with info icon and hover-to-upgrade
+                <div
+                  onMouseEnter={() => setUsageHovered(true)}
+                  onMouseLeave={() => setUsageHovered(false)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', position: 'relative' }}
+                >
+                  <span style={{ fontWeight: 500 }}>Usage:</span>
                   <span>{quotaUsage.priorityMic}</span>
                   <span style={{ opacity: 0.4 }}>·</span>
                   <span>{quotaUsage.autoStack}</span>
+                  {/* Info icon with tooltip on hover */}
                   <span
-                    title="Priority minutes and auto-stacks reset monthly on the first"
+                    onMouseEnter={() => setInfoHovered(true)}
+                    onMouseLeave={() => setInfoHovered(false)}
                     style={{ 
+                      position: 'relative',
                       opacity: 0.4, 
                       cursor: 'help',
                       fontSize: '10px',
                     }}
                   >
                     ⓘ
+                    {infoHovered && (
+                      <span
+                        style={{ 
+                          position: 'absolute',
+                          bottom: '100%',
+                          left: '50%',
+                          transform: 'translateX(-50%)',
+                          marginBottom: '4px',
+                          padding: '4px 8px',
+                          backgroundColor: theme.isDark ? 'rgba(50, 50, 50, 0.95)' : 'rgba(0, 0, 0, 0.8)',
+                          color: '#fff',
+                          borderRadius: '4px',
+                          fontSize: '10px',
+                          whiteSpace: 'nowrap',
+                          pointerEvents: 'none',
+                          zIndex: 1000,
+                        }}
+                      >
+                        Resets monthly on the 1st
+                      </span>
+                    )}
                   </span>
+                  {/* Upgrade button - shimmer fade in on hover */}
                   <span
                     onClick={() => window.open('https://buy.stripe.com/YOUR_CHECKOUT_LINK', '_blank')}
                     style={{ 
                       color: theme.accent, 
                       cursor: 'pointer',
                       textDecoration: 'underline',
+                      opacity: usageHovered ? 1 : 0,
+                      transform: usageHovered ? 'translateX(0)' : 'translateX(-8px)',
+                      transition: 'opacity 0.3s ease-out, transform 0.3s ease-out',
+                      pointerEvents: usageHovered ? 'auto' : 'none',
                     }}
                   >
                     Upgrade
                   </span>
-                </>
+                </div>
               ) : null}
             </div>
           )
@@ -5811,6 +5854,7 @@ export default function ClipboardHistory() {
                   maxHeight: '400px',
                   borderRadius: '8px',
                 }}
+                onError={(e) => { e.currentTarget.style.display = 'none'; }}
               />
             )}
             {hotMicMessage.contentText && (
