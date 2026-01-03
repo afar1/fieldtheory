@@ -145,7 +145,7 @@ export default function AudioSettingsPanel() {
 
       {/* Priority microphone selector */}
       <div style={styles.row}>
-        <span style={styles.rowLabel}>Priority Mic</span>
+        <span style={styles.rowLabel}>Set Priority Mic</span>
         <div style={styles.rowControls}>
           <select
             value={audioState.priorityDeviceId || ''}
@@ -198,45 +198,6 @@ export default function AudioSettingsPanel() {
         </div>
       )}
 
-      {/* Devices list with sub-header */}
-      <div style={styles.devicesSection}>
-        <div style={styles.sectionHeader}>
-          <span style={styles.sectionTitle}>INPUT DEVICES</span>
-          <div style={styles.sectionLine} />
-        </div>
-        
-        {inputDevices.map((device) => {
-          const isDefault = device.id === audioState.defaultInputId;
-          const isPriority = device.id === audioState.priorityDeviceId;
-          
-          return (
-            <div
-              key={device.id}
-              style={{
-                ...styles.deviceRow,
-                backgroundColor: isDefault ? '#f0f9ff' : 'transparent',
-                borderLeft: isDefault ? '3px solid #3b82f6' : isPriority ? '3px solid #22c55e' : '3px solid transparent',
-              }}
-            >
-              <div>
-                <span style={{ ...styles.rowValue, fontWeight: isDefault ? 600 : 500 }}>
-                  {device.name}
-                </span>
-                <span style={styles.deviceMeta}>
-                  {device.manufacturer && `${device.manufacturer} • `}
-                  {device.transportType?.toUpperCase() || 'OTHER'}
-                  {isDefault && ' • Default'}
-                </span>
-              </div>
-              {isPriority && <span style={styles.priorityBadge}>★</span>}
-            </div>
-          );
-        })}
-        
-        {inputDevices.length === 0 && (
-          <div style={styles.emptyMessage}>No input devices found</div>
-        )}
-      </div>
     </div>
   );
 }

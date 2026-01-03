@@ -34,6 +34,11 @@ contextBridge.exposeInMainWorld('cursorStatusAPI', {
   onScreenshotModeChange: (callback: (active: boolean) => void) => {
     ipcRenderer.on('cursor-status-screenshot-mode', (_event, active) => callback(active));
   },
+
+  // Tutorial hint changes (onboarding prompts shown next to cursor dot).
+  onTutorialHint: (callback: (hint: string | null) => void) => {
+    ipcRenderer.on('cursor-status-tutorial-hint', (_event, hint) => callback(hint));
+  },
   
   // Send confirmation response (true = abandon, false = continue)
   sendConfirmationResponse: (abandon: boolean) => {

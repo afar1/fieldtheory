@@ -451,17 +451,6 @@ export default function TranscriptionSettings() {
         </span>
       </div>
 
-      <div style={styles.row}>
-        <span style={styles.rowLabel}>Overlay</span>
-        <select
-          value={overlayStyle}
-          onChange={(e) => handleOverlayStyleChange(e.target.value as 'rectangle' | 'top-emerging')}
-          style={styles.select}
-        >
-          <option value="rectangle">Rectangle</option>
-          <option value="top-emerging">Dynamic Island</option>
-        </select>
-      </div>
 
       <div style={styles.soundsSection}>
         <div style={styles.sectionHeader}>
