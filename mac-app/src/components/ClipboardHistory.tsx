@@ -5390,8 +5390,7 @@ export default function ClipboardHistory() {
                         style={{ 
                           position: 'absolute',
                           bottom: '100%',
-                          left: '50%',
-                          transform: 'translateX(-50%)',
+                          left: 0,
                           marginBottom: '4px',
                           padding: '4px 8px',
                           backgroundColor: theme.isDark ? 'rgba(50, 50, 50, 0.95)' : 'rgba(0, 0, 0, 0.8)',
