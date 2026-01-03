@@ -35,9 +35,13 @@ export interface PermissionStatus {
  */
 export class OnboardingWindow {
   private window: BrowserWindow | null = null;
+  private normalBounds: Electron.Rectangle | null = null;
+  private animationTimer: NodeJS.Timeout | null = null;
   
   private readonly WINDOW_WIDTH = 600;
   private readonly WINDOW_HEIGHT = 500;
+  private readonly EXPANDED_WIDTH = 720;
+  private readonly EXPANDED_HEIGHT = 600;
 
   /**
    * Check current permission status for all required permissions.
@@ -197,6 +201,92 @@ export class OnboardingWindow {
     if (this.window && !this.window.isDestroyed()) {
       this.window.webContents.send(channel, ...args);
     }
+  }
+
+  /**
+   * Expand the window for the tutorial phase.
+   * Uses smooth animation to resize and recenter.
+   */
+  expandWindow(): void {
+    if (!this.window || this.window.isDestroyed()) return;
+    if (this.normalBounds) return; // Already expanded.
+
+    this.normalBounds = this.window.getBounds();
+    
+    const current = this.normalBounds;
+    const newWidth = this.EXPANDED_WIDTH;
+    const newHeight = this.EXPANDED_HEIGHT;
+    const newX = Math.round(current.x - (newWidth - current.width) / 2);
+    const newY = Math.round(current.y - (newHeight - current.height) / 2);
+
+    // Clamp to work area bounds.
+    const display = screen.getDisplayNearestPoint({ x: current.x, y: current.y });
+    const workArea = display.workArea;
+
+    const clampedBounds = {
+      x: Math.max(workArea.x, Math.min(newX, workArea.x + workArea.width - newWidth)),
+      y: Math.max(workArea.y, Math.min(newY, workArea.y + workArea.height - newHeight)),
+      width: Math.min(newWidth, workArea.width),
+      height: Math.min(newHeight, workArea.height),
+    };
+
+    this.animateBounds(clampedBounds);
+  }
+
+  /**
+   * Contract the window back to normal size.
+   */
+  contractWindow(): void {
+    if (!this.window || this.window.isDestroyed()) return;
+    if (!this.normalBounds) return; // Not expanded.
+
+    this.animateBounds(this.normalBounds);
+    this.normalBounds = null;
+  }
+
+  /**
+   * Animate window bounds change over time.
+   */
+  private animateBounds(targetBounds: Electron.Rectangle, duration: number = 150): void {
+    if (!this.window || this.window.isDestroyed()) return;
+
+    // Cancel any in-progress animation.
+    if (this.animationTimer) {
+      clearInterval(this.animationTimer);
+      this.animationTimer = null;
+    }
+
+    const startBounds = this.window.getBounds();
+    const steps = 6;
+    const stepDuration = duration / steps;
+    let currentStep = 0;
+
+    this.animationTimer = setInterval(() => {
+      currentStep++;
+      const progress = currentStep / steps;
+      // Ease-out curve for smooth deceleration.
+      const easedProgress = 1 - Math.pow(1 - progress, 3);
+
+      const newBounds = {
+        x: Math.round(startBounds.x + (targetBounds.x - startBounds.x) * easedProgress),
+        y: Math.round(startBounds.y + (targetBounds.y - startBounds.y) * easedProgress),
+        width: Math.round(startBounds.width + (targetBounds.width - startBounds.width) * easedProgress),
+        height: Math.round(startBounds.height + (targetBounds.height - startBounds.height) * easedProgress),
+      };
+
+      if (this.window && !this.window.isDestroyed()) {
+        this.window.setBounds(newBounds);
+      }
+
+      if (currentStep >= steps) {
+        clearInterval(this.animationTimer!);
+        this.animationTimer = null;
+        // Ensure final bounds are exact.
+        if (this.window && !this.window.isDestroyed()) {
+          this.window.setBounds(targetBounds);
+        }
+      }
+    }, stepDuration);
   }
 }
 

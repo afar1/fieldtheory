@@ -119,6 +119,7 @@ const OnboardingIPCChannels = {
   SKIP_ONBOARDING: 'onboarding:skip',
   RESET_ONBOARDING: 'onboarding:reset',
   CHECK_MODEL_STATUS: 'onboarding:checkModelStatus',
+  EXPAND_WINDOW: 'onboarding:expandWindow',
 } as const;
 
 // Todo IPC channels for bidirectional sync with Supabase.
@@ -1302,6 +1303,11 @@ const onboardingAPI = {
   // Check if model is downloaded.
   checkModelStatus: async (): Promise<{ downloaded: boolean }> => {
     return ipcRenderer.invoke(OnboardingIPCChannels.CHECK_MODEL_STATUS);
+  },
+
+  // Expand the window for the tutorial phase.
+  expandWindow: async (): Promise<void> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.EXPAND_WINDOW);
   },
 };
 

@@ -44,7 +44,7 @@ export class TranscriberManager extends EventEmitter {
   private overlay: RecordingOverlay;
   private clipboardManager: ClipboardManager | null = null;
   private status: TranscriptionStatus = 'idle';
-  private hotkey: string = 'Alt+Space'; // Option+Space on macOS
+  private hotkey: string = 'Command+\\'; // Command+Backslash on macOS
   private registeredHotkey: string | null = null; // Track currently registered transcription hotkey
   private whisperProcess: ChildProcess | null = null;
   private abandonHotkeyRegistered: boolean = false;

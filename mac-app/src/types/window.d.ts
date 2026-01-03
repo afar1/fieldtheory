@@ -415,6 +415,8 @@ interface OnboardingAPI {
   skip: () => Promise<boolean>;
   reset: () => Promise<boolean>;
   checkModelStatus: () => Promise<{ downloaded: boolean }>;
+  expandWindow?: () => Promise<void>;
+  onFieldTheoryOpened?: (callback: () => void) => () => void;
 }
 
 /**

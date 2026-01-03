@@ -355,6 +355,7 @@ export default function CursorStatus() {
           marginLeft: screenshotMode ? '16px' : '3px', // Shift right during screenshot to avoid overlap
           transition: 'margin-left 0.15s ease-out', // Smooth animation for screenshot mode
           backgroundColor: color,
+          border: '1px solid rgba(0, 0, 0, 0.4)',
           boxShadow: `0 0 6px ${glow}`,
           animation: (state === 'recording' || state === 'confirmation') 
             ? 'pulse 1.8s ease-in-out infinite' 
@@ -379,8 +380,8 @@ export default function CursorStatus() {
               style={{
                 width: '2px',
                 height: '10px',
-                backgroundColor: 'rgba(255, 255, 255, 0.6)',
-                borderRadius: '1px',
+                backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                border: '1px solid rgba(0, 0, 0, 0.4)',
                 opacity: animatedPipes.has(i) ? 1 : 0,
                 transition: 'opacity 0.2s ease-in',
               }}
@@ -390,7 +391,9 @@ export default function CursorStatus() {
           {pipeCount > 3 && (
             <span style={{
               fontSize: '8px',
-              color: 'rgba(255, 255, 255, 0.5)',
+              fontWeight: 600,
+              color: 'rgba(255, 255, 255, 0.9)',
+              WebkitTextStroke: '0.5px rgba(0, 0, 0, 0.5)',
               marginLeft: '2px',
               opacity: animatedPipes.has(3) ? 1 : 0,
               transition: 'opacity 0.2s ease-in',
@@ -434,17 +437,17 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: 'border-box',
   },
   dot: {
-    width: '7px',
-    height: '7px',
-    minWidth: '7px',
-    minHeight: '7px',
-    maxWidth: '7px',
-    maxHeight: '7px',
+    width: '6px',
+    height: '6px',
+    minWidth: '6px',
+    minHeight: '6px',
+    maxWidth: '6px',
+    maxHeight: '6px',
     aspectRatio: '1 / 1', // Force perfect circle
     borderRadius: '50%',
     flexShrink: 0,
     flexGrow: 0,
-    flexBasis: '7px', // Prevent flexbox from altering size
+    flexBasis: '6px', // Prevent flexbox from altering size
     marginTop: '4px',
     marginLeft: '3px', // Moved 1px right to avoid overlap with screen recording measurement UI.
   },
