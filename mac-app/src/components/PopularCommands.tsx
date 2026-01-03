@@ -232,13 +232,8 @@ export default function PopularCommands() {
     return content.length > 120 || (hasNewlines && content.length > 80);
   }, []);
 
-  // Handle hover start - start timer for tooltip.
-  // Only show tooltip if content needs truncation and item is not expanded.
   const handleMouseEnter = useCallback((command: Command, e: React.MouseEvent) => {
-    // Skip hover tooltip if content doesn't need truncation.
     if (!needsTruncation(command.content)) return;
-    
-    // Skip hover tooltip if this item is expanded.
     if (expandedId === command.id) return;
     
     const rect = e.currentTarget.getBoundingClientRect();
@@ -361,7 +356,6 @@ export default function PopularCommands() {
             onClick={(e) => {
               e.stopPropagation();
               setExpandedId(isExpanded ? null : command.id);
-              // Clear any hover tooltip when expanding.
               setHoveredCommand(null);
               setHoverPosition(null);
             }}
