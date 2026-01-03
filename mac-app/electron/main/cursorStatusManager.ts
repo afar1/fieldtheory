@@ -36,9 +36,9 @@ export class CursorStatusManager extends EventEmitter {
   private doneTimeout: NodeJS.Timeout | null = null;
   private readonly DONE_DURATION_MS = 800;
   
-  // Paste-failed state timeout
+  // Paste-failed state timeout - brief since message is simple now.
   private pasteFailedTimeout: NodeJS.Timeout | null = null;
-  private readonly PASTE_FAILED_DURATION_MS = 5000;
+  private readonly PASTE_FAILED_DURATION_MS = 2500;
   
   // Store last transcription for done state display
   private lastTranscription: string = '';
@@ -216,12 +216,23 @@ export class CursorStatusManager extends EventEmitter {
         this.lastTranscription = data.transcription;
       }
       
-      // Auto-hide after duration (longer to allow reading message)
+      // Auto-hide after duration.
       this.pasteFailedTimeout = setTimeout(() => {
         this.pasteFailedTimeout = null;
         this.state = 'idle';
         this.hide();
-      }, this.PASTE_FAILED_DURATION_MS + 1500); // Extra time for "saved to FT" message
+      }, this.PASTE_FAILED_DURATION_MS);
+    }
+  }
+
+  /**
+   * Set a tutorial hint to display next to the cursor dot during recording.
+   * Used by onboarding to guide users through the tutorial.
+   * Pass null to clear the hint and return to default behavior.
+   */
+  setTutorialHint(hint: string | null): void {
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send('cursor-status-tutorial-hint', hint);
     }
   }
   

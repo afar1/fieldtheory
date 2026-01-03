@@ -337,11 +337,12 @@ function smartTruncateText(
   };
 }
 
+// Sorted chronologically (oldest first, newest last) for natural reading order.
 function combineStackText(items: SharedClipboardItem[]): string {
   return items
-    .filter(item => item.type === 'text' || item.type === 'transcript')
-    .map(item => item.content || '')
-    .filter(Boolean)
+    .filter(item => (item.type === 'text' || item.type === 'transcript') && item.content)
+    .sort((a, b) => a.createdAt - b.createdAt) // Oldest first, newest last
+    .map(item => item.content!)
     .join('\n\n');
 }
 
@@ -401,7 +402,7 @@ function DraggableDroppableRow({
 // KeyCap component
 // =============================================================================
 
-function KeyCap({ children, small = false }: { children: React.ReactNode; small?: boolean }) {
+function KeyCap({ children, small = false, style }: { children: React.ReactNode; small?: boolean; style?: React.CSSProperties }) {
   return (
     <span
       style={{
@@ -414,7 +415,7 @@ function KeyCap({ children, small = false }: { children: React.ReactNode; small?
         color: '#555',
         backgroundColor: '#e8e8e8',
         borderRadius: '3px',
-        marginRight: '2px',
+        ...style,
       }}
     >
       {children}
@@ -2268,7 +2269,7 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
                             }}
                             style={{ padding: '4px 6px', fontSize: '10px', fontWeight: 500, backgroundColor: 'transparent', color: theme.textSecondary, border: 'none', borderRadius: '4px', cursor: 'pointer' }}
                           >
-                            preview <KeyCap style={{ minWidth: 28 }}>␣</KeyCap>
+                            preview <KeyCap>␣</KeyCap>
                           </button>
                           <button
                             tabIndex={-1}

@@ -417,6 +417,7 @@ interface OnboardingAPI {
   checkModelStatus: () => Promise<{ downloaded: boolean }>;
   expandWindow?: () => Promise<void>;
   onFieldTheoryOpened?: (callback: () => void) => () => void;
+  setTutorialHint?: (hint: string | null) => void;
 }
 
 /**

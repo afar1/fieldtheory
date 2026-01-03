@@ -670,14 +670,10 @@ export default function SettingsPanel() {
           handleSetHistoryHotkey(hotkeyString);
         } else if (capturing === 'desktopScreenshot') {
           handleSetDesktopScreenshotHotkey(hotkeyString);
-        } else if (capturing === 'continuousContext') {
-          handleSetContinuousContextHotkey(hotkeyString);
         } else if (capturing === 'todo') {
           handleSetTodoHotkey(hotkeyString);
         } else if (capturing === 'transcription') {
           handleSetTranscriptionHotkey(hotkeyString);
-        } else if (capturing === 'abandon') {
-          handleSetAbandonHotkey(hotkeyString);
         }
       }
     };
@@ -781,13 +777,30 @@ export default function SettingsPanel() {
       <div style={styles.section}>
         <SectionHeader title="Keyboard Shortcuts" />
         
+        {/* Open Field Theory - primary action, shown first */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Open Field Theory</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => { setIsCapturingHistoryHotkey(true); setHotkeyError(null); }}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
+              style={{ ...styles.btn, ...(isCapturingHistoryHotkey ? styles.btnActive : {}) }}
+            >
+              {isCapturingHistoryHotkey ? 'Press keys...' : clipboardHotkeys.history || '⌥Space'}
+            </button>
+            {isCapturingHistoryHotkey && (
+              <button onClick={() => { setIsCapturingHistoryHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+          </div>
+        </div>
+        
         {/* Transcription (Record) */}
         <div style={styles.row}>
           <span style={styles.rowLabel}>Transcription</span>
           <div style={styles.rowControls}>
             <button
               onClick={() => { setIsCapturingTranscriptionHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
               style={{ ...styles.btn, ...(isCapturingTranscriptionHotkey ? styles.btnActive : {}) }}
             >
               {isCapturingTranscriptionHotkey ? 'Press keys...' : transcriptionHotkey}
@@ -798,40 +811,16 @@ export default function SettingsPanel() {
           </div>
         </div>
 
-        {/* Abandon Recording */}
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Abandon Recording</span>
-          <div style={styles.rowControls}>
-            <button
-              onClick={() => { setIsCapturingAbandonHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
-              style={{ ...styles.btn, ...(isCapturingAbandonHotkey ? styles.btnActive : {}) }}
-            >
-              {isCapturingAbandonHotkey ? 'Press keys...' : abandonHotkey}
-            </button>
-            {isCapturingAbandonHotkey && (
-              <button onClick={() => { setIsCapturingAbandonHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
-            )}
-            <button
-              onClick={() => handleAbandonConfirmationChange(!abandonConfirmation)}
-              style={{ ...styles.toggle, backgroundColor: abandonConfirmation ? theme.accent : '#d1d5db' }}
-              title={abandonConfirmation ? 'Confirm before abandoning' : 'Abandon immediately'}
-            >
-              <span style={{ ...styles.toggleKnob, transform: abandonConfirmation ? 'translateX(20px)' : 'translateX(2px)' }} />
-            </button>
-          </div>
-        </div>
-
         {/* Screenshot */}
         <div style={styles.row}>
           <span style={styles.rowLabel}>Screenshot</span>
           <div style={styles.rowControls}>
             <button
               onClick={() => { setIsCapturingScreenshotHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
               style={{ ...styles.btn, ...(isCapturingScreenshotHotkey ? styles.btnActive : {}) }}
             >
-              {isCapturingScreenshotHotkey ? 'Press keys...' : clipboardHotkeys.screenshot || '⌘⇧4'}
+              {isCapturingScreenshotHotkey ? 'Press keys...' : clipboardHotkeys.screenshot || '⌘4'}
             </button>
             {isCapturingScreenshotHotkey && (
               <button onClick={() => { setIsCapturingScreenshotHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
@@ -845,53 +834,13 @@ export default function SettingsPanel() {
           <div style={styles.rowControls}>
             <button
               onClick={() => { setIsCapturingDesktopScreenshotHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
               style={{ ...styles.btn, ...(isCapturingDesktopScreenshotHotkey ? styles.btnActive : {}) }}
             >
               {isCapturingDesktopScreenshotHotkey ? 'Press keys...' : clipboardHotkeys.desktopScreenshot || '⌘3'}
             </button>
             {isCapturingDesktopScreenshotHotkey && (
               <button onClick={() => { setIsCapturingDesktopScreenshotHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
-            )}
-          </div>
-        </div>
-        
-        {/* Clipboard History */}
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Clipboard History</span>
-          <div style={styles.rowControls}>
-            <button
-              onClick={() => { setIsCapturingHistoryHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
-              style={{ ...styles.btn, ...(isCapturingHistoryHotkey ? styles.btnActive : {}) }}
-            >
-              {isCapturingHistoryHotkey ? 'Press keys...' : clipboardHotkeys.history || '⌘⇧V'}
-            </button>
-            {isCapturingHistoryHotkey && (
-              <button onClick={() => { setIsCapturingHistoryHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
-            )}
-          </div>
-        </div>
-        
-        {/* Continuous Context */}
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Continuous Context</span>
-          <div style={styles.rowControls}>
-            <button
-              onClick={() => handleToggleContinuousContext(!continuousContextEnabled)}
-              style={{ ...styles.toggle, backgroundColor: continuousContextEnabled ? theme.accent : '#d1d5db' }}
-            >
-              <span style={{ ...styles.toggleKnob, transform: continuousContextEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
-            </button>
-            <button
-              onClick={() => { setIsCapturingContinuousContextHotkey(true); setHotkeyError(null); }}
-              disabled={!continuousContextEnabled || isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
-              style={{ ...styles.btn, ...(isCapturingContinuousContextHotkey ? styles.btnActive : {}), opacity: continuousContextEnabled ? 1 : 0.5 }}
-            >
-              {isCapturingContinuousContextHotkey ? 'Press keys...' : continuousContextHotkey || '⌥⇧1'}
-            </button>
-            {isCapturingContinuousContextHotkey && (
-              <button onClick={() => { setIsCapturingContinuousContextHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
             )}
           </div>
         </div>
@@ -1094,7 +1043,7 @@ export default function SettingsPanel() {
             <div style={styles.rowControls}>
               <button
                 onClick={() => { setIsCapturingTodoHotkey(true); setHotkeyError(null); }}
-                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingContinuousContextHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingAbandonHotkey}
+                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
                 style={{ ...styles.btn, ...(isCapturingTodoHotkey ? styles.btnActive : {}) }}
               >
                 {isCapturingTodoHotkey ? 'Press keys...' : todoHotkey || '⌘⇧T'}
@@ -1108,63 +1057,71 @@ export default function SettingsPanel() {
       </div>
       
       {/* Subscription Section */}
-      <div style={styles.section}>
-        <SectionHeader title="Subscription" />
+      {(() => {
+        // Only trust cached 'pro' tier if user is actually signed in.
+        // When no session exists, always display 'free' tier.
+        const displayTier = session ? userTier : 'free';
         
-        <div style={styles.row}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={styles.rowLabel}>Current Plan</span>
-              <span style={{
-                padding: '2px 8px',
-                borderRadius: '4px',
-                fontSize: '10px',
-                fontWeight: 600,
-                textTransform: 'uppercase' as const,
-                backgroundColor: userTier === 'pro' ? theme.accent : theme.bgSecondary,
-                color: userTier === 'pro' ? '#fff' : theme.textSecondary,
-              }}>
-                {userTier}
-              </span>
+        return (
+          <div style={styles.section}>
+            <SectionHeader title="Subscription" />
+            
+            <div style={styles.row}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={styles.rowLabel}>Current Plan</span>
+                  <span style={{
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    fontSize: '10px',
+                    fontWeight: 600,
+                    textTransform: 'uppercase' as const,
+                    backgroundColor: displayTier === 'pro' ? theme.accent : theme.bgSecondary,
+                    color: displayTier === 'pro' ? '#fff' : theme.textSecondary,
+                  }}>
+                    {displayTier}
+                  </span>
+                </div>
+                <p style={styles.rowHint}>
+                  {displayTier === 'free' 
+                    ? 'Upgrade to Pro for unlimited priority mic and auto-stacking ($15/month).'
+                    : 'Unlimited priority mic and auto-stacking, plus all-time stats.'}
+                </p>
+              </div>
+              <div style={styles.rowControls}>
+                {displayTier === 'free' ? (
+                  <button 
+                    onClick={() => {
+                      // Open Stripe checkout in default browser (avoids Apple 30% tax).
+                      // TODO: Replace with actual Stripe checkout URL.
+                      window.open('https://buy.stripe.com/YOUR_CHECKOUT_LINK', '_blank');
+                    }}
+                    style={{
+                      ...styles.btn,
+                      backgroundColor: theme.accent,
+                      color: '#fff',
+                      border: 'none',
+                    }}
+                  >
+                    Upgrade to Pro
+                  </button>
+                ) : (
+                  <button 
+                    onClick={() => {
+                      // Open Stripe Customer Portal for subscription management.
+                      // TODO: Replace with actual Stripe portal URL.
+                      window.open('https://billing.stripe.com/p/login/YOUR_PORTAL_LINK', '_blank');
+                    }}
+                    style={styles.btn}
+                  >
+                    Manage Subscription
+                  </button>
+                )}
+              </div>
             </div>
-            <p style={{ ...styles.rowHint, marginTop: 0 }}>
-              {userTier === 'free' 
-                ? 'Upgrade to Pro for unlimited priority mic and auto-stacking ($15/month).'
-                : 'Unlimited priority mic and auto-stacking, plus all-time stats.'}
-            </p>
           </div>
-          <div style={styles.rowControls}>
-            {userTier === 'free' ? (
-              <button 
-                onClick={() => {
-                  // Open Stripe checkout in default browser (avoids Apple 30% tax).
-                  // TODO: Replace with actual Stripe checkout URL.
-                  window.open('https://buy.stripe.com/YOUR_CHECKOUT_LINK', '_blank');
-                }}
-                style={{
-                  ...styles.btn,
-                  backgroundColor: theme.accent,
-                  color: '#fff',
-                  border: 'none',
-                }}
-              >
-                Upgrade to Pro
-              </button>
-            ) : (
-              <button 
-                onClick={() => {
-                  // Open Stripe Customer Portal for subscription management.
-                  // TODO: Replace with actual Stripe portal URL.
-                  window.open('https://billing.stripe.com/p/login/YOUR_PORTAL_LINK', '_blank');
-                }}
-                style={styles.btn}
-              >
-                Manage Subscription
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1248,6 +1205,11 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
+  },
+  rowHint: {
+    fontSize: '13px',
+    color: '#6b7280',
+    fontWeight: 400,
   },
   
   // Unified button styles

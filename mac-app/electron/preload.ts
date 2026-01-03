@@ -1309,6 +1309,12 @@ const onboardingAPI = {
   expandWindow: async (): Promise<void> => {
     return ipcRenderer.invoke(OnboardingIPCChannels.EXPAND_WINDOW);
   },
+
+  // Set a tutorial hint to display next to the cursor dot.
+  // Used during onboarding to guide users through the tutorial.
+  setTutorialHint: (hint: string | null): void => {
+    ipcRenderer.send('onboarding:set-tutorial-hint', hint);
+  },
 };
 
 type OnboardingAPI = typeof onboardingAPI;
