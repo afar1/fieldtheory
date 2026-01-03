@@ -2612,6 +2612,7 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
                   borderRadius: '8px',
                   boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
                 }}
+                onError={(e) => { e.currentTarget.style.display = 'none'; }}
               />
               {/* Action bar - paste, draw, delete */}
               <div style={{

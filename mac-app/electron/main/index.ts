@@ -1936,6 +1936,22 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
+  // Tasks tab - experimental feature toggle.
+  ipcMain.handle('clipboard:getTasksTabEnabled', async () => {
+    if (!preferencesManager) {
+      return false;
+    }
+    return preferencesManager.getPreference('tasksTabEnabled') ?? false;
+  });
+
+  ipcMain.handle('clipboard:setTasksTabEnabled', async (_event, enabled: boolean) => {
+    if (!preferencesManager) {
+      return false;
+    }
+    await preferencesManager.save({ tasksTabEnabled: enabled });
+    return true;
+  });
+
   // =========================================================================
   // Quota IPC Handlers - Local usage tracking
   // =========================================================================

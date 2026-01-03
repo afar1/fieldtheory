@@ -225,8 +225,22 @@ export default function PopularCommands() {
     }
   }, [newCommandName, newCommandContent]);
 
+  // Check if content needs truncation (more than ~2 lines worth of text).
+  const needsTruncation = useCallback((content: string) => {
+    // Rough estimate: 2 lines at 11px font = ~120 chars, or has newlines that would extend it.
+    const hasNewlines = content.includes('\n');
+    return content.length > 120 || (hasNewlines && content.length > 80);
+  }, []);
+
   // Handle hover start - start timer for tooltip.
+  // Only show tooltip if content needs truncation and item is not expanded.
   const handleMouseEnter = useCallback((command: Command, e: React.MouseEvent) => {
+    // Skip hover tooltip if content doesn't need truncation.
+    if (!needsTruncation(command.content)) return;
+    
+    // Skip hover tooltip if this item is expanded.
+    if (expandedId === command.id) return;
+    
     const rect = e.currentTarget.getBoundingClientRect();
     
     // Clear any existing timer.
@@ -239,7 +253,7 @@ export default function PopularCommands() {
       setHoveredCommand(command);
       setHoverPosition({ x: rect.left, y: rect.bottom + 4 });
     }, 500);
-  }, []);
+  }, [needsTruncation, expandedId]);
 
   // Handle hover end - clear timer and tooltip.
   const handleMouseLeave = useCallback(() => {
@@ -341,12 +355,15 @@ export default function PopularCommands() {
           </div>
         </div>
         
-        {/* Show more / Show less toggle */}
-        {command.content.length > 120 && (
+        {/* Show more / Show less toggle - only if content needs truncation */}
+        {needsTruncation(command.content) && (
           <button
             onClick={(e) => {
               e.stopPropagation();
               setExpandedId(isExpanded ? null : command.id);
+              // Clear any hover tooltip when expanding.
+              setHoveredCommand(null);
+              setHoverPosition(null);
             }}
             style={{
               alignSelf: 'flex-start',

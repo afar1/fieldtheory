@@ -258,16 +258,16 @@ export class QuotaManager extends EventEmitter {
 
   /**
    * Format priority mic usage for display.
-   * Returns "0 of 500 min priority mic" or "0 of ∞ min priority mic".
+   * Returns "0 of 500 priority mic mins" or "0 of ∞ priority mic mins".
    */
   formatPriorityMicUsage(): string {
     const status = this.getPriorityMicStatus();
     const usedMinutes = Math.floor(status.used / 60);
     if (isUnlimited(status.limit)) {
-      return `${usedMinutes} of ∞ min priority mic`;
+      return `${usedMinutes} of ∞ priority mic mins`;
     }
     const limitMinutes = Math.floor(status.limit / 60);
-    return `${usedMinutes} of ${limitMinutes} min priority mic`;
+    return `${usedMinutes} of ${limitMinutes} priority mic mins`;
   }
 
   /**
