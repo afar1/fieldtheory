@@ -118,14 +118,14 @@ interface Preferences {
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
-  transcriptionHotkey: 'Alt+Space',
+  transcriptionHotkey: 'Command+\\',
   selectedModel: 'base',
   overlayStyle: 'rectangle',
-  clipboardScreenshotHotkey: 'Alt+1',
+  clipboardScreenshotHotkey: 'Command+4',
   clipboardDesktopScreenshotHotkey: 'Command+3',
-  clipboardHistoryHotkey: 'Control+Alt+Space',
+  clipboardHistoryHotkey: 'Alt+Space',
   continuousContextEnabled: false,
-  continuousContextHotkey: 'Shift+Alt+1', // Default: Shift + screenshot hotkey
+  continuousContextHotkey: 'Shift+Command+4', // Default: Shift + screenshot hotkey
   abandonRecordingHotkey: 'Escape', // Default: Escape key to cancel recording
   abandonRecordingConfirmation: true, // Default: confirm before abandoning if there's audio
   todoHotkey: 'Command+Shift+T', // Default: Cmd+Shift+T for todo list

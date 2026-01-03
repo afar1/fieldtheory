@@ -292,6 +292,7 @@ export class CursorStatusManager extends EventEmitter {
     const cursorPos = screen.getCursorScreenPoint();
     
     this.window = new BrowserWindow({
+      type: 'panel',  // NSPanel for floating above all windows including Field Theory
       width: this.WINDOW_WIDTH_NORMAL,
       height: this.WINDOW_HEIGHT_NORMAL,
       x: cursorPos.x + this.CURSOR_OFFSET_X,
@@ -314,6 +315,10 @@ export class CursorStatusManager extends EventEmitter {
 
     // Show on all workspaces including full-screen apps
     this.window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    
+    // Ensure highest z-level to appear above Field Theory and other windows
+    // Use level 2 to be above clipboard history (level 1)
+    this.window.setAlwaysOnTop(true, 'screen-saver', 2);
     
     // Ignore mouse events so clicks pass through
     this.window.setIgnoreMouseEvents(true);

@@ -26,7 +26,7 @@ export default function App() {
   
   // Continuous Context feature settings
   const [continuousContextEnabled, setContinuousContextEnabled] = useState(false);
-  const [continuousContextHotkey, setContinuousContextHotkey] = useState('Shift+Alt+1');
+  const [continuousContextHotkey, setContinuousContextHotkey] = useState('Shift+Command+4');
   const [isCapturingContinuousContextHotkey, setIsCapturingContinuousContextHotkey] = useState(false);
   const [continuousContextState, setContinuousContextState] = useState<{ active: boolean; stackId: string | null; screenshotCount: number }>({
     active: false,

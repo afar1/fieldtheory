@@ -614,7 +614,7 @@ function setupTranscribeIPCHandlers(): void {
 
   ipcMain.handle(TranscribeIPCChannels.GET_HOTKEY, () => {
     if (!transcriberManager) {
-      return 'Alt+Space';
+      return 'Command+\\';
     }
     return transcriberManager.getHotkey();
   });
@@ -920,8 +920,8 @@ function setupClipboardIPCHandlers(): void {
   ipcMain.handle(ClipboardIPCChannels.GET_HOTKEYS, async () => {
     if (!clipboardManager) {
       return {
-        screenshot: 'Alt+1',
-        history: 'Control+Alt+Space',
+        screenshot: 'Command+4',
+        history: 'Alt+Space',
       };
     }
     return clipboardManager.getHotkeys();
@@ -1823,7 +1823,7 @@ function setupClipboardIPCHandlers(): void {
 
   ipcMain.handle(ClipboardIPCChannels.GET_CONTINUOUS_CONTEXT_HOTKEY, async () => {
     if (!clipboardManager) {
-      return 'Shift+Alt+1';
+      return 'Shift+Command+4';
     }
     return clipboardManager.getContinuousContextHotkey();
   });
@@ -2396,6 +2396,12 @@ function setupOnboardingIPCHandlers(): void {
     
     console.log('[Main] Onboarding reset - showing wizard from start');
     return true;
+  });
+
+  // Expand the onboarding window for the tutorial phase.
+  ipcMain.handle(OnboardingIPCChannels.EXPAND_WINDOW, async () => {
+    if (!onboardingWindow) return;
+    onboardingWindow.expandWindow();
   });
 }
 
@@ -2991,13 +2997,23 @@ async function initVisionSystem(): Promise<void> {
   visionModelManager = new VisionModelManager();
   visionProcessor = new VisionProcessor(visionModelManager, clipboardManager);
 
-  // Update clipboard manager callback to include vision processing
-  // This ensures images added via clipboard polling are also processed
+  // Update clipboard manager callback to include vision processing and auto-stacking.
+  // This ensures images added via clipboard polling (including Apple's Shift+Cmd+3/4) are:
+  // 1. Processed by vision if available
+  // 2. Added to the recording stack if user is currently recording
   clipboardManager.setOnItemAdded((id) => {
-    // Queue for vision processing if it's an image and vision processor is available
-    if (visionProcessor) {
-      const item = clipboardManager!.getItem(id);
-      if (item && (item.type === 'image' || item.type === 'screenshot')) {
+    const item = clipboardManager!.getItem(id);
+    
+    // Add images to recording stack if user is currently recording.
+    // This enables Apple's default screenshot shortcuts (Shift+Cmd+3/4) to participate in auto-stacking.
+    if (item && (item.type === 'image' || item.type === 'screenshot')) {
+      if (transcriberManager && transcriberManager.getStatus() === 'recording') {
+        transcriberManager.addToStack(id);
+        console.log(`[Main] Added clipboard image ${id} to recording stack (Apple screenshot)`);
+      }
+      
+      // Queue for vision processing if vision processor is available.
+      if (visionProcessor) {
         visionProcessor.queueImage(id).catch((error) => {
           console.error('[Main] Failed to queue image for vision processing:', error);
         });

@@ -18,6 +18,9 @@ export const OnboardingIPCChannels = {
   
   // Model download (reuses existing model download infrastructure)
   CHECK_MODEL_STATUS: 'onboarding:checkModelStatus',
+  
+  // Window control
+  EXPAND_WINDOW: 'onboarding:expandWindow',
 } as const;
 
 /**

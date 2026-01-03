@@ -95,9 +95,9 @@ const DEFAULT_CONFIG: ClipboardConfig = {
     'com.lastpass.LastPass',
     'com.dashlane.dashlanephonefinal',
   ],
-  screenshotHotkey: 'Alt+1',
+  screenshotHotkey: 'Command+4',
   desktopScreenshotHotkey: 'Command+3',
-  historyHotkey: 'Control+Alt+Space',
+  historyHotkey: 'Alt+Space',
 };
 
 /**
@@ -141,7 +141,7 @@ export class ClipboardManager extends EventEmitter {
   private continuousContextStackId: string | null = null;
   private continuousContextScreenshotCount: number = 0;
   private continuousContextHotkeyRegistered: boolean = false;
-  private continuousContextHotkey: string = 'Shift+Alt+1';
+  private continuousContextHotkey: string = 'Shift+Command+4';
   private continuousContextEnabled: boolean = false;
   private continuousContextCallback: (() => void) | null = null;
   private screencaptureProcess: ChildProcess | null = null;
