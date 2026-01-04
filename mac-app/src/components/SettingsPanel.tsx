@@ -937,212 +937,96 @@ export default function SettingsPanel() {
         <TranscriptionSettings />
       </div>
 
-      {/* AI Features Section */}
-      <div style={styles.section}>
-        <SectionHeader title="AI Features" />
-        
-        {/* API Key Row */}
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Anthropic API Key</span>
-          <div style={styles.rowControls}>
-            {hasApiKey ? (
-              <>
-                <span style={{ ...styles.rowValue, color: theme.accent }}>✓ Configured</span>
-                <button onClick={handleClearApiKey} style={{ ...styles.btn, ...styles.btnDanger }}>
-                  Clear
-                </button>
-              </>
-            ) : (
-              <>
-                <input
-                  type={showApiKey ? 'text' : 'password'}
-                  value={apiKeyInput}
-                  onChange={(e) => setApiKeyInput(e.target.value)}
-                  placeholder="sk-ant-..."
-                  style={{ ...styles.input, fontFamily: 'monospace', width: '180px' }}
-                />
-                <button onClick={() => setShowApiKey(!showApiKey)} style={styles.btnGhost}>
-                  {showApiKey ? 'Hide' : 'Show'}
-                </button>
-                <button
-                  onClick={handleSaveApiKey}
-                  disabled={apiKeySaving || !apiKeyInput.trim()}
-                  style={{
-                    ...styles.btn,
-                    ...(apiKeySaving || !apiKeyInput.trim() ? {} : styles.btnSuccess),
-                    opacity: apiKeySaving || !apiKeyInput.trim() ? 0.5 : 1,
-                    cursor: apiKeySaving || !apiKeyInput.trim() ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  {apiKeySaving ? 'Saving...' : 'Save'}
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-        {apiKeyError && <p style={styles.error}>{apiKeyError}</p>}
-        
-        {/* Prompt Settings */}
-        <PromptSettings />
-      </div>
 
-      {/* Mobile Sync Section */}
-      <div style={styles.section}>
-        <SectionHeader title="Mobile Sync" />
-        
-        {session ? (
-          <>
-            <div style={styles.row}>
-              <div style={styles.syncUserInfo}>
-                <span style={styles.syncUserIcon}>✓</span>
-                <span style={styles.rowValue}>{session.user.email === 'andrew.mfarah@gmail.com' ? 'A. Farah' : session.user.email}</span>
-              </div>
-              <div style={styles.rowControls}>
-                <button onClick={handleManualSync} disabled={isSyncing} style={styles.btn}>
-                  {isSyncing ? 'Syncing...' : 'Sync'}
-                </button>
-                <button onClick={handleForceSync} disabled={isSyncing} style={styles.btn} title="Fix source attribution">
-                  Fix
-                </button>
-                <button onClick={handleSignOut} disabled={authLoading} style={styles.btnGhost}>
-                  {authLoading ? '...' : 'Sign Out'}
-                </button>
-              </div>
-            </div>
-            {syncStatus && <p style={styles.syncStatusText}>{syncStatus}</p>}
-          </>
-        ) : (
-          // Not signed in - direct user to Team tab.
-          <div style={styles.row}>
-            <span style={{ ...styles.rowValue, color: theme.textSecondary }}>
-              Sign in via the Team tab to enable mobile sync.
-            </span>
-          </div>
-        )}
-      </div>
-      
-      {/* Experimental Section */}
-      <div style={styles.section}>
-        <SectionHeader title="Experimental" />
-        
-        {/* Tasks Tab toggle */}
-        <div style={styles.row}>
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <span style={styles.rowLabel}>Tasks Tab</span>
-            <span style={{ ...styles.rowHint, marginTop: 0 }}>Show Tasks tab (syncs todos from iOS)</span>
-          </div>
-          <div style={styles.rowControls}>
-            <button
-              onClick={async () => {
-                const newValue = !tasksTabEnabled;
-                const success = await window.clipboardAPI?.setTasksTabEnabled?.(newValue);
-                if (success) setTasksTabEnabled(newValue);
-              }}
-              style={{ ...styles.toggle, backgroundColor: tasksTabEnabled ? theme.accent : '#d1d5db' }}
-            >
-              <span style={{ ...styles.toggleKnob, transform: tasksTabEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
-            </button>
-          </div>
-        </div>
-        
-        {/* Tasks hotkey (only show if tasks enabled) */}
-        {tasksTabEnabled && (
-          <div style={styles.row}>
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <span style={styles.rowLabel}>Tasks Hotkey</span>
-              <span style={{ ...styles.rowHint, marginTop: 0 }}>Open Tasks from anywhere</span>
-            </div>
-            <div style={styles.rowControls}>
-              <button
-                onClick={() => { setIsCapturingTodoHotkey(true); setHotkeyError(null); }}
-                disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
-                style={{ ...styles.btn, ...(isCapturingTodoHotkey ? styles.btnActive : {}) }}
-              >
-                {isCapturingTodoHotkey ? 'Press keys...' : todoHotkey || '⌘⇧T'}
-              </button>
-              {isCapturingTodoHotkey && (
-                <button onClick={() => { setIsCapturingTodoHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-      
-      {/* Subscription Section */}
+      {/* Account Section - combines account info and subscription */}
       {(() => {
         // Only trust cached 'pro' tier if user is actually signed in.
-        // When no session exists, always display 'free' tier.
         const displayTier = session ? userTier : 'free';
-        
-        // Display names: 'free' -> 'Free Plan', 'pro' -> 'Pro Plan'
         const tierDisplayName = displayTier === 'pro' ? 'Pro Plan' : 'Free Plan';
         
         return (
           <div style={styles.section}>
-            <SectionHeader title="Subscription" />
+            <SectionHeader title="Account" />
             
-            <div style={styles.row}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={styles.rowLabel}>Current Plan</span>
-                  <span style={{
-                    padding: '2px 8px',
-                    borderRadius: '4px',
-                    fontSize: '10px',
-                    fontWeight: 600,
-                    backgroundColor: displayTier === 'pro' ? theme.accent : theme.bgSecondary,
-                    color: displayTier === 'pro' ? '#fff' : theme.textSecondary,
-                  }}>
-                    {tierDisplayName}
-                  </span>
+            {session ? (
+              <>
+                {/* User info row with sign out */}
+                <div style={styles.row}>
+                  <div style={styles.syncUserInfo}>
+                    <span style={styles.syncUserIcon}>✓</span>
+                    <span style={styles.rowValue}>{session.user.email === 'andrew.mfarah@gmail.com' ? 'A. Farah' : session.user.email}</span>
+                  </div>
+                  <div style={styles.rowControls}>
+                    <button onClick={handleSignOut} disabled={authLoading} style={styles.btnGhost}>
+                      {authLoading ? '...' : 'Sign Out'}
+                    </button>
+                  </div>
                 </div>
-                <p style={styles.rowHint}>
-                  {displayTier === 'free'
-                    ? 'Upgrade for unlimited priority mic and auto-stacking.'
-                    : 'Unlimited priority mic and auto-stacking, plus all-time stats.'}
-                </p>
+                {syncStatus && <p style={styles.syncStatusText}>{syncStatus}</p>}
+                
+                {/* Subscription row */}
+                <div style={styles.row}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={styles.rowLabel}>Current Plan</span>
+                      <span style={{
+                        padding: '2px 8px',
+                        borderRadius: '4px',
+                        fontSize: '10px',
+                        fontWeight: 600,
+                        backgroundColor: displayTier === 'pro' ? theme.accent : theme.bgSecondary,
+                        color: displayTier === 'pro' ? '#fff' : theme.textSecondary,
+                      }}>
+                        {tierDisplayName}
+                      </span>
+                    </div>
+                    <p style={styles.rowHint}>
+                      {displayTier === 'free'
+                        ? 'Upgrade for unlimited priority mic and auto-stacking.'
+                        : 'Unlimited priority mic and auto-stacking.'}
+                    </p>
+                  </div>
+                  <div style={styles.rowControls}>
+                    {displayTier === 'free' ? (
+                      <button 
+                        onClick={() => {
+                          const userId = session.user.id;
+                          const paymentLink = window.stripeConfig?.paymentLink || '';
+                          window.shellAPI?.openExternal(
+                            `${paymentLink}?client_reference_id=${userId}`
+                          );
+                        }}
+                        style={{
+                          ...styles.btn,
+                          backgroundColor: theme.accent,
+                          color: '#fff',
+                          border: 'none',
+                        }}
+                      >
+                        Upgrade
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          const portalLink = window.stripeConfig?.portalLink || '';
+                          window.shellAPI?.openExternal(portalLink);
+                        }}
+                        style={styles.btn}
+                      >
+                        Manage Subscription
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </>
+            ) : (
+              // Not signed in - direct user to Team tab.
+              <div style={styles.row}>
+                <span style={{ ...styles.rowValue, color: theme.textSecondary }}>
+                  Sign in via the Team tab to access your account.
+                </span>
               </div>
-              <div style={styles.rowControls}>
-                {displayTier === 'free' ? (
-                  <button 
-                    onClick={() => {
-                      // Require sign-in before upgrading.
-                      if (!session) {
-                        // Could show a modal here, but for now just alert.
-                        alert('Please sign in first to upgrade. Go to the Team tab to sign in.');
-                        return;
-                      }
-                      // Open Stripe checkout with user ID for webhook linking.
-                      // Opens in browser to avoid Apple's 30% in-app purchase tax.
-                      const userId = session.user.id;
-                      const paymentLink = window.stripeConfig?.paymentLink || '';
-                      window.shellAPI?.openExternal(
-                        `${paymentLink}?client_reference_id=${userId}`
-                      );
-                    }}
-                    style={{
-                      ...styles.btn,
-                      backgroundColor: theme.accent,
-                      color: '#fff',
-                      border: 'none',
-                    }}
-                  >
-                    Upgrade
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => {
-                      // Open Stripe Customer Portal for subscription management.
-                      const portalLink = window.stripeConfig?.portalLink || '';
-                      window.shellAPI?.openExternal(portalLink);
-                    }}
-                    style={styles.btn}
-                  >
-                    Manage Subscription
-                  </button>
-                )}
-              </div>
-            </div>
+            )}
           </div>
         );
       })()}
