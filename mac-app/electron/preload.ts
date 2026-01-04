@@ -611,6 +611,7 @@ export interface ClipboardAPI {
   // Tasks tab (experimental feature)
   getTasksTabEnabled?: () => Promise<boolean>;
   setTasksTabEnabled?: (enabled: boolean) => Promise<boolean>;
+  onTasksTabToggled?: (callback: (enabled: boolean) => void) => () => void;
 }
 
 export interface PermissionsAPI {
@@ -1149,6 +1150,16 @@ const clipboardAPI: ClipboardAPI = {
 
   setTasksTabEnabled: async (enabled: boolean): Promise<boolean> => {
     return ipcRenderer.invoke('clipboard:setTasksTabEnabled', enabled);
+  },
+
+  onTasksTabToggled: (callback: (enabled: boolean) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, enabled: boolean) => {
+      callback(enabled);
+    };
+    ipcRenderer.on('clipboard:tasksTabToggled', handler);
+    return () => {
+      ipcRenderer.removeListener('clipboard:tasksTabToggled', handler);
+    };
   },
 };
 
@@ -1878,7 +1889,7 @@ contextBridge.exposeInMainWorld('stripeConfig', {
     : 'https://buy.stripe.com/14A00j3iCbyl6aZ3fU3Ru00',
   // Customer portal for managing subscription
   portalLink: isDev
-    ? 'https://billing.stripe.com/p/login/test_00g5lD0hG6SYfKMfYY'
+    ? 'https://billing.stripe.com/p/login/test_aFadR96pW4vJdA9gPvfYY00'
     : 'https://billing.stripe.com/p/login/14A00j3iCbyl6aZ3fU3Ru00',
 });
 

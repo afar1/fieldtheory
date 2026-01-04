@@ -137,15 +137,9 @@ export default function AudioSettingsPanel() {
 
   return (
     <div style={styles.container}>
-      {/* Current status row */}
-      <div style={styles.row}>
-        <span style={styles.rowLabel}>Current</span>
-        <span style={styles.rowValue}>{currentDefault?.name || 'None'}</span>
-      </div>
-
       {/* Priority microphone selector */}
       <div style={styles.row}>
-        <span style={styles.rowLabel}>Set Priority Mic</span>
+        <span style={styles.rowLabel}>Priority Mic</span>
         <div style={styles.rowControls}>
           <select
             value={audioState.priorityDeviceId || ''}

@@ -2974,43 +2974,32 @@ async function initTranscriberSystem(): Promise<void> {
     });
   }
 
-  // Register todo hotkey (Cmd+Shift+T by default).
-  // This hotkey toggles between todo view and clipboard view.
-  const todoHotkey = prefs.todoHotkey || 'Command+Shift+T';
+  // Cmd+Shift+T toggles Tasks tab visibility.
+  const todoHotkey = 'Command+Shift+T';
   let lastTodoToggleAt = 0;
   
   try {
-    globalShortcut.register(todoHotkey, () => {
+    globalShortcut.register(todoHotkey, async () => {
       // Debounce to avoid repeated toggles when the hotkey auto-repeats.
       const now = Date.now();
       if (now - lastTodoToggleAt < 250) return;
       lastTodoToggleAt = now;
 
-      if (!clipboardHistoryWindow) {
-        clipboardHistoryWindow = initClipboardHistoryWindow();
-      }
+      if (!preferencesManager) return;
 
-      const visible = clipboardHistoryWindow.isVisible();
-
-      if (!visible) {
-        // Show window in todo view mode.
-        clipboardHistoryWindow.capturePreviousAppBeforeShow().then(() => {
-          const boundsToUse = restoreClipboardHistoryBounds();
-          clipboardHistoryWindow!.show(boundsToUse);
-          // Switch to todo view after window is shown.
-          setTimeout(() => {
-            clipboardHistoryWindow?.getWindow()?.webContents.send(TodoIPCChannels.SHOW_TODOS);
-          }, 50);
-        });
-      } else {
-        // If already visible, toggle between todo and clipboard view.
-        // Send SHOW_TODOS event - the renderer will toggle if already in todo view.
-        clipboardHistoryWindow.getWindow()?.webContents.send(TodoIPCChannels.SHOW_TODOS);
+      const currentValue = preferencesManager.getPreference('tasksTabEnabled') ?? false;
+      const newValue = !currentValue;
+      await preferencesManager.save({ tasksTabEnabled: newValue });
+      
+      if (clipboardHistoryWindow) {
+        clipboardHistoryWindow.getWindow()?.webContents.send('clipboard:tasksTabToggled', newValue);
       }
+      
+      console.log(`[Main] Tasks tab toggled: ${newValue ? 'enabled' : 'disabled'}`);
     });
-    console.log(`[Main] Registered todo hotkey: ${todoHotkey}`);
+    console.log(`[Main] Registered tasks toggle hotkey: ${todoHotkey}`);
   } catch (err) {
-    console.error('[Main] Failed to register todo hotkey:', err);
+    console.error('[Main] Failed to register tasks toggle hotkey:', err);
   }
 
   console.log('[Main] Transcription system initialized');

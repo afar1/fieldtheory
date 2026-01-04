@@ -329,6 +329,12 @@ interface ClipboardAPI {
   // Cursor status indicator settings
   getCursorStatusEnabled?: () => Promise<boolean>;
   setCursorStatusEnabled?: (enabled: boolean) => Promise<boolean>;
+  
+  getSoundsEnabled?: () => Promise<boolean>;
+  setSoundsEnabled?: (enabled: boolean) => Promise<boolean>;
+  getTasksTabEnabled?: () => Promise<boolean>;
+  setTasksTabEnabled?: (enabled: boolean) => Promise<boolean>;
+  onTasksTabToggled?: (callback: (enabled: boolean) => void) => () => void;
 }
 
 /**
