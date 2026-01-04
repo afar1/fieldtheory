@@ -334,11 +334,13 @@ type CoreMechanicsStep =
   | 'show-input'
   | 'done';
 
-// Image thumbnails captured during screenshots (base64 data URLs).
-interface CapturedImage {
-  id: number;
-  dataUrl: string;
-}
+// Derive screenshot count from current step (avoids storing full image data).
+const getScreenshotCount = (s: CoreMechanicsStep): number => {
+  if (s === 'take-screenshot-2') return 1;
+  if (s === 'take-screenshot-3') return 2;
+  if (s === 'show-input' || s === 'done') return 3;
+  return 0;
+};
 
 function CoreMechanicsPhase({
   recordingHotkey,
@@ -347,9 +349,29 @@ function CoreMechanicsPhase({
   onContinue,
 }: CoreMechanicsPhaseProps) {
   const [step, setStep] = useState<CoreMechanicsStep>('start-recording');
-  const [capturedImages, setCapturedImages] = useState<CapturedImage[]>([]);
   const [inputText, setInputText] = useState('');
+  const [pastedImages, setPastedImages] = useState<string[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Ref to access current step in listener callback without stale closure.
+  const stepRef = useRef(step);
+  stepRef.current = step;
+
+  // Handle paste to capture images from clipboard.
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith('image/')) {
+        const blob = item.getAsFile();
+        if (blob) {
+          const url = URL.createObjectURL(blob);
+          setPastedImages(prev => [...prev, url]);
+        }
+      }
+    }
+  };
 
   // Send tutorial hints to cursor status dot based on current step.
   useEffect(() => {
@@ -395,35 +417,25 @@ function CoreMechanicsPhase({
     }
   }, [step, isRecording]);
 
-  // Listen for screenshots and capture image data.
+  // Listen for screenshots - register once to avoid duplicate listeners.
   useEffect(() => {
     if (!window.clipboardAPI) return;
 
-    const handleItemAdded = async (id: number) => {
-      // Fetch the item to get image data for preview.
-      const item = await window.clipboardAPI?.getItem?.(id);
-      if (item?.imageData) {
-        setCapturedImages(prev => [...prev, {
-          id,
-          dataUrl: `data:image/png;base64,${item.imageData}`,
-        }]);
-      }
+    const handleItemAdded = (_id: number) => {
+      const currentStep = stepRef.current;
 
       // Progress through screenshot steps.
-      if (step === 'describing-1' || step === 'take-screenshot-1') {
+      if (currentStep === 'describing-1' || currentStep === 'take-screenshot-1') {
         setStep('take-screenshot-2');
-      } else if (step === 'take-screenshot-2') {
+      } else if (currentStep === 'take-screenshot-2') {
         setStep('take-screenshot-3');
-      } else if (step === 'take-screenshot-3') {
+      } else if (currentStep === 'take-screenshot-3') {
         setStep('show-input');
       }
     };
 
     window.clipboardAPI.onItemAdded?.(handleItemAdded);
-    return () => {
-      // Note: cleanup would require the API to expose a removeListener method.
-    };
-  }, [step]);
+  }, []);
 
   // For the input field, detect when content is pasted/typed.
   useEffect(() => {
@@ -432,21 +444,27 @@ function CoreMechanicsPhase({
     const handleInput = () => {
       if (inputRef.current && inputRef.current.value.length > 0) {
         setInputText(inputRef.current.value);
-        // Success! Move to done after a moment.
-        setTimeout(() => setStep('done'), 1500);
       }
     };
 
     const input = inputRef.current;
     if (input) {
       input.addEventListener('input', handleInput);
-      // Focus the input for paste.
       input.focus();
       return () => input.removeEventListener('input', handleInput);
     }
   }, [step]);
 
-  // When done, auto-advance to next phase after brief delay.
+  // Auto-advance when content is pasted, then to next phase when done.
+  useEffect(() => {
+    if (step !== 'show-input') return;
+    if (inputText.length > 0 || pastedImages.length > 0) {
+      const timer = setTimeout(() => setStep('done'), 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [step, inputText, pastedImages]);
+
+  // When done, advance to next phase after brief delay.
   useEffect(() => {
     if (step === 'done') {
       const timer = setTimeout(onContinue, 1500);
@@ -494,7 +512,7 @@ function CoreMechanicsPhase({
               />
             </div>
             <p style={styles.tutorialPrompt}>
-              Describe what you see, then take a screenshot.
+              Describe what you see, then press <kbd style={styles.kbd}>{formatHotkeyDisplay(screenshotHotkey)}</kbd> to screenshot.
             </p>
           </>
         );
@@ -509,7 +527,7 @@ function CoreMechanicsPhase({
                   alt="Artwork 1" 
                   style={{ ...styles.artworkSmall, opacity: 0.5 }}
                 />
-                {capturedImages.length > 0 && (
+                {getScreenshotCount(step) > 0 && (
                   <div style={styles.stackIndicator}>✓</div>
                 )}
               </div>
@@ -520,7 +538,7 @@ function CoreMechanicsPhase({
               />
             </div>
             <p style={styles.tutorialPrompt}>
-              Now describe and screenshot this one.
+              Now describe and screenshot this one (<kbd style={styles.kbd}>{formatHotkeyDisplay(screenshotHotkey)}</kbd>).
             </p>
           </>
         );
@@ -543,7 +561,7 @@ function CoreMechanicsPhase({
                   alt="Artwork 2" 
                   style={{ ...styles.artworkSmall, opacity: 0.5 }}
                 />
-                {capturedImages.length > 1 && (
+                {getScreenshotCount(step) > 1 && (
                   <div style={styles.stackIndicator}>✓</div>
                 )}
               </div>
@@ -554,7 +572,7 @@ function CoreMechanicsPhase({
               />
             </div>
             <p style={styles.tutorialPrompt}>
-              One more! Describe and screenshot.
+              One more! Describe and screenshot (<kbd style={styles.kbd}>{formatHotkeyDisplay(screenshotHotkey)}</kbd>).
             </p>
           </>
         );
@@ -563,28 +581,25 @@ function CoreMechanicsPhase({
         return (
           <>
             <p style={styles.tutorialPrompt}>
-              Stop recording. Your content will paste into the field below.
+              Press <kbd style={styles.kbd}>{formatHotkeyDisplay(recordingHotkey)}</kbd> to stop recording. Your content will paste below.
             </p>
-            {/* Image previews */}
-            {capturedImages.length > 0 && (
-              <div style={styles.imagePreviews}>
-                {capturedImages.map((img, i) => (
-                  <img
-                    key={img.id}
-                    src={img.dataUrl}
-                    alt={`Screenshot ${i + 1}`}
-                    style={styles.imagePreviewThumb}
-                  />
-                ))}
-              </div>
-            )}
-            <textarea
-              ref={inputRef}
-              style={styles.pasteInput}
-              placeholder="Your stacked content will appear here..."
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-            />
+            <div style={styles.composedInput}>
+              {pastedImages.length > 0 && (
+                <div style={styles.imageChipsRow}>
+                  {pastedImages.map((url, i) => (
+                    <img key={i} src={url} alt="" style={styles.imageChip} />
+                  ))}
+                </div>
+              )}
+              <textarea
+                ref={inputRef}
+                style={styles.textareaInner}
+                placeholder="Your stacked content will appear here..."
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                onPaste={handlePaste}
+              />
+            </div>
           </>
         );
 
@@ -1423,28 +1438,35 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '16px',
     fontWeight: 'bold',
   },
-  imagePreviews: {
-    display: 'flex',
-    gap: '8px',
-    justifyContent: 'center',
-    marginBottom: '12px',
-    flexWrap: 'wrap',
-  },
-  imagePreviewThumb: {
-    width: '60px',
-    height: '45px',
-    objectFit: 'cover',
-    borderRadius: '4px',
-    border: '2px solid #e5e7eb',
-  },
-  pasteInput: {
+  composedInput: {
     width: '100%',
     maxWidth: '400px',
-    minHeight: '80px',
-    padding: '12px',
-    fontSize: '13px',
     border: '1px solid #e5e7eb',
     borderRadius: '8px',
+    backgroundColor: '#fff',
+    overflow: 'hidden',
+  },
+  imageChipsRow: {
+    display: 'flex',
+    gap: '6px',
+    padding: '8px 12px',
+    borderBottom: '1px solid #f1f5f9',
+    flexWrap: 'wrap',
+  },
+  imageChip: {
+    width: '48px',
+    height: '48px',
+    objectFit: 'cover',
+    borderRadius: '6px',
+    border: '1px solid #e5e7eb',
+  },
+  textareaInner: {
+    width: '100%',
+    minHeight: '60px',
+    padding: '12px',
+    fontSize: '13px',
+    border: 'none',
+    outline: 'none',
     resize: 'none',
     textAlign: 'left',
     fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',

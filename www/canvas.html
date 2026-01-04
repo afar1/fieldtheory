@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Field Theory — Build Canvas</title>
+  <style>
+    :root{
+      --bg:#0b0d12;
+      --panel:#0f1420;
+      --panel2:#0d111b;
+      --line:rgba(255,255,255,.10);
+      --text:rgba(255,255,255,.90);
+      --muted:rgba(255,255,255,.65);
+
+      --radius:18px;
+      --shadow: 0 18px 60px rgba(0,0,0,.55);
+      --shadow2: 0 10px 30px rgba(0,0,0,.45);
+
+      --brickA: rgba(255,255,255,.12);
+      --brickB: rgba(255,255,255,.08);
+      --brickEdge: rgba(255,255,255,.14);
+
+      --dur: 520ms;
+      --stagger: 60ms;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body{
+      margin:0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      background:
+        radial-gradient(1200px 900px at 18% 10%, rgba(92,132,255,.14), transparent 55%),
+        radial-gradient(1200px 900px at 80% 30%, rgba(255,120,178,.10), transparent 55%),
+        radial-gradient(900px 700px at 50% 95%, rgba(120,255,210,.08), transparent 60%),
+        var(--bg);
+      color: var(--text);
+      overflow-x:hidden;
+    }
+
+    /* Top bar */
+    .shell{
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 28px 18px 60px;
+    }
+
+    .topbar{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .brand{
+      display:flex;
+      align-items:center;
+      gap: 10px;
+      letter-spacing:.2px;
+      user-select:none;
+    }
+    .logo{
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.22), rgba(255,255,255,.08));
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      border:1px solid rgba(255,255,255,.16);
+      position:relative;
+      overflow:hidden;
+    }
+    .logo:before{
+      content:"";
+      position:absolute;
+      inset:-30%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,.22), transparent);
+      transform: rotate(25deg);
+      animation: sheen 2400ms ease-in-out infinite;
+      opacity:.7;
+    }
+    @keyframes sheen {
+      0%, 65% { transform: translateX(-45%) rotate(25deg); opacity:.0; }
+      75% { opacity:.8; }
+      100% { transform: translateX(45%) rotate(25deg); opacity:.0; }
+    }
+
+    .brand .name{ font-weight: 620; }
+    .brand .tag{ color: var(--muted); font-size: 13px; margin-left: 8px; }
+
+    .controls{
+      display:flex;
+      align-items:center;
+      gap:10px;
+    }
+
+    .btn{
+      appearance:none;
+      border:1px solid rgba(255,255,255,.16);
+      background: rgba(255,255,255,.06);
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 12px;
+      cursor:pointer;
+      box-shadow: 0 10px 26px rgba(0,0,0,.25);
+      transition: transform 140ms ease, background 140ms ease, border-color 140ms ease;
+      font-weight: 560;
+      font-size: 13px;
+    }
+    .btn:hover{ transform: translateY(-1px); background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.22); }
+    .btn:active{ transform: translateY(0px) scale(.98); }
+
+    .pill{
+      padding: 8px 10px;
+      border-radius: 999px;
+      border:1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.05);
+      color: var(--muted);
+      font-size: 12px;
+      user-select:none;
+      white-space:nowrap;
+    }
+
+    /* Hero (video placeholder + transcript placeholder) */
+    .hero{
+      display:grid;
+      grid-template-columns: 1.2fr .8fr;
+      gap: 16px;
+      align-items:stretch;
+      margin-bottom: 16px;
+    }
+    @media (max-width: 860px){
+      .hero{ grid-template-columns: 1fr; }
+    }
+
+    .card{
+      border-radius: var(--radius);
+      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+      border:1px solid rgba(255,255,255,.12);
+      box-shadow: var(--shadow2);
+      overflow:hidden;
+      position:relative;
+    }
+
+    .videoPh{
+      min-height: 260px;
+      background:
+        radial-gradient(900px 500px at 20% 20%, rgba(255,255,255,.07), transparent 50%),
+        linear-gradient(180deg, rgba(0,0,0,.20), rgba(0,0,0,.40)),
+        var(--panel2);
+      display:flex;
+      flex-direction:column;
+      justify-content:space-between;
+    }
+    .videoPh .bar{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      padding: 12px 14px;
+      border-bottom:1px solid rgba(255,255,255,.10);
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing:.2px;
+    }
+    .dots{
+      display:flex; gap:6px;
+    }
+    .dot{ width:8px; height:8px; border-radius:999px; background: rgba(255,255,255,.16); }
+    .dot:nth-child(1){ background: rgba(255,90,120,.55); }
+    .dot:nth-child(2){ background: rgba(255,200,90,.50); }
+    .dot:nth-child(3){ background: rgba(120,255,170,.45); }
+
+    .videoPh .center{
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding: 18px;
+    }
+    .playGlyph{
+      width: 70px; height: 70px;
+      border-radius: 18px;
+      border:1px solid rgba(255,255,255,.16);
+      background: rgba(255,255,255,.06);
+      box-shadow: 0 20px 50px rgba(0,0,0,.35);
+      position:relative;
+      transform: translateZ(0);
+    }
+    .playGlyph:before{
+      content:"";
+      position:absolute;
+      left: 30px; top: 21px;
+      width:0; height:0;
+      border-top: 14px solid transparent;
+      border-bottom: 14px solid transparent;
+      border-left: 22px solid rgba(255,255,255,.72);
+      filter: drop-shadow(0 6px 12px rgba(0,0,0,.45));
+    }
+    .videoPh .footer{
+      padding: 12px 14px;
+      border-top:1px solid rgba(255,255,255,.10);
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .transcript{
+      padding: 14px 14px 12px;
+    }
+    .transcript h3{
+      margin: 0 0 8px;
+      font-size: 13px;
+      color: rgba(255,255,255,.85);
+      font-weight: 650;
+      letter-spacing:.2px;
+    }
+    .line{
+      height: 11px;
+      border-radius: 7px;
+      background: rgba(255,255,255,.08);
+      margin: 9px 0;
+      position:relative;
+      overflow:hidden;
+      border:1px solid rgba(255,255,255,.08);
+    }
+    .line:before{
+      content:"";
+      position:absolute;
+      inset:0;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,.10), transparent);
+      transform: translateX(-60%);
+      animation: shimmer 1600ms ease-in-out infinite;
+    }
+    @keyframes shimmer {
+      0%{ transform: translateX(-60%); opacity:.1; }
+      50%{ opacity:.9; }
+      100%{ transform: translateX(60%); opacity:.1; }
+    }
+
+    /* Main sections */
+    .grid{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .sectionCard{
+      padding: 14px;
+      background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.025));
+    }
+    .sectionHead{
+      display:flex;
+      justify-content:space-between;
+      align-items:flex-start;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .sectionHead .title{
+      font-weight: 680;
+      letter-spacing:.2px;
+    }
+    .sectionHead .desc{
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 4px;
+      max-width: 70ch;
+    }
+
+    /* Brick field */
+    .brickField{
+      display:grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 10px;
+      padding: 12px;
+      border-radius: 16px;
+      border:1px dashed rgba(255,255,255,.12);
+      background: rgba(0,0,0,.18);
+      overflow:hidden;
+      position:relative;
+      min-height: 132px;
+    }
+
+    .brick{
+      grid-column: span var(--w, 3);
+      height: 36px;
+      border-radius: 12px;
+      border: 1px solid var(--brickEdge);
+      background:
+        linear-gradient(180deg, var(--brickA), var(--brickB));
+      box-shadow: 0 14px 30px rgba(0,0,0,.35);
+      position:relative;
+
+      /* start hidden; become visible by phase */
+      opacity: 0;
+      transform: translateY(-90px) rotate(var(--r, -6deg)) scale(.86);
+      filter: blur(6px);
+      will-change: transform, opacity, filter;
+    }
+
+    /* a subtle "split seam" to make it feel like a brick */
+    .brick:before{
+      content:"";
+      position:absolute;
+      left: 10px; right: 10px;
+      top: 10px;
+      height: 1px;
+      background: rgba(255,255,255,.10);
+    }
+
+    /* Label capsule inside some bricks */
+    .brick .label{
+      font-size: 12px;
+      color: rgba(255,255,255,.78);
+      padding: 9px 12px;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow: ellipsis;
+      letter-spacing:.2px;
+      user-select:none;
+    }
+
+    /* PHASE TRIGGERS */
+    body.phase-1 .p1,
+    body.phase-2 .p2,
+    body.phase-3 .p3,
+    body.built .brick{
+      animation: crashIn var(--dur) cubic-bezier(.18,.92,.22,1.05) forwards;
+      animation-delay: calc(var(--i, 0) * var(--stagger));
+    }
+
+    /* When built: no blur, no jitter */
+    body.built .brick{
+      opacity: 1;
+      transform: translateY(0) rotate(0deg) scale(1);
+      filter: none;
+      animation: none;
+    }
+
+    /* "Crash into being" animation */
+    @keyframes crashIn {
+      0%{
+        opacity: 0;
+        transform: translateY(-120px) rotate(var(--r, -10deg)) scale(.78);
+        filter: blur(10px);
+      }
+      55%{
+        opacity: 1;
+        transform: translateY(6px) rotate(calc(var(--r, -10deg) * .35)) scale(1.06);
+        filter: blur(0px);
+      }
+      72%{
+        transform: translateY(-4px) rotate(calc(var(--r, -10deg) * -.12)) scale(.99);
+      }
+      84%{
+        transform: translateY(2px) rotate(calc(var(--r, -10deg) * .06)) scale(1.01);
+      }
+      100%{
+        opacity: 1;
+        transform: translateY(0px) rotate(0deg) scale(1);
+        filter: blur(0px);
+      }
+    }
+
+    /* micro "impact" spark lines in the brickField when a phase starts */
+    .impact{
+      position:absolute;
+      inset:0;
+      pointer-events:none;
+      opacity:0;
+    }
+    .impact:before, .impact:after{
+      content:"";
+      position:absolute;
+      width: 220px;
+      height: 1px;
+      background: rgba(255,255,255,.14);
+      filter: blur(.2px);
+      transform: rotate(-10deg);
+      left: 8%;
+      top: 28%;
+    }
+    .impact:after{
+      width: 160px;
+      left: 14%;
+      top: 34%;
+      transform: rotate(12deg);
+      background: rgba(255,255,255,.10);
+    }
+
+    body.phase-1 .impact.p1,
+    body.phase-2 .impact.p2,
+    body.phase-3 .impact.p3{
+      animation: impactFlash 520ms ease-out forwards;
+    }
+    @keyframes impactFlash{
+      0%{ opacity:0; transform: translateY(-6px); }
+      20%{ opacity:.7; }
+      55%{ opacity:.22; }
+      100%{ opacity:0; transform: translateY(0px); }
+    }
+
+    /* Reduce motion */
+    @media (prefers-reduced-motion: reduce){
+      *{ animation: none !important; transition: none !important; }
+      .brick{ opacity:1 !important; transform:none !important; filter:none !important; }
+      body{ scroll-behavior:auto; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo" aria-hidden="true"></div>
+        <div>
+          <div class="name">Field Theory</div>
+          <div class="tag">Animation canvas — CSS-first "constructed in place"</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="pill" id="statusPill">First visit: build plays</div>
+        <button class="btn" id="replayBtn" type="button">Replay build</button>
+        <button class="btn" id="skipBtn" type="button">Skip → built</button>
+      </div>
+    </div>
+
+    <div class="hero">
+      <div class="card videoPh">
+        <div class="bar">
+          <div class="dots" aria-hidden="true"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+          <div>Hero video placeholder (replace with your looping MP4)</div>
+        </div>
+        <div class="center">
+          <div class="playGlyph" aria-hidden="true"></div>
+        </div>
+        <div class="footer">
+          <div>Muted autoplay recommended</div>
+          <div>Phase-driven build below</div>
+        </div>
+      </div>
+
+      <div class="card transcript">
+        <div style="padding: 14px 14px 12px;">
+          <h3>Transcript placeholder</h3>
+          <div class="line" style="width:92%"></div>
+          <div class="line" style="width:86%"></div>
+          <div class="line" style="width:94%"></div>
+          <div class="line" style="width:72%"></div>
+          <div class="line" style="width:88%"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <!-- Phase 1 -->
+      <section class="card sectionCard" aria-label="Compliance build phase">
+        <div class="sectionHead">
+          <div>
+            <div class="title">Phase 1 — Compliance + Download</div>
+            <div class="desc">"This site needs a privacy policy, terms, and a download button."</div>
+          </div>
+          <div class="pill">crash-assemble</div>
+        </div>
+
+        <div class="brickField">
+          <div class="impact p1"></div>
+
+          <div class="brick p1" style="--w:4;--i:0;--r:-14deg"><div class="label">Privacy Policy</div></div>
+          <div class="brick p1" style="--w:4;--i:1;--r:10deg"><div class="label">Terms of Service</div></div>
+          <div class="brick p1" style="--w:4;--i:2;--r:-7deg"><div class="label">Download</div></div>
+
+          <div class="brick p1" style="--w:3;--i:3;--r:12deg"><div class="label">Security</div></div>
+          <div class="brick p1" style="--w:3;--i:4;--r:-8deg"><div class="label">Contact</div></div>
+          <div class="brick p1" style="--w:6;--i:5;--r:6deg"><div class="label">Changelog</div></div>
+        </div>
+      </section>
+
+      <!-- Phase 2 -->
+      <section class="card sectionCard" aria-label="About build phase">
+        <div class="sectionHead">
+          <div>
+            <div class="title">Phase 2 — About</div>
+            <div class="desc">"It'd be nice if we explained what this whole thing is about."</div>
+          </div>
+          <div class="pill">assemble → clarify</div>
+        </div>
+
+        <div class="brickField">
+          <div class="impact p2"></div>
+
+          <div class="brick p2" style="--w:5;--i:0;--r:-12deg"><div class="label">What is Field Theory?</div></div>
+          <div class="brick p2" style="--w:7;--i:1;--r:9deg"><div class="label">How it helps developers build systems</div></div>
+
+          <div class="brick p2" style="--w:4;--i:2;--r:-6deg"><div class="label">Principles</div></div>
+          <div class="brick p2" style="--w:4;--i:3;--r:12deg"><div class="label">Examples</div></div>
+          <div class="brick p2" style="--w:4;--i:4;--r:-10deg"><div class="label">Docs</div></div>
+
+          <div class="brick p2" style="--w:6;--i:5;--r:7deg"><div class="label">FAQ</div></div>
+          <div class="brick p2" style="--w:6;--i:6;--r:-5deg"><div class="label">Architecture notes</div></div>
+        </div>
+      </section>
+
+      <!-- Phase 3 -->
+      <section class="card sectionCard" aria-label="Pricing build phase">
+        <div class="sectionHead">
+          <div>
+            <div class="title">Phase 3 — Pricing</div>
+            <div class="desc">"All this should also provide info about pricing."</div>
+          </div>
+          <div class="pill">snap-in cards</div>
+        </div>
+
+        <div class="brickField">
+          <div class="impact p3"></div>
+
+          <div class="brick p3" style="--w:4;--i:0;--r:-16deg"><div class="label">Starter</div></div>
+          <div class="brick p3" style="--w:4;--i:1;--r:10deg"><div class="label">Pro</div></div>
+          <div class="brick p3" style="--w:4;--i:2;--r:-7deg"><div class="label">Team</div></div>
+
+          <div class="brick p3" style="--w:6;--i:3;--r:8deg"><div class="label">Compare plans</div></div>
+          <div class="brick p3" style="--w:6;--i:4;--r:-6deg"><div class="label">Contact sales</div></div>
+
+          <div class="brick p3" style="--w:12;--i:5;--r:5deg"><div class="label">Pricing note: keep this copy minimal — numbers later</div></div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    // Minimal JS only for sequencing + first-visit + replay/skip.
+    (function(){
+      const seenKey = "ft_build_seen_v1";
+      const pill = document.getElementById("statusPill");
+      const replayBtn = document.getElementById("replayBtn");
+      const skipBtn = document.getElementById("skipBtn");
+
+      const prefersReduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      const timings = {
+        p1: 50,          // start almost immediately
+        p2: 1100,        // after phase 1 settles
+        p3: 2350,        // after phase 2 settles
+        built: 3600      // fully built
+      };
+
+      let timers = [];
+
+      function clearTimers(){
+        timers.forEach(t => clearTimeout(t));
+        timers = [];
+      }
+
+      function setBodyClass(cn){
+        document.body.className = cn;
+      }
+
+      function runSequence(){
+        clearTimers();
+        setBodyClass(""); // reset
+
+        // If reduced motion: just show built.
+        if (prefersReduced){
+          setBodyClass("built");
+          pill.textContent = "Reduced motion: built";
+          localStorage.setItem(seenKey, "1");
+          return;
+        }
+
+        pill.textContent = "Build playing";
+        timers.push(setTimeout(()=> setBodyClass("phase-1"), timings.p1));
+        timers.push(setTimeout(()=> setBodyClass("phase-1 phase-2"), timings.p2));
+        timers.push(setTimeout(()=> setBodyClass("phase-1 phase-2 phase-3"), timings.p3));
+        timers.push(setTimeout(()=>{
+          setBodyClass("built");
+          pill.textContent = "Built (replay anytime)";
+          localStorage.setItem(seenKey, "1");
+        }, timings.built));
+      }
+
+      function skipToBuilt(){
+        clearTimers();
+        setBodyClass("built");
+        pill.textContent = "Built (skipped)";
+        localStorage.setItem(seenKey, "1");
+      }
+
+      replayBtn.addEventListener("click", () => {
+        // Force replay even if previously seen.
+        localStorage.removeItem(seenKey);
+        runSequence();
+      });
+
+      skipBtn.addEventListener("click", skipToBuilt);
+
+      // First visit behavior
+      const seen = localStorage.getItem(seenKey) === "1";
+      if (seen) {
+        setBodyClass("built");
+        pill.textContent = "Returning: built (tap replay)";
+      } else {
+        runSequence();
+      }
+    })();
+  </script>
+</body>
+</html>

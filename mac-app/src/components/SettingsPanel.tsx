@@ -57,6 +57,7 @@ export default function SettingsPanel() {
   const [authLoading, setAuthLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [passwordResetStatus, setPasswordResetStatus] = useState<'idle' | 'sending' | 'sent'>('idle');
   
   // API key state - for Engineer feature (Anthropic API)
   const [hasApiKey, setHasApiKey] = useState(false);
@@ -82,6 +83,9 @@ export default function SettingsPanel() {
   
   // Subscription tier state - 'free' or 'pro'.
   const [userTier, setUserTier] = useState<'free' | 'pro'>('free');
+  
+  // Quota usage for free users (formatted strings like "10/500 min").
+  const [quotaUsage, setQuotaUsage] = useState<{ priorityMic: string; autoStack: string } | null>(null);
   
   // Load clipboard hotkeys on mount
   useEffect(() => {
@@ -157,12 +161,17 @@ export default function SettingsPanel() {
       });
     }
     
-    // Load user tier from quota manager.
+    // Load user tier and quota usage from quota manager.
     if (window.quotaAPI?.getQuotas) {
       window.quotaAPI.getQuotas().then(quotas => {
         if (quotas) {
           setUserTier(quotas.tier);
         }
+      });
+    }
+    if (window.quotaAPI?.getFormattedUsage) {
+      window.quotaAPI.getFormattedUsage().then(formatted => {
+        if (formatted) setQuotaUsage(formatted);
       });
     }
     
@@ -174,8 +183,17 @@ export default function SettingsPanel() {
       });
     }
     
+    // Listen for quota changes to update usage in real-time.
+    let unsubscribeQuota: (() => void) | undefined;
+    if (window.quotaAPI?.onQuotaChanged) {
+      unsubscribeQuota = window.quotaAPI.onQuotaChanged((formatted) => {
+        setQuotaUsage(formatted);
+      });
+    }
+    
     return () => {
       unsubscribeTier?.();
+      unsubscribeQuota?.();
     };
   }, []);
   
@@ -334,6 +352,27 @@ export default function SettingsPanel() {
       console.error('Sign out error:', err);
     } finally {
       setAuthLoading(false);
+    }
+  };
+  
+  // Handle password change request - sends reset email.
+  const handleChangePassword = async () => {
+    const email = session?.user?.email;
+    if (!email || !window.authAPI?.resetPasswordForEmail) return;
+    
+    setPasswordResetStatus('sending');
+    try {
+      const result = await window.authAPI.resetPasswordForEmail(email);
+      if (result.error) {
+        console.error('Password reset error:', result.error);
+        setPasswordResetStatus('idle');
+      } else {
+        setPasswordResetStatus('sent');
+        // Keep message visible so user can resend if needed.
+      }
+    } catch (err) {
+      console.error('Password reset error:', err);
+      setPasswordResetStatus('idle');
     }
   };
   
@@ -944,24 +983,66 @@ export default function SettingsPanel() {
         const displayTier = session ? userTier : 'free';
         const tierDisplayName = displayTier === 'pro' ? 'Pro Plan' : 'Free Plan';
         
+        // Get display name from user metadata, fallback to email.
+        const userFullName = session?.user?.user_metadata?.full_name as string | undefined;
+        const userEmail = session?.user?.email;
+        
         return (
           <div style={styles.section}>
             <SectionHeader title="Account" />
             
             {session ? (
               <>
-                {/* User info row with sign out */}
+                {/* User info row with sign out - name + email stacked */}
                 <div style={styles.row}>
-                  <div style={styles.syncUserInfo}>
-                    <span style={styles.syncUserIcon}>✓</span>
-                    <span style={styles.rowValue}>{session.user.email === 'andrew.mfarah@gmail.com' ? 'A. Farah' : session.user.email}</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <span style={styles.rowValue}>
+                      {userFullName || userEmail}
+                    </span>
+                    {userFullName && userEmail && (
+                      <span style={{ fontSize: '12px', color: theme.textSecondary }}>
+                        {userEmail}
+                      </span>
+                    )}
                   </div>
                   <div style={styles.rowControls}>
-                    <button onClick={handleSignOut} disabled={authLoading} style={styles.btnGhost}>
+                    <button 
+                      onClick={handleChangePassword} 
+                      disabled={passwordResetStatus === 'sending'}
+                      style={styles.linkBtn}
+                      title="Send password reset email"
+                    >
+                      {passwordResetStatus === 'sending' ? '...' : 'Change Password'}
+                    </button>
+                    <span style={{ color: theme.border }}>·</span>
+                    <button 
+                      onClick={handleSignOut} 
+                      disabled={authLoading} 
+                      style={styles.linkBtn}
+                    >
                       {authLoading ? '...' : 'Sign Out'}
                     </button>
                   </div>
                 </div>
+                
+                {/* Password reset confirmation message */}
+                {passwordResetStatus === 'sent' && (
+                  <p style={{ ...styles.rowHint, color: theme.accent, margin: '4px 0 0 0' }}>
+                    Password reset email sent to {userEmail}. Check your inbox.{' '}
+                    <button 
+                      onClick={handleChangePassword}
+                      style={{ 
+                        ...styles.linkBtn, 
+                        color: theme.accent,
+                        display: 'inline',
+                        padding: 0,
+                      }}
+                    >
+                      Resend
+                    </button>
+                  </p>
+                )}
+                
                 {syncStatus && <p style={styles.syncStatusText}>{syncStatus}</p>}
                 
                 {/* Subscription row */}
@@ -981,9 +1062,11 @@ export default function SettingsPanel() {
                       </span>
                     </div>
                     <p style={styles.rowHint}>
-                      {displayTier === 'free'
-                        ? 'Upgrade for unlimited priority mic and auto-stacking.'
-                        : 'Unlimited priority mic and auto-stacking.'}
+                      {displayTier === 'pro'
+                        ? 'Unlimited priority mic and auto-stacking.'
+                        : quotaUsage
+                          ? `${quotaUsage.priorityMic} · ${quotaUsage.autoStack}`
+                          : 'Upgrade for unlimited priority mic and auto-stacking.'}
                     </p>
                   </div>
                   <div style={styles.rowControls}>
@@ -1020,11 +1103,33 @@ export default function SettingsPanel() {
                 </div>
               </>
             ) : (
-              // Not signed in - direct user to Team tab.
-              <div style={styles.row}>
-                <span style={{ ...styles.rowValue, color: theme.textSecondary }}>
-                  Sign in via the Team tab to access your account.
-                </span>
+              // Not signed in - show option to create account via Team tab.
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={styles.row}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={styles.rowLabel}>Current Plan</span>
+                      <span style={{
+                        padding: '2px 8px',
+                        borderRadius: '4px',
+                        fontSize: '10px',
+                        fontWeight: 600,
+                        backgroundColor: theme.bgSecondary,
+                        color: theme.textSecondary,
+                      }}>
+                        Free Plan
+                      </span>
+                    </div>
+                    <p style={styles.rowHint}>
+                      {quotaUsage
+                        ? `${quotaUsage.priorityMic} · ${quotaUsage.autoStack}`
+                        : 'Limited priority mic and auto-stacking.'}
+                    </p>
+                  </div>
+                </div>
+                <p style={{ ...styles.rowHint, margin: 0 }}>
+                  Create an account via the Team tab to sync across devices and unlock more features.
+                </p>
               </div>
             )}
           </div>
@@ -1155,6 +1260,16 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: 'auto',
     padding: '6px 8px',
   },
+  linkBtn: {
+    backgroundColor: 'transparent',
+    border: 'none',
+    color: '#6b7280',
+    fontSize: '13px',
+    padding: '4px 0',
+    cursor: 'pointer',
+    textDecoration: 'underline',
+    textUnderlineOffset: '2px',
+  },
   
   // Toggle switch
   toggle: {
@@ -1271,25 +1386,6 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     fontSize: '13px',
     fontWeight: 500,
-  },
-  
-  // Mobile sync (logged in state)
-  syncUserInfo: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-  },
-  syncUserIcon: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '18px',
-    height: '18px',
-    backgroundColor: '#14372A',
-    color: '#fff',
-    borderRadius: '50%',
-    fontSize: '10px',
-    fontWeight: 600,
   },
   
   // Login form (compact)
