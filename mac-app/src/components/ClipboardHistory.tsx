@@ -589,6 +589,16 @@ export default function ClipboardHistory() {
     });
   }, [isVisible]);
   
+  useEffect(() => {
+    const unsubscribe = window.clipboardAPI?.onTasksTabToggled?.((enabled) => {
+      setTasksTabEnabled(enabled);
+      if (!enabled && viewMode === 'todo') {
+        setViewMode('commands');
+      }
+    });
+    return () => unsubscribe?.();
+  }, [viewMode]);
+  
   // Fetch quota usage on mount and when visibility changes.
   useEffect(() => {
     if (!isVisible || !window.quotaAPI) return;
@@ -825,7 +835,6 @@ export default function ClipboardHistory() {
     { label: 'Words', value: allTimeStats.words, singular: 'word transcribed', plural: 'words transcribed' },
     { label: 'Stacks', value: allTimeStats.stacks, singular: 'stack', plural: 'stacks' },
     { label: 'Transcriptions', value: allTimeStats.transcriptions, singular: 'transcription', plural: 'transcriptions' },
-    { label: 'Improved', value: allTimeStats.improved, singular: 'prompt improved', plural: 'prompts improved' },
     { label: 'Screenshots', value: allTimeStats.screenshots, singular: 'screenshot', plural: 'screenshots' },
   ].filter(item => item.value > 0), [allTimeStats]);
 
@@ -1540,22 +1549,18 @@ export default function ClipboardHistory() {
             }));
             window.clipboardAPI?.setTargetApp(newApp);
           } else if (hasShift) {
-            // Shift+Tab - cycle backwards: clipboard ← commands ← todo ← dms ← team ← clipboard.
             setShowSettings(false);
             setViewMode(prev => {
               if (prev === 'clipboard') return 'commands';
-              if (prev === 'commands') return 'todo';
-              if (prev === 'todo') return 'dms';
-              if (prev === 'dms') return 'team';
+              if (prev === 'commands') return tasksTabEnabled ? 'todo' : 'team';
+              if (prev === 'todo') return 'team';
               return 'clipboard';
             });
           } else {
-            // Tab - cycle forwards: clipboard → team → dms → todo → commands → clipboard.
             setShowSettings(false);
             setViewMode(prev => {
               if (prev === 'clipboard') return 'team';
-              if (prev === 'team') return 'dms';
-              if (prev === 'dms') return 'todo';
+              if (prev === 'team') return tasksTabEnabled ? 'todo' : 'commands';
               if (prev === 'todo') return 'commands';
               return 'clipboard';
             });
@@ -2334,22 +2339,18 @@ export default function ClipboardHistory() {
           }));
           window.clipboardAPI?.setTargetApp(newApp);
         } else if (hasShift) {
-          // Shift+Tab - cycle backwards through available modes.
           setShowSettings(false);
           setViewMode(prev => {
             if (prev === 'clipboard') return 'commands';
-            if (prev === 'commands') return tasksTabEnabled ? 'todo' : 'dms';
-            if (prev === 'todo') return 'dms';
-            if (prev === 'dms') return 'team';
+            if (prev === 'commands') return tasksTabEnabled ? 'todo' : 'team';
+            if (prev === 'todo') return 'team';
             return 'clipboard';
           });
         } else {
-          // Tab - cycle forwards through available modes.
           setShowSettings(false);
           setViewMode(prev => {
             if (prev === 'clipboard') return 'team';
-            if (prev === 'team') return 'dms';
-            if (prev === 'dms') return tasksTabEnabled ? 'todo' : 'commands';
+            if (prev === 'team') return tasksTabEnabled ? 'todo' : 'commands';
             if (prev === 'todo') return 'commands';
             return 'clipboard';
           });
@@ -2961,43 +2962,6 @@ export default function ClipboardHistory() {
           </div>
         )}
         
-        {/* Hot Mic toggle - shows under the mic dropdown */}
-        {!showSettings && (
-          <button
-            onClick={async () => {
-              if (!window.socialAPI) return;
-              const newState = !hotMicEnabled;
-              const success = await window.socialAPI.setHotMic(newState);
-              if (success) {
-                setHotMicEnabled(newState);
-              }
-            }}
-            title={`Hot Mic: ${hotMicEnabled ? 'on' : 'off'} (H to toggle)`}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              marginLeft: '8px',
-              padding: '6px 8px',
-              fontSize: '10px',
-              color: hotMicEnabled ? '#fff' : theme.textSecondary,
-              backgroundColor: hotMicEnabled ? '#10b981' : (theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)'),
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              // @ts-ignore - prevent drag
-              WebkitAppRegion: 'no-drag',
-            }}
-          >
-            <span style={{ 
-              width: '6px', 
-              height: '6px', 
-              borderRadius: '50%',
-              backgroundColor: hotMicEnabled ? '#fff' : theme.textSecondary,
-            }} />
-            Hot Mic: {hotMicEnabled ? 'on' : 'off'}
-          </button>
-        )}
       </div>
       
       {/* View mode tabs - only show when not in settings */}
@@ -3011,7 +2975,7 @@ export default function ClipboardHistory() {
             padding: '0 16px',
             marginBottom: '8px',
           }}>
-          {(['clipboard', 'team', 'dms', ...(tasksTabEnabled ? ['todo'] : []), 'commands'] as ViewMode[]).map((mode) => (
+          {(['clipboard', 'team', ...(tasksTabEnabled ? ['todo'] : []), 'commands'] as ViewMode[]).map((mode) => (
             <button
               key={mode}
               onClick={() => {
@@ -3054,8 +3018,8 @@ export default function ClipboardHistory() {
                   position: 'absolute',
                   top: '2px',
                   right: '2px',
-                  width: '6px',
-                  height: '6px',
+                  width: '8px',
+                  height: '8px',
                   borderRadius: '50%',
                   backgroundColor: '#f59e0b',
                 }} />
