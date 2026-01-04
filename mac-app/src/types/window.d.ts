@@ -491,6 +491,7 @@ interface AuthAPI {
   resetPasswordForEmail?: (email: string) => Promise<{ error: string | null }>;
   updatePassword?: (newPassword: string) => Promise<{ error: string | null }>;
   setSessionFromUrl?: (accessToken: string, refreshToken: string) => Promise<{ error: string | null; session: any | null }>;
+  deleteAccount?: () => Promise<{ error: string | null }>;
 }
 
 /**
