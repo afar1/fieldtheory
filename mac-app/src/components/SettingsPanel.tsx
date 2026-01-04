@@ -59,6 +59,12 @@ export default function SettingsPanel() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [passwordResetStatus, setPasswordResetStatus] = useState<'idle' | 'sending' | 'sent'>('idle');
   
+  // Delete account state.
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteConfirmEmail, setDeleteConfirmEmail] = useState('');
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  
   // API key state - for Engineer feature (Anthropic API)
   const [hasApiKey, setHasApiKey] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState('');
@@ -373,6 +379,34 @@ export default function SettingsPanel() {
     } catch (err) {
       console.error('Password reset error:', err);
       setPasswordResetStatus('idle');
+    }
+  };
+  
+  // Handle account deletion.
+  const handleDeleteAccount = async () => {
+    if (!window.authAPI?.deleteAccount) {
+      setDeleteError('Account deletion not available');
+      return;
+    }
+    
+    setDeleteLoading(true);
+    setDeleteError(null);
+    
+    try {
+      const result = await window.authAPI.deleteAccount();
+      if (result.error) {
+        setDeleteError(result.error);
+        setDeleteLoading(false);
+      } else {
+        // Account deleted successfully. Clear local state.
+        setShowDeleteModal(false);
+        setSession(null);
+        // The user is now signed out and their account is gone.
+      }
+    } catch (err) {
+      console.error('Delete account error:', err);
+      setDeleteError('An unexpected error occurred');
+      setDeleteLoading(false);
     }
   };
   
@@ -1101,6 +1135,24 @@ export default function SettingsPanel() {
                     )}
                   </div>
                 </div>
+                
+                {/* Delete account link */}
+                <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: `1px solid ${theme.border}` }}>
+                  <button
+                    onClick={() => {
+                      setShowDeleteModal(true);
+                      setDeleteConfirmEmail('');
+                      setDeleteError(null);
+                    }}
+                    style={{
+                      ...styles.linkBtn,
+                      color: '#dc2626',
+                      fontSize: '12px',
+                    }}
+                  >
+                    Delete Account
+                  </button>
+                </div>
               </>
             ) : (
               // Not signed in - show option to create account via Team tab.
@@ -1135,6 +1187,106 @@ export default function SettingsPanel() {
           </div>
         );
       })()}
+      
+      {/* Delete Account Confirmation Modal */}
+      {showDeleteModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}
+          onClick={() => !deleteLoading && setShowDeleteModal(false)}
+        >
+          <div
+            style={{
+              backgroundColor: theme.bg,
+              borderRadius: '8px',
+              padding: '20px',
+              maxWidth: '400px',
+              width: '90%',
+              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: '0 0 12px 0', fontSize: '15px', fontWeight: 600, color: theme.text }}>
+              Delete Your Account?
+            </h3>
+            <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: theme.textSecondary, lineHeight: 1.5 }}>
+              This will permanently delete:
+            </p>
+            <ul style={{ margin: '0 0 16px 0', paddingLeft: '20px', fontSize: '13px', color: theme.textSecondary, lineHeight: 1.6 }}>
+              <li>Your account and profile</li>
+              <li>All synced todos, transcripts, and sketches</li>
+              <li>Any items you've shared with your team</li>
+              <li>Your subscription (if active)</li>
+            </ul>
+            <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: '#dc2626', fontWeight: 500 }}>
+              This cannot be undone.
+            </p>
+            
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontSize: '12px', color: theme.textSecondary, marginBottom: '6px' }}>
+                Type your email to confirm:
+              </label>
+              <input
+                type="email"
+                value={deleteConfirmEmail}
+                onChange={(e) => setDeleteConfirmEmail(e.target.value)}
+                placeholder={session?.user?.email || ''}
+                disabled={deleteLoading}
+                style={{
+                  width: '100%',
+                  padding: '8px 10px',
+                  fontSize: '13px',
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '4px',
+                  backgroundColor: theme.bgSecondary,
+                  color: theme.text,
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+            
+            {deleteError && (
+              <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: '#dc2626' }}>
+                {deleteError}
+              </p>
+            )}
+            
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowDeleteModal(false)}
+                disabled={deleteLoading}
+                style={{
+                  ...styles.btn,
+                  backgroundColor: 'transparent',
+                  border: `1px solid ${theme.border}`,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteAccount}
+                disabled={deleteLoading || deleteConfirmEmail.toLowerCase() !== session?.user?.email?.toLowerCase()}
+                style={{
+                  ...styles.btn,
+                  backgroundColor: '#dc2626',
+                  color: '#fff',
+                  border: 'none',
+                  opacity: deleteLoading || deleteConfirmEmail.toLowerCase() !== session?.user?.email?.toLowerCase() ? 0.5 : 1,
+                }}
+              >
+                {deleteLoading ? 'Deleting...' : 'Delete Account'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

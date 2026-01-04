@@ -1658,6 +1658,52 @@ function setupClipboardIPCHandlers(): void {
     return await mobileSync.signOut();
   });
 
+  // Delete account via Edge Function.
+  // This permanently deletes the user's account and all associated data.
+  ipcMain.handle('auth:deleteAccount', async () => {
+    if (!mobileSync) {
+      return { error: 'Mobile sync not initialized' };
+    }
+    
+    const session = mobileSync.getSession();
+    if (!session?.access_token) {
+      return { error: 'Not authenticated' };
+    }
+
+    const envVars = loadEnvVars();
+    if (!envVars.supabaseUrl) {
+      return { error: 'Supabase not configured' };
+    }
+
+    // Call the delete-account Edge Function.
+    const edgeFunctionUrl = `${envVars.supabaseUrl}/functions/v1/delete-account`;
+    
+    try {
+      const response = await fetch(edgeFunctionUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      const result = await response.json();
+      
+      if (!response.ok) {
+        console.error('[Main] Delete account failed:', result);
+        return { error: result.error || 'Failed to delete account' };
+      }
+
+      // Clear local session after successful deletion.
+      await mobileSync.signOut();
+      
+      return { error: null };
+    } catch (err) {
+      console.error('[Main] Delete account error:', err);
+      return { error: 'Failed to connect to server' };
+    }
+  });
+
   ipcMain.handle('auth:getSession', async () => {
     if (!mobileSync) {
       return null;
