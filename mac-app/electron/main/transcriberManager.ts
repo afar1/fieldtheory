@@ -415,21 +415,27 @@ export class TranscriberManager extends EventEmitter {
           
           // Auto-stack: if screenshots were taken during recording, group them with transcript.
           // Only auto-stack if we have more than one item (transcript + screenshots).
+          // Check quota BEFORE stacking - if exhausted, items stay separate.
           if (this.currentStack.length > 1) {
-            const stackId = crypto.randomUUID();
-            this.clipboardManager.updateStackId(this.currentStack, stackId);
-            console.log(`[TranscriberManager] Auto-stacked ${this.currentStack.length} items (stackId: ${stackId})`);
+            let canAutoStack = true;
             
-            // Track auto-stack quota usage and check if quota is now exhausted.
-            await this.trackAutoStackUsage();
-            
-            // After auto-stacking, check if quota is exhausted to show upgrade prompt.
             if (this.quotaManager) {
               const quotaCheck = this.quotaManager.checkQuota('autoStack');
               if (!quotaCheck.allowed) {
-                // Emit event to show upgrade prompt (stack was still saved, just prompt for future).
+                // Quota exhausted - don't auto-stack, emit upgrade prompt.
+                canAutoStack = false;
+                console.log('[TranscriberManager] Auto-stack quota exhausted, items saved separately');
                 this.emit('quotaExhausted', quotaCheck);
               }
+            }
+            
+            if (canAutoStack) {
+              const stackId = crypto.randomUUID();
+              this.clipboardManager.updateStackId(this.currentStack, stackId);
+              console.log(`[TranscriberManager] Auto-stacked ${this.currentStack.length} items (stackId: ${stackId})`);
+              
+              // Track auto-stack quota usage.
+              await this.trackAutoStackUsage();
             }
           }
           
@@ -867,20 +873,27 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
     
-    // Group screenshots under a single stack ID.
-    const stackId = crypto.randomUUID();
-    this.clipboardManager.updateStackId(this.currentStack, stackId);
-    console.log(`[TranscriberManager] Stacked ${this.currentStack.length} screenshots (no audio, stackId: ${stackId})`);
-    
-    // Track auto-stack quota if more than 1 screenshot (counts as one auto-stack session).
+    // Only stack if more than 1 screenshot and quota allows.
     if (this.currentStack.length > 1) {
-      await this.trackAutoStackUsage();
+      let canAutoStack = true;
       
       if (this.quotaManager) {
         const quotaCheck = this.quotaManager.checkQuota('autoStack');
         if (!quotaCheck.allowed) {
+          // Quota exhausted - don't stack, emit upgrade prompt.
+          canAutoStack = false;
+          console.log('[TranscriberManager] Auto-stack quota exhausted, screenshots saved separately');
           this.emit('quotaExhausted', quotaCheck);
         }
+      }
+      
+      if (canAutoStack) {
+        const stackId = crypto.randomUUID();
+        this.clipboardManager.updateStackId(this.currentStack, stackId);
+        console.log(`[TranscriberManager] Stacked ${this.currentStack.length} screenshots (no audio, stackId: ${stackId})`);
+        
+        // Track auto-stack quota usage.
+        await this.trackAutoStackUsage();
       }
     }
     

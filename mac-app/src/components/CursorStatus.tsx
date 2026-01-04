@@ -452,17 +452,17 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: 'border-box',
   },
   dot: {
-    width: '6px',
-    height: '6px',
-    minWidth: '6px',
-    minHeight: '6px',
-    maxWidth: '6px',
-    maxHeight: '6px',
+    width: '7px',
+    height: '7px',
+    minWidth: '7px',
+    minHeight: '7px',
+    maxWidth: '7px',
+    maxHeight: '7px',
     aspectRatio: '1 / 1', // Force perfect circle
     borderRadius: '50%',
     flexShrink: 0,
     flexGrow: 0,
-    flexBasis: '6px', // Prevent flexbox from altering size
+    flexBasis: '7px', // Prevent flexbox from altering size
     marginTop: '4px',
     marginLeft: '3px', // Moved 1px right to avoid overlap with screen recording measurement UI.
   },
