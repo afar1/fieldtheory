@@ -32,6 +32,11 @@ export class CursorStatusManager extends EventEmitter {
   private cursorIdleTime: number = 0;
   private isIdle: boolean = false;
   
+  // Hysteresis for edge flipping - prevents jittery bouncing when cursor is near edge.
+  private isFlippedX: boolean = false;
+  private isFlippedY: boolean = false;
+  private readonly FLIP_HYSTERESIS_PX = 50; // Extra margin before flipping back
+  
   // Done state timeout - for showing brief green dot after transcribing
   private doneTimeout: NodeJS.Timeout | null = null;
   private readonly DONE_DURATION_MS = 800;
@@ -370,6 +375,10 @@ export class CursorStatusManager extends EventEmitter {
     this.cursorIdleTime = 0;
     this.isIdle = false;
     
+    // Reset flip state so indicator starts in default position.
+    this.isFlippedX = false;
+    this.isFlippedY = false;
+    
     this.pollInterval = setInterval(() => {
       this.updateCursorPosition();
     }, this.POLL_INTERVAL_MS);
@@ -418,28 +427,57 @@ export class CursorStatusManager extends EventEmitter {
     
     this.lastCursorPos = cursorPos;
     
-    // Calculate new window position with screen edge clamping
+    // Calculate new window position with screen edge clamping and hysteresis.
     const display = screen.getDisplayNearestPoint(cursorPos);
     const bounds = display.bounds;
     
-    // Get current window width (may be wide for confirmation/paste-failed)
-    const [windowWidth] = this.window.getSize();
+    // Get current window dimensions.
+    const [windowWidth, windowHeight] = this.window.getSize();
     
-    let newX = cursorPos.x + this.CURSOR_OFFSET_X;
-    let newY = cursorPos.y + this.CURSOR_OFFSET_Y;
+    // Calculate default position (to the right and slightly above cursor).
+    const rightX = cursorPos.x + this.CURSOR_OFFSET_X;
+    const leftX = cursorPos.x - this.CURSOR_OFFSET_X - windowWidth;
+    const belowY = cursorPos.y + this.CURSOR_OFFSET_Y;
+    const aboveY = cursorPos.y - this.CURSOR_OFFSET_Y - windowHeight;
     
-    // Clamp to screen bounds
-    if (newX + windowWidth > bounds.x + bounds.width) {
-      // Flip to left side of cursor if too close to right edge
-      newX = cursorPos.x - this.CURSOR_OFFSET_X - windowWidth;
+    // Hysteresis for X: Only flip when necessary, and only flip back when cursor
+    // moves far enough from edge to avoid jittery bouncing.
+    const wouldOverflowRight = rightX + windowWidth > bounds.x + bounds.width;
+    const safeFromRightEdge = rightX + windowWidth + this.FLIP_HYSTERESIS_PX < bounds.x + bounds.width;
+    
+    if (this.isFlippedX) {
+      // Currently on left side of cursor - flip back only if safe
+      if (safeFromRightEdge) {
+        this.isFlippedX = false;
+      }
+    } else {
+      // Currently on right side of cursor - flip if would overflow
+      if (wouldOverflowRight) {
+        this.isFlippedX = true;
+      }
     }
-    const [, windowHeight] = this.window.getSize();
-    if (newY + windowHeight > bounds.y + bounds.height) {
-      // Flip to above cursor if too close to bottom edge
-      newY = cursorPos.y - this.CURSOR_OFFSET_Y - windowHeight;
+    
+    // Hysteresis for Y: Same logic for vertical flipping.
+    const wouldOverflowBottom = belowY + windowHeight > bounds.y + bounds.height;
+    const safeFromBottomEdge = belowY + windowHeight + this.FLIP_HYSTERESIS_PX < bounds.y + bounds.height;
+    
+    if (this.isFlippedY) {
+      // Currently above cursor - flip back only if safe
+      if (safeFromBottomEdge) {
+        this.isFlippedY = false;
+      }
+    } else {
+      // Currently below cursor - flip if would overflow
+      if (wouldOverflowBottom) {
+        this.isFlippedY = true;
+      }
     }
     
-    // Ensure we don't go off the left or top edges
+    // Apply the flip state.
+    let newX = this.isFlippedX ? leftX : rightX;
+    let newY = this.isFlippedY ? aboveY : belowY;
+    
+    // Ensure we don't go off the left or top edges.
     newX = Math.max(bounds.x, newX);
     newY = Math.max(bounds.y, newY);
     

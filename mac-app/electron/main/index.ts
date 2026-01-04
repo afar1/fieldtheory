@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import os from 'os';
@@ -1665,6 +1665,11 @@ function setupClipboardIPCHandlers(): void {
     return mobileSync.getSession();
   });
 
+  // Open external URL in default browser (for Stripe checkout, etc).
+  ipcMain.handle('shell:openExternal', async (_event, url: string) => {
+    await shell.openExternal(url);
+  });
+
   // =========================================================================
   // Todo IPC Handlers - Bidirectional sync with Supabase
   // =========================================================================
@@ -2810,6 +2815,8 @@ async function initTranscriberSystem(): Promise<void> {
     sharedClipboardSync.setSession(existingSession);
     socialSync.setSupabaseClient(existingSupabaseClient);
     socialSync.setSession(existingSession);
+    // Note: Tier fetch happens when ClipboardHistory forwards the session via setSyncSession,
+    // which triggers mobileSync.setSession -> fetchAndEmitCurrentTier.
   }
   
   // Set the Supabase client from mobileSync once a session is established.
@@ -2875,6 +2882,24 @@ async function initTranscriberSystem(): Promise<void> {
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send(TodoIPCChannels.TODO_DELETED, id);
+      }
+    });
+  });
+
+  // Forward tier changes to quota manager and all renderer windows.
+  // This fires when Stripe webhook updates the user's tier in Supabase.
+  mobileSync.on('tierChanged', async (tier: 'free' | 'pro') => {
+    console.log('[Main] Realtime: tier changed to:', tier);
+    
+    // Update the cached tier in quota manager.
+    if (quotaManager) {
+      await quotaManager.setCachedTier(tier);
+    }
+    
+    // Broadcast to all windows so UI updates immediately.
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send('tier:changed', tier);
       }
     });
   });
