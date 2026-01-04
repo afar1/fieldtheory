@@ -165,6 +165,18 @@ export default function SettingsPanel() {
         }
       });
     }
+    
+    // Listen for tier changes (e.g., after Stripe checkout).
+    let unsubscribeTier: (() => void) | undefined;
+    if (window.quotaAPI?.onTierChanged) {
+      unsubscribeTier = window.quotaAPI.onTierChanged((tier) => {
+        setUserTier(tier);
+      });
+    }
+    
+    return () => {
+      unsubscribeTier?.();
+    };
   }, []);
   
   // Handler for saving API key
@@ -1062,6 +1074,9 @@ export default function SettingsPanel() {
         // When no session exists, always display 'free' tier.
         const displayTier = session ? userTier : 'free';
         
+        // Display names: 'free' -> 'Free Plan', 'pro' -> 'Pro Plan'
+        const tierDisplayName = displayTier === 'pro' ? 'Pro Plan' : 'Free Plan';
+        
         return (
           <div style={styles.section}>
             <SectionHeader title="Subscription" />
@@ -1075,16 +1090,15 @@ export default function SettingsPanel() {
                     borderRadius: '4px',
                     fontSize: '10px',
                     fontWeight: 600,
-                    textTransform: 'uppercase' as const,
                     backgroundColor: displayTier === 'pro' ? theme.accent : theme.bgSecondary,
                     color: displayTier === 'pro' ? '#fff' : theme.textSecondary,
                   }}>
-                    {displayTier}
+                    {tierDisplayName}
                   </span>
                 </div>
                 <p style={styles.rowHint}>
-                  {displayTier === 'free' 
-                    ? 'Upgrade to Pro for unlimited priority mic and auto-stacking ($15/month).'
+                  {displayTier === 'free'
+                    ? 'Upgrade for unlimited priority mic and auto-stacking.'
                     : 'Unlimited priority mic and auto-stacking, plus all-time stats.'}
                 </p>
               </div>
@@ -1092,9 +1106,19 @@ export default function SettingsPanel() {
                 {displayTier === 'free' ? (
                   <button 
                     onClick={() => {
-                      // Open Stripe checkout in default browser (avoids Apple 30% tax).
-                      // TODO: Replace with actual Stripe checkout URL.
-                      window.open('https://buy.stripe.com/YOUR_CHECKOUT_LINK', '_blank');
+                      // Require sign-in before upgrading.
+                      if (!session) {
+                        // Could show a modal here, but for now just alert.
+                        alert('Please sign in first to upgrade. Go to the Team tab to sign in.');
+                        return;
+                      }
+                      // Open Stripe checkout with user ID for webhook linking.
+                      // Opens in browser to avoid Apple's 30% in-app purchase tax.
+                      const userId = session.user.id;
+                      const paymentLink = window.stripeConfig?.paymentLink || '';
+                      window.shellAPI?.openExternal(
+                        `${paymentLink}?client_reference_id=${userId}`
+                      );
                     }}
                     style={{
                       ...styles.btn,
@@ -1103,14 +1127,14 @@ export default function SettingsPanel() {
                       border: 'none',
                     }}
                   >
-                    Upgrade to Pro
+                    Upgrade
                   </button>
                 ) : (
-                  <button 
+                  <button
                     onClick={() => {
                       // Open Stripe Customer Portal for subscription management.
-                      // TODO: Replace with actual Stripe portal URL.
-                      window.open('https://billing.stripe.com/p/login/YOUR_PORTAL_LINK', '_blank');
+                      const portalLink = window.stripeConfig?.portalLink || '';
+                      window.shellAPI?.openExternal(portalLink);
                     }}
                     style={styles.btn}
                   >

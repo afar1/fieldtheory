@@ -212,12 +212,13 @@ export class QuotaManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Get both quotas at once.
+   * Get both quotas at once, plus the current tier.
    */
-  getQuotas(): { priorityMic: QuotaStatus; autoStack: QuotaStatus } {
+  getQuotas(): { priorityMic: QuotaStatus; autoStack: QuotaStatus; tier: UserTier } {
     return {
       priorityMic: this.getPriorityMicStatus(),
       autoStack: this.getAutoStackStatus(),
+      tier: this.quotas.cachedTier,
     };
   }
 

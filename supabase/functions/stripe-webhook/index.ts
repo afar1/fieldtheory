@@ -90,11 +90,12 @@ async function handleCheckoutCompleted(
   supabase: ReturnType<typeof createClient>,
   session: Stripe.Checkout.Session
 ) {
-  // Get user ID from checkout session metadata.
-  // The user_id should be set when creating the checkout session.
-  const userId = session.metadata?.user_id;
+  // Get user ID from client_reference_id.
+  // This is passed via query param when opening the payment link:
+  // https://buy.stripe.com/xxx?client_reference_id=USER_ID
+  const userId = session.client_reference_id;
   if (!userId) {
-    console.error('No user_id in checkout session metadata');
+    console.error('No client_reference_id in checkout session');
     return;
   }
 

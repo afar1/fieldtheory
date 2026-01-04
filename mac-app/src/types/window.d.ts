@@ -739,12 +739,28 @@ interface QuotaExhaustedData {
  * Free users have monthly limits on priority mic and auto-stacking.
  */
 interface QuotaAPI {
-  getQuotas: () => Promise<{ priorityMic: QuotaStatus; autoStack: QuotaStatus } | null>;
+  getQuotas: () => Promise<{ priorityMic: QuotaStatus; autoStack: QuotaStatus; tier: 'free' | 'pro' } | null>;
   checkQuota: (feature: 'priorityMic' | 'autoStack') => Promise<QuotaCheckResult>;
   getFormattedUsage: () => Promise<{ priorityMic: string; autoStack: string }>;
   getResetDate: () => Promise<Date>;
+  onTierChanged: (callback: (tier: 'free' | 'pro') => void) => () => void;
   onQuotaExhausted: (callback: (data: QuotaExhaustedData) => void) => () => void;
   onQuotaChanged: (callback: (data: { priorityMic: string; autoStack: string }) => void) => () => void;
+}
+
+/**
+ * Shell API for opening external URLs.
+ */
+interface ShellAPI {
+  openExternal: (url: string) => Promise<void>;
+}
+
+/**
+ * Stripe configuration - URLs switch between test and live based on environment.
+ */
+interface StripeConfig {
+  paymentLink: string;
+  portalLink: string;
 }
 
 /**
@@ -766,6 +782,8 @@ declare global {
     socialAPI?: SocialAPI;
     cursorStatusAPI?: CursorStatusAPI;
     quotaAPI?: QuotaAPI;
+    shellAPI?: ShellAPI;
+    stripeConfig?: StripeConfig;
     platform?: PlatformInfo;
   }
 }

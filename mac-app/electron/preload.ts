@@ -1801,6 +1801,17 @@ const quotaAPI = {
   // Get the quota reset date (first of next month).
   getResetDate: () => ipcRenderer.invoke('quota:getResetDate'),
   
+  // Listen for tier changes (e.g., after Stripe checkout upgrades user to pro).
+  onTierChanged: (callback: (tier: 'free' | 'pro') => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, tier: 'free' | 'pro') => {
+      callback(tier);
+    };
+    ipcRenderer.on('tier:changed', handler);
+    return () => {
+      ipcRenderer.removeListener('tier:changed', handler);
+    };
+  },
+
   // Listen for quota exhausted events.
   onQuotaExhausted: (callback: (data: { feature: 'priorityMic' | 'autoStack'; used: number; limit: number; featureName: string; limitDisplay: string }) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, data: { feature: 'priorityMic' | 'autoStack'; used: number; limit: number; featureName: string; limitDisplay: string }) => {
@@ -1826,6 +1837,18 @@ const quotaAPI = {
 
 type QuotaAPI = typeof quotaAPI;
 
+// =============================================================================
+// Shell API - Open external URLs in default browser
+// =============================================================================
+
+const shellAPI = {
+  openExternal: (url: string): Promise<void> =>
+    ipcRenderer.invoke('shell:openExternal', url),
+};
+
+type ShellAPI = typeof shellAPI;
+
+contextBridge.exposeInMainWorld('shellAPI', shellAPI);
 contextBridge.exposeInMainWorld('quotaAPI', quotaAPI);
 contextBridge.exposeInMainWorld('audioAPI', audioAPI);
 contextBridge.exposeInMainWorld('transcribeAPI', transcribeAPI);
@@ -1844,6 +1867,21 @@ contextBridge.exposeInMainWorld('platform', {
   isLinux: process.platform === 'linux',
 });
 
+// Stripe configuration - uses test links in development, live links in production.
+// Check for ELECTRON_START_URL which is set in dev mode.
+const isDev = !!process.env.ELECTRON_START_URL;
+
+contextBridge.exposeInMainWorld('stripeConfig', {
+  // Payment link for upgrading to Dev+
+  paymentLink: isDev
+    ? 'https://buy.stripe.com/test_aFadR96pW4vJdA9gPvfYY00'
+    : 'https://buy.stripe.com/14A00j3iCbyl6aZ3fU3Ru00',
+  // Customer portal for managing subscription
+  portalLink: isDev
+    ? 'https://billing.stripe.com/p/login/test_00g5lD0hG6SYfKMfYY'
+    : 'https://billing.stripe.com/p/login/14A00j3iCbyl6aZ3fU3Ru00',
+});
+
 declare global {
   interface Window {
     audioAPI: AudioAPI;
@@ -1858,6 +1896,11 @@ declare global {
     sharedClipboardAPI: SharedClipboardAPI;
     socialAPI: SocialAPI;
     quotaAPI: QuotaAPI;
+    shellAPI: ShellAPI;
+    stripeConfig: {
+      paymentLink: string;
+      portalLink: string;
+    };
     platform: {
       isMacOS: boolean;
       isWindows: boolean;

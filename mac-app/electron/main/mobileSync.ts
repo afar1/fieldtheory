@@ -130,6 +130,9 @@ export class MobileSync extends EventEmitter {
   private todoRealtimeChannel: RealtimeChannel | null = null;
   private todoRealtimeConnected: boolean = false;
 
+  // Realtime subscription for profile tier changes (subscription status).
+  private profileRealtimeChannel: RealtimeChannel | null = null;
+
   constructor(clipboardManager: ClipboardManager, preferences: PreferencesManager) {
     super();
     this.clipboardManager = clipboardManager;
@@ -208,6 +211,41 @@ export class MobileSync extends EventEmitter {
     
     // Setup realtime subscription for instant todo updates.
     this.setupTodoRealtimeSubscription();
+
+    // Setup realtime subscription for profile tier changes (subscription status).
+    this.setupProfileRealtimeSubscription();
+    
+    // Fetch current tier from database to sync with any changes made while app was closed.
+    this.fetchAndEmitCurrentTier();
+  }
+  
+  /**
+   * Fetch the user's current tier from the database and emit tierChanged.
+   * This syncs the local cache with the server after the app restarts.
+   */
+  private async fetchAndEmitCurrentTier(): Promise<void> {
+    const userId = this.session?.user?.id;
+    if (!this.supabase || !userId) return;
+    
+    try {
+      const { data, error } = await this.supabase
+        .from('profiles')
+        .select('tier')
+        .eq('id', userId)
+        .single();
+      
+      if (error) {
+        console.error('[MobileSync] Failed to fetch tier:', error);
+        return;
+      }
+      
+      if (data?.tier) {
+        console.log('[MobileSync] Fetched tier from server:', data.tier);
+        this.emit('tierChanged', data.tier);
+      }
+    } catch (err) {
+      console.error('[MobileSync] Error fetching tier:', err);
+    }
   }
 
   /**
@@ -215,6 +253,7 @@ export class MobileSync extends EventEmitter {
    */
   clearSession(): void {
     this.teardownTodoRealtimeSubscription();
+    this.teardownProfileRealtimeSubscription();
     this.session = null;
     this.stopPeriodicSync();
     console.log('[MobileSync] Session cleared');
@@ -779,6 +818,64 @@ export class MobileSync extends EventEmitter {
       this.todoRealtimeChannel = null;
     }
     this.todoRealtimeConnected = false;
+  }
+
+  // ===========================================================================
+  // Profile Tier Realtime Subscription
+  // Listens for changes to the user's tier (e.g., after Stripe checkout).
+  // ===========================================================================
+
+  /**
+   * Subscribe to realtime changes on the user's profile row.
+   * Emits 'tierChanged' when the tier is updated (e.g., free -> pro).
+   */
+  private setupProfileRealtimeSubscription(): void {
+    const userId = this.session?.user?.id;
+    if (!this.supabase || !userId) return;
+
+    // Teardown existing subscription first.
+    this.teardownProfileRealtimeSubscription();
+
+    console.log('[MobileSync] Setting up realtime subscription for profile tier');
+
+    this.profileRealtimeChannel = this.supabase
+      .channel('profile-tier')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'profiles',
+          filter: `id=eq.${userId}`,
+        },
+        (payload) => {
+          const newTier = payload.new?.tier;
+          const oldTier = payload.old?.tier;
+          if (newTier && newTier !== oldTier) {
+            console.log(`[MobileSync] Tier changed via realtime: ${oldTier} -> ${newTier}`);
+            this.emit('tierChanged', newTier);
+          }
+        }
+      )
+      .subscribe((status, err) => {
+        if (err) {
+          console.error('[MobileSync] Profile realtime subscription error:', err);
+        }
+        if (status === 'SUBSCRIBED') {
+          console.log('[MobileSync] Profile realtime subscription active');
+        }
+      });
+  }
+
+  /**
+   * Unsubscribe from profile realtime updates.
+   */
+  private teardownProfileRealtimeSubscription(): void {
+    if (this.profileRealtimeChannel) {
+      console.log('[MobileSync] Tearing down profile realtime subscription');
+      this.supabase?.removeChannel(this.profileRealtimeChannel);
+      this.profileRealtimeChannel = null;
+    }
   }
 
   /**
