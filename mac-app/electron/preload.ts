@@ -1547,6 +1547,9 @@ const authAPI = {
   
   // Get current session.
   getSession: () => ipcRenderer.invoke('auth:getSession'),
+  
+  // Delete account permanently.
+  deleteAccount: () => ipcRenderer.invoke('auth:deleteAccount'),
 };
 
 type AuthAPI = typeof authAPI;
