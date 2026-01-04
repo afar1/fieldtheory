@@ -595,11 +595,11 @@ export default function ClipboardHistory() {
     
     const fetchQuotas = async () => {
       try {
-        const formatted = await window.quotaAPI.getFormattedUsage();
-        setQuotaUsage(formatted);
+        const formatted = await window.quotaAPI?.getFormattedUsage();
+        if (formatted) setQuotaUsage(formatted);
         
         // Also get the cached tier for determining what to show.
-        const quotas = await window.quotaAPI.getQuotas();
+        const quotas = await window.quotaAPI?.getQuotas();
         if (quotas) {
           // Pro users have unlimited (Infinity) limits.
           const isPro = quotas.priorityMic.limit === Infinity;
@@ -611,6 +611,15 @@ export default function ClipboardHistory() {
     };
     
     fetchQuotas();
+    
+    // Re-fetch quotas when tier changes (e.g., after Stripe subscription).
+    const unsubscribeTier = window.quotaAPI?.onTierChanged?.(() => {
+      fetchQuotas();
+    });
+    
+    return () => {
+      unsubscribeTier?.();
+    };
   }, [isVisible]);
   
   // Quota exhausted modal state.
@@ -1082,11 +1091,21 @@ export default function ClipboardHistory() {
 
     supabase.auth.getSession().then(({ data: { session } }) => {
       setAuthSession(session);
+      // Forward session to main process for tier sync on startup.
+      if (session) {
+        window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
+      }
     });
 
     // Listen for auth state changes.
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setAuthSession(session);
+      // Forward session changes to main process.
+      if (session) {
+        window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
+      } else {
+        window.clipboardAPI?.clearSyncSession?.();
+      }
     });
 
     return () => subscription.unsubscribe();
@@ -5348,7 +5367,7 @@ export default function ClipboardHistory() {
               {cachedTier === 'pro' ? (
                 // Pro: show analytics
                 <>
-                  <span style={{ fontWeight: 500 }}>Usage:</span>
+                  <span style={{ fontWeight: 500 }}>Pro Plan:</span>
                   {statItems.length > 0 ? (
                     <>
                       <span
@@ -5410,15 +5429,27 @@ export default function ClipboardHistory() {
                       </span>
                     )}
                   </span>
-                  <span style={{ fontWeight: 500 }}>Usage:</span>
+                  <span style={{ fontWeight: 500 }}>Free Plan:</span>
                   <span>{quotaUsage.priorityMic}</span>
                   <span style={{ opacity: 0.4 }}>·</span>
                   <span>{quotaUsage.autoStack}</span>
                   {/* Upgrade button - shimmer fade in on hover */}
                   <span
-                    onClick={() => window.open('https://buy.stripe.com/YOUR_CHECKOUT_LINK', '_blank')}
-                    style={{ 
-                      color: theme.accent, 
+                    onClick={() => {
+                      // Require sign-in before upgrading.
+                      if (!authSession?.user?.id) {
+                        alert('Please sign in first to upgrade. Go to the Team tab to sign in.');
+                        return;
+                      }
+                      // Open Stripe checkout with user ID for webhook linking.
+                      const userId = authSession.user.id;
+                      const paymentLink = window.stripeConfig?.paymentLink || '';
+                      window.shellAPI?.openExternal(
+                        `${paymentLink}?client_reference_id=${userId}`
+                      );
+                    }}
+                    style={{
+                      color: theme.accent,
                       cursor: 'pointer',
                       textDecoration: 'underline',
                       opacity: usageHovered ? 1 : 0,
@@ -5540,8 +5571,18 @@ export default function ClipboardHistory() {
               </button>
               <button
                 onClick={() => {
-                  // Open Stripe checkout in browser.
-                  window.open('https://buy.stripe.com/YOUR_CHECKOUT_LINK', '_blank');
+                  // Require sign-in before upgrading.
+                  if (!authSession?.user?.id) {
+                    alert('Please sign in first to upgrade. Go to the Team tab to sign in.');
+                    setQuotaExhausted(null);
+                    return;
+                  }
+                  // Open Stripe checkout with user ID for webhook linking.
+                  const userId = authSession.user.id;
+                  const paymentLink = window.stripeConfig?.paymentLink || '';
+                  window.shellAPI?.openExternal(
+                    `${paymentLink}?client_reference_id=${userId}`
+                  );
                   setQuotaExhausted(null);
                 }}
                 style={{
@@ -5555,7 +5596,7 @@ export default function ClipboardHistory() {
                   fontWeight: '500',
                 }}
               >
-                Subscribe
+                Upgrade
               </button>
             </div>
           </div>
