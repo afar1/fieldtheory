@@ -5393,11 +5393,11 @@ export default function ClipboardHistory() {
                       </span>
                     )}
                   </span>
-                  <span style={{ fontWeight: 500 }}>Free Plan:</span>
                   <span>{quotaUsage.priorityMic}</span>
                   <span style={{ opacity: 0.4 }}>·</span>
                   <span>{quotaUsage.autoStack}</span>
-                  {/* Upgrade button - shimmer fade in on hover */}
+                  <span style={{ opacity: 0.4 }}>·</span>
+                  {/* Upgrade link */}
                   <span
                     onClick={() => {
                       // Require sign-in before upgrading.
@@ -5416,10 +5416,6 @@ export default function ClipboardHistory() {
                       color: theme.accent,
                       cursor: 'pointer',
                       textDecoration: 'underline',
-                      opacity: usageHovered ? 1 : 0,
-                      transform: usageHovered ? 'translateX(0)' : 'translateX(-8px)',
-                      transition: 'opacity 0.3s ease-out, transform 0.3s ease-out',
-                      pointerEvents: usageHovered ? 'auto' : 'none',
                     }}
                   >
                     Upgrade

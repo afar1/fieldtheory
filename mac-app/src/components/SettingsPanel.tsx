@@ -1214,7 +1214,7 @@ export default function SettingsPanel() {
             onClick={(e) => e.stopPropagation()}
           >
             <h3 style={{ margin: '0 0 12px 0', fontSize: '15px', fontWeight: 600, color: theme.text }}>
-              Delete Your Account?
+              {userTier === 'pro' ? 'Delete Account and Cancel Subscription?' : 'Delete Your Account?'}
             </h3>
             <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: theme.textSecondary, lineHeight: 1.5 }}>
               This will permanently delete:
@@ -1223,7 +1223,7 @@ export default function SettingsPanel() {
               <li>Your account and profile</li>
               <li>All synced todos, transcripts, and sketches</li>
               <li>Any items you've shared with your team</li>
-              <li>Your subscription (if active)</li>
+              {userTier === 'pro' && <li>Your Pro subscription will be cancelled</li>}
             </ul>
             <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: '#dc2626', fontWeight: 500 }}>
               This cannot be undone.
@@ -1281,7 +1281,7 @@ export default function SettingsPanel() {
                   opacity: deleteLoading || deleteConfirmEmail.toLowerCase() !== session?.user?.email?.toLowerCase() ? 0.5 : 1,
                 }}
               >
-                {deleteLoading ? 'Deleting...' : 'Delete Account'}
+                {deleteLoading ? 'Deleting...' : userTier === 'pro' ? 'Delete and Cancel' : 'Delete Account'}
               </button>
             </div>
           </div>
