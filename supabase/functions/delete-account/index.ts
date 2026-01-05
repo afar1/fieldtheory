@@ -75,18 +75,12 @@ serve(async (req: Request) => {
   const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
   try {
-    // =========================================================================
-    // Step 1: Get user profile to check for Stripe subscription.
-    // =========================================================================
     const { data: profile } = await supabaseAdmin
       .from('profiles')
       .select('stripe_subscription_id, stripe_customer_id')
       .eq('id', userId)
       .single();
 
-    // =========================================================================
-    // Step 2: Cancel Stripe subscription if exists.
-    // =========================================================================
     if (profile?.stripe_subscription_id) {
       try {
         await stripe.subscriptions.cancel(profile.stripe_subscription_id);
@@ -97,10 +91,7 @@ serve(async (req: Request) => {
       }
     }
 
-    // =========================================================================
-    // Step 3: Delete storage files.
-    // Files are stored in folders named by user_id.
-    // =========================================================================
+    // Delete storage files.
     const storageBuckets = ['team-clipboard-images', 'sketch-images'];
     
     for (const bucket of storageBuckets) {
@@ -122,10 +113,7 @@ serve(async (req: Request) => {
       }
     }
 
-    // =========================================================================
-    // Step 4: Delete the auth user.
-    // This cascades to all tables with ON DELETE CASCADE.
-    // =========================================================================
+    // Delete auth user (cascades to all tables).
     const { error: deleteError } = await supabaseAdmin.auth.admin.deleteUser(userId);
 
     if (deleteError) {

@@ -1815,6 +1815,9 @@ const quotaAPI = {
   // Get the quota reset date (first of next month).
   getResetDate: () => ipcRenderer.invoke('quota:getResetDate'),
   
+  // Manually refresh tier from server (debugging and edge cases).
+  refreshTier: () => ipcRenderer.invoke('quota:refreshTier') as Promise<{ tier: 'free' | 'pro'; error: string | null }>,
+  
   // Listen for tier changes (e.g., after Stripe checkout upgrades user to pro).
   onTierChanged: (callback: (tier: 'free' | 'pro') => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, tier: 'free' | 'pro') => {

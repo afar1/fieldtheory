@@ -260,6 +260,13 @@ export class MobileSync extends EventEmitter {
   }
 
   /**
+   * Get the Supabase client for direct queries (e.g., refreshing tier).
+   */
+  getSupabaseClient(): SupabaseClient | null {
+    return this.supabase;
+  }
+
+  /**
    * Enable or disable sync.
    */
   setSyncEnabled(enabled: boolean): void {

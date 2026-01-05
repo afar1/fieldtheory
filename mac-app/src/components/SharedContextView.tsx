@@ -1615,24 +1615,9 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
 
           {!successMessage && (
             <>
-              <h3 style={{ margin: '0 0 8px 0', fontSize: '16px', color: theme.text }}>
+              <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', color: theme.text }}>
                 Sign in or create account
               </h3>
-              <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: theme.textSecondary }}>
-                Free accounts include:
-              </p>
-              <ul style={{
-                margin: '0 0 16px 0',
-                paddingLeft: '20px',
-                fontSize: '12px',
-                color: theme.textSecondary,
-                lineHeight: '1.6',
-              }}>
-                <li>Shared clipboard with your team</li>
-                <li>Sync across Mac and iPhone</li>
-                <li>500 minutes priority mic per month</li>
-                <li>50 auto-stacks per month</li>
-              </ul>
 
               {!otpSent ? (
                 <form onSubmit={handleRequestOtp}>
@@ -1676,6 +1661,34 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
                   <p style={{ margin: '12px 0 0 0', fontSize: '11px', color: theme.textSecondary, textAlign: 'center' }}>
                     We'll email you a sign-in code. New users will have an account created automatically.
                   </p>
+
+                  {/* Separator and feature list */}
+                  <div style={{
+                    borderTop: `1px solid ${theme.border}`,
+                    margin: '20px 0 16px 0',
+                    width: '50%',
+                    marginLeft: 'auto',
+                    marginRight: 'auto',
+                  }} />
+                  <p style={{ margin: '0 0 8px 0', fontSize: '12px', color: theme.textSecondary, fontWeight: 600 }}>
+                    <b>Free accounts include (per mo):</b>
+                  </p>
+                  <ul style={{
+                    margin: '0',
+                    paddingLeft: '20px',
+                    fontSize: '12px',
+                    color: theme.textSecondary,
+                    lineHeight: '1.6',
+                  }}>
+                    <li>Shared Fields (up to 3 people)</li>
+                    <li>500 minutes priority mic</li>
+                    <li>50 auto-stacks</li>
+                    <li>20 image drawings</li>
+                    <li>Unlimited transcripts and screenshots</li>
+                    <li>Unlimited fields and manual stacking</li>
+                    <li>Unlimited manual drawings</li> 
+                    <li>Popular commands</li>
+                  </ul>
                 </form>
               ) : (
                 <form onSubmit={handleVerifyOtp}>
@@ -2279,7 +2292,7 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
                                   height: imageItem.imageHeight || 0,
                                 });
                               } else if (textItem && textItem.content) {
-                                setPreview({ type: 'text', data: textItem.content });
+                                setPreview({ type: 'text', content: textItem.content });
                               }
                             }}
                             style={{ padding: '4px 6px', fontSize: '10px', fontWeight: 500, backgroundColor: 'transparent', color: theme.textSecondary, border: 'none', borderRadius: '4px', cursor: 'pointer' }}
