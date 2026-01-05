@@ -2760,7 +2760,7 @@ export default function ClipboardHistory() {
           }}
         />
         
-        {/* Sign in button when not authenticated - highlighted when on Shared Fields */}
+        {/* Sign in button when not authenticated */}
         {!showSettings && !authSession?.user?.email && (
           <button
             onClick={() => {
@@ -2769,8 +2769,8 @@ export default function ClipboardHistory() {
             }}
             style={{
               fontSize: '10px',
-              color: viewMode === 'team' ? theme.accent : theme.textSecondary,
-              backgroundColor: 'transparent',
+              color: viewMode === 'team' ? '#fff' : theme.textSecondary,
+              backgroundColor: viewMode === 'team' ? theme.accent : 'transparent',
               border: `1px solid ${viewMode === 'team' ? theme.accent : theme.border}`,
               borderRadius: '4px',
               padding: '2px 8px',
@@ -2991,8 +2991,9 @@ export default function ClipboardHistory() {
                 padding: '6px 8px',
                 fontSize: '10px',
                 fontWeight: 400,
-                backgroundColor: viewMode === mode ? theme.accent : 'transparent',
-                color: viewMode === mode ? '#fff' : theme.textSecondary,
+                // Don't highlight Shared Fields when showing sign-in (not authenticated).
+                backgroundColor: viewMode === mode && !(mode === 'team' && !authSession?.user?.email) ? theme.accent : 'transparent',
+                color: viewMode === mode && !(mode === 'team' && !authSession?.user?.email) ? '#fff' : theme.textSecondary,
                 border: 'none',
                 borderRadius: '4px',
                 cursor: 'pointer',
@@ -3332,7 +3333,12 @@ export default function ClipboardHistory() {
 
       {/* Conditionally show Settings, Todo View, DMs View, or Clipboard History */}
       {showSettings ? (
-        <SettingsPanel />
+        <SettingsPanel 
+          onNavigateToSignIn={() => {
+            setShowSettings(false);
+            setViewMode('team');
+          }}
+        />
       ) : viewMode === 'todo' ? (
         <TodoView onSwitchToClipboard={() => setViewMode('clipboard')} />
       ) : viewMode === 'team' ? (
@@ -5115,24 +5121,41 @@ export default function ClipboardHistory() {
           })
         )}
         
-        {/* Load more */}
+        {/* Load more - gated for free users */}
         {hasMore && listRows.length > 0 && (
-          <button
-            onClick={handleLoadMore}
-            disabled={loading}
-            style={{
-              width: '100%',
-              padding: '12px',
-              border: 'none',
-              borderTop: `1px solid ${theme.border}`,
-              backgroundColor: theme.bgSecondary,
-              color: theme.text,
-              cursor: loading ? 'wait' : 'pointer',
-              fontSize: '12px',
-            }}
-          >
-            {loading ? 'Loading...' : 'Load More'}
-          </button>
+          cachedTier === 'pro' ? (
+            <button
+              onClick={handleLoadMore}
+              disabled={loading}
+              style={{
+                width: '100%',
+                padding: '12px',
+                border: 'none',
+                borderTop: `1px solid ${theme.border}`,
+                backgroundColor: theme.bgSecondary,
+                color: theme.text,
+                cursor: loading ? 'wait' : 'pointer',
+                fontSize: '12px',
+              }}
+            >
+              {loading ? 'Loading...' : 'Load More'}
+            </button>
+          ) : (
+            <div
+              style={{
+                width: '100%',
+                padding: '12px',
+                border: 'none',
+                borderTop: `1px solid ${theme.border}`,
+                backgroundColor: theme.bgSecondary,
+                color: theme.textSecondary,
+                fontSize: '12px',
+                textAlign: 'center',
+              }}
+            >
+              Load More <span style={{ opacity: 0.7 }}>(Full history available with Pro plan)</span>
+            </div>
+          )
         )}
         </div>
         </div>
@@ -5329,7 +5352,6 @@ export default function ClipboardHistory() {
               }}
             >
               {authSession && cachedTier === 'pro' ? (
-                // Pro: show analytics (only if logged in AND pro)
                 <>
                   <span style={{ fontWeight: 500 }}>Pro Plan:</span>
                   {statItems.length > 0 ? (

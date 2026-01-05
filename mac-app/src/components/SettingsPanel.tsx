@@ -12,12 +12,16 @@ import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
 import { useTheme } from '../contexts/ThemeContext';
 
+interface SettingsPanelProps {
+  onNavigateToSignIn?: () => void;
+}
+
 /**
  * SettingsPanel - Settings content designed to live inside the clipboard history window.
  * Keeps the same functionality as the original App.tsx settings, but styled for the
  * clipboard history context.
  */
-export default function SettingsPanel() {
+export default function SettingsPanel({ onNavigateToSignIn }: SettingsPanelProps) {
   const { theme } = useTheme();
   // Permissions state
   const [permissions, setPermissions] = useState<{ accessibilityGranted: boolean } | null>(null);
@@ -57,7 +61,6 @@ export default function SettingsPanel() {
   const [authLoading, setAuthLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [passwordResetStatus, setPasswordResetStatus] = useState<'idle' | 'sending' | 'sent'>('idle');
   
   // Delete account state.
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -361,27 +364,6 @@ export default function SettingsPanel() {
     }
   };
   
-  // Handle password change request - sends reset email.
-  const handleChangePassword = async () => {
-    const email = session?.user?.email;
-    if (!email || !window.authAPI?.resetPasswordForEmail) return;
-    
-    setPasswordResetStatus('sending');
-    try {
-      const result = await window.authAPI.resetPasswordForEmail(email);
-      if (result.error) {
-        console.error('Password reset error:', result.error);
-        setPasswordResetStatus('idle');
-      } else {
-        setPasswordResetStatus('sent');
-        // Keep message visible so user can resend if needed.
-      }
-    } catch (err) {
-      console.error('Password reset error:', err);
-      setPasswordResetStatus('idle');
-    }
-  };
-  
   // Handle account deletion.
   const handleDeleteAccount = async () => {
     if (!window.authAPI?.deleteAccount) {
@@ -398,10 +380,9 @@ export default function SettingsPanel() {
         setDeleteError(result.error);
         setDeleteLoading(false);
       } else {
-        // Account deleted successfully. Clear local state.
+        await supabase?.auth.signOut();
         setShowDeleteModal(false);
         setSession(null);
-        // The user is now signed out and their account is gone.
       }
     } catch (err) {
       console.error('Delete account error:', err);
@@ -1039,43 +1020,14 @@ export default function SettingsPanel() {
                       </span>
                     )}
                   </div>
-                  <div style={styles.rowControls}>
-                    <button 
-                      onClick={handleChangePassword} 
-                      disabled={passwordResetStatus === 'sending'}
-                      style={styles.linkBtn}
-                      title="Send password reset email"
-                    >
-                      {passwordResetStatus === 'sending' ? '...' : 'Change Password'}
-                    </button>
-                    <span style={{ color: theme.border }}>·</span>
-                    <button 
-                      onClick={handleSignOut} 
-                      disabled={authLoading} 
-                      style={styles.linkBtn}
-                    >
-                      {authLoading ? '...' : 'Sign Out'}
-                    </button>
-                  </div>
+                  <button 
+                    onClick={handleSignOut} 
+                    disabled={authLoading} 
+                    style={styles.linkBtn}
+                  >
+                    {authLoading ? '...' : 'Sign out'}
+                  </button>
                 </div>
-                
-                {/* Password reset confirmation message */}
-                {passwordResetStatus === 'sent' && (
-                  <p style={{ ...styles.rowHint, color: theme.accent, margin: '4px 0 0 0' }}>
-                    Password reset email sent to {userEmail}. Check your inbox.{' '}
-                    <button 
-                      onClick={handleChangePassword}
-                      style={{ 
-                        ...styles.linkBtn, 
-                        color: theme.accent,
-                        display: 'inline',
-                        padding: 0,
-                      }}
-                    >
-                      Resend
-                    </button>
-                  </p>
-                )}
                 
                 {syncStatus && <p style={styles.syncStatusText}>{syncStatus}</p>}
                 
@@ -1155,7 +1107,7 @@ export default function SettingsPanel() {
                 </div>
               </>
             ) : (
-              // Not signed in - show option to create account via Team tab.
+              // Not signed in - show sign in button.
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <div style={styles.row}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -1178,10 +1130,13 @@ export default function SettingsPanel() {
                         : 'Limited priority mic and auto-stacking.'}
                     </p>
                   </div>
+                  <button
+                    onClick={onNavigateToSignIn}
+                    style={styles.linkBtn}
+                  >
+                    Sign in
+                  </button>
                 </div>
-                <p style={{ ...styles.rowHint, margin: 0 }}>
-                  Sign in via the Shared Fields tab to sync across devices and unlock more features.
-                </p>
               </div>
             )}
           </div>
@@ -1214,17 +1169,20 @@ export default function SettingsPanel() {
             onClick={(e) => e.stopPropagation()}
           >
             <h3 style={{ margin: '0 0 12px 0', fontSize: '15px', fontWeight: 600, color: theme.text }}>
-              {userTier === 'pro' ? 'Delete Account and Cancel Subscription?' : 'Delete Your Account?'}
+              Delete Account / Cancel Subscription
             </h3>
-            <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: theme.textSecondary, lineHeight: 1.5 }}>
+            <p style={{ margin: '0 0 12px 0', fontSize: '13px', color: theme.textSecondary, lineHeight: 1.5 }}>
               This will permanently delete:
             </p>
-            <ul style={{ margin: '0 0 16px 0', paddingLeft: '20px', fontSize: '13px', color: theme.textSecondary, lineHeight: 1.6 }}>
+            <ul style={{ margin: '0 0 12px 0', paddingLeft: '20px', fontSize: '13px', color: theme.textSecondary, lineHeight: 1.6 }}>
               <li>Your account and profile</li>
-              <li>All synced todos, transcripts, and sketches</li>
-              <li>Any items you've shared with your team</li>
-              {userTier === 'pro' && <li>Your Pro subscription will be cancelled</li>}
+              <li>All shared items</li>
+              {userTier === 'pro' && <li>Any existing Pro subscription ($14/month)</li>}
             </ul>
+            <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5 }}>
+              <strong>Important:</strong> You may continue to use the free plan without an account. 
+              All local screenshots, transcripts, and drawings will remain on your machine.
+            </p>
             <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: '#dc2626', fontWeight: 500 }}>
               This cannot be undone.
             </p>
