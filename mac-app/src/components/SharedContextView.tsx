@@ -1618,9 +1618,21 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
               <h3 style={{ margin: '0 0 8px 0', fontSize: '16px', color: theme.text }}>
                 Sign in or create account
               </h3>
-              <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: theme.textSecondary }}>
-                Share clipboard items with your team and sync across devices.
+              <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: theme.textSecondary }}>
+                Free accounts include:
               </p>
+              <ul style={{
+                margin: '0 0 16px 0',
+                paddingLeft: '20px',
+                fontSize: '12px',
+                color: theme.textSecondary,
+                lineHeight: '1.6',
+              }}>
+                <li>Shared clipboard with your team</li>
+                <li>Sync across Mac and iPhone</li>
+                <li>500 minutes priority mic per month</li>
+                <li>50 auto-stacks per month</li>
+              </ul>
 
               {!otpSent ? (
                 <form onSubmit={handleRequestOtp}>
