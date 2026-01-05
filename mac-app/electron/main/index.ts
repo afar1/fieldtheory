@@ -1665,8 +1665,6 @@ function setupClipboardIPCHandlers(): void {
     return result;
   });
 
-  // Delete account via Edge Function.
-  // This permanently deletes the user's account and all associated data.
   ipcMain.handle('auth:deleteAccount', async () => {
     if (!mobileSync) {
       return { error: 'Mobile sync not initialized' };
@@ -1682,7 +1680,6 @@ function setupClipboardIPCHandlers(): void {
       return { error: 'Supabase not configured' };
     }
 
-    // Call the delete-account Edge Function.
     const edgeFunctionUrl = `${envVars.supabaseUrl}/functions/v1/delete-account`;
     
     try {
@@ -1701,11 +1698,17 @@ function setupClipboardIPCHandlers(): void {
         return { error: result.error || 'Failed to delete account' };
       }
 
-      // Clear local session and reset tier after successful deletion.
       await mobileSync.signOut();
       if (quotaManager) {
         await quotaManager.setCachedTier('free');
       }
+      
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send('session-changed', null);
+          window.webContents.send('tier-changed', 'free');
+        }
+      });
       
       return { error: null };
     } catch (err) {
@@ -2046,6 +2049,53 @@ function setupClipboardIPCHandlers(): void {
       return new Date();
     }
     return quotaManager.getResetDate();
+  });
+
+  ipcMain.handle('quota:refreshTier', async () => {
+    if (!mobileSync) {
+      return { tier: 'free', error: 'Not initialized' };
+    }
+    
+    const session = mobileSync.getSession();
+    if (!session) {
+      return { tier: 'free', error: 'Not signed in' };
+    }
+    
+    try {
+      const supabase = mobileSync.getSupabaseClient();
+      if (!supabase) {
+        return { tier: 'free', error: 'No Supabase client' };
+      }
+      
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('tier')
+        .eq('id', session.user.id)
+        .single();
+      
+      if (error) {
+        console.error('[Main] Failed to fetch tier:', error);
+        return { tier: quotaManager?.getCachedTier() || 'free', error: error.message };
+      }
+      
+      const tier = data?.tier || 'free';
+      console.log('[Main] Refreshed tier from server:', tier);
+      
+      if (quotaManager) {
+        await quotaManager.setCachedTier(tier);
+      }
+      
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send('tier-changed', tier);
+        }
+      });
+      
+      return { tier, error: null };
+    } catch (err) {
+      console.error('[Main] Error refreshing tier:', err);
+      return { tier: quotaManager?.getCachedTier() || 'free', error: String(err) };
+    }
   });
 
   // =========================================================================
