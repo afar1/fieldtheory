@@ -2873,6 +2873,13 @@ async function initTranscriberSystem(): Promise<void> {
     socialSync.setSession(existingSession);
     // Note: Tier fetch happens when ClipboardHistory forwards the session via setSyncSession,
     // which triggers mobileSync.setSession -> fetchAndEmitCurrentTier.
+  } else {
+    // No session on startup - ensure cached tier is 'free'.
+    // This handles edge cases where user was Pro, app crashed without proper logout.
+    if (quotaManager && quotaManager.getCachedTier() === 'pro') {
+      console.log('[Main] No session but cached tier is pro, resetting to free');
+      await quotaManager.setCachedTier('free');
+    }
   }
   
   // Set the Supabase client from mobileSync once a session is established.
