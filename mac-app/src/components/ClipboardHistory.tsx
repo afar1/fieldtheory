@@ -2760,7 +2760,7 @@ export default function ClipboardHistory() {
           }}
         />
         
-        {/* Sign in button when not authenticated */}
+        {/* Sign in button when not authenticated - highlighted when on Shared Fields */}
         {!showSettings && !authSession?.user?.email && (
           <button
             onClick={() => {
@@ -2769,9 +2769,9 @@ export default function ClipboardHistory() {
             }}
             style={{
               fontSize: '10px',
-              color: theme.textSecondary,
+              color: viewMode === 'team' ? theme.accent : theme.textSecondary,
               backgroundColor: 'transparent',
-              border: `1px solid ${theme.border}`,
+              border: `1px solid ${viewMode === 'team' ? theme.accent : theme.border}`,
               borderRadius: '4px',
               padding: '2px 8px',
               cursor: 'pointer',
@@ -5402,7 +5402,8 @@ export default function ClipboardHistory() {
                     onClick={() => {
                       // Require sign-in before upgrading.
                       if (!authSession?.user?.id) {
-                        alert('Please sign in first to upgrade. Go to the Team tab to sign in.');
+                        alert('Sign in or create an account to upgrade.');
+                        setViewMode('team');
                         return;
                       }
                       // Open Stripe checkout with user ID for webhook linking.
@@ -5533,8 +5534,9 @@ export default function ClipboardHistory() {
                 onClick={() => {
                   // Require sign-in before upgrading.
                   if (!authSession?.user?.id) {
-                    alert('Please sign in first to upgrade. Go to the Team tab to sign in.');
+                    alert('Sign in or create an account to upgrade.');
                     setQuotaExhausted(null);
+                    setViewMode('team');
                     return;
                   }
                   // Open Stripe checkout with user ID for webhook linking.
