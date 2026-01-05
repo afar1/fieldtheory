@@ -5328,8 +5328,8 @@ export default function ClipboardHistory() {
                 flex: 1,
               }}
             >
-              {cachedTier === 'pro' ? (
-                // Pro: show analytics
+              {authSession && cachedTier === 'pro' ? (
+                // Pro: show analytics (only if logged in AND pro)
                 <>
                   <span style={{ fontWeight: 500 }}>Pro Plan:</span>
                   {statItems.length > 0 ? (
