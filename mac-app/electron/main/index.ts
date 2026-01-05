@@ -1687,7 +1687,7 @@ function setupClipboardIPCHandlers(): void {
         },
       });
 
-      const result = await response.json();
+      const result = await response.json() as { error?: string; success?: boolean };
       
       if (!response.ok) {
         console.error('[Main] Delete account failed:', result);
