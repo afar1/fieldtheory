@@ -1180,7 +1180,7 @@ export default function SettingsPanel() {
                   </div>
                 </div>
                 <p style={{ ...styles.rowHint, margin: 0 }}>
-                  Create an account via the Team tab to sync across devices and unlock more features.
+                  Sign in via the Shared Fields tab to sync across devices and unlock more features.
                 </p>
               </div>
             )}

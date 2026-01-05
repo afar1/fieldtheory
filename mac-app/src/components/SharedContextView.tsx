@@ -1616,7 +1616,7 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
           {!successMessage && (
             <>
               <h3 style={{ margin: '0 0 8px 0', fontSize: '16px', color: theme.text }}>
-                Sign in to Field Theory
+                Sign in or create account
               </h3>
               <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: theme.textSecondary }}>
                 Share clipboard items with your team and sync across devices.
@@ -1659,8 +1659,11 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
                         animation: 'spin 0.8s linear infinite',
                       }} />
                     )}
-                    {isRequestingOtp ? 'Sending...' : 'Send Code'}
+                    {isRequestingOtp ? 'Sending...' : 'Continue'}
                   </button>
+                  <p style={{ margin: '12px 0 0 0', fontSize: '11px', color: theme.textSecondary, textAlign: 'center' }}>
+                    We'll email you a sign-in code. New users will have an account created automatically.
+                  </p>
                 </form>
               ) : (
                 <form onSubmit={handleVerifyOtp}>
