@@ -1655,7 +1655,14 @@ function setupClipboardIPCHandlers(): void {
     if (!mobileSync) {
       return { error: 'Mobile sync not initialized' };
     }
-    return await mobileSync.signOut();
+    const result = await mobileSync.signOut();
+    
+    // Reset cached tier to 'free' on logout so quotas show free limits.
+    if (!result.error && quotaManager) {
+      await quotaManager.setCachedTier('free');
+    }
+    
+    return result;
   });
 
   // Delete account via Edge Function.
@@ -1694,8 +1701,11 @@ function setupClipboardIPCHandlers(): void {
         return { error: result.error || 'Failed to delete account' };
       }
 
-      // Clear local session after successful deletion.
+      // Clear local session and reset tier after successful deletion.
       await mobileSync.signOut();
+      if (quotaManager) {
+        await quotaManager.setCachedTier('free');
+      }
       
       return { error: null };
     } catch (err) {
