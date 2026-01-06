@@ -126,6 +126,7 @@ export interface ClipboardItem {
   contentHash: string;
   stackId: string | null; // Groups items into a prompt stack for batch paste
   source: ClipboardSource; // Device source: 'mac' for local, 'ios' for mobile synced
+  figureLabel: string | null; // Figure label for screenshots in stacks (e.g., "A", "B", "C")
 }
 
 /**

@@ -49,6 +49,7 @@ type ClipboardItem = {
   contentHash: string;
   stackId: string | null;
   source: ClipboardSource;
+  figureLabel: string | null; // Figure label for screenshots in stacks (e.g., "A", "B", "C")
 };
 
 type StackInfo = {
@@ -3914,6 +3915,23 @@ export default function ClipboardHistory() {
                                   cursor: 'pointer',
                                 }}
                               />
+                              {/* Figure label badge - shows "A", "B", "C" for screenshots in stacks */}
+                              {item.figureLabel && (
+                                <div style={{
+                                  position: 'absolute',
+                                  bottom: '2px',
+                                  left: '2px',
+                                  backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                                  color: '#fff',
+                                  fontSize: '9px',
+                                  fontWeight: 600,
+                                  padding: '1px 4px',
+                                  borderRadius: '3px',
+                                  letterSpacing: '0.5px',
+                                }}>
+                                  {item.figureLabel}
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>
@@ -4767,6 +4785,23 @@ export default function ClipboardHistory() {
                                   cursor: 'pointer',
                                 }}
                               />
+                              {/* Figure label badge - shows "A", "B", "C" for screenshots in stacks */}
+                              {item.figureLabel && (
+                                <div style={{
+                                  position: 'absolute',
+                                  bottom: '2px',
+                                  left: '2px',
+                                  backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                                  color: '#fff',
+                                  fontSize: '9px',
+                                  fontWeight: 600,
+                                  padding: '1px 4px',
+                                  borderRadius: '3px',
+                                  letterSpacing: '0.5px',
+                                }}>
+                                  {item.figureLabel}
+                                </div>
+                              )}
                             </div>
                           )}
                           <div style={{ flex: 1 }}>
