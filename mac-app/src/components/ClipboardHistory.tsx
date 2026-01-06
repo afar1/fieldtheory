@@ -3920,7 +3920,7 @@ export default function ClipboardHistory() {
                                   cursor: 'pointer',
                                 }}
                               />
-                              {/* Figure label badge - shows "A", "B", "C" for screenshots in stacks */}
+                              {/* Figure label badge */}
                               {item.figureLabel && (
                                 <div style={{
                                   position: 'absolute',
@@ -4790,7 +4790,7 @@ export default function ClipboardHistory() {
                                   cursor: 'pointer',
                                 }}
                               />
-                              {/* Figure label badge - shows "A", "B", "C" for screenshots in stacks */}
+                              {/* Figure label badge */}
                               {item.figureLabel && (
                                 <div style={{
                                   position: 'absolute',
