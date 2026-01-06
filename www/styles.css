@@ -119,6 +119,7 @@ img {
 .nav-logo {
   display: flex;
   align-items: center;
+  flex-shrink: 0;
 }
 
 .nav-logo-img {
@@ -560,5 +561,29 @@ img {
 
   .nav-links {
     gap: var(--space-sm);
+  }
+
+  /* Scale down ASCII art visuals to fit mobile screens. */
+  .hero-visual,
+  .feature-visual {
+    font-size: 0.55rem;
+    padding: var(--space-sm);
+  }
+
+  .hero-visual {
+    max-width: 100%;
+  }
+}
+
+/* Extra small screens need even smaller ASCII art. */
+@media (max-width: 400px) {
+  .hero-visual,
+  .feature-visual {
+    font-size: 0.45rem;
+  }
+
+  .nav-logo-img {
+    height: 24px;
+    max-height: 24px;
   }
 }
