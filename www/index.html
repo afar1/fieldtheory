@@ -25,7 +25,10 @@
         <li><a href="theory.html">Theory</a></li>
         <li><a href="#pricing">Pricing</a></li>
         <li><a href="#download">Download</a></li>
-        <li><button class="theme-toggle" onclick="toggleTheme()">◐</button></li>
+        <li class="theme-toggle-wrapper">
+          <button class="theme-toggle" onclick="toggleTheme()">◐</button>
+          <span class="theme-label" id="theme-label">Switch theme</span>
+        </li>
       </ul>
     </div>
   </nav>
@@ -54,7 +57,10 @@
 └─────────────────────────────────────────────────────────────┘</div>
 
       <div class="hero-buttons">
-        <a href="#download" class="btn btn-primary">Download for Mac</a>
+        <a href="#download" class="btn btn-primary">
+          <span class="desktop-download-text">Download for Mac</span>
+          <span class="mobile-download-text">Visit on Mac to download</span>
+        </a>
         <a href="#features" class="btn btn-secondary">See how it works</a>
       </div>
     </div>
