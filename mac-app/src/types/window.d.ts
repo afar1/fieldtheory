@@ -169,6 +169,7 @@ interface ClipboardItem {
   contentHash: string;
   stackId: string | null;
   source: ClipboardSource;
+  figureLabel: string | null; // Figure label for screenshots in stacks (e.g., "A", "B", "C")
 }
 
 /**
