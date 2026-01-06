@@ -107,7 +107,9 @@ export type HelperOutgoingMessageType =
   | 'permissionsStatus'
   | 'focusedTextInputStatus'
   | 'keyEvent'
-  | 'keyboardMonitoringDisabled';
+  | 'keyboardMonitoringDisabled'
+  | 'menuBarClicked'
+  | 'appBecameFrontmost';
 
 /**
  * Message types sent FROM Electron main TO the Swift helper.
@@ -230,6 +232,22 @@ export interface KeyboardMonitoringDisabledMessage extends HelperMessage {
 }
 
 /**
+ * Menu bar clicked message.
+ * Sent when user clicks in the menu bar area so Field Theory can hide.
+ */
+export interface MenuBarClickedMessage extends HelperMessage {
+  type: 'menuBarClicked';
+}
+
+/**
+ * App became frontmost message.
+ * Sent when Field Theory becomes the frontmost app (e.g., via Cmd+Tab).
+ */
+export interface AppBecameFrontmostMessage extends HelperMessage {
+  type: 'appBecameFrontmost';
+}
+
+/**
  * Union type of all possible messages from the helper.
  */
 export type HelperOutgoingMessage =
@@ -244,7 +262,9 @@ export type HelperOutgoingMessage =
   | PermissionsStatusMessage
   | FocusedTextInputStatusMessage
   | KeyEventMessage
-  | KeyboardMonitoringDisabledMessage;
+  | KeyboardMonitoringDisabledMessage
+  | MenuBarClickedMessage
+  | AppBecameFrontmostMessage;
 
 /**
  * Commands sent to the helper.

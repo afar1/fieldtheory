@@ -280,7 +280,7 @@ interface ClipboardAPI {
   saveBounds: (bounds: { x: number; y: number; width: number; height: number }) => Promise<void>;
   onKeyEvent: (callback: (event: { characters: string; keyCode: number; modifiers: string[] }) => void) => () => void;
   closeWindow: () => Promise<void>;
-  showToast?: (message: string) => Promise<void>;
+  showNoTargetError?: (message?: string) => void;
   setSketchMode?: (active: boolean) => void;
   
   // Stack operations for prompt stacking feature
@@ -334,6 +334,10 @@ interface ClipboardAPI {
   setSoundsEnabled?: (enabled: boolean) => Promise<boolean>;
   getTasksTabEnabled?: () => Promise<boolean>;
   setTasksTabEnabled?: (enabled: boolean) => Promise<boolean>;
+  
+  // Show in Dock and Cmd+Tab
+  getShowInDock?: () => Promise<boolean>;
+  setShowInDock?: (show: boolean) => Promise<boolean>;
   onTasksTabToggled?: (callback: (enabled: boolean) => void) => () => void;
 }
 

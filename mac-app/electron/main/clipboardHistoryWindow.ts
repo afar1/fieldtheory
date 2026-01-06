@@ -79,10 +79,14 @@ export class ClipboardHistoryWindow {
 
   // Sound manager for playing window open/close sounds.
   private soundManager: SoundManager;
+  
+  // Preferences manager for checking settings like showInDock.
+  private preferencesManager: PreferencesManager;
 
   constructor(preferences?: PreferencesManager) {
     // Create sound manager with preferences (or create new PreferencesManager if none provided).
     const prefs = preferences || new PreferencesManager();
+    this.preferencesManager = prefs;
     this.soundManager = new SoundManager(prefs);
   }
 
@@ -219,7 +223,13 @@ export class ClipboardHistoryWindow {
         });
       }
       
+      // Ensure app is visible (un-hide after app.hide() was called).
+      // This is needed for Cmd+Tab to properly show windows.
+      app.show();
+      
       this.window.show();
+      // Bring window to front of window stack (important when not alwaysOnTop)
+      this.window.moveTop();
       this.window.focus();
       
       // Notify renderer to reset search query.
@@ -233,6 +243,9 @@ export class ClipboardHistoryWindow {
       this.refreshAppDataInBackground();
       return;
     }
+    
+    // Ensure app is visible (un-hide after app.hide() was called).
+    app.show();
     
     // Create new window.
     this.createWindow(savedBounds, showSettingsMode);
@@ -295,19 +308,25 @@ export class ClipboardHistoryWindow {
     windowX = Math.max(displayBounds.x, Math.min(windowX, displayBounds.x + displayBounds.width - windowWidth));
     windowY = Math.max(displayBounds.y, Math.min(windowY, displayBounds.y + displayBounds.height - windowHeight));
 
+    // Check if we're in "normal app" mode (showInDock) or "panel" mode at creation time.
+    // These options can't be changed after window creation.
+    const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+
     // Native vibrancy window options.
-    // Key difference from old approach: window IS the dialog (not a full-screen overlay).
     const options: BrowserWindowConstructorOptions = {
-      type: 'panel',                // NSPanel for Alfred-like behavior over full-screen apps.
+      // Panel mode uses NSPanel; normal mode uses standard window with titlebar.
+      ...(showInDock ? {} : { type: 'panel' as const }),
       width: windowWidth,
       height: windowHeight,
       x: windowX,
       y: windowY,
-      frame: false,                 // No native frame (no traffic lights).
+      ...(showInDock 
+        ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 12, y: 12 } }
+        : { frame: false }),
       transparent: false,
       vibrancy: 'under-window',     // Blur what's behind the window.
       visualEffectState: 'active',
-      skipTaskbar: true,
+      skipTaskbar: !showInDock,     // Show in Dock when showInDock is true.
       resizable: true,
       minWidth: 750,   // Minimum to fit all components including recording UI.
       minHeight: 500,  // Ensures settings and controls remain visible.
@@ -331,18 +350,28 @@ export class ClipboardHistoryWindow {
 
     this.window = new BrowserWindow(options);
 
-    // Appear over full-screen apps (like Alfred/Spotlight).
-    this.window.setAlwaysOnTop(true, 'screen-saver', 1);
-    this.window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    if (!showInDock) {
+      this.window.setAlwaysOnTop(true, 'screen-saver', 1);
+      this.window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    }
 
     this.window.on('closed', () => {
       this.window = null;
     });
 
     // Dismiss when window loses focus (Alfred behavior).
-    // Pass hideApp=false when recording is active to keep recording overlay visible.
+    // When showInDock is enabled, skip this entirely - user expects normal app behavior.
     this.window.on('blur', () => {
+      const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+      
+      // When showInDock is enabled, don't auto-hide on blur.
+      // User expects normal app behavior where windows stay visible.
+      if (showInDock) {
+        return;
+      }
+      
       console.log('[ClipboardHistoryWindow] Window lost focus, hiding');
+      // Alfred-style: hide when clicking away.
       this.hide(!this.isRecordingActive);
     });
     
@@ -422,8 +451,13 @@ export class ClipboardHistoryWindow {
 
     // Hide entire app to guarantee focus returns to previous app
     // This ensures the exact input field that was active gets focus back
-    // Skip app.hide() if other windows need to stay visible (e.g., recording overlay)
-    if (hideApp) {
+    // Skip app.hide() if:
+    // - Other windows need to stay visible (e.g., recording overlay)
+    // - showInDock is true: just hide window, keep app in Dock/Cmd+Tab
+    //   (Swift's appBecameFrontmost will show window when user Cmd+Tabs back)
+    const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+    const willCallAppHide = hideApp && !showInDock;
+    if (willCallAppHide) {
       app.hide();
     }
     this.previouslyFocusedWindow = null;
