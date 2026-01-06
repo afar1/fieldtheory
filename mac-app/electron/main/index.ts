@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import os from 'os';
@@ -6,7 +6,6 @@ import fs from 'fs';
 import { NativeHelper } from './nativeHelper';
 import { AudioManager } from './audioManager';
 import { TrayManager } from './trayManager';
-import { ToastWindow } from './toastWindow';
 import { TranscriberManager } from './transcriberManager';
 import { PreferencesManager } from './preferences';
 import { ClipboardManager } from './clipboardManager';
@@ -123,17 +122,15 @@ if (process.env.EXPERIMENTAL === 'true') {
   app.setName('Oscar Experimental');
 }
 
-// Configure autoUpdater for manual update flow (only in production builds).
-if (!process.env.ELECTRON_START_URL) {
-  autoUpdater.autoDownload = false;
-  autoUpdater.setFeedURL({ provider: 'github', owner: 'afar1', repo: 'field-releases' });
-}
+// Configure autoUpdater for manual update flow.
+// DEBUG: Always configure feed URL for testing
+autoUpdater.autoDownload = false;
+autoUpdater.setFeedURL({ provider: 'github', owner: 'afar1', repo: 'field-releases' });
 
 let mainWindow: BrowserWindow | null = null;
 let nativeHelper: NativeHelper | null = null;
 let audioManager: AudioManager | null = null;
 let trayManager: TrayManager | null = null;
-let toastWindow: ToastWindow | null = null;
 let transcriberManager: TranscriberManager | null = null;
 let preferencesManager: PreferencesManager | null = null;
 let clipboardManager: ClipboardManager | null = null;
@@ -416,7 +413,7 @@ function restoreClipboardHistoryBounds(): { x: number; y: number; width: number;
  * Initialize clipboard history window with bounds change callback.
  */
 function initClipboardHistoryWindow(): ClipboardHistoryWindow {
-  const window = new ClipboardHistoryWindow();
+  const window = new ClipboardHistoryWindow(preferencesManager ?? undefined);
   
   // Set up callback to save bounds when window is moved/resized.
   window.setOnBoundsChanged(async (bounds) => {
@@ -463,10 +460,9 @@ function showClipboardHistoryOnActivate(): void {
     clipboardHistoryWindow = initClipboardHistoryWindow();
   }
   
-  if (!clipboardHistoryWindow.isVisible()) {
-    const boundsToUse = restoreClipboardHistoryBounds();
-    clipboardHistoryWindow.show(boundsToUse);
-  }
+  // Always show the clipboard window when app is activated (e.g., Dock icon click).
+  const boundsToUse = restoreClipboardHistoryBounds();
+  clipboardHistoryWindow.show(boundsToUse);
 }
 
 /**
@@ -1214,9 +1210,10 @@ function setupClipboardIPCHandlers(): void {
     }
   });
   
-  ipcMain.on('clipboard:showToast', async (_event, message: string) => {
-    if (toastWindow) {
-      toastWindow.show(message);
+  // Show "no target" error at cursor position (replaces old toast window).
+  ipcMain.on('clipboard:showNoTargetError', async (_event, message?: string) => {
+    if (cursorStatusManager) {
+      cursorStatusManager.showNoTargetError(message);
     }
   });
   
@@ -1983,6 +1980,49 @@ function setupClipboardIPCHandlers(): void {
     cursorStatusManager?.setHideLabels(hide);
     return true;
   });
+  
+  // Show in Dock - controls whether app appears in Dock and Cmd+Tab.
+  ipcMain.handle('clipboard:getShowInDock', async () => {
+    if (!preferencesManager) {
+      return false;
+    }
+    return preferencesManager.getPreference('showInDock') ?? false;
+  });
+  
+  ipcMain.handle('clipboard:setShowInDock', async (_event, show: boolean) => {
+    if (!preferencesManager) {
+      return false;
+    }
+    await preferencesManager.save({ showInDock: show });
+    
+    // Apply immediately. Window type can't change dynamically, so recreate the window.
+    if (process.platform === 'darwin') {
+      if (show) {
+        await app.dock.show();
+      } else {
+        app.dock.hide();
+      }
+      
+      // Recreate window with correct type (panel vs normal window with titlebar).
+      if (clipboardHistoryWindow) {
+        const wasVisible = clipboardHistoryWindow.isVisible();
+        const bounds = clipboardHistoryWindow.getWindow()?.getBounds();
+        
+        // Destroy the old window.
+        clipboardHistoryWindow.destroy();
+        clipboardHistoryWindow = null;
+        
+        // Reinitialize with new window type.
+        clipboardHistoryWindow = initClipboardHistoryWindow();
+        
+        // If it was visible, show it again at the same position.
+        if (wasVisible && bounds) {
+          clipboardHistoryWindow.show(bounds);
+        }
+      }
+    }
+    return true;
+  });
 
   // Sounds enabled - master toggle for all sounds.
   ipcMain.handle('clipboard:getSoundsEnabled', async () => {
@@ -2561,6 +2601,14 @@ function broadcastTranscribeEvents(): void {
     if (cursorStatusManager) {
       cursorStatusManager.setState(status as CursorStatusState);
     }
+    
+    // Force Dock visibility when showInDock is enabled.
+    if (process.platform === 'darwin' && preferencesManager) {
+      const showInDock = preferencesManager.getPreference('showInDock') ?? false;
+      if (showInDock) {
+        app.dock.show();
+      }
+    }
   });
 
   transcriberManager.on('result', (text) => {
@@ -2673,6 +2721,35 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
 
   nativeHelper = new NativeHelper();
   nativeHelper.start();
+  
+  // Hide clipboard history when user clicks on menu bar (Alfred-style).
+  // Debounce to avoid hiding immediately after app activation.
+  let lastActivateTime = 0;
+  
+  app.on('activate', () => {
+    lastActivateTime = Date.now();
+  });
+  
+  nativeHelper.on('menuBarClicked', () => {
+    if (Date.now() - lastActivateTime < 300) return;
+    if (clipboardHistoryWindow?.isVisible()) {
+      clipboardHistoryWindow.hide();
+    }
+  });
+  
+  // Show clipboard history when Field Theory becomes frontmost (e.g., via Cmd+Tab).
+  nativeHelper.on('appBecameFrontmost', () => {
+    if (clipboardHistoryWindow?.isVisible()) return;
+    
+    if (!clipboardHistoryWindow) {
+      clipboardHistoryWindow = initClipboardHistoryWindow();
+    }
+    
+    clipboardHistoryWindow.playOpenSound();
+    const boundsToUse = restoreClipboardHistoryBounds();
+    clipboardHistoryWindow.show(boundsToUse, false, true);
+    clipboardHistoryWindow.capturePreviousAppBeforeShow();
+  });
 
   audioManager = new AudioManager(nativeHelper);
   
@@ -2689,13 +2766,6 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
 
   trayManager = new TrayManager(audioManager);
   trayManager.init(showSettingsInClipboardWindow, checkForUpdatesCallback);
-  
-  toastWindow = new ToastWindow();
-  toastWindow.setShowWindowCallback(() => {
-    if (clipboardHistoryWindow) {
-      clipboardHistoryWindow.show();
-    }
-  });
 
   console.log('[Main] Audio system initialized');
 }
@@ -2821,6 +2891,7 @@ async function initTranscriberSystem(): Promise<void> {
     }
 
     const visible = clipboardHistoryWindow.isVisible();
+    const showInDock = preferencesManager?.getPreference('showInDock') ?? false;
 
     if (!visible) {
       // Play sound immediately for responsive feedback.
@@ -2833,12 +2904,12 @@ async function initTranscriberSystem(): Promise<void> {
       // Capture frontmost app in background (updates target app info after window shows).
       // Not awaited - window appears instantly, target app info updates ~200ms later.
       clipboardHistoryWindow.capturePreviousAppBeforeShow();
-    } else {
-      // Hide window and restore focus to previous app.
-      // Don't hide the entire app if recording overlay is visible.
+    } else if (!showInDock) {
+      // Panel mode: toggle behavior - hide window and restore focus.
       const overlayVisible = transcriberManager?.isRecordingOverlayVisible() ?? false;
       clipboardHistoryWindow.hide(!overlayVisible);
     }
+    // When showInDock is true and visible: do nothing (normal app behavior).
   });
 
   // Initialize quota manager for tracking local usage.
@@ -3133,21 +3204,21 @@ async function initVisionSystem(): Promise<void> {
   visionProcessor = new VisionProcessor(visionModelManager, clipboardManager);
 
   // Update clipboard manager callback to include vision processing and auto-stacking.
-  // This ensures images added via clipboard polling (including Apple's Shift+Cmd+3/4) are:
-  // 1. Processed by vision if available
-  // 2. Added to the recording stack if user is currently recording
+  // This ensures ALL clipboard items (text, images, screenshots) are:
+  // 1. Added to the recording stack if user is currently recording
+  // 2. Processed by vision if available (images only)
   clipboardManager.setOnItemAdded((id) => {
     const item = clipboardManager!.getItem(id);
     
-    // Add images to recording stack if user is currently recording.
-    // This enables Apple's default screenshot shortcuts (Shift+Cmd+3/4) to participate in auto-stacking.
+    // Add ALL items to recording stack if user is currently recording.
+    // This enables any clipboard copy (text, images, screenshots) to participate in auto-stacking.
+    if (item && transcriberManager && transcriberManager.getStatus() === 'recording') {
+      transcriberManager.addToStack(id);
+      console.log(`[Main] Added clipboard ${item.type} ${id} to recording stack`);
+    }
+    
+    // Queue images for vision processing if vision processor is available.
     if (item && (item.type === 'image' || item.type === 'screenshot')) {
-      if (transcriberManager && transcriberManager.getStatus() === 'recording') {
-        transcriberManager.addToStack(id);
-        console.log(`[Main] Added clipboard image ${id} to recording stack (Apple screenshot)`);
-      }
-      
-      // Queue for vision processing if vision processor is available.
       if (visionProcessor) {
         visionProcessor.queueImage(id).catch((error) => {
           console.error('[Main] Failed to queue image for vision processing:', error);
@@ -3207,6 +3278,53 @@ if (!gotTheLock) {
     setupOnboardingIPCHandlers();
     setupDisplayListeners();
 
+    // Set up macOS app menu with standard items (required for Cmd+H, Cmd+Q, etc.)
+    if (process.platform === 'darwin') {
+      const template: Electron.MenuItemConstructorOptions[] = [
+        {
+          label: app.name,
+          submenu: [
+            { role: 'about' },
+            { type: 'separator' },
+            { role: 'services' },
+            { type: 'separator' },
+            { 
+              label: 'Hide Field Theory',
+              accelerator: 'Command+H',
+              click: () => {
+                app.hide();
+              }
+            },
+            { role: 'hideOthers' },
+            { role: 'unhide' },
+            { type: 'separator' },
+            { role: 'quit' }
+          ]
+        },
+        {
+          label: 'Edit',
+          submenu: [
+            { role: 'undo' },
+            { role: 'redo' },
+            { type: 'separator' },
+            { role: 'cut' },
+            { role: 'copy' },
+            { role: 'paste' },
+            { role: 'selectAll' }
+          ]
+        },
+        {
+          label: 'Window',
+          submenu: [
+            { role: 'minimize' },
+            { role: 'close' }
+          ]
+        }
+      ];
+      const menu = Menu.buildFromTemplate(template);
+      Menu.setApplicationMenu(menu);
+    }
+
     // Register keyboard shortcut to reset onboarding (Cmd+Shift+O).
     // Useful for testing and development.
     globalShortcut.register('Command+Shift+O', async () => {
@@ -3240,9 +3358,21 @@ if (!gotTheLock) {
     await initAudioSystem(checkForUpdatesManual);
     await initTranscriberSystem();
     await initVisionSystem();
+    
+    // Apply Dock visibility setting.
+    // By default, hide from Dock (accessory app behavior).
+    if (process.platform === 'darwin') {
+      const showInDock = preferencesManager?.getPreference('showInDock') ?? false;
+      if (showInDock) {
+        await app.dock.show();
+      } else {
+        app.dock.hide();
+      }
+    }
 
     // Check for updates on startup and periodically (production only).
-    if (!process.env.ELECTRON_START_URL) {
+    // DEBUG: Force update check even in dev mode for testing
+    {
       // Initial check after 5s delay to not block UI.
       setTimeout(() => {
         console.log('[Updater] Checking for updates on startup...');
@@ -3271,7 +3401,7 @@ if (!gotTheLock) {
       });
     });
 
-    autoUpdater.on('update-not-available', () => {
+    autoUpdater.on('update-not-available', (info) => {
       console.log('[Updater] No update available.');
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {

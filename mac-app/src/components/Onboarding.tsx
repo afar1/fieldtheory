@@ -798,6 +798,9 @@ export default function Onboarding() {
 
   const openScreenRecordingSettings = useCallback(async () => {
     if (!window.onboardingAPI) return;
+    // Trigger a screen capture first to auto-add the app to the permissions list.
+    // This saves users from having to manually click "+" to add the app.
+    await window.onboardingAPI.triggerScreenRecordingPrompt();
     await window.onboardingAPI.openScreenRecordingSettings();
   }, []);
 

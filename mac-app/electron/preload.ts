@@ -543,7 +543,7 @@ export interface ClipboardAPI {
   onTargetAppInfo: (callback: (info: TargetAppInfo) => void) => () => void;
   saveBounds: (bounds: { x: number; y: number; width: number; height: number }) => Promise<void>;
   closeWindow: () => Promise<void>;
-  showToast: (message: string) => Promise<void>;
+  showNoTargetError: (message?: string) => void;
   setSketchMode: (active: boolean) => void;
   
   // Stack operations for prompt stacking feature
@@ -603,6 +603,10 @@ export interface ClipboardAPI {
   // Hide status labels (show only colored dots)
   getHideStatusLabels?: () => Promise<boolean>;
   setHideStatusLabels?: (hide: boolean) => Promise<boolean>;
+  
+  // Show in Dock and Cmd+Tab
+  getShowInDock?: () => Promise<boolean>;
+  setShowInDock?: (show: boolean) => Promise<boolean>;
   
   // Sounds enabled (master toggle)
   getSoundsEnabled?: () => Promise<boolean>;
@@ -965,8 +969,8 @@ const clipboardAPI: ClipboardAPI = {
     ipcRenderer.send('clipboard:closeWindow');
   },
   
-  showToast: async (message: string): Promise<void> => {
-    ipcRenderer.send('clipboard:showToast', message);
+  showNoTargetError: (message?: string): void => {
+    ipcRenderer.send('clipboard:showNoTargetError', message);
   },
   
   setSketchMode: (active: boolean): void => {
@@ -1132,6 +1136,15 @@ const clipboardAPI: ClipboardAPI = {
 
   setHideStatusLabels: async (hide: boolean): Promise<boolean> => {
     return ipcRenderer.invoke('clipboard:setHideStatusLabels', hide);
+  },
+  
+  // Show in Dock and Cmd+Tab.
+  getShowInDock: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:getShowInDock');
+  },
+  
+  setShowInDock: async (show: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:setShowInDock', show);
   },
 
   // Sounds enabled (master toggle for all sounds).

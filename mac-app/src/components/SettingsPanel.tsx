@@ -90,6 +90,9 @@ export default function SettingsPanel({ onNavigateToSignIn }: SettingsPanelProps
   // Tasks tab - experimental feature.
   const [tasksTabEnabled, setTasksTabEnabled] = useState(false);
   
+  // Show in Dock - whether app appears in Dock and Cmd+Tab.
+  const [showInDock, setShowInDock] = useState(false);
+  
   // Subscription tier state - 'free' or 'pro'.
   const [userTier, setUserTier] = useState<'free' | 'pro'>('free');
   
@@ -141,6 +144,11 @@ export default function SettingsPanel({ onNavigateToSignIn }: SettingsPanelProps
       // Load tasks tab enabled setting
       window.clipboardAPI.getTasksTabEnabled?.().then(enabled => {
         setTasksTabEnabled(enabled);
+      });
+      
+      // Load show in dock setting
+      window.clipboardAPI.getShowInDock?.().then(show => {
+        setShowInDock(show);
       });
     }
     
@@ -927,6 +935,30 @@ export default function SettingsPanel({ onNavigateToSignIn }: SettingsPanelProps
             </button>
           </div>
         </div>
+        
+        {/* Show in Dock - whether app appears in Dock and Cmd+Tab */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Show in Dock</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={async () => {
+                const newValue = !showInDock;
+                const success = await window.clipboardAPI?.setShowInDock?.(newValue);
+                if (success) setShowInDock(newValue);
+              }}
+              style={{ ...styles.toggle, backgroundColor: showInDock ? theme.accent : '#d1d5db' }}
+            >
+              <span style={{ ...styles.toggleKnob, transform: showInDock ? 'translateX(20px)' : 'translateX(2px)' }} />
+            </button>
+          </div>
+        </div>
+        {showInDock && (
+          <div style={{ ...styles.row, paddingTop: 0, paddingBottom: 8 }}>
+            <span style={{ ...styles.rowLabel, fontSize: 12, opacity: 0.7, lineHeight: 1.4 }}>
+              Field Theory appears in Dock and Cmd+Tab with standard window controls.
+            </span>
+          </div>
+        )}
         
         {/* Permission Reminders - show/hide the screen recording permission banner */}
         <div style={styles.row}>

@@ -465,10 +465,6 @@ export class SharedClipboardSync extends EventEmitter {
 
       const { data, error } = await query;
 
-      // #region agent log
-      console.log('[SharedClipboardSync] Query result - error:', error, 'rowCount:', data?.length ?? 0);
-      // #endregion
-
       if (error) {
         console.error('[SharedClipboardSync] Query failed:', error);
         throw error;
@@ -1170,8 +1166,9 @@ export class SharedClipboardSync extends EventEmitter {
   }
 
   /**
-   * Get all team members.
-   * Returns people you added and people who added you.
+   * Get all team members with full transitive visibility.
+   * Uses the get_all_team_members_full() RPC function to return all members
+   * across all teams you belong to (not just direct connections).
    */
   async getTeamMembers(): Promise<TeamMember[]> {
     if (!this.isAuthenticated()) {
@@ -1185,18 +1182,16 @@ export class SharedClipboardSync extends EventEmitter {
     }
 
     try {
-      const { data, error } = await this.supabase!
-        .from('team_members')
-        .select('*')
-        .order('created_at', { ascending: false });
+      // Use the RPC function for full transitive team visibility.
+      const { data, error } = await this.supabase!.rpc('get_all_team_members_full');
 
       if (error) {
-        console.error('[SharedClipboardSync] Get team members failed:', error);
-        return [];
+        console.error('[SharedClipboardSync] Get team members RPC failed:', error);
+        // Fallback to direct query if RPC not available.
+        return this.getTeamMembersFallback(userId, myEmail);
       }
 
       // Convert rows to TeamMember objects.
-      // Each row represents a relationship. We want to show the "other person".
       const members: TeamMember[] = [];
       const seenEmails = new Set<string>();
 
@@ -1204,7 +1199,7 @@ export class SharedClipboardSync extends EventEmitter {
         const addedByMe = row.added_by_user_id === userId;
         const email = row.member_email;
 
-        // Skip duplicates (could happen if A added B and B added A).
+        // Skip duplicates.
         if (seenEmails.has(email.toLowerCase())) {
           continue;
         }
@@ -1226,6 +1221,53 @@ export class SharedClipboardSync extends EventEmitter {
       return members;
     } catch (error) {
       console.error('[SharedClipboardSync] Failed to get team members:', error);
+      return [];
+    }
+  }
+  
+  /**
+   * Fallback method for getting team members if RPC is not available.
+   * Uses direct table query with limited visibility.
+   */
+  private async getTeamMembersFallback(userId: string, myEmail: string): Promise<TeamMember[]> {
+    try {
+      const { data, error } = await this.supabase!
+        .from('team_members')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('[SharedClipboardSync] Get team members fallback failed:', error);
+        return [];
+      }
+
+      const members: TeamMember[] = [];
+      const seenEmails = new Set<string>();
+
+      for (const row of data as TeamMemberRow[]) {
+        const addedByMe = row.added_by_user_id === userId;
+        const email = row.member_email;
+
+        if (seenEmails.has(email.toLowerCase())) {
+          continue;
+        }
+        seenEmails.add(email.toLowerCase());
+
+        if (email.toLowerCase() === myEmail.toLowerCase()) {
+          continue;
+        }
+
+        members.push({
+          id: row.id,
+          email: email,
+          addedByMe: addedByMe,
+          createdAt: new Date(row.created_at).getTime(),
+        });
+      }
+
+      return members;
+    } catch (error) {
+      console.error('[SharedClipboardSync] Fallback failed:', error);
       return [];
     }
   }

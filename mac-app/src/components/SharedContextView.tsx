@@ -1767,7 +1767,16 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
   // ---------------------------------------------------------------------------
 
   return (
-    <div ref={containerRef} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '0 16px 16px 16px' }}>
+    <div ref={containerRef} style={{ 
+      flex: 1, 
+      display: 'flex', 
+      flexDirection: 'column', 
+      overflow: 'hidden', 
+      padding: '0 16px 16px 16px',
+      // Visual distinction: soft purple left border to indicate shared context.
+      borderLeft: '3px solid rgba(139, 92, 246, 0.5)',
+      marginLeft: '4px',
+    }}>
       {/* Team Members Toggle */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
         <button
