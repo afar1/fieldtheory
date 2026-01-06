@@ -3389,6 +3389,11 @@ if (!gotTheLock) {
     // Auto-updater event handlers - send to renderer for in-app notification UI.
     autoUpdater.on('checking-for-update', () => {
       console.log('[Updater] Checking for updates...');
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send('updater:checkingForUpdate');
+        }
+      });
     });
 
     autoUpdater.on('update-available', (info) => {
