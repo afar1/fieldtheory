@@ -39,6 +39,7 @@ export interface ClipboardItem {
   contentHash: string;
   stackId: string | null; // Groups items into a prompt stack for batch paste
   source: ClipboardSource; // Device source: 'mac' for local, 'ios' for mobile synced
+  figureLabel: string | null; // Figure label for screenshots in stacks (e.g., "A", "B", "C")
 }
 
 /**
@@ -278,6 +279,15 @@ export class ClipboardManager extends EventEmitter {
         
         INSERT OR IGNORE INTO cumulative_stats (key, value)
         SELECT 'stacks_created', COUNT(DISTINCT stack_id) FROM clipboard_items WHERE stack_id IS NOT NULL;
+      `);
+    });
+
+    // Migration: Add figure_label column for labeling screenshots in stacks.
+    // When screenshots are taken during recording, they get labels like "A", "B", "C"
+    // which can be referenced in the transcript text.
+    this.runMigration('add_figure_label', () => {
+      this.db.exec(`
+        ALTER TABLE clipboard_items ADD COLUMN figure_label TEXT;
       `);
     });
 
@@ -716,6 +726,7 @@ export class ClipboardManager extends EventEmitter {
       contentHash: row.content_hash,
       stackId: row.stack_id || null,
       source: row.source || 'mac',
+      figureLabel: row.figure_label || null,
     })) as ClipboardItem[];
   }
 
@@ -749,6 +760,7 @@ export class ClipboardManager extends EventEmitter {
       contentHash: row.content_hash,
       stackId: row.stack_id || null,
       source: row.source || 'mac',
+      figureLabel: row.figure_label || null,
     } as ClipboardItem;
   }
 
@@ -849,6 +861,7 @@ export class ClipboardManager extends EventEmitter {
       contentHash: row.content_hash,
       stackId: row.stack_id || null,
       source: row.source || 'mac',
+      figureLabel: row.figure_label || null,
     })) as ClipboardItem[];
   }
 
@@ -964,6 +977,18 @@ export class ClipboardManager extends EventEmitter {
   updateItemContent(itemId: number, content: string): void {
     const stmt = this.db.prepare('UPDATE clipboard_items SET content = ? WHERE id = ?');
     stmt.run(content, itemId);
+  }
+
+  /**
+   * Update the figure label for an item.
+   * Used when screenshots are taken during recording to label them as "A", "B", "C", etc.
+   * @param itemId - ID of the item to update
+   * @param figureLabel - The figure label (e.g., "A", "B", "C")
+   */
+  updateFigureLabel(itemId: number, figureLabel: string): void {
+    const stmt = this.db.prepare('UPDATE clipboard_items SET figure_label = ? WHERE id = ?');
+    stmt.run(figureLabel, itemId);
+    console.log(`[ClipboardManager] Updated figure label for item ${itemId}: Figure ${figureLabel}`);
   }
 
   /**
