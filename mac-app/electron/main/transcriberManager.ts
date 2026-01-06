@@ -56,6 +56,15 @@ export class TranscriberManager extends EventEmitter {
   private currentStack: number[] = [];
   private lastTranscription: string = '';
   
+  // Screenshot metadata for figure labeling feature.
+  // Tracks when each screenshot was captured relative to recording start,
+  // and assigns figure labels (A, B, C...) for referencing in transcripts.
+  private screenshotMetadata: Array<{
+    itemId: number;
+    figureLabel: string;
+    capturedAtMs: number; // Timestamp relative to recording start
+  }> = [];
+  
   // Clipboard history visibility checker - allows escape key to dismiss clipboard history first
   private clipboardHistoryVisibilityChecker: (() => boolean) | null = null;
   
@@ -304,8 +313,9 @@ export class TranscriberManager extends EventEmitter {
       this.hasAudioContent = false;
       this.pendingAbandonConfirmation = false;
       
-      // Clear stack from previous recording session (for auto-stacking).
+      // Clear stack and screenshot metadata from previous recording session.
       this.currentStack = [];
+      this.screenshotMetadata = [];
       
       // Show overlay
       this.overlay.showRecording();
@@ -384,7 +394,7 @@ export class TranscriberManager extends EventEmitter {
       
       // Strip bracketed content like [BLANK_AUDIO], [MUSIC], [SILENCE] from anywhere in the text.
       // These are whisper artifacts that shouldn't appear in final transcription.
-      const cleanedText = trimmedText.replace(/\s*\[[^\]]+\]\s*/g, ' ').trim();
+      let cleanedText = trimmedText.replace(/\s*\[[^\]]+\]\s*/g, ' ').trim();
       
       // If nothing remains after stripping brackets, treat as silence.
       if (cleanedText.length === 0) {
@@ -394,6 +404,13 @@ export class TranscriberManager extends EventEmitter {
         this.setStatus('idle');
         this.overlay.showStatus('No audio found');
         return;
+      }
+      
+      // Insert figure references if screenshots were captured during recording.
+      // This adds markers like "[Figure A]" at the end of the transcript so users
+      // know which screenshots correspond to the content.
+      if (this.screenshotMetadata.length > 0) {
+        cleanedText = this.insertFigureReferences(cleanedText);
       }
       
       // Store transcription in clipboard history.
@@ -494,12 +511,16 @@ export class TranscriberManager extends EventEmitter {
       await this.nativeHelper.cancelRecording();
       this.setStatus('idle');
       this.hasAudioContent = false;
+      this.currentStack = [];
+      this.screenshotMetadata = [];
       this.overlay.showStatus('Cancelled');
       this.unregisterAbandonHotkey();
     } catch (error) {
       console.error('[TranscriberManager] Failed to cancel recording:', error);
       this.setStatus('idle');
       this.hasAudioContent = false;
+      this.currentStack = [];
+      this.screenshotMetadata = [];
       this.overlay.showStatus('Cancelled');
       this.unregisterAbandonHotkey();
     }
@@ -861,6 +882,7 @@ export class TranscriberManager extends EventEmitter {
    */
   clearStack(): void {
     this.currentStack = [];
+    this.screenshotMetadata = [];
     this.emit('stackChanged', 0);
   }
 
@@ -902,12 +924,93 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Add an item to the current stack (e.g., screenshot).
+   * If recording is active and the item is a screenshot, assigns a figure label
+   * and tracks the capture timestamp for later insertion into the transcript.
    */
   addToStack(itemId: number): void {
     if (!this.currentStack.includes(itemId)) {
       this.currentStack.push(itemId);
+      
+      // If we're currently recording, check if this is a screenshot and assign a figure label.
+      if (this.status === 'recording' && this.clipboardManager) {
+        const item = this.clipboardManager.getItem(itemId);
+        if (item && (item.type === 'screenshot' || item.type === 'image')) {
+          // Generate the next figure label (A, B, C... Z, AA, AB...).
+          const figureLabel = this.generateFigureLabel(this.screenshotMetadata.length);
+          
+          // Calculate timestamp relative to recording start.
+          const capturedAtMs = Date.now() - this.recordingStartTime;
+          
+          // Store metadata for later use when inserting references into transcript.
+          this.screenshotMetadata.push({
+            itemId,
+            figureLabel,
+            capturedAtMs,
+          });
+          
+          // Update the item in the database with the figure label.
+          this.clipboardManager.updateFigureLabel(itemId, figureLabel);
+          
+          console.log(`[TranscriberManager] Screenshot ${itemId} labeled as Figure ${figureLabel} (captured at ${this.formatTimestamp(capturedAtMs)})`);
+        }
+      }
+      
       this.emit('stackChanged', this.currentStack.length);
     }
+  }
+  
+  /**
+   * Generate a figure label from an index (0 = A, 1 = B, ..., 25 = Z, 26 = AA, etc.)
+   */
+  private generateFigureLabel(index: number): string {
+    let label = '';
+    let remaining = index;
+    
+    do {
+      label = String.fromCharCode(65 + (remaining % 26)) + label;
+      remaining = Math.floor(remaining / 26) - 1;
+    } while (remaining >= 0);
+    
+    return label;
+  }
+  
+  /**
+   * Format a millisecond timestamp as MM:SS for display.
+   */
+  private formatTimestamp(ms: number): string {
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  }
+  
+  /**
+   * Insert figure references into the transcript text.
+   * Appends a line with all figure references and their capture times.
+   * Format: "[Figure A at 0:05, Figure B at 0:23]"
+   */
+  private insertFigureReferences(text: string): string {
+    if (this.screenshotMetadata.length === 0) {
+      return text;
+    }
+    
+    // Build the figure reference string.
+    // Sort by capture time to maintain chronological order.
+    const sortedMetadata = [...this.screenshotMetadata].sort(
+      (a, b) => a.capturedAtMs - b.capturedAtMs
+    );
+    
+    const figureRefs = sortedMetadata.map(meta => 
+      `Figure ${meta.figureLabel} at ${this.formatTimestamp(meta.capturedAtMs)}`
+    );
+    
+    // Append figure references to the end of the transcript.
+    // Use brackets to clearly indicate these are references, not spoken content.
+    const referenceText = `[${figureRefs.join(', ')}]`;
+    
+    console.log(`[TranscriberManager] Added figure references to transcript: ${referenceText}`);
+    
+    return `${text} ${referenceText}`;
   }
 
   /**
