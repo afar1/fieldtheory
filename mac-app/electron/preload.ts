@@ -147,6 +147,7 @@ const UpdaterIPCChannels = {
   DOWNLOAD_UPDATE: 'updater:downloadUpdate',
   INSTALL_UPDATE: 'updater:installUpdate',
   DISMISS_UPDATE: 'updater:dismissUpdate',
+  CHECKING_FOR_UPDATE: 'updater:checkingForUpdate',
   UPDATE_AVAILABLE: 'updater:updateAvailable',
   UPDATE_NOT_AVAILABLE: 'updater:updateNotAvailable',
   DOWNLOAD_PROGRESS: 'updater:downloadProgress',
@@ -1372,6 +1373,12 @@ const updaterAPI = {
 
   dismissUpdate: async (): Promise<void> => {
     return ipcRenderer.invoke(UpdaterIPCChannels.DISMISS_UPDATE);
+  },
+
+  onCheckingForUpdate: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on(UpdaterIPCChannels.CHECKING_FOR_UPDATE, handler);
+    return () => ipcRenderer.removeListener(UpdaterIPCChannels.CHECKING_FOR_UPDATE, handler);
   },
 
   onUpdateAvailable: (callback: (info: UpdateInfo) => void): (() => void) => {
