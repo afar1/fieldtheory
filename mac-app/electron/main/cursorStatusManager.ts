@@ -242,6 +242,45 @@ export class CursorStatusManager extends EventEmitter {
   }
   
   /**
+   * Show a "no target input field" error at the cursor position.
+   * Used when pasting from clipboard history but no text input is focused.
+   * This can be called on-demand, not just during transcription flow.
+   */
+  showNoTargetError(message?: string): void {
+    // Clear any pending timeouts from previous states.
+    if (this.doneTimeout) {
+      clearTimeout(this.doneTimeout);
+      this.doneTimeout = null;
+    }
+    if (this.pasteFailedTimeout) {
+      clearTimeout(this.pasteFailedTimeout);
+      this.pasteFailedTimeout = null;
+    }
+    
+    this.state = 'paste-failed';
+    this.updateWindowSize('paste-failed');
+    
+    // Show the window if not already visible.
+    this.show();
+    
+    // Send state and data to renderer.
+    this.sendStateToRenderer('paste-failed');
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send('cursor-status-data', { 
+        transcription: message || 'No target input field',
+        pasteFailed: true 
+      });
+    }
+    
+    // Auto-hide after duration.
+    this.pasteFailedTimeout = setTimeout(() => {
+      this.pasteFailedTimeout = null;
+      this.state = 'idle';
+      this.hide();
+    }, this.PASTE_FAILED_DURATION_MS);
+  }
+  
+  /**
    * Update window size based on state (wider for text-heavy states).
    * Also toggles mouse event handling - allow clicks in paste-failed/done states for dismiss.
    */

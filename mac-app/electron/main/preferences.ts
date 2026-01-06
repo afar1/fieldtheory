@@ -115,6 +115,9 @@ interface Preferences {
   
   // Local quota tracking for anonymous users.
   localQuotas?: LocalQuotas;
+  
+  // Show in Dock and Cmd+Tab - when enabled, app appears in Dock and application switcher.
+  showInDock?: boolean;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
@@ -148,6 +151,9 @@ const DEFAULT_PREFERENCES: Preferences = {
   
   // Tasks tab - experimental feature, hidden by default.
   tasksTabEnabled: false,
+  
+  // Show in Dock - disabled by default (accessory app behavior).
+  showInDock: false,
 };
 
 /**

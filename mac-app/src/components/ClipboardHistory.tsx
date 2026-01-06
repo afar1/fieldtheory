@@ -352,6 +352,14 @@ export default function ClipboardHistory() {
   const [isVisible, setIsVisible] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    // If user started a transcription, always show Fields on next open.
+    const shouldShowFields = localStorage.getItem('shouldShowFieldsOnOpen') === 'true';
+    if (shouldShowFields) {
+      localStorage.removeItem('shouldShowFieldsOnOpen');
+      localStorage.setItem('fieldTheoryView', 'clipboard');
+      return 'clipboard';
+    }
+    
     const saved = localStorage.getItem('fieldTheoryView');
     if (saved === 'clipboard' || saved === 'team' || saved === 'todo' || saved === 'dms' || saved === 'commands') {
       return saved;
@@ -571,6 +579,9 @@ export default function ClipboardHistory() {
   const [usageHovered, setUsageHovered] = useState(false);
   const [infoHovered, setInfoHovered] = useState(false);
   const [tasksTabEnabled, setTasksTabEnabled] = useState(false);
+  
+  // Show in Dock - affects header padding for stoplight buttons.
+  const [showInDock, setShowInDock] = useState(false);
 
   useEffect(() => {
     if (!isVisible || !window.clipboardAPI?.getAllTimeStats) return;
@@ -586,6 +597,13 @@ export default function ClipboardHistory() {
   useEffect(() => {
     window.clipboardAPI?.getTasksTabEnabled?.().then(enabled => {
       setTasksTabEnabled(enabled);
+    });
+  }, [isVisible]);
+  
+  // Load show in dock setting (affects header layout for stoplight buttons).
+  useEffect(() => {
+    window.clipboardAPI?.getShowInDock?.().then(show => {
+      setShowInDock(show);
     });
   }, [isVisible]);
   
@@ -671,6 +689,12 @@ export default function ClipboardHistory() {
     const cleanup = window.transcribeAPI.onStatusChanged((status) => {
       setIsRecording(status === 'recording');
       setTranscriptionStatus(status);
+      
+      // When transcription starts, set a flag so the next window open shows Fields.
+      // This ensures the user sees their new transcript in Fields, not Shared Fields.
+      if (status === 'recording') {
+        localStorage.setItem('shouldShowFieldsOnOpen', 'true');
+      }
     });
     
     return cleanup;
@@ -1493,7 +1517,10 @@ export default function ClipboardHistory() {
         return; // Let input handle it naturally
       }
 
-      // Prevent default for navigation keys (except Tab when input is focused)
+      // Let Cmd+H pass through to menu for app hiding.
+      if (key === 'h' && hasMeta) return;
+      
+      // Prevent default for navigation keys.
       if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Enter' || key === 'Escape' || 
           key === 'j' || key === 'k' || key === 'u' || key === 'h' || key === '?') {
         if (!document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
@@ -2590,7 +2617,7 @@ export default function ClipboardHistory() {
       
       if (!pasteBundleId) {
         window.clipboardAPI?.copyItem?.(item.id);
-        window.clipboardAPI?.showToast?.('No target input field. Copied to clipboard.');
+        window.clipboardAPI?.showNoTargetError?.('Copied to clipboard');
         window.clipboardAPI?.closeWindow();
         return;
       }
@@ -2734,6 +2761,19 @@ export default function ClipboardHistory() {
           cursor: 'default',
         }}
       >
+      {/* Titlebar area for stoplight buttons when in Dock mode */}
+      {showInDock && (
+        <div
+          style={{
+            height: '28px',
+            minHeight: '28px',
+            // @ts-ignore - webkit vendor prefix for Electron draggable region
+            WebkitAppRegion: 'drag',
+            cursor: 'grab',
+          }}
+        />
+      )}
+      
       {/* Draggable header area */}
       <div
         style={{
@@ -2747,7 +2787,8 @@ export default function ClipboardHistory() {
           // @ts-ignore - webkit vendor prefix for Electron draggable region
           WebkitAppRegion: 'drag',
           cursor: 'grab',
-          // Native window roundedCorners handles the border radius.
+          // Light divider line under header when in settings.
+          borderBottom: showSettings ? `1px solid ${theme.border}` : 'none',
         }}
       >
         <img 
@@ -2756,9 +2797,20 @@ export default function ClipboardHistory() {
           style={{ 
             height: '20px',
             width: 'auto',
-            marginRight: 'auto',
           }}
         />
+        {showSettings && (
+          <span style={{ 
+            marginLeft: '8px', 
+            fontSize: '14px', 
+            fontWeight: 500,
+            color: theme.textSecondary,
+            marginRight: 'auto',
+          }}>
+            Settings
+          </span>
+        )}
+        {!showSettings && <div style={{ marginRight: 'auto' }} />}
         
         {/* Sign in button when not authenticated */}
         {!showSettings && !authSession?.user?.email && (

@@ -167,6 +167,14 @@ struct KeyboardMonitoringDisabledMessage: Codable {
     }
 }
 
+struct MenuBarClickedMessage: Codable {
+    let type = "menuBarClicked"
+    
+    enum CodingKeys: String, CodingKey {
+        case type
+    }
+}
+
 // MARK: - CoreAudio Helper
 
 final class CoreAudioHelper {
@@ -937,6 +945,205 @@ final class KeyboardMonitor {
     }
 }
 
+// MARK: - Menu Bar Monitor
+
+/// Monitors for mouse clicks in the menu bar area.
+/// Sends a message to Electron when the menu bar is clicked so Field Theory can hide.
+final class MenuBarMonitor {
+    
+    static let shared = MenuBarMonitor()
+    
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+    private var isMonitoring = false
+    
+    // Menu bar is approximately 24-25 pixels tall on standard displays.
+    // On notched MacBooks, the safe area is handled differently but clicks in that region
+    // still count as menu bar area for our purposes.
+    private let menuBarHeight: CGFloat = 25
+    
+    private init() {}
+    
+    /// Start monitoring for menu bar clicks.
+    func startMonitoring() -> Bool {
+        guard !isMonitoring else {
+            return true
+        }
+        
+        // Create event tap for left mouse down events.
+        // We use listenOnly so we don't block the event - just observe it.
+        let eventMask = (1 << CGEventType.leftMouseDown.rawValue)
+        
+        eventTap = CGEvent.tapCreate(
+            tap: .cghidEventTap,
+            place: .headInsertEventTap,
+            options: .listenOnly,  // Don't block events, just observe
+            eventsOfInterest: CGEventMask(eventMask),
+            callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
+                let monitor = Unmanaged<MenuBarMonitor>.fromOpaque(refcon!).takeUnretainedValue()
+                monitor.handleMouseEvent(event: event)
+                return Unmanaged.passUnretained(event)  // Pass event through unchanged
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        )
+        
+        guard let tap = eventTap else {
+            sendLog(level: "error", message: "Failed to create menu bar event tap")
+            return false
+        }
+        
+        if CGEvent.tapIsEnabled(tap: tap) {
+            runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+            if let source = runLoopSource {
+                CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+            }
+            
+            isMonitoring = true
+            sendLog(level: "info", message: "Menu bar monitoring started")
+            return true
+        } else {
+            CFMachPortInvalidate(tap)
+            eventTap = nil
+            sendLog(level: "error", message: "Menu bar event tap disabled")
+            return false
+        }
+    }
+    
+    /// Stop monitoring for menu bar clicks.
+    func stopMonitoring() {
+        guard isMonitoring else { return }
+        
+        if let source = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            runLoopSource = nil
+        }
+        
+        if let tap = eventTap {
+            CFMachPortInvalidate(tap)
+            eventTap = nil
+        }
+        
+        isMonitoring = false
+        sendLog(level: "info", message: "Menu bar monitoring stopped")
+    }
+    
+    /// Handle a mouse event and check if it's in the menu bar area.
+    private func handleMouseEvent(event: CGEvent) {
+        let location = event.location
+        
+        // Get the screen that contains this click.
+        // CGEvent location is in global coordinates where (0,0) is top-left of main display.
+        // Menu bar is at the top of each screen.
+        guard let screen = NSScreen.screens.first(where: { screen in
+            // Check if click is within this screen's bounds
+            let frame = screen.frame
+            return location.x >= frame.minX && location.x <= frame.maxX
+        }) else {
+            return
+        }
+        
+        // Calculate the top of the screen in global coordinates.
+        // NSScreen.frame.maxY gives the top edge in Cocoa coordinates (origin at bottom-left).
+        // But CGEvent uses Quartz coordinates (origin at top-left of main screen).
+        let mainScreenHeight = NSScreen.main?.frame.height ?? 0
+        let screenTopInQuartz = mainScreenHeight - screen.frame.maxY
+        
+        // Check if click is in menu bar area (within menuBarHeight from top of this screen).
+        if location.y >= screenTopInQuartz && location.y <= screenTopInQuartz + menuBarHeight {
+            sendJSON(MenuBarClickedMessage())
+        }
+    }
+}
+
+// MARK: - App Activation Monitor
+
+/// Monitors when Field Theory becomes the frontmost application.
+/// Sends a message to Electron so it can show the clipboard window.
+final class AppActivationMonitor {
+    
+    static let shared = AppActivationMonitor()
+    
+    private var observer: NSObjectProtocol?
+    private var isMonitoring = false
+    
+    private init() {}
+    
+    /// Start monitoring for app activation.
+    func startMonitoring() -> Bool {
+        guard !isMonitoring else {
+            return true
+        }
+        
+        // Listen for when our app becomes active (frontmost).
+        observer = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleAppActivation(notification: notification)
+        }
+        
+        isMonitoring = true
+        sendLog(level: "info", message: "App activation monitoring started")
+        return true
+    }
+    
+    /// Stop monitoring.
+    func stopMonitoring() {
+        guard isMonitoring else { return }
+        
+        if let observer = observer {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            self.observer = nil
+        }
+        
+        isMonitoring = false
+        sendLog(level: "info", message: "App activation monitoring stopped")
+    }
+    
+    /// Handle app activation notification.
+    private func handleAppActivation(notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
+            sendLog(level: "debug", message: "AppActivationMonitor: No app in notification")
+            return
+        }
+        
+        // Check if the activated app is our parent process (Electron).
+        // This is more reliable than bundle ID matching because:
+        // - Works in dev mode, production, and any bundle ID configuration
+        // - getppid() returns the parent process ID that spawned this helper
+        let parentPid = getppid()
+        let activatedPid = app.processIdentifier
+        
+        // HTTP debug log (appears in debug.log file)
+        let debugUrl = URL(string: "http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03")!
+        var request = URLRequest(url: debugUrl)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let payload = """
+        {"location":"main.swift:handleAppActivation","message":"app-activated","data":{"activatedPid":\(activatedPid),"parentPid":\(parentPid),"name":"\(app.localizedName ?? "unknown")","match":\(activatedPid == parentPid)},"timestamp":\(Int(Date().timeIntervalSince1970 * 1000)),"sessionId":"debug-session","hypothesisId":"H16"}
+        """
+        request.httpBody = payload.data(using: .utf8)
+        URLSession.shared.dataTask(with: request).resume()
+        
+        sendLog(level: "debug", message: "AppActivationMonitor: activated=\(activatedPid) parent=\(parentPid) name=\(app.localizedName ?? "unknown")")
+        
+        if activatedPid == parentPid {
+            sendLog(level: "debug", message: "Field Theory (parent process) became frontmost app")
+            sendJSON(AppBecameFrontmostMessage())
+        }
+    }
+}
+
+/// Message sent when Field Theory becomes the frontmost app.
+struct AppBecameFrontmostMessage: Codable {
+    let type = "appBecameFrontmost"
+    
+    enum CodingKeys: String, CodingKey {
+        case type
+    }
+}
+
 // MARK: - Audio Recording Helper
 
 /// Manages audio recording using AVAudioEngine.
@@ -1320,51 +1527,66 @@ final class MessageHandler {
 
 // MARK: - Main Entry Point
 
-func main() {
+func setupAndRun() {
     sendLog(level: "info", message: "LittleOneHelper started")
+    
+    // Start menu bar monitoring immediately.
+    // This allows us to detect when user clicks on the menu bar to hide Field Theory.
+    _ = MenuBarMonitor.shared.startMonitoring()
+    
+    // Start app activation monitoring.
+    // This allows us to detect when Field Theory becomes the frontmost app (e.g., via Cmd+Tab).
+    _ = AppActivationMonitor.shared.startMonitoring()
     
     let handler = MessageHandler()
     
-    // Read JSON messages from stdin, one per line.
-    while let line = readLine() {
-        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { continue }
-        
-        guard let data = trimmed.data(using: .utf8) else {
-            sendError("Failed to parse input as UTF-8. Input length: \(trimmed.count), first 50 chars: \(String(trimmed.prefix(50)))")
-            continue
-        }
-        
-        do {
-            let message = try JSONDecoder().decode(IncomingMessage.self, from: data)
-            handler.handle(message)
-        } catch let decodingError as DecodingError {
-            var errorDetails = "Failed to parse JSON: "
-            switch decodingError {
-            case .dataCorrupted(let context):
-                errorDetails += "Data corrupted: \(context.debugDescription)"
-            case .keyNotFound(let key, let context):
-                errorDetails += "Key '\(key.stringValue)' not found: \(context.debugDescription)"
-            case .typeMismatch(let type, let context):
-                errorDetails += "Type mismatch for \(type): \(context.debugDescription)"
-            case .valueNotFound(let type, let context):
-                errorDetails += "Value not found for \(type): \(context.debugDescription)"
-            @unknown default:
-                errorDetails += decodingError.localizedDescription
+    // Read stdin on a background queue so the main run loop can process CGEventTap callbacks.
+    // This is critical - blocking the main thread with readLine() prevents event callbacks from firing.
+    DispatchQueue.global(qos: .userInitiated).async {
+        while let line = readLine() {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            
+            guard let data = trimmed.data(using: .utf8) else {
+                sendError("Failed to parse input as UTF-8. Input length: \(trimmed.count), first 50 chars: \(String(trimmed.prefix(50)))")
+                continue
             }
-            // Include first 100 chars of input to help debug
-            let inputPreview = trimmed.count > 100 ? String(trimmed.prefix(100)) + "..." : trimmed
-            sendError("\(errorDetails). Input preview: \(inputPreview)")
-        } catch {
-            // Include first 100 chars of input to help debug
-            let inputPreview = trimmed.count > 100 ? String(trimmed.prefix(100)) + "..." : trimmed
-            sendError("Failed to parse JSON: \(error.localizedDescription). Input preview: \(inputPreview)")
+            
+            do {
+                let message = try JSONDecoder().decode(IncomingMessage.self, from: data)
+                // Handle on main thread for thread safety with UI/event handling.
+                DispatchQueue.main.async {
+                    handler.handle(message)
+                }
+            } catch let decodingError as DecodingError {
+                var errorDetails = "Failed to parse JSON: "
+                switch decodingError {
+                case .dataCorrupted(let context):
+                    errorDetails += "Data corrupted: \(context.debugDescription)"
+                case .keyNotFound(let key, let context):
+                    errorDetails += "Key '\(key.stringValue)' not found: \(context.debugDescription)"
+                case .typeMismatch(let type, let context):
+                    errorDetails += "Type mismatch for \(type): \(context.debugDescription)"
+                case .valueNotFound(let type, let context):
+                    errorDetails += "Value not found for \(type): \(context.debugDescription)"
+                @unknown default:
+                    errorDetails += decodingError.localizedDescription
+                }
+                let inputPreview = trimmed.count > 100 ? String(trimmed.prefix(100)) + "..." : trimmed
+                sendError("\(errorDetails). Input preview: \(inputPreview)")
+            } catch {
+                let inputPreview = trimmed.count > 100 ? String(trimmed.prefix(100)) + "..." : trimmed
+                sendError("Failed to parse JSON: \(error.localizedDescription). Input preview: \(inputPreview)")
+            }
         }
+        
+        // If stdin closes, exit the app.
+        exit(0)
     }
 }
 
-// Run the main loop.
-main()
+// Setup and start the run loop.
+setupAndRun()
 
-// Keep the run loop alive for callbacks.
+// Keep the main run loop alive for CGEventTap and other callbacks.
 RunLoop.main.run()
