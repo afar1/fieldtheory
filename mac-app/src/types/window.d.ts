@@ -440,6 +440,7 @@ interface UpdaterAPI {
   downloadUpdate: () => Promise<void>;
   installUpdate: () => Promise<void>;
   dismissUpdate: () => Promise<void>;
+  onCheckingForUpdate: (callback: () => void) => () => void;
   onUpdateAvailable: (callback: (info: UpdateInfo) => void) => () => void;
   onUpdateNotAvailable: (callback: () => void) => () => void;
   onDownloadProgress: (callback: (percent: number) => void) => () => void;
