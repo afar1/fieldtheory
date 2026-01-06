@@ -394,7 +394,8 @@ export class TranscriberManager extends EventEmitter {
       
       // Strip bracketed content like [BLANK_AUDIO], [MUSIC], [SILENCE] from anywhere in the text.
       // These are whisper artifacts that shouldn't appear in final transcription.
-      let cleanedText = trimmedText.replace(/\s*\[[^\]]+\]\s*/g, ' ').trim();
+      // Preserve [Figure X] references by using a negative lookahead.
+      let cleanedText = trimmedText.replace(/\s*\[(?!Figure\s+[A-Z]+\])[^\]]+\]\s*/g, ' ').trim();
       
       // If nothing remains after stripping brackets, treat as silence.
       if (cleanedText.length === 0) {
@@ -1024,11 +1025,10 @@ export class TranscriberManager extends EventEmitter {
       }
     }
     
-    // If still no segments, fall back to stripping timestamps and returning plain text.
+    // If no segments parsed, fall back to appending figure references at the end.
     if (segments.length === 0) {
-      console.log('[TranscriberManager] Could not parse timestamped segments, falling back');
       const stripped = output.replace(/\[\d{2}:\d{2}:\d{2}(?:\.\d{3})?\s*-->\s*\d{2}:\d{2}:\d{2}(?:\.\d{3})?\]/g, '');
-      return stripped.trim();
+      return this.insertFigureReferences(stripped.trim());
     }
     
     // Sort screenshots by capture time.
@@ -1093,10 +1093,7 @@ export class TranscriberManager extends EventEmitter {
       resultParts.push(segmentText);
     }
     
-    const result = resultParts.join(' ').trim();
-    console.log(`[TranscriberManager] Inserted ${sortedScreenshots.length} figure references inline`);
-    
-    return result;
+    return resultParts.join(' ').trim();
   }
   
   /**
