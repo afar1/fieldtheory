@@ -161,6 +161,19 @@ img {
   color: var(--color-text);
 }
 
+/* Theme label hidden on desktop, shown on mobile */
+.theme-label {
+  display: none;
+}
+
+/* Mobile download button text */
+.mobile-download-text {
+  display: none;
+}
+.desktop-download-text {
+  display: inline;
+}
+
 /* --------------------------------------------------------------------------
    Hero Section
    -------------------------------------------------------------------------- */
@@ -618,7 +631,7 @@ html, body {
     border-bottom: 1px solid var(--color-border);
     flex-direction: column;
     padding: var(--space-md);
-    gap: var(--space-sm);
+    gap: var(--space-xs);
   }
 
   .nav-links.open {
@@ -630,7 +643,28 @@ html, body {
   }
 
   .nav-links li {
-    text-align: center;
+    text-align: left;
+  }
+  
+  /* Theme toggle with label on mobile */
+  .theme-toggle-wrapper {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+  }
+  
+  .theme-label {
+    display: inline;
+    font-size: 0.9rem;
+    color: var(--color-text-muted);
+  }
+  
+  /* Mobile: show "Visit on Mac" instead of "Download for Mac" */
+  .mobile-download-text {
+    display: inline;
+  }
+  .desktop-download-text {
+    display: none;
   }
 
   /* Scale down ASCII art visuals to fit mobile screens. */
