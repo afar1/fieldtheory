@@ -14,7 +14,14 @@
   <nav class="nav">
     <div class="container nav-inner">
       <a href="/" class="nav-logo"><img id="nav-logo-img" src="images/field-theory-log(blk).png" alt="Field Theory" class="nav-logo-img"></a>
-      <ul class="nav-links">
+      <button class="nav-toggle" onclick="toggleNav()" aria-label="Toggle navigation">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round">
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+      <ul class="nav-links" id="nav-links">
         <li><a href="theory.html">Theory</a></li>
         <li><a href="#pricing">Pricing</a></li>
         <li><a href="#download">Download</a></li>
@@ -440,6 +447,22 @@
         logoImg.src = isDark ? 'images/field-theory-logo.png' : 'images/field-theory-log(blk).png';
       }
     }
+    
+    // Toggle mobile nav menu
+    function toggleNav() {
+      const navLinks = document.getElementById('nav-links');
+      if (navLinks) {
+        navLinks.classList.toggle('open');
+      }
+    }
+    
+    // Close nav when clicking a link
+    document.querySelectorAll('.nav-links a').forEach(link => {
+      link.addEventListener('click', () => {
+        const navLinks = document.getElementById('nav-links');
+        if (navLinks) navLinks.classList.remove('open');
+      });
+    });
     
     // Update logo on page load based on saved theme
     (function() {
