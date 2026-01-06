@@ -560,7 +560,7 @@ export default function ClipboardHistory() {
   });
   
   // Update notification state.
-  type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error';
+  type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error' | 'uptodate';
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
@@ -806,7 +806,9 @@ export default function ClipboardHistory() {
         setUpdateVersion(info.version);
       }),
       window.updaterAPI.onUpdateNotAvailable(() => {
-        setUpdateStatus('idle');
+        setUpdateStatus('uptodate');
+        // Reset to idle after 3 seconds so the version number returns.
+        setTimeout(() => setUpdateStatus('idle'), 3000);
       }),
       window.updaterAPI.onError((error) => {
         console.error('[Updater] Error:', error);
@@ -5297,103 +5299,8 @@ export default function ClipboardHistory() {
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         }}
       >
-        {/* Left side: Update notification OR Version + Stats */}
+        {/* Left side: Plan info (quotas or stats) */}
         {!showSettings ? (
-          updateStatus !== 'idle' ? (
-            // Update notification (replaces version + stats)
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1 }}>
-              {/* Gift icon + text with shimmer overlay */}
-              <div style={{
-                position: 'relative',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                overflow: 'hidden',
-              }}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 12 20 22 4 22 4 12"/>
-                  <rect x="2" y="7" width="20" height="5"/>
-                  <line x1="12" y1="22" x2="12" y2="7"/>
-                  <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/>
-                  <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>
-                </svg>
-                <span style={{ fontSize: '10px', color: updateStatus === 'error' ? '#ef4444' : theme.text }}>
-                  {updateStatus === 'checking' ? 'Checking for updates...' : updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'New update ready' : updateStatus === 'error' ? `Update failed: ${updateError}` : 'New update available'}
-                </span>
-                {/* Shimmer overlay - always show during update sequence */}
-                <div style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  background: `linear-gradient(90deg, transparent 0%, ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.6)'} 50%, transparent 100%)`,
-                  animation: 'shimmer 3.7s ease-in-out infinite',
-                  pointerEvents: 'none',
-                }} />
-              </div>
-                {updateStatus !== 'checking' && updateStatus !== 'downloading' && updateStatus !== 'error' && (
-                <>
-                  <button
-                    onClick={() => {
-                      window.updaterAPI?.dismissUpdate();
-                      setUpdateStatus('idle');
-                    }}
-                    style={{
-                      padding: '2px 5px',
-                      fontSize: '9px',
-                      color: theme.textSecondary,
-                      backgroundColor: 'transparent',
-                      border: 'none',
-                      cursor: 'pointer',
-                      opacity: 0.6,
-                    }}
-                  >
-                    Later
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (updateStatus === 'ready') {
-                        window.updaterAPI?.installUpdate();
-                      } else {
-                        window.updaterAPI?.downloadUpdate();
-                      }
-                    }}
-                    style={{
-                      padding: '2px 6px',
-                      fontSize: '9px',
-                      color: theme.text,
-                      backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
-                      border: `1px solid ${theme.border}`,
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {updateStatus === 'ready' ? 'Install and restart' : 'Update'}
-                  </button>
-                </>
-              )}
-              {updateStatus === 'error' && (
-                <button
-                  onClick={() => {
-                    setUpdateError(null);
-                    setUpdateStatus('idle');
-                  }}
-                  style={{
-                    padding: '2px 6px',
-                    fontSize: '9px',
-                    color: theme.text,
-                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Dismiss
-                </button>
-              )}
-            </div>
-          ) : (
             // Plan info: Dev (quotas) or Dev Plus (analytics)
             <div
               style={{
@@ -5501,23 +5408,117 @@ export default function ClipboardHistory() {
                 </div>
               ) : null}
             </div>
-          )
         ) : (
           <div style={{ flex: 1 }} />
         )}
 
-        {/* Right side: version + settings button */}
+        {/* Right side: update notification OR version + settings button */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', fontSize: '9px', flex: 1 }}>
-          {/* Version number */}
-          <span
-            onMouseEnter={() => setVersionHovered(true)}
-            onMouseLeave={() => setVersionHovered(false)}
-            onClick={() => window.updaterAPI?.checkForUpdates?.()}
-            style={{ cursor: 'pointer', color: theme.textSecondary }}
-            title="Check for updates"
-          >
-            {versionHovered ? 'Check for updates' : `v${appVersion}`}
-          </span>
+          {/* Update notification (when active) or version number */}
+          {updateStatus !== 'idle' && updateStatus !== 'uptodate' ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {/* Gift icon + text with shimmer overlay */}
+              <div style={{
+                position: 'relative',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                overflow: 'hidden',
+              }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 12 20 22 4 22 4 12"/>
+                  <rect x="2" y="7" width="20" height="5"/>
+                  <line x1="12" y1="22" x2="12" y2="7"/>
+                  <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/>
+                  <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>
+                </svg>
+                <span style={{ fontSize: '10px', color: updateStatus === 'error' ? '#ef4444' : theme.text }}>
+                  {updateStatus === 'checking' ? 'Checking...' : updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'Update ready' : updateStatus === 'error' ? `Update failed: ${updateError}` : 'Update available'}
+                </span>
+                {/* Shimmer overlay */}
+                <div style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  background: `linear-gradient(90deg, transparent 0%, ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.6)'} 50%, transparent 100%)`,
+                  animation: 'shimmer 3.7s ease-in-out infinite',
+                  pointerEvents: 'none',
+                }} />
+              </div>
+              {updateStatus !== 'checking' && updateStatus !== 'downloading' && updateStatus !== 'error' && (
+                <>
+                  <button
+                    onClick={() => {
+                      window.updaterAPI?.dismissUpdate();
+                      setUpdateStatus('idle');
+                    }}
+                    style={{
+                      padding: '2px 5px',
+                      fontSize: '9px',
+                      color: theme.textSecondary,
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      opacity: 0.6,
+                    }}
+                  >
+                    Later
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (updateStatus === 'ready') {
+                        window.updaterAPI?.installUpdate();
+                      } else {
+                        window.updaterAPI?.downloadUpdate();
+                      }
+                    }}
+                    style={{
+                      padding: '2px 6px',
+                      fontSize: '9px',
+                      color: theme.text,
+                      backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                      border: `1px solid ${theme.border}`,
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {updateStatus === 'ready' ? 'Install' : 'Update'}
+                  </button>
+                </>
+              )}
+              {updateStatus === 'error' && (
+                <button
+                  onClick={() => {
+                    setUpdateError(null);
+                    setUpdateStatus('idle');
+                  }}
+                  style={{
+                    padding: '2px 6px',
+                    fontSize: '9px',
+                    color: theme.text,
+                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Dismiss
+                </button>
+              )}
+            </div>
+          ) : (
+            <span
+              onMouseEnter={() => setVersionHovered(true)}
+              onMouseLeave={() => setVersionHovered(false)}
+              onClick={() => window.updaterAPI?.checkForUpdates?.()}
+              style={{ cursor: 'pointer', color: updateStatus === 'uptodate' ? '#22c55e' : theme.textSecondary }}
+              title="Check for updates"
+            >
+              {updateStatus === 'uptodate' ? 'Up to date ✓' : versionHovered ? 'Check for updates' : `v${appVersion}`}
+            </span>
+          )}
           {/* Settings toggle button */}
           <button
             onClick={() => setShowSettings(!showSettings)}
