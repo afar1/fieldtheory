@@ -406,12 +406,8 @@ export class TranscriberManager extends EventEmitter {
         return;
       }
       
-      // Insert figure references if screenshots were captured during recording.
-      // This adds markers like "[Figure A]" at the end of the transcript so users
-      // know which screenshots correspond to the content.
-      if (this.screenshotMetadata.length > 0) {
-        cleanedText = this.insertFigureReferences(cleanedText);
-      }
+      // Figure references are now inserted inline during transcription parsing
+      // (in parseTimestampedOutput) when screenshots were captured during recording.
       
       // Store transcription in clipboard history.
       if (this.clipboardManager) {
@@ -695,16 +691,22 @@ export class TranscriberManager extends EventEmitter {
     const modelPath = this.modelManager.getModelPath();
     const whisperPath = this.getWhisperPath();
 
+    // If screenshots were captured, we need timestamps to insert figure refs inline.
+    const needTimestamps = this.screenshotMetadata.length > 0;
+
     return new Promise((resolve, reject) => {
       // Spawn whisper-cli process
-      // whisper-cli -m model.bin -f audio.wav --no-timestamps --language en
-      // Note: --print-colors is a flag (defaults to false), don't pass 'false' as value
+      // whisper-cli -m model.bin -f audio.wav [--no-timestamps] --language en
       const args = [
         '-m', modelPath,
         '-f', wavPath,
-        '--no-timestamps',
         '--language', 'en',
       ];
+      
+      // Only skip timestamps if we don't need them for figure placement.
+      if (!needTimestamps) {
+        args.push('--no-timestamps');
+      }
 
       console.log('[TranscriberManager] Running:', whisperPath, args.join(' '));
 
@@ -732,38 +734,36 @@ export class TranscriberManager extends EventEmitter {
           return;
         }
 
-        // Strip ANSI escape codes (color codes) from output as a fallback
-        // Pattern matches ANSI escape sequences like [38;5;227m, [0m, etc.
+        // Strip ANSI escape codes (color codes) from output as a fallback.
         const ansiEscapeRegex = /\u001b\[[0-9;]*m/g;
         let cleanedStdout = stdout.replace(ansiEscapeRegex, '');
-
-        // Remove timestamp patterns like [00:00:00.000 --> 00:00:05.000] or [00:00:00 --> 00:00:05]
-        // Also remove standalone timestamp lines
-        cleanedStdout = cleanedStdout.replace(/\[\d{2}:\d{2}:\d{2}(?:\.\d{3})?\s*-->\s*\d{2}:\d{2}:\d{2}(?:\.\d{3})?\]/g, '');
         
-        // Remove any remaining bracketed content that looks like metadata (e.g., [SPEAKER_TURN], [id: 0], etc.)
-        // But be careful not to remove actual text in brackets - only remove if it looks like metadata
+        // Remove metadata-like bracketed content but preserve timestamp patterns for parsing.
         cleanedStdout = cleanedStdout.replace(/\[(?:SPEAKER_TURN|id:\s*\d+|start:|end:)[^\]]*\]/gi, '');
 
-        // Extract text from output
-        // whisper-cli outputs the transcription text, possibly with some metadata
-        // We want just the text content
-        const lines = cleanedStdout.trim().split('\n');
-        const text = lines
-          .filter(line => {
-            const trimmed = line.trim();
-            // Skip empty lines
-            if (trimmed.length === 0) return false;
-            // Skip lines that are only timestamps or metadata (start with [ and contain --> or are just numbers/timestamps)
-            if (trimmed.match(/^\[.*-->\s*\]/)) return false;
-            if (trimmed.match(/^\[\d+:\d+:\d+/)) return false;
-            // Skip lines that look like metadata markers
-            if (trimmed.match(/^(###|Transcription|END|BEGIN)/i)) return false;
-            return true;
-          })
-          .map(line => line.trim())
-          .join(' ')
-          .trim();
+        let text: string;
+
+        if (needTimestamps) {
+          // Parse timestamped segments for inline figure placement.
+          text = this.parseTimestampedOutput(cleanedStdout);
+        } else {
+          // No screenshots - strip all timestamps and join text.
+          cleanedStdout = cleanedStdout.replace(/\[\d{2}:\d{2}:\d{2}(?:\.\d{3})?\s*-->\s*\d{2}:\d{2}:\d{2}(?:\.\d{3})?\]/g, '');
+          
+          const lines = cleanedStdout.trim().split('\n');
+          text = lines
+            .filter(line => {
+              const trimmed = line.trim();
+              if (trimmed.length === 0) return false;
+              if (trimmed.match(/^\[.*-->\s*\]/)) return false;
+              if (trimmed.match(/^\[\d+:\d+:\d+/)) return false;
+              if (trimmed.match(/^(###|Transcription|END|BEGIN)/i)) return false;
+              return true;
+            })
+            .map(line => line.trim())
+            .join(' ')
+            .trim();
+        }
 
         resolve(text);
       });
@@ -985,32 +985,152 @@ export class TranscriberManager extends EventEmitter {
   }
   
   /**
-   * Insert figure references into the transcript text.
-   * Appends a line with all figure references and their capture times.
-   * Format: "[Figure A at 0:05, Figure B at 0:23]"
+   * Parse timestamped whisper output and insert figure references inline.
+   * Whisper outputs: [00:00:00.000 --> 00:00:05.000] This is the text.
+   */
+  private parseTimestampedOutput(output: string): string {
+    // Parse segments: [HH:MM:SS.mmm --> HH:MM:SS.mmm] text
+    const segmentRegex = /\[(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?\s*-->\s*(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?\]\s*(.+?)(?=\[\d{2}:\d{2}:\d{2}|$)/gs;
+    
+    const segments: Array<{ startMs: number; endMs: number; text: string }> = [];
+    let match;
+    
+    while ((match = segmentRegex.exec(output)) !== null) {
+      const startMs = this.parseTimestampToMs(match[1], match[2], match[3], match[4]);
+      const endMs = this.parseTimestampToMs(match[5], match[6], match[7], match[8]);
+      const text = match[9].trim();
+      
+      if (text.length > 0) {
+        segments.push({ startMs, endMs, text });
+      }
+    }
+    
+    // Fallback: if no segments parsed, try line-by-line approach.
+    if (segments.length === 0) {
+      const lines = output.trim().split('\n');
+      const lineRegex = /^\[(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?\s*-->\s*(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?\]\s*(.+)$/;
+      
+      for (const line of lines) {
+        const lineMatch = line.match(lineRegex);
+        if (lineMatch) {
+          const startMs = this.parseTimestampToMs(lineMatch[1], lineMatch[2], lineMatch[3], lineMatch[4]);
+          const endMs = this.parseTimestampToMs(lineMatch[5], lineMatch[6], lineMatch[7], lineMatch[8]);
+          const text = lineMatch[9].trim();
+          
+          if (text.length > 0) {
+            segments.push({ startMs, endMs, text });
+          }
+        }
+      }
+    }
+    
+    // If still no segments, fall back to stripping timestamps and returning plain text.
+    if (segments.length === 0) {
+      console.log('[TranscriberManager] Could not parse timestamped segments, falling back');
+      const stripped = output.replace(/\[\d{2}:\d{2}:\d{2}(?:\.\d{3})?\s*-->\s*\d{2}:\d{2}:\d{2}(?:\.\d{3})?\]/g, '');
+      return stripped.trim();
+    }
+    
+    // Sort screenshots by capture time.
+    const sortedScreenshots = [...this.screenshotMetadata].sort(
+      (a, b) => a.capturedAtMs - b.capturedAtMs
+    );
+    
+    // For each segment, collect any screenshots captured during that segment.
+    const segmentFigures: Map<number, string[]> = new Map();
+    
+    for (const screenshot of sortedScreenshots) {
+      // Find the segment that was active when screenshot was captured.
+      // A screenshot at time T belongs to the segment where startMs <= T <= endMs,
+      // or the segment that ends closest before T if none contain it.
+      let bestSegmentIndex = -1;
+      let bestDistance = Infinity;
+      
+      for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i];
+        
+        // Screenshot falls within this segment.
+        if (screenshot.capturedAtMs >= seg.startMs && screenshot.capturedAtMs <= seg.endMs) {
+          bestSegmentIndex = i;
+          break;
+        }
+        
+        // Screenshot is after segment end - track closest preceding segment.
+        if (screenshot.capturedAtMs > seg.endMs) {
+          const distance = screenshot.capturedAtMs - seg.endMs;
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            bestSegmentIndex = i;
+          }
+        }
+      }
+      
+      // If screenshot is before all segments, attach to first segment.
+      if (bestSegmentIndex === -1 && segments.length > 0) {
+        bestSegmentIndex = 0;
+      }
+      
+      if (bestSegmentIndex >= 0) {
+        const existing = segmentFigures.get(bestSegmentIndex) || [];
+        existing.push(screenshot.figureLabel);
+        segmentFigures.set(bestSegmentIndex, existing);
+      }
+    }
+    
+    // Build final text with inline figure references.
+    const resultParts: string[] = [];
+    
+    for (let i = 0; i < segments.length; i++) {
+      let segmentText = segments[i].text;
+      
+      const figures = segmentFigures.get(i);
+      if (figures && figures.length > 0) {
+        // Insert figure refs at end of this segment.
+        const figureRefs = figures.map(f => `[Figure ${f}]`).join(' ');
+        segmentText = `${segmentText} ${figureRefs}`;
+      }
+      
+      resultParts.push(segmentText);
+    }
+    
+    const result = resultParts.join(' ').trim();
+    console.log(`[TranscriberManager] Inserted ${sortedScreenshots.length} figure references inline`);
+    
+    return result;
+  }
+  
+  /**
+   * Parse timestamp components to milliseconds.
+   */
+  private parseTimestampToMs(hours: string, minutes: string, seconds: string, ms?: string): number {
+    const h = parseInt(hours, 10) || 0;
+    const m = parseInt(minutes, 10) || 0;
+    const s = parseInt(seconds, 10) || 0;
+    const milliseconds = parseInt(ms || '0', 10) || 0;
+    
+    return (h * 3600 + m * 60 + s) * 1000 + milliseconds;
+  }
+  
+  /**
+   * Insert figure references into the transcript text (fallback for non-timestamped output).
+   * Appends all figure references at the end.
    */
   private insertFigureReferences(text: string): string {
     if (this.screenshotMetadata.length === 0) {
       return text;
     }
     
-    // Build the figure reference string.
-    // Sort by capture time to maintain chronological order.
+    // Sort by capture time.
     const sortedMetadata = [...this.screenshotMetadata].sort(
       (a, b) => a.capturedAtMs - b.capturedAtMs
     );
     
-    const figureRefs = sortedMetadata.map(meta => 
-      `Figure ${meta.figureLabel} at ${this.formatTimestamp(meta.capturedAtMs)}`
-    );
+    // Append figure references at the end as a fallback.
+    const figureRefs = sortedMetadata.map(meta => `[Figure ${meta.figureLabel}]`).join(' ');
     
-    // Append figure references to the end of the transcript.
-    // Use brackets to clearly indicate these are references, not spoken content.
-    const referenceText = `[${figureRefs.join(', ')}]`;
+    console.log(`[TranscriberManager] Added figure references (fallback): ${figureRefs}`);
     
-    console.log(`[TranscriberManager] Added figure references to transcript: ${referenceText}`);
-    
-    return `${text} ${referenceText}`;
+    return `${text} ${figureRefs}`;
   }
 
   /**
