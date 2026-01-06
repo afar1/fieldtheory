@@ -53,6 +53,7 @@
   "build": {
     "appId": "com.fieldtheory.app",
     "productName": "Field Theory",
+    "electronLanguages": ["en", "en-US"],
     "publish": {
       "provider": "github",
       "owner": "afar1",

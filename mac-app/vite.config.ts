@@ -15,6 +15,7 @@ export default defineConfig(({ mode }) => {
       strictPort: true, // Fail if port is already in use
     },
     build: {
+      sourcemap: false,
       rollupOptions: {
         input: {
           main: path.resolve(__dirname, 'index.html'),

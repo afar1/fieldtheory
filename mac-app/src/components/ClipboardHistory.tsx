@@ -4,13 +4,16 @@
 // Also supports todo view mode (switched via Cmd+Shift+T hotkey).
 // =============================================================================
 
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useMemo, Suspense } from 'react';
 import SettingsPanel from './SettingsPanel';
 import TodoView from './TodoView';
 import SharedContextView from './SharedContextView';
 import DMsView from './DMsView';
 import PopularCommands from './PopularCommands';
-import SketchView, { SketchViewHandle } from './SketchView';
+import type { SketchViewHandle } from './SketchView';
+
+// Lazy load SketchView (Excalidraw) to reduce initial bundle size
+const SketchView = React.lazy(() => import('./SketchView'));
 import { useTheme } from '../contexts/ThemeContext';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
@@ -3406,22 +3409,24 @@ export default function ClipboardHistory() {
       ) : viewMode === 'commands' ? (
         <PopularCommands />
       ) : viewMode === 'sketch' ? (
-        <SketchView
-          ref={sketchViewRef}
-          onSave={handleSketchSave}
-          onClose={handleSketchClose}
-          existingSketch={editingSketchItem ? {
-            id: editingSketchItem.id,
-            imageData: editingSketchItem.imageData || '',
-            width: editingSketchItem.imageWidth || undefined,
-            height: editingSketchItem.imageHeight || undefined,
-          } : null}
-          backgroundImage={sketchBackgroundImage}
-          hideHeader={true}
-          onHasChangesChange={setSketchHasChanges}
-          associatedTranscripts={sketchAssociatedTranscripts}
-          onUnstackTranscript={handleUnstackTranscript}
-        />
+        <Suspense fallback={<div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>}>
+          <SketchView
+            ref={sketchViewRef}
+            onSave={handleSketchSave}
+            onClose={handleSketchClose}
+            existingSketch={editingSketchItem ? {
+              id: editingSketchItem.id,
+              imageData: editingSketchItem.imageData || '',
+              width: editingSketchItem.imageWidth || undefined,
+              height: editingSketchItem.imageHeight || undefined,
+            } : null}
+            backgroundImage={sketchBackgroundImage}
+            hideHeader={true}
+            onHasChangesChange={setSketchHasChanges}
+            associatedTranscripts={sketchAssociatedTranscripts}
+            onUnstackTranscript={handleUnstackTranscript}
+          />
+        </Suspense>
       ) : (
         <div 
           style={{ 
