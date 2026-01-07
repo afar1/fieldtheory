@@ -47,6 +47,7 @@ import { OnboardingIPCChannels } from './types/onboarding';
 import { TodoIPCChannels } from './types/todo';
 import { CursorStatusManager, CursorStatusState } from './cursorStatusManager';
 import { QuotaManager } from './quotaManager';
+import { DiagnosticsCollector } from './diagnosticsCollector';
 
 // Load environment variables from .env.local for Supabase credentials.
 // In development, the file is in the mac-app directory.
@@ -143,6 +144,7 @@ let socialSync: SocialSync | null = null;
 let onboardingWindow: OnboardingWindow | null = null;
 let cursorStatusManager: CursorStatusManager | null = null;
 let quotaManager: QuotaManager | null = null;
+let diagnosticsCollector: DiagnosticsCollector | null = null;
 
 // Track pending update state so windows can query it when they open.
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
@@ -545,7 +547,7 @@ function setupTranscribeIPCHandlers(): void {
     
     const downloadFn = modelSize 
       ? (onProgress?: (downloaded: number, total: number) => void) => 
-          modelManager.downloadModelForSize(modelSize as 'base' | 'small' | 'medium' | 'large', onProgress)
+          modelManager.downloadModelForSize(modelSize as 'small' | 'medium' | 'large', onProgress)
       : (onProgress?: (downloaded: number, total: number) => void) => 
           modelManager.downloadModel(onProgress);
     
@@ -567,7 +569,7 @@ function setupTranscribeIPCHandlers(): void {
       throw new Error('TranscriberManager not initialized');
     }
     const modelManager = transcriberManager.getModelManager();
-    const validSizes: ModelSize[] = ['base', 'small', 'medium', 'large'];
+    const validSizes: ModelSize[] = ['small', 'medium', 'large'];
     if (!validSizes.includes(modelSize as ModelSize)) {
       throw new Error(`Invalid model size: ${modelSize}`);
     }
@@ -590,6 +592,14 @@ function setupTranscribeIPCHandlers(): void {
     return modelManager.getDownloadStatus();
   });
 
+  ipcMain.handle(TranscribeIPCChannels.GET_DOWNLOADING_MODELS, () => {
+    if (!transcriberManager) {
+      return [];
+    }
+    const modelManager = transcriberManager.getModelManager();
+    return modelManager.getDownloadingModels();
+  });
+
   ipcMain.handle(TranscribeIPCChannels.GET_SELECTED_MODEL, () => {
     if (!transcriberManager) {
       return 'base';
@@ -601,7 +611,7 @@ function setupTranscribeIPCHandlers(): void {
     if (!transcriberManager) {
       throw new Error('TranscriberManager not initialized');
     }
-    const validSizes: ModelSize[] = ['base', 'small', 'medium', 'large'];
+    const validSizes: ModelSize[] = ['small', 'medium', 'large'];
     if (!validSizes.includes(modelSize as ModelSize)) {
       throw new Error(`Invalid model size: ${modelSize}`);
     }
@@ -2139,6 +2149,25 @@ function setupClipboardIPCHandlers(): void {
   });
 
   // =========================================================================
+  // Diagnostics IPC Handlers - For remote troubleshooting
+  // =========================================================================
+
+  ipcMain.handle('diagnostics:get', async () => {
+    if (!diagnosticsCollector) {
+      return { error: 'Diagnostics not initialized' };
+    }
+    return diagnosticsCollector.collect();
+  });
+
+  ipcMain.handle('diagnostics:getMarkdown', async () => {
+    if (!diagnosticsCollector) {
+      return 'Diagnostics not initialized';
+    }
+    const report = await diagnosticsCollector.collect();
+    return diagnosticsCollector.formatAsMarkdown(report);
+  });
+
+  // =========================================================================
   // Shared Clipboard IPC Handlers - Shared clipboard for collaboration
   // =========================================================================
 
@@ -2285,6 +2314,14 @@ function setupClipboardIPCHandlers(): void {
     return await socialSync.sendTextDM(recipientUserId, text, parentMessageId);
   });
 
+  // DM: Send an image reply (for feedback with pasted images).
+  ipcMain.handle(SocialIPCChannels.SEND_IMAGE_REPLY, async (_event, recipientUserId: string, imageBase64: string, text?: string, parentMessageId?: string) => {
+    if (!socialSync) {
+      return null;
+    }
+    return await socialSync.sendImageReply(recipientUserId, imageBase64, text, parentMessageId);
+  });
+
   // DM: Get all DM conversations.
   ipcMain.handle(SocialIPCChannels.GET_CONVERSATIONS, async () => {
     if (!socialSync) {
@@ -2317,12 +2354,36 @@ function setupClipboardIPCHandlers(): void {
     return await socialSync.hasUnreadMessages();
   });
 
+  // Feedback: Check if there are unread feedback messages.
+  ipcMain.handle(SocialIPCChannels.HAS_UNREAD_FEEDBACK, async () => {
+    if (!socialSync) {
+      return false;
+    }
+    return await socialSync.hasUnreadFeedback();
+  });
+
   // Feedback: Submit feedback (send to admin).
   ipcMain.handle(SocialIPCChannels.SUBMIT_FEEDBACK, async (_event, localItemId: number) => {
     if (!socialSync) {
       return null;
     }
     return await socialSync.submitFeedback(localItemId);
+  });
+
+  // Feedback: Submit text feedback (for diagnostics, etc.).
+  ipcMain.handle(SocialIPCChannels.SUBMIT_TEXT_FEEDBACK, async (_event, text: string) => {
+    if (!socialSync) {
+      return null;
+    }
+    return await socialSync.submitTextFeedback(text);
+  });
+
+  // Feedback: Submit image feedback with optional caption.
+  ipcMain.handle(SocialIPCChannels.SUBMIT_IMAGE_FEEDBACK, async (_event, imageBase64: string, caption?: string) => {
+    if (!socialSync) {
+      return null;
+    }
+    return await socialSync.submitImageFeedback(imageBase64, caption);
   });
 
   // Feedback: Get current user's submitted feedback.
@@ -2549,34 +2610,23 @@ function setupOnboardingIPCHandlers(): void {
     return true;
   });
 
-  // Expand the onboarding window for the tutorial phase.
-  ipcMain.handle(OnboardingIPCChannels.EXPAND_WINDOW, async () => {
-    if (!onboardingWindow) return;
-    onboardingWindow.expandWindow();
-  });
-
-  // Set tutorial hint to display next to cursor status dot.
-  // Used during onboarding to guide users through the tutorial.
-  ipcMain.on('onboarding:set-tutorial-hint', (_event, hint: string | null) => {
-    if (cursorStatusManager) {
-      cursorStatusManager.setTutorialHint(hint);
-    }
-  });
+  // Note: EXPAND_WINDOW handler removed - no longer needed since onboarding
+  // is now just 2 phases (permissions + model) with no tutorial phase.
 }
 
 
 /**
  * Check permissions and return status.
  */
-async function checkPermissions(): Promise<{ accessibilityGranted: boolean; inputMonitoringGranted: boolean }> {
+async function checkPermissions(): Promise<{ accessibilityGranted: boolean }> {
   if (!nativeHelper) {
-    return { accessibilityGranted: false, inputMonitoringGranted: false };
+    return { accessibilityGranted: false };
   }
   try {
     return await nativeHelper.checkPermissions();
   } catch (error) {
     console.error('[Main] Failed to check permissions:', error);
-    return { accessibilityGranted: false, inputMonitoringGranted: false };
+    return { accessibilityGranted: false };
   }
 }
 
@@ -2951,6 +3001,18 @@ async function initTranscriberSystem(): Promise<void> {
   clipboardManager.on('screenshotEnd', () => {
     cursorStatusManager?.setScreenshotMode(false);
   });
+  
+  // Initialize diagnostics collector for remote troubleshooting.
+  diagnosticsCollector = new DiagnosticsCollector(preferencesManager);
+  if (transcriberManager) {
+    diagnosticsCollector.setModelManager(transcriberManager.getModelManager());
+  }
+  if (visionModelManager) {
+    diagnosticsCollector.setVisionModelManager(visionModelManager);
+  }
+  if (audioManager) {
+    diagnosticsCollector.setAudioManager(audioManager);
+  }
 
   // Set up escape key priority: dismiss clipboard history before canceling recording
   transcriberManager.setClipboardHistoryVisibilityChecker(() => {
@@ -3360,7 +3422,7 @@ if (!gotTheLock) {
     await initVisionSystem();
     
     // Apply Dock visibility setting.
-    // By default, hide from Dock (accessory app behavior).
+    // Default is panel mode (hidden from Dock). This is a WIP feature.
     if (process.platform === 'darwin') {
       const showInDock = preferencesManager?.getPreference('showInDock') ?? false;
       if (showInDock) {

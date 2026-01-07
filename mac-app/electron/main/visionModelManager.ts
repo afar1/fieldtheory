@@ -36,7 +36,7 @@ const VISION_MODELS: Record<VisionModelSize, VisionModelInfo> = {
 
 /**
  * Manages vision model downloads and storage.
- * Models are stored in ~/Library/Application Support/Oscar/models/vision/
+ * Models are stored in ~/Library/Application Support/Field Theory/models/vision/
  * MLX models are directories with multiple files (weights, tokenizer, config, etc.)
  */
 export class VisionModelManager {

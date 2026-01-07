@@ -273,9 +273,11 @@ export class NativeHelper extends EventEmitter {
   }
 
   /**
-   * Check if Accessibility and Input Monitoring permissions are granted.
+   * Check if Accessibility permission is granted.
+   * Note: Input Monitoring check was removed as it caused the app to appear
+   * in Input Monitoring settings even though that permission is not needed.
    */
-  async checkPermissions(): Promise<{ accessibilityGranted: boolean; inputMonitoringGranted: boolean }> {
+  async checkPermissions(): Promise<{ accessibilityGranted: boolean }> {
     await this.waitForReady();
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -288,7 +290,6 @@ export class NativeHelper extends EventEmitter {
           cleanup();
           resolve({
             accessibilityGranted: msg.accessibilityGranted,
-            inputMonitoringGranted: msg.inputMonitoringGranted,
           });
         } else if (msg.type === 'error') {
           cleanup();

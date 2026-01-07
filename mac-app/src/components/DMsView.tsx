@@ -101,9 +101,10 @@ function getDisplayName(name: string | null, email: string | null): string {
 
 interface DMsViewProps {
   onSendDM?: (recipientUserId: string, localItemId: number) => void;
+  feedbackOnly?: boolean;
 }
 
-export default function DMsView({ onSendDM }: DMsViewProps) {
+export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps) {
   const { theme } = useTheme();
   
   // State
@@ -114,18 +115,22 @@ export default function DMsView({ onSendDM }: DMsViewProps) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [contacts, setContacts] = useState<SocialContact[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'dms' | 'feedback'>('dms');
+  // When feedbackOnly, always start in feedback mode.
+  const [activeTab, setActiveTab] = useState<'dms' | 'feedback'>(feedbackOnly ? 'feedback' : 'dms');
   const [selectedFeedback, setSelectedFeedback] = useState<SocialMessage | null>(null);
   const [feedbackReplies, setFeedbackReplies] = useState<SocialMessage[]>([]);
   const [activityLog, setActivityLog] = useState<ActivityLogEntry[]>([]);
   const [replyText, setReplyText] = useState('');
+  const [replyImage, setReplyImage] = useState<{ base64: string; preview: string } | null>(null);
   const [addFriendEmail, setAddFriendEmail] = useState('');
   const [showAddFriend, setShowAddFriend] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [sending, setSending] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const replyInputRef = useRef<HTMLInputElement>(null);
 
   // ==========================================================================
   // Data Loading
@@ -341,19 +346,110 @@ export default function DMsView({ onSendDM }: DMsViewProps) {
   };
 
   const handleSendReply = async () => {
-    if (!window.socialAPI || !replyText.trim()) return;
+    if (!window.socialAPI) return;
     
-    if (selectedFeedback) {
-      // Reply to feedback.
-      const recipientId = isAdmin ? selectedFeedback.senderUserId : selectedFeedback.recipientUserId;
-      await window.socialAPI.sendTextDM(recipientId, replyText.trim(), selectedFeedback.id);
+    // Need either text or image to send.
+    const hasContent = replyText.trim() || replyImage;
+    if (!hasContent) return;
+    
+    setSending(true);
+    try {
+      if (selectedFeedback) {
+        // Reply to feedback.
+        const recipientId = isAdmin ? selectedFeedback.senderUserId : selectedFeedback.recipientUserId;
+        
+        if (replyImage) {
+          // Send image reply (with optional text).
+          await window.socialAPI.sendImageReply(
+            recipientId, 
+            replyImage.base64, 
+            replyText.trim() || undefined, 
+            selectedFeedback.id
+          );
+        } else {
+          // Send text-only reply.
+          await window.socialAPI.sendTextDM(recipientId, replyText.trim(), selectedFeedback.id);
+        }
+        
+        setReplyText('');
+        setReplyImage(null);
+        loadFeedbackDetails(selectedFeedback);
+      } else if (selectedConversation) {
+        // Reply to DM.
+        if (replyImage) {
+          await window.socialAPI.sendImageReply(
+            selectedConversation, 
+            replyImage.base64, 
+            replyText.trim() || undefined
+          );
+        } else {
+          await window.socialAPI.sendTextDM(selectedConversation, replyText.trim());
+        }
+        
+        setReplyText('');
+        setReplyImage(null);
+        loadMessages(selectedConversation);
+      }
+    } finally {
+      setSending(false);
+    }
+  };
+  
+  // Handle paste events for image support.
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) continue;
+        
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const dataUrl = event.target?.result as string;
+          if (!dataUrl) return;
+          
+          // Extract base64 data (remove "data:image/png;base64," prefix).
+          const base64 = dataUrl.split(',')[1];
+          setReplyImage({ base64, preview: dataUrl });
+        };
+        reader.readAsDataURL(file);
+        break;
+      }
+    }
+  };
+  
+  // Clear the pasted image.
+  const clearReplyImage = () => setReplyImage(null);
+  
+  // Handle submitting new feedback (from compose area).
+  const handleNewFeedback = async () => {
+    if (!window.socialAPI) return;
+    
+    // Need either text or image to send.
+    const hasContent = replyText.trim() || replyImage;
+    if (!hasContent) return;
+    
+    setSending(true);
+    try {
+      if (replyImage) {
+        // Send image feedback with optional caption.
+        await window.socialAPI.submitImageFeedback(
+          replyImage.base64,
+          replyText.trim() || undefined
+        );
+      } else {
+        // Send text feedback.
+        await window.socialAPI.submitTextFeedback(replyText.trim());
+      }
+      
       setReplyText('');
-      loadFeedbackDetails(selectedFeedback);
-    } else if (selectedConversation) {
-      // Reply to DM.
-      await window.socialAPI.sendTextDM(selectedConversation, replyText.trim());
-      setReplyText('');
-      loadMessages(selectedConversation);
+      setReplyImage(null);
+      loadData(); // Refresh to show the new feedback in the list.
+    } finally {
+      setSending(false);
     }
   };
 
@@ -453,74 +549,95 @@ export default function DMsView({ onSendDM }: DMsViewProps) {
       overflow: 'hidden',
       padding: '0 16px 16px 16px',
     }}>
-      {/* Sub-tabs: DMs and Feedback */}
+      {/* Sub-tabs: When feedbackOnly is true, just show title; otherwise show DMs/Feedback tabs */}
       <div style={{
         display: 'flex',
         gap: '8px',
         marginBottom: '12px',
+        alignItems: 'center',
       }}>
-        {(['dms', 'feedback'] as const).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => {
-              setActiveTab(tab);
-              setSelectedConversation(null);
-              setSelectedFeedback(null);
-            }}
-            style={{
-              padding: '6px 8px',
-              fontSize: '10px',
-              fontWeight: 400,
-              backgroundColor: activeTab === tab ? theme.accent : 'transparent',
-              color: activeTab === tab ? '#fff' : theme.textSecondary,
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              outline: 'none',
-              transition: 'all 0.15s ease',
-            }}
-            onMouseEnter={(e) => {
-              if (activeTab !== tab) {
-                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (activeTab !== tab) {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }
-            }}
-          >
-            {tab === 'dms' ? 'Direct Messages' : 'Send Feedback'}
-            {tab === 'feedback' && feedback.filter(f => f.feedbackStatus === 'open').length > 0 && (
-              <span style={{
-                marginLeft: '4px',
-                width: '6px',
-                height: '6px',
-                borderRadius: '50%',
-                backgroundColor: '#f59e0b',
-                display: 'inline-block',
-              }} />
-            )}
-          </button>
-        ))}
-        
-        {/* Add Friend button */}
-        <button
-          onClick={() => setShowAddFriend(true)}
-          style={{
-            marginLeft: 'auto',
-            padding: '4px 8px',
-            fontSize: '9px',
-            backgroundColor: 'transparent',
-            color: theme.textSecondary,
-            border: `1px solid ${theme.inputBorder}`,
-            borderRadius: '4px',
-            cursor: 'pointer',
-            outline: 'none',
-          }}
-        >
-          + Add Friend
-        </button>
+        {feedbackOnly ? (
+          // Feedback-only mode: show header instead of tabs.
+          <div style={{ 
+            fontSize: '12px', 
+            fontWeight: 500, 
+            color: theme.text,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+          }}>
+            Send Feedback
+            <span style={{ fontSize: '10px', color: theme.textSecondary, fontWeight: 400 }}>
+              Use Field Theory to transcribe your feedback
+            </span>
+          </div>
+        ) : (
+          // Full mode: show DMs and Feedback tabs.
+          <>
+            {(['dms', 'feedback'] as const).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => {
+                  setActiveTab(tab);
+                  setSelectedConversation(null);
+                  setSelectedFeedback(null);
+                }}
+                style={{
+                  padding: '6px 8px',
+                  fontSize: '10px',
+                  fontWeight: 400,
+                  backgroundColor: activeTab === tab ? theme.accent : 'transparent',
+                  color: activeTab === tab ? '#fff' : theme.textSecondary,
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  outline: 'none',
+                  transition: 'all 0.15s ease',
+                }}
+                onMouseEnter={(e) => {
+                  if (activeTab !== tab) {
+                    e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (activeTab !== tab) {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }
+                }}
+              >
+                {tab === 'dms' ? 'Direct Messages' : 'Send Feedback'}
+                {tab === 'feedback' && feedback.filter(f => f.feedbackStatus === 'open').length > 0 && (
+                  <span style={{
+                    marginLeft: '4px',
+                    width: '6px',
+                    height: '6px',
+                    borderRadius: '50%',
+                    backgroundColor: '#f59e0b',
+                    display: 'inline-block',
+                  }} />
+                )}
+              </button>
+            ))}
+            
+            {/* Add Friend button - only show in full mode */}
+            <button
+              onClick={() => setShowAddFriend(true)}
+              style={{
+                marginLeft: 'auto',
+                padding: '4px 8px',
+                fontSize: '9px',
+                backgroundColor: 'transparent',
+                color: theme.textSecondary,
+                border: `1px solid ${theme.inputBorder}`,
+                borderRadius: '4px',
+                cursor: 'pointer',
+                outline: 'none',
+              }}
+            >
+              + Add Friend
+            </button>
+          </>
+        )}
       </div>
 
       {/* Add Friend Modal */}
@@ -797,38 +914,87 @@ export default function DMsView({ onSendDM }: DMsViewProps) {
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* Reply input */}
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <input
-                  type="text"
-                  placeholder="Type a message..."
-                  value={replyText}
-                  onChange={(e) => setReplyText(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSendReply()}
-                  style={{
-                    flex: 1,
-                    padding: '8px',
-                    fontSize: '12px',
-                    border: `1px solid ${theme.inputBorder}`,
-                    borderRadius: '4px',
-                    backgroundColor: theme.inputBg,
-                    color: theme.text,
-                  }}
-                />
-                <button
-                  onClick={handleSendReply}
-                  style={{
-                    padding: '8px 16px',
-                    fontSize: '11px',
-                    backgroundColor: theme.accent,
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Send
-                </button>
+              {/* Reply input with image preview */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {/* Image preview - shown when an image is pasted */}
+                {replyImage && (
+                  <div style={{ 
+                    position: 'relative', 
+                    display: 'inline-block',
+                    alignSelf: 'flex-start',
+                  }}>
+                    <img 
+                      src={replyImage.preview} 
+                      alt="Pasted image" 
+                      style={{ 
+                        maxWidth: '200px', 
+                        maxHeight: '120px', 
+                        borderRadius: '4px',
+                        border: `1px solid ${theme.inputBorder}`,
+                      }} 
+                    />
+                    <button
+                      onClick={clearReplyImage}
+                      style={{
+                        position: 'absolute',
+                        top: '-6px',
+                        right: '-6px',
+                        width: '18px',
+                        height: '18px',
+                        borderRadius: '50%',
+                        backgroundColor: '#ef4444',
+                        color: '#fff',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '10px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        lineHeight: 1,
+                      }}
+                      title="Remove image"
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
+                
+                {/* Text input and send button */}
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    placeholder={replyImage ? "Add a caption (optional)..." : "Type a message... (paste images with Cmd+V)"}
+                    value={replyText}
+                    onChange={(e) => setReplyText(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && !sending && handleSendReply()}
+                    onPaste={handlePaste}
+                    style={{
+                      flex: 1,
+                      padding: '8px',
+                      fontSize: '12px',
+                      border: `1px solid ${theme.inputBorder}`,
+                      borderRadius: '4px',
+                      backgroundColor: theme.inputBg,
+                      color: theme.text,
+                    }}
+                  />
+                  <button
+                    onClick={handleSendReply}
+                    disabled={sending || (!replyText.trim() && !replyImage)}
+                    style={{
+                      padding: '8px 16px',
+                      fontSize: '11px',
+                      backgroundColor: theme.accent,
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: sending ? 'wait' : 'pointer',
+                      opacity: sending || (!replyText.trim() && !replyImage) ? 0.5 : 1,
+                    }}
+                  >
+                    {sending ? 'Sending...' : 'Send'}
+                  </button>
+                </div>
               </div>
             </>
           ) : activeTab === 'feedback' && selectedFeedback ? (
@@ -962,50 +1128,219 @@ export default function DMsView({ onSendDM }: DMsViewProps) {
                     <div style={{ fontSize: '9px', color: theme.textSecondary, marginBottom: '2px' }}>
                       {reply.senderEmail} • {formatRelativeTime(reply.createdAt)}
                     </div>
-                    <div style={{ fontSize: '12px', color: theme.text }}>
-                      {reply.contentText}
-                    </div>
+                    {reply.contentType === 'image' && reply.imageUrl && (
+                      <img
+                        src={reply.imageUrl}
+                        alt="Reply image"
+                        style={{
+                          maxWidth: '200px',
+                          borderRadius: '4px',
+                          marginBottom: reply.contentText ? '4px' : 0,
+                        }}
+                        onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                      />
+                    )}
+                    {reply.contentText && (
+                      <div style={{ fontSize: '12px', color: theme.text }}>
+                        {reply.contentText}
+                      </div>
+                    )}
                   </div>
                 ))}
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* Reply input */}
-              <div style={{ display: 'flex', gap: '8px' }}>
+              {/* Reply input with image preview */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {/* Image preview - shown when an image is pasted */}
+                {replyImage && (
+                  <div style={{ 
+                    position: 'relative', 
+                    display: 'inline-block',
+                    alignSelf: 'flex-start',
+                  }}>
+                    <img 
+                      src={replyImage.preview} 
+                      alt="Pasted image" 
+                      style={{ 
+                        maxWidth: '200px', 
+                        maxHeight: '120px', 
+                        borderRadius: '4px',
+                        border: `1px solid ${theme.inputBorder}`,
+                      }} 
+                    />
+                    <button
+                      onClick={clearReplyImage}
+                      style={{
+                        position: 'absolute',
+                        top: '-6px',
+                        right: '-6px',
+                        width: '18px',
+                        height: '18px',
+                        borderRadius: '50%',
+                        backgroundColor: '#ef4444',
+                        color: '#fff',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '10px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        lineHeight: 1,
+                      }}
+                      title="Remove image"
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
+                
+                {/* Text input and send button */}
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    ref={replyInputRef}
+                    type="text"
+                    placeholder={replyImage ? "Add a caption (optional)..." : "Add a reply... (paste images with Cmd+V)"}
+                    value={replyText}
+                    onChange={(e) => setReplyText(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && !sending && handleSendReply()}
+                    onPaste={handlePaste}
+                    style={{
+                      flex: 1,
+                      padding: '8px',
+                      fontSize: '12px',
+                      border: `1px solid ${theme.inputBorder}`,
+                      borderRadius: '4px',
+                      backgroundColor: theme.inputBg,
+                      color: theme.text,
+                    }}
+                  />
+                  <button
+                    onClick={handleSendReply}
+                    disabled={sending || (!replyText.trim() && !replyImage)}
+                    style={{
+                      padding: '8px 16px',
+                      fontSize: '11px',
+                      backgroundColor: theme.accent,
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: sending ? 'wait' : 'pointer',
+                      opacity: sending || (!replyText.trim() && !replyImage) ? 0.5 : 1,
+                    }}
+                  >
+                    {sending ? 'Sending...' : 'Reply'}
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : activeTab === 'feedback' ? (
+            // Feedback compose mode - allows creating new feedback directly.
+            <div style={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'center',
+              padding: '20px',
+            }}>
+              <div style={{ textAlign: 'center', marginBottom: '16px' }}>
+                <div style={{ fontSize: '14px', fontWeight: 500, color: theme.text, marginBottom: '4px' }}>
+                  New Feedback
+                </div>
+                <div style={{ fontSize: '11px', color: theme.textSecondary }}>
+                  Type a message, paste an image, or use <kbd style={{ 
+                    padding: '1px 4px', 
+                    backgroundColor: theme.bgSecondary, 
+                    borderRadius: '3px',
+                    fontSize: '10px',
+                  }}>F</kbd> on a Field to send it as feedback
+                </div>
+              </div>
+              
+              {/* Image preview */}
+              {replyImage && (
+                <div style={{ 
+                  position: 'relative', 
+                  display: 'inline-block',
+                  alignSelf: 'center',
+                  marginBottom: '8px',
+                }}>
+                  <img 
+                    src={replyImage.preview} 
+                    alt="Pasted image" 
+                    style={{ 
+                      maxWidth: '300px', 
+                      maxHeight: '200px', 
+                      borderRadius: '4px',
+                      border: `1px solid ${theme.inputBorder}`,
+                    }} 
+                  />
+                  <button
+                    onClick={clearReplyImage}
+                    style={{
+                      position: 'absolute',
+                      top: '-6px',
+                      right: '-6px',
+                      width: '18px',
+                      height: '18px',
+                      borderRadius: '50%',
+                      backgroundColor: '#ef4444',
+                      color: '#fff',
+                      border: 'none',
+                      cursor: 'pointer',
+                      fontSize: '10px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      lineHeight: 1,
+                    }}
+                    title="Remove image"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+              
+              {/* Compose input */}
+              <div style={{ display: 'flex', gap: '8px', maxWidth: '500px', alignSelf: 'center', width: '100%' }}>
                 <input
                   type="text"
-                  placeholder="Add a reply..."
+                  placeholder={replyImage ? "Add a caption (optional)..." : "Type your feedback... (paste images with Cmd+V)"}
                   value={replyText}
                   onChange={(e) => setReplyText(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSendReply()}
+                  onKeyDown={(e) => e.key === 'Enter' && !sending && handleNewFeedback()}
+                  onPaste={handlePaste}
                   style={{
                     flex: 1,
-                    padding: '8px',
+                    padding: '10px 12px',
                     fontSize: '12px',
                     border: `1px solid ${theme.inputBorder}`,
-                    borderRadius: '4px',
+                    borderRadius: '6px',
                     backgroundColor: theme.inputBg,
                     color: theme.text,
                   }}
                 />
                 <button
-                  onClick={handleSendReply}
+                  onClick={handleNewFeedback}
+                  disabled={sending || (!replyText.trim() && !replyImage)}
                   style={{
-                    padding: '8px 16px',
-                    fontSize: '11px',
+                    padding: '10px 16px',
+                    fontSize: '12px',
+                    fontWeight: 500,
                     backgroundColor: theme.accent,
                     color: '#fff',
                     border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
+                    borderRadius: '6px',
+                    cursor: sending ? 'wait' : 'pointer',
+                    opacity: sending || (!replyText.trim() && !replyImage) ? 0.5 : 1,
                   }}
                 >
-                  Reply
+                  {sending ? 'Sending...' : 'Send'}
                 </button>
               </div>
-            </>
+            </div>
           ) : (
-            // No selection
+            // No selection (DMs tab)
             <div style={{
               flex: 1,
               display: 'flex',
@@ -1014,9 +1349,7 @@ export default function DMsView({ onSendDM }: DMsViewProps) {
               color: theme.textSecondary,
               fontSize: '12px',
             }}>
-              {activeTab === 'dms' 
-                ? 'Select a conversation or press D on an item to send a DM' 
-                : 'Select a feedback item to view details'}
+              Select a conversation or press D on an item to send a DM
             </div>
           )}
         </div>

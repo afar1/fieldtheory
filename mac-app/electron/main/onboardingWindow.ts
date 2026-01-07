@@ -35,13 +35,10 @@ export interface PermissionStatus {
  */
 export class OnboardingWindow {
   private window: BrowserWindow | null = null;
-  private normalBounds: Electron.Rectangle | null = null;
-  private animationTimer: NodeJS.Timeout | null = null;
   
-  private readonly WINDOW_WIDTH = 600;
-  private readonly WINDOW_HEIGHT = 500;
-  private readonly EXPANDED_WIDTH = 720;
-  private readonly EXPANDED_HEIGHT = 600;
+  // Compact window size for streamlined 2-phase onboarding (permissions + model).
+  private readonly WINDOW_WIDTH = 500;
+  private readonly WINDOW_HEIGHT = 450;
 
   /**
    * Check current permission status for all required permissions.
@@ -116,10 +113,16 @@ export class OnboardingWindow {
   async triggerScreenRecordingPrompt(): Promise<void> {
     try {
       // Attempting to get screen sources triggers macOS to add the app to the list.
-      await desktopCapturer.getSources({ types: ['screen'] });
+      console.log('[Onboarding] Triggering screen capture to add app to permissions list...');
+      const sources = await desktopCapturer.getSources({ types: ['screen'] });
+      console.log('[Onboarding] Screen capture returned', sources.length, 'sources');
+      
+      // Small delay to give macOS time to update the permissions list.
+      // Without this, opening System Settings immediately may not show the app.
+      await new Promise(resolve => setTimeout(resolve, 500));
     } catch (error) {
       // Expected to fail if permission not granted - that's fine.
-      console.log('[Onboarding] Screen capture triggered to add app to permissions list');
+      console.log('[Onboarding] Screen capture triggered (may have failed, which is expected):', error);
     }
   }
 
@@ -167,8 +170,8 @@ export class OnboardingWindow {
       // Dev mode - load from Vite dev server.
       this.window.loadURL(`${startUrl}#/onboarding?step=${startStep}`);
     } else {
-      // Production - load from built files.
-      const indexPath = path.join(app.getAppPath(), 'electron-dist', 'index.html');
+      // Production - load from built files (frontend is in dist/, not electron-dist/).
+      const indexPath = path.join(app.getAppPath(), 'dist', 'index.html');
       this.window.loadFile(indexPath, { hash: `/onboarding?step=${startStep}` });
     }
 
@@ -203,90 +206,5 @@ export class OnboardingWindow {
     }
   }
 
-  /**
-   * Expand the window for the tutorial phase.
-   * Uses smooth animation to resize and recenter.
-   */
-  expandWindow(): void {
-    if (!this.window || this.window.isDestroyed()) return;
-    if (this.normalBounds) return; // Already expanded.
-
-    this.normalBounds = this.window.getBounds();
-    
-    const current = this.normalBounds;
-    const newWidth = this.EXPANDED_WIDTH;
-    const newHeight = this.EXPANDED_HEIGHT;
-    const newX = Math.round(current.x - (newWidth - current.width) / 2);
-    const newY = Math.round(current.y - (newHeight - current.height) / 2);
-
-    // Clamp to work area bounds.
-    const display = screen.getDisplayNearestPoint({ x: current.x, y: current.y });
-    const workArea = display.workArea;
-
-    const clampedBounds = {
-      x: Math.max(workArea.x, Math.min(newX, workArea.x + workArea.width - newWidth)),
-      y: Math.max(workArea.y, Math.min(newY, workArea.y + workArea.height - newHeight)),
-      width: Math.min(newWidth, workArea.width),
-      height: Math.min(newHeight, workArea.height),
-    };
-
-    this.animateBounds(clampedBounds);
-  }
-
-  /**
-   * Contract the window back to normal size.
-   */
-  contractWindow(): void {
-    if (!this.window || this.window.isDestroyed()) return;
-    if (!this.normalBounds) return; // Not expanded.
-
-    this.animateBounds(this.normalBounds);
-    this.normalBounds = null;
-  }
-
-  /**
-   * Animate window bounds change over time.
-   */
-  private animateBounds(targetBounds: Electron.Rectangle, duration: number = 150): void {
-    if (!this.window || this.window.isDestroyed()) return;
-
-    // Cancel any in-progress animation.
-    if (this.animationTimer) {
-      clearInterval(this.animationTimer);
-      this.animationTimer = null;
-    }
-
-    const startBounds = this.window.getBounds();
-    const steps = 6;
-    const stepDuration = duration / steps;
-    let currentStep = 0;
-
-    this.animationTimer = setInterval(() => {
-      currentStep++;
-      const progress = currentStep / steps;
-      // Ease-out curve for smooth deceleration.
-      const easedProgress = 1 - Math.pow(1 - progress, 3);
-
-      const newBounds = {
-        x: Math.round(startBounds.x + (targetBounds.x - startBounds.x) * easedProgress),
-        y: Math.round(startBounds.y + (targetBounds.y - startBounds.y) * easedProgress),
-        width: Math.round(startBounds.width + (targetBounds.width - startBounds.width) * easedProgress),
-        height: Math.round(startBounds.height + (targetBounds.height - startBounds.height) * easedProgress),
-      };
-
-      if (this.window && !this.window.isDestroyed()) {
-        this.window.setBounds(newBounds);
-      }
-
-      if (currentStep >= steps) {
-        clearInterval(this.animationTimer!);
-        this.animationTimer = null;
-        // Ensure final bounds are exact.
-        if (this.window && !this.window.isDestroyed()) {
-          this.window.setBounds(targetBounds);
-        }
-      }
-    }, stepDuration);
-  }
 }
 

@@ -1,15 +1,12 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
-import { formatHotkeyDisplay } from '../utils/hotkeys';
+import { useEffect, useState, useCallback } from 'react';
 
 // =============================================================================
-// Onboarding - 4-phase onboarding flow for Field Theory
+// Onboarding - 2-phase onboarding flow for Field Theory
 // Phase 1: Permissions (microphone, accessibility, screen recording)
 // Phase 2: Model (voice model selection and download)
-// Phase 3: Core Mechanics (interactive recording + screenshots mini-game)
-// Phase 4: Open Field Theory (teaching the app-opening shortcut)
 // =============================================================================
 
-type OnboardingPhase = 'permissions' | 'model' | 'core-mechanics' | 'open-field-theory';
+type OnboardingPhase = 'permissions' | 'model';
 
 type PermissionStatus = {
   microphone: 'granted' | 'denied' | 'not-determined';
@@ -110,6 +107,14 @@ function PermissionsPhase({
         </div>
       )}
 
+      {/* Shortcut hint */}
+      <div style={styles.shortcutHint}>
+        <span style={styles.shortcutLabel}>Open Field Theory anytime:</span>
+        <kbd style={styles.kbd}>Option</kbd>
+        <span style={styles.shortcutPlus}>+</span>
+        <kbd style={styles.kbd}>Space</kbd>
+      </div>
+
       <button 
         style={{
           ...styles.primaryButton,
@@ -178,7 +183,7 @@ interface ModelPhaseProps {
   onDownloadModel: (model: ModelSize) => void;
   onCancelDownload: () => void;
   onDeleteModel: (model: ModelSize) => void;
-  onContinue: () => void;
+  onFinish: () => void;
 }
 
 function ModelPhase({
@@ -190,12 +195,12 @@ function ModelPhase({
   onDownloadModel,
   onCancelDownload,
   onDeleteModel,
-  onContinue,
+  onFinish,
 }: ModelPhaseProps) {
   const isSelectedModelDownloaded = modelDownloadStatus[selectedModel] || false;
 
-  // Can continue if the selected model is downloaded.
-  const canContinue = isSelectedModelDownloaded;
+  // Can finish if the selected model is downloaded.
+  const canFinish = isSelectedModelDownloaded;
 
   return (
     <div style={styles.phase}>
@@ -299,376 +304,15 @@ function ModelPhase({
       <button 
         style={{
           ...styles.primaryButton,
-          opacity: canContinue ? 1 : 0.5,
-          cursor: canContinue ? 'pointer' : 'not-allowed',
+          opacity: canFinish ? 1 : 0.5,
+          cursor: canFinish ? 'pointer' : 'not-allowed',
           marginTop: '12px',
         }}
-        onClick={onContinue}
-        disabled={!canContinue}
+        onClick={onFinish}
+        disabled={!canFinish}
       >
-        Continue
+        Done
       </button>
-    </div>
-  );
-}
-
-// =============================================================================
-// Phase 3: Core Mechanics (interactive recording + screenshots)
-// Users learn by actually performing the shortcuts. The cursor status dot
-// displays tutorial prompts to guide them through each step.
-// =============================================================================
-
-interface CoreMechanicsPhaseProps {
-  recordingHotkey: string;
-  screenshotHotkey: string;
-  isRecording: boolean;
-  onContinue: () => void;
-}
-
-type CoreMechanicsStep = 
-  | 'start-recording'
-  | 'describing-1'
-  | 'take-screenshot-1'
-  | 'take-screenshot-2'
-  | 'take-screenshot-3'
-  | 'show-input'
-  | 'done';
-
-// Derive screenshot count from current step (avoids storing full image data).
-const getScreenshotCount = (s: CoreMechanicsStep): number => {
-  if (s === 'take-screenshot-2') return 1;
-  if (s === 'take-screenshot-3') return 2;
-  if (s === 'show-input' || s === 'done') return 3;
-  return 0;
-};
-
-function CoreMechanicsPhase({
-  recordingHotkey,
-  screenshotHotkey,
-  isRecording,
-  onContinue,
-}: CoreMechanicsPhaseProps) {
-  const [step, setStep] = useState<CoreMechanicsStep>('start-recording');
-  const [inputText, setInputText] = useState('');
-  const [pastedImages, setPastedImages] = useState<string[]>([]);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-
-  // Ref to access current step in listener callback without stale closure.
-  const stepRef = useRef(step);
-  stepRef.current = step;
-
-  // Handle paste to capture images from clipboard.
-  const handlePaste = (e: React.ClipboardEvent) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    for (const item of Array.from(items)) {
-      if (item.type.startsWith('image/')) {
-        const blob = item.getAsFile();
-        if (blob) {
-          const url = URL.createObjectURL(blob);
-          setPastedImages(prev => [...prev, url]);
-        }
-      }
-    }
-  };
-
-  // Send tutorial hints to cursor status dot based on current step.
-  useEffect(() => {
-    const sendHint = (hint: string | null) => {
-      window.onboardingAPI?.setTutorialHint?.(hint);
-    };
-
-    switch (step) {
-      case 'describing-1':
-        sendHint('Describe what you see in this painting...');
-        // After a delay, prompt for screenshot.
-        const timer1 = setTimeout(() => {
-          sendHint(`Press ${formatHotkeyDisplay(screenshotHotkey)} to screenshot`);
-        }, 4000);
-        return () => { clearTimeout(timer1); sendHint(null); };
-
-      case 'take-screenshot-1':
-        sendHint(`Press ${formatHotkeyDisplay(screenshotHotkey)} to screenshot`);
-        return () => sendHint(null);
-
-      case 'take-screenshot-2':
-        sendHint(`Now screenshot this one (${formatHotkeyDisplay(screenshotHotkey)})`);
-        return () => sendHint(null);
-
-      case 'take-screenshot-3':
-        sendHint(`One more! Describe & screenshot (${formatHotkeyDisplay(screenshotHotkey)})`);
-        return () => sendHint(null);
-
-      case 'show-input':
-        sendHint(null); // Clear hint, let normal transcription flow happen.
-        return;
-
-      default:
-        sendHint(null);
-        return;
-    }
-  }, [step, screenshotHotkey]);
-
-  // Listen for recording state changes.
-  useEffect(() => {
-    if (step === 'start-recording' && isRecording) {
-      setStep('describing-1');
-    }
-  }, [step, isRecording]);
-
-  // Listen for screenshots - register once to avoid duplicate listeners.
-  useEffect(() => {
-    if (!window.clipboardAPI) return;
-
-    const handleItemAdded = (_id: number) => {
-      const currentStep = stepRef.current;
-
-      // Progress through screenshot steps.
-      if (currentStep === 'describing-1' || currentStep === 'take-screenshot-1') {
-        setStep('take-screenshot-2');
-      } else if (currentStep === 'take-screenshot-2') {
-        setStep('take-screenshot-3');
-      } else if (currentStep === 'take-screenshot-3') {
-        setStep('show-input');
-      }
-    };
-
-    window.clipboardAPI.onItemAdded?.(handleItemAdded);
-  }, []);
-
-  // For the input field, detect when content is pasted/typed.
-  useEffect(() => {
-    if (step !== 'show-input') return;
-
-    const handleInput = () => {
-      if (inputRef.current && inputRef.current.value.length > 0) {
-        setInputText(inputRef.current.value);
-      }
-    };
-
-    const input = inputRef.current;
-    if (input) {
-      input.addEventListener('input', handleInput);
-      input.focus();
-      return () => input.removeEventListener('input', handleInput);
-    }
-  }, [step]);
-
-  // Auto-advance when content is pasted, then to next phase when done.
-  useEffect(() => {
-    if (step !== 'show-input') return;
-    if (inputText.length > 0 || pastedImages.length > 0) {
-      const timer = setTimeout(() => setStep('done'), 1500);
-      return () => clearTimeout(timer);
-    }
-  }, [step, inputText, pastedImages]);
-
-  // When done, advance to next phase after brief delay.
-  useEffect(() => {
-    if (step === 'done') {
-      const timer = setTimeout(onContinue, 1500);
-      return () => clearTimeout(timer);
-    }
-  }, [step, onContinue]);
-
-  // Clean up tutorial hint when unmounting.
-  useEffect(() => {
-    return () => {
-      window.onboardingAPI?.setTutorialHint?.(null);
-    };
-  }, []);
-
-  const renderContent = () => {
-    switch (step) {
-      case 'start-recording':
-        return (
-          <>
-            <div style={styles.artworkContainer}>
-              <img 
-                src="/onboarding-art-1.jpg" 
-                alt="Artwork 1" 
-                style={styles.artwork}
-              />
-            </div>
-            <p style={styles.tutorialPrompt}>
-              Press <kbd style={styles.kbd}>{formatHotkeyDisplay(recordingHotkey)}</kbd> to start recording.
-            </p>
-            <p style={styles.subtitle}>
-              Look for the recording indicator next to your cursor.
-            </p>
-          </>
-        );
-
-      case 'describing-1':
-      case 'take-screenshot-1':
-        return (
-          <>
-            <div style={styles.artworkContainer}>
-              <img 
-                src="/onboarding-art-1.jpg" 
-                alt="Artwork 1" 
-                style={styles.artwork}
-              />
-            </div>
-            <p style={styles.tutorialPrompt}>
-              Describe what you see, then press <kbd style={styles.kbd}>{formatHotkeyDisplay(screenshotHotkey)}</kbd> to screenshot.
-            </p>
-          </>
-        );
-
-      case 'take-screenshot-2':
-        return (
-          <>
-            <div style={styles.artworkRow}>
-              <div style={styles.artworkWithStack}>
-                <img 
-                  src="/onboarding-art-1.jpg" 
-                  alt="Artwork 1" 
-                  style={{ ...styles.artworkSmall, opacity: 0.5 }}
-                />
-                {getScreenshotCount(step) > 0 && (
-                  <div style={styles.stackIndicator}>✓</div>
-                )}
-              </div>
-              <img 
-                src="/onboarding-art-2.jpg" 
-                alt="Artwork 2" 
-                style={styles.artworkSmall}
-              />
-            </div>
-            <p style={styles.tutorialPrompt}>
-              Now describe and screenshot this one (<kbd style={styles.kbd}>{formatHotkeyDisplay(screenshotHotkey)}</kbd>).
-            </p>
-          </>
-        );
-
-      case 'take-screenshot-3':
-        return (
-          <>
-            <div style={styles.artworkRow}>
-              <div style={styles.artworkWithStack}>
-                <img 
-                  src="/onboarding-art-1.jpg" 
-                  alt="Artwork 1" 
-                  style={{ ...styles.artworkSmall, opacity: 0.5 }}
-                />
-                <div style={styles.stackIndicator}>✓</div>
-              </div>
-              <div style={styles.artworkWithStack}>
-                <img 
-                  src="/onboarding-art-2.jpg" 
-                  alt="Artwork 2" 
-                  style={{ ...styles.artworkSmall, opacity: 0.5 }}
-                />
-                {getScreenshotCount(step) > 1 && (
-                  <div style={styles.stackIndicator}>✓</div>
-                )}
-              </div>
-              <img 
-                src="/onboarding-art-3.jpg" 
-                alt="Artwork 3" 
-                style={styles.artworkSmall}
-              />
-            </div>
-            <p style={styles.tutorialPrompt}>
-              One more! Describe and screenshot (<kbd style={styles.kbd}>{formatHotkeyDisplay(screenshotHotkey)}</kbd>).
-            </p>
-          </>
-        );
-
-      case 'show-input':
-        return (
-          <>
-            <p style={styles.tutorialPrompt}>
-              Press <kbd style={styles.kbd}>{formatHotkeyDisplay(recordingHotkey)}</kbd> to stop recording. Your content will paste below.
-            </p>
-            <div style={styles.composedInput}>
-              {pastedImages.length > 0 && (
-                <div style={styles.imageChipsRow}>
-                  {pastedImages.map((url, i) => (
-                    <img key={i} src={url} alt="" style={styles.imageChip} />
-                  ))}
-                </div>
-              )}
-              <textarea
-                ref={inputRef}
-                style={styles.textareaInner}
-                placeholder="Your stacked content will appear here..."
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
-                onPaste={handlePaste}
-              />
-            </div>
-          </>
-        );
-
-      case 'done':
-        return (
-          <>
-            <div style={styles.successIcon}>✓</div>
-            <p style={styles.successText}>
-              That's context stacking! Your voice and screenshots combined.
-            </p>
-          </>
-        );
-
-      default:
-        return null;
-    }
-  };
-
-  return (
-    <div style={styles.phase}>
-      <h1 style={styles.title}>Try Recording & Screenshots</h1>
-      {renderContent()}
-    </div>
-  );
-}
-
-// =============================================================================
-// Phase 4: Open Field Theory
-// Dedicated screen for teaching the app-opening shortcut.
-// =============================================================================
-
-interface OpenFieldTheoryPhaseProps {
-  openHotkey: string;
-  onFinish: () => void;
-}
-
-function OpenFieldTheoryPhase({ openHotkey, onFinish }: OpenFieldTheoryPhaseProps) {
-  const [opened, setOpened] = useState(false);
-
-  // Listen for Field Theory window opening.
-  useEffect(() => {
-    const handleWindowOpen = () => {
-      setOpened(true);
-      // Brief delay then finish onboarding.
-      setTimeout(onFinish, 800);
-    };
-
-    window.onboardingAPI?.onFieldTheoryOpened?.(handleWindowOpen);
-  }, [onFinish]);
-
-  return (
-    <div style={styles.phase}>
-      <h1 style={styles.title}>Open Field Theory</h1>
-      
-      {opened ? (
-        <>
-          <div style={styles.successIcon}>✓</div>
-          <p style={styles.successText}>You're ready! Have fun.</p>
-        </>
-      ) : (
-        <>
-          <p style={styles.tutorialPrompt}>
-            Press <kbd style={styles.kbd}>{formatHotkeyDisplay(openHotkey)}</kbd> to open Field Theory.
-          </p>
-          <p style={styles.subtitle}>
-            This is how you'll access your context window anytime.
-          </p>
-        </>
-      )}
     </div>
   );
 }
@@ -694,14 +338,6 @@ export default function Onboarding() {
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState(0);
 
-  // Hotkey state.
-  const [recordingHotkey, setRecordingHotkey] = useState('Command+\\');
-  const [screenshotHotkey, setScreenshotHotkey] = useState('Command+4');
-  const [openHotkey, setOpenHotkey] = useState('Alt+Space');
-
-  // Recording state (for tutorial).
-  const [isRecording, setIsRecording] = useState(false);
-
   // Load initial state from Electron.
   useEffect(() => {
     const loadState = async () => {
@@ -717,9 +353,6 @@ export default function Onboarding() {
         
         // Load current hotkeys, selected model, and download status for all models.
         if (window.transcribeAPI) {
-          const transcribeHotkey = await window.transcribeAPI.getHotkey();
-          if (transcribeHotkey) setRecordingHotkey(transcribeHotkey);
-          
           // Load the currently selected model.
           const currentModel = await window.transcribeAPI.getSelectedModel();
           if (currentModel && ['small', 'medium', 'large'].includes(currentModel)) {
@@ -729,11 +362,12 @@ export default function Onboarding() {
           // Load download status for all models.
           const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
           setModelDownloadStatus(downloadStatus);
-        }
-        if (window.clipboardAPI) {
-          const hotkeys = await window.clipboardAPI.getHotkeys();
-          if (hotkeys.screenshot) setScreenshotHotkey(hotkeys.screenshot);
-          if (hotkeys.history) setOpenHotkey(hotkeys.history);
+          
+          // Check if a download is already in progress.
+          const downloadingModels = await window.transcribeAPI.getDownloadingModels?.() ?? [];
+          if (downloadingModels.length > 0) {
+            setDownloadingModel(downloadingModels[0]);
+          }
         }
       } catch (err) {
         console.error('[Onboarding] Failed to load state:', err);
@@ -742,17 +376,6 @@ export default function Onboarding() {
       }
     };
     loadState();
-  }, []);
-
-  // Listen for recording state changes.
-  useEffect(() => {
-    if (!window.transcribeAPI) return;
-
-    const unsubscribe = window.transcribeAPI.onStatusChanged((status) => {
-      setIsRecording(status === 'recording');
-    });
-
-    return () => unsubscribe();
   }, []);
 
   // Listen for model download progress.
@@ -863,12 +486,6 @@ export default function Onboarding() {
 
   // Phase navigation.
   const goToModel = useCallback(() => setPhase('model'), []);
-  const goToCoreMechanics = useCallback(() => {
-    // Expand window for interactive tutorial.
-    window.onboardingAPI?.expandWindow?.();
-    setPhase('core-mechanics');
-  }, []);
-  const goToOpenFieldTheory = useCallback(() => setPhase('open-field-theory'), []);
 
   // Complete onboarding.
   const finish = useCallback(async () => {
@@ -917,24 +534,6 @@ export default function Onboarding() {
             onDownloadModel={downloadModel}
             onCancelDownload={cancelDownload}
             onDeleteModel={deleteModel}
-            onContinue={goToCoreMechanics}
-          />
-        );
-
-      case 'core-mechanics':
-        return (
-          <CoreMechanicsPhase
-            recordingHotkey={recordingHotkey}
-            screenshotHotkey={screenshotHotkey}
-            isRecording={isRecording}
-            onContinue={goToOpenFieldTheory}
-          />
-        );
-
-      case 'open-field-theory':
-        return (
-          <OpenFieldTheoryPhase
-            openHotkey={openHotkey}
             onFinish={finish}
           />
         );
@@ -961,7 +560,7 @@ interface PhaseIndicatorProps {
 }
 
 function PhaseIndicator({ current, onGoToPhase }: PhaseIndicatorProps) {
-  const phases: OnboardingPhase[] = ['permissions', 'model', 'core-mechanics', 'open-field-theory'];
+  const phases: OnboardingPhase[] = ['permissions', 'model'];
   const currentIndex = phases.indexOf(current);
 
   return (
@@ -1073,10 +672,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#d1d5db',
     fontSize: '14px',
   },
-  downloading: {
-    color: '#3b82f6',
-    fontSize: '14px',
-  },
   permissionContent: {
     flex: 1,
   },
@@ -1108,41 +703,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 500,
     cursor: 'pointer',
     flexShrink: 0,
-  },
-
-  // Setup row styles.
-  setupRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    backgroundColor: '#ffffff',
-    border: '1px solid #e5e7eb',
-    borderRadius: '6px',
-    padding: '8px 10px',
-    textAlign: 'left',
-  },
-  setupCheck: {
-    width: '18px',
-    height: '18px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  setupContent: {
-    flex: 1,
-  },
-  setupLabel: {
-    fontSize: '13px',
-    fontWeight: 500,
-    color: '#1a1a1a',
-  },
-  setupDescription: {
-    fontSize: '11px',
-    color: '#6b7280',
-  },
-  noteText: {
-    display: 'none',
   },
 
   // Model list and cards.
@@ -1256,58 +816,6 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: 'right',
   },
 
-  // Hotkey capture.
-  hotkeyCapture: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'flex-end',
-    gap: '2px',
-    flexShrink: 0,
-  },
-  hotkeyDisplay: {
-    fontFamily: '-apple-system, monospace',
-    fontSize: '12px',
-    fontWeight: 500,
-    color: '#1a1a1a',
-    backgroundColor: '#f3f4f6',
-    padding: '4px 10px',
-    borderRadius: '4px',
-    minWidth: '60px',
-    textAlign: 'center',
-  },
-  capturingBox: {
-    fontFamily: '-apple-system, monospace',
-    fontSize: '12px',
-    color: '#3b82f6',
-    backgroundColor: '#eff6ff',
-    border: '1px solid #3b82f6',
-    padding: '4px 10px',
-    borderRadius: '4px',
-    minWidth: '60px',
-    textAlign: 'center',
-  },
-  hotkeyActions: {
-    display: 'flex',
-    gap: '2px',
-  },
-  changeButton: {
-    fontSize: '10px',
-    color: '#6b7280',
-    backgroundColor: 'transparent',
-    border: 'none',
-    cursor: 'pointer',
-    padding: '1px 4px',
-  },
-  confirmButton: {
-    fontSize: '10px',
-    color: '#14372A',
-    backgroundColor: 'transparent',
-    border: 'none',
-    cursor: 'pointer',
-    padding: '1px 4px',
-    fontWeight: 500,
-  },
-
   // Success banner.
   successBanner: {
     backgroundColor: '#f0fdf4',
@@ -1319,6 +827,37 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#166534',
     width: '100%',
     textAlign: 'center',
+  },
+
+  // Shortcut hint.
+  shortcutHint: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
+    padding: '10px 0',
+    marginBottom: '8px',
+  },
+  shortcutLabel: {
+    fontSize: '11px',
+    color: '#6b7280',
+    marginRight: '4px',
+  },
+  shortcutPlus: {
+    fontSize: '11px',
+    color: '#9ca3af',
+  },
+  kbd: {
+    display: 'inline-block',
+    padding: '3px 8px',
+    fontSize: '11px',
+    fontWeight: 500,
+    color: '#374151',
+    backgroundColor: '#f3f4f6',
+    border: '1px solid #d1d5db',
+    borderRadius: '4px',
+    boxShadow: '0 1px 0 #d1d5db',
+    fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
   },
 
   // Primary button.
@@ -1348,131 +887,5 @@ const styles: Record<string, React.CSSProperties> = {
     height: '6px',
     borderRadius: '50%',
     transition: 'background-color 0.2s',
-  },
-
-  // Tutorial styles.
-  artworkContainer: {
-    width: '100%',
-    maxWidth: '320px',
-    marginBottom: '10px',
-  },
-  artwork: {
-    width: '100%',
-    height: 'auto',
-    borderRadius: '6px',
-    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
-  },
-  artworkRow: {
-    display: 'flex',
-    gap: '10px',
-    justifyContent: 'center',
-    marginBottom: '10px',
-  },
-  artworkSmall: {
-    width: '140px',
-    height: 'auto',
-    borderRadius: '6px',
-    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
-  },
-  tutorialPrompt: {
-    fontSize: '13px',
-    color: '#4b5563',
-    lineHeight: 1.5,
-    marginBottom: '10px',
-  },
-  kbd: {
-    display: 'inline-block',
-    backgroundColor: '#1e293b',
-    color: '#f9fafb',
-    padding: '3px 8px',
-    borderRadius: '3px',
-    fontFamily: '-apple-system, monospace',
-    fontSize: '12px',
-    fontWeight: 500,
-    margin: '0 2px',
-  },
-  recordingIndicator: {
-    backgroundColor: '#dc2626',
-    color: '#ffffff',
-    padding: '5px 12px',
-    borderRadius: '12px',
-    fontSize: '11px',
-    fontWeight: 500,
-    marginBottom: '10px',
-  },
-  testInput: {
-    width: '100%',
-    maxWidth: '320px',
-    padding: '10px',
-    fontSize: '13px',
-    border: '1px solid #e5e7eb',
-    borderRadius: '6px',
-    marginBottom: '10px',
-    textAlign: 'center',
-  },
-  successIcon: {
-    fontSize: '32px',
-    color: '#14372A',
-    marginBottom: '8px',
-  },
-  successText: {
-    fontSize: '13px',
-    color: '#166534',
-    fontWeight: 500,
-  },
-  // New styles for enhanced tutorial flow.
-  artworkWithStack: {
-    position: 'relative',
-    display: 'inline-block',
-  },
-  stackIndicator: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: 'translate(-50%, -50%)',
-    backgroundColor: 'rgba(34, 197, 94, 0.9)',
-    color: '#fff',
-    borderRadius: '50%',
-    width: '28px',
-    height: '28px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: '16px',
-    fontWeight: 'bold',
-  },
-  composedInput: {
-    width: '100%',
-    maxWidth: '400px',
-    border: '1px solid #e5e7eb',
-    borderRadius: '8px',
-    backgroundColor: '#fff',
-    overflow: 'hidden',
-  },
-  imageChipsRow: {
-    display: 'flex',
-    gap: '6px',
-    padding: '8px 12px',
-    borderBottom: '1px solid #f1f5f9',
-    flexWrap: 'wrap',
-  },
-  imageChip: {
-    width: '48px',
-    height: '48px',
-    objectFit: 'cover',
-    borderRadius: '6px',
-    border: '1px solid #e5e7eb',
-  },
-  textareaInner: {
-    width: '100%',
-    minHeight: '60px',
-    padding: '12px',
-    fontSize: '13px',
-    border: 'none',
-    outline: 'none',
-    resize: 'none',
-    textAlign: 'left',
-    fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
-    lineHeight: 1.5,
   },
 };

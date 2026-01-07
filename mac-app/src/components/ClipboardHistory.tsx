@@ -4,13 +4,16 @@
 // Also supports todo view mode (switched via Cmd+Shift+T hotkey).
 // =============================================================================
 
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useMemo, Suspense } from 'react';
 import SettingsPanel from './SettingsPanel';
 import TodoView from './TodoView';
 import SharedContextView from './SharedContextView';
 import DMsView from './DMsView';
 import PopularCommands from './PopularCommands';
-import SketchView, { SketchViewHandle } from './SketchView';
+import type { SketchViewHandle } from './SketchView';
+
+// Lazy load SketchView (Excalidraw) to reduce initial bundle size
+const SketchView = React.lazy(() => import('./SketchView'));
 import { useTheme } from '../contexts/ThemeContext';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
@@ -27,7 +30,7 @@ import {
   useDroppable,
 } from '@dnd-kit/core';
 
-type ViewMode = 'clipboard' | 'todo' | 'team' | 'dms' | 'commands' | 'sketch';
+type ViewMode = 'clipboard' | 'todo' | 'team' | 'feedback' | 'commands' | 'sketch';
 
 type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
 type ClipboardSource = 'mac' | 'ios';
@@ -363,7 +366,7 @@ export default function ClipboardHistory() {
     }
     
     const saved = localStorage.getItem('fieldTheoryView');
-    if (saved === 'clipboard' || saved === 'team' || saved === 'todo' || saved === 'dms' || saved === 'commands') {
+    if (saved === 'clipboard' || saved === 'team' || saved === 'todo' || saved === 'feedback' || saved === 'commands') {
       return saved;
     }
     return 'clipboard';
@@ -551,6 +554,7 @@ export default function ClipboardHistory() {
     imageUrl: string | null;
   } | null>(null);
   const [hasUnreadDMs, setHasUnreadDMs] = useState(false);
+  const [hasUnreadFeedback, setHasUnreadFeedback] = useState(false);
   const [sketchHasChanges, setSketchHasChanges] = useState(false);
   const [lastSeenItemId, setLastSeenItemId] = useState<number | string | null>(() => {
     try {
@@ -730,14 +734,21 @@ export default function ClipboardHistory() {
   useEffect(() => {
     if (!window.socialAPI) return;
     
-    // Load initial hot mic state and unread count.
+    // Load initial hot mic state and unread counts.
     window.socialAPI.getHotMic().then(setHotMicEnabled);
     window.socialAPI.hasUnread().then(setHasUnreadDMs);
+    window.socialAPI.hasUnreadFeedback?.().then(hasUnread => {
+      if (hasUnread) setHasUnreadFeedback(true);
+    });
     
-    // Listen for incoming DMs for Hot Mic feature.
+    // Listen for incoming messages for Hot Mic and notifications.
     const unsubscribe = window.socialAPI.onMessageReceived(async (message) => {
-      // Update unread indicator.
-      setHasUnreadDMs(true);
+      // Update unread indicators based on message type.
+      if (message.type === 'feedback') {
+        setHasUnreadFeedback(true);
+      } else {
+        setHasUnreadDMs(true);
+      }
       
       // Only show Hot Mic preview for DMs (not feedback replies).
       if (message.type !== 'dm') return;
@@ -1121,6 +1132,10 @@ export default function ClipboardHistory() {
   useEffect(() => {
     if (viewMode !== 'sketch') {
       localStorage.setItem('fieldTheoryView', viewMode);
+    }
+    // Clear unread indicator when entering feedback view.
+    if (viewMode === 'feedback') {
+      setHasUnreadFeedback(false);
     }
     // Notify main process of sketch mode changes so it can skip auto-paste into Excalidraw.
     window.clipboardAPI?.setSketchMode?.(viewMode === 'sketch');
@@ -1729,32 +1744,35 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // F - Submit selected item as feedback to admin.
+      // F - Submit selected item as feedback (in clipboard view), or open feedback view.
       if (key === 'f' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
-        // Skip if typing in input
+        // Skip if typing in input.
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
         e.preventDefault();
         
-        // Get the selected item ID.
-        const selectedRow = listRows[selectedIndex];
-        if (!selectedRow) return;
-        
-        const itemId = selectedRow.type === 'item' 
-          ? selectedRow.item.id 
-          : selectedRow.items[0]?.id;
-        
-        if (!itemId) return;
-        
-        // Submit feedback.
-        (async () => {
-          if (!window.socialAPI) return;
-          const result = await window.socialAPI.submitFeedback(itemId);
-          if (result) {
-            // Show a brief confirmation.
-            // (Could add toast notification here)
-            console.log('[ClipboardHistory] Feedback submitted:', result.id);
+        // In clipboard view with a selected item, submit it as feedback.
+        if (viewMode === 'clipboard' && listRows.length > 0) {
+          const selectedRow = listRows[selectedIndex];
+          if (selectedRow) {
+            const itemId = selectedRow.type === 'item' 
+              ? selectedRow.item.id 
+              : selectedRow.items[0]?.id;
+            
+            if (itemId) {
+              (async () => {
+                if (!window.socialAPI) return;
+                const result = await window.socialAPI.submitFeedback(itemId);
+                if (result) {
+                  showFeedback('sent as feedback');
+                }
+              })();
+              return;
+            }
           }
-        })();
+        }
+        
+        // Otherwise, open feedback view.
+        setViewMode('feedback');
         return;
       }
 
@@ -3037,13 +3055,7 @@ export default function ClipboardHistory() {
           {(['clipboard', 'team', ...(tasksTabEnabled ? ['todo'] : []), 'commands'] as ViewMode[]).map((mode) => (
             <button
               key={mode}
-              onClick={() => {
-                setViewMode(mode);
-                // Clear unread indicator when viewing DMs.
-                if (mode === 'dms') {
-                  setHasUnreadDMs(false);
-                }
-              }}
+              onClick={() => setViewMode(mode)}
               tabIndex={0}
               style={{
                 position: 'relative',
@@ -3072,22 +3084,10 @@ export default function ClipboardHistory() {
                 }
               }}
             >
-              {mode === 'clipboard' ? 'Fields' : mode === 'commands' ? 'Popular Commands' : mode === 'team' ? 'Shared Fields' : mode === 'dms' ? 'Messages' : 'Tasks'}
-              {mode === 'dms' && hasUnreadDMs && viewMode !== 'dms' && (
-                <span style={{
-                  position: 'absolute',
-                  top: '2px',
-                  right: '2px',
-                  width: '8px',
-                  height: '8px',
-                  borderRadius: '50%',
-                  backgroundColor: '#f59e0b',
-                }} />
-              )}
+              {mode === 'clipboard' ? 'Fields' : mode === 'commands' ? 'Popular Commands' : mode === 'team' ? 'Shared Fields' : 'Tasks'}
             </button>
           ))}
           
-          {/* Draw button - opens blank canvas */}
           <button
             onClick={() => {
               setEditingSketchItem(null);
@@ -3119,42 +3119,40 @@ export default function ClipboardHistory() {
               e.currentTarget.style.backgroundColor = 'transparent';
               e.currentTarget.style.borderColor = theme.border;
             }}
-            title="Create a new drawing"
+            title="Create a new sketch"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 19l7-7 3 3-7 7-3-3z" />
               <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
               <path d="M2 2l7.586 7.586" />
             </svg>
-            Draw
+            Sketch
           </button>
-          {/* Action feedback - shows recent action like "item deleted" */}
-          {actionFeedback && (
-            <span 
-              style={{ 
-                marginLeft: 'auto',
-                fontSize: '9px', 
-                fontWeight: 500,
-                color: theme.textSecondary,
-              }}
-            >
-              {actionFeedback}
-            </span>
-          )}
           
-          {/* Recording/Transcribing indicator - right-aligned in header */}
-          {(transcriptionStatus === 'recording' || transcriptionStatus === 'transcribing') && (
-            <div 
-              style={{ 
-                marginLeft: actionFeedback ? '8px' : 'auto', 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: '4px',
-                position: 'relative',
-              }}
-              onMouseEnter={() => transcriptionStatus === 'recording' && setShowRecordingTooltip(true)}
-              onMouseLeave={() => setShowRecordingTooltip(false)}
-            >
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {actionFeedback && (
+              <span 
+                style={{ 
+                  fontSize: '9px', 
+                  fontWeight: 500,
+                  color: theme.textSecondary,
+                }}
+              >
+                {actionFeedback}
+              </span>
+            )}
+            
+            {(transcriptionStatus === 'recording' || transcriptionStatus === 'transcribing') && (
+              <div 
+                style={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '4px',
+                  position: 'relative',
+                }}
+                onMouseEnter={() => transcriptionStatus === 'recording' && setShowRecordingTooltip(true)}
+                onMouseLeave={() => setShowRecordingTooltip(false)}
+              >
               <span
                 style={{
                   width: '6px',
@@ -3212,6 +3210,56 @@ export default function ClipboardHistory() {
               )}
             </div>
           )}
+          
+          <button
+            onClick={() => setViewMode('feedback')}
+            tabIndex={0}
+            style={{
+              padding: '3px 6px',
+              fontSize: '9px',
+              fontWeight: 500,
+              backgroundColor: viewMode === 'feedback' ? theme.accent : 'transparent',
+              color: viewMode === 'feedback' ? '#fff' : theme.textSecondary,
+              border: 'none',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              outline: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px',
+              position: 'relative',
+            }}
+            onMouseEnter={(e) => {
+              if (viewMode !== 'feedback') {
+                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (viewMode !== 'feedback') {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }
+            }}
+            title="Send feedback (F)"
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+            Feedback
+            {/* Notification dot for new feedback */}
+            {hasUnreadFeedback && viewMode !== 'feedback' && (
+              <span style={{
+                position: 'absolute',
+                top: '-2px',
+                right: '-2px',
+                width: '6px',
+                height: '6px',
+                borderRadius: '50%',
+                backgroundColor: '#f59e0b',
+              }} />
+            )}
+          </button>
+          </div>
         </div>
       )}
 
@@ -3386,6 +3434,18 @@ export default function ClipboardHistory() {
               });
               setViewMode('sketch');
             }}
+            onSubmitFeedback={async (text, imageBase64) => {
+              if (!window.socialAPI) return;
+              let result;
+              if (imageBase64) {
+                result = await window.socialAPI.submitImageFeedback(imageBase64, text || undefined);
+              } else if (text) {
+                result = await window.socialAPI.submitTextFeedback(text);
+              }
+              if (result) {
+                showFeedback('sent as feedback');
+              }
+            }}
           />
         </div>
       )}
@@ -3397,32 +3457,38 @@ export default function ClipboardHistory() {
             setShowSettings(false);
             setViewMode('team');
           }}
+          onNavigateToFeedback={() => {
+            setShowSettings(false);
+            setViewMode('feedback');
+          }}
         />
       ) : viewMode === 'todo' ? (
         <TodoView onSwitchToClipboard={() => setViewMode('clipboard')} />
       ) : viewMode === 'team' ? (
         null
-      ) : viewMode === 'dms' ? (
-        <DMsView />
+      ) : viewMode === 'feedback' ? (
+        <DMsView feedbackOnly={true} />
       ) : viewMode === 'commands' ? (
         <PopularCommands />
       ) : viewMode === 'sketch' ? (
-        <SketchView
-          ref={sketchViewRef}
-          onSave={handleSketchSave}
-          onClose={handleSketchClose}
-          existingSketch={editingSketchItem ? {
-            id: editingSketchItem.id,
-            imageData: editingSketchItem.imageData || '',
-            width: editingSketchItem.imageWidth || undefined,
-            height: editingSketchItem.imageHeight || undefined,
-          } : null}
-          backgroundImage={sketchBackgroundImage}
-          hideHeader={true}
-          onHasChangesChange={setSketchHasChanges}
-          associatedTranscripts={sketchAssociatedTranscripts}
-          onUnstackTranscript={handleUnstackTranscript}
-        />
+        <Suspense fallback={<div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>}>
+          <SketchView
+            ref={sketchViewRef}
+            onSave={handleSketchSave}
+            onClose={handleSketchClose}
+            existingSketch={editingSketchItem ? {
+              id: editingSketchItem.id,
+              imageData: editingSketchItem.imageData || '',
+              width: editingSketchItem.imageWidth || undefined,
+              height: editingSketchItem.imageHeight || undefined,
+            } : null}
+            backgroundImage={sketchBackgroundImage}
+            hideHeader={true}
+            onHasChangesChange={setSketchHasChanges}
+            associatedTranscripts={sketchAssociatedTranscripts}
+            onUnstackTranscript={handleUnstackTranscript}
+          />
+        </Suspense>
       ) : (
         <div 
           style={{ 
@@ -6099,7 +6165,7 @@ export default function ClipboardHistory() {
                       showFeedback('copied to clipboard');
                     }
                   }},
-                  { label: 'draw', key: 'd', action: () => {
+                  { label: 'sketch', key: 'd', action: () => {
                     setSketchBackgroundImage({
                       dataUrl: `data:image/png;base64,${preview.data}`,
                       width: preview.width || 800,
@@ -6108,6 +6174,19 @@ export default function ClipboardHistory() {
                     setEditingSketchItem(null);
                     dismissPreview();
                     setViewMode('sketch');
+                  }},
+                  { label: 'feedback', key: 'f', action: async () => {
+                    const selectedRow = listRows[selectedIndex];
+                    const itemId = selectedRow?.type === 'item' 
+                      ? selectedRow.item.id 
+                      : selectedRow?.items?.[0]?.id;
+                    if (itemId && window.socialAPI) {
+                      const result = await window.socialAPI.submitFeedback(itemId);
+                      if (result) {
+                        showFeedback('sent as feedback');
+                      }
+                    }
+                    dismissPreview();
                   }},
                   // Unstack button - only show when image is part of a stack.
                   ...(preview.type === 'image' && preview.stackId ? [{
