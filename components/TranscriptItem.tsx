@@ -223,18 +223,7 @@ function TranscriptItemComponent({
               </TouchableOpacity>
             )}
           </View>
-          {/* Edit button - top right */}
-          <TouchableOpacity
-            onPress={(e) => {
-              e.stopPropagation();
-              onEdit(item);
-            }}
-            hitSlop={8}
-            style={[styles.editButton, selectionMode && styles.actionButtonDisabled]}
-            disabled={selectionMode}
-          >
-            <Feather name="edit-2" size={14} color={selectionMode ? '#9CA3AF' : '#6B7280'} />
-          </TouchableOpacity>
+          {/* Edit is now in long-press menu */}
         </View>
         
         {/* Main text content - show TextInput when editing */}
@@ -531,6 +520,8 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: 8,
     backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0', // Slightly darker green
     gap: 5,
   },
   sendToCursorText: {
@@ -548,6 +539,8 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: 8,
     backgroundColor: '#F3E8FF',
+    borderWidth: 1,
+    borderColor: '#DDD6FE', // Slightly darker purple
     gap: 5,
   },
   separateButtonText: {

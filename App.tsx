@@ -1447,6 +1447,27 @@ export default function App() {
             </TouchableOpacity>
             
             <TouchableOpacity
+              onPress={() => {
+                // Edit only works with exactly 1 item selected
+                if (selectedIds.size === 1) {
+                  const selectedId = Array.from(selectedIds)[0];
+                  const entry = sortedTranscripts.find(t => t.id === selectedId);
+                  if (entry) {
+                    handleEditTranscript(entry);
+                    exitSelectionMode();
+                  }
+                }
+              }}
+              style={[styles.tabButton, selectedIds.size !== 1 && styles.selectionBottomButtonDisabled]}
+              disabled={selectedIds.size !== 1}
+            >
+              <Feather name="edit-2" size={22} color={selectedIds.size === 1 ? '#059669' : '#9CA3AF'} />
+              <Text style={[styles.tabLabel, selectedIds.size === 1 ? styles.editTabLabel : styles.tabLabelDisabled]}>
+                Edit
+              </Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
               onPress={handleDeleteSelected}
               style={[styles.tabButton, selectedIds.size === 0 && styles.selectionBottomButtonDisabled]}
               disabled={selectedIds.size === 0}
@@ -1927,6 +1948,9 @@ const styles = StyleSheet.create({
   },
   unstackTabLabel: {
     color: '#7C3AED',
+  },
+  editTabLabel: {
+    color: '#059669',
   },
   selectionBottomButtonDisabled: {
     opacity: 0.4,
