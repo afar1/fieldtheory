@@ -1474,26 +1474,38 @@ export default function App() {
                 color={pageIndex === 0 ? '#007AFF' : '#9CA3AF'} 
               />
               <Text style={[styles.tabLabel, pageIndex === 0 && styles.tabLabelActive]}>
-                Fields
+                iOS Fields
               </Text>
             </TouchableOpacity>
 
-            {/* Shared Fields Tab - shows team shared items when logged into a team */}
-            {session && (
-              <TouchableOpacity 
-                style={styles.tabButton} 
-                onPress={() => pagerRef.current?.setPageWithoutAnimation(0)}
-              >
-                <Feather 
-                  name="users" 
-                  size={22} 
-                  color={'#9CA3AF'} 
-                />
-                <Text style={styles.tabLabel}>
-                  Shared
-                </Text>
-              </TouchableOpacity>
-            )}
+            {/* Shared Fields Tab - always visible, prompts for login if not authenticated */}
+            <TouchableOpacity 
+              style={styles.tabButton} 
+              onPress={() => {
+                if (!session) {
+                  Alert.alert(
+                    'Sign In Required',
+                    'You need to log in to access shared fields. Go to Settings to sign in.',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      { text: 'Settings', onPress: () => pagerRef.current?.setPageWithoutAnimation(5) },
+                    ]
+                  );
+                } else {
+                  // TODO: Navigate to shared fields page when implemented
+                  Alert.alert('Shared Fields', 'Shared fields coming soon to iOS.');
+                }
+              }}
+            >
+              <Feather 
+                name="users" 
+                size={22} 
+                color={'#9CA3AF'} 
+              />
+              <Text style={styles.tabLabel}>
+                Shared
+              </Text>
+            </TouchableOpacity>
 
             {/* Cursor Tab */}
             {settings.showCursor && (
