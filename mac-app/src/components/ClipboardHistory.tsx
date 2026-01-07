@@ -1612,17 +1612,17 @@ export default function ClipboardHistory() {
           } else if (hasShift) {
             setShowSettings(false);
             setViewMode(prev => {
-              if (prev === 'clipboard') return 'commands';
-              if (prev === 'commands') return tasksTabEnabled ? 'todo' : 'team';
-              if (prev === 'todo') return 'team';
+              if (prev === 'clipboard') return 'hotmic';
+              if (prev === 'hotmic') return 'team';
+              if (prev === 'team') return 'clipboard';
               return 'clipboard';
             });
           } else {
             setShowSettings(false);
             setViewMode(prev => {
               if (prev === 'clipboard') return 'team';
-              if (prev === 'team') return tasksTabEnabled ? 'todo' : 'commands';
-              if (prev === 'todo') return 'commands';
+              if (prev === 'team') return 'hotmic';
+              if (prev === 'hotmic') return 'clipboard';
               return 'clipboard';
             });
           }
@@ -2405,17 +2405,17 @@ export default function ClipboardHistory() {
         } else if (hasShift) {
           setShowSettings(false);
           setViewMode(prev => {
-            if (prev === 'clipboard') return 'commands';
-            if (prev === 'commands') return tasksTabEnabled ? 'todo' : 'team';
-            if (prev === 'todo') return 'team';
+            if (prev === 'clipboard') return 'hotmic';
+            if (prev === 'hotmic') return 'team';
+            if (prev === 'team') return 'clipboard';
             return 'clipboard';
           });
         } else {
           setShowSettings(false);
           setViewMode(prev => {
             if (prev === 'clipboard') return 'team';
-            if (prev === 'team') return tasksTabEnabled ? 'todo' : 'commands';
-            if (prev === 'todo') return 'commands';
+            if (prev === 'team') return 'hotmic';
+            if (prev === 'hotmic') return 'clipboard';
             return 'clipboard';
           });
         }
@@ -3064,55 +3064,92 @@ export default function ClipboardHistory() {
             padding: '0 16px',
             marginBottom: '8px',
           }}>
-          {(['clipboard', 'team', 'hotmic', ...(tasksTabEnabled ? ['todo'] : []), 'commands'] as ViewMode[]).map((mode) => (
-            <button
-              key={mode}
-              onClick={() => setViewMode(mode)}
-              tabIndex={0}
-              style={{
-                position: 'relative',
-                padding: '6px 8px',
-                fontSize: '10px',
-                fontWeight: 400,
-                // Don't highlight Shared Fields when showing sign-in (not authenticated).
-                backgroundColor: viewMode === mode && !(mode === 'team' && !authSession?.user?.email)
-                  ? (mode === 'team' ? (theme.isDark ? '#8b5cf6' : '#7c3aed') : theme.accent)
-                  : 'transparent',
-                color: viewMode === mode && !(mode === 'team' && !authSession?.user?.email) ? '#fff' : theme.textSecondary,
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                transition: 'all 0.15s ease',
-                outline: 'none',
-              }}
-              onMouseEnter={(e) => {
-                if (viewMode !== mode) {
-                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
-                  e.currentTarget.style.borderColor = theme.text;
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (viewMode !== mode) {
-                  e.currentTarget.style.backgroundColor = 'transparent';
-                  e.currentTarget.style.borderColor = 'transparent';
-                }
-              }}
-            >
-              {mode === 'clipboard' ? 'Fields' : mode === 'commands' ? 'Popular Commands' : mode === 'team' ? 'Shared Fields' : mode === 'hotmic' ? 'Hot Mic' : 'Tasks'}
-              {/* Unread indicator for Hot Mic tab */}
-              {mode === 'hotmic' && hasUnreadDMs && viewMode !== 'hotmic' && (
-                <span style={{
-                  position: 'absolute',
-                  top: '-2px',
-                  right: '-2px',
-                  width: '6px',
-                  height: '6px',
-                  borderRadius: '50%',
-                  backgroundColor: '#DC2626',
-                }} />
-              )}
-            </button>
-          ))}
+          {(['clipboard', 'team', 'hotmic', ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
+            // Hot Mic tab has special styling and the fire toggle.
+            const isHotMic = mode === 'hotmic';
+            const isSelected = viewMode === mode && !(mode === 'team' && !authSession?.user?.email);
+            
+            // Hot Mic: red when selected AND enabled, otherwise normal accent.
+            const bgColor = isSelected
+              ? (isHotMic && hotMicEnabled ? '#DC2626' : (mode === 'team' ? (theme.isDark ? '#8b5cf6' : '#7c3aed') : theme.accent))
+              : 'transparent';
+            
+            return (
+              <button
+                key={mode}
+                onClick={() => setViewMode(mode)}
+                tabIndex={0}
+                style={{
+                  position: 'relative',
+                  padding: isHotMic ? '6px 8px 6px 6px' : '6px 8px',
+                  fontSize: '10px',
+                  fontWeight: 400,
+                  backgroundColor: bgColor,
+                  color: isSelected ? '#fff' : theme.textSecondary,
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                  outline: 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+                onMouseEnter={(e) => {
+                  if (!isSelected) {
+                    e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!isSelected) {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }
+                }}
+              >
+                {/* Hot Mic fire toggle - clickable independently, on the left */}
+                {isHotMic && (
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const newState = !hotMicEnabled;
+                      window.socialAPI?.setHotMic(newState).then(success => {
+                        if (success) setHotMicEnabled(newState);
+                      });
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.transform = 'scale(1.2)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'scale(1)';
+                    }}
+                    style={{
+                      cursor: 'pointer',
+                      fontSize: '11px',
+                      transition: 'all 0.15s ease',
+                      filter: hotMicEnabled ? 'none' : 'grayscale(100%) opacity(0.5)',
+                    }}
+                    title={hotMicEnabled ? 'Hot Mic is ON - click to turn off' : 'Hot Mic is OFF - click to turn on'}
+                  >
+                    🔥
+                  </span>
+                )}
+                {mode === 'clipboard' ? 'Fields' : mode === 'team' ? 'Shared Fields' : mode === 'hotmic' ? 'Hot Mic' : 'Tasks'}
+                
+                {/* Unread indicator for Hot Mic tab */}
+                {isHotMic && hasUnreadDMs && viewMode !== 'hotmic' && (
+                  <span style={{
+                    position: 'absolute',
+                    top: '-2px',
+                    right: '-2px',
+                    width: '6px',
+                    height: '6px',
+                    borderRadius: '50%',
+                    backgroundColor: '#3b82f6',
+                  }} />
+                )}
+              </button>
+            );
+          })}
           
           <button
             onClick={() => {
@@ -3282,7 +3319,7 @@ export default function ClipboardHistory() {
             </button>
           )}
           
-          {/* Popular Commands button */}
+          {/* Commands button */}
           <button
             onClick={() => setViewMode('commands')}
             tabIndex={0}
@@ -3299,7 +3336,7 @@ export default function ClipboardHistory() {
               outline: 'none',
               display: 'flex',
               alignItems: 'center',
-              gap: '3px',
+              gap: '2px',
             }}
             onMouseEnter={(e) => {
               if (viewMode !== 'commands') {
@@ -3311,12 +3348,9 @@ export default function ClipboardHistory() {
                 e.currentTarget.style.backgroundColor = 'transparent';
               }
             }}
-            title="Popular Commands (C)"
+            title="Commands (C)"
           >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="4 17 10 11 4 5" />
-              <line x1="12" y1="19" x2="20" y2="19" />
-            </svg>
+            <span style={{ fontWeight: 400, opacity: 0.7 }}>/</span>
             Commands
           </button>
           
@@ -3370,14 +3404,6 @@ export default function ClipboardHistory() {
             )}
           </button>
           
-          {/* Data policy notice - shows privacy context for current view */}
-          <DataPolicyNotice 
-            context={
-              viewMode === 'team' ? 'shared' : 
-              viewMode === 'feedback' ? 'feedback' : 
-              'local'
-            } 
-          />
           </div>
         </div>
       )}
@@ -3591,9 +3617,97 @@ export default function ClipboardHistory() {
       ) : viewMode === 'team' ? (
         null
       ) : viewMode === 'hotmic' ? (
-        <HotMicView />
+        // Hot Mic requires authentication.
+        !authSession?.user?.email ? (
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '40px',
+            textAlign: 'center',
+          }}>
+            <div style={{
+              fontSize: '32px',
+              marginBottom: '16px',
+              filter: 'grayscale(100%) opacity(0.5)',
+            }}>🔥</div>
+            <h3 style={{ margin: '0 0 8px 0', fontSize: '14px', color: theme.text }}>
+              Sign in to use Hot Mic
+            </h3>
+            <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: theme.textSecondary }}>
+              Send and receive messages with your team in real time.
+            </p>
+            <button
+              onClick={() => setViewMode('team')}
+              style={{
+                padding: '8px 16px',
+                fontSize: '12px',
+                fontWeight: 500,
+                backgroundColor: theme.accent,
+                color: '#fff',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+              }}
+            >
+              Sign in
+            </button>
+          </div>
+        ) : (
+          <HotMicView 
+            hotMicEnabled={hotMicEnabled}
+            onHotMicToggle={() => {
+              const newState = !hotMicEnabled;
+              window.socialAPI?.setHotMic(newState).then(success => {
+                if (success) setHotMicEnabled(newState);
+              });
+            }}
+          />
+        )
       ) : viewMode === 'feedback' ? (
-        <DMsView feedbackOnly={true} />
+        // Feedback requires authentication.
+        !authSession?.user?.email ? (
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '40px',
+            textAlign: 'center',
+          }}>
+            <div style={{
+              fontSize: '32px',
+              marginBottom: '16px',
+              opacity: 0.5,
+            }}>💬</div>
+            <h3 style={{ margin: '0 0 8px 0', fontSize: '14px', color: theme.text }}>
+              Sign in to send feedback
+            </h3>
+            <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: theme.textSecondary }}>
+              Share ideas, report issues, or ask questions.
+            </p>
+            <button
+              onClick={() => setViewMode('team')}
+              style={{
+                padding: '8px 16px',
+                fontSize: '12px',
+                fontWeight: 500,
+                backgroundColor: theme.accent,
+                color: '#fff',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+              }}
+            >
+              Sign in
+            </button>
+          </div>
+        ) : (
+          <DMsView feedbackOnly={true} />
+        )
       ) : viewMode === 'commands' ? (
         <PopularCommands />
       ) : viewMode === 'sketch' ? (
@@ -5640,6 +5754,16 @@ export default function ClipboardHistory() {
         ) : (
           <div style={{ flex: 1 }} />
         )}
+
+        {/* Center: Data policy notice */}
+        <DataPolicyNotice 
+          context={
+            viewMode === 'team' ? 'shared' : 
+            viewMode === 'feedback' ? 'feedback' : 
+            viewMode === 'hotmic' ? 'dm' :
+            'local'
+          } 
+        />
 
         {/* Right side: update notification OR version + settings button */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', fontSize: '9px', flex: 1 }}>
