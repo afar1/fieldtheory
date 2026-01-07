@@ -564,6 +564,7 @@ export default function ClipboardHistory() {
   } | null>(null);
   const [hasUnreadDMs, setHasUnreadDMs] = useState(false);
   const [hasUnreadFeedback, setHasUnreadFeedback] = useState(false);
+  const [hasUnreadShared, setHasUnreadShared] = useState(false);
   const [sketchHasChanges, setSketchHasChanges] = useState(false);
   const [lastSeenItemId, setLastSeenItemId] = useState<number | string | null>(() => {
     try {
@@ -764,10 +765,18 @@ export default function ClipboardHistory() {
     // Listen for incoming messages for Hot Mic and notifications.
     const unsubscribe = window.socialAPI.onMessageReceived(async (message) => {
       // Update unread indicators based on message type.
+      // Only set unread if we're not currently viewing that section.
       if (message.type === 'feedback') {
-        setHasUnreadFeedback(true);
+        // Check current viewMode from DOM to avoid stale closure.
+        const currentView = localStorage.getItem('fieldTheoryView');
+        if (currentView !== 'feedback') {
+          setHasUnreadFeedback(true);
+        }
       } else {
-        setHasUnreadDMs(true);
+        const currentView = localStorage.getItem('fieldTheoryView');
+        if (currentView !== 'hotmic') {
+          setHasUnreadDMs(true);
+        }
       }
       
       // Only show Hot Mic preview for DMs (not feedback replies).
@@ -795,6 +804,20 @@ export default function ClipboardHistory() {
     return unsubscribe;
   }, [isRecording]);
   
+  // Listen for new shared team items.
+  useEffect(() => {
+    if (!window.sharedClipboardAPI?.onTeamItemAdded) return;
+    
+    const unsubscribe = window.sharedClipboardAPI.onTeamItemAdded(() => {
+      // Only set unread if not currently viewing team.
+      const currentView = localStorage.getItem('fieldTheoryView');
+      if (currentView !== 'team') {
+        setHasUnreadShared(true);
+      }
+    });
+    
+    return unsubscribe;
+  }, []);
   
   // Close mic dropdown when clicking outside.
   useEffect(() => {
@@ -1161,6 +1184,10 @@ export default function ClipboardHistory() {
     if (viewMode === 'hotmic') {
       setHasUnreadDMs(false);
     }
+    // Clear unread indicator when entering team/shared fields view.
+    if (viewMode === 'team') {
+      setHasUnreadShared(false);
+    }
     // Notify main process of sketch mode changes so it can skip auto-paste into Excalidraw.
     window.clipboardAPI?.setSketchMode?.(viewMode === 'sketch');
   }, [viewMode]);
@@ -1187,6 +1214,7 @@ export default function ClipboardHistory() {
         // Clear unread indicators when signing out.
         setHasUnreadDMs(false);
         setHasUnreadFeedback(false);
+        setHasUnreadShared(false);
       }
     });
 
@@ -3152,6 +3180,18 @@ export default function ClipboardHistory() {
                 
                 {/* Unread indicator for Hot Mic tab - only when authenticated */}
                 {isHotMic && hasUnreadDMs && viewMode !== 'hotmic' && authSession?.user?.email && (
+                  <span style={{
+                    position: 'absolute',
+                    top: '-2px',
+                    right: '-2px',
+                    width: '6px',
+                    height: '6px',
+                    borderRadius: '50%',
+                    backgroundColor: '#3b82f6',
+                  }} />
+                )}
+                {/* Unread indicator for Shared Fields tab - only when authenticated */}
+                {mode === 'team' && hasUnreadShared && viewMode !== 'team' && authSession?.user?.email && (
                   <span style={{
                     position: 'absolute',
                     top: '-2px',
