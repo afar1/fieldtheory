@@ -11,6 +11,7 @@ import SharedContextView from './SharedContextView';
 import DMsView from './DMsView';
 import HotMicView from './HotMicView';
 import PopularCommands from './PopularCommands';
+import DataPolicyNotice from './DataPolicyNotice';
 import type { SketchViewHandle } from './SketchView';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
@@ -3368,6 +3369,15 @@ export default function ClipboardHistory() {
               }} />
             )}
           </button>
+          
+          {/* Data policy notice - shows privacy context for current view */}
+          <DataPolicyNotice 
+            context={
+              viewMode === 'team' ? 'shared' : 
+              viewMode === 'feedback' ? 'feedback' : 
+              'local'
+            } 
+          />
           </div>
         </div>
       )}
