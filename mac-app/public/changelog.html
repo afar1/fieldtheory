@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Changelog - Field Theory</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Source Serif 4', Georgia, serif;
+      background: #fff;
+      color: #1a1a1a;
+      line-height: 1.7;
+      padding: 0 24px;
+    }
+
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 80px 0;
+    }
+
+    header {
+      margin-bottom: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    h1 {
+      font-size: 24px;
+      font-weight: 600;
+      color: #1a1a1a;
+    }
+
+    .back-link {
+      font-size: 14px;
+      color: #666;
+      text-decoration: none;
+      transition: color 0.15s ease;
+    }
+
+    .back-link:hover {
+      color: #1a1a1a;
+    }
+
+    .entry {
+      margin-bottom: 80px;
+    }
+
+    .entry:last-child {
+      margin-bottom: 0;
+    }
+
+    .entry-date {
+      font-size: 13px;
+      color: #888;
+      margin-bottom: 12px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-weight: 400;
+    }
+
+    .entry-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .entry-title {
+      font-size: 22px;
+      font-weight: 600;
+      color: #1a1a1a;
+    }
+
+    .entry-tag {
+      font-size: 12px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    .tag-feature {
+      background: #f3f4f6;
+      color: #374151;
+    }
+
+    .tag-fix {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .tag-improvement {
+      background: #dbeafe;
+      color: #1e40af;
+    }
+
+    .entry-content p {
+      font-size: 16px;
+      color: #444;
+      margin-bottom: 16px;
+    }
+
+    .entry-content p:last-child {
+      margin-bottom: 0;
+    }
+
+    .entry-image {
+      margin-top: 32px;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+    }
+
+    .entry-image img {
+      width: 100%;
+      display: block;
+    }
+
+    .entry-list {
+      margin: 16px 0;
+      padding-left: 24px;
+    }
+
+    .entry-list li {
+      font-size: 16px;
+      color: #444;
+      margin-bottom: 8px;
+    }
+
+    .divider {
+      height: 1px;
+      background: #eee;
+      margin: 60px 0;
+    }
+
+    @media (max-width: 640px) {
+      .container {
+        padding: 40px 0;
+      }
+
+      header {
+        margin-bottom: 40px;
+      }
+
+      .entry {
+        margin-bottom: 48px;
+      }
+
+      .entry-title {
+        font-size: 18px;
+      }
+
+      .entry-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Changelog</h1>
+      <a href="/" class="back-link">Back to Field Theory</a>
+    </header>
+
+    <article class="entry">
+      <div class="entry-date">January 7, 2026</div>
+      <div class="entry-header">
+        <h2 class="entry-title">Hot Mic Messaging System</h2>
+        <span class="entry-tag tag-feature">Feature</span>
+      </div>
+      <div class="entry-content">
+        <p>We've added Hot Mic, a new way to communicate with your team in real-time. Send quick messages, images, and stay connected while you work.</p>
+        <p>The Hot Mic toggle lives right in your tab bar - click the fire emoji to go live. When Hot Mic is on, your team can see you're available and message you directly.</p>
+        <ul class="entry-list">
+          <li>Real-time messaging with team members</li>
+          <li>Share images and screenshots instantly</li>
+          <li>Visual indicator when Hot Mic is active</li>
+          <li>Unread message notifications with blue dots</li>
+        </ul>
+      </div>
+    </article>
+
+    <div class="divider"></div>
+
+    <article class="entry">
+      <div class="entry-date">January 7, 2026</div>
+      <div class="entry-header">
+        <h2 class="entry-title">Data Policy Notices</h2>
+        <span class="entry-tag tag-feature">Feature</span>
+      </div>
+      <div class="entry-content">
+        <p>We believe in transparency about where your data lives. You'll now see clear indicators in the footer showing whether your data is stored locally, shared with your team, or sent to Field Theory.</p>
+        <p>Different views have different policies - your clipboard history stays on your machine, while shared fields are synced with your team.</p>
+      </div>
+    </article>
+
+    <div class="divider"></div>
+
+    <article class="entry">
+      <div class="entry-date">January 7, 2026</div>
+      <div class="entry-header">
+        <h2 class="entry-title">Auto-Updater Improvements</h2>
+        <span class="entry-tag tag-fix">Fix</span>
+      </div>
+      <div class="entry-content">
+        <p>Fixed an issue where users on pre-release versions couldn't automatically update to stable releases. The update button now has proper visual feedback when clicked.</p>
+        <p>We also added a release notes popup that appears after updates, so you'll always know what's new.</p>
+      </div>
+    </article>
+
+    <div class="divider"></div>
+
+    <article class="entry">
+      <div class="entry-date">January 6, 2026</div>
+      <div class="entry-header">
+        <h2 class="entry-title">Improved Tab Navigation</h2>
+        <span class="entry-tag tag-improvement">Improvement</span>
+      </div>
+      <div class="entry-content">
+        <p>Tab now cycles through Fields, Shared Fields, and Hot Mic in a loop. Shift+Tab goes backwards. No more dead ends.</p>
+        <p>We also updated the Commands icon to use a forward slash, matching the keyboard shortcut convention.</p>
+      </div>
+    </article>
+
+    <div class="divider"></div>
+
+    <article class="entry">
+      <div class="entry-date">January 5, 2026</div>
+      <div class="entry-header">
+        <h2 class="entry-title">Authentication Required for Social Features</h2>
+        <span class="entry-tag tag-feature">Feature</span>
+      </div>
+      <div class="entry-content">
+        <p>Hot Mic and Feedback now require you to be signed in. If you're not authenticated, you'll see a sign-in prompt instead of the feature.</p>
+        <p>This ensures your messages are properly attributed and your conversations are secure.</p>
+      </div>
+    </article>
+
+  </div>
+</body>
+</html>
