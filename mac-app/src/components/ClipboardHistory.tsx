@@ -50,6 +50,7 @@ type ClipboardItem = {
   stackId: string | null;
   source: ClipboardSource;
   figureLabel: string | null; // Figure label for screenshots in stacks (e.g., "A", "B", "C")
+  figureId: string | null; // Unique 5-char alphanumeric ID for searchability (e.g., "k7xm2")
 };
 
 type StackInfo = {
