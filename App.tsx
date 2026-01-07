@@ -989,9 +989,8 @@ export default function App() {
       setExpandedMap((prevExpanded) => {
         const next = { ...prevExpanded };
         delete next[sourceId];
-        if (mergedSegments.length > 1) {
-          next[targetId] = true;
-        }
+        // Keep stacked items collapsed by default for easier navigation.
+        delete next[targetId];
         return next;
       });
 
@@ -1125,11 +1124,11 @@ export default function App() {
 
       StorageService.saveTranscripts(updatedList).catch(console.error);
 
-      // Expand the resulting stack so user sees the merged content.
+      // Keep stacked items collapsed by default for easier navigation.
       setExpandedMap((prevExpanded) => {
         const next = { ...prevExpanded };
         sourceIds.forEach((id) => delete next[id]);
-        next[targetEntry.id] = true;
+        delete next[targetEntry.id];
         return next;
       });
 
@@ -1378,21 +1377,7 @@ export default function App() {
             onCreateModeChange={handleObservationCreateModeChange}
           />
         </View>
-        <View key="sketches" style={styles.pageContainer}>
-          <SketchList
-            sketches={sketches}
-            onRefresh={handleRefreshSketches}
-            onNewSketch={() => setShowSketchCanvas(true)}
-          />
-        </View>
-      </PagerView>
-      
-      {/* Sketch Canvas Modal - Full screen drawing experience */}
-      <SketchCanvas
-        visible={showSketchCanvas}
-        onComplete={handleSketchComplete}
-        onCancel={() => setShowSketchCanvas(false)}
-      />
+        </PagerView>
 
       {/* BOTTOM BAR - Changes based on mode (create > selection > normal) */}
       <KeyboardAvoidingView
@@ -1473,9 +1458,12 @@ export default function App() {
             </TouchableOpacity>
           </>
         ) : (
-          /* Normal mode: show tab navigation */
+          /* Normal mode: show tab navigation
+           * Layout: Fields, Shared Fields, Cursor, [RECORD], Tasks, Observations, Settings
+           * Record button is centered with 3 tabs on each side.
+           */
           <>
-            {/* Stacks Tab */}
+            {/* Fields Tab (was Stacks) */}
             <TouchableOpacity 
               style={styles.tabButton} 
               onPress={() => pagerRef.current?.setPageWithoutAnimation(0)}
@@ -1486,9 +1474,26 @@ export default function App() {
                 color={pageIndex === 0 ? '#007AFF' : '#9CA3AF'} 
               />
               <Text style={[styles.tabLabel, pageIndex === 0 && styles.tabLabelActive]}>
-                Stacks
+                Fields
               </Text>
             </TouchableOpacity>
+
+            {/* Shared Fields Tab - shows team shared items when logged into a team */}
+            {session && (
+              <TouchableOpacity 
+                style={styles.tabButton} 
+                onPress={() => pagerRef.current?.setPageWithoutAnimation(0)}
+              >
+                <Feather 
+                  name="users" 
+                  size={22} 
+                  color={'#9CA3AF'} 
+                />
+                <Text style={styles.tabLabel}>
+                  Shared
+                </Text>
+              </TouchableOpacity>
+            )}
 
             {/* Cursor Tab */}
             {settings.showCursor && (
@@ -1559,21 +1564,6 @@ export default function App() {
                 </Text>
               </TouchableOpacity>
             )}
-
-            {/* Sketches Tab - New drawing feature */}
-            <TouchableOpacity 
-              style={styles.tabButton} 
-              onPress={() => pagerRef.current?.setPageWithoutAnimation(4)}
-            >
-              <Feather 
-                name="edit-3" 
-                size={22} 
-                color={pageIndex === 4 ? '#007AFF' : '#9CA3AF'} 
-              />
-              <Text style={[styles.tabLabel, pageIndex === 4 && styles.tabLabelActive]}>
-                Sketch
-              </Text>
-            </TouchableOpacity>
 
             {/* Settings Tab */}
             <TouchableOpacity 
@@ -1659,7 +1649,7 @@ export default function App() {
                 <Text style={styles.settingLabel}>Auto Create Tasks and Observations</Text>
                 <Text style={styles.settingDescription}>
                   {settings.autoSeparate 
-                    ? 'Stacks are automatically processed' 
+                    ? 'Fields are automatically processed' 
                     : 'Use the Create Tasks button on each stack'}
                 </Text>
               </View>

@@ -12,6 +12,40 @@ import { Feather } from '@expo/vector-icons';
 import { TranscriptEntry } from '../types';
 
 const MAX_PREVIEW_LINES = 3;
+const ENDING_WORD_COUNT = 3;
+
+/**
+ * Count words in text.
+ */
+function countWords(text: string): number {
+  return text.trim().split(/\s+/).filter(word => word.length > 0).length;
+}
+
+/**
+ * Smart truncation that shows beginning + ellipsis + last 3 words.
+ * Helps users verify the transcription captured everything.
+ */
+function smartTruncate(text: string): {
+  displayText: string;
+  lastWords: string;
+  needsTruncation: boolean;
+} {
+  const words = text.trim().split(/\s+/).filter(w => w.length > 0);
+  
+  // If very short, no truncation needed.
+  if (words.length <= 15) {
+    return { displayText: text, lastWords: '', needsTruncation: false };
+  }
+  
+  // Get the last 3 words.
+  const lastWords = words.slice(-ENDING_WORD_COUNT).join(' ');
+  
+  return {
+    displayText: text, // Let numberOfLines handle the main truncation
+    lastWords,
+    needsTruncation: true,
+  };
+}
 
 const dateHeaderFormatter = new Intl.DateTimeFormat('en-US', {
   weekday: 'short',
@@ -92,6 +126,12 @@ function TranscriptItemComponent({
   const shouldShowExpand = item.text.length > 160 || item.text.includes('\n');
   const stackCount = item.stackSegments?.length ?? 1;
   const isStacked = stackCount > 1;
+  
+  // Word count for display.
+  const wordCount = countWords(item.text);
+  
+  // Smart truncation for collapsed view.
+  const { lastWords, needsTruncation } = smartTruncate(item.text);
 
   const handleExpandPress = (event: GestureResponderEvent) => {
     event.stopPropagation();
@@ -165,6 +205,10 @@ function TranscriptItemComponent({
             <Text style={[styles.transcriptTime, isCopied && styles.transcriptTimeCopied]}>
               {isCopied ? 'Copied!' : formatTime(item.createdAt)}
             </Text>
+            {/* Word count badge */}
+            <View style={styles.wordCountBadge}>
+              <Text style={styles.wordCountText}>{wordCount} words</Text>
+            </View>
             {/* Stack badge - next to time */}
             {isStacked && (
               <TouchableOpacity
@@ -225,12 +269,20 @@ function TranscriptItemComponent({
             </View>
           </View>
         ) : (
-          <Text
-            style={styles.transcriptText}
-            numberOfLines={isExpanded ? undefined : MAX_PREVIEW_LINES}
-          >
-            {item.text}
-          </Text>
+          <View>
+            <Text
+              style={styles.transcriptText}
+              numberOfLines={isExpanded ? undefined : MAX_PREVIEW_LINES}
+            >
+              {item.text}
+            </Text>
+            {/* Last words indicator - shows when collapsed and text is long enough */}
+            {!isExpanded && needsTruncation && (
+              <Text style={styles.lastWordsText}>
+                [...] {lastWords}
+              </Text>
+            )}
+          </View>
         )}
         
         {/* Bottom row: Action buttons on left, Expand button on right */}
@@ -387,6 +439,23 @@ const styles = StyleSheet.create({
   },
   stackBadgeTextDisabled: {
     color: '#9CA3AF',
+  },
+  wordCountBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: '#F3F4F6',
+  },
+  wordCountText: {
+    fontSize: 10,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  lastWordsText: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontStyle: 'italic',
+    marginTop: 4,
   },
   editButton: {
     padding: 4,

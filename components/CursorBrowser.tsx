@@ -592,36 +592,7 @@ export const CursorBrowser = forwardRef<CursorBrowserHandle, CursorBrowserProps>
           )}
         </View>
 
-        {/* Floating Record Button - for recording directly on this page */}
-        {onStartRecording && onStopRecording && (
-          <View style={styles.floatingRecordContainer}>
-            <TouchableOpacity
-              style={[
-                styles.floatingRecordButton,
-                isRecording && styles.floatingRecordButtonActive,
-                (!isWhisperReady || isProcessing) && styles.floatingRecordButtonDisabled,
-              ]}
-              onPress={isRecording ? onStopRecording : onStartRecording}
-              disabled={!isWhisperReady || isProcessing}
-            >
-              {isProcessing ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <Feather 
-                  name={isRecording ? "square" : "mic"} 
-                  size={24} 
-                  color="#fff" 
-                />
-              )}
-            </TouchableOpacity>
-            {isRecording && (
-              <Text style={styles.recordingLabel}>Recording...</Text>
-            )}
-            {isProcessing && (
-              <Text style={styles.recordingLabel}>Transcribing...</Text>
-            )}
-          </View>
-        )}
+        {/* Floating Record Button removed - use the main bottom bar record button instead */}
       </View>
     );
   }
