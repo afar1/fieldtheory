@@ -12,6 +12,7 @@ import DMsView from './DMsView';
 import HotMicView from './HotMicView';
 import PopularCommands from './PopularCommands';
 import DataPolicyNotice from './DataPolicyNotice';
+import ReleaseNotesPopup from './ReleaseNotesPopup';
 import type { SketchViewHandle } from './SketchView';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
@@ -581,6 +582,17 @@ export default function ClipboardHistory() {
   
   // App version for footer display.
   const [appVersion] = useState(() => window.updaterAPI?.getVersion?.() || '0.0.0');
+  
+  // Release notes popup - show after update if version changed.
+  const [showReleaseNotes, setShowReleaseNotes] = useState(() => {
+    const lastVersion = localStorage.getItem('lastSeenVersion');
+    const currentVersion = window.updaterAPI?.getVersion?.() || '0.0.0';
+    if (lastVersion !== currentVersion) {
+      localStorage.setItem('lastSeenVersion', currentVersion);
+      return lastVersion !== null; // Only show if not first run
+    }
+    return false;
+  });
   const [versionHovered, setVersionHovered] = useState(false);
   
   const [allTimeStats, setAllTimeStats] = useState<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>({
@@ -6702,6 +6714,14 @@ export default function ClipboardHistory() {
         </div>
       )}
     </div>
+    
+    {/* Release notes popup - shows after app update */}
+    {showReleaseNotes && (
+      <ReleaseNotesPopup
+        currentVersion={appVersion}
+        onDismiss={() => setShowReleaseNotes(false)}
+      />
+    )}
     </>
   );
 }
