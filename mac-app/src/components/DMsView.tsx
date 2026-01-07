@@ -181,7 +181,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
     }
   }, []);
 
-  // Load feedback replies and activity log.
+  // Load feedback replies and activity log, and mark as read.
   const loadFeedbackDetails = useCallback(async (feedbackItem: SocialMessage) => {
     if (!window.socialAPI) return;
     
@@ -192,6 +192,27 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
     
     setFeedbackReplies(replies);
     setActivityLog(log);
+    
+    // Mark the original feedback as read if unread.
+    let markedAny = false;
+    if (!feedbackItem.readAt) {
+      await window.socialAPI.markAsRead(feedbackItem.id);
+      markedAny = true;
+    }
+    
+    // Mark unread replies as read.
+    for (const reply of replies) {
+      if (!reply.readAt) {
+        await window.socialAPI.markAsRead(reply.id);
+        markedAny = true;
+      }
+    }
+    
+    // Reload feedback list if we marked anything as read.
+    if (markedAny) {
+      const feedbackList = await window.socialAPI.getMyFeedback();
+      setFeedback(feedbackList);
+    }
   }, []);
 
   // Initial load.
