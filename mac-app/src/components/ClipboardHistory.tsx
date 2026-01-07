@@ -5833,11 +5833,24 @@ export default function ClipboardHistory() {
                     style={{
                       padding: '2px 6px',
                       fontSize: '9px',
-                      color: theme.text,
-                      backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
-                      border: `1px solid ${theme.border}`,
+                      color: '#fff',
+                      backgroundColor: theme.accent,
+                      border: 'none',
                       borderRadius: '4px',
                       cursor: 'pointer',
+                      transition: 'all 0.1s ease',
+                    }}
+                    onMouseDown={(e) => {
+                      e.currentTarget.style.transform = 'scale(0.95)';
+                      e.currentTarget.style.opacity = '0.8';
+                    }}
+                    onMouseUp={(e) => {
+                      e.currentTarget.style.transform = 'scale(1)';
+                      e.currentTarget.style.opacity = '1';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.transform = 'scale(1)';
+                      e.currentTarget.style.opacity = '1';
                     }}
                   >
                     {updateStatus === 'ready' ? 'Install' : 'Update'}
