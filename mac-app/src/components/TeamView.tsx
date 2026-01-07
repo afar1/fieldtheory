@@ -2173,14 +2173,8 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
               borderTop: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
               borderBottom: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : `1px solid ${theme.border}`,
               borderRight: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
-              // J/K = bright teal, X-selection = muted teal, both = thicker bright teal
-              borderLeft: isRowSelected && isMultiSelected
-                ? `4px solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
-                : isRowSelected
-                  ? `2px solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
-                  : isMultiSelected
-                    ? `2px solid ${theme.selectedBorder || (theme.isDark ? '#2dd4bf80' : '#14b8a680')}`
-                    : '2px solid transparent',
+              // Left indicator is now an inner element to avoid corner radius bending.
+              borderLeft: '2px solid transparent',
               boxShadow: isRowSelected
                 ? theme.isDark 
                   ? '0 2px 8px rgba(0,0,0,0.3)' 
@@ -2222,8 +2216,24 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
                   style={{
                     ...rowStyle,
                     cursor: activeDragId ? 'grabbing' : 'grab',
+                    position: 'relative',
                   }}
                 >
+                  {/* Left selection indicator - inset to avoid corner radius bending */}
+                  {(isRowSelected || isMultiSelected) && (
+                    <div style={{
+                      position: 'absolute',
+                      left: 0,
+                      top: 4,
+                      bottom: 4,
+                      width: (isRowSelected && isMultiSelected) ? '4px' : '2px',
+                      backgroundColor: isRowSelected 
+                        ? (theme.isDark ? '#2dd4bf' : '#14b8a6')
+                        : (theme.selectedBorder || (theme.isDark ? 'rgba(45, 212, 191, 0.5)' : 'rgba(20, 184, 166, 0.5)')),
+                      borderRadius: '1px',
+                      transition: 'width 0.1s ease, background-color 0.1s ease',
+                    }} />
+                  )}
                   {/* Stack image thumbnails */}
                   {stackImages.length > 0 && (
                     <div style={{ display: 'flex', gap: '4px', marginBottom: hasText ? '8px' : '0', flexWrap: 'wrap' }}>
@@ -2552,8 +2562,24 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
                 style={{
                   ...rowStyle,
                   cursor: activeDragId ? 'grabbing' : 'grab',
+                  position: 'relative',
                 }}
               >
+                {/* Left selection indicator - inset to avoid corner radius bending */}
+                {(isRowSelected || isMultiSelected) && (
+                  <div style={{
+                    position: 'absolute',
+                    left: 0,
+                    top: 4,
+                    bottom: 4,
+                    width: (isRowSelected && isMultiSelected) ? '4px' : '2px',
+                    backgroundColor: isRowSelected 
+                      ? (theme.isDark ? '#2dd4bf' : '#14b8a6')
+                      : (theme.selectedBorder || (theme.isDark ? 'rgba(45, 212, 191, 0.5)' : 'rgba(20, 184, 166, 0.5)')),
+                    borderRadius: '1px',
+                    transition: 'width 0.1s ease, background-color 0.1s ease',
+                  }} />
+                )}
                 {/* Content section */}
                 <div>
                   {/* Image/screenshot - show thumbnail with preview */}

@@ -2129,17 +2129,30 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
                         borderTop: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
                         borderBottom: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : `1px solid ${theme.border}`,
                         borderRight: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
-                        borderLeft: isRowSelected
-                          ? `${stackItems.some(item => selectedIds.has(item.id)) ? '4px' : '2px'} solid ${theme.isDark ? '#8b5cf6' : '#7c3aed'}`
-                          : stackItems.some(item => selectedIds.has(item.id))
-                            ? `2px solid ${theme.isDark ? 'rgba(139, 92, 246, 0.6)' : 'rgba(124, 58, 237, 0.6)'}`
-                            : '2px solid transparent',
+                        // Left indicator is now an inner element to avoid corner radius bending.
+                        borderLeft: '2px solid transparent',
                         boxShadow: isRowSelected ? (theme.isDark ? '0 2px 8px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.08)') : 'none',
-                        transition: 'background-color 0.3s ease, border-left 0.3s ease, box-shadow 0.3s ease',
+                        transition: 'background-color 0.3s ease, box-shadow 0.3s ease',
                         cursor: activeDragId ? 'grabbing' : 'grab',
                         userSelect: 'none',
+                        position: 'relative',
                       }}
                     >
+                      {/* Left selection indicator - inset to avoid corner radius bending */}
+                      {(isRowSelected || stackItems.some(item => selectedIds.has(item.id))) && (
+                        <div style={{
+                          position: 'absolute',
+                          left: 0,
+                          top: 4,
+                          bottom: 4,
+                          width: isRowSelected ? (stackItems.some(item => selectedIds.has(item.id)) ? '4px' : '2px') : '2px',
+                          backgroundColor: isRowSelected 
+                            ? (theme.isDark ? '#8b5cf6' : '#7c3aed')
+                            : (theme.isDark ? 'rgba(139, 92, 246, 0.6)' : 'rgba(124, 58, 237, 0.6)'),
+                          borderRadius: '1px',
+                          transition: 'width 0.1s ease, background-color 0.1s ease',
+                        }} />
+                      )}
                       <div>
                         {/* Images */}
                         {stackImages.length > 0 && (
@@ -2383,18 +2396,30 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
                         borderTop: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
                         borderBottom: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : `1px solid ${theme.border}`,
                         borderRight: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
-                        borderLeft: isRowSelected
-                          ? `${isSelected ? '4px' : '2px'} solid ${theme.isDark ? '#8b5cf6' : '#7c3aed'}`
-                          : isSelected
-                            ? `2px solid ${theme.isDark ? 'rgba(139, 92, 246, 0.6)' : 'rgba(124, 58, 237, 0.6)'}`
-                            : '2px solid transparent',
+                        // Left indicator is now an inner element to avoid corner radius bending.
+                        borderLeft: '2px solid transparent',
                         boxShadow: isRowSelected ? (theme.isDark ? '0 2px 8px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.08)') : 'none',
-                        transition: 'background-color 0.3s ease, border-left 0.3s ease, box-shadow 0.3s ease',
+                        transition: 'background-color 0.3s ease, box-shadow 0.3s ease',
                         cursor: activeDragId ? 'grabbing' : 'grab',
                         userSelect: 'none',
                         position: 'relative',
                       }}
                     >
+                      {/* Left selection indicator - inset to avoid corner radius bending */}
+                      {(isRowSelected || isSelected) && (
+                        <div style={{
+                          position: 'absolute',
+                          left: 0,
+                          top: 4,
+                          bottom: 4,
+                          width: isRowSelected ? (isSelected ? '4px' : '2px') : '2px',
+                          backgroundColor: isRowSelected 
+                            ? (theme.isDark ? '#8b5cf6' : '#7c3aed')
+                            : (theme.isDark ? 'rgba(139, 92, 246, 0.6)' : 'rgba(124, 58, 237, 0.6)'),
+                          borderRadius: '1px',
+                          transition: 'width 0.1s ease, background-color 0.1s ease',
+                        }} />
+                      )}
                       {/* Copy icon - top right */}
                       <button
                         onClick={(e) => {
