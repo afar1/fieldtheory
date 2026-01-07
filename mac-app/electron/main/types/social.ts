@@ -5,13 +5,17 @@ export const SocialIPCChannels = {
   // DM operations
   SEND_DM: 'social:sendDM',
   SEND_TEXT_DM: 'social:sendTextDM',
+  SEND_IMAGE_REPLY: 'social:sendImageReply',
   GET_CONVERSATIONS: 'social:getConversations',
   GET_DMS_WITH_USER: 'social:getDMsWithUser',
   MARK_AS_READ: 'social:markAsRead',
   HAS_UNREAD: 'social:hasUnread',
+  HAS_UNREAD_FEEDBACK: 'social:hasUnreadFeedback',
   
   // Feedback operations
   SUBMIT_FEEDBACK: 'social:submitFeedback',
+  SUBMIT_TEXT_FEEDBACK: 'social:submitTextFeedback',
+  SUBMIT_IMAGE_FEEDBACK: 'social:submitImageFeedback',
   GET_MY_FEEDBACK: 'social:getMyFeedback',
   GET_ALL_FEEDBACK: 'social:getAllFeedback',
   GET_FEEDBACK_REPLIES: 'social:getFeedbackReplies',

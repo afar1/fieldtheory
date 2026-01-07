@@ -177,8 +177,15 @@ export class TranscriberManager extends EventEmitter {
     await this.preferences.load();
     this.hotkey = this.preferences.getPreference('transcriptionHotkey');
     
-    // Set the selected model from preferences
-    const selectedModel = this.preferences.getPreference('selectedModel');
+    // Set the selected model from preferences.
+    // Validate that the model is still supported (base was removed in v0.1.29).
+    const validModels: ModelSize[] = ['small', 'medium', 'large'];
+    let selectedModel = this.preferences.getPreference('selectedModel');
+    if (!validModels.includes(selectedModel)) {
+      console.log(`[TranscriberManager] Invalid model "${selectedModel}", migrating to "small"`);
+      selectedModel = 'small';
+      await this.preferences.save({ selectedModel: 'small' });
+    }
     this.modelManager.setSelectedModel(selectedModel);
     console.log(`[TranscriberManager] Using model: ${selectedModel}`);
 
@@ -361,14 +368,15 @@ export class TranscriberManager extends EventEmitter {
       await this.trackPriorityMicUsage();
 
       // Check if model is available
-      console.log('[TranscriberManager] Checking model availability...');
+      const selectedModel = this.modelManager.getSelectedModel();
+      console.log(`[TranscriberManager] Checking model availability for: ${selectedModel}`);
       const modelAvailable = await this.modelManager.isModelAvailable();
       console.log('[TranscriberManager] Model available:', modelAvailable);
       if (!modelAvailable) {
-        console.log('[TranscriberManager] Model not available, emitting error');
+        console.log(`[TranscriberManager] Model "${selectedModel}" not available, emitting error`);
         this.setStatus('idle');
         this.handleOverlayAfterTranscription();
-        this.emit('error', new Error('Model not available. Please download the model first.'));
+        this.emit('error', new Error(`Model "${selectedModel}" not available. Please download the model first.`));
         return;
       }
 
