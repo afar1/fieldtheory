@@ -1172,6 +1172,9 @@ export default function ClipboardHistory() {
         window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
       } else {
         window.clipboardAPI?.clearSyncSession?.();
+        // Clear unread indicators when signing out.
+        setHasUnreadDMs(false);
+        setHasUnreadFeedback(false);
       }
     });
 
@@ -3135,8 +3138,8 @@ export default function ClipboardHistory() {
                 )}
                 {mode === 'clipboard' ? 'Fields' : mode === 'team' ? 'Shared Fields' : mode === 'hotmic' ? 'Hot Mic' : 'Tasks'}
                 
-                {/* Unread indicator for Hot Mic tab */}
-                {isHotMic && hasUnreadDMs && viewMode !== 'hotmic' && (
+                {/* Unread indicator for Hot Mic tab - only when authenticated */}
+                {isHotMic && hasUnreadDMs && viewMode !== 'hotmic' && authSession?.user?.email && (
                   <span style={{
                     position: 'absolute',
                     top: '-2px',
@@ -3390,8 +3393,8 @@ export default function ClipboardHistory() {
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
             Feedback
-            {/* Notification dot for new feedback */}
-            {hasUnreadFeedback && viewMode !== 'feedback' && (
+            {/* Notification dot for new feedback - only when authenticated */}
+            {hasUnreadFeedback && viewMode !== 'feedback' && authSession?.user?.email && (
               <span style={{
                 position: 'absolute',
                 top: '-2px',
@@ -3399,7 +3402,7 @@ export default function ClipboardHistory() {
                 width: '6px',
                 height: '6px',
                 borderRadius: '50%',
-                backgroundColor: '#f59e0b',
+                backgroundColor: '#3b82f6',
               }} />
             )}
           </button>
