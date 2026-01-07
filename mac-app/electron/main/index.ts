@@ -124,8 +124,9 @@ if (process.env.EXPERIMENTAL === 'true') {
 }
 
 // Configure autoUpdater for manual update flow.
-// DEBUG: Always configure feed URL for testing
+// allowPrerelease ensures users on prerelease builds (e.g., 0.1.29-maxwell) can update to stable releases (0.1.30).
 autoUpdater.autoDownload = false;
+autoUpdater.allowPrerelease = true;
 autoUpdater.setFeedURL({ provider: 'github', owner: 'afar1', repo: 'field-releases' });
 
 let mainWindow: BrowserWindow | null = null;
@@ -3469,7 +3470,7 @@ if (!gotTheLock) {
     });
 
     autoUpdater.on('update-not-available', (info) => {
-      console.log('[Updater] No update available.');
+      console.log('[Updater] No update available. Current:', app.getVersion(), 'Latest:', info.version);
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send('updater:updateNotAvailable');
