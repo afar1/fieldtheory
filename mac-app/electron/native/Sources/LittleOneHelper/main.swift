@@ -126,12 +126,10 @@ struct AudioLevelMessage: Codable {
 struct PermissionsStatusMessage: Codable {
     let type = "permissionsStatus"
     let accessibilityGranted: Bool
-    let inputMonitoringGranted: Bool
     
     enum CodingKeys: String, CodingKey {
         case type
         case accessibilityGranted
-        case inputMonitoringGranted
     }
 }
 
@@ -1499,10 +1497,10 @@ final class MessageHandler {
             
         case .checkPermissions:
             let accessibilityGranted = KeyboardMonitor.shared.checkAccessibilityPermission()
-            let inputMonitoringGranted = KeyboardMonitor.shared.checkInputMonitoringPermission()
+            // Note: We no longer check inputMonitoringPermission as it's not needed
+            // and checking it causes the app to appear in Input Monitoring settings
             let response = PermissionsStatusMessage(
-                accessibilityGranted: accessibilityGranted,
-                inputMonitoringGranted: inputMonitoringGranted
+                accessibilityGranted: accessibilityGranted
             )
             sendJSON(response)
             

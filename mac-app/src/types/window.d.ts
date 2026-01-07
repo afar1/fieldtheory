@@ -662,13 +662,17 @@ interface SocialAPI {
   // DM operations
   sendDM: (recipientUserId: string, localItemId: number) => Promise<SocialMessage | null>;
   sendTextDM: (recipientUserId: string, text: string, parentMessageId?: string) => Promise<SocialMessage | null>;
+  sendImageReply: (recipientUserId: string, imageBase64: string, text?: string, parentMessageId?: string) => Promise<SocialMessage | null>;
   getConversations: () => Promise<DMConversation[]>;
   getDMsWithUser: (otherUserId: string) => Promise<SocialMessage[]>;
   markAsRead: (messageId: string) => Promise<boolean>;
   hasUnread: () => Promise<boolean>;
+  hasUnreadFeedback: () => Promise<boolean>;
   
   // Feedback operations
   submitFeedback: (localItemId: number) => Promise<SocialMessage | null>;
+  submitTextFeedback: (text: string) => Promise<SocialMessage | null>;
+  submitImageFeedback: (imageBase64: string, caption?: string) => Promise<SocialMessage | null>;
   getMyFeedback: () => Promise<SocialMessage[]>;
   getAllFeedback: () => Promise<SocialMessage[]>;
   getFeedbackReplies: (feedbackId: string) => Promise<SocialMessage[]>;
