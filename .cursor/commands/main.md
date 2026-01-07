@@ -1,3 +1,1 @@
-run /deslop command first 
-
-then merge main into this branch, fix any merge conflicts, then commit and push to main
+Merge main into this branch, fix any merge conflicts, then commit and push to main. Ending branch that we're on should become main so I know that everything is up to date.

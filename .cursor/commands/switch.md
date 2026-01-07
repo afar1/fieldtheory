@@ -1,0 +1,3 @@
+Make sure all uncommited changes have been pushed first to origin. Then pull down this branch I just pasted in, pull main into it and clear up and merge conflicts, briefly summarize this specific branch for me, then ask me any /questions you have in my questions command, then we'll get started. The branch's contents should dictate the name of our Agent discussion.
+
+A a general rule never commit to a remote branch without asking me first. I always test locally before pushing. 
