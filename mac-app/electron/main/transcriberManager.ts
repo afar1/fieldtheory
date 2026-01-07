@@ -59,9 +59,11 @@ export class TranscriberManager extends EventEmitter {
   // Screenshot metadata for figure labeling feature.
   // Tracks when each screenshot was captured relative to recording start,
   // and assigns figure labels (A, B, C...) for referencing in transcripts.
+  // figureId is a unique 5-char alphanumeric ID for searchability across all recordings.
   private screenshotMetadata: Array<{
     itemId: number;
     figureLabel: string;
+    figureId: string;
     capturedAtMs: number; // Timestamp relative to recording start
   }> = [];
   
@@ -947,6 +949,9 @@ export class TranscriberManager extends EventEmitter {
           // Generate the next figure label (A, B, C... Z, AA, AB...).
           const figureLabel = this.generateFigureLabel(this.screenshotMetadata.length);
           
+          // Generate a unique 5-char ID for searchability across all recordings.
+          const figureId = this.clipboardManager.generateFigureId();
+          
           // Calculate timestamp relative to recording start.
           const capturedAtMs = Date.now() - this.recordingStartTime;
           
@@ -954,13 +959,14 @@ export class TranscriberManager extends EventEmitter {
           this.screenshotMetadata.push({
             itemId,
             figureLabel,
+            figureId,
             capturedAtMs,
           });
           
-          // Update the item in the database with the figure label.
-          this.clipboardManager.updateFigureLabel(itemId, figureLabel);
+          // Update the item in the database with the figure label and unique ID.
+          this.clipboardManager.updateFigureLabel(itemId, figureLabel, figureId);
           
-          console.log(`[TranscriberManager] Screenshot ${itemId} labeled as Figure ${figureLabel} (captured at ${this.formatTimestamp(capturedAtMs)})`);
+          console.log(`[TranscriberManager] Screenshot ${itemId} labeled as Figure ${figureLabel} (${figureId}) at ${this.formatTimestamp(capturedAtMs)}`);
         }
       }
       
