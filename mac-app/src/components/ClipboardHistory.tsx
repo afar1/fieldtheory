@@ -6484,15 +6484,12 @@ export default function ClipboardHistory() {
                   boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
                 }}
               />
-              {/* Action bar - all available actions for images */}
+              {/* Action bar - compact buttons with no background */}
               <div style={{
                 display: 'flex',
-                gap: '8px',
-                backgroundColor: 'rgba(0, 0, 0, 0.6)',
-                backdropFilter: 'blur(8px)',
-                WebkitBackdropFilter: 'blur(8px)',
-                borderRadius: '10px',
-                padding: '8px 12px',
+                gap: '4px',
+                flexWrap: 'wrap',
+                justifyContent: 'center',
               }}>
                 {[
                   { label: 'paste', key: '↵', action: async () => {
@@ -6518,6 +6515,22 @@ export default function ClipboardHistory() {
                     setEditingSketchItem(null);
                     dismissPreview();
                     setViewMode('sketch');
+                  }},
+                  { label: 'share', key: 's', action: async () => {
+                    const selectedRow = listRows[selectedIndex];
+                    const itemId = selectedRow?.type === 'item' 
+                      ? selectedRow.item.id 
+                      : selectedRow?.items?.[0]?.id;
+                    if (itemId && window.sharedClipboardAPI) {
+                      await window.sharedClipboardAPI.shareToTeam(itemId);
+                      showFeedback('shared to team');
+                    }
+                    dismissPreview();
+                  }},
+                  { label: 'message', key: 'm', action: async () => {
+                    // Navigate to Hot Mic to send as message
+                    dismissPreview();
+                    setViewMode('hotmic');
                   }},
                   { label: 'feedback', key: 'f', action: async () => {
                     const selectedRow = listRows[selectedIndex];
@@ -6564,24 +6577,21 @@ export default function ClipboardHistory() {
                     style={{
                       display: 'flex',
                       alignItems: 'center',
-                      gap: '6px',
-                      padding: '6px 12px',
-                      fontSize: '12px',
+                      gap: '3px',
+                      padding: '3px 6px',
+                      fontSize: '10px',
                       fontWeight: 500,
-                      backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                      backgroundColor: 'rgba(0, 0, 0, 0.5)',
                       color: '#fff',
                       border: 'none',
-                      borderRadius: '6px',
+                      borderRadius: '4px',
                       cursor: 'pointer',
                     }}
                   >
                     {action.label}
                     <span style={{
-                      fontSize: '10px',
-                      opacity: 0.7,
-                      backgroundColor: 'rgba(255, 255, 255, 0.15)',
-                      padding: '2px 5px',
-                      borderRadius: '3px',
+                      fontSize: '8px',
+                      opacity: 0.6,
                     }}>
                       {action.key}
                     </span>
