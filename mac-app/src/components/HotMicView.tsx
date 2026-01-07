@@ -93,9 +93,11 @@ function getDisplayName(name: string | null, email: string | null): string {
 
 interface HotMicViewProps {
   onSendDM?: (recipientUserId: string, localItemId: number) => void;
+  hotMicEnabled: boolean;
+  onHotMicToggle: () => void;
 }
 
-export default function HotMicView({ onSendDM }: HotMicViewProps) {
+export default function HotMicView({ onSendDM, hotMicEnabled, onHotMicToggle }: HotMicViewProps) {
   const { theme } = useTheme();
   
   // State
@@ -105,9 +107,6 @@ export default function HotMicView({ onSendDM }: HotMicViewProps) {
   const [contacts, setContacts] = useState<SocialContact[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  
-  // Hot Mic on/off toggle state - when on, incoming Hot Mic messages show as full preview.
-  const [hotMicEnabled, setHotMicEnabled] = useState(false);
   
   // Compose state
   const [replyText, setReplyText] = useState('');
@@ -135,15 +134,13 @@ export default function HotMicView({ onSendDM }: HotMicViewProps) {
     
     setLoading(true);
     try {
-      const [convos, contactList, hotMicStatus] = await Promise.all([
+      const [convos, contactList] = await Promise.all([
         window.socialAPI.getConversations(),
         window.socialAPI.getContacts(),
-        window.socialAPI.getHotMicEnabled?.() ?? Promise.resolve(false),
       ]);
       
       setConversations(convos);
       setContacts(contactList);
-      setHotMicEnabled(hotMicStatus);
     } catch (err) {
       console.error('[HotMicView] Failed to load data:', err);
     } finally {
@@ -152,15 +149,15 @@ export default function HotMicView({ onSendDM }: HotMicViewProps) {
   }, []);
 
   // Load messages for selected conversation and mark as read.
-  const loadMessages = useCallback(async (userId: string) => {
+  const loadMessages = useCallback(async (otherUserId: string) => {
     if (!window.socialAPI) return;
     
-    const msgs = await window.socialAPI.getDMsWithUser(userId);
+    const msgs = await window.socialAPI.getDMsWithUser(otherUserId);
     setMessages(msgs);
     
-    // Mark unread messages as read - this clears the unread indicator.
+    // Mark messages from the other user as read.
     for (const msg of msgs) {
-      if (!msg.readAt && msg.recipientUserId !== msg.senderUserId) {
+      if (!msg.readAt && msg.senderUserId === otherUserId) {
         await window.socialAPI.markAsRead(msg.id);
       }
     }
@@ -278,17 +275,6 @@ export default function HotMicView({ onSendDM }: HotMicViewProps) {
   // ==========================================================================
   // Actions
   // ==========================================================================
-
-  // Toggle Hot Mic on/off.
-  const handleToggleHotMic = async () => {
-    if (!window.socialAPI) return;
-    
-    const newValue = !hotMicEnabled;
-    const success = await window.socialAPI.setHotMicEnabled?.(newValue);
-    if (success) {
-      setHotMicEnabled(newValue);
-    }
-  };
 
   const handleAddFriend = async () => {
     if (!window.socialAPI || !addFriendEmail.trim()) return;
@@ -451,43 +437,39 @@ export default function HotMicView({ onSendDM }: HotMicViewProps) {
       overflow: 'hidden',
       padding: '0 16px 16px 16px',
     }}>
-      {/* Header with Hot Mic toggle and actions */}
+      {/* Header with status and actions */}
       <div style={{
         display: 'flex',
         gap: '8px',
         marginBottom: '12px',
         alignItems: 'center',
       }}>
-        {/* Hot Mic toggle button - prominent visual indicator of on/off state */}
+        {/* Status indicator - clickable to toggle */}
         <button
-          onClick={handleToggleHotMic}
+          onClick={onHotMicToggle}
           style={{
-            padding: '6px 12px',
-            fontSize: '11px',
-            fontWeight: 600,
-            backgroundColor: hotMicEnabled ? '#DC2626' : theme.bgSecondary,
-            color: hotMicEnabled ? '#fff' : theme.textSecondary,
-            border: hotMicEnabled ? 'none' : `1px solid ${theme.inputBorder}`,
-            borderRadius: '6px',
-            cursor: 'pointer',
-            outline: 'none',
+            fontSize: '10px',
+            color: hotMicEnabled ? '#DC2626' : theme.textSecondary,
             display: 'flex',
             alignItems: 'center',
-            gap: '6px',
+            gap: '4px',
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            padding: '4px 8px',
+            borderRadius: '4px',
             transition: 'all 0.15s ease',
           }}
-          title={hotMicEnabled 
-            ? 'Hot Mic is ON - incoming hot mic messages will show as full preview' 
-            : 'Hot Mic is OFF - messages will only show as notifications'}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = 'transparent';
+          }}
+          title={hotMicEnabled ? 'Click to turn Hot Mic off' : 'Click to turn Hot Mic on'}
         >
-          <span style={{
-            width: '8px',
-            height: '8px',
-            borderRadius: '50%',
-            backgroundColor: hotMicEnabled ? '#fff' : theme.textSecondary,
-            animation: hotMicEnabled ? 'pulse 2s infinite' : 'none',
-          }} />
-          {hotMicEnabled ? 'Hot Mic ON' : 'Hot Mic OFF'}
+          <span style={{ filter: hotMicEnabled ? 'none' : 'grayscale(100%) opacity(0.5)' }}>🔥</span>
+          {hotMicEnabled ? 'Hot Mic is live' : 'Hot Mic is off'}
         </button>
 
         <div style={{ flex: 1 }} />
@@ -726,7 +708,9 @@ export default function HotMicView({ onSendDM }: HotMicViewProps) {
                       ? `${theme.bgSecondary}80` 
                       : 'transparent',
                   cursor: 'pointer',
-                  outline: index === selectedIndex ? `1px solid ${theme.accent}40` : 'none',
+                  border: index === selectedIndex && selectedConversation !== convo.otherUserId
+                    ? `1px solid ${theme.accent}40` 
+                    : '1px solid transparent',
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: '2px' }}>
@@ -734,14 +718,14 @@ export default function HotMicView({ onSendDM }: HotMicViewProps) {
                     {getDisplayName(convo.otherUserName, convo.otherUserEmail)}
                   </span>
                   {renderBadge(convo.relationshipType)}
-                  {/* Unread indicator - only shows if there are unread messages */}
-                  {convo.unreadCount > 0 && (
+                  {/* Unread indicator - only shows if unread AND not currently selected */}
+                  {convo.unreadCount > 0 && selectedConversation !== convo.otherUserId && (
                     <span style={{
                       marginLeft: 'auto',
                       width: '8px',
                       height: '8px',
                       borderRadius: '50%',
-                      backgroundColor: '#DC2626',
+                      backgroundColor: '#3b82f6',
                       display: 'inline-block',
                     }} />
                   )}

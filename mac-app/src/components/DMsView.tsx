@@ -167,15 +167,15 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
   }, []);
 
   // Load messages for selected conversation.
-  const loadMessages = useCallback(async (userId: string) => {
+  const loadMessages = useCallback(async (otherUserId: string) => {
     if (!window.socialAPI) return;
     
-    const msgs = await window.socialAPI.getDMsWithUser(userId);
+    const msgs = await window.socialAPI.getDMsWithUser(otherUserId);
     setMessages(msgs);
     
-    // Mark unread messages as read.
+    // Mark messages from the other user as read.
     for (const msg of msgs) {
-      if (!msg.readAt && msg.recipientUserId !== msg.senderUserId) {
+      if (!msg.readAt && msg.senderUserId === otherUserId) {
         await window.socialAPI.markAsRead(msg.id);
       }
     }
