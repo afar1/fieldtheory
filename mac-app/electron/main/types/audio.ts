@@ -202,7 +202,6 @@ export interface AudioLevelMessage extends HelperMessage {
 export interface PermissionsStatusMessage extends HelperMessage {
   type: 'permissionsStatus';
   accessibilityGranted: boolean;
-  inputMonitoringGranted: boolean;
 }
 
 /**

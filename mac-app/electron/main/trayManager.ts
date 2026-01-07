@@ -1,4 +1,4 @@
-import { Tray, Menu, nativeImage, app, MenuItemConstructorOptions } from 'electron';
+import { Tray, Menu, nativeImage, app, MenuItemConstructorOptions, net } from 'electron';
 import path from 'path';
 import { AudioState } from './types/audio';
 import { AudioManager } from './audioManager';
@@ -203,8 +203,11 @@ export class TrayManager {
       },
     });
 
+    // Check network status at menu build time to show offline state.
+    const isOnline = net.isOnline();
     items.push({
-      label: 'Check for Updates…',
+      label: isOnline ? 'Check for Updates…' : 'Check for Updates (Offline)',
+      enabled: isOnline,
       click: () => {
         if (this.checkForUpdatesCallback) {
           this.checkForUpdatesCallback();

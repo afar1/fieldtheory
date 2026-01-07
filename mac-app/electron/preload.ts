@@ -16,6 +16,7 @@ const TranscribeIPCChannels = {
   DELETE_MODEL: 'transcribe:deleteModel',
   GET_AVAILABLE_MODELS: 'transcribe:getAvailableModels',
   GET_MODEL_DOWNLOAD_STATUS: 'transcribe:getModelDownloadStatus',
+  GET_DOWNLOADING_MODELS: 'transcribe:getDownloadingModels',
   GET_SELECTED_MODEL: 'transcribe:getSelectedModel',
   SET_SELECTED_MODEL: 'transcribe:setSelectedModel',
   GET_HOTKEY: 'transcribe:getHotkey',
@@ -153,6 +154,11 @@ const UpdaterIPCChannels = {
   DOWNLOAD_PROGRESS: 'updater:downloadProgress',
   UPDATE_DOWNLOADED: 'updater:updateDownloaded',
   UPDATE_ERROR: 'updater:error',
+} as const;
+
+const DiagnosticsIPCChannels = {
+  GET_DIAGNOSTICS: 'diagnostics:get',
+  GET_DIAGNOSTICS_MARKDOWN: 'diagnostics:getMarkdown',
 } as const;
 
 // Types (only for TypeScript checking, not runtime)
@@ -401,13 +407,17 @@ const SocialIPCChannels = {
   // DM operations
   SEND_DM: 'social:sendDM',
   SEND_TEXT_DM: 'social:sendTextDM',
+  SEND_IMAGE_REPLY: 'social:sendImageReply',
   GET_CONVERSATIONS: 'social:getConversations',
   GET_DMS_WITH_USER: 'social:getDMsWithUser',
   MARK_AS_READ: 'social:markAsRead',
   HAS_UNREAD: 'social:hasUnread',
+  HAS_UNREAD_FEEDBACK: 'social:hasUnreadFeedback',
   
   // Feedback operations
   SUBMIT_FEEDBACK: 'social:submitFeedback',
+  SUBMIT_TEXT_FEEDBACK: 'social:submitTextFeedback',
+  SUBMIT_IMAGE_FEEDBACK: 'social:submitImageFeedback',
   GET_MY_FEEDBACK: 'social:getMyFeedback',
   GET_ALL_FEEDBACK: 'social:getAllFeedback',
   GET_FEEDBACK_REPLIES: 'social:getFeedbackReplies',
@@ -478,6 +488,7 @@ export interface TranscribeAPI {
   deleteModel: (modelSize: string) => Promise<boolean>;
   getAvailableModels: () => Promise<Record<string, ModelInfo>>;
   getModelDownloadStatus: () => Promise<Record<string, boolean>>;
+  getDownloadingModels: () => Promise<string[]>;
   getSelectedModel: () => Promise<string>;
   setSelectedModel: (modelSize: string) => Promise<void>;
   getHotkey: () => Promise<string>;
@@ -620,9 +631,14 @@ export interface ClipboardAPI {
 }
 
 export interface PermissionsAPI {
-  check: () => Promise<{ accessibilityGranted: boolean; inputMonitoringGranted: boolean }>;
-  onStatusChanged: (callback: (status: { accessibilityGranted: boolean; inputMonitoringGranted: boolean }) => void) => () => void;
+  check: () => Promise<{ accessibilityGranted: boolean }>;
+  onStatusChanged: (callback: (status: { accessibilityGranted: boolean }) => void) => () => void;
   onRevoked: (callback: () => void) => () => void;
+}
+
+export interface DiagnosticsAPI {
+  getDiagnostics: () => Promise<unknown>;
+  getDiagnosticsMarkdown: () => Promise<string>;
 }
 
 const audioAPI: AudioAPI = {
@@ -678,6 +694,10 @@ const transcribeAPI: TranscribeAPI = {
 
   getModelDownloadStatus: async (): Promise<Record<string, boolean>> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.GET_MODEL_DOWNLOAD_STATUS);
+  },
+
+  getDownloadingModels: async (): Promise<string[]> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_DOWNLOADING_MODELS);
   },
 
   getSelectedModel: async (): Promise<string> => {
@@ -1244,12 +1264,12 @@ const visionAPI: VisionAPI = {
 };
 
 const permissionsAPI: PermissionsAPI = {
-  check: async (): Promise<{ accessibilityGranted: boolean; inputMonitoringGranted: boolean }> => {
+  check: async (): Promise<{ accessibilityGranted: boolean }> => {
     return ipcRenderer.invoke('permissions:check');
   },
 
-  onStatusChanged: (callback: (status: { accessibilityGranted: boolean; inputMonitoringGranted: boolean }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, status: { accessibilityGranted: boolean; inputMonitoringGranted: boolean }) => {
+  onStatusChanged: (callback: (status: { accessibilityGranted: boolean }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: { accessibilityGranted: boolean }) => {
       callback(status);
     };
     ipcRenderer.on('permissions-status', handler);
@@ -1703,6 +1723,11 @@ const socialAPI = {
     return ipcRenderer.invoke(SocialIPCChannels.SEND_TEXT_DM, recipientUserId, text, parentMessageId);
   },
   
+  // Send an image reply (for feedback with pasted images).
+  sendImageReply: async (recipientUserId: string, imageBase64: string, text?: string, parentMessageId?: string): Promise<SocialMessage | null> => {
+    return ipcRenderer.invoke(SocialIPCChannels.SEND_IMAGE_REPLY, recipientUserId, imageBase64, text, parentMessageId);
+  },
+  
   // Get all DM conversations.
   getConversations: async (): Promise<DMConversation[]> => {
     return ipcRenderer.invoke(SocialIPCChannels.GET_CONVERSATIONS);
@@ -1723,6 +1748,11 @@ const socialAPI = {
     return ipcRenderer.invoke(SocialIPCChannels.HAS_UNREAD);
   },
   
+  // Check if there are unread feedback messages.
+  hasUnreadFeedback: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(SocialIPCChannels.HAS_UNREAD_FEEDBACK);
+  },
+  
   // =========================================================================
   // Feedback Operations
   // =========================================================================
@@ -1730,6 +1760,16 @@ const socialAPI = {
   // Submit feedback (send to admin).
   submitFeedback: async (localItemId: number): Promise<SocialMessage | null> => {
     return ipcRenderer.invoke(SocialIPCChannels.SUBMIT_FEEDBACK, localItemId);
+  },
+  
+  // Submit text feedback (for diagnostics, etc.).
+  submitTextFeedback: async (text: string): Promise<SocialMessage | null> => {
+    return ipcRenderer.invoke(SocialIPCChannels.SUBMIT_TEXT_FEEDBACK, text);
+  },
+  
+  // Submit image feedback with optional caption.
+  submitImageFeedback: async (imageBase64: string, caption?: string): Promise<SocialMessage | null> => {
+    return ipcRenderer.invoke(SocialIPCChannels.SUBMIT_IMAGE_FEEDBACK, imageBase64, caption);
   },
   
   // Get current user's submitted feedback.
@@ -1885,7 +1925,17 @@ const shellAPI = {
 
 type ShellAPI = typeof shellAPI;
 
+const diagnosticsAPI: DiagnosticsAPI = {
+  getDiagnostics: async (): Promise<unknown> => {
+    return ipcRenderer.invoke(DiagnosticsIPCChannels.GET_DIAGNOSTICS);
+  },
+  getDiagnosticsMarkdown: async (): Promise<string> => {
+    return ipcRenderer.invoke(DiagnosticsIPCChannels.GET_DIAGNOSTICS_MARKDOWN);
+  },
+};
+
 contextBridge.exposeInMainWorld('shellAPI', shellAPI);
+contextBridge.exposeInMainWorld('diagnosticsAPI', diagnosticsAPI);
 contextBridge.exposeInMainWorld('quotaAPI', quotaAPI);
 contextBridge.exposeInMainWorld('audioAPI', audioAPI);
 contextBridge.exposeInMainWorld('transcribeAPI', transcribeAPI);
@@ -1934,6 +1984,7 @@ declare global {
     socialAPI: SocialAPI;
     quotaAPI: QuotaAPI;
     shellAPI: ShellAPI;
+    diagnosticsAPI: DiagnosticsAPI;
     stripeConfig: {
       paymentLink: string;
       portalLink: string;
