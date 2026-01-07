@@ -611,6 +611,7 @@ interface SocialMessage {
   readAt: number | null;
   feedbackStatus: 'open' | 'resolved' | 'archived' | null;
   parentMessageId: string | null;
+  isHotMic: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -661,8 +662,8 @@ interface ActivityLogEntry {
 interface SocialAPI {
   // DM operations
   sendDM: (recipientUserId: string, localItemId: number) => Promise<SocialMessage | null>;
-  sendTextDM: (recipientUserId: string, text: string, parentMessageId?: string) => Promise<SocialMessage | null>;
-  sendImageReply: (recipientUserId: string, imageBase64: string, text?: string, parentMessageId?: string) => Promise<SocialMessage | null>;
+  sendTextDM: (recipientUserId: string, text: string, parentMessageId?: string, isHotMic?: boolean) => Promise<SocialMessage | null>;
+  sendImageReply: (recipientUserId: string, imageBase64: string, text?: string, parentMessageId?: string, isHotMic?: boolean) => Promise<SocialMessage | null>;
   getConversations: () => Promise<DMConversation[]>;
   getDMsWithUser: (otherUserId: string) => Promise<SocialMessage[]>;
   markAsRead: (messageId: string) => Promise<boolean>;
