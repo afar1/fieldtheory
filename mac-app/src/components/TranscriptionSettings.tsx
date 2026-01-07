@@ -20,7 +20,7 @@ export default function TranscriptionSettings() {
   const [isCapturingHotkey, setIsCapturingHotkey] = useState(false);
   const [hotkeyError, setHotkeyError] = useState<string | null>(null);
   const [availableModels, setAvailableModels] = useState<Record<string, ModelInfo>>({});
-  const [selectedModel, setSelectedModel] = useState<string>('base');
+  const [selectedModel, setSelectedModel] = useState<string>('small');
   const [modelDownloadStatus, setModelDownloadStatus] = useState<Record<string, boolean>>({});
   const [overlayStyle, setOverlayStyle] = useState<'rectangle' | 'top-emerging'>('rectangle');
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
@@ -51,13 +51,14 @@ export default function TranscriptionSettings() {
 
     const fetchStatus = async () => {
       try {
-        const [currentStatus, currentModelStatus, currentHotkey, models, currentSelectedModel, downloadStatus, currentOverlayStyle, currentAbandonHotkey, currentAbandonConfirmation, soundConfig, sounds] = await Promise.all([
+        const [currentStatus, currentModelStatus, currentHotkey, models, currentSelectedModel, downloadStatus, downloadingModels, currentOverlayStyle, currentAbandonHotkey, currentAbandonConfirmation, soundConfig, sounds] = await Promise.all([
           window.transcribeAPI!.getStatus(),
           window.transcribeAPI!.getModelStatus(),
           window.transcribeAPI!.getHotkey(),
           window.transcribeAPI!.getAvailableModels(),
           window.transcribeAPI!.getSelectedModel(),
           window.transcribeAPI!.getModelDownloadStatus(),
+          window.transcribeAPI!.getDownloadingModels?.() ?? [],
           window.transcribeAPI!.getOverlayStyle(),
           window.transcribeAPI!.getAbandonHotkey?.() ?? 'Escape',
           window.transcribeAPI!.getAbandonConfirmation?.() ?? true,
@@ -70,6 +71,10 @@ export default function TranscriptionSettings() {
         setAvailableModels(models);
         setSelectedModel(currentSelectedModel);
         setModelDownloadStatus(downloadStatus);
+        // If a download is in progress, restore that state.
+        if (downloadingModels.length > 0) {
+          setDownloadingModel(downloadingModels[0]);
+        }
         setOverlayStyle(currentOverlayStyle);
         setAbandonHotkey(currentAbandonHotkey);
         setAbandonConfirmation(currentAbandonConfirmation);
@@ -165,6 +170,15 @@ export default function TranscriptionSettings() {
         delete next[modelSize];
         return next;
       });
+      
+      // Auto-select the downloaded model if no valid model is currently selected.
+      // This prevents the confusing case where user downloads a model but can't use it
+      // because another (non-downloaded) model is still selected.
+      const currentSelected = await window.transcribeAPI.getSelectedModel();
+      if (!downloadStatus[currentSelected]) {
+        setSelectedModel(modelSize);
+        await window.transcribeAPI.setSelectedModel(modelSize);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : `Failed to download ${modelSize} model`);
       console.error(`Failed to download ${modelSize} model:`, err);
@@ -661,9 +675,7 @@ export default function TranscriptionSettings() {
             disabled={isDownloading || downloadingModel !== null}
             style={styles.select}
           >
-            {Object.entries(availableModels)
-              .filter(([size]) => size !== 'base')
-              .map(([size, info]) => {
+            {Object.entries(availableModels).map(([size, info]) => {
                 const isDownloaded = modelDownloadStatus[size] || false;
                 return (
                   <option key={size} value={size} disabled={!isDownloaded}>
@@ -675,9 +687,7 @@ export default function TranscriptionSettings() {
         </div>
 
         <div style={styles.modelsList}>
-          {Object.entries(availableModels)
-            .filter(([size]) => size !== 'base')
-            .map(([size, info]) => {
+          {Object.entries(availableModels).map(([size, info]) => {
               const isDownloaded = modelDownloadStatus[size] || false;
               const isSelected = size === selectedModel;
               const isDownloadingThis = downloadingModel === size;

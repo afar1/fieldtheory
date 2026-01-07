@@ -685,6 +685,68 @@ export class SocialSync extends EventEmitter {
   }
 
   /**
+   * Send an image reply (for feedback threads with pasted images).
+   * Accepts base64 image data and optional text.
+   */
+  async sendImageReply(
+    recipientUserId: string, 
+    imageBase64: string, 
+    text?: string, 
+    parentMessageId?: string
+  ): Promise<Message | null> {
+    if (!this.isAuthenticated()) return null;
+    const userId = this.getUserId();
+    if (!userId) return null;
+
+    try {
+      // Decode base64 to buffer for upload.
+      const imageBuffer = Buffer.from(imageBase64, 'base64');
+      const itemId = crypto.randomUUID();
+      const imagePath = `${userId}/${itemId}.png`;
+
+      // Upload image to storage.
+      const { error: uploadError } = await this.supabase!.storage
+        .from('team-clipboard-images')
+        .upload(imagePath, imageBuffer, {
+          contentType: 'image/png',
+          upsert: false,
+        });
+
+      if (uploadError) {
+        console.error('[SocialSync] Image reply upload failed:', uploadError);
+        return null;
+      }
+
+      // Insert message with image.
+      const insertData = {
+        type: parentMessageId ? 'feedback' : 'dm',
+        sender_user_id: userId,
+        recipient_user_id: recipientUserId,
+        content_type: 'image',
+        content_text: text || null,
+        image_path: imagePath,
+        parent_message_id: parentMessageId || null,
+      };
+
+      const { data, error } = await this.supabase!
+        .from('messages')
+        .insert(insertData)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('[SocialSync] Send image reply failed:', error);
+        return null;
+      }
+
+      return this.rowToMessage(data as MessageRow);
+    } catch (err) {
+      console.error('[SocialSync] Failed to send image reply:', err);
+      return null;
+    }
+  }
+
+  /**
    * Get all DM conversations for the current user.
    */
   async getDMConversations(): Promise<DMConversation[]> {
@@ -849,6 +911,32 @@ export class SocialSync extends EventEmitter {
     }
   }
 
+  /**
+   * Check if there are any unread feedback messages (for feedback notifications).
+   * This includes: new feedback, status changes, and replies.
+   */
+  async hasUnreadFeedback(): Promise<boolean> {
+    if (!this.isAuthenticated()) return false;
+    const userId = this.getUserId();
+    if (!userId) return false;
+
+    try {
+      // Check for unread feedback where user is recipient (admin gets notifications from users,
+      // users get notifications from admin responses).
+      const { count, error } = await this.supabase!
+        .from('messages')
+        .select('*', { count: 'exact', head: true })
+        .eq('type', 'feedback')
+        .eq('recipient_user_id', userId)
+        .is('read_at', null);
+
+      if (error) return false;
+      return (count || 0) > 0;
+    } catch (err) {
+      return false;
+    }
+  }
+
   // ===========================================================================
   // Feedback Operations
   // ===========================================================================
@@ -926,6 +1014,117 @@ export class SocialSync extends EventEmitter {
       return this.rowToMessage(data as MessageRow);
     } catch (err) {
       console.error('[SocialSync] Failed to submit feedback:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Submit text-only feedback (for diagnostics, etc.).
+   */
+  async submitTextFeedback(text: string): Promise<Message | null> {
+    const adminUserId = await this.getAdminUserId();
+    if (!adminUserId) {
+      console.error('[SocialSync] No admin user found');
+      return null;
+    }
+
+    if (!this.isAuthenticated()) return null;
+    const userId = this.getUserId();
+    if (!userId) return null;
+
+    try {
+      const insertData = {
+        type: 'feedback',
+        sender_user_id: userId,
+        recipient_user_id: adminUserId,
+        content_type: 'text',
+        content_text: text,
+        feedback_status: 'open',
+      };
+
+      const { data, error } = await this.supabase!
+        .from('messages')
+        .insert(insertData)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('[SocialSync] Submit text feedback failed:', error);
+        return null;
+      }
+
+      // Log the creation.
+      await this.logActivity(data.id, 'created');
+
+      console.log('[SocialSync] Text feedback submitted:', data.id);
+      return this.rowToMessage(data as MessageRow);
+    } catch (err) {
+      console.error('[SocialSync] Failed to submit text feedback:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Submit image feedback with optional caption.
+   */
+  async submitImageFeedback(imageBase64: string, caption?: string): Promise<Message | null> {
+    const adminUserId = await this.getAdminUserId();
+    if (!adminUserId) {
+      console.error('[SocialSync] No admin user found');
+      return null;
+    }
+
+    if (!this.isAuthenticated()) return null;
+    const userId = this.getUserId();
+    if (!userId) return null;
+
+    try {
+      // Decode base64 to buffer for upload.
+      const imageBuffer = Buffer.from(imageBase64, 'base64');
+      const itemId = crypto.randomUUID();
+      const imagePath = `${userId}/${itemId}.png`;
+
+      // Upload image to storage.
+      const { error: uploadError } = await this.supabase!.storage
+        .from('team-clipboard-images')
+        .upload(imagePath, imageBuffer, {
+          contentType: 'image/png',
+          upsert: false,
+        });
+
+      if (uploadError) {
+        console.error('[SocialSync] Image feedback upload failed:', uploadError);
+        return null;
+      }
+
+      const insertData = {
+        type: 'feedback',
+        sender_user_id: userId,
+        recipient_user_id: adminUserId,
+        content_type: 'image',
+        content_text: caption || null,
+        image_path: imagePath,
+        feedback_status: 'open',
+      };
+
+      const { data, error } = await this.supabase!
+        .from('messages')
+        .insert(insertData)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('[SocialSync] Submit image feedback failed:', error);
+        return null;
+      }
+
+      // Log the creation.
+      await this.logActivity(data.id, 'created');
+
+      console.log('[SocialSync] Image feedback submitted:', data.id);
+      return this.rowToMessage(data as MessageRow);
+    } catch (err) {
+      console.error('[SocialSync] Failed to submit image feedback:', err);
       return null;
     }
   }

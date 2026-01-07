@@ -8,7 +8,7 @@ import https from 'https';
  * Available Whisper model sizes.
  * Larger models provide better accuracy but require more disk space and processing time.
  */
-export type ModelSize = 'base' | 'small' | 'medium' | 'large';
+export type ModelSize = 'small' | 'medium' | 'large';
 
 /**
  * Model metadata including name, URL, and expected size.
@@ -24,12 +24,6 @@ interface ModelInfo {
  * Available models configuration.
  */
 const MODELS: Record<ModelSize, ModelInfo> = {
-  base: {
-    name: 'ggml-base.en.bin',
-    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin',
-    sizeBytes: 142 * 1024 * 1024, // ~142MB
-    description: 'Base (142MB) - Fast, good accuracy',
-  },
   small: {
     name: 'ggml-small.en.bin',
     url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin',
@@ -52,11 +46,12 @@ const MODELS: Record<ModelSize, ModelInfo> = {
 
 /**
  * Manages Whisper model downloads and storage.
- * Models are stored in ~/Library/Application Support/Oscar/models/
+ * Models are stored in ~/Library/Application Support/Field Theory/models/
  */
 export class ModelManager {
   private modelsDir: string;
-  private selectedModel: ModelSize = 'base';
+  private selectedModel: ModelSize = 'small';
+  private downloadingModels: Set<ModelSize> = new Set();
 
   constructor(selectedModel?: ModelSize) {
     const appDataPath = app.getPath('userData');
@@ -64,6 +59,20 @@ export class ModelManager {
     if (selectedModel) {
       this.selectedModel = selectedModel;
     }
+  }
+
+  /**
+   * Get which models are currently being downloaded.
+   */
+  getDownloadingModels(): ModelSize[] {
+    return Array.from(this.downloadingModels);
+  }
+
+  /**
+   * Check if a specific model is currently being downloaded.
+   */
+  isDownloading(size: ModelSize): boolean {
+    return this.downloadingModels.has(size);
   }
 
   /**
@@ -93,7 +102,7 @@ export class ModelManager {
    */
   async getDownloadStatus(): Promise<Record<ModelSize, boolean>> {
     const status: Record<ModelSize, boolean> = {} as Record<ModelSize, boolean>;
-    const modelSizes: ModelSize[] = ['base', 'small', 'medium', 'large'];
+    const modelSizes: ModelSize[] = ['small', 'medium', 'large'];
     
     await Promise.all(
       modelSizes.map(async (size) => {
@@ -138,23 +147,30 @@ export class ModelManager {
    * Check if a specific model size is downloaded and valid.
    */
   async isModelAvailableForSize(size: ModelSize): Promise<boolean> {
+    const modelPath = this.getModelPathForSize(size);
+    const modelInfo = MODELS[size];
+    
     try {
-      const modelPath = this.getModelPathForSize(size);
       const stats = await fs.stat(modelPath);
-      const modelInfo = MODELS[size];
+      const fileSizeMB = stats.size / 1024 / 1024;
       
-      // Check if file size is within reasonable range (80% to 120% of expected)
-      const expectedSize = modelInfo.sizeBytes;
-      const minSize = expectedSize * 0.8;
-      const maxSize = expectedSize * 1.2;
+      // Minimum size sanity check - file should be at least 50% of expected size.
+      // This catches incomplete downloads while being lenient with size variations.
+      const minSize = modelInfo.sizeBytes * 0.5;
       
-      if (stats.size < minSize || stats.size > maxSize) {
-        console.warn(`[ModelManager] Model ${size} size suspicious: ${(stats.size / 1024 / 1024).toFixed(2)}MB (expected ~${(expectedSize / 1024 / 1024).toFixed(0)}MB)`);
+      if (stats.size < minSize) {
+        console.warn(`[ModelManager] Model ${size} too small: ${fileSizeMB.toFixed(2)}MB (min ${(minSize / 1024 / 1024).toFixed(0)}MB)`);
         return false;
       }
       
+      console.log(`[ModelManager] Model ${size} found: ${fileSizeMB.toFixed(2)}MB at ${modelPath}`);
       return true;
-    } catch {
+    } catch (error: any) {
+      if (error.code === 'ENOENT') {
+        console.log(`[ModelManager] Model ${size} not found at: ${modelPath}`);
+      } else {
+        console.warn(`[ModelManager] Model ${size} check failed:`, error.message);
+      }
       return false;
     }
   }
@@ -179,6 +195,12 @@ export class ModelManager {
     size: ModelSize,
     onProgress?: (bytesDownloaded: number, totalBytes: number) => void
   ): Promise<void> {
+    // Prevent duplicate downloads of the same model.
+    if (this.downloadingModels.has(size)) {
+      console.log(`[ModelManager] Model ${size} download already in progress, skipping`);
+      return;
+    }
+
     const modelInfo = MODELS[size];
     const modelPath = this.getModelPathForSize(size);
     
@@ -192,15 +214,20 @@ export class ModelManager {
     }
 
     console.log(`[ModelManager] Starting download of ${size} model...`);
+    this.downloadingModels.add(size);
     
-    // Download with redirect handling
-    await this.downloadWithRedirects(modelInfo.url, modelPath, onProgress);
-    
-    // Verify download
-    if (await this.isModelAvailableForSize(size)) {
-      console.log(`[ModelManager] Model ${size} downloaded successfully`);
-    } else {
-      throw new Error(`Downloaded file validation failed for ${size} model`);
+    try {
+      // Download with redirect handling
+      await this.downloadWithRedirects(modelInfo.url, modelPath, onProgress);
+      
+      // Verify download
+      if (await this.isModelAvailableForSize(size)) {
+        console.log(`[ModelManager] Model ${size} downloaded successfully`);
+      } else {
+        throw new Error(`Downloaded file validation failed for ${size} model`);
+      }
+    } finally {
+      this.downloadingModels.delete(size);
     }
   }
 

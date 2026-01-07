@@ -8,12 +8,14 @@ import { useEffect, useState, useCallback } from 'react';
 import AudioSettingsPanel from './AudioSettingsPanel';
 import TranscriptionSettings from './TranscriptionSettings';
 import PromptSettings from './PromptSettings';
+import DiagnosticsModal from './DiagnosticsModal';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
 import { useTheme } from '../contexts/ThemeContext';
 
 interface SettingsPanelProps {
   onNavigateToSignIn?: () => void;
+  onNavigateToFeedback?: () => void;
 }
 
 /**
@@ -21,11 +23,18 @@ interface SettingsPanelProps {
  * Keeps the same functionality as the original App.tsx settings, but styled for the
  * clipboard history context.
  */
-export default function SettingsPanel({ onNavigateToSignIn }: SettingsPanelProps) {
+export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback }: SettingsPanelProps) {
   const { theme } = useTheme();
   // Permissions state
   const [permissions, setPermissions] = useState<{ accessibilityGranted: boolean } | null>(null);
   const [showPermissionsGate, setShowPermissionsGate] = useState(false);
+  
+  // System Access permissions state (microphone, accessibility, screen recording)
+  const [systemPermissions, setSystemPermissions] = useState<{
+    microphone: 'granted' | 'denied' | 'not-determined';
+    accessibility: boolean;
+    screenRecording: boolean;
+  } | null>(null);
   
   // Clipboard hotkey configuration
   const [clipboardHotkeys, setClipboardHotkeys] = useState<{ screenshot?: string; history?: string; desktopScreenshot?: string }>({
@@ -99,6 +108,30 @@ export default function SettingsPanel({ onNavigateToSignIn }: SettingsPanelProps
   // Quota usage for free users (formatted strings like "10/500 min").
   const [quotaUsage, setQuotaUsage] = useState<{ priorityMic: string; autoStack: string } | null>(null);
   
+  // Diagnostics modal visibility.
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  
+  // Load system permissions on mount and when window gains focus
+  useEffect(() => {
+    const loadSystemPermissions = async () => {
+      if (window.onboardingAPI?.getPermissionStatus) {
+        try {
+          const status = await window.onboardingAPI.getPermissionStatus();
+          setSystemPermissions(status);
+        } catch (err) {
+          console.error('[SettingsPanel] Failed to load system permissions:', err);
+        }
+      }
+    };
+    
+    loadSystemPermissions();
+    
+    // Refresh when window gains focus (user may have just changed settings)
+    const handleFocus = () => loadSystemPermissions();
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, []);
+
   // Load clipboard hotkeys on mount
   useEffect(() => {
     if (window.clipboardAPI) {
@@ -847,6 +880,64 @@ export default function SettingsPanel({ onNavigateToSignIn }: SettingsPanelProps
     <div style={styles.container}>
       {permissionsWarning}
 
+      {/* System Access Section - Permission status with quick links to settings */}
+      {systemPermissions && (
+        <div style={styles.section}>
+          <SectionHeader title="System Access" />
+          
+          {/* Microphone */}
+          <div style={styles.row}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{
+                ...styles.statusDot,
+                backgroundColor: systemPermissions.microphone === 'granted' ? '#22c55e' : '#ef4444',
+              }} />
+              <span style={styles.rowLabel}>Microphone</span>
+            </div>
+            <button
+              onClick={() => window.shellAPI?.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone')}
+              style={styles.linkBtn}
+            >
+              {systemPermissions.microphone === 'granted' ? 'Open Settings' : 'Grant Access'}
+            </button>
+          </div>
+          
+          {/* Accessibility */}
+          <div style={styles.row}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{
+                ...styles.statusDot,
+                backgroundColor: systemPermissions.accessibility ? '#22c55e' : '#ef4444',
+              }} />
+              <span style={styles.rowLabel}>Accessibility</span>
+            </div>
+            <button
+              onClick={() => window.shellAPI?.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility')}
+              style={styles.linkBtn}
+            >
+              {systemPermissions.accessibility ? 'Open Settings' : 'Grant Access'}
+            </button>
+          </div>
+          
+          {/* Screen Recording */}
+          <div style={styles.row}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{
+                ...styles.statusDot,
+                backgroundColor: systemPermissions.screenRecording ? '#22c55e' : '#ef4444',
+              }} />
+              <span style={styles.rowLabel}>Screen Recording</span>
+            </div>
+            <button
+              onClick={() => window.shellAPI?.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')}
+              style={styles.linkBtn}
+            >
+              {systemPermissions.screenRecording ? 'Open Settings' : 'Grant Access'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Keyboard Shortcuts Section - First for easy access */}
       <div style={styles.section}>
         <SectionHeader title="Keyboard Shortcuts" />
@@ -936,29 +1027,21 @@ export default function SettingsPanel({ onNavigateToSignIn }: SettingsPanelProps
           </div>
         </div>
         
-        {/* Show in Dock - whether app appears in Dock and Cmd+Tab */}
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Show in Dock</span>
+        {/* Show in Dock - WIP feature, disabled for now */}
+        <div style={{ ...styles.row, opacity: 0.5 }}>
+          <span style={styles.rowLabel}>
+            Show in Dock
+            <span style={{ marginLeft: '8px', fontSize: '9px', color: theme.textSecondary, fontWeight: 500 }}>WIP</span>
+          </span>
           <div style={styles.rowControls}>
             <button
-              onClick={async () => {
-                const newValue = !showInDock;
-                const success = await window.clipboardAPI?.setShowInDock?.(newValue);
-                if (success) setShowInDock(newValue);
-              }}
-              style={{ ...styles.toggle, backgroundColor: showInDock ? theme.accent : '#d1d5db' }}
+              disabled
+              style={{ ...styles.toggle, backgroundColor: '#d1d5db', cursor: 'not-allowed' }}
             >
-              <span style={{ ...styles.toggleKnob, transform: showInDock ? 'translateX(20px)' : 'translateX(2px)' }} />
+              <span style={{ ...styles.toggleKnob, transform: 'translateX(2px)' }} />
             </button>
           </div>
         </div>
-        {showInDock && (
-          <div style={{ ...styles.row, paddingTop: 0, paddingBottom: 8 }}>
-            <span style={{ ...styles.rowLabel, fontSize: 12, opacity: 0.7, lineHeight: 1.4 }}>
-              Field Theory appears in Dock and Cmd+Tab with standard window controls.
-            </span>
-          </div>
-        )}
         
         {/* Permission Reminders - show/hide the screen recording permission banner */}
         <div style={styles.row}>
@@ -1024,6 +1107,23 @@ export default function SettingsPanel({ onNavigateToSignIn }: SettingsPanelProps
       </div>
 
 
+      {/* Support Section - diagnostics and troubleshooting */}
+      <div style={styles.section}>
+        <SectionHeader title="Support" />
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={styles.rowLabel}>Diagnostics</span>
+            <span style={styles.rowHint}>View system info for troubleshooting</span>
+          </div>
+          <button
+            onClick={() => setShowDiagnostics(true)}
+            style={styles.linkBtn}
+          >
+            View
+          </button>
+        </div>
+      </div>
+      
       {/* Account Section - combines account info and subscription */}
       {(() => {
         // Only trust cached 'pro' tier if user is actually signed in.
@@ -1277,6 +1377,13 @@ export default function SettingsPanel({ onNavigateToSignIn }: SettingsPanelProps
           </div>
         </div>
       )}
+      
+      {/* Diagnostics Modal */}
+      <DiagnosticsModal 
+        isOpen={showDiagnostics} 
+        onClose={() => setShowDiagnostics(false)}
+        onSendAsFeedback={onNavigateToFeedback}
+      />
     </div>
   );
 }

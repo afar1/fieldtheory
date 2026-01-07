@@ -469,9 +469,10 @@ function InitialsBadge({ email }: { email: string | null }) {
 
 interface SharedContextViewProps {
   onOpenSketch?: (imageDataUrl: string, width: number, height: number) => void;
+  onSubmitFeedback?: (text: string, imageBase64?: string) => Promise<void>;
 }
 
-export default function SharedContextView({ onOpenSketch }: SharedContextViewProps = {}) {
+export default function SharedContextView({ onOpenSketch, onSubmitFeedback }: SharedContextViewProps = {}) {
   const { theme } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -1466,8 +1467,20 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
         return;
       }
 
-      // c: Copy to personal.
+      // c: Copy to clipboard (matches Cmd+C behavior).
       if (key === 'c' && !hasMeta) {
+        if (selectedRow?.type === 'item') {
+          e.preventDefault();
+          copyItemToClipboard(selectedRow.item, `item-${selectedRow.item.id}`);
+        } else if (selectedRow?.type === 'stack' && selectedRow.items.length > 0) {
+          e.preventDefault();
+          copyStackToClipboard(selectedRow.items, `stack-${selectedRow.items.map(i => i.id).join(',')}`);
+        }
+        return;
+      }
+
+      // a: Add to personal fields.
+      if (key === 'a' && !hasMeta) {
         e.preventDefault();
         if (selectedRow?.type === 'item') {
           copyToPersonal(selectedRow.item.id);
@@ -1538,11 +1551,31 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
           return;
         }
       }
+
+      // f: Submit selected item as feedback.
+      if (key === 'f' && !hasMeta && !hasCtrl && !hasAlt && !hasShift && onSubmitFeedback) {
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        
+        if (selectedRow) {
+          e.preventDefault();
+          (async () => {
+            const item = selectedRow.type === 'item' ? selectedRow.item : selectedRow.items[0];
+            if (!item) return;
+            
+            // Build content for feedback.
+            const text = item.content || '';
+            const imageBase64 = item.imageData;
+            
+            await onSubmitFeedback(text, imageBase64 || undefined);
+          })();
+          return;
+        }
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [session, listRows, selectedIndex, selectedIds, deletedItems, pasteItem, pasteStack, copyToPersonal, preview, dismissPreview, getPreviewForRow, getStackPreviewItems, hoveredImageId, teamItems, deleteTeamItem, deleteTeamItems, unstackTeamItems, toggleStackExpanded, toggleItemExpanded, stackPreviewIndex, stackPreviewItems, onOpenSketch]);
+  }, [session, listRows, selectedIndex, selectedIds, deletedItems, pasteItem, pasteStack, copyToPersonal, copyItemToClipboard, copyStackToClipboard, preview, dismissPreview, getPreviewForRow, getStackPreviewItems, hoveredImageId, teamItems, deleteTeamItem, deleteTeamItems, unstackTeamItems, toggleStackExpanded, toggleItemExpanded, stackPreviewIndex, stackPreviewItems, onOpenSketch, onSubmitFeedback]);
 
   // ---------------------------------------------------------------------------
   // Render: Loading
@@ -2264,7 +2297,7 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
                             onClick={(e) => { e.stopPropagation(); for (const item of stackItems) { copyToPersonal(item.id); } }}
                             style={{ padding: '4px 6px', fontSize: '10px', fontWeight: 500, backgroundColor: 'transparent', color: theme.textSecondary, border: 'none', borderRadius: '4px', cursor: 'pointer' }}
                           >
-                            copy <KeyCap>c</KeyCap>
+                            add <KeyCap>a</KeyCap>
                           </button>
                           {onOpenSketch && (() => {
                             const imageItem = stackItems.find(i => i.imageUrl || i.imageData);
@@ -2524,7 +2557,7 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
                             disabled={isCopying}
                             style={{ padding: '4px 6px', fontSize: '10px', fontWeight: 500, backgroundColor: 'transparent', color: theme.textSecondary, border: 'none', borderRadius: '4px', cursor: isCopying ? 'wait' : 'pointer' }}
                           >
-                            {isCopying ? 'copying...' : 'copy'} <KeyCap>c</KeyCap>
+                            {isCopying ? 'adding...' : 'add'} <KeyCap>a</KeyCap>
                           </button>
                           {(item.imageUrl || item.imageData) && onOpenSketch && (
                             <button
@@ -2672,9 +2705,18 @@ export default function SharedContextView({ onOpenSketch }: SharedContextViewPro
                       await pasteStack(selectedRow.items);
                     }
                   }},
-                  ...(onOpenSketch ? [{ label: 'draw', key: 'd', action: () => {
+                  ...(onOpenSketch ? [{ label: 'sketch', key: 'd', action: () => {
                     // Open sketch mode with this image.
                     onOpenSketch(preview.url, preview.width || 800, preview.height || 600);
+                    dismissPreview();
+                  }}] : []),
+                  ...(onSubmitFeedback ? [{ label: 'feedback', key: 'f', action: async () => {
+                    // Send previewed image as feedback.
+                    const selectedRow = listRows[selectedIndex];
+                    const item = selectedRow?.type === 'item' ? selectedRow.item : selectedRow?.items?.[0];
+                    if (item) {
+                      await onSubmitFeedback(item.content || '', item.imageData || undefined);
+                    }
                     dismissPreview();
                   }}] : []),
                   { label: 'delete', key: '⌫', action: async () => {

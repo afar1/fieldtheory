@@ -9,6 +9,7 @@ export const TranscribeIPCChannels = {
   DELETE_MODEL: 'transcribe:deleteModel',
   GET_AVAILABLE_MODELS: 'transcribe:getAvailableModels',
   GET_MODEL_DOWNLOAD_STATUS: 'transcribe:getModelDownloadStatus',
+  GET_DOWNLOADING_MODELS: 'transcribe:getDownloadingModels',
   GET_SELECTED_MODEL: 'transcribe:getSelectedModel',
   SET_SELECTED_MODEL: 'transcribe:setSelectedModel',
   GET_HOTKEY: 'transcribe:getHotkey',
@@ -88,6 +89,7 @@ export interface TranscribeAPI {
   deleteModel: (modelSize: string) => Promise<boolean>;
   getAvailableModels: () => Promise<Record<string, ModelInfo>>;
   getModelDownloadStatus: () => Promise<Record<string, boolean>>;
+  getDownloadingModels: () => Promise<string[]>;
   getSelectedModel: () => Promise<string>;
   setSelectedModel: (modelSize: string) => Promise<void>;
   getHotkey: () => Promise<string>;
