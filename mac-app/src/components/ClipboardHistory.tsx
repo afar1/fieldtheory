@@ -54,6 +54,7 @@ type ClipboardItem = {
   stackId: string | null;
   source: ClipboardSource;
   figureLabel: string | null; // Figure label for screenshots in stacks (e.g., "A", "B", "C")
+  figureId: string | null; // Unique 5-char alphanumeric ID for searchability (e.g., "k7xm2")
 };
 
 type StackInfo = {
@@ -381,6 +382,12 @@ export default function ClipboardHistory() {
   if (viewMode === 'team' && !hasShownTeamView) {
     setHasShownTeamView(true);
   }
+  
+  // Team members drawer state (for Shared Fields view).
+  const [showTeamMembers, setShowTeamMembers] = useState(() => {
+    const saved = localStorage.getItem('teamMembersVisible');
+    return saved === 'true';
+  });
   
   const [editingSketchItem, setEditingSketchItem] = useState<ClipboardItem | null>(null);
   const [sketchBackgroundImage, setSketchBackgroundImage] = useState<{
@@ -3067,7 +3074,9 @@ export default function ClipboardHistory() {
                 fontSize: '10px',
                 fontWeight: 400,
                 // Don't highlight Shared Fields when showing sign-in (not authenticated).
-                backgroundColor: viewMode === mode && !(mode === 'team' && !authSession?.user?.email) ? theme.accent : 'transparent',
+                backgroundColor: viewMode === mode && !(mode === 'team' && !authSession?.user?.email)
+                  ? (mode === 'team' ? (theme.isDark ? '#8b5cf6' : '#7c3aed') : theme.accent)
+                  : 'transparent',
                 color: viewMode === mode && !(mode === 'team' && !authSession?.user?.email) ? '#fff' : theme.textSecondary,
                 border: 'none',
                 borderRadius: '4px',
@@ -3227,11 +3236,95 @@ export default function ClipboardHistory() {
             </div>
           )}
           
+          {/* Team button - only visible in shared fields view */}
+          {viewMode === 'team' && (
+            <button
+              onClick={() => {
+                setShowTeamMembers(!showTeamMembers);
+                localStorage.setItem('teamMembersVisible', String(!showTeamMembers));
+              }}
+              tabIndex={0}
+              style={{
+                padding: '5px 6px',
+                fontSize: '9px',
+                fontWeight: 500,
+                backgroundColor: showTeamMembers ? theme.accent : 'transparent',
+                color: showTeamMembers ? '#fff' : theme.textSecondary,
+                border: 'none',
+                borderRadius: '3px',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+                outline: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '3px',
+              }}
+              onMouseEnter={(e) => {
+                if (!showTeamMembers) {
+                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!showTeamMembers) {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }
+              }}
+              title="Team Members"
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+              </svg>
+              Team
+            </button>
+          )}
+          
+          {/* Popular Commands button */}
+          <button
+            onClick={() => setViewMode('commands')}
+            tabIndex={0}
+            style={{
+              padding: '5px 6px',
+              fontSize: '9px',
+              fontWeight: 500,
+              backgroundColor: viewMode === 'commands' ? theme.accent : 'transparent',
+              color: viewMode === 'commands' ? '#fff' : theme.textSecondary,
+              border: 'none',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              outline: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px',
+            }}
+            onMouseEnter={(e) => {
+              if (viewMode !== 'commands') {
+                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (viewMode !== 'commands') {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }
+            }}
+            title="Popular Commands (C)"
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="4 17 10 11 4 5" />
+              <line x1="12" y1="19" x2="20" y2="19" />
+            </svg>
+            Commands
+          </button>
+          
+          {/* Feedback button */}
           <button
             onClick={() => setViewMode('feedback')}
             tabIndex={0}
             style={{
-              padding: '3px 6px',
+              padding: '5px 6px',
               fontSize: '9px',
               fontWeight: 500,
               backgroundColor: viewMode === 'feedback' ? theme.accent : 'transparent',
@@ -3461,6 +3554,11 @@ export default function ClipboardHistory() {
               if (result) {
                 showFeedback('sent as feedback');
               }
+            }}
+            showMembers={showTeamMembers}
+            onToggleMembers={() => {
+              setShowTeamMembers(!showTeamMembers);
+              localStorage.setItem('teamMembersVisible', String(!showTeamMembers));
             }}
           />
         </div>
@@ -3788,6 +3886,7 @@ export default function ClipboardHistory() {
               minHeight: 0,
               borderRadius: '8px',
               border: `1px solid ${theme.border}`,
+              marginTop: '8px',
             }}
           >
         {listRows.length === 0 && !loading ? (
