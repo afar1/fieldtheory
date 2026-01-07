@@ -346,14 +346,22 @@ function combineStackText(items: SharedClipboardItem[]): string {
     .join('\n\n');
 }
 
-function getInitials(email: string | null): string {
+// Format email to "First Name Last Initial" (e.g., "andrew.mfarah@gmail.com" → "Andrew F.")
+function formatNameFromEmail(email: string | null): string {
   if (!email) return '?';
   const localPart = email.split('@')[0];
-  const parts = localPart.split(/[._-]/);
+  // Split by common separators (dot, underscore, hyphen).
+  const parts = localPart.split(/[._-]/).filter(Boolean);
+  
   if (parts.length >= 2) {
-    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    // Capitalize first name, take first letter of last name.
+    const firstName = parts[0].charAt(0).toUpperCase() + parts[0].slice(1).toLowerCase();
+    const lastInitial = parts[parts.length - 1].charAt(0).toUpperCase();
+    return `${firstName} ${lastInitial}.`;
   }
-  return localPart.slice(0, 2).toUpperCase();
+  
+  // Single part - just capitalize it.
+  return parts[0] ? parts[0].charAt(0).toUpperCase() + parts[0].slice(1).toLowerCase() : '?';
 }
 
 // =============================================================================
@@ -389,7 +397,7 @@ function DraggableDroppableRow({
       style={{
         ...style,
         opacity: isDragging ? 0.5 : 1,
-        outline: isOver ? '2px solid #2dd4bf' : 'none',
+        outline: isOver ? '2px solid #8b5cf6' : 'none',
         outlineOffset: '-2px',
       }}
     >
@@ -424,11 +432,11 @@ function KeyCap({ children, small = false, style }: { children: React.ReactNode;
 }
 
 // =============================================================================
-// InitialsBadge
+// InitialsBadge - shows "First Name Last Initial" (e.g., "Andrew F.").
 // =============================================================================
 
 function InitialsBadge({ email }: { email: string | null }) {
-  const initials = getInitials(email);
+  const displayName = formatNameFromEmail(email);
   
   const getColorFromEmail = (email: string | null): string => {
     if (!email) return '#888';
@@ -443,22 +451,14 @@ function InitialsBadge({ email }: { email: string | null }) {
   return (
     <span
       style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: '16px',
-        height: '16px',
-        borderRadius: '50%',
-        backgroundColor: getColorFromEmail(email),
-        fontSize: '8px',
-        fontWeight: 600,
-        color: '#fff',
+        fontSize: '10px',
+        fontWeight: 500,
+        color: getColorFromEmail(email),
         marginLeft: '4px',
-        verticalAlign: 'middle',
       }}
       title={email || 'Unknown'}
     >
-      {initials}
+      {displayName}
     </span>
   );
 }
@@ -470,9 +470,11 @@ function InitialsBadge({ email }: { email: string | null }) {
 interface SharedContextViewProps {
   onOpenSketch?: (imageDataUrl: string, width: number, height: number) => void;
   onSubmitFeedback?: (text: string, imageBase64?: string) => Promise<void>;
+  showMembers?: boolean;
+  onToggleMembers?: () => void;
 }
 
-export default function SharedContextView({ onOpenSketch, onSubmitFeedback }: SharedContextViewProps = {}) {
+export default function SharedContextView({ onOpenSketch, onSubmitFeedback, showMembers: showMembersProp, onToggleMembers }: SharedContextViewProps = {}) {
   const { theme } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -499,10 +501,14 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback }: Sh
   const [addMemberEmail, setAddMemberEmail] = useState('');
   const [addMemberError, setAddMemberError] = useState<string | null>(null);
   const [addingMember, setAddingMember] = useState(false);
-  const [showMembers, setShowMembers] = useState(() => {
+  const [showMembersInternal, setShowMembersInternal] = useState(() => {
     const saved = localStorage.getItem('teamMembersVisible');
     return saved === 'true';
   });
+  
+  // Use prop if provided, otherwise use internal state.
+  const showMembers = showMembersProp !== undefined ? showMembersProp : showMembersInternal;
+  const setShowMembers = onToggleMembers || setShowMembersInternal;
 
   // Team items state - initialized from cache for instant display.
   const [teamItems, setTeamItems] = useState<SharedClipboardItem[]>(() => {
@@ -1129,10 +1135,12 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback }: Sh
     }
   }, [listRows.length, selectedIndex]);
 
-  // Persist showMembers panel state.
+  // Persist showMembers panel state (only if using internal state).
   useEffect(() => {
-    localStorage.setItem('teamMembersVisible', String(showMembers));
-  }, [showMembers]);
+    if (showMembersProp === undefined) {
+      localStorage.setItem('teamMembersVisible', String(showMembers));
+    }
+  }, [showMembers, showMembersProp]);
 
   // Debounce search query.
   useEffect(() => {
@@ -1806,29 +1814,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback }: Sh
       flexDirection: 'column', 
       overflow: 'hidden', 
       padding: '0 16px 16px 16px',
-      // Visual distinction: soft purple left border to indicate shared context.
-      borderLeft: '3px solid rgba(139, 92, 246, 0.5)',
-      marginLeft: '4px',
     }}>
-      {/* Team Members Toggle */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-        <button
-          onClick={() => setShowMembers(!showMembers)}
-          style={{
-            background: 'transparent',
-            border: 'none',
-            fontSize: '11px',
-            color: theme.textSecondary,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-          }}
-        >
-          {showMembers ? '▼' : '▶'} Team ({teamMembers.length})
-        </button>
-      </div>
-
       {/* Team Members Panel */}
       {showMembers && (
         <div style={{ marginBottom: '12px', padding: '12px', backgroundColor: theme.bgSecondary, borderRadius: '8px', border: `1px solid ${theme.border}` }}>
@@ -1886,8 +1872,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback }: Sh
                     color: theme.text,
                   }}
                 >
-                  <InitialsBadge email={member.email} />
-                  <span>{member.email}</span>
+                  <span title={member.email}>{formatNameFromEmail(member.email)}</span>
                   {member.addedByMe && (
                     <button
                       onClick={() => handleRemoveMember(member.id)}
@@ -2095,6 +2080,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback }: Sh
               minHeight: 0,
               borderRadius: '8px',
               border: `1px solid ${theme.border}`,
+              marginTop: '8px',
             }}
           >
             {listRows.length === 0 && !itemsLoading ? (
@@ -2144,9 +2130,9 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback }: Sh
                         borderBottom: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : `1px solid ${theme.border}`,
                         borderRight: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
                         borderLeft: isRowSelected
-                          ? `${stackItems.some(item => selectedIds.has(item.id)) ? '4px' : '2px'} solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
-                          : stackItems.some(item => selectedIds.has(item.id)) 
-                            ? `2px solid ${theme.selectedBorder}` 
+                          ? `${stackItems.some(item => selectedIds.has(item.id)) ? '4px' : '2px'} solid ${theme.isDark ? '#8b5cf6' : '#7c3aed'}`
+                          : stackItems.some(item => selectedIds.has(item.id))
+                            ? `2px solid ${theme.isDark ? 'rgba(139, 92, 246, 0.6)' : 'rgba(124, 58, 237, 0.6)'}`
                             : '2px solid transparent',
                         boxShadow: isRowSelected ? (theme.isDark ? '0 2px 8px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.08)') : 'none',
                         transition: 'background-color 0.3s ease, border-left 0.3s ease, box-shadow 0.3s ease',
@@ -2398,9 +2384,9 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback }: Sh
                         borderBottom: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : `1px solid ${theme.border}`,
                         borderRight: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
                         borderLeft: isRowSelected
-                          ? `${isSelected ? '4px' : '2px'} solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
-                          : isSelected 
-                            ? `2px solid ${theme.selectedBorder}` 
+                          ? `${isSelected ? '4px' : '2px'} solid ${theme.isDark ? '#8b5cf6' : '#7c3aed'}`
+                          : isSelected
+                            ? `2px solid ${theme.isDark ? 'rgba(139, 92, 246, 0.6)' : 'rgba(124, 58, 237, 0.6)'}`
                             : '2px solid transparent',
                         boxShadow: isRowSelected ? (theme.isDark ? '0 2px 8px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.08)') : 'none',
                         transition: 'background-color 0.3s ease, border-left 0.3s ease, box-shadow 0.3s ease',

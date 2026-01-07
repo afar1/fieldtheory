@@ -40,6 +40,7 @@ export interface ClipboardItem {
   stackId: string | null; // Groups items into a prompt stack for batch paste
   source: ClipboardSource; // Device source: 'mac' for local, 'ios' for mobile synced
   figureLabel: string | null; // Figure label for screenshots in stacks (e.g., "A", "B", "C")
+  figureId: string | null; // Unique 5-char alphanumeric ID for searchability (e.g., "k7xm2")
 }
 
 /**
@@ -288,6 +289,15 @@ export class ClipboardManager extends EventEmitter {
     this.runMigration('add_figure_label', () => {
       this.db.exec(`
         ALTER TABLE clipboard_items ADD COLUMN figure_label TEXT;
+      `);
+    });
+
+    // Migration: Add figure_id column for unique figure identification.
+    // This is a 5-char alphanumeric ID (e.g., "k7xm2") that makes figures searchable
+    // across all recordings, even when multiple figures share the same label (A, B, C).
+    this.runMigration('add_figure_id', () => {
+      this.db.exec(`
+        ALTER TABLE clipboard_items ADD COLUMN figure_id TEXT;
       `);
     });
 
@@ -727,6 +737,7 @@ export class ClipboardManager extends EventEmitter {
       stackId: row.stack_id || null,
       source: row.source || 'mac',
       figureLabel: row.figure_label || null,
+      figureId: row.figure_id || null,
     })) as ClipboardItem[];
   }
 
@@ -761,6 +772,7 @@ export class ClipboardManager extends EventEmitter {
       stackId: row.stack_id || null,
       source: row.source || 'mac',
       figureLabel: row.figure_label || null,
+      figureId: row.figure_id || null,
     } as ClipboardItem;
   }
 
@@ -862,6 +874,7 @@ export class ClipboardManager extends EventEmitter {
       stackId: row.stack_id || null,
       source: row.source || 'mac',
       figureLabel: row.figure_label || null,
+      figureId: row.figure_id || null,
     })) as ClipboardItem[];
   }
 
@@ -980,15 +993,31 @@ export class ClipboardManager extends EventEmitter {
   }
 
   /**
-   * Update the figure label for an item.
+   * Update the figure label and unique ID for an item.
    * Used when screenshots are taken during recording to label them as "A", "B", "C", etc.
    * @param itemId - ID of the item to update
    * @param figureLabel - The figure label (e.g., "A", "B", "C")
+   * @param figureId - Optional unique 5-char ID (e.g., "k7xm2"). If not provided, one is generated.
    */
-  updateFigureLabel(itemId: number, figureLabel: string): void {
-    const stmt = this.db.prepare('UPDATE clipboard_items SET figure_label = ? WHERE id = ?');
-    stmt.run(figureLabel, itemId);
-    console.log(`[ClipboardManager] Updated figure label for item ${itemId}: Figure ${figureLabel}`);
+  updateFigureLabel(itemId: number, figureLabel: string, figureId?: string): void {
+    const id = figureId || this.generateFigureId();
+    const stmt = this.db.prepare('UPDATE clipboard_items SET figure_label = ?, figure_id = ? WHERE id = ?');
+    stmt.run(figureLabel, id, itemId);
+    console.log(`[ClipboardManager] Updated figure for item ${itemId}: Figure ${figureLabel} (${id})`);
+  }
+
+  /**
+   * Generate a unique 5-character alphanumeric ID for figure identification.
+   * Uses lowercase letters and digits (36^5 = ~60 million combinations).
+   * Format: e.g., "k7xm2", "a3b9z"
+   */
+  generateFigureId(): string {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let id = '';
+    for (let i = 0; i < 5; i++) {
+      id += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return id;
   }
 
   /**
@@ -1016,11 +1045,14 @@ export class ClipboardManager extends EventEmitter {
   /**
    * Capture screenshot and add to clipboard history.
    * When region=true, uses interactive selection (drag to select) like macOS Command+Shift+Control+4.
-   * @param options - Capture options
+   * @param options - Capture options (region, saveToDesktop, figureLabel, figureId)
    * @param stackId - Optional stack ID to group this screenshot with other items
    */
-  async captureScreenshot(options: { region?: boolean; saveToDesktop?: boolean } = {}, stackId?: string): Promise<number> {
-    const { region = false, saveToDesktop = false } = options;
+  async captureScreenshot(
+    options: { region?: boolean; saveToDesktop?: boolean; figureLabel?: string; figureId?: string } = {},
+    stackId?: string
+  ): Promise<number> {
+    const { region = false, saveToDesktop = false, figureLabel, figureId } = options;
     
     // Debug: Log screen recording permission status to diagnose Tahoe issues.
     const screenPermission = systemPreferences.getMediaAccessStatus('screen');
@@ -1039,11 +1071,21 @@ export class ClipboardManager extends EventEmitter {
         let command = 'screencapture -i';
         
         if (saveToDesktop) {
-          // If saving to desktop, generate a timestamped filename
+          // Generate desktop filename. If figure info is provided, include it for searchability.
+          // Format: Field_Figure-A_k7xm2_2026-01-07_14-30-22.png (with figure)
+          //    or: Field_Screenshot_2026-01-07_14-30-22.png (without figure)
           const now = new Date();
           const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
           const desktopPath = app.getPath('desktop');
-          capturePath = path.join(desktopPath, `Field_Screenshot_${timestamp}.png`);
+          
+          let filename: string;
+          if (figureLabel && figureId) {
+            filename = `Field_Figure-${figureLabel}_${figureId}_${timestamp}.png`;
+          } else {
+            filename = `Field_Screenshot_${timestamp}.png`;
+          }
+          
+          capturePath = path.join(desktopPath, filename);
           command += ` "${capturePath}"`;
         } else {
           // Default: save directly to clipboard

@@ -697,8 +697,7 @@ const styles: Record<string, React.CSSProperties> = {
   header: {
     display: 'flex',
     gap: '8px',
-    padding: '12px 16px',
-    borderBottom: '1px solid #e5e7eb',
+    padding: '0 16px 8px 16px',
   },
   searchInput: {
     flex: 1,
