@@ -122,7 +122,7 @@ interface Preferences {
 
 const DEFAULT_PREFERENCES: Preferences = {
   transcriptionHotkey: 'Command+\\',
-  selectedModel: 'base',
+  selectedModel: 'small',
   overlayStyle: 'rectangle',
   clipboardScreenshotHotkey: 'Command+4',
   clipboardDesktopScreenshotHotkey: 'Command+3',
@@ -152,7 +152,7 @@ const DEFAULT_PREFERENCES: Preferences = {
   // Tasks tab - experimental feature, hidden by default.
   tasksTabEnabled: false,
   
-  // Show in Dock - disabled by default (accessory app behavior).
+  // Show in Dock - disabled by default (panel mode). WIP feature.
   showInDock: false,
 };
 
