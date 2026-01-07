@@ -281,17 +281,22 @@ function smartTruncateText(text: string, targetWords: number = 15): {
   return { firstPart, lastPart, needsTruncation: true };
 }
 
-// Extract initials from email (first.last@domain -> FL, or first letter of email).
-function getInitials(email: string | null): string {
+// Format email to "First Name Last Initial" (e.g., "andrew.mfarah@gmail.com" → "Andrew F.")
+function formatNameFromEmail(email: string | null): string {
   if (!email) return '?';
   const localPart = email.split('@')[0];
-  // Try to split by common separators.
-  const parts = localPart.split(/[._-]/);
+  // Split by common separators (dot, underscore, hyphen).
+  const parts = localPart.split(/[._-]/).filter(Boolean);
+  
   if (parts.length >= 2) {
-    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    // Capitalize first name, take first letter of last name.
+    const firstName = parts[0].charAt(0).toUpperCase() + parts[0].slice(1).toLowerCase();
+    const lastInitial = parts[parts.length - 1].charAt(0).toUpperCase();
+    return `${firstName} ${lastInitial}.`;
   }
-  // Just use first two letters.
-  return localPart.slice(0, 2).toUpperCase();
+  
+  // Single part - just capitalize it.
+  return parts[0] ? parts[0].charAt(0).toUpperCase() + parts[0].slice(1).toLowerCase() : '?';
 }
 
 // Format file size for images.
@@ -380,11 +385,11 @@ function KeyCap({ children, small = false }: { children: React.ReactNode; small?
 }
 
 // =============================================================================
-// InitialsBadge - shows user initials in a small colored circle (inline).
+// InitialsBadge - shows "First Name Last Initial" (e.g., "Andrew F.").
 // =============================================================================
 
 function InitialsBadge({ email }: { email: string | null }) {
-  const initials = getInitials(email);
+  const displayName = formatNameFromEmail(email);
   
   // Generate a consistent color from the email.
   const getColorFromEmail = (email: string | null): string => {
@@ -393,7 +398,6 @@ function InitialsBadge({ email }: { email: string | null }) {
     for (let i = 0; i < email.length; i++) {
       hash = email.charCodeAt(i) + ((hash << 5) - hash);
     }
-    // Generate a hue from the hash, keep saturation and lightness fixed for readability.
     const hue = Math.abs(hash) % 360;
     return `hsl(${hue}, 65%, 55%)`;
   };
@@ -401,22 +405,14 @@ function InitialsBadge({ email }: { email: string | null }) {
   return (
     <span
       style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: '16px',
-        height: '16px',
-        borderRadius: '50%',
-        backgroundColor: getColorFromEmail(email),
-        fontSize: '8px',
-        fontWeight: 600,
-        color: '#fff',
+        fontSize: '10px',
+        fontWeight: 500,
+        color: getColorFromEmail(email),
         marginLeft: '4px',
-        verticalAlign: 'middle',
       }}
       title={email || 'Unknown'}
     >
-      {initials}
+      {displayName}
     </span>
   );
 }
@@ -1879,7 +1875,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
               }}
             >
               <div>
-                <span style={{ fontSize: '12px', color: theme.text }}>{member.email}</span>
+                <span style={{ fontSize: '12px', color: theme.text }} title={member.email}>{formatNameFromEmail(member.email)}</span>
                 {!member.addedByMe && (
                   <span style={{ marginLeft: '8px', fontSize: '10px', color: theme.textSecondary }}>
                     (added you)
@@ -2141,6 +2137,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
           minHeight: 0,
           borderRadius: '8px',
           border: `1px solid ${theme.border}`,
+          marginTop: '8px',
         }}
       >
         {listRows.length === 0 && !itemsLoading ? (
