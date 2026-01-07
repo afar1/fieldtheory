@@ -4186,22 +4186,36 @@ export default function ClipboardHistory() {
                       borderTop: selectedIndex === index ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
                       borderBottom: selectedIndex === index ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : `1px solid ${theme.border}`,
                       borderRight: selectedIndex === index ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
-                      // J/K = bright teal (4px if over X-selected, else 2px), X-selection = muted teal 2px
-                      borderLeft: recentlyStackedId === stack.stackId || selectedIndex === index
-                        ? `${stackItems.some(item => selectedIds.has(item.id)) ? '4px' : '2px'} solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
-                        : stackItems.some(item => selectedIds.has(item.id)) 
-                          ? `2px solid ${theme.selectedBorder}` 
-                          : '2px solid transparent',
+                      // Left indicator is now an inner element to avoid corner radius bending.
+                      borderLeft: '2px solid transparent',
                       boxShadow: selectedIndex === index
                         ? theme.isDark 
                           ? '0 2px 8px rgba(0,0,0,0.3)' 
                           : '0 2px 8px rgba(0,0,0,0.08)'
                         : 'none',
-                      transition: 'background-color 0.3s ease, border-left 0.3s ease, box-shadow 0.3s ease',
+                      transition: 'background-color 0.3s ease, box-shadow 0.3s ease',
                       cursor: activeDragId ? 'grabbing' : 'grab',
                       userSelect: 'none',
+                      position: 'relative',
                     }}
                   >
+                    {/* Left selection indicator - inset to avoid corner radius bending */}
+                    {(recentlyStackedId === stack.stackId || selectedIndex === index || stackItems.some(item => selectedIds.has(item.id))) && (
+                      <div style={{
+                        position: 'absolute',
+                        left: 0,
+                        top: 4,
+                        bottom: 4,
+                        width: (recentlyStackedId === stack.stackId || selectedIndex === index) 
+                          ? (stackItems.some(item => selectedIds.has(item.id)) ? '4px' : '2px') 
+                          : '2px',
+                        backgroundColor: (recentlyStackedId === stack.stackId || selectedIndex === index)
+                          ? (theme.isDark ? '#2dd4bf' : '#14b8a6')
+                          : theme.selectedBorder,
+                        borderRadius: '1px',
+                        transition: 'width 0.1s ease, background-color 0.1s ease',
+                      }} />
+                    )}
                     {/* Content section - full width */}
                     <div>
                       {/* Inline image thumbnails - horizontal row */}
@@ -4792,12 +4806,8 @@ export default function ClipboardHistory() {
                       borderTop: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
                       borderBottom: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : `1px solid ${theme.border}`,
                       borderRight: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
-                      // J/K = bright teal (4px if over X-selected, else 2px), X-selection = muted teal 2px
-                      borderLeft: isRowSelected
-                        ? `${isInStack ? '4px' : '2px'} solid ${theme.isDark ? '#2dd4bf' : '#14b8a6'}`
-                        : isInStack 
-                          ? `2px solid ${theme.selectedBorder}` 
-                          : '2px solid transparent',
+                      // Left indicator is now an inner element to avoid corner radius bending.
+                      borderLeft: '2px solid transparent',
                       boxShadow: isRowSelected
                         ? theme.isDark 
                           ? '0 2px 8px rgba(0,0,0,0.3)' 
@@ -4811,6 +4821,21 @@ export default function ClipboardHistory() {
                       position: 'relative',
                     }}
                   >
+                  {/* Left selection indicator - inset to avoid corner radius bending */}
+                  {(isRowSelected || isInStack) && (
+                    <div style={{
+                      position: 'absolute',
+                      left: 0,
+                      top: 4,
+                      bottom: 4,
+                      width: isRowSelected ? (isInStack ? '4px' : '2px') : '2px',
+                      backgroundColor: isRowSelected 
+                        ? (theme.isDark ? '#2dd4bf' : '#14b8a6')
+                        : theme.selectedBorder,
+                      borderRadius: '1px',
+                      transition: 'width 0.1s ease, background-color 0.1s ease',
+                    }} />
+                  )}
                   {/* Copy icon - top right */}
                   <button
                     onClick={(e) => {
