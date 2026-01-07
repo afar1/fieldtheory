@@ -866,16 +866,20 @@ export class SocialSync extends EventEmitter {
   }
 
   /**
-   * Mark a message as read.
+   * Mark a message as read. Only works if current user is the recipient.
    */
   async markAsRead(messageId: string): Promise<boolean> {
     if (!this.supabase) return false;
+    const userId = this.getUserId();
+    if (!userId) return false;
 
     try {
+      // Only update if current user is the recipient.
       const { error } = await this.supabase
         .from('messages')
         .update({ read_at: new Date().toISOString() })
-        .eq('id', messageId);
+        .eq('id', messageId)
+        .eq('recipient_user_id', userId);
 
       if (error) {
         console.error('[SocialSync] Mark as read failed:', error);
