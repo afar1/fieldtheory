@@ -9,6 +9,7 @@ import SettingsPanel from './SettingsPanel';
 import TodoView from './TodoView';
 import SharedContextView from './SharedContextView';
 import DMsView from './DMsView';
+import HotMicView from './HotMicView';
 import PopularCommands from './PopularCommands';
 import type { SketchViewHandle } from './SketchView';
 
@@ -30,7 +31,7 @@ import {
   useDroppable,
 } from '@dnd-kit/core';
 
-type ViewMode = 'clipboard' | 'todo' | 'team' | 'feedback' | 'commands' | 'sketch';
+type ViewMode = 'clipboard' | 'todo' | 'team' | 'hotmic' | 'feedback' | 'commands' | 'sketch';
 
 type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
 type ClipboardSource = 'mac' | 'ios';
@@ -365,7 +366,7 @@ export default function ClipboardHistory() {
     }
     
     const saved = localStorage.getItem('fieldTheoryView');
-    if (saved === 'clipboard' || saved === 'team' || saved === 'todo' || saved === 'feedback' || saved === 'commands') {
+    if (saved === 'clipboard' || saved === 'team' || saved === 'hotmic' || saved === 'todo' || saved === 'feedback' || saved === 'commands') {
       return saved;
     }
     return 'clipboard';
@@ -1135,6 +1136,10 @@ export default function ClipboardHistory() {
     // Clear unread indicator when entering feedback view.
     if (viewMode === 'feedback') {
       setHasUnreadFeedback(false);
+    }
+    // Clear unread indicator when entering hot mic view.
+    if (viewMode === 'hotmic') {
+      setHasUnreadDMs(false);
     }
     // Notify main process of sketch mode changes so it can skip auto-paste into Excalidraw.
     window.clipboardAPI?.setSketchMode?.(viewMode === 'sketch');
@@ -3051,7 +3056,7 @@ export default function ClipboardHistory() {
             padding: '0 16px',
             marginBottom: '8px',
           }}>
-          {(['clipboard', 'team', ...(tasksTabEnabled ? ['todo'] : []), 'commands'] as ViewMode[]).map((mode) => (
+          {(['clipboard', 'team', 'hotmic', ...(tasksTabEnabled ? ['todo'] : []), 'commands'] as ViewMode[]).map((mode) => (
             <button
               key={mode}
               onClick={() => setViewMode(mode)}
@@ -3083,7 +3088,19 @@ export default function ClipboardHistory() {
                 }
               }}
             >
-              {mode === 'clipboard' ? 'Fields' : mode === 'commands' ? 'Popular Commands' : mode === 'team' ? 'Shared Fields' : 'Tasks'}
+              {mode === 'clipboard' ? 'Fields' : mode === 'commands' ? 'Popular Commands' : mode === 'team' ? 'Shared Fields' : mode === 'hotmic' ? 'Hot Mic' : 'Tasks'}
+              {/* Unread indicator for Hot Mic tab */}
+              {mode === 'hotmic' && hasUnreadDMs && viewMode !== 'hotmic' && (
+                <span style={{
+                  position: 'absolute',
+                  top: '-2px',
+                  right: '-2px',
+                  width: '6px',
+                  height: '6px',
+                  borderRadius: '50%',
+                  backgroundColor: '#DC2626',
+                }} />
+              )}
             </button>
           ))}
           
@@ -3465,6 +3482,8 @@ export default function ClipboardHistory() {
         <TodoView onSwitchToClipboard={() => setViewMode('clipboard')} />
       ) : viewMode === 'team' ? (
         null
+      ) : viewMode === 'hotmic' ? (
+        <HotMicView />
       ) : viewMode === 'feedback' ? (
         <DMsView feedbackOnly={true} />
       ) : viewMode === 'commands' ? (
