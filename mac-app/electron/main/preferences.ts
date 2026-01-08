@@ -110,6 +110,13 @@ interface Preferences {
   // Hide status text labels - show only colored dots (red/purple/green).
   hideStatusLabels?: boolean;
   
+  // Progressive label hiding - tracks how many times labels have been shown.
+  // After thresholds are reached, labels auto-hide (user can re-enable via settings).
+  // - "Transcribing..." shown for first 3 uses
+  // - "Say anything" shown for first 2 uses
+  transcribingLabelShownCount?: number;
+  sayAnythingLabelShownCount?: number;
+  
   // Tasks tab - experimental feature, hidden by default.
   tasksTabEnabled?: boolean;
   
@@ -148,6 +155,10 @@ const DEFAULT_PREFERENCES: Preferences = {
   
   // Hide status text labels - show only colored dots (red/purple/green). Disabled by default.
   hideStatusLabels: false,
+  
+  // Progressive label hiding - start at 0 so first uses show labels.
+  transcribingLabelShownCount: 0,
+  sayAnythingLabelShownCount: 0,
   
   // Tasks tab - experimental feature, hidden by default.
   tasksTabEnabled: false,

@@ -5,11 +5,13 @@ import path from 'path';
 /**
  * Status states for the cursor indicator.
  * - idle: No indicator shown
- * - recording: Red pulsing dot with "Think outloud..." that fades away
- * - transcribing: Purple dot, "Transcribing..." text when cursor is still
+ * - recording: Red pulsing dot with "Say anything" that fades away (first 2 uses only)
+ * - transcribing: Purple dot, "Transcribing..." text when cursor is still (first 3 uses only)
  * - done: Green dot with "Pasted", shown briefly after transcribing completes
  * - confirmation: Red pulsing dot with countdown, awaiting abandon/continue decision
  * - paste-failed: Orange dot, shows transcription then "Saved to Field Theory"
+ * 
+ * Labels progressively hide after first few uses - only colored dots remain (stacks are core).
  */
 export type CursorStatusState = 'idle' | 'recording' | 'transcribing' | 'done' | 'confirmation' | 'paste-failed';
 
@@ -53,6 +55,15 @@ export class CursorStatusManager extends EventEmitter {
   
   // Whether to hide text labels (show only colored dots)
   private hideLabels: boolean = false;
+  
+  // Progressive label hiding - counts how many times each label has been shown.
+  // After thresholds are reached, labels auto-hide unless user re-enables.
+  private transcribingLabelShownCount: number = 0;
+  private sayAnythingLabelShownCount: number = 0;
+  
+  // Thresholds for progressive hiding.
+  private readonly TRANSCRIBING_LABEL_THRESHOLD = 3;  // Show "Transcribing..." 3 times
+  private readonly SAY_ANYTHING_LABEL_THRESHOLD = 2;  // Show "Say anything" 2 times
   
   // Timing constants
   private readonly POLL_INTERVAL_MS = 33;
@@ -134,6 +145,60 @@ export class CursorStatusManager extends EventEmitter {
     if (this.window && !this.window.isDestroyed()) {
       this.window.webContents.send('cursor-status-hide-labels', hide);
     }
+  }
+  
+  /**
+   * Set the label shown counts for progressive hiding.
+   * These track how many times each label type has been displayed.
+   */
+  setLabelCounts(transcribingCount: number, sayAnythingCount: number): void {
+    this.transcribingLabelShownCount = transcribingCount;
+    this.sayAnythingLabelShownCount = sayAnythingCount;
+    
+    // Send the computed "should show" states to the renderer.
+    this.sendLabelVisibilityToRenderer();
+  }
+  
+  /**
+   * Get the current label shown counts.
+   */
+  getLabelCounts(): { transcribing: number; sayAnything: number } {
+    return {
+      transcribing: this.transcribingLabelShownCount,
+      sayAnything: this.sayAnythingLabelShownCount,
+    };
+  }
+  
+  /**
+   * Increment label counts when labels are displayed.
+   * Returns the new counts for persistence.
+   */
+  incrementLabelCount(labelType: 'transcribing' | 'sayAnything'): number {
+    if (labelType === 'transcribing') {
+      this.transcribingLabelShownCount++;
+      this.sendLabelVisibilityToRenderer();
+      return this.transcribingLabelShownCount;
+    } else {
+      this.sayAnythingLabelShownCount++;
+      this.sendLabelVisibilityToRenderer();
+      return this.sayAnythingLabelShownCount;
+    }
+  }
+  
+  /**
+   * Send label visibility state to renderer based on current counts.
+   */
+  private sendLabelVisibilityToRenderer(): void {
+    if (!this.window || this.window.isDestroyed()) return;
+    
+    // Calculate whether each label should still be shown.
+    const showTranscribingLabel = this.transcribingLabelShownCount < this.TRANSCRIBING_LABEL_THRESHOLD;
+    const showSayAnythingLabel = this.sayAnythingLabelShownCount < this.SAY_ANYTHING_LABEL_THRESHOLD;
+    
+    this.window.webContents.send('cursor-status-label-visibility', {
+      showTranscribingLabel,
+      showSayAnythingLabel,
+    });
   }
   
   /**
@@ -400,6 +465,7 @@ export class CursorStatusManager extends EventEmitter {
         this.window.webContents.send('cursor-status-state', this.state);
         this.window.webContents.send('cursor-status-idle', this.isIdle);
         this.window.webContents.send('cursor-status-hide-labels', this.hideLabels);
+        this.sendLabelVisibilityToRenderer();
       }
     });
   }

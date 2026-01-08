@@ -56,6 +56,11 @@ export default function CursorStatus() {
   // Hide labels setting - show only colored dots without text.
   const [hideLabels, setHideLabels] = useState<boolean>(false);
   
+  // Progressive label visibility - these are computed from usage counts.
+  // After thresholds are reached, labels auto-hide (unless user re-enables via settings).
+  const [showTranscribingLabel, setShowTranscribingLabel] = useState<boolean>(true);
+  const [showSayAnythingLabel, setShowSayAnythingLabel] = useState<boolean>(true);
+  
   // Screenshot mode - shifts indicator right to avoid overlap with screenshot UI.
   const [screenshotMode, setScreenshotMode] = useState<boolean>(false);
   
@@ -75,7 +80,7 @@ export default function CursorStatus() {
     window.cursorStatusAPI.onStateChange((newState) => {
       setState(newState);
       
-      // When recording starts, show "fielding theories..." text briefly then fade it out
+      // When recording starts, show "Say anything" text briefly then fade it out
       if (newState === 'recording') {
         setShowRecordingText(true);
         // Clear any existing timeout
@@ -184,6 +189,21 @@ export default function CursorStatus() {
     
     return () => {
       window.cursorStatusAPI?.removeAllListeners('cursor-status-hide-labels');
+    };
+  }, []);
+
+  // Listen for progressive label visibility updates.
+  // These control whether to show labels based on usage count thresholds.
+  useEffect(() => {
+    if (!window.cursorStatusAPI?.onLabelVisibilityChange) return;
+    
+    window.cursorStatusAPI.onLabelVisibilityChange((visibility: { showTranscribingLabel: boolean; showSayAnythingLabel: boolean }) => {
+      setShowTranscribingLabel(visibility.showTranscribingLabel);
+      setShowSayAnythingLabel(visibility.showSayAnythingLabel);
+    });
+    
+    return () => {
+      window.cursorStatusAPI?.removeAllListeners('cursor-status-label-visibility');
     };
   }, []);
   
@@ -323,7 +343,7 @@ export default function CursorStatus() {
       return tutorialHint;
     }
     if (state === 'recording' && showRecordingText) {
-      return 'fielding theories...';
+      return 'Say anything';
     }
     if (state === 'transcribing') {
       return 'transcribing' + '.'.repeat(dotCount);
@@ -345,14 +365,23 @@ export default function CursorStatus() {
   const color = STATE_COLORS[state];
   const glow = STATE_GLOWS[state];
   const label = getLabel();
-  // Hide labels when hideLabels is true, but always show error/confirmation states.
-  // User should always see: paste-failed, confirmation, and tutorial hints.
+  
+  // Label visibility logic:
+  // 1. Always show: paste-failed, confirmation, and tutorial hints (critical feedback)
+  // 2. If user has explicitly hidden labels (hideLabels setting), don't show normal labels
+  // 3. Otherwise, check progressive visibility thresholds:
+  //    - "Say anything" shows for first 2 recordings, then hides
+  //    - "Transcribing..." shows for first 3 transcriptions, then hides
+  // After thresholds, only the colored dots remain (stacks are the core mechanic).
   const showLabel = state === 'paste-failed' || state === 'confirmation' || 
     (state === 'recording' && tutorialHint) ||  // Always show tutorial hints
     (!hideLabels && (
-      (state === 'recording' && showRecordingText) || 
-      (state === 'transcribing' && textVisible) ||
-      state === 'done'
+      // "Say anything" during recording - respects progressive threshold
+      (state === 'recording' && showRecordingText && showSayAnythingLabel) || 
+      // "Transcribing..." - respects progressive threshold
+      (state === 'transcribing' && textVisible && showTranscribingLabel) ||
+      // "Transcribing..." during done state (brief continuation) - same threshold
+      (state === 'done' && showTranscribingLabel)
     ));
 
   // Handle click to dismiss (for paste-failed/done states)
@@ -479,7 +508,7 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: '14px',
     color: 'rgba(255, 255, 255, 0.9)',
     fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
-    whiteSpace: 'nowrap', // Prevent text wrapping for short labels like "fielding theories..."
+    whiteSpace: 'nowrap', // Prevent text wrapping for short labels like "Say anything"
   },
   helpText: {
     fontSize: '10px',
