@@ -2840,7 +2840,18 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   await audioManager.init();
 
   trayManager = new TrayManager(audioManager);
-  trayManager.init(showSettingsInClipboardWindow, checkForUpdatesCallback);
+  
+  // Start recording callback - toggles recording via transcriberManager.
+  // Wrapped in a function that checks if transcriberManager is ready.
+  const startRecordingCallback = () => {
+    if (transcriberManager) {
+      transcriberManager.toggleRecording();
+    } else {
+      console.warn('[TrayManager] TranscriberManager not ready yet');
+    }
+  };
+  
+  trayManager.init(showSettingsInClipboardWindow, checkForUpdatesCallback, startRecordingCallback);
 
   console.log('[Main] Audio system initialized');
 }

@@ -279,6 +279,14 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
+   * Public method to toggle recording.
+   * Called from tray menu or other external triggers.
+   */
+  async toggleRecording(): Promise<void> {
+    await this.handleHotkeyPress();
+  }
+
+  /**
    * Handle hotkey press - toggle recording.
    */
   private async handleHotkeyPress(): Promise<void> {

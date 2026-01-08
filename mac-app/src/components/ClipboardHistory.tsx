@@ -14,6 +14,7 @@ import PopularCommands from './PopularCommands';
 import DataPolicyNotice from './DataPolicyNotice';
 import ReleaseNotesPopup from './ReleaseNotesPopup';
 import type { SketchViewHandle } from './SketchView';
+import { FEATURE_HOT_MIC_ENABLED, FEATURE_IMPROVE_ENABLED, FEATURE_MESSAGE_SHORTCUT_ENABLED } from '../featureFlags';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
 const SketchView = React.lazy(() => import('./SketchView'));
@@ -603,6 +604,7 @@ export default function ClipboardHistory() {
   // Quota usage for free users (priority mic + auto-stacking).
   const [quotaUsage, setQuotaUsage] = useState<{ priorityMic: string; autoStack: string } | null>(null);
   const [cachedTier, setCachedTier] = useState<'free' | 'pro'>('free');
+  const [quotaPercentUsed, setQuotaPercentUsed] = useState(0); // Max percentage of either quota
   const [usageHovered, setUsageHovered] = useState(false);
   const [infoHovered, setInfoHovered] = useState(false);
   const [tasksTabEnabled, setTasksTabEnabled] = useState(false);
@@ -653,12 +655,16 @@ export default function ClipboardHistory() {
         const formatted = await window.quotaAPI?.getFormattedUsage();
         if (formatted) setQuotaUsage(formatted);
         
-        // Also get the cached tier for determining what to show.
+        // Also get the cached tier and percentage for determining what to show.
         const quotas = await window.quotaAPI?.getQuotas();
         if (quotas) {
           // Pro users have unlimited (Infinity) limits.
           const isPro = quotas.priorityMic.limit === Infinity;
           setCachedTier(isPro ? 'pro' : 'free');
+          
+          // Track max percentage for Upgrade visibility (show at >= 50%).
+          const maxPercent = Math.max(quotas.priorityMic.percentUsed, quotas.autoStack.percentUsed);
+          setQuotaPercentUsed(maxPercent);
         }
       } catch (err) {
         console.error('[ClipboardHistory] Failed to load quota usage:', err);
@@ -1649,7 +1655,8 @@ export default function ClipboardHistory() {
           } else if (hasShift) {
             setShowSettings(false);
             setViewMode(prev => {
-              if (prev === 'clipboard') return 'hotmic';
+              // Cycle backwards: clipboard -> (hotmic if enabled) -> team -> clipboard
+              if (prev === 'clipboard') return FEATURE_HOT_MIC_ENABLED ? 'hotmic' : 'team';
               if (prev === 'hotmic') return 'team';
               if (prev === 'team') return 'clipboard';
               return 'clipboard';
@@ -1657,8 +1664,9 @@ export default function ClipboardHistory() {
           } else {
             setShowSettings(false);
             setViewMode(prev => {
+              // Cycle forwards: clipboard -> team -> (hotmic if enabled) -> clipboard
               if (prev === 'clipboard') return 'team';
-              if (prev === 'team') return 'hotmic';
+              if (prev === 'team') return FEATURE_HOT_MIC_ENABLED ? 'hotmic' : 'clipboard';
               if (prev === 'hotmic') return 'clipboard';
               return 'clipboard';
             });
@@ -1770,8 +1778,8 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // M - Open DM modal to send selected item to a contact.
-      if (key === 'm' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
+      // M - Open DM modal to send selected item to a contact (disabled by feature flag).
+      if (FEATURE_MESSAGE_SHORTCUT_ENABLED && key === 'm' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         // Skip if typing in input
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
         e.preventDefault();
@@ -2181,8 +2189,8 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // I: Improve the selected item/stack
-      if (key === 'i' && !hasShift && !hasMeta && !hasCtrl && !hasAlt && selectedIds.size === 0) {
+      // I: Improve the selected item/stack (disabled by feature flag).
+      if (FEATURE_IMPROVE_ENABLED && key === 'i' && !hasShift && !hasMeta && !hasCtrl && !hasAlt && selectedIds.size === 0) {
         // Skip if user is typing in an input field.
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
           return;
@@ -2442,7 +2450,8 @@ export default function ClipboardHistory() {
         } else if (hasShift) {
           setShowSettings(false);
           setViewMode(prev => {
-            if (prev === 'clipboard') return 'hotmic';
+            // Cycle backwards: clipboard -> (hotmic if enabled) -> team -> clipboard
+            if (prev === 'clipboard') return FEATURE_HOT_MIC_ENABLED ? 'hotmic' : 'team';
             if (prev === 'hotmic') return 'team';
             if (prev === 'team') return 'clipboard';
             return 'clipboard';
@@ -2450,8 +2459,9 @@ export default function ClipboardHistory() {
         } else {
           setShowSettings(false);
           setViewMode(prev => {
+            // Cycle forwards: clipboard -> team -> (hotmic if enabled) -> clipboard
             if (prev === 'clipboard') return 'team';
-            if (prev === 'team') return 'hotmic';
+            if (prev === 'team') return FEATURE_HOT_MIC_ENABLED ? 'hotmic' : 'clipboard';
             if (prev === 'hotmic') return 'clipboard';
             return 'clipboard';
           });
@@ -3101,7 +3111,7 @@ export default function ClipboardHistory() {
             padding: '0 16px',
             marginBottom: '8px',
           }}>
-          {(['clipboard', 'team', 'hotmic', ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
+          {(['clipboard', 'team', ...(FEATURE_HOT_MIC_ENABLED ? ['hotmic'] : []), ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
             // Hot Mic tab has special styling and the fire toggle.
             const isHotMic = mode === 'hotmic';
             const isSelected = viewMode === mode && !(mode === 'team' && !authSession?.user?.email);
@@ -4619,71 +4629,36 @@ export default function ClipboardHistory() {
                             <>share <KeyCap>t</KeyCap></>
                           )}
                         </button>
-                        {/* DM button */}
-                        <button
-                          tabIndex={-1}
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedIndex(index);
-                            setDmRecipientQuery('');
-                            setSelectedDmContactIndex(0);
-                            setShowDMModal(true);
-                          }}
-                          style={{
-                            padding: '4px 6px',
-                            fontSize: '10px',
-                            fontWeight: 500,
-                            backgroundColor: 'transparent',
-                            color: theme.textSecondary,
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                            transition: 'background-color 0.15s ease',
-                          }}
-                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
-                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                        >
-                          message <KeyCap>m</KeyCap>
-                        </button>
-                        {/* Delete button */}
-                        <button
-                          tabIndex={-1}
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            const itemsToDelete: ClipboardItem[] = [];
-                            for (const stackItem of stackItems) {
-                              const itemToDelete = await window.clipboardAPI?.getItem(stackItem.id);
-                              if (itemToDelete) {
-                                itemsToDelete.push(itemToDelete);
-                              }
-                            }
-                            for (const stackItem of stackItems) {
-                              await window.clipboardAPI?.deleteItem(stackItem.id);
-                            }
-                            if (itemsToDelete.length > 0) {
-                              pushUndo({ type: 'delete', items: itemsToDelete });
-                              showFeedback('stack deleted');
-                            }
-                            loadItems(true);
-                          }}
-                          style={{
-                            padding: '4px 6px',
-                            fontSize: '10px',
-                            fontWeight: 500,
-                            backgroundColor: 'transparent',
-                            color: theme.textSecondary,
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                            transition: 'background-color 0.15s ease',
-                          }}
-                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
-                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                        >
-                          delete <KeyCap>⌫</KeyCap>
-                        </button>
+                        {/* DM button - hidden by feature flag */}
+                        {FEATURE_MESSAGE_SHORTCUT_ENABLED && (
+                          <button
+                            tabIndex={-1}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedIndex(index);
+                              setDmRecipientQuery('');
+                              setSelectedDmContactIndex(0);
+                              setShowDMModal(true);
+                            }}
+                            style={{
+                              padding: '4px 6px',
+                              fontSize: '10px',
+                              fontWeight: 500,
+                              backgroundColor: 'transparent',
+                              color: theme.textSecondary,
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              transition: 'background-color 0.15s ease',
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                          >
+                            message <KeyCap>m</KeyCap>
+                          </button>
+                        )}
+                        {/* Delete button - display removed, functionality preserved via keyboard shortcut */}
                         {/* Preview button for stacks */}
                         <button
                           tabIndex={-1}
@@ -5403,65 +5378,37 @@ export default function ClipboardHistory() {
                           <>{sharingToTeam === item.id ? 'sharing...' : 'share'} <KeyCap>t</KeyCap></>
                         )}
                       </button>
-                      {/* DM button */}
-                      <button
-                        tabIndex={-1}
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedIndex(index);
-                          setDmRecipientQuery('');
-                          setSelectedDmContactIndex(0);
-                          setShowDMModal(true);
-                        }}
-                        style={{
-                          padding: '3px 4px',
-                          fontSize: '9px',
-                          whiteSpace: 'nowrap',
-                          fontWeight: 500,
-                          backgroundColor: 'transparent',
-                          color: theme.textSecondary,
-                          border: 'none',
-                          borderRadius: '4px',
-                          cursor: 'pointer',
-                          transition: 'background-color 0.15s ease',
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
-                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                      >
-                        message <KeyCap>m</KeyCap>
-                      </button>
-                      {/* Delete button */}
-                      <button
-                        tabIndex={-1}
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          const itemToDelete = await window.clipboardAPI?.getItem(item.id);
-                          await window.clipboardAPI?.deleteItem(item.id);
-                          if (itemToDelete) {
-                            pushUndo({ type: 'delete', items: [itemToDelete] });
-                            showFeedback('item deleted');
-                          }
-                          loadItems(true);
-                        }}
-                        style={{
-                          padding: '3px 4px',
-                          fontSize: '9px',
-                          whiteSpace: 'nowrap',
-                          fontWeight: 500,
-                          backgroundColor: 'transparent',
-                          color: theme.textSecondary,
-                          border: 'none',
-                          borderRadius: '4px',
-                          cursor: 'pointer',
-                          transition: 'background-color 0.15s ease',
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
-                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                      >
-                        delete <KeyCap>⌫</KeyCap>
-                      </button>
+                      {/* DM button - hidden by feature flag */}
+                      {FEATURE_MESSAGE_SHORTCUT_ENABLED && (
+                        <button
+                          tabIndex={-1}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedIndex(index);
+                            setDmRecipientQuery('');
+                            setSelectedDmContactIndex(0);
+                            setShowDMModal(true);
+                          }}
+                          style={{
+                            padding: '3px 4px',
+                            fontSize: '9px',
+                            whiteSpace: 'nowrap',
+                            fontWeight: 500,
+                            backgroundColor: 'transparent',
+                            color: theme.textSecondary,
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            transition: 'background-color 0.15s ease',
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        >
+                          message <KeyCap>m</KeyCap>
+                        </button>
+                      )}
+                      {/* Delete button - display removed, functionality preserved via keyboard shortcut */}
                       {/* Preview button - only for images */}
                       {item.imageData && (
                         <button
@@ -5797,31 +5744,35 @@ export default function ClipboardHistory() {
                   <span>{quotaUsage.priorityMic}</span>
                   <span style={{ opacity: 0.4 }}>·</span>
                   <span>{quotaUsage.autoStack}</span>
-                  <span style={{ opacity: 0.4 }}>·</span>
-                  {/* Upgrade link */}
-                  <span
-                    onClick={() => {
-                      // Require sign-in before upgrading.
-                      if (!authSession?.user?.id) {
-                        alert('Sign in or create an account to upgrade.');
-                        setViewMode('team');
-                        return;
-                      }
-                      // Open Stripe checkout with user ID for webhook linking.
-                      const userId = authSession.user.id;
-                      const paymentLink = window.stripeConfig?.paymentLink || '';
-                      window.shellAPI?.openExternal(
-                        `${paymentLink}?client_reference_id=${userId}`
-                      );
-                    }}
-                    style={{
-                      color: theme.accent,
-                      cursor: 'pointer',
-                      textDecoration: 'underline',
-                    }}
-                  >
-                    Upgrade
-                  </span>
+                  {/* Upgrade link - only show when quota >= 50% used */}
+                  {quotaPercentUsed >= 50 && (
+                    <>
+                      <span style={{ opacity: 0.4 }}>·</span>
+                      <span
+                        onClick={() => {
+                          // Require sign-in before upgrading.
+                          if (!authSession?.user?.id) {
+                            alert('Sign in or create an account to upgrade.');
+                            setViewMode('team');
+                            return;
+                          }
+                          // Open Stripe checkout with user ID for webhook linking.
+                          const userId = authSession.user.id;
+                          const paymentLink = window.stripeConfig?.paymentLink || '';
+                          window.shellAPI?.openExternal(
+                            `${paymentLink}?client_reference_id=${userId}`
+                          );
+                        }}
+                        style={{
+                          color: theme.accent,
+                          cursor: 'pointer',
+                          textDecoration: 'underline',
+                        }}
+                      >
+                        Upgrade
+                      </span>
+                    </>
+                  )}
                 </div>
               ) : null}
             </div>

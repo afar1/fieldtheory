@@ -22,6 +22,7 @@ export class TrayManager {
   private audioManager: AudioManager;
   private showWindowCallback: (() => void) | null = null;
   private checkForUpdatesCallback: (() => void) | null = null;
+  private startRecordingCallback: (() => void) | null = null;
 
   constructor(audioManager: AudioManager) {
     this.audioManager = audioManager;
@@ -30,7 +31,7 @@ export class TrayManager {
   /**
    * Initialize the tray icon and set up event listeners.
    */
-  init(showWindowCallback?: () => void, checkForUpdatesCallback?: () => void): void {
+  init(showWindowCallback?: () => void, checkForUpdatesCallback?: () => void, startRecordingCallback?: () => void): void {
     if (process.platform !== 'darwin') {
       console.log('[TrayManager] Not on macOS, skipping tray creation');
       return;
@@ -38,6 +39,7 @@ export class TrayManager {
 
     this.showWindowCallback = showWindowCallback || null;
     this.checkForUpdatesCallback = checkForUpdatesCallback || null;
+    this.startRecordingCallback = startRecordingCallback || null;
 
     const iconPath = this.getIconPath('disconnected');
     const icon = nativeImage.createFromPath(iconPath);
@@ -191,6 +193,27 @@ export class TrayManager {
         },
       });
     }
+
+    items.push({ type: 'separator' });
+
+    // Primary actions: Open and Start Recording.
+    items.push({
+      label: 'Open Field Theory',
+      click: () => {
+        if (this.showWindowCallback) {
+          this.showWindowCallback();
+        }
+      },
+    });
+
+    items.push({
+      label: 'Start Recording',
+      click: () => {
+        if (this.startRecordingCallback) {
+          this.startRecordingCallback();
+        }
+      },
+    });
 
     items.push({ type: 'separator' });
 
