@@ -26,6 +26,9 @@ export const SocialIPCChannels = {
   GET_CONTACTS: 'social:getContacts',
   ADD_FRIEND: 'social:addFriend',
   SEARCH_CONTACTS: 'social:searchContacts',
+  GET_PENDING_INVITES: 'social:getPendingInvites',
+  RESPOND_TO_INVITE: 'social:respondToInvite',
+  REMOVE_FRIEND: 'social:removeFriend',
   
   // Hot mic
   GET_HOT_MIC: 'social:getHotMic',
