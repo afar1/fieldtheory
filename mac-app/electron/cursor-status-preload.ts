@@ -30,6 +30,12 @@ contextBridge.exposeInMainWorld('cursorStatusAPI', {
     ipcRenderer.on('cursor-status-hide-labels', (_event, hide) => callback(hide));
   },
   
+  // Progressive label visibility changes - computed from usage count thresholds.
+  // After showing "Transcribing..." 3 times and "Say anything" 2 times, labels auto-hide.
+  onLabelVisibilityChange: (callback: (visibility: { showTranscribingLabel: boolean; showSayAnythingLabel: boolean }) => void) => {
+    ipcRenderer.on('cursor-status-label-visibility', (_event, visibility) => callback(visibility));
+  },
+  
   // Screenshot mode changes (shifts indicator right to avoid overlap).
   onScreenshotModeChange: (callback: (active: boolean) => void) => {
     ipcRenderer.on('cursor-status-screenshot-mode', (_event, active) => callback(active));
