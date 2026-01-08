@@ -2451,6 +2451,30 @@ function setupClipboardIPCHandlers(): void {
     return await socialSync.searchContacts(query);
   });
 
+  // Contacts: Get pending invites (friend requests sent to me).
+  ipcMain.handle(SocialIPCChannels.GET_PENDING_INVITES, async () => {
+    if (!socialSync) {
+      return [];
+    }
+    return await socialSync.getPendingInvites();
+  });
+
+  // Contacts: Respond to a pending invite (accept or reject).
+  ipcMain.handle(SocialIPCChannels.RESPOND_TO_INVITE, async (_event, contactId: string, accept: boolean) => {
+    if (!socialSync) {
+      return false;
+    }
+    return await socialSync.respondToInvite(contactId, accept);
+  });
+
+  // Contacts: Remove a friend (unfriend/leave).
+  ipcMain.handle(SocialIPCChannels.REMOVE_FRIEND, async (_event, contactId: string) => {
+    if (!socialSync) {
+      return false;
+    }
+    return await socialSync.removeFriend(contactId);
+  });
+
   // Hot Mic: Get hot mic enabled status.
   ipcMain.handle(SocialIPCChannels.GET_HOT_MIC, async () => {
     if (!socialSync) {
@@ -3151,27 +3175,34 @@ async function initTranscriberSystem(): Promise<void> {
     });
   });
 
-  // Forward socialSync messageReceived events to all renderer windows for Hot Mic.
+  // Forward socialSync messageReceived events to all renderer windows.
+  // All message types are forwarded for unread indicators. Hot Mic overlay only shows for DMs.
   if (socialSync) {
     socialSync.on('messageReceived', async (message: { id: string; type: string }) => {
-      console.log('[Main] Hot Mic message received:', message.id, 'type:', message.type);
+      console.log('[Main] Message received:', message.id, 'type:', message.type);
       
-      // Only trigger Hot Mic for DMs, not feedback replies.
+      // Forward ALL messages to renderer for unread indicators (feedback dot, DM dot, etc).
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(SocialIPCChannels.MESSAGE_RECEIVED, message);
+        }
+      });
+      
+      // Only show Hot Mic overlay for DMs, not feedback replies.
       if (message.type !== 'dm') {
-        console.log('[Main] Not a DM, skipping Hot Mic');
         return;
       }
       
       // Check if Hot Mic is enabled for this user.
       const hotMicEnabled = await socialSync!.getHotMicEnabled();
       if (!hotMicEnabled) {
-        console.log('[Main] Hot Mic is disabled, skipping');
+        console.log('[Main] Hot Mic is disabled, skipping overlay');
         return;
       }
       
       // Check if user is currently recording (don't interrupt).
       if (clipboardHistoryWindow?.getRecordingActive()) {
-        console.log('[Main] User is recording, skipping Hot Mic');
+        console.log('[Main] User is recording, skipping Hot Mic overlay');
         return;
       }
       
@@ -3180,13 +3211,6 @@ async function initTranscriberSystem(): Promise<void> {
         console.log('[Main] Showing clipboard history window for Hot Mic');
         clipboardHistoryWindow.show();
       }
-      
-      // Send message to renderer to show the Hot Mic preview.
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(SocialIPCChannels.MESSAGE_RECEIVED, message);
-        }
-      });
     });
   }
 

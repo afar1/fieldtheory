@@ -764,23 +764,17 @@ export default function ClipboardHistory() {
     
     // Listen for incoming messages for Hot Mic and notifications.
     const unsubscribe = window.socialAPI.onMessageReceived(async (message) => {
-      // Update unread indicators based on message type.
-      // Only set unread if we're not currently viewing that section.
+      // Update unread indicators (skip if viewing that section).
+      const currentView = localStorage.getItem('fieldTheoryView');
       if (message.type === 'feedback') {
-        // Check current viewMode from DOM to avoid stale closure.
-        const currentView = localStorage.getItem('fieldTheoryView');
-        if (currentView !== 'feedback') {
-          setHasUnreadFeedback(true);
-        }
+        if (currentView !== 'feedback') setHasUnreadFeedback(true);
       } else {
-        const currentView = localStorage.getItem('fieldTheoryView');
-        if (currentView !== 'hotmic') {
-          setHasUnreadDMs(true);
-        }
+        if (currentView !== 'hotmic') setHasUnreadDMs(true);
       }
       
-      // Only show Hot Mic preview for DMs (not feedback replies).
+      // Only show Hot Mic overlay for DMs when not already viewing Hot Mic.
       if (message.type !== 'dm') return;
+      if (currentView === 'hotmic') return;
       
       // Check if Hot Mic is enabled.
       if (!window.socialAPI) return;

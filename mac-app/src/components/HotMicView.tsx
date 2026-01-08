@@ -118,6 +118,10 @@ export default function HotMicView({ onSendDM, hotMicEnabled, onHotMicToggle }: 
   const [showAddFriend, setShowAddFriend] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
+  // Pending invites
+  const [pendingInvites, setPendingInvites] = useState<SocialContact[]>([]);
+  const [showPendingInvites, setShowPendingInvites] = useState(false);
+  
   // New message modal (to start a conversation with a new user)
   const [showNewMessage, setShowNewMessage] = useState(false);
   const [newMessageRecipient, setNewMessageRecipient] = useState('');
@@ -134,13 +138,15 @@ export default function HotMicView({ onSendDM, hotMicEnabled, onHotMicToggle }: 
     
     setLoading(true);
     try {
-      const [convos, contactList] = await Promise.all([
+      const [convos, contactList, invites] = await Promise.all([
         window.socialAPI.getConversations(),
         window.socialAPI.getContacts(),
+        window.socialAPI.getPendingInvites?.() || Promise.resolve([]),
       ]);
       
       setConversations(convos);
       setContacts(contactList);
+      setPendingInvites(invites);
     } catch (err) {
       console.error('[HotMicView] Failed to load data:', err);
     } finally {
@@ -380,6 +386,24 @@ export default function HotMicView({ onSendDM, hotMicEnabled, onHotMicToggle }: 
     loadData();
   };
 
+  const handleAcceptInvite = async (contactId: string) => {
+    if (!window.socialAPI?.respondToInvite) return;
+    const success = await window.socialAPI.respondToInvite(contactId, true);
+    if (success) loadData();
+  };
+
+  const handleRejectInvite = async (contactId: string) => {
+    if (!window.socialAPI?.respondToInvite) return;
+    const success = await window.socialAPI.respondToInvite(contactId, false);
+    if (success) loadData();
+  };
+
+  const handleRemoveFriend = async (contactId: string) => {
+    if (!window.socialAPI?.removeFriend) return;
+    const success = await window.socialAPI.removeFriend(contactId);
+    if (success) loadData();
+  };
+
   // ==========================================================================
   // Render Helpers
   // ==========================================================================
@@ -507,6 +531,44 @@ export default function HotMicView({ onSendDM, hotMicEnabled, onHotMicToggle }: 
         >
           + Add Friend
         </button>
+        
+        {/* Pending Invites button with badge */}
+        {pendingInvites.length > 0 && (
+          <button
+            onClick={() => setShowPendingInvites(true)}
+            style={{
+              position: 'relative',
+              padding: '4px 8px',
+              fontSize: '9px',
+              backgroundColor: 'transparent',
+              color: theme.textSecondary,
+              border: `1px solid ${theme.inputBorder}`,
+              borderRadius: '4px',
+              cursor: 'pointer',
+              outline: 'none',
+            }}
+          >
+            Invites
+            <span style={{
+              position: 'absolute',
+              top: '-4px',
+              right: '-4px',
+              minWidth: '14px',
+              height: '14px',
+              borderRadius: '7px',
+              backgroundColor: '#3b82f6',
+              color: '#fff',
+              fontSize: '9px',
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '0 3px',
+            }}>
+              {pendingInvites.length}
+            </span>
+          </button>
+        )}
       </div>
 
       {/* Add Friend Modal */}
@@ -583,6 +645,124 @@ export default function HotMicView({ onSendDM, hotMicEnabled, onHotMicToggle }: 
                 }}
               >
                 Add
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pending Invites Modal */}
+      {showPendingInvites && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 100,
+        }} onClick={() => setShowPendingInvites(false)}>
+          <div
+            style={{
+              backgroundColor: theme.bgSecondary,
+              padding: '20px',
+              borderRadius: '8px',
+              width: '350px',
+              maxHeight: '400px',
+              overflow: 'auto',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: '0 0 12px 0', fontSize: '14px', color: theme.text }}>
+              Pending Invites ({pendingInvites.length})
+            </h3>
+            <p style={{ margin: '0 0 16px 0', fontSize: '11px', color: theme.textSecondary }}>
+              These people want to connect with you.
+            </p>
+            
+            {pendingInvites.length === 0 ? (
+              <div style={{ 
+                color: theme.textSecondary, 
+                fontSize: '12px', 
+                textAlign: 'center',
+                padding: '20px 0',
+              }}>
+                No pending invites
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {pendingInvites.map((invite) => (
+                  <div
+                    key={invite.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '10px 12px',
+                      backgroundColor: theme.isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+                      borderRadius: '6px',
+                      border: `1px solid ${theme.border}`,
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: '12px', color: theme.text, fontWeight: 500 }}>
+                        {invite.contactName || invite.contactEmail}
+                      </div>
+                      {invite.contactName && (
+                        <div style={{ fontSize: '10px', color: theme.textSecondary }}>
+                          {invite.contactEmail}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button
+                        onClick={() => handleAcceptInvite(invite.id)}
+                        style={{
+                          padding: '4px 10px',
+                          fontSize: '10px',
+                          backgroundColor: '#10b981',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Accept
+                      </button>
+                      <button
+                        onClick={() => handleRejectInvite(invite.id)}
+                        style={{
+                          padding: '4px 10px',
+                          fontSize: '10px',
+                          backgroundColor: 'transparent',
+                          color: theme.textSecondary,
+                          border: `1px solid ${theme.inputBorder}`,
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
+              <button
+                onClick={() => setShowPendingInvites(false)}
+                style={{
+                  padding: '6px 12px',
+                  fontSize: '11px',
+                  backgroundColor: 'transparent',
+                  color: theme.textSecondary,
+                  border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                }}
+              >
+                Close
               </button>
             </div>
           </div>

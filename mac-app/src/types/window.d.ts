@@ -684,6 +684,9 @@ interface SocialAPI {
   getContacts: () => Promise<SocialContact[]>;
   addFriend: (email: string) => Promise<{ success: boolean; error?: string }>;
   searchContacts: (query: string) => Promise<SocialContact[]>;
+  getPendingInvites: () => Promise<SocialContact[]>;
+  respondToInvite: (contactId: string, accept: boolean) => Promise<boolean>;
+  removeFriend: (contactId: string) => Promise<boolean>;
   
   // Hot mic
   getHotMic: () => Promise<boolean>;

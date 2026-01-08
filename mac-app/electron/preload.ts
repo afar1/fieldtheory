@@ -430,6 +430,9 @@ const SocialIPCChannels = {
   GET_CONTACTS: 'social:getContacts',
   ADD_FRIEND: 'social:addFriend',
   SEARCH_CONTACTS: 'social:searchContacts',
+  GET_PENDING_INVITES: 'social:getPendingInvites',
+  RESPOND_TO_INVITE: 'social:respondToInvite',
+  REMOVE_FRIEND: 'social:removeFriend',
   
   // Hot mic
   GET_HOT_MIC: 'social:getHotMic',
@@ -1816,6 +1819,21 @@ const socialAPI = {
   // Search contacts by name or email.
   searchContacts: async (query: string): Promise<SocialContact[]> => {
     return ipcRenderer.invoke(SocialIPCChannels.SEARCH_CONTACTS, query);
+  },
+  
+  // Get pending invites (friend requests sent to me).
+  getPendingInvites: async (): Promise<SocialContact[]> => {
+    return ipcRenderer.invoke(SocialIPCChannels.GET_PENDING_INVITES);
+  },
+  
+  // Respond to a pending invite (accept or reject).
+  respondToInvite: async (contactId: string, accept: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke(SocialIPCChannels.RESPOND_TO_INVITE, contactId, accept);
+  },
+  
+  // Remove a friend (unfriend/leave).
+  removeFriend: async (contactId: string): Promise<boolean> => {
+    return ipcRenderer.invoke(SocialIPCChannels.REMOVE_FRIEND, contactId);
   },
   
   // =========================================================================
