@@ -1987,18 +1987,12 @@ function setupClipboardIPCHandlers(): void {
       return false;
     }
     await preferencesManager.save({ hideStatusLabels: hide });
-    
-    // Notify cursor status window to update labels visibility.
     cursorStatusManager?.setHideLabels(hide);
     
-    // When user explicitly enables labels (hide=false), reset the progressive
-    // hiding counts. This lets them see "Say anything" and "Transcribing..." again.
+    // User explicitly enabled labels - bypass progressive hiding.
     if (!hide) {
-      await preferencesManager.save({ 
-        transcribingLabelShownCount: 0, 
-        sayAnythingLabelShownCount: 0 
-      });
-      cursorStatusManager?.setLabelCounts(0, 0);
+      await preferencesManager.save({ labelsExplicitlyEnabled: true });
+      cursorStatusManager?.setLabelsExplicitlyEnabled(true);
     }
     return true;
   });
@@ -2683,16 +2677,11 @@ function broadcastTranscribeEvents(): void {
     // This ensures blur event doesn't hide the app when recording is active
     clipboardHistoryWindow?.setRecordingActive(status === 'recording');
     
-    // Update cursor status indicator to show recording/transcribing state.
-    // Also increment label shown counts for progressive hiding:
-    // - "Say anything" shown for first 2 recordings
-    // - "Transcribing..." shown for first 3 transcriptions
-    // After thresholds, only colored dots remain (stacks are the core mechanic).
+    // Update cursor status indicator and increment progressive label counts.
     if (cursorStatusManager) {
       cursorStatusManager.setState(status as CursorStatusState);
       
-      // Increment label counts when entering states that show labels.
-      // Only increment if labels are still being shown (below threshold).
+      // Increment label counts (labels auto-hide after thresholds).
       if (preferencesManager) {
         const hideLabels = preferencesManager.getPreference('hideStatusLabels') ?? false;
         if (!hideLabels) {
@@ -3050,11 +3039,12 @@ async function initTranscriberSystem(): Promise<void> {
   const hideStatusLabels = preferencesManager.getPreference('hideStatusLabels') ?? false;
   cursorStatusManager.setHideLabels(hideStatusLabels);
   
-  // Load progressive label hiding counts from preferences.
-  // These track how many times each label type has been shown.
+  // Load progressive label hiding state.
   const transcribingCount = preferencesManager.getPreference('transcribingLabelShownCount') ?? 0;
   const sayAnythingCount = preferencesManager.getPreference('sayAnythingLabelShownCount') ?? 0;
+  const labelsExplicitlyEnabled = preferencesManager.getPreference('labelsExplicitlyEnabled') ?? false;
   cursorStatusManager.setLabelCounts(transcribingCount, sayAnythingCount);
+  cursorStatusManager.setLabelsExplicitlyEnabled(labelsExplicitlyEnabled);
   
   // Wire up confirmation response from cursor status widget to transcriber manager
   cursorStatusManager.on('confirmation-response', ({ abandon }) => {
