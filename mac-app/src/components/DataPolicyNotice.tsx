@@ -17,12 +17,12 @@ interface DataPolicyNoticeProps {
   style?: React.CSSProperties;
 }
 
-// Policy messages - plain language, no legalese.
+// Policy messages - plain language, no legalese. Lowercase for visual consistency.
 const POLICY_TITLES: Record<PolicyContext, string> = {
-  local: 'Data stored locally',
-  shared: 'Data shared with your team',
-  feedback: 'Data sent to Field Theory',
-  dm: 'Data private to recipient',
+  local: 'data stored locally',
+  shared: 'data shared with your team',
+  feedback: 'data sent to Field Theory',
+  dm: 'data private to recipient',
 };
 
 /**
@@ -60,6 +60,8 @@ export default function DataPolicyNotice({ context, style }: DataPolicyNoticePro
         color: getIconColor(),
         backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
         borderRadius: '4px',
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
         ...style,
       }}
     >

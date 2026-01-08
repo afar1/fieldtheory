@@ -1010,22 +1010,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </div>
         </div>
         
-        {/* Sounds Enabled - master toggle for all sounds */}
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Sounds</span>
-          <div style={styles.rowControls}>
-            <button
-              onClick={async () => {
-                const newValue = !soundsEnabled;
-                const success = await window.clipboardAPI?.setSoundsEnabled?.(newValue);
-                if (success) setSoundsEnabled(newValue);
-              }}
-              style={{ ...styles.toggle, backgroundColor: soundsEnabled ? theme.accent : '#d1d5db' }}
-            >
-              <span style={{ ...styles.toggleKnob, transform: soundsEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
-            </button>
-          </div>
-        </div>
+        {/* Sounds toggle moved to Audio section */}
         
         {/* Show in Dock - WIP feature, disabled for now */}
         <div style={{ ...styles.row, opacity: 0.5 }}>
@@ -1043,53 +1028,8 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </div>
         </div>
         
-        {/* Permission Reminders - show/hide the screen recording permission banner */}
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Permission Reminders</span>
-          <div style={styles.rowControls}>
-            <button
-              onClick={() => handleTogglePermissionReminders(!showPermissionReminders)}
-              style={{ ...styles.toggle, backgroundColor: showPermissionReminders ? theme.accent : '#d1d5db' }}
-            >
-              <span style={{ ...styles.toggleKnob, transform: showPermissionReminders ? 'translateX(20px)' : 'translateX(2px)' }} />
-            </button>
-          </div>
-        </div>
-        
-        {/* Cursor Status Indicator - shows dot next to cursor during recording/transcribing */}
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Cursor Status Indicator</span>
-          <div style={styles.rowControls}>
-            <button
-              onClick={() => handleToggleCursorStatus(!cursorStatusEnabled)}
-              style={{ ...styles.toggle, backgroundColor: cursorStatusEnabled ? theme.accent : '#d1d5db' }}
-            >
-              <span style={{ ...styles.toggleKnob, transform: cursorStatusEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
-            </button>
-          </div>
-        </div>
-        
-        {/* Hide Status Labels - show only colored dots (requires cursor status enabled) */}
-        {cursorStatusEnabled && (
-          <div style={styles.row}>
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <span style={styles.rowLabel}>Show Status Labels</span>
-              <span style={{ ...styles.rowHint, marginTop: 0 }}>When off, show only colored dots</span>
-            </div>
-            <div style={styles.rowControls}>
-              <button
-                onClick={async () => {
-                  const newValue = !hideStatusLabels;
-                  const success = await window.clipboardAPI?.setHideStatusLabels?.(newValue);
-                  if (success) setHideStatusLabels(newValue);
-                }}
-                style={{ ...styles.toggle, backgroundColor: !hideStatusLabels ? theme.accent : '#d1d5db' }}
-              >
-                <span style={{ ...styles.toggleKnob, transform: !hideStatusLabels ? 'translateX(20px)' : 'translateX(2px)' }} />
-              </button>
-            </div>
-          </div>
-        )}
+        {/* Permission Reminders - removed, always show until permissions granted */}
+        {/* Cursor Status Indicator - removed, always show status dots */}
         
         {hotkeyError && <p style={styles.error}>{hotkeyError}</p>}
       </div>
@@ -1098,6 +1038,23 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       <div style={styles.section}>
         <SectionHeader title="Audio" />
         <AudioSettingsPanel />
+        
+        {/* Sounds Enabled - master toggle for all sounds */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Sounds</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={async () => {
+                const newValue = !soundsEnabled;
+                const success = await window.clipboardAPI?.setSoundsEnabled?.(newValue);
+                if (success) setSoundsEnabled(newValue);
+              }}
+              style={{ ...styles.toggle, backgroundColor: soundsEnabled ? theme.accent : '#d1d5db' }}
+            >
+              <span style={{ ...styles.toggleKnob, transform: soundsEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Transcription Section */}
@@ -1128,7 +1085,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       {(() => {
         // Only trust cached 'pro' tier if user is actually signed in.
         const displayTier = session ? userTier : 'free';
-        const tierDisplayName = displayTier === 'pro' ? 'Pro Plan' : 'Free Plan';
+        const tierDisplayName = displayTier === 'pro' ? 'Pro Plan' : 'Basic Plan';
         
         // Get display name from user metadata, fallback to email.
         const userFullName = session?.user?.user_metadata?.full_name as string | undefined;
@@ -1253,7 +1210,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                         backgroundColor: theme.bgSecondary,
                         color: theme.textSecondary,
                       }}>
-                        Free Plan
+                        Basic Plan
                       </span>
                     </div>
                     <p style={styles.rowHint}>
@@ -1312,7 +1269,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
               {userTier === 'pro' && <li>Any existing Pro subscription ($14/month)</li>}
             </ul>
             <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5 }}>
-              <strong>Important:</strong> You may continue to use the free plan without an account. 
+              <strong>Important:</strong> You may continue to use the Basic plan without an account. 
               All local screenshots, transcripts, and drawings will remain on your machine.
             </p>
             <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: '#dc2626', fontWeight: 500 }}>

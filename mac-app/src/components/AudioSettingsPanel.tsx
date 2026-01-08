@@ -137,13 +137,20 @@ export default function AudioSettingsPanel() {
 
   return (
     <div style={styles.container}>
-      {/* Priority microphone selector */}
+      {/* Priority microphone selector - selecting a mic auto-enables priority mode */}
       <div style={styles.row}>
         <span style={styles.rowLabel}>Priority Mic</span>
         <div style={styles.rowControls}>
           <select
             value={audioState.priorityDeviceId || ''}
-            onChange={(e) => handleSetPriorityDevice(e.target.value || null)}
+            onChange={async (e) => {
+              const deviceId = e.target.value || null;
+              await handleSetPriorityDevice(deviceId);
+              // Auto-enable priority mode when selecting a device.
+              if (deviceId && !audioState.priorityMode && window.audioAPI) {
+                await window.audioAPI.setPriorityMode(true);
+              }
+            }}
             style={styles.select}
           >
             <option value="">None</option>
@@ -153,28 +160,6 @@ export default function AudioSettingsPanel() {
               </option>
             ))}
           </select>
-        </div>
-      </div>
-
-      {/* Priority microphone enable toggle */}
-      <div style={styles.row}>
-        <span style={styles.rowLabel}>Enabled</span>
-        <div style={styles.rowControls}>
-          <button
-            onClick={handleTogglePriority}
-            disabled={!audioState.priorityDeviceId}
-            style={{
-              ...styles.toggle,
-              backgroundColor: audioState.priorityMode ? '#22c55e' : '#d1d5db',
-              opacity: audioState.priorityDeviceId ? 1 : 0.5,
-              cursor: audioState.priorityDeviceId ? 'pointer' : 'not-allowed',
-            }}
-          >
-            <span style={{
-              ...styles.toggleKnob,
-              transform: audioState.priorityMode ? 'translateX(20px)' : 'translateX(2px)',
-            }} />
-          </button>
           {audioState.userOverrideId && audioState.priorityMode && priorityDevice && (
             <button onClick={handleResetOverride} style={styles.btn}>
               Reset
@@ -186,9 +171,7 @@ export default function AudioSettingsPanel() {
       {/* Priority microphone helper text */}
       {audioState.priorityDeviceId && (
         <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '12px', paddingLeft: '2px' }}>
-          {audioState.priorityMode 
-            ? 'Your microphone will not auto-switch while enabled.' 
-            : 'Enable to prevent your microphone from auto-switching.'}
+          Your microphone will not auto-switch while a priority mic is selected.
         </div>
       )}
 
