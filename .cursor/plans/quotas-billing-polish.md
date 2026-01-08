@@ -215,10 +215,10 @@ Features requiring sign-in (show sign-in prompt if not authenticated):
 Show stacked cursor pipes to indicate screenshots taken during recording:
 
 ```
-[red dot] [| | |] [fielding theories...]
+[red dot] [| | |] [Say anything]
           └─ 3 pipes = 3 screenshots
 
-[red dot] [| | | +2] [fielding theories...]
+[red dot] [| | | +2] [Say anything]
           └─ 3 pipes + overflow = 5 screenshots
 ```
 
@@ -243,7 +243,7 @@ When transitioning from transcribing to done:
 
 New setting: "Show status labels"
 
-- ON (default): Show "fielding theories...", "transcribing...", etc.
+- ON (default): Show "Say anything", "Transcribing...", etc. (progressively hidden after first few uses)
 - OFF: Show only colored dots (red/purple/green)
 
 Files: `CursorStatus.tsx`, `RecordingOverlay.tsx`, `cursorStatusManager.ts`, `preferences.ts`
