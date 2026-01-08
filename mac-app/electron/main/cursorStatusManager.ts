@@ -5,7 +5,7 @@ import path from 'path';
 /**
  * Status states for the cursor indicator.
  * - idle: No indicator shown
- * - recording: Red pulsing dot with "Think outloud..." that fades away
+ * - recording: Red pulsing dot with "Say anything" label
  * - transcribing: Purple dot, "Transcribing..." text when cursor is still
  * - done: Green dot with "Pasted", shown briefly after transcribing completes
  * - confirmation: Red pulsing dot with countdown, awaiting abandon/continue decision
@@ -53,6 +53,13 @@ export class CursorStatusManager extends EventEmitter {
   
   // Whether to hide text labels (show only colored dots)
   private hideLabels: boolean = false;
+  
+  // Progressive label hiding - counts how many times each label has been shown.
+  private transcribingLabelShownCount: number = 0;
+  private sayAnythingLabelShownCount: number = 0;
+  private readonly TRANSCRIBING_LABEL_THRESHOLD = 3;
+  private readonly SAY_ANYTHING_LABEL_THRESHOLD = 2;
+  private labelsExplicitlyEnabled: boolean = false;
   
   // Timing constants
   private readonly POLL_INTERVAL_MS = 33;
@@ -134,6 +141,50 @@ export class CursorStatusManager extends EventEmitter {
     if (this.window && !this.window.isDestroyed()) {
       this.window.webContents.send('cursor-status-hide-labels', hide);
     }
+  }
+  
+  setLabelCounts(transcribingCount: number, sayAnythingCount: number): void {
+    this.transcribingLabelShownCount = transcribingCount;
+    this.sayAnythingLabelShownCount = sayAnythingCount;
+    this.sendLabelVisibilityToRenderer();
+  }
+  
+  getLabelCounts(): { transcribing: number; sayAnything: number } {
+    return {
+      transcribing: this.transcribingLabelShownCount,
+      sayAnything: this.sayAnythingLabelShownCount,
+    };
+  }
+  
+  incrementLabelCount(labelType: 'transcribing' | 'sayAnything'): number {
+    if (labelType === 'transcribing') {
+      this.transcribingLabelShownCount++;
+    } else {
+      this.sayAnythingLabelShownCount++;
+    }
+    this.sendLabelVisibilityToRenderer();
+    return labelType === 'transcribing' 
+      ? this.transcribingLabelShownCount 
+      : this.sayAnythingLabelShownCount;
+  }
+  
+  setLabelsExplicitlyEnabled(enabled: boolean): void {
+    this.labelsExplicitlyEnabled = enabled;
+    this.sendLabelVisibilityToRenderer();
+  }
+  
+  private sendLabelVisibilityToRenderer(): void {
+    if (!this.window || this.window.isDestroyed()) return;
+    
+    const showTranscribingLabel = this.labelsExplicitlyEnabled || 
+      this.transcribingLabelShownCount < this.TRANSCRIBING_LABEL_THRESHOLD;
+    const showSayAnythingLabel = this.labelsExplicitlyEnabled || 
+      this.sayAnythingLabelShownCount < this.SAY_ANYTHING_LABEL_THRESHOLD;
+    
+    this.window.webContents.send('cursor-status-label-visibility', {
+      showTranscribingLabel,
+      showSayAnythingLabel,
+    });
   }
   
   /**
@@ -400,6 +451,7 @@ export class CursorStatusManager extends EventEmitter {
         this.window.webContents.send('cursor-status-state', this.state);
         this.window.webContents.send('cursor-status-idle', this.isIdle);
         this.window.webContents.send('cursor-status-hide-labels', this.hideLabels);
+        this.sendLabelVisibilityToRenderer();
       }
     });
   }

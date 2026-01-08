@@ -705,6 +705,15 @@ interface SocialAPI {
 type CursorStatusState = 'idle' | 'recording' | 'transcribing' | 'done' | 'confirmation' | 'paste-failed';
 
 /**
+ * Label visibility state for progressive hiding.
+ * After thresholds are reached, labels auto-hide to show only colored dots.
+ */
+interface LabelVisibility {
+  showTranscribingLabel: boolean;  // Show "Transcribing..." for first 3 uses
+  showSayAnythingLabel: boolean;   // Show "Say anything" for first 2 uses
+}
+
+/**
  * API for the cursor status indicator overlay.
  * Used by the cursor-status.html overlay window.
  */
@@ -714,7 +723,9 @@ interface CursorStatusAPI {
   onDataChange?: (callback: (data: { transcription?: string; pasteFailed?: boolean }) => void) => void;
   onStackChange?: (callback: (count: number) => void) => void;
   onHideLabelsChange?: (callback: (hide: boolean) => void) => void;
+  onLabelVisibilityChange?: (callback: (visibility: LabelVisibility) => void) => void;
   onScreenshotModeChange?: (callback: (active: boolean) => void) => void;
+  onTutorialHint?: (callback: (hint: string | null) => void) => void;
   sendConfirmationResponse?: (abandon: boolean) => void;
   dismiss?: () => void;
   removeAllListeners: (channel: string) => void;
