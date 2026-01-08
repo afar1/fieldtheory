@@ -4,7 +4,7 @@
 // Copy count (times copied) determines popularity ranking.
 // =============================================================================
 
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
@@ -46,11 +46,6 @@ export default function PopularCommands() {
   
   // Expanded state for "show more" functionality.
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  
-  // Hover tooltip state - shows after 2.25s delay.
-  const [hoveredCommand, setHoveredCommand] = useState<Command | null>(null);
-  const [hoverPosition, setHoverPosition] = useState<{ x: number; y: number } | null>(null);
-  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // Auth state - required for sharing commands.
   const [session, setSession] = useState<Session | null>(null);
@@ -232,38 +227,7 @@ export default function PopularCommands() {
     return content.length > 120 || (hasNewlines && content.length > 80);
   }, []);
 
-  const handleMouseEnter = useCallback((command: Command, e: React.MouseEvent) => {
-    if (!needsTruncation(command.content)) return;
-    if (expandedId === command.id) return;
-    
-    const rect = e.currentTarget.getBoundingClientRect();
-    
-    // Clear any existing timer.
-    if (hoverTimerRef.current) {
-      clearTimeout(hoverTimerRef.current);
-    }
-    
-    // Start 500ms delay timer.
-    hoverTimerRef.current = setTimeout(() => {
-      setHoveredCommand(command);
-      setHoverPosition({ x: rect.left, y: rect.bottom + 4 });
-    }, 500);
-  }, [needsTruncation, expandedId]);
-
-  // Handle hover end - clear timer and tooltip.
-  const handleMouseLeave = useCallback(() => {
-    if (hoverTimerRef.current) {
-      clearTimeout(hoverTimerRef.current);
-      hoverTimerRef.current = null;
-    }
-    // Don't immediately close if hovering the tooltip itself.
-  }, []);
-
-  // Close tooltip when mouse leaves the tooltip area.
-  const closeTooltip = useCallback(() => {
-    setHoveredCommand(null);
-    setHoverPosition(null);
-  }, []);
+  // Hover tooltip removed for cleaner UI - use "show more" button instead.
 
   // Format use count with proper pluralization.
   const formatUseCount = (count: number): string => {
@@ -278,8 +242,6 @@ export default function PopularCommands() {
     return (
       <div
         key={command.id}
-        onMouseEnter={(e) => handleMouseEnter(command, e)}
-        onMouseLeave={handleMouseLeave}
         style={{
           ...styles.commandRow,
           backgroundColor: isCopied 
@@ -586,50 +548,6 @@ export default function PopularCommands() {
           </>
         )}
       </div>
-
-      {/* Hover tooltip - appears after 2.25s delay */}
-      {hoveredCommand && hoverPosition && (
-        <div
-          onMouseEnter={() => {
-            // Keep tooltip open when hovering over it.
-            if (hoverTimerRef.current) {
-              clearTimeout(hoverTimerRef.current);
-            }
-          }}
-          onMouseLeave={closeTooltip}
-          style={{
-            position: 'fixed',
-            left: hoverPosition.x,
-            top: hoverPosition.y,
-            maxWidth: '400px',
-            maxHeight: '200px',
-            overflowY: 'auto',
-            padding: '10px 12px',
-            backgroundColor: theme.isDark ? '#1f2937' : '#fff',
-            border: `1px solid ${theme.isDark ? '#374151' : '#e5e7eb'}`,
-            borderRadius: '8px',
-            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
-            zIndex: 1000,
-          }}
-        >
-          <div style={{
-            fontSize: '11px',
-            fontWeight: 600,
-            color: theme.text,
-            marginBottom: '6px',
-          }}>
-            /{hoveredCommand.name}
-          </div>
-          <div style={{
-            fontSize: '10px',
-            color: theme.textSecondary,
-            whiteSpace: 'pre-wrap',
-            lineHeight: '1.5',
-          }}>
-            {hoveredCommand.content}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
