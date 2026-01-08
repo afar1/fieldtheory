@@ -1472,6 +1472,8 @@ export class SocialSync extends EventEmitter {
         .ilike('email', email)
         .single();
 
+      // Always create with pending status - the contact must accept the invite.
+      // This ensures users have control over who can message them.
       const { error } = await this.supabase!
         .from('contacts')
         .insert({
@@ -1479,7 +1481,7 @@ export class SocialSync extends EventEmitter {
           contact_email: email.toLowerCase(),
           contact_user_id: existingUser?.id || null,
           relationship_type: 'friend',
-          status: existingUser ? 'accepted' : 'pending',
+          status: 'pending',
         });
 
       if (error) {
@@ -1509,6 +1511,148 @@ export class SocialSync extends EventEmitter {
       c.contactEmail.toLowerCase().includes(queryLower) ||
       (c.contactName && c.contactName.toLowerCase().includes(queryLower))
     );
+  }
+
+  /**
+   * Get pending invites where I'm the target (someone wants to add me).
+   * These are contacts where I'm the contact_user_id or contact_email, status is pending,
+   * and I'm not the owner (not my own outgoing invites).
+   */
+  async getPendingInvites(): Promise<Contact[]> {
+    if (!this.isAuthenticated()) return [];
+    const userId = this.getUserId();
+    const userEmail = this.getUserEmail();
+    if (!userId) return [];
+
+    try {
+      // Build OR filter for matching by user_id or email.
+      let orFilter = `contact_user_id.eq.${userId}`;
+      if (userEmail) {
+        orFilter += `,contact_email.ilike.${userEmail.toLowerCase()}`;
+      }
+
+      const { data, error } = await this.supabase!
+        .from('contacts')
+        .select('*')
+        .or(orFilter)
+        .eq('status', 'pending')
+        .neq('owner_user_id', userId)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('[SocialSync] Get pending invites failed:', error);
+        return [];
+      }
+
+      const invites: Contact[] = [];
+      for (const row of data as ContactRow[]) {
+        // Get display name of the person who sent the invite.
+        let ownerName: string | null = null;
+        if (row.owner_user_id) {
+          ownerName = await this.getDisplayName(row.owner_user_id);
+        }
+
+        invites.push({
+          id: row.id,
+          ownerUserId: row.owner_user_id,
+          contactEmail: row.contact_email,
+          contactUserId: row.contact_user_id,
+          contactName: ownerName, // Use owner's name since they sent the invite
+          relationshipType: row.relationship_type as 'team' | 'friend' | null,
+          status: row.status as 'pending' | 'accepted',
+          createdAt: new Date(row.created_at).getTime(),
+        });
+      }
+
+      return invites;
+    } catch (err) {
+      console.error('[SocialSync] Failed to get pending invites:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Respond to a pending invite - accept or reject.
+   * Accept: updates status to 'accepted', enabling bidirectional messaging.
+   * Reject: deletes the contact row.
+   */
+  async respondToInvite(contactId: string, accept: boolean): Promise<boolean> {
+    if (!this.isAuthenticated()) return false;
+    const userId = this.getUserId();
+    const userEmail = this.getUserEmail();
+    if (!userId) return false;
+
+    try {
+      if (accept) {
+        // Accept: update status to accepted.
+        // Also set contact_user_id if not already set (for invites by email).
+        const { error } = await this.supabase!
+          .from('contacts')
+          .update({ 
+            status: 'accepted',
+            contact_user_id: userId, // Ensure our user ID is linked
+          })
+          .eq('id', contactId)
+          .or(`contact_user_id.eq.${userId},contact_email.ilike.${userEmail?.toLowerCase() || ''}`);
+
+        if (error) {
+          console.error('[SocialSync] Accept invite failed:', error);
+          return false;
+        }
+
+        console.log('[SocialSync] Invite accepted:', contactId);
+        return true;
+      } else {
+        // Reject: delete the contact row.
+        const { error } = await this.supabase!
+          .from('contacts')
+          .delete()
+          .eq('id', contactId)
+          .or(`contact_user_id.eq.${userId},contact_email.ilike.${userEmail?.toLowerCase() || ''}`);
+
+        if (error) {
+          console.error('[SocialSync] Reject invite failed:', error);
+          return false;
+        }
+
+        console.log('[SocialSync] Invite rejected:', contactId);
+        return true;
+      }
+    } catch (err) {
+      console.error('[SocialSync] Failed to respond to invite:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Remove a friend/contact (unfriend or leave team).
+   * Works for both contacts I own and contacts where I'm the target.
+   */
+  async removeFriend(contactId: string): Promise<boolean> {
+    if (!this.isAuthenticated()) return false;
+    const userId = this.getUserId();
+    const userEmail = this.getUserEmail();
+    if (!userId) return false;
+
+    try {
+      // Delete where I'm either the owner or the contact.
+      const { error } = await this.supabase!
+        .from('contacts')
+        .delete()
+        .eq('id', contactId)
+        .or(`owner_user_id.eq.${userId},contact_user_id.eq.${userId},contact_email.ilike.${userEmail?.toLowerCase() || ''}`);
+
+      if (error) {
+        console.error('[SocialSync] Remove friend failed:', error);
+        return false;
+      }
+
+      console.log('[SocialSync] Friend removed:', contactId);
+      return true;
+    } catch (err) {
+      console.error('[SocialSync] Failed to remove friend:', err);
+      return false;
+    }
   }
 
   // ===========================================================================

@@ -12,14 +12,49 @@ import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import fs from 'fs';
 import path from 'path';
+import { app } from 'electron';
 
 /**
- * Simple in-memory storage adapter for Supabase auth in the main process.
- * This is needed for OTP verification to work - the Supabase client needs
- * to persist state between the OTP request and verification steps.
+ * File-based storage adapter for Supabase auth in the main process.
+ * Persists session to disk so it survives app updates. This fixes the issue
+ * where users had to re-login after every app update because localStorage
+ * is tied to the Chromium partition which can change between versions.
  */
-class MemoryStorage implements SupportedStorage {
+class FileStorage implements SupportedStorage {
   private storage: Map<string, string> = new Map();
+  private filePath: string;
+  private initialized: boolean = false;
+
+  constructor(userDataPath: string) {
+    this.filePath = path.join(userDataPath, 'supabase-session.json');
+    this.loadFromDisk();
+  }
+
+  private loadFromDisk(): void {
+    try {
+      if (fs.existsSync(this.filePath)) {
+        const data = fs.readFileSync(this.filePath, 'utf-8');
+        const parsed = JSON.parse(data);
+        this.storage = new Map(Object.entries(parsed));
+        console.log('[FileStorage] Loaded session from disk');
+      }
+    } catch (err) {
+      console.warn('[FileStorage] Failed to load session from disk:', err);
+    }
+    this.initialized = true;
+  }
+
+  private saveToDisk(): void {
+    try {
+      const obj: Record<string, string> = {};
+      this.storage.forEach((value, key) => {
+        obj[key] = value;
+      });
+      fs.writeFileSync(this.filePath, JSON.stringify(obj, null, 2));
+    } catch (err) {
+      console.warn('[FileStorage] Failed to save session to disk:', err);
+    }
+  }
 
   async getItem(key: string): Promise<string | null> {
     return this.storage.get(key) ?? null;
@@ -27,10 +62,12 @@ class MemoryStorage implements SupportedStorage {
 
   async setItem(key: string, value: string): Promise<void> {
     this.storage.set(key, value);
+    this.saveToDisk();
   }
 
   async removeItem(key: string): Promise<void> {
     this.storage.delete(key);
+    this.saveToDisk();
   }
 }
 
@@ -153,13 +190,15 @@ export class MobileSync extends EventEmitter {
       return;
     }
 
-    // Use in-memory storage for auth state - required for OTP verification to work.
-    // The Supabase client needs storage to track state between OTP request and verify.
+    // Use file-based storage for auth state so sessions persist across app updates.
+    // This fixes the issue where users had to re-login after every update because
+    // localStorage is tied to the Chromium partition which can change between versions.
     // Explicit WebSocket transport fixes Realtime timeouts in Node.js < v22 / Electron.
+    const userDataPath = app.getPath('userData');
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     this.supabase = createClient(url, anonKey, {
       auth: {
-        storage: new MemoryStorage(),
+        storage: new FileStorage(userDataPath),
         autoRefreshToken: true,
         persistSession: true,
         detectSessionInUrl: false,
@@ -169,7 +208,43 @@ export class MobileSync extends EventEmitter {
       },
     });
 
-    console.log('[MobileSync] Initialized with Supabase client');
+    console.log('[MobileSync] Initialized with Supabase client, session storage:', userDataPath);
+    
+    // Try to restore session from file storage. Supabase should have loaded it
+    // automatically, but we need to retrieve it and set our local state.
+    await this.restoreSessionFromStorage();
+  }
+
+  /**
+   * Restore session from file storage on startup.
+   * This enables auto-login after app updates.
+   */
+  private async restoreSessionFromStorage(): Promise<void> {
+    if (!this.supabase) return;
+    
+    try {
+      const { data, error } = await this.supabase.auth.getSession();
+      
+      if (error) {
+        console.log('[MobileSync] No stored session to restore:', error.message);
+        return;
+      }
+      
+      if (data.session) {
+        this.session = data.session;
+        console.log('[MobileSync] Restored session for user:', data.session.user?.email);
+        
+        // Start periodic sync now that we're authenticated.
+        this.startPeriodicSync();
+        this.setupTodoRealtimeSubscription();
+        this.setupProfileRealtimeSubscription();
+        this.fetchAndEmitCurrentTier();
+      } else {
+        console.log('[MobileSync] No session found in storage');
+      }
+    } catch (err) {
+      console.warn('[MobileSync] Failed to restore session:', err);
+    }
   }
 
   /**
