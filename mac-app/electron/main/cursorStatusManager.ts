@@ -5,13 +5,11 @@ import path from 'path';
 /**
  * Status states for the cursor indicator.
  * - idle: No indicator shown
- * - recording: Red pulsing dot with "Say anything" that fades away (first 2 uses only)
- * - transcribing: Purple dot, "Transcribing..." text when cursor is still (first 3 uses only)
+ * - recording: Red pulsing dot with "Say anything" label
+ * - transcribing: Purple dot, "Transcribing..." text when cursor is still
  * - done: Green dot with "Pasted", shown briefly after transcribing completes
  * - confirmation: Red pulsing dot with countdown, awaiting abandon/continue decision
  * - paste-failed: Orange dot, shows transcription then "Saved to Field Theory"
- * 
- * Labels progressively hide after first few uses - only colored dots remain (stacks are core).
  */
 export type CursorStatusState = 'idle' | 'recording' | 'transcribing' | 'done' | 'confirmation' | 'paste-failed';
 
@@ -57,13 +55,11 @@ export class CursorStatusManager extends EventEmitter {
   private hideLabels: boolean = false;
   
   // Progressive label hiding - counts how many times each label has been shown.
-  // After thresholds are reached, labels auto-hide unless user re-enables.
   private transcribingLabelShownCount: number = 0;
   private sayAnythingLabelShownCount: number = 0;
-  
-  // Thresholds for progressive hiding.
-  private readonly TRANSCRIBING_LABEL_THRESHOLD = 3;  // Show "Transcribing..." 3 times
-  private readonly SAY_ANYTHING_LABEL_THRESHOLD = 2;  // Show "Say anything" 2 times
+  private readonly TRANSCRIBING_LABEL_THRESHOLD = 3;
+  private readonly SAY_ANYTHING_LABEL_THRESHOLD = 2;
+  private labelsExplicitlyEnabled: boolean = false;
   
   // Timing constants
   private readonly POLL_INTERVAL_MS = 33;
@@ -147,21 +143,12 @@ export class CursorStatusManager extends EventEmitter {
     }
   }
   
-  /**
-   * Set the label shown counts for progressive hiding.
-   * These track how many times each label type has been displayed.
-   */
   setLabelCounts(transcribingCount: number, sayAnythingCount: number): void {
     this.transcribingLabelShownCount = transcribingCount;
     this.sayAnythingLabelShownCount = sayAnythingCount;
-    
-    // Send the computed "should show" states to the renderer.
     this.sendLabelVisibilityToRenderer();
   }
   
-  /**
-   * Get the current label shown counts.
-   */
   getLabelCounts(): { transcribing: number; sayAnything: number } {
     return {
       transcribing: this.transcribingLabelShownCount,
@@ -169,31 +156,30 @@ export class CursorStatusManager extends EventEmitter {
     };
   }
   
-  /**
-   * Increment label counts when labels are displayed.
-   * Returns the new counts for persistence.
-   */
   incrementLabelCount(labelType: 'transcribing' | 'sayAnything'): number {
     if (labelType === 'transcribing') {
       this.transcribingLabelShownCount++;
-      this.sendLabelVisibilityToRenderer();
-      return this.transcribingLabelShownCount;
     } else {
       this.sayAnythingLabelShownCount++;
-      this.sendLabelVisibilityToRenderer();
-      return this.sayAnythingLabelShownCount;
     }
+    this.sendLabelVisibilityToRenderer();
+    return labelType === 'transcribing' 
+      ? this.transcribingLabelShownCount 
+      : this.sayAnythingLabelShownCount;
   }
   
-  /**
-   * Send label visibility state to renderer based on current counts.
-   */
+  setLabelsExplicitlyEnabled(enabled: boolean): void {
+    this.labelsExplicitlyEnabled = enabled;
+    this.sendLabelVisibilityToRenderer();
+  }
+  
   private sendLabelVisibilityToRenderer(): void {
     if (!this.window || this.window.isDestroyed()) return;
     
-    // Calculate whether each label should still be shown.
-    const showTranscribingLabel = this.transcribingLabelShownCount < this.TRANSCRIBING_LABEL_THRESHOLD;
-    const showSayAnythingLabel = this.sayAnythingLabelShownCount < this.SAY_ANYTHING_LABEL_THRESHOLD;
+    const showTranscribingLabel = this.labelsExplicitlyEnabled || 
+      this.transcribingLabelShownCount < this.TRANSCRIBING_LABEL_THRESHOLD;
+    const showSayAnythingLabel = this.labelsExplicitlyEnabled || 
+      this.sayAnythingLabelShownCount < this.SAY_ANYTHING_LABEL_THRESHOLD;
     
     this.window.webContents.send('cursor-status-label-visibility', {
       showTranscribingLabel,
