@@ -111,6 +111,9 @@ export default function CursorStatus() {
     
     // Listen for data (transcription text for paste-failed or done state)
     window.cursorStatusAPI.onDataChange?.((data) => {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'CursorStatus.tsx:onDataChange',message:'received data',data:{transcription:data?.transcription,pasteFailed:data?.pasteFailed},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3'})}).catch(()=>{});
+      // #endregion
       if (data?.transcription) {
         // Store transcription
         setDoneTranscription(data.transcription);

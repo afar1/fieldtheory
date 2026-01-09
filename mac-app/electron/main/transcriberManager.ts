@@ -29,6 +29,7 @@ export interface TranscriberEvents {
   result: (text: string) => void;
   error: (error: Error) => void;
   stackChanged: (count: number) => void;
+  stackingDisabled: (data: { itemId: number; message: string }) => void;
 }
 
 /**
@@ -454,9 +455,15 @@ export class TranscriberManager extends EventEmitter {
             if (this.quotaManager) {
               const quotaCheck = this.quotaManager.checkQuota('autoStack');
               if (!quotaCheck.allowed) {
-                // Quota exhausted - don't auto-stack, emit upgrade prompt.
+                // Quota exhausted - don't auto-stack. Remove screenshots from stack so only
+                // transcript is pasted. Screenshots are saved separately in Field Theory.
                 canAutoStack = false;
-                console.log('[TranscriberManager] Auto-stack quota exhausted, items saved separately');
+                console.log('[TranscriberManager] Auto-stack quota exhausted, removing screenshots from paste stack');
+                
+                // Keep only the transcript (just added), remove all screenshots.
+                this.currentStack = [itemId];
+                this.screenshotMetadata = [];
+                
                 this.emit('quotaExhausted', quotaCheck);
               }
             }
@@ -945,41 +952,58 @@ export class TranscriberManager extends EventEmitter {
    * Add an item to the current stack (e.g., screenshot).
    * If recording is active and the item is a screenshot, assigns a figure label
    * and tracks the capture timestamp for later insertion into the transcript.
+   * 
+   * If auto-stack quota is exhausted, the screenshot is NOT added to the stack.
+   * It's still saved to Field Theory but must be manually stacked by the user.
    */
   addToStack(itemId: number): void {
-    if (!this.currentStack.includes(itemId)) {
-      this.currentStack.push(itemId);
-      
-      // If we're currently recording, check if this is a screenshot and assign a figure label.
-      if (this.status === 'recording' && this.clipboardManager) {
-        const item = this.clipboardManager.getItem(itemId);
-        if (item && (item.type === 'screenshot' || item.type === 'image')) {
-          // Generate the next figure label (A, B, C... Z, AA, AB...).
-          const figureLabel = this.generateFigureLabel(this.screenshotMetadata.length);
-          
-          // Generate a unique 5-char ID for searchability across all recordings.
-          const figureId = this.clipboardManager.generateFigureId();
-          
-          // Calculate timestamp relative to recording start.
-          const capturedAtMs = Date.now() - this.recordingStartTime;
-          
-          // Store metadata for later use when inserting references into transcript.
-          this.screenshotMetadata.push({
-            itemId,
-            figureLabel,
-            figureId,
-            capturedAtMs,
-          });
-          
-          // Update the item in the database with the figure label and unique ID.
-          this.clipboardManager.updateFigureLabel(itemId, figureLabel, figureId);
-          
-          console.log(`[TranscriberManager] Screenshot ${itemId} labeled as Figure ${figureLabel} (${figureId}) at ${this.formatTimestamp(capturedAtMs)}`);
-        }
+    if (this.currentStack.includes(itemId)) return;
+    
+    // Check auto-stack quota before adding screenshots to stack during recording.
+    // Transcript gets added at the END of recording, so we check on any screenshot.
+    if (this.status === 'recording' && this.quotaManager) {
+      const quotaCheck = this.quotaManager.checkQuota('autoStack');
+      if (!quotaCheck.allowed) {
+        console.log(`[TranscriberManager] Auto-stack quota exhausted, screenshot ${itemId} saved separately`);
+        this.emit('stackingDisabled', {
+          itemId,
+          message: 'Screenshot saved to Field Theory — open to stack manually',
+        });
+        return;
       }
-      
-      this.emit('stackChanged', this.currentStack.length);
     }
+    
+    this.currentStack.push(itemId);
+    
+    // If we're currently recording, check if this is a screenshot and assign a figure label.
+    if (this.status === 'recording' && this.clipboardManager) {
+      const item = this.clipboardManager.getItem(itemId);
+      if (item && (item.type === 'screenshot' || item.type === 'image')) {
+        // Generate the next figure label (A, B, C... Z, AA, AB...).
+        const figureLabel = this.generateFigureLabel(this.screenshotMetadata.length);
+        
+        // Generate a unique 5-char ID for searchability across all recordings.
+        const figureId = this.clipboardManager.generateFigureId();
+        
+        // Calculate timestamp relative to recording start.
+        const capturedAtMs = Date.now() - this.recordingStartTime;
+        
+        // Store metadata for later use when inserting references into transcript.
+        this.screenshotMetadata.push({
+          itemId,
+          figureLabel,
+          figureId,
+          capturedAtMs,
+        });
+        
+        // Update the item in the database with the figure label and unique ID.
+        this.clipboardManager.updateFigureLabel(itemId, figureLabel, figureId);
+        
+        console.log(`[TranscriberManager] Screenshot ${itemId} labeled as Figure ${figureLabel} (${figureId}) at ${this.formatTimestamp(capturedAtMs)}`);
+      }
+    }
+    
+    this.emit('stackChanged', this.currentStack.length);
   }
   
   /**

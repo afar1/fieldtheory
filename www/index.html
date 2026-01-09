@@ -13,7 +13,7 @@
   <!-- Navigation -->
   <nav class="nav">
     <div class="container nav-inner">
-      <a href="/" class="nav-logo"><img id="nav-logo-img" src="images/field-theory-log(blk).png" alt="Field Theory" class="nav-logo-img"></a>
+      <a href="/" class="nav-logo"><img id="nav-logo-img" src="images/fieldtheory-logo-black.png" alt="Field Theory" class="nav-logo-img"></a>
       <button class="nav-toggle" onclick="toggleNav()" aria-label="Toggle navigation">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round">
           <line x1="3" y1="6" x2="21" y2="6"/>
@@ -450,7 +450,7 @@
       // Update logo based on theme
       const logoImg = document.getElementById('nav-logo-img');
       if (logoImg) {
-        logoImg.src = isDark ? 'images/field-theory-logo.png' : 'images/field-theory-log(blk).png';
+        logoImg.src = isDark ? 'images/fieldtheory-logo-white.png' : 'images/fieldtheory-logo-black.png';
       }
     }
     
@@ -475,7 +475,7 @@
       const isDark = document.body.classList.contains('dark');
       const logoImg = document.getElementById('nav-logo-img');
       if (logoImg) {
-        logoImg.src = isDark ? 'images/field-theory-logo.png' : 'images/field-theory-log(blk).png';
+        logoImg.src = isDark ? 'images/fieldtheory-logo-white.png' : 'images/fieldtheory-logo-black.png';
       }
     })();
   </script>
