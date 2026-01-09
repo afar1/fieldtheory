@@ -49,11 +49,39 @@ export interface QuotaCheckResult {
 export class QuotaManager extends EventEmitter {
   private preferencesManager: PreferencesManager;
   private quotas: LocalQuotas;
+  
+  // Session checker function injected from main process.
+  // Returns true if user has a valid (non-expired) session.
+  // When not logged in, we enforce free tier limits regardless of cached tier.
+  private sessionChecker: (() => boolean) | null = null;
 
   constructor(preferencesManager: PreferencesManager) {
     super();
     this.preferencesManager = preferencesManager;
     this.quotas = this.loadQuotas();
+  }
+  
+  /**
+   * Set the session checker function. Called from main process after mobileSync is initialized.
+   * This allows quota checks to use free limits when user is not logged in.
+   */
+  setSessionChecker(checker: () => boolean): void {
+    this.sessionChecker = checker;
+  }
+  
+  /**
+   * Get the effective tier - uses cached tier if logged in, 'free' if not.
+   */
+  private getEffectiveTier(): UserTier {
+    // If no session checker set, fall back to cached tier.
+    if (!this.sessionChecker) {
+      return this.quotas.cachedTier;
+    }
+    // If not logged in, always use free tier limits.
+    if (!this.sessionChecker()) {
+      return 'free';
+    }
+    return this.quotas.cachedTier;
   }
 
   // ---------------------------------------------------------------------------
@@ -134,7 +162,7 @@ export class QuotaManager extends EventEmitter {
    */
   async incrementPriorityMic(seconds: number): Promise<void> {
     // Pro users don't consume quota.
-    if (this.quotas.cachedTier === 'pro') return;
+    if (this.getEffectiveTier() === 'pro') return;
 
     // Check for month rollover before incrementing.
     this.checkAndResetIfNeeded();
@@ -151,7 +179,7 @@ export class QuotaManager extends EventEmitter {
    * Get priority mic quota status.
    */
   getPriorityMicStatus(): QuotaStatus {
-    const tier = this.quotas.cachedTier;
+    const tier = this.getEffectiveTier();
     const limitMinutes = TIER_LIMITS[tier].priorityMicMinutes;
     const limitSeconds = isUnlimited(limitMinutes) ? Infinity : limitMinutes * 60;
     const used = this.quotas.priorityMicSecondsUsed;
@@ -176,7 +204,7 @@ export class QuotaManager extends EventEmitter {
    */
   async incrementAutoStack(): Promise<void> {
     // Pro users don't consume quota.
-    if (this.quotas.cachedTier === 'pro') return;
+    if (this.getEffectiveTier() === 'pro') return;
 
     // Check for month rollover before incrementing.
     this.checkAndResetIfNeeded();
@@ -193,7 +221,7 @@ export class QuotaManager extends EventEmitter {
    * Get auto-stack quota status.
    */
   getAutoStackStatus(): QuotaStatus {
-    const tier = this.quotas.cachedTier;
+    const tier = this.getEffectiveTier();
     const limit = TIER_LIMITS[tier].autoStackSessions;
     const used = this.quotas.autoStackSessionsUsed;
     const remaining = isUnlimited(limit) ? Infinity : Math.max(0, limit - used);
@@ -218,7 +246,7 @@ export class QuotaManager extends EventEmitter {
     return {
       priorityMic: this.getPriorityMicStatus(),
       autoStack: this.getAutoStackStatus(),
-      tier: this.quotas.cachedTier,
+      tier: this.getEffectiveTier(),
     };
   }
 

@@ -2074,6 +2074,7 @@ function setupClipboardIPCHandlers(): void {
 
   // =========================================================================
   // Quota IPC Handlers - Local usage tracking
+  // QuotaManager handles session checking internally via setSessionChecker().
   // =========================================================================
 
   ipcMain.handle('quota:getQuotas', async () => {
@@ -2747,7 +2748,15 @@ function broadcastTranscribeEvents(): void {
     cursorStatusManager?.setScreenshotCount(count);
   });
   
+  // Track if quota just exhausted - skip paste-success to preserve upgrade message.
+  let quotaJustExhausted = false;
+  
   transcriberManager.on('paste-success', (transcription) => {
+    // If quota was just exhausted, skip the normal done state to preserve upgrade message.
+    if (quotaJustExhausted) {
+      quotaJustExhausted = false;
+      return;
+    }
     if (cursorStatusManager) {
       cursorStatusManager.setStateWithData('done', { transcription, pasteFailed: false });
     }
@@ -2773,13 +2782,22 @@ function broadcastTranscribeEvents(): void {
     }
   });
   
-  // Handle quota exhausted events - show upgrade prompt.
+  // Handle quota exhausted events - show upgrade prompt at cursor and broadcast to windows.
   transcriberManager.on('quotaExhausted', (data: { feature: 'priorityMic' | 'autoStack'; used: number; limit: number }) => {
     const { feature, used, limit } = data;
     const featureName = feature === 'priorityMic' ? 'priority mic minutes' : 'auto-stacks';
     const limitDisplay = feature === 'priorityMic' ? `${Math.floor(limit / 60)} minutes` : `${limit} stacks`;
     
-    // Broadcast to all windows to show quota exhausted modal.
+    // Show message at cursor for auto-stack quota exhaustion.
+    if (feature === 'autoStack' && cursorStatusManager) {
+      quotaJustExhausted = true;
+      cursorStatusManager.setScreenshotCount(0);
+      cursorStatusManager.setStateWithData('paste-failed', {
+        transcription: 'Transcript saved — open Field Theory to add screenshots',
+        pasteFailed: true,
+      });
+    }
+    
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send('quota:exhausted', { feature, used, limit, featureName, limitDisplay });
@@ -2787,6 +2805,14 @@ function broadcastTranscribeEvents(): void {
     });
     
     console.log(`[Main] Quota exhausted: ${featureName} (${used}/${limit})`);
+  });
+  
+  // Handle stacking disabled during recording - screenshot taken but quota exhausted.
+  transcriberManager.on('stackingDisabled', (data: { itemId: number; message: string }) => {
+    if (cursorStatusManager) {
+      cursorStatusManager.showNoTargetError(data.message);
+    }
+    console.log(`[Main] Stacking disabled: ${data.message}`);
   });
 
 }
@@ -3102,6 +3128,16 @@ async function initTranscriberSystem(): Promise<void> {
   const envVars = loadEnvVars();
   mobileSync = new MobileSync(clipboardManager, preferencesManager);
   await mobileSync.init(envVars.supabaseUrl, envVars.supabaseAnonKey);
+  
+  // Wire up session checker so quota manager uses free limits when not logged in.
+  // This ensures auto-stack limits are enforced for logged-out users.
+  if (quotaManager) {
+    quotaManager.setSessionChecker(() => {
+      const session = mobileSync?.getSession();
+      if (!session?.expires_at) return false;
+      return session.expires_at > Math.floor(Date.now() / 1000);
+    });
+  }
 
   // Initialize shared clipboard sync - shares Supabase client with mobileSync.
   // This enables collaborative clipboard sharing between team members.
@@ -3116,7 +3152,12 @@ async function initTranscriberSystem(): Promise<void> {
   // @ts-ignore - Access internal supabase client.
   const existingSupabaseClient = mobileSync['supabase'];
   
-  if (existingSession && existingSupabaseClient) {
+  // Validate session is not expired. Supabase may return stale sessions from storage
+  // before background refresh completes, so we check expires_at explicitly.
+  const isSessionValid = existingSession && existingSession.expires_at && 
+    existingSession.expires_at > Math.floor(Date.now() / 1000);
+  
+  if (isSessionValid && existingSupabaseClient) {
     console.log('[Main] Found existing session on startup, initializing syncs');
     sharedClipboardSync.setSupabaseClient(existingSupabaseClient);
     sharedClipboardSync.setSession(existingSession);
@@ -3125,10 +3166,10 @@ async function initTranscriberSystem(): Promise<void> {
     // Note: Tier fetch happens when ClipboardHistory forwards the session via setSyncSession,
     // which triggers mobileSync.setSession -> fetchAndEmitCurrentTier.
   } else {
-    // No session on startup - ensure cached tier is 'free'.
-    // This handles edge cases where user was Pro, app crashed without proper logout.
+    // No valid session on startup - ensure cached tier is 'free'.
+    // This handles: expired sessions, app crash without logout, stale session files.
     if (quotaManager && quotaManager.getCachedTier() === 'pro') {
-      console.log('[Main] No session but cached tier is pro, resetting to free');
+      console.log('[Main] No valid session but cached tier is pro, resetting to free');
       await quotaManager.setCachedTier('free');
     }
   }
