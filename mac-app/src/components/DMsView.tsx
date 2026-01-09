@@ -155,6 +155,14 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
       if (admin) {
         const allFeedback = await window.socialAPI.getAllFeedback();
         setFeedback(allFeedback);
+        
+        // Mark unread feedback items as read when admin views the list.
+        // Admin is the recipient of user-submitted feedback.
+        for (const item of allFeedback) {
+          if (!item.readAt) {
+            await window.socialAPI.markAsRead(item.id);
+          }
+        }
       } else {
         const myFeedback = await window.socialAPI.getMyFeedback();
         setFeedback(myFeedback);

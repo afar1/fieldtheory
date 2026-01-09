@@ -777,8 +777,10 @@ export default function ClipboardHistory() {
     // Load initial hot mic state and unread counts.
     window.socialAPI.getHotMic().then(setHotMicEnabled);
     window.socialAPI.hasUnread().then(setHasUnreadDMs);
+    // Check current view to avoid race condition where async query overwrites cleared state.
     window.socialAPI.hasUnreadFeedback?.().then(hasUnread => {
-      if (hasUnread) setHasUnreadFeedback(true);
+      const currentView = localStorage.getItem('fieldTheoryView');
+      if (hasUnread && currentView !== 'feedback') setHasUnreadFeedback(true);
     });
     
     // Listen for incoming messages for Hot Mic and notifications.
