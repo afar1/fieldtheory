@@ -14,7 +14,7 @@ import PopularCommands from './PopularCommands';
 import DataPolicyNotice from './DataPolicyNotice';
 import ReleaseNotesPopup from './ReleaseNotesPopup';
 import type { SketchViewHandle } from './SketchView';
-import { FEATURE_HOT_MIC_ENABLED, FEATURE_IMPROVE_ENABLED, FEATURE_MESSAGE_SHORTCUT_ENABLED } from '../featureFlags';
+import { FEATURE_HOT_MIC_ENABLED, FEATURE_IMPROVE_ENABLED, FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED } from '../featureFlags';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
 const SketchView = React.lazy(() => import('./SketchView'));
@@ -423,6 +423,19 @@ export default function ClipboardHistory() {
   const [sharingToTeam, setSharingToTeam] = useState<number | null>(null);
   const [sharedToTeamId, setSharedToTeamId] = useState<string | null>(null); // For success flash.
   const [copiedItemId, setCopiedItemId] = useState<string | null>(null); // For "copied" flash.
+  
+  // Sign-in prompt modal - shown when user tries to share without being logged in.
+  const [showSignInPrompt, setShowSignInPrompt] = useState(false);
+  
+  // Secret sharing unlock - toggled via Cmd+Shift+S.
+  // Persisted to localStorage so it survives restarts.
+  const [sharingUnlocked, setSharingUnlocked] = useState(() => {
+    try {
+      return localStorage.getItem('sharingUnlocked') === 'true';
+    } catch {
+      return false;
+    }
+  });
   
   // Auth session state for showing "Signed in as..." in header.
   const [authSession, setAuthSession] = useState<Session | null>(null);
@@ -1047,8 +1060,21 @@ export default function ClipboardHistory() {
     }
   }, [isMacOS, debouncedSearchQuery, offset, stacks, sourceFilter]);
 
+  // Check if sharing is enabled.
+  // Feature is disabled by default, unlocked via Cmd+Shift+S secret toggle.
+  const canShare = FEATURE_SHARING_ENABLED || sharingUnlocked;
+
   // Share an item to the shared clipboard.
   const shareToTeam = useCallback(async (localItemId: number) => {
+    // Check if user is logged in first.
+    if (!authSession?.user?.email) {
+      setShowSignInPrompt(true);
+      return;
+    }
+    // Check if sharing is enabled for this user.
+    if (!canShare) {
+      return; // Silently fail - UI should hide share buttons when !canShare.
+    }
     if (!window.sharedClipboardAPI) return;
     setSharingToTeam(localItemId);
     await window.sharedClipboardAPI.shareToTeam(localItemId);
@@ -1056,16 +1082,25 @@ export default function ClipboardHistory() {
     // Show success flash.
     setSharedToTeamId(`item-${localItemId}`);
     setTimeout(() => setSharedToTeamId(null), 1500);
-  }, []);
+  }, [authSession?.user?.email, canShare]);
 
   // Share a stack to the shared clipboard.
   const shareStackToTeam = useCallback(async (itemIds: number[]) => {
+    // Check if user is logged in first.
+    if (!authSession?.user?.email) {
+      setShowSignInPrompt(true);
+      return;
+    }
+    // Check if sharing is enabled for this user.
+    if (!canShare) {
+      return; // Silently fail - UI should hide share buttons when !canShare.
+    }
     if (!window.sharedClipboardAPI) return;
     await window.sharedClipboardAPI.shareStackToTeam(itemIds);
     // Show success flash.
     setSharedToTeamId(`stack-${itemIds.join(',')}`);
     setTimeout(() => setSharedToTeamId(null), 1500);
-  }, []);
+  }, [authSession?.user?.email, canShare]);
 
   // Copy item to system clipboard and show flash.
   const copyItem = useCallback(async (itemId: number, rowKey: string) => {
@@ -1901,6 +1936,25 @@ export default function ClipboardHistory() {
         }
         return;
       }
+      
+      // Secret: Cmd+Shift+S to toggle sharing feature unlock.
+      // This is a hidden toggle for enabling the sharing feature without code changes.
+      if (key === 's' && hasMeta && e.shiftKey) {
+        e.preventDefault();
+        const newValue = !sharingUnlocked;
+        setSharingUnlocked(newValue);
+        try {
+          localStorage.setItem('sharingUnlocked', String(newValue));
+        } catch {
+          // Ignore storage errors.
+        }
+        // If disabling sharing while on team view, switch to clipboard view.
+        if (!newValue && viewMode === 'team') {
+          setViewMode('clipboard');
+        }
+        showFeedback(newValue ? 'sharing enabled' : 'sharing disabled');
+        return;
+      }
 
       if (key === 'Escape') {
         // If dragging, cancel the drag first
@@ -2623,7 +2677,7 @@ export default function ClipboardHistory() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, sharingUnlocked, setViewMode]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
 
@@ -2876,7 +2930,7 @@ export default function ClipboardHistory() {
         }}
       >
         <img 
-          src={theme.isDark ? "field-theory-logo.png" : "field-theory-log(blk).png"} 
+          src={theme.isDark ? "fieldtheory-logo-white.png" : "fieldtheory-logo-black.png"} 
           alt="Field Theory" 
           style={{ 
             height: '20px',
@@ -3111,7 +3165,7 @@ export default function ClipboardHistory() {
             padding: '0 16px',
             marginBottom: '8px',
           }}>
-          {(['clipboard', 'team', ...(FEATURE_HOT_MIC_ENABLED ? ['hotmic'] : []), ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
+          {(['clipboard', ...(canShare ? ['team'] : []), ...(FEATURE_HOT_MIC_ENABLED ? ['hotmic'] : []), ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
             // Hot Mic tab has special styling and the fire toggle.
             const isHotMic = mode === 'hotmic';
             const isSelected = viewMode === mode && !(mode === 'team' && !authSession?.user?.email);
@@ -3928,40 +3982,42 @@ export default function ClipboardHistory() {
                 >
                   delete <KeyCap small>⌫</KeyCap>
                 </button>
-                {/* Share to Team button */}
-                <button
-                  tabIndex={-1}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={async () => {
-                    // Share selected items to team
-                    if (selectedIds.size === 1) {
-                      // Single item - share directly
-                      const itemId = Array.from(selectedIds)[0];
-                      await shareToTeam(itemId);
-                    } else {
-                      // Multiple items - share as a stack
-                      await shareStackToTeam(Array.from(selectedIds));
-                    }
-                    setSelectedIds(new Set());
-                    setIsMultiSelect(false);
-                    setLastClickedIndex(null);
-                  }}
-                  disabled={sharingToTeam !== null}
-                  style={{
-                    padding: '2px 6px',
-                    fontSize: '10px',
-                    backgroundColor: 'transparent',
-                    color: sharingToTeam !== null ? theme.border : theme.textSecondary,
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: sharingToTeam !== null ? 'default' : 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                  }}
-                >
-                  {sharingToTeam !== null ? 'Sharing...' : 'share'} <KeyCap>t</KeyCap>
-                </button>
+                {/* Share to Team button - hidden when sharing feature is disabled */}
+                {canShare && (
+                  <button
+                    tabIndex={-1}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={async () => {
+                      // Share selected items to team
+                      if (selectedIds.size === 1) {
+                        // Single item - share directly
+                        const itemId = Array.from(selectedIds)[0];
+                        await shareToTeam(itemId);
+                      } else {
+                        // Multiple items - share as a stack
+                        await shareStackToTeam(Array.from(selectedIds));
+                      }
+                      setSelectedIds(new Set());
+                      setIsMultiSelect(false);
+                      setLastClickedIndex(null);
+                    }}
+                    disabled={sharingToTeam !== null}
+                    style={{
+                      padding: '2px 6px',
+                      fontSize: '10px',
+                      backgroundColor: 'transparent',
+                      color: sharingToTeam !== null ? theme.border : theme.textSecondary,
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: sharingToTeam !== null ? 'default' : 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                  >
+                    {sharingToTeam !== null ? 'Sharing...' : 'share'} <KeyCap>t</KeyCap>
+                  </button>
+                )}
                 {selectedIds.size > 1 && (
                   <button
                     tabIndex={-1}
@@ -4589,46 +4645,48 @@ export default function ClipboardHistory() {
                             {improvingStackId === stack.stackId ? 'improving...' : 'improve'} <KeyCap>i</KeyCap>
                           </button>
                         )}
-                        {/* Share to Team button */}
-                        <button
-                          tabIndex={-1}
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const itemIds = stackItems.map(i => i.id);
-                            shareStackToTeam(itemIds);
-                          }}
-                          style={{
-                            padding: '4px 6px',
-                            fontSize: '10px',
-                            fontWeight: 500,
-                            backgroundColor: sharedToTeamId === `stack-${stackItems.map(i => i.id).join(',')}`
-                              ? (theme.isDark ? 'rgba(16, 185, 129, 0.2)' : 'rgba(16, 185, 129, 0.15)')
-                              : 'transparent',
-                            color: sharedToTeamId === `stack-${stackItems.map(i => i.id).join(',')}`
-                              ? '#10b981' : theme.textSecondary,
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                            transition: 'background-color 0.3s ease, color 0.3s ease',
-                          }}
-                          onMouseEnter={(e) => {
-                            if (sharedToTeamId !== `stack-${stackItems.map(i => i.id).join(',')}`) {
-                              e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
-                            }
-                          }}
-                          onMouseLeave={(e) => {
-                            if (sharedToTeamId !== `stack-${stackItems.map(i => i.id).join(',')}`) {
-                              e.currentTarget.style.backgroundColor = 'transparent';
-                            }
-                          }}
-                        >
-                          {sharedToTeamId === `stack-${stackItems.map(i => i.id).join(',')}` ? (
-                            <>✓ shared</>
-                          ) : (
-                            <>share <KeyCap>t</KeyCap></>
-                          )}
-                        </button>
+                        {/* Share to Team button - hidden when sharing feature is disabled */}
+                        {canShare && (
+                          <button
+                            tabIndex={-1}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const itemIds = stackItems.map(i => i.id);
+                              shareStackToTeam(itemIds);
+                            }}
+                            style={{
+                              padding: '4px 6px',
+                              fontSize: '10px',
+                              fontWeight: 500,
+                              backgroundColor: sharedToTeamId === `stack-${stackItems.map(i => i.id).join(',')}`
+                                ? (theme.isDark ? 'rgba(16, 185, 129, 0.2)' : 'rgba(16, 185, 129, 0.15)')
+                                : 'transparent',
+                              color: sharedToTeamId === `stack-${stackItems.map(i => i.id).join(',')}`
+                                ? '#10b981' : theme.textSecondary,
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              transition: 'background-color 0.3s ease, color 0.3s ease',
+                            }}
+                            onMouseEnter={(e) => {
+                              if (sharedToTeamId !== `stack-${stackItems.map(i => i.id).join(',')}`) {
+                                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
+                              }
+                            }}
+                            onMouseLeave={(e) => {
+                              if (sharedToTeamId !== `stack-${stackItems.map(i => i.id).join(',')}`) {
+                                e.currentTarget.style.backgroundColor = 'transparent';
+                              }
+                            }}
+                          >
+                            {sharedToTeamId === `stack-${stackItems.map(i => i.id).join(',')}` ? (
+                              <>✓ shared</>
+                            ) : (
+                              <>share <KeyCap>t</KeyCap></>
+                            )}
+                          </button>
+                        )}
                         {/* DM button - hidden by feature flag */}
                         {FEATURE_MESSAGE_SHORTCUT_ENABLED && (
                           <button
@@ -5338,46 +5396,48 @@ export default function ClipboardHistory() {
                           edit <KeyCap>e</KeyCap>
                         </button>
                       )}
-                      {/* Share to Team button */}
-                      <button
-                        tabIndex={-1}
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          shareToTeam(item.id);
-                        }}
-                        disabled={sharingToTeam === item.id}
-                        style={{
-                          padding: '3px 4px',
-                          fontSize: '9px',
-                          whiteSpace: 'nowrap',
-                          fontWeight: 500,
-                          backgroundColor: sharedToTeamId === `item-${item.id}` 
-                            ? (theme.isDark ? 'rgba(16, 185, 129, 0.2)' : 'rgba(16, 185, 129, 0.15)')
-                            : 'transparent',
-                          color: sharedToTeamId === `item-${item.id}` ? '#10b981' : theme.textSecondary,
-                          border: 'none',
-                          borderRadius: '4px',
-                          cursor: sharingToTeam === item.id ? 'wait' : 'pointer',
-                          transition: 'background-color 0.3s ease, color 0.3s ease',
-                        }}
-                        onMouseEnter={(e) => {
-                          if (sharedToTeamId !== `item-${item.id}`) {
-                            e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (sharedToTeamId !== `item-${item.id}`) {
-                            e.currentTarget.style.backgroundColor = 'transparent';
-                          }
-                        }}
-                      >
-                        {sharedToTeamId === `item-${item.id}` ? (
-                          <>✓ shared</>
-                        ) : (
-                          <>{sharingToTeam === item.id ? 'sharing...' : 'share'} <KeyCap>t</KeyCap></>
-                        )}
-                      </button>
+                      {/* Share to Team button - hidden when sharing feature is disabled */}
+                      {canShare && (
+                        <button
+                          tabIndex={-1}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            shareToTeam(item.id);
+                          }}
+                          disabled={sharingToTeam === item.id}
+                          style={{
+                            padding: '3px 4px',
+                            fontSize: '9px',
+                            whiteSpace: 'nowrap',
+                            fontWeight: 500,
+                            backgroundColor: sharedToTeamId === `item-${item.id}` 
+                              ? (theme.isDark ? 'rgba(16, 185, 129, 0.2)' : 'rgba(16, 185, 129, 0.15)')
+                              : 'transparent',
+                            color: sharedToTeamId === `item-${item.id}` ? '#10b981' : theme.textSecondary,
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: sharingToTeam === item.id ? 'wait' : 'pointer',
+                            transition: 'background-color 0.3s ease, color 0.3s ease',
+                          }}
+                          onMouseEnter={(e) => {
+                            if (sharedToTeamId !== `item-${item.id}`) {
+                              e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (sharedToTeamId !== `item-${item.id}`) {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                            }
+                          }}
+                        >
+                          {sharedToTeamId === `item-${item.id}` ? (
+                            <>✓ shared</>
+                          ) : (
+                            <>{sharingToTeam === item.id ? 'sharing...' : 'share'} <KeyCap>t</KeyCap></>
+                          )}
+                        </button>
+                      )}
                       {/* DM button - hidden by feature flag */}
                       {FEATURE_MESSAGE_SHORTCUT_ENABLED && (
                         <button
@@ -6028,6 +6088,81 @@ export default function ClipboardHistory() {
                 }}
               >
                 Upgrade
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Sign-in prompt modal - shown when user tries to share without being logged in */}
+      {showSignInPrompt && (
+        <div
+          onClick={() => setShowSignInPrompt(false)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            backdropFilter: 'blur(4px)',
+            WebkitBackdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10002,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: theme.bg,
+              borderRadius: '12px',
+              padding: '24px',
+              maxWidth: '360px',
+              width: '90%',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+              border: `1px solid ${theme.border}`,
+            }}
+          >
+            <h3 style={{ margin: '0 0 12px 0', fontSize: '16px', color: theme.text, fontWeight: '600' }}>
+              Sign In to Share
+            </h3>
+            <p style={{ margin: '0 0 20px 0', fontSize: '13px', color: theme.textSecondary, lineHeight: '1.5' }}>
+              Sign in or create an account to share items with your team.
+            </p>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowSignInPrompt(false)}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '12px',
+                  backgroundColor: 'transparent',
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '6px',
+                  color: theme.textSecondary,
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setShowSignInPrompt(false);
+                  setViewMode('team'); // Navigate to team view which shows sign-in form.
+                }}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '12px',
+                  backgroundColor: theme.accent,
+                  border: 'none',
+                  borderRadius: '6px',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  fontWeight: '500',
+                }}
+              >
+                Sign In
               </button>
             </div>
           </div>
