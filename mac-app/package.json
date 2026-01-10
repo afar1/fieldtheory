@@ -53,6 +53,7 @@
   "build": {
     "appId": "com.fieldtheory.app",
     "productName": "Field Theory",
+    "afterSign": "scripts/notarize.js",
     "publish": {
       "provider": "github",
       "owner": "afar1",

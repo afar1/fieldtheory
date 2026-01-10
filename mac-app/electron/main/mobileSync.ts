@@ -267,31 +267,74 @@ export class MobileSync extends EventEmitter {
       refresh_token: refreshToken,
     });
 
-    // Token expired or invalid - clear session, user will need to sign in again.
-    // This is normal when app hasn't been used for a while.
+    // Token expired or invalid - try to refresh before giving up.
     if (error) {
-      this.lastFailedToken = accessToken;
-      console.log('[MobileSync] Session restore failed (tokens expired), user needs to sign in');
-      this.clearSession();
-      return;
-    }
+      console.log('[MobileSync] Access token expired, attempting to refresh session...');
 
-    // Success - clear the failed token tracker.
-    this.lastFailedToken = null;
-    this.session = data.session;
-    console.log('[MobileSync] Session set for user:', this.session?.user?.email);
+      // Try to refresh the session using the refresh token
+      const refreshResult = await this.supabase.auth.refreshSession({ refresh_token: refreshToken });
+
+      if (refreshResult.error || !refreshResult.data.session) {
+        // Refresh also failed - tokens are truly invalid
+        this.lastFailedToken = accessToken;
+        console.log('[MobileSync] Session refresh failed, user needs to sign in again:', refreshResult.error?.message);
+        this.clearSession();
+        return;
+      }
+
+      // Refresh succeeded! Use the new session
+      console.log('[MobileSync] Session successfully refreshed for user:', refreshResult.data.session.user?.email);
+      this.session = refreshResult.data.session;
+    } else {
+      // Success - clear the failed token tracker.
+      this.lastFailedToken = null;
+      this.session = data.session;
+      console.log('[MobileSync] Session set for user:', this.session?.user?.email);
+    }
 
     // Start periodic sync now that we're authenticated.
     this.startPeriodicSync();
-    
+
     // Setup realtime subscription for instant todo updates.
     this.setupTodoRealtimeSubscription();
 
     // Setup realtime subscription for profile tier changes (subscription status).
     this.setupProfileRealtimeSubscription();
-    
+
     // Fetch current tier from database to sync with any changes made while app was closed.
     this.fetchAndEmitCurrentTier();
+  }
+
+  /**
+   * Attempt to refresh the current session. Called when app becomes active
+   * to ensure tokens are fresh after periods of inactivity.
+   */
+  async refreshSessionIfNeeded(): Promise<void> {
+    if (!this.supabase || !this.session) {
+      return;
+    }
+
+    // Check if token is close to expiration (within 5 minutes)
+    const expiresAt = this.session.expires_at;
+    if (!expiresAt) return;
+
+    const now = Math.floor(Date.now() / 1000);
+    const fiveMinutes = 5 * 60;
+
+    if (expiresAt - now < fiveMinutes) {
+      console.log('[MobileSync] Token expiring soon, refreshing session...');
+
+      const { data, error } = await this.supabase.auth.refreshSession();
+
+      if (error || !data.session) {
+        console.log('[MobileSync] Session refresh failed:', error?.message);
+        this.clearSession();
+        return;
+      }
+
+      this.session = data.session;
+      console.log('[MobileSync] Session refreshed successfully');
+    }
   }
   
   /**
