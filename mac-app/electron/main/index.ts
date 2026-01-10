@@ -3681,6 +3681,13 @@ if (!gotTheLock) {
       // We no longer create the old main/settings window - the app is a background app
       // that primarily operates through the clipboard history window and tray.
       showClipboardHistoryOnActivate();
+
+      // Refresh session if tokens are expiring soon to prevent auto-logout
+      if (mobileSync) {
+        mobileSync.refreshSessionIfNeeded().catch(err => {
+          console.error('[Main] Failed to refresh session on activate:', err);
+        });
+      }
     });
   });
 
