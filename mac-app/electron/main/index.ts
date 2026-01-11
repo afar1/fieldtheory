@@ -1007,9 +1007,11 @@ function setupClipboardIPCHandlers(): void {
           // For terminals: export image to file and put path on clipboard
           const imagePath = await clipboardManager.exportImageToCache(item);
           if (imagePath) {
+            const { obscureHomePath } = require('./clipboardManager');
+            const obscuredPath = obscureHomePath(imagePath);
             const figureRef = item.figureLabel
-              ? `Figure ${item.figureLabel}: ${imagePath}`
-              : imagePath;
+              ? `Figure ${item.figureLabel}: ${obscuredPath}`
+              : obscuredPath;
             clipboard.writeText(figureRef);
           } else {
             console.error('[Main] Failed to export image for terminal paste');
@@ -3443,9 +3445,11 @@ async function initTranscriberSystem(): Promise<void> {
 
                 const imagePath = await clipboardManager.exportImageToCache(tempItem as any);
                 if (imagePath) {
-                  clipboard.writeText(imagePath);
+                  const { obscureHomePath } = require('./clipboardManager');
+                  const obscuredPath = obscureHomePath(imagePath);
+                  clipboard.writeText(obscuredPath);
                   await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-                  console.log('[Main] Super Paste: pasted image path to terminal:', imagePath);
+                  console.log('[Main] Super Paste: pasted image path to terminal:', obscuredPath);
                 }
               } else {
                 // Paste image buffer normally
