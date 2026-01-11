@@ -33,6 +33,19 @@ export function isTerminalApp(bundleId: string | null): boolean {
 }
 
 /**
+ * Replace home directory path with tilde (~) for privacy.
+ * Converts: /Users/username/path/to/file.png
+ * To: ~/path/to/file.png
+ */
+export function obscureHomePath(filePath: string): string {
+  const homeDir = app.getPath('home');
+  if (filePath.startsWith(homeDir)) {
+    return filePath.replace(homeDir, '~');
+  }
+  return filePath;
+}
+
+/**
  * Type of clipboard item.
  */
 export type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
@@ -1069,14 +1082,16 @@ export class ClipboardManager extends EventEmitter {
   /**
    * Capture screenshot and add to clipboard history.
    * When region=true, uses interactive selection (drag to select) like macOS Command+Shift+Control+4.
-   * @param options - Capture options (region, saveToDesktop, figureLabel, figureId)
+   * When fullScreen=true, captures all displays immediately.
+   * When activeWindow=true, captures just the active window.
+   * @param options - Capture options (region, fullScreen, activeWindow, saveToDesktop, figureLabel, figureId)
    * @param stackId - Optional stack ID to group this screenshot with other items
    */
   async captureScreenshot(
-    options: { region?: boolean; saveToDesktop?: boolean; figureLabel?: string; figureId?: string } = {},
+    options: { region?: boolean; fullScreen?: boolean; activeWindow?: boolean; saveToDesktop?: boolean; figureLabel?: string; figureId?: string } = {},
     stackId?: string
   ): Promise<number> {
-    const { region = false, saveToDesktop = false, figureLabel, figureId } = options;
+    const { region = false, fullScreen = false, activeWindow = false, saveToDesktop = false, figureLabel, figureId } = options;
     
     // Debug: Log screen recording permission status to diagnose Tahoe issues.
     const screenPermission = systemPreferences.getMediaAccessStatus('screen');

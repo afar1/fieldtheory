@@ -9,7 +9,7 @@ import { NativeHelper } from './nativeHelper';
 import { ModelManager, ModelSize } from './modelManager';
 import { PreferencesManager } from './preferences';
 import { RecordingOverlay } from './recordingOverlay';
-import { ClipboardManager, ClipboardItem, isTerminalApp } from './clipboardManager';
+import { ClipboardManager, ClipboardItem, isTerminalApp, obscureHomePath } from './clipboardManager';
 import { SoundManager } from './soundManager';
 import { QuotaManager } from './quotaManager';
 import { AudioManager } from './audioManager';
@@ -1200,7 +1200,8 @@ export class TranscriberManager extends EventEmitter {
       if (item.imageData && item.figureLabel) {
         const imagePath = await this.clipboardManager!.exportImageToCache(item);
         if (imagePath) {
-          figurePaths.push(`Figure ${item.figureLabel}: ${imagePath}`);
+          const obscuredPath = obscureHomePath(imagePath);
+          figurePaths.push(`Figure ${item.figureLabel}: ${obscuredPath}`);
         }
       }
     }
@@ -1263,9 +1264,10 @@ export class TranscriberManager extends EventEmitter {
           // For terminals, export image to file and paste path
           const imagePath = await this.clipboardManager!.exportImageToCache(item);
           if (imagePath) {
+            const obscuredPath = obscureHomePath(imagePath);
             const figureRef = item.figureLabel
-              ? `[Figure ${item.figureLabel} - ${imagePath}]`
-              : `[Image - ${imagePath}]`;
+              ? `[Figure ${item.figureLabel} - ${obscuredPath}]`
+              : `[Image - ${obscuredPath}]`;
             clipboard.writeText(figureRef);
             await this.pasteText();
           }
