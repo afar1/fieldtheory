@@ -1,12 +1,36 @@
 import { app, clipboard, globalShortcut, nativeImage, systemPreferences } from 'electron';
 import Database from 'better-sqlite3';
 import path from 'path';
+import fs from 'fs';
 import { exec, spawn, ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import crypto from 'crypto';
 import { EventEmitter } from 'events';
 
 const execAsync = promisify(exec);
+
+/**
+ * Terminal/CLI bundle IDs that don't support image pasting.
+ * For these apps, we need to paste file paths instead of image buffers.
+ */
+const TERMINAL_BUNDLE_IDS = new Set([
+  'com.apple.Terminal',
+  'com.googlecode.iterm2',
+  'com.microsoft.VSCode',
+  'dev.warp.Warp-Stable',
+  'co.zeit.hyper',
+  'com.github.wez.wezterm',
+  'io.alacritty',
+  'org.vim.MacVim',
+]);
+
+/**
+ * Check if a bundle ID belongs to a terminal/CLI application.
+ */
+export function isTerminalApp(bundleId: string | null): boolean {
+  if (!bundleId) return false;
+  return TERMINAL_BUNDLE_IDS.has(bundleId);
+}
 
 /**
  * Type of clipboard item.
@@ -1758,6 +1782,54 @@ export class ClipboardManager extends EventEmitter {
           )
         `).run(toDelete);
       }
+    }
+  }
+
+  /**
+   * Export an image from the database to the figures cache directory.
+   * Returns the file path to the exported image.
+   * Uses lazy caching: only exports if file doesn't already exist.
+   */
+  async exportImageToCache(item: ClipboardItem): Promise<string | null> {
+    if (!item.imageData) {
+      console.warn('[ClipboardManager] Cannot export item without image data');
+      return null;
+    }
+
+    // Create cache directory if it doesn't exist
+    const cacheDir = path.join(app.getPath('userData'), 'figures');
+    if (!fs.existsSync(cacheDir)) {
+      fs.mkdirSync(cacheDir, { recursive: true });
+    }
+
+    // Generate filename based on figure label and ID
+    let filename: string;
+    if (item.figureLabel && item.figureId) {
+      filename = `figure-${item.figureLabel}-${item.figureId}.png`;
+    } else {
+      // Fallback for items without figure labels
+      filename = `image-${item.id}-${Date.now()}.png`;
+    }
+
+    const filePath = path.join(cacheDir, filename);
+
+    // Check if file already exists (lazy cache)
+    if (fs.existsSync(filePath)) {
+      return filePath;
+    }
+
+    // Export image data to file
+    try {
+      const imageBuffer = typeof item.imageData === 'string'
+        ? Buffer.from(item.imageData, 'base64')
+        : item.imageData;
+
+      fs.writeFileSync(filePath, imageBuffer);
+      console.log('[ClipboardManager] Exported image to:', filePath);
+      return filePath;
+    } catch (error) {
+      console.error('[ClipboardManager] Failed to export image:', error);
+      return null;
     }
   }
 
