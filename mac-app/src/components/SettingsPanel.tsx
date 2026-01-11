@@ -1009,7 +1009,25 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             )}
           </div>
         </div>
-        
+
+        {/* Super Paste - Smart context-aware paste */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>
+            Super Paste
+            <span style={{ marginLeft: '8px', fontSize: '10px', color: theme.textSecondary }}>
+              (pastes last stack or smart clipboard)
+            </span>
+          </span>
+          <div style={styles.rowControls}>
+            <button
+              disabled
+              style={{ ...styles.btn, opacity: 0.7, cursor: 'default' }}
+            >
+              ⌘⇧V
+            </button>
+          </div>
+        </div>
+
         {/* Sounds toggle moved to Audio section */}
         
         {/* Show in Dock - WIP feature, disabled for now */}
