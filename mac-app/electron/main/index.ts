@@ -985,31 +985,56 @@ function setupClipboardIPCHandlers(): void {
         console.error('[Main] pasteItem: item not found', id);
         return;
       }
-      
+
+      // Determine the target bundle ID for terminal detection
+      let effectiveBundleId: string | null = targetBundleId || null;
+      if (!effectiveBundleId && clipboardHistoryWindow) {
+        const previousApp = clipboardHistoryWindow.getPreviousApp();
+        effectiveBundleId = previousApp?.bundleId || null;
+      }
+
+      // Check if target is a terminal
+      const { isTerminalApp } = require('./clipboardManager');
+      const isTerminal = isTerminalApp(effectiveBundleId);
+
       // Put content on clipboard first.
       if (item.type === 'text' || item.type === 'transcript') {
         clipboard.writeText(item.content || '');
       } else if (item.imageData) {
-        const { nativeImage } = require('electron');
-        // item.imageData is already a base64 string from IPC serialization
-        const imageBuffer = typeof item.imageData === 'string' 
-          ? Buffer.from(item.imageData, 'base64')
-          : item.imageData;
-        const image = nativeImage.createFromBuffer(imageBuffer);
-        clipboard.writeImage(image);
+        if (isTerminal) {
+          // For terminals: export image to file and put path on clipboard
+          const imagePath = await clipboardManager.exportImageToCache(item);
+          if (imagePath) {
+            const figureRef = item.figureLabel
+              ? `Figure ${item.figureLabel}: ${imagePath}`
+              : imagePath;
+            clipboard.writeText(figureRef);
+          } else {
+            console.error('[Main] Failed to export image for terminal paste');
+            return;
+          }
+        } else {
+          // For non-terminals: put image buffer on clipboard as before
+          const { nativeImage } = require('electron');
+          const imageBuffer = typeof item.imageData === 'string'
+            ? Buffer.from(item.imageData, 'base64')
+            : item.imageData;
+          const image = nativeImage.createFromBuffer(imageBuffer);
+          clipboard.writeImage(image);
+        }
       }
-      
+
       clipboardManager.syncClipboardHash();
-      
+
       // Hide window first.
       if (clipboardHistoryWindow) {
         clipboardHistoryWindow.hide(); // This includes app.hide() to restore focus
       }
-      
+
       const { exec } = require('child_process');
       const { promisify } = require('util');
       const execAsync = promisify(exec);
-      
+
       // If a specific target app was provided, activate it and paste there.
       // Otherwise, use the default behavior (paste to previous app).
       if (targetBundleId && clipboardHistoryWindow) {

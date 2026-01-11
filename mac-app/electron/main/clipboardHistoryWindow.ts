@@ -725,6 +725,13 @@ export class ClipboardHistoryWindow {
   }
 
   /**
+   * Get the previous app (the app that was active before showing clipboard history).
+   */
+  getPreviousApp(): RunningApp | null {
+    return this.previousApp;
+  }
+
+  /**
    * Set the target app for pasting.
    */
   setTargetApp(app: RunningApp | null): void {

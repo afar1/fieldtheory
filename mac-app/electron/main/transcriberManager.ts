@@ -9,7 +9,7 @@ import { NativeHelper } from './nativeHelper';
 import { ModelManager, ModelSize } from './modelManager';
 import { PreferencesManager } from './preferences';
 import { RecordingOverlay } from './recordingOverlay';
-import { ClipboardManager, ClipboardItem } from './clipboardManager';
+import { ClipboardManager, ClipboardItem, isTerminalApp } from './clipboardManager';
 import { SoundManager } from './soundManager';
 import { QuotaManager } from './quotaManager';
 import { AudioManager } from './audioManager';
@@ -1007,18 +1007,10 @@ export class TranscriberManager extends EventEmitter {
   }
   
   /**
-   * Generate a figure label from an index (0 = A, 1 = B, ..., 25 = Z, 26 = AA, etc.)
+   * Generate a figure label from an index (0 = 1, 1 = 2, 2 = 3, etc.)
    */
   private generateFigureLabel(index: number): string {
-    let label = '';
-    let remaining = index;
-    
-    do {
-      label = String.fromCharCode(65 + (remaining % 26)) + label;
-      remaining = Math.floor(remaining / 26) - 1;
-    } while (remaining >= 0);
-    
-    return label;
+    return String(index + 1);
   }
   
   /**
@@ -1177,17 +1169,62 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
+   * Check if the frontmost application is a terminal/CLI.
+   */
+  private async isFrontmostAppTerminal(): Promise<boolean> {
+    try {
+      const script = `
+        tell application "System Events"
+          set frontApp to first application process whose frontmost is true
+          return (bundle identifier of frontApp)
+        end tell
+      `;
+      const { stdout } = await execAsync(`osascript -e '${script}'`);
+      const bundleId = stdout.trim();
+      return isTerminalApp(bundleId);
+    } catch (error) {
+      console.error('[TranscriberManager] Failed to get frontmost app:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Append figure file paths at the end of text (scientific paper format).
+   * Exports images to cache and adds a "Figures:" section with paths.
+   */
+  private async addImagePathsToText(text: string, items: ClipboardItem[]): Promise<string> {
+    const figurePaths: string[] = [];
+
+    // Find all image items and export them
+    for (const item of items) {
+      if (item.imageData && item.figureLabel) {
+        const imagePath = await this.clipboardManager!.exportImageToCache(item);
+        if (imagePath) {
+          figurePaths.push(`Figure ${item.figureLabel}: ${imagePath}`);
+        }
+      }
+    }
+
+    // If we have figures, append them in scientific paper format
+    if (figurePaths.length > 0) {
+      return `${text}\n\nFigures:\n${figurePaths.join('\n')}`;
+    }
+
+    return text;
+  }
+
+  /**
    * Paste all items in the current stack.
    * Pastes text and images sequentially with delays between each.
    * Skips paste if sketch mode is active to avoid pasting into Excalidraw.
    */
   async pasteStack(): Promise<void> {
     const sketchModeActive = this.sketchModeChecker?.() ?? false;
-    
+
     if (!this.clipboardManager || this.currentStack.length === 0) {
       return;
     }
-    
+
     // Skip paste if draw canvas is open - user can manually Cmd+V if needed.
     if (sketchModeActive) {
       console.log('[TranscriberManager] Sketch mode active, skipping auto-paste');
@@ -1203,19 +1240,43 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
+    // Detect if frontmost app is a terminal/CLI
+    const isTerminal = await this.isFrontmostAppTerminal();
+    console.log('[TranscriberManager] Frontmost app is terminal:', isTerminal);
+
     // Paste in chronological order: oldest first (top), newest last (bottom).
     // This preserves the natural flow of conversation/context building.
     for (const item of items) {
       if (item.type === 'text' || item.type === 'transcript') {
-        clipboard.writeText(item.content || '');
+        let textContent = item.content || '';
+
+        // For terminals, replace figure references with file paths
+        if (isTerminal && this.currentStack.length > 1) {
+          textContent = await this.addImagePathsToText(textContent, items);
+        }
+
+        clipboard.writeText(textContent);
         await this.pasteText();
       } else if (item.imageData) {
-        const imageBuffer = typeof item.imageData === 'string'
-          ? Buffer.from(item.imageData, 'base64')
-          : item.imageData;
-        const image = nativeImage.createFromBuffer(imageBuffer);
-        clipboard.writeImage(image);
-        await this.pasteText();
+        if (isTerminal) {
+          // For terminals, export image to file and paste path
+          const imagePath = await this.clipboardManager!.exportImageToCache(item);
+          if (imagePath) {
+            const figureRef = item.figureLabel
+              ? `[Figure ${item.figureLabel} - ${imagePath}]`
+              : `[Image - ${imagePath}]`;
+            clipboard.writeText(figureRef);
+            await this.pasteText();
+          }
+        } else {
+          // For non-terminals, paste image buffer as before
+          const imageBuffer = typeof item.imageData === 'string'
+            ? Buffer.from(item.imageData, 'base64')
+            : item.imageData;
+          const image = nativeImage.createFromBuffer(imageBuffer);
+          clipboard.writeImage(image);
+          await this.pasteText();
+        }
       }
       await new Promise(resolve => setTimeout(resolve, 100));
     }
