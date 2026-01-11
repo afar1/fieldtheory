@@ -9,6 +9,18 @@ import { useTheme } from '../contexts/ThemeContext';
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.33': [
+    'Renamed Commands to Popular Commands with admin delete controls',
+    'Improved release notes popup with hover delay and positioning',
+    'Fixed Settings page loading and TypeScript errors',
+    'Version number shows "Check for updates" on hover',
+  ],
+  '0.1.32': [
+    'Added full screen (⌘3) and active window (⌘⇧3) screenshot hotkeys',
+    'Fixed inline [Figure X] references in transcripts with multiple screenshots',
+    'Screenshots now use readable macOS-style filenames',
+    'Paths shown as ~/field-theory/ for cleaner appearance',
+  ],
   '0.1.31': [
     'Hot Mic messaging for real-time team communication',
     'Data policy notices showing where your data is stored',
@@ -21,17 +33,28 @@ const RELEASE_NOTES: Record<string, string[]> = {
   ],
 };
 
+// Release dates for each version (format: 'Jan 10 2026')
+const RELEASE_DATES: Record<string, string> = {
+  '0.1.33': 'Jan 10 2026',
+  '0.1.32': 'Jan 10 2026',
+  '0.1.31': 'Dec 15 2025',
+  '0.1.30': 'Dec 1 2025',
+};
+
 interface ReleaseNotesPopupProps {
   currentVersion: string;
   onDismiss: () => void;
+  // When true, shows "Latest" instead of "What's new" (for uptodate/hover cases).
+  isLatestMode?: boolean;
 }
 
-export default function ReleaseNotesPopup({ currentVersion, onDismiss }: ReleaseNotesPopupProps) {
+export default function ReleaseNotesPopup({ currentVersion, onDismiss, isLatestMode = false }: ReleaseNotesPopupProps) {
   const { theme } = useTheme();
   const [isVisible, setIsVisible] = useState(true);
   const [isClosing, setIsClosing] = useState(false);
 
   const notes = RELEASE_NOTES[currentVersion] || [];
+  const releaseDate = RELEASE_DATES[currentVersion] || '';
 
   // If no notes for this version, don't show anything.
   if (notes.length === 0) {
@@ -54,49 +77,64 @@ export default function ReleaseNotesPopup({ currentVersion, onDismiss }: Release
     <div
       style={{
         position: 'fixed',
-        bottom: '16px',
-        left: '16px',
+        bottom: '40px',
+        right: '8px',
         width: '280px',
         backgroundColor: theme.isDark ? '#1a1a1a' : '#ffffff',
         border: `1px solid ${theme.border}`,
         borderRadius: '12px',
-        boxShadow: theme.isDark 
-          ? '0 8px 32px rgba(0,0,0,0.5)' 
+        boxShadow: theme.isDark
+          ? '0 8px 32px rgba(0,0,0,0.5)'
           : '0 8px 32px rgba(0,0,0,0.15)',
         padding: '16px',
         zIndex: 10000,
         opacity: isClosing ? 0 : 1,
         transform: isClosing ? 'translateY(10px)' : 'translateY(0)',
-        transition: 'opacity 0.2s ease, transform 0.2s ease',
+        transition: 'opacity 0.3s ease, transform 0.3s ease',
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       }}
     >
       {/* Header with version and dismiss button */}
       <div style={{
         display: 'flex',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         justifyContent: 'space-between',
         marginBottom: '12px',
       }}>
         <div style={{
           display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
+          flexDirection: 'column',
+          gap: '2px',
         }}>
-          <span style={{
-            fontSize: '14px',
-            fontWeight: 600,
-            color: theme.text,
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
           }}>
-            v{currentVersion}
-          </span>
-          <span style={{
-            fontSize: '11px',
-            color: theme.textSecondary,
-            fontWeight: 400,
-          }}>
-            What's new
-          </span>
+            <span style={{
+              fontSize: '14px',
+              fontWeight: 600,
+              color: theme.text,
+            }}>
+              v{currentVersion}
+            </span>
+            <span style={{
+              fontSize: '11px',
+              color: isLatestMode ? '#22c55e' : theme.textSecondary,
+              fontWeight: 400,
+            }}>
+              {isLatestMode ? 'Latest' : "What's new"}
+            </span>
+          </div>
+          {releaseDate && (
+            <span style={{
+              fontSize: '10px',
+              color: theme.textSecondary,
+              fontWeight: 400,
+            }}>
+              Released {releaseDate}
+            </span>
+          )}
         </div>
         <button
           onClick={handleDismiss}
