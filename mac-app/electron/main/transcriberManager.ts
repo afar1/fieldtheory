@@ -1217,8 +1217,9 @@ export class TranscriberManager extends EventEmitter {
    * Paste all items in the current stack.
    * Pastes text and images sequentially with delays between each.
    * Skips paste if sketch mode is active to avoid pasting into Excalidraw.
+   * @param clearAfter - Whether to clear the stack after pasting (default: true for auto-paste, false for manual)
    */
-  async pasteStack(): Promise<void> {
+  async pasteStack(clearAfter: boolean = true): Promise<void> {
     const sketchModeActive = this.sketchModeChecker?.() ?? false;
 
     if (!this.clipboardManager || this.currentStack.length === 0) {
@@ -1281,7 +1282,9 @@ export class TranscriberManager extends EventEmitter {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
 
-    this.clearStack();
+    if (clearAfter) {
+      this.clearStack();
+    }
   }
 
   async separateIntoTasks(transcriptId: number): Promise<void> {
