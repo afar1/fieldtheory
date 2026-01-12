@@ -14,6 +14,11 @@ import { SoundManager } from './soundManager';
 import { QuotaManager } from './quotaManager';
 import { AudioManager } from './audioManager';
 import { CursorStatusManager } from './cursorStatusManager';
+import { improveTranscript, setApiKey as setEngineerApiKey } from './promptEngineer';
+
+// Feature flag for live transcript improvement.
+// When enabled, users can trigger AI improvement by ending recording with a different hotkey than started.
+const FEATURE_IMPROVE_ENABLED = true;
 
 const execAsync = promisify(exec);
 
@@ -90,6 +95,10 @@ export class TranscriberManager extends EventEmitter {
   private audioManager: AudioManager | null = null;
   private cursorStatusManager: CursorStatusManager | null = null;
   private recordingStartTime: number = 0;
+  
+  // Track which hotkey started recording for cross-hotkey improvement trigger.
+  // If user starts with primary and ends with secondary (or vice versa), trigger improvement.
+  private startedWithSecondaryHotkey: boolean = false;
 
   constructor(nativeHelper: NativeHelper, preferences: PreferencesManager, clipboardManager?: ClipboardManager, quotaManager?: QuotaManager, audioManager?: AudioManager, cursorStatusManager?: CursorStatusManager) {
     super();
@@ -299,9 +308,9 @@ export class TranscriberManager extends EventEmitter {
       globalShortcut.unregister(normalizedHotkey);
     }
 
-    // Register new hotkey
+    // Register new hotkey (primary = isSecondary false)
     const registered = globalShortcut.register(normalizedHotkey, () => {
-      this.handleHotkeyPress();
+      this.handleHotkeyPress(false);
     });
 
     if (!registered) {
@@ -370,9 +379,9 @@ export class TranscriberManager extends EventEmitter {
       globalShortcut.unregister(normalizedHotkey);
     }
 
-    // Register secondary hotkey with the same handler as primary
+    // Register secondary hotkey (isSecondary = true)
     const registered = globalShortcut.register(normalizedHotkey, () => {
-      this.handleHotkeyPress();
+      this.handleHotkeyPress(true);
     });
 
     if (!registered) {
@@ -434,17 +443,22 @@ export class TranscriberManager extends EventEmitter {
    * Called from tray menu or other external triggers.
    */
   async toggleRecording(): Promise<void> {
-    await this.handleHotkeyPress();
+    await this.handleHotkeyPress(false);
   }
 
   /**
    * Handle hotkey press - toggle recording.
+   * @param isSecondary - True if triggered by secondary hotkey, false for primary
    */
-  private async handleHotkeyPress(): Promise<void> {
+  private async handleHotkeyPress(isSecondary: boolean): Promise<void> {
     if (this.status === 'idle') {
+      this.startedWithSecondaryHotkey = isSecondary;
       await this.startRecording();
     } else if (this.status === 'recording') {
-      await this.stopRecordingAndTranscribe();
+      // Determine if improvement should be triggered.
+      // Improvement triggers when: both hotkeys are configured AND ended with different hotkey than started.
+      const shouldImprove = this.secondaryHotkey !== null && isSecondary !== this.startedWithSecondaryHotkey;
+      await this.stopRecordingAndTranscribe(shouldImprove);
     }
     // Ignore if transcribing
   }
@@ -507,8 +521,9 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Stop recording and transcribe the audio.
+   * @param shouldImprove - If true, run AI improvement on the transcript after transcription
    */
-  private async stopRecordingAndTranscribe(): Promise<void> {
+  private async stopRecordingAndTranscribe(shouldImprove: boolean = false): Promise<void> {
     if (this.status !== 'recording') {
       console.warn('[TranscriberManager] Cannot stop recording - not recording');
       return;
@@ -638,10 +653,61 @@ export class TranscriberManager extends EventEmitter {
       
       this.lastTranscription = cleanedText;
       
-      // Paste first, check accessibility in parallel for UI feedback
+      // If improvement was triggered (cross-hotkey), run AI improvement on the transcript.
+      let finalText = cleanedText;
+      let improvedText: string | null = null;
+      
+      if (shouldImprove && FEATURE_IMPROVE_ENABLED && this.clipboardManager) {
+        // Check quota before calling AI.
+        const quotaCheck = this.quotaManager?.checkQuota('textImprove');
+        if (quotaCheck && !quotaCheck.allowed) {
+          console.log('[TranscriberManager] Text improve quota exhausted');
+          this.cursorStatusManager?.showCriticalMessage('Improvement quota exhausted');
+        } else {
+          // Set API key from preferences if available.
+          const apiKey = this.preferences.getApiKey();
+          if (apiKey) {
+            setEngineerApiKey(apiKey);
+            
+            // Show improving state.
+            this.cursorStatusManager?.setState('improving');
+            
+            console.log('[TranscriberManager] Running AI improvement on transcript...');
+            const result = await improveTranscript(cleanedText);
+            
+            if (result.success && result.refinedPrompt) {
+              improvedText = result.refinedPrompt;
+              finalText = improvedText;
+              console.log('[TranscriberManager] Transcript improved successfully');
+              
+              // Track quota usage.
+              await this.quotaManager?.incrementTextImprove();
+              
+              // Save improved content to the transcript item in the database.
+              // The transcript item is the last one added to currentStack.
+              const transcriptItemId = this.currentStack[this.currentStack.length - 1];
+              if (transcriptItemId) {
+                this.clipboardManager.saveImprovedContent(transcriptItemId, improvedText);
+              }
+            } else {
+              console.error('[TranscriberManager] Improvement failed:', result.error);
+              this.cursorStatusManager?.showCriticalMessage('Failed to improve');
+              // Fall back to original transcript - don't block paste.
+            }
+          } else {
+            console.log('[TranscriberManager] No API key configured for improvement');
+            this.cursorStatusManager?.showCriticalMessage('API key not configured');
+          }
+        }
+      }
+      
+      // Update lastTranscription with the final text (improved or original).
+      this.lastTranscription = finalText;
+      
+      // Paste, check accessibility in parallel for UI feedback.
       const accessibilityCheckPromise = this.nativeHelper.checkFocusedTextInput();
       await this.pasteStack();
-      this.emit('result', cleanedText);
+      this.emit('result', finalText);
       
       // Set status to idle BEFORE emitting paste events.
       // This prevents the idle transition from overriding paste-failed UI.
@@ -1423,10 +1489,13 @@ export class TranscriberManager extends EventEmitter {
     // This preserves the natural flow of conversation/context building.
     for (const item of items) {
       if (item.type === 'text' || item.type === 'transcript') {
-        let textContent = item.content || '';
+        // Use improved content if available and toggle is set.
+        let textContent = (item.useImprovedVersion && item.improvedContent)
+          ? item.improvedContent
+          : (item.content || '');
 
-        // Append figure paths at the end for terminals when there are multiple items
-        // Non-terminals get inline [Figure X] refs without the file path list
+        // Append figure paths at the end for terminals when there are multiple items.
+        // Non-terminals get inline [Figure X] refs without the file path list.
         if (this.currentStack.length > 1 && isTerminal) {
           textContent = await this.addImagePathsToText(textContent, items);
         }

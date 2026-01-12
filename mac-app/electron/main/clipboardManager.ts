@@ -79,6 +79,7 @@ export interface ClipboardItem {
   type: ClipboardItemType;
   content: string | null;
   improvedContent: string | null; // Improved version from Engineer feature
+  useImprovedVersion: boolean; // Toggle between improved and original text
   imageData: Buffer | null;
   thumbnailData: Buffer | null; // Small preview image (~10KB) for list view
   imageWidth: number | null;
@@ -309,6 +310,14 @@ export class ClipboardManager extends EventEmitter {
     this.runMigration('add_improved_content', () => {
       this.db.exec(`
         ALTER TABLE clipboard_items ADD COLUMN improved_content TEXT;
+      `);
+    });
+
+    // Migration: Add use_improved_version column for toggling between improved and original text.
+    // Defaults to 1 (true) so improved content is used by default when available.
+    this.runMigration('add_use_improved_version', () => {
+      this.db.exec(`
+        ALTER TABLE clipboard_items ADD COLUMN use_improved_version INTEGER DEFAULT 1;
       `);
     });
 
@@ -740,7 +749,7 @@ export class ClipboardManager extends EventEmitter {
     const { type, search, limit = 50, offset = 0, source } = options;
 
     // Use thumbnail for display; exclude large image_data from list queries.
-    let query = `SELECT id, type, content, improved_content, 
+    let query = `SELECT id, type, content, improved_content, use_improved_version,
       CASE 
         WHEN thumbnail_data IS NOT NULL THEN NULL 
         WHEN length(image_data) > 102400 THEN NULL 
@@ -809,6 +818,7 @@ export class ClipboardManager extends EventEmitter {
       type: row.type,
       content: row.content,
       improvedContent: row.improved_content || null,
+      useImprovedVersion: row.use_improved_version === 1,
       imageData: row.image_data ? Buffer.from(row.image_data) : null,
       thumbnailData: row.thumbnail_data ? Buffer.from(row.thumbnail_data) : null,
       imageWidth: row.image_width,
@@ -846,6 +856,7 @@ export class ClipboardManager extends EventEmitter {
       type: row.type,
       content: row.content,
       improvedContent: row.improved_content || null,
+      useImprovedVersion: row.use_improved_version === 1,
       imageData: row.image_data ? Buffer.from(row.image_data) : null,
       thumbnailData: row.thumbnail_data ? Buffer.from(row.thumbnail_data) : null,
       imageWidth: row.image_width,
@@ -949,6 +960,7 @@ export class ClipboardManager extends EventEmitter {
       type: row.type,
       content: row.content,
       improvedContent: row.improved_content || null,
+      useImprovedVersion: row.use_improved_version === 1,
       imageData: row.image_data ? Buffer.from(row.image_data) : null,
       thumbnailData: row.thumbnail_data ? Buffer.from(row.thumbnail_data) : null,
       imageWidth: row.image_width,
@@ -1129,6 +1141,16 @@ export class ClipboardManager extends EventEmitter {
     const stmt = this.db.prepare('UPDATE clipboard_items SET improved_content = NULL WHERE id = ?');
     stmt.run(itemId);
     console.log(`[ClipboardManager] Cleared improved content for item ${itemId}`);
+  }
+
+  /**
+   * Set whether to use the improved version of content for an item.
+   * When true, improved content is used for pasting; when false, original content is used.
+   */
+  setUseImprovedVersion(itemId: number, useImproved: boolean): void {
+    const stmt = this.db.prepare('UPDATE clipboard_items SET use_improved_version = ? WHERE id = ?');
+    stmt.run(useImproved ? 1 : 0, itemId);
+    console.log(`[ClipboardManager] Set use_improved_version=${useImproved} for item ${itemId}`);
   }
 
   /**

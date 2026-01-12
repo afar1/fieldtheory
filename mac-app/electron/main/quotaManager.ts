@@ -14,10 +14,12 @@ const TIER_LIMITS = {
   free: {
     priorityMicMinutes: 500,
     autoStackSessions: 50,
+    textImprovements: 15,
   },
   pro: {
     priorityMicMinutes: Infinity,
     autoStackSessions: Infinity,
+    textImprovements: Infinity,
   },
 } as const;
 
@@ -38,7 +40,7 @@ export interface QuotaCheckResult {
   allowed: boolean;
   used: number;
   limit: number;
-  feature: 'priorityMic' | 'autoStack';
+  feature: 'priorityMic' | 'autoStack' | 'textImprove';
 }
 
 /**
@@ -122,11 +124,17 @@ export class QuotaManager extends EventEmitter {
         period: currentPeriod,
         priorityMicSecondsUsed: 0,
         autoStackSessionsUsed: 0,
+        textImprovementsUsed: 0,
         cachedTier: stored?.cachedTier || 'free',
         cachedTierUpdatedAt: stored?.cachedTierUpdatedAt || new Date().toISOString(),
       };
       this.saveQuotas(fresh);
       return fresh;
+    }
+    
+    // Handle migration from older quota format without textImprovementsUsed.
+    if (stored.textImprovementsUsed === undefined) {
+      stored.textImprovementsUsed = 0;
     }
 
     return stored;
@@ -257,16 +265,58 @@ export class QuotaManager extends EventEmitter {
   }
 
   // ---------------------------------------------------------------------------
+  // Text improvement quota
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Increment text improvement count.
+   * Call once per AI text improvement.
+   */
+  async incrementTextImprove(): Promise<void> {
+    // Pro users don't consume quota.
+    if (this.getEffectiveTier() === 'pro') return;
+
+    // Check for month rollover before incrementing.
+    this.checkAndResetIfNeeded();
+
+    await this.saveQuotas({
+      ...this.quotas,
+      textImprovementsUsed: this.quotas.textImprovementsUsed + 1,
+    });
+
+    this.emit('quotaChanged', this.getQuotas());
+  }
+
+  /**
+   * Get text improvement quota status.
+   */
+  getTextImproveStatus(): QuotaStatus {
+    const tier = this.getEffectiveTier();
+    const limit = TIER_LIMITS[tier].textImprovements;
+    const used = this.quotas.textImprovementsUsed;
+    const remaining = isUnlimited(limit) ? Infinity : Math.max(0, limit - used);
+
+    return {
+      used,
+      limit,
+      remaining,
+      allowed: isUnlimited(limit) || used < limit,
+      percentUsed: isUnlimited(limit) ? 0 : Math.min(100, (used / limit) * 100),
+    };
+  }
+
+  // ---------------------------------------------------------------------------
   // Combined quota access
   // ---------------------------------------------------------------------------
 
   /**
-   * Get both quotas at once, plus the current tier.
+   * Get all quotas at once, plus the current tier.
    */
-  getQuotas(): { priorityMic: QuotaStatus; autoStack: QuotaStatus; tier: UserTier } {
+  getQuotas(): { priorityMic: QuotaStatus; autoStack: QuotaStatus; textImprove: QuotaStatus; tier: UserTier } {
     return {
       priorityMic: this.getPriorityMicStatus(),
       autoStack: this.getAutoStackStatus(),
+      textImprove: this.getTextImproveStatus(),
       tier: this.getEffectiveTier(),
     };
   }
@@ -274,10 +324,15 @@ export class QuotaManager extends EventEmitter {
   /**
    * Check if a specific quota is exhausted.
    */
-  checkQuota(feature: 'priorityMic' | 'autoStack'): QuotaCheckResult {
-    const status = feature === 'priorityMic' 
-      ? this.getPriorityMicStatus() 
-      : this.getAutoStackStatus();
+  checkQuota(feature: 'priorityMic' | 'autoStack' | 'textImprove'): QuotaCheckResult {
+    let status: QuotaStatus;
+    if (feature === 'priorityMic') {
+      status = this.getPriorityMicStatus();
+    } else if (feature === 'autoStack') {
+      status = this.getAutoStackStatus();
+    } else {
+      status = this.getTextImproveStatus();
+    }
 
     return {
       allowed: status.allowed,
@@ -298,6 +353,7 @@ export class QuotaManager extends EventEmitter {
         period: currentPeriod,
         priorityMicSecondsUsed: 0,
         autoStackSessionsUsed: 0,
+        textImprovementsUsed: 0,
       };
     }
   }
@@ -330,6 +386,18 @@ export class QuotaManager extends EventEmitter {
       return `${status.used} of ∞ auto-stacks`;
     }
     return `${status.used} of ${status.limit} auto-stacks`;
+  }
+
+  /**
+   * Format text improvement usage for display.
+   * Returns "3 of 15 improvements" or "3 of ∞ improvements".
+   */
+  formatTextImproveUsage(): string {
+    const status = this.getTextImproveStatus();
+    if (isUnlimited(status.limit)) {
+      return `${status.used} of ∞ improvements`;
+    }
+    return `${status.used} of ${status.limit} improvements`;
   }
 
   /**

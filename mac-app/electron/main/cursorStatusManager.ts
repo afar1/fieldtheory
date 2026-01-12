@@ -7,11 +7,12 @@ import path from 'path';
  * - idle: No indicator shown
  * - recording: Red pulsing dot with "Say anything" label
  * - transcribing: Purple dot, "Transcribing..." text when cursor is still
+ * - improving: Blue dot, "improving..." text during AI improvement
  * - done: Green dot with "Pasted", shown briefly after transcribing completes
  * - confirmation: Red pulsing dot with countdown, awaiting abandon/continue decision
  * - paste-failed: Orange dot, shows transcription then "Saved to Field Theory"
  */
-export type CursorStatusState = 'idle' | 'recording' | 'transcribing' | 'done' | 'confirmation' | 'paste-failed';
+export type CursorStatusState = 'idle' | 'recording' | 'transcribing' | 'improving' | 'done' | 'confirmation' | 'paste-failed';
 
 /**
  * Manages the cursor-following status indicator overlay.
@@ -208,10 +209,11 @@ export class CursorStatusManager extends EventEmitter {
     }
     
     const wasTranscribing = this.state === 'transcribing';
+    const wasImproving = this.state === 'improving';
     const isActive = state !== 'idle';
     
-    // When transcribing finishes, show 'done' briefly before hiding
-    if (wasTranscribing && state === 'idle' && this.enabled) {
+    // When transcribing or improving finishes, show 'done' briefly before hiding
+    if ((wasTranscribing || wasImproving) && state === 'idle' && this.enabled) {
       this.state = 'done';
       this.updateWindowSize('done');
       this.sendStateToRenderer('done');

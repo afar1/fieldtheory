@@ -1066,7 +1066,10 @@ function setupClipboardIPCHandlers(): void {
 
       // Put content on clipboard first.
       if (item.type === 'text' || item.type === 'transcript') {
-        let textContent = item.content || '';
+        // Use improved content if available and toggle is set.
+        let textContent = (item.useImprovedVersion && item.improvedContent)
+          ? item.improvedContent
+          : (item.content || '');
 
         // If this item belongs to a stack, append the figure list
         if (item.stackId) {
@@ -1263,7 +1266,10 @@ function setupClipboardIPCHandlers(): void {
       for (const item of items) {
         try {
           if (item.type === 'text' || item.type === 'transcript') {
-            let textContent = item.content || '';
+            // Use improved content if available and toggle is set.
+            let textContent = (item.useImprovedVersion && item.improvedContent)
+              ? item.improvedContent
+              : (item.content || '');
             
             // Only add figure paths for terminals (non-terminals get actual images).
             if (items.length > 1 && isTerminal) {
@@ -1752,6 +1758,23 @@ function setupClipboardIPCHandlers(): void {
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to clear improved content',
+      };
+    }
+  });
+
+  // Toggle between improved and original text for an item.
+  ipcMain.handle(ClipboardIPCChannels.SET_USE_IMPROVED_VERSION, async (_event, itemId: number, useImproved: boolean) => {
+    try {
+      if (!clipboardManager) {
+        return { success: false, error: 'Clipboard manager not initialized' };
+      }
+      clipboardManager.setUseImprovedVersion(itemId, useImproved);
+      return { success: true };
+    } catch (error) {
+      console.error('[Main] setUseImprovedVersion error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to set use improved version',
       };
     }
   });

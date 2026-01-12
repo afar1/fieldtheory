@@ -160,6 +160,7 @@ interface ClipboardItem {
   type: ClipboardItemType;
   content: string | null;
   improvedContent: string | null; // Improved version from Engineer feature
+  useImprovedVersion: boolean; // Toggle between improved and original text
   imageData: string | null;
   imageWidth: number | null;
   imageHeight: number | null;
@@ -309,6 +310,7 @@ interface ClipboardAPI {
   // Improved content management - store/clear improved versions of transcriptions
   saveImprovedContent?: (itemId: number, improvedContent: string) => Promise<{ success: boolean; error?: string }>;
   clearImprovedContent?: (itemId: number) => Promise<{ success: boolean; error?: string }>;
+  setUseImprovedVersion?: (itemId: number, useImproved: boolean) => Promise<{ success: boolean; error?: string }>;
   
   // Mobile sync operations - sync iOS transcriptions to clipboard history
   setSyncSession?: (accessToken: string, refreshToken: string) => Promise<boolean>;

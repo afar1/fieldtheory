@@ -5,13 +5,14 @@
 
 import { useEffect, useState, useRef } from 'react';
 
-type StatusState = 'idle' | 'recording' | 'transcribing' | 'done' | 'confirmation' | 'paste-failed';
+type StatusState = 'idle' | 'recording' | 'transcribing' | 'improving' | 'done' | 'confirmation' | 'paste-failed';
 
 // Colors for each state
 const STATE_COLORS: Record<StatusState, string> = {
   idle: 'transparent',
   recording: '#ff3b30',      // Red
   transcribing: '#af52de',   // Purple
+  improving: '#007aff',      // Blue - distinct from purple/green
   done: '#34c759',           // Green
   confirmation: '#ff3b30',   // Red (still recording)
   'paste-failed': '#ff9500', // Orange
@@ -22,6 +23,7 @@ const STATE_GLOWS: Record<StatusState, string> = {
   idle: 'transparent',
   recording: 'rgba(255, 59, 48, 0.5)',
   transcribing: 'rgba(175, 82, 222, 0.5)',
+  improving: 'rgba(0, 122, 255, 0.5)',
   done: 'rgba(52, 199, 89, 0.5)',
   confirmation: 'rgba(255, 59, 48, 0.5)',
   'paste-failed': 'rgba(255, 149, 0, 0.5)',
@@ -268,21 +270,21 @@ export default function CursorStatus() {
     };
   }, []);
 
-  // Handle text visibility with fade-in when idle (for transcribing only)
+  // Handle text visibility with fade-in when idle (for transcribing and improving)
   useEffect(() => {
-    if (isIdle && state === 'transcribing') {
+    if (isIdle && (state === 'transcribing' || state === 'improving')) {
       setTextVisible(true);
-    } else if (state !== 'transcribing') {
+    } else if (state !== 'transcribing' && state !== 'improving') {
       setTextVisible(false);
     } else {
-      // Cursor moved during transcribing - hide text immediately
+      // Cursor moved during transcribing/improving - hide text immediately
       setTextVisible(false);
     }
   }, [isIdle, state]);
 
-  // Old-school cycling dots animation for transcribing
+  // Old-school cycling dots animation for transcribing and improving
   useEffect(() => {
-    if (state === 'transcribing' && textVisible) {
+    if ((state === 'transcribing' || state === 'improving') && textVisible) {
       dotIntervalRef.current = setInterval(() => {
         setDotCount(prev => (prev % 3) + 1);
       }, 400);
@@ -383,9 +385,12 @@ export default function CursorStatus() {
     if (state === 'transcribing') {
       return 'transcribing' + '.'.repeat(dotCount);
     }
+    if (state === 'improving') {
+      return 'improving' + '.'.repeat(dotCount);
+    }
     if (state === 'done') {
-      // Keep showing "transcribing" text briefly during green state for continuity.
-      return 'transcribing...';
+      // No text label on done state - just green dot then paste.
+      return '';
     }
     if (state === 'confirmation') {
       return `ESC to cancel recording. Ignore to continue (${countdownSeconds}).`;
@@ -415,8 +420,8 @@ export default function CursorStatus() {
       (state === 'recording' && showRecordingText && showSayAnythingLabel) || 
       // "Transcribing..." - respects progressive threshold
       (state === 'transcribing' && textVisible && showTranscribingLabel) ||
-      // "Transcribing..." during done state (brief continuation) - same threshold
-      (state === 'done' && showTranscribingLabel)
+      // "improving..." - always show when improving (it's a new feature)
+      (state === 'improving' && textVisible)
     ));
 
   // Handle click to dismiss (for paste-failed/done states)
