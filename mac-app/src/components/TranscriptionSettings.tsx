@@ -208,13 +208,6 @@ export default function TranscriptionSettings() {
   const handleDeleteModel = useCallback(async (modelSize: string) => {
     if (!window.transcribeAPI || deletingModel) return;
 
-    const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
-    const downloadedCount = Object.values(downloadStatus).filter(Boolean).length;
-    if (modelSize === selectedModel && downloadedCount === 1) {
-      setError('Cannot delete the only downloaded model. Please download another model first.');
-      return;
-    }
-
     setDeletingModel(modelSize);
     setError(null);
 
@@ -222,12 +215,19 @@ export default function TranscriptionSettings() {
       await window.transcribeAPI.deleteModel(modelSize);
       const newDownloadStatus = await window.transcribeAPI.getModelDownloadStatus();
       setModelDownloadStatus(newDownloadStatus);
-      
+
+      // If we deleted the currently selected model, switch to another or 'none'
       if (modelSize === selectedModel) {
         const availableModel = Object.entries(newDownloadStatus).find(([size, downloaded]) =>
           downloaded && size !== modelSize
-        )?.[0] || 'small';
-        await handleModelChange(availableModel);
+        )?.[0];
+
+        if (availableModel) {
+          await handleModelChange(availableModel);
+        } else {
+          // No models left - set to 'none'
+          await handleModelChange('none');
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : `Failed to delete ${modelSize} model`);
@@ -446,7 +446,7 @@ export default function TranscriptionSettings() {
   const getStatusColor = () => {
     if (status === 'recording') return '#3b82f6';
     if (status === 'transcribing') return '#f59e0b';
-    if (modelStatus === 'missing') return '#dc2626';
+    if (selectedModel === 'none' || modelStatus === 'missing') return '#dc2626';
     if (modelStatus === 'downloading') return '#f59e0b';
     return '#22c55e';
   };
@@ -454,6 +454,7 @@ export default function TranscriptionSettings() {
   const getStatusText = () => {
     if (status === 'recording') return 'Recording';
     if (status === 'transcribing') return 'Transcribing';
+    if (selectedModel === 'none') return 'No model';
     if (modelStatus === 'missing') return 'No model';
     if (modelStatus === 'downloading') return 'Downloading';
     return 'Ready';
@@ -465,7 +466,7 @@ export default function TranscriptionSettings() {
         <span style={styles.rowLabel}>Status</span>
         <span style={{ ...styles.rowValue, color: getStatusColor() }}>
           <span style={{ ...styles.statusDot, backgroundColor: getStatusColor() }} />
-          {getStatusText()} • {selectedModel} {modelStatus === 'downloaded' ? '✓' : modelStatus === 'downloading' ? '↓' : '✗'}
+          {selectedModel === 'none' ? 'No model - download one below' : `${getStatusText()} • ${selectedModel} ${modelStatus === 'downloaded' ? '✓' : modelStatus === 'downloading' ? '↓' : '✗'}`}
         </span>
       </div>
 
@@ -679,6 +680,9 @@ export default function TranscriptionSettings() {
             disabled={isDownloading || downloadingModel !== null}
             style={styles.select}
           >
+            {!Object.values(modelDownloadStatus).some(Boolean) && (
+              <option value="none">No models downloaded</option>
+            )}
             {Object.entries(availableModels).map(([size, info]) => {
                 const isDownloaded = modelDownloadStatus[size] || false;
                 return (
@@ -736,7 +740,7 @@ export default function TranscriptionSettings() {
                         <span style={styles.downloadedBadge}>Downloaded</span>
                         <button
                           onClick={() => handleDeleteModel(size)}
-                          disabled={isDeletingThis || (isSelected && Object.values(modelDownloadStatus).filter(Boolean).length === 1)}
+                          disabled={isDeletingThis}
                           style={{ ...styles.btnGhost, color: '#9ca3af', opacity: isDeletingThis ? 0.5 : 1 }}
                           title="Delete model"
                         >

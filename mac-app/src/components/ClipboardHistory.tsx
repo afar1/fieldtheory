@@ -6114,20 +6114,26 @@ export default function ClipboardHistory() {
                   >
                     Release notes
                   </button>
-                  <button
-                    onClick={() => window.updaterAPI?.checkForUpdates?.()}
-                    style={{
-                      cursor: 'pointer',
-                      color: updateStatus === 'uptodate' ? '#22c55e' : theme.textSecondary,
-                      fontSize: '9px',
-                      background: 'none',
-                      border: 'none',
-                      padding: 0,
-                    }}
-                    title="Check for updates"
-                  >
-                    Check for updates
-                  </button>
+                  {updateStatus === 'uptodate' ? (
+                    <span style={{ color: '#22c55e', fontSize: '9px' }}>
+                      Up to date ✓
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => window.updaterAPI?.checkForUpdates?.()}
+                      style={{
+                        cursor: 'pointer',
+                        color: theme.textSecondary,
+                        fontSize: '9px',
+                        background: 'none',
+                        border: 'none',
+                        padding: 0,
+                      }}
+                      title="Check for updates"
+                    >
+                      Check for updates
+                    </button>
+                  )}
                 </>
               ) : (
                 <span style={{ color: updateStatus === 'uptodate' ? '#22c55e' : theme.textSecondary, fontSize: '9px' }}>
