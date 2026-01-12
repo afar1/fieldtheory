@@ -2556,105 +2556,6 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // I: Improve the selected item/stack (disabled by feature flag).
-      if (FEATURE_IMPROVE_ENABLED && key === 'i' && !hasShift && !hasMeta && !hasCtrl && !hasAlt && selectedIds.size === 0) {
-        // Skip if user is typing in an input field.
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
-          return;
-        }
-        // Skip if I key and user is typing (could be typing "improve" etc)
-        if (key === 'i' && document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
-          return;
-        }
-        e.preventDefault();
-        const selectedRow = listRows[selectedIndex];
-        if (!selectedRow) return;
-        
-        // Check if item has text to improve
-        let hasText = false;
-        let stackId: string | null = null;
-        let itemId: number | null = null;
-        
-        if (selectedRow.type === 'stack') {
-          hasText = selectedRow.items.some(i => 
-            (i.type === 'text' || i.type === 'transcript') && i.content
-          );
-          stackId = selectedRow.stack.stackId;
-        } else if (selectedRow.type === 'item') {
-          hasText = (selectedRow.item.type === 'text' || selectedRow.item.type === 'transcript') && !!selectedRow.item.content;
-          itemId = selectedRow.item.id;
-        }
-        
-        if (!hasText) return;
-        
-        // Trigger improve (simulate the button click logic)
-        if (stackId && selectedRow.type === 'stack') {
-          // Improve stack - this is handled by the component, trigger via state
-          setImprovingStackId(stackId);
-          (async () => {
-            try {
-              const textItems = selectedRow.items.filter((i: ClipboardItem) => 
-                (i.type === 'text' || i.type === 'transcript') && i.content
-              );
-              const tempStackId = crypto.randomUUID();
-              const textItemIds = textItems.map((i: ClipboardItem) => i.id);
-              await window.clipboardAPI?.updateStackId?.(textItemIds, tempStackId);
-              const result = await window.clipboardAPI?.engineerStack?.(tempStackId);
-              await window.clipboardAPI?.updateStackId?.(textItemIds, stackId);
-              if (result?.success && result.refinedPrompt) {
-                // Save improved content to the first text item in the stack for persistence.
-                // The improved prompt is a combination of all items, so we store it on the first one.
-                if (textItems.length > 0) {
-                  await window.clipboardAPI?.saveImprovedContent?.(textItems[0].id, result.refinedPrompt);
-                  // Update local state for immediate display.
-                  setItems(prev => prev.map(i => 
-                    i.id === textItems[0].id ? { ...i, improvedContent: result.refinedPrompt ?? null } : i
-                  ));
-                }
-                setImproveResult({ stackId: stackId!, refinedPrompt: result.refinedPrompt });
-                window.clipboardAPI?.incrementImprovedCount?.().then(count => {
-                  setAllTimeStats(prev => ({ ...prev, improved: count }));
-                });
-              }
-            } catch (err) {
-              console.error('[Improve] Error:', err);
-            } finally {
-              setImprovingStackId(null);
-            }
-          })();
-        } else if (itemId && selectedRow.type === 'item') {
-          // Improve individual item
-          setImprovingStackId(`item-${itemId}`);
-          const itemStackId = selectedRow.item.stackId;
-          (async () => {
-            try {
-              const tempStackId = crypto.randomUUID();
-              await window.clipboardAPI?.updateStackId?.([itemId!], tempStackId);
-              const result = await window.clipboardAPI?.engineerStack?.(tempStackId);
-              await window.clipboardAPI?.updateStackId?.([itemId!], itemStackId || null);
-              if (result?.success && result.refinedPrompt) {
-                // Save improved content to database for persistence.
-                await window.clipboardAPI?.saveImprovedContent?.(itemId!, result.refinedPrompt);
-                // Also update local state for immediate display.
-                setImproveResult({ stackId: `item-${itemId}`, refinedPrompt: result.refinedPrompt });
-                setItems(prev => prev.map(i => 
-                  i.id === itemId ? { ...i, improvedContent: result.refinedPrompt ?? null } : i
-                ));
-                window.clipboardAPI?.incrementImprovedCount?.().then(count => {
-                  setAllTimeStats(prev => ({ ...prev, improved: count }));
-                });
-              }
-            } catch (err) {
-              console.error('[Improve] Error:', err);
-              await window.clipboardAPI?.updateStackId?.([itemId!], itemStackId || null);
-            } finally {
-              setImprovingStackId(null);
-            }
-          })();
-        }
-        return;
-      }
-
       if (key === 'Enter' && !hasShift && !hasMeta) {
         // Skip if user is typing in an input field - let Enter submit forms naturally.
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
@@ -4818,7 +4719,7 @@ export default function ClipboardHistory() {
                           borderRadius: '3px',
                           marginBottom: '4px',
                         }}>
-                          ✨ Improved version available
+                          Improved version available
                         </span>
                       )}
                       
@@ -4900,69 +4801,6 @@ export default function ClipboardHistory() {
                             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                           >
                             unstack <KeyCap>u</KeyCap>
-                          </button>
-                        )}
-                        {/* Improve hint button - middle, only if stack has text */}
-                        {hasText && (
-                          <button
-                            tabIndex={-1}
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              setImprovingStackId(stack.stackId);
-                              setImproveResult(null);
-                              try {
-                                const textItems = stackItems.filter(i => 
-                                  (i.type === 'text' || i.type === 'transcript') && i.content
-                                );
-                                if (textItems.length === 0) {
-                                  return;
-                                }
-                                const tempStackId = crypto.randomUUID();
-                                const textItemIds = textItems.map(i => i.id);
-                                await window.clipboardAPI?.updateStackId?.(textItemIds, tempStackId);
-                                const result = await window.clipboardAPI?.engineerStack?.(tempStackId);
-                                await window.clipboardAPI?.updateStackId?.(textItemIds, stack.stackId);
-                                if (result?.success && result.refinedPrompt) {
-                                  // Save improved content to the first text item in the stack for persistence.
-                                  // The improved prompt is a combination of all items, so we store it on the first one.
-                                  if (textItems.length > 0) {
-                                    await window.clipboardAPI?.saveImprovedContent?.(textItems[0].id, result.refinedPrompt);
-                                    // Update local state for immediate display.
-                                    setItems(prev => prev.map(i => 
-                                      i.id === textItems[0].id ? { ...i, improvedContent: result.refinedPrompt ?? null } : i
-                                    ));
-                                  }
-                                  setImproveResult({
-                                    stackId: stack.stackId,
-                                    refinedPrompt: result.refinedPrompt,
-                                  });
-                                  window.clipboardAPI?.incrementImprovedCount?.().then(count => {
-                                    setAllTimeStats(prev => ({ ...prev, improved: count }));
-                                  });
-                                }
-                              } catch (err) {
-                                console.error('[Improve] Error:', err);
-                              } finally {
-                                setImprovingStackId(null);
-                              }
-                            }}
-                            disabled={improvingStackId === stack.stackId}
-                            style={{
-                              padding: '4px 6px',
-                              fontSize: '10px',
-                              fontWeight: 500,
-                              backgroundColor: 'transparent',
-                              color: theme.textSecondary,
-                              border: 'none',
-                              borderRadius: '4px',
-                              cursor: improvingStackId === stack.stackId ? 'wait' : 'pointer',
-                              transition: 'background-color 0.15s ease',
-                            }}
-                            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
-                            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                          >
-                            {improvingStackId === stack.stackId ? 'improving...' : 'improve'} <KeyCap>i</KeyCap>
                           </button>
                         )}
                         {/* Share to Team button - hidden when sharing feature is disabled */}
@@ -5415,13 +5253,10 @@ export default function ClipboardHistory() {
                                   }),
                                 }}
                               >
-                                {/* Show improved or original content based on useImprovedVersion toggle.
-                                    Priority: 1) useImprovedVersion=false shows original 2) transient improveResult 3) stored improvedContent 4) original content */}
-                                {!item.useImprovedVersion && item.improvedContent
+                                {/* Show improved or original content based on useImprovedVersion toggle. */}
+                                {item.improvedContent && !item.useImprovedVersion
                                   ? item.content || 'Empty'
-                                  : (improveResult?.stackId === `item-${item.id}` 
-                                      ? improveResult.refinedPrompt 
-                                      : (item.improvedContent || item.content || 'Empty'))}
+                                  : (item.improvedContent || item.content || 'Empty')}
                               </span>
                             </div>
                           );
@@ -5439,7 +5274,7 @@ export default function ClipboardHistory() {
                               padding: '2px 6px',
                               borderRadius: '3px',
                             }}>
-                              ✨ {!item.useImprovedVersion ? 'Viewing original' : 'Improved'}
+                              {!item.useImprovedVersion ? 'Viewing original' : 'Improved'}
                             </span>
                             <button
                               tabIndex={-1}
@@ -5644,71 +5479,6 @@ export default function ClipboardHistory() {
                       flexWrap: 'nowrap',
                       visibility: isRowSelected || hoveredRowIndex === index ? 'visible' : 'hidden',
                     }}>
-                      {/* Improve hint button - only if item has text */}
-                      {hasText && (
-                        <button
-                          tabIndex={-1}
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            
-                            // Check if already improved and show confirmation.
-                            const hasExistingImproved = item.improvedContent || improveResult?.stackId === `item-${item.id}`;
-                            if (hasExistingImproved) {
-                              setConfirmReimproveModal({
-                                itemId: `item-${item.id}`,
-                                type: viewOriginalIds.has(`item-${item.id}`) ? 'original' : 'improved'
-                              });
-                              return;
-                            }
-                            
-                            const tempStackId = crypto.randomUUID();
-                            await window.clipboardAPI?.updateStackId?.([item.id], tempStackId);
-                            setImprovingStackId(`item-${item.id}`);
-                            setImproveResult(null);
-                            try {
-                              const result = await window.clipboardAPI?.engineerStack?.(tempStackId);
-                              await window.clipboardAPI?.updateStackId?.([item.id], item.stackId || null);
-                              if (result?.success && result.refinedPrompt) {
-                                // Save improved content to database for persistence.
-                                await window.clipboardAPI?.saveImprovedContent?.(item.id, result.refinedPrompt);
-                                // Also update local state for immediate display.
-                                setImproveResult({
-                                  stackId: `item-${item.id}`,
-                                  refinedPrompt: result.refinedPrompt,
-                                });
-                                // Update the item in our local list to reflect the improvement.
-                                setItems(prev => prev.map(i => 
-                                  i.id === item.id ? { ...i, improvedContent: result.refinedPrompt ?? null } : i
-                                ));
-                                window.clipboardAPI?.incrementImprovedCount?.().then(count => {
-                                  setAllTimeStats(prev => ({ ...prev, improved: count }));
-                                });
-                              }
-                            } catch (err) {
-                              await window.clipboardAPI?.updateStackId?.([item.id], item.stackId || null);
-                            } finally {
-                              setImprovingStackId(null);
-                            }
-                          }}
-                          disabled={improvingStackId === `item-${item.id}`}
-                          style={{
-                            padding: '4px 6px',
-                            fontSize: '10px',
-                            fontWeight: 500,
-                            backgroundColor: 'transparent',
-                            color: theme.textSecondary,
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: improvingStackId === `item-${item.id}` ? 'wait' : 'pointer',
-                            transition: 'background-color 0.15s ease',
-                          }}
-                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
-                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                        >
-                          {improvingStackId === `item-${item.id}` ? 'improving...' : (item.improvedContent ? 're-improve' : 'improve')} <KeyCap>i</KeyCap>
-                        </button>
-                      )}
                       {/* Edit Sketch button - only for sketch items */}
                       {item.sourceApp === 'com.fieldtheory.sketch' && (
                         <button
@@ -6637,7 +6407,6 @@ export default function ClipboardHistory() {
               <span>feedback <KeyCap>f</KeyCap></span>
               <span>help <KeyCap>shift</KeyCap><KeyCap>?</KeyCap></span>
               <span>hot mic <KeyCap>h</KeyCap></span>
-              <span>improve <KeyCap>i</KeyCap></span>
               {/* Right column (N-U) */}
               <span>new draw <KeyCap>⌘</KeyCap><KeyCap>d</KeyCap></span>
               <span>paste <KeyCap>↵</KeyCap></span>
