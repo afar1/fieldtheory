@@ -258,3 +258,88 @@ export async function engineerStack(
   const combinedInput = combinedParts.join('\n\n');
   return engineerPrompt(combinedInput);
 }
+
+/**
+ * Hardcoded system prompt for transcript improvement.
+ * Not user-modifiable to ensure consistent quality.
+ */
+const IMPROVE_TRANSCRIPT_PROMPT = `Rewrite this spoken feedback as clear prose. Same meaning, fewer words, no ambiguity. Replace vague references with specific names. Remove filler words. Keep it as one paragraph. Do not add structure, bullets, or headers.
+
+IMPORTANT: Preserve any [Figure X] references exactly as written. These reference images and must remain in the output in their original positions relative to the surrounding text.`;
+
+/**
+ * Improve a transcript by cleaning up spoken language into clear prose.
+ * Uses a hardcoded prompt optimized for transcript improvement.
+ * 
+ * @param rawTranscript - The raw transcribed text to improve
+ * @returns The improved text, or error if failed
+ */
+export async function improveTranscript(rawTranscript: string): Promise<EngineerResult> {
+  const apiKey = getApiKey();
+  
+  if (!apiKey) {
+    return {
+      success: false,
+      error: 'Anthropic API key not configured. Please set it in Settings.',
+    };
+  }
+
+  if (!rawTranscript || rawTranscript.trim().length === 0) {
+    return {
+      success: false,
+      error: 'No transcript provided to improve.',
+    };
+  }
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5-20250929',
+        max_tokens: 4096,
+        system: IMPROVE_TRANSCRIPT_PROMPT,
+        messages: [
+          {
+            role: 'user',
+            content: rawTranscript.trim(),
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[PromptEngineer] improveTranscript API error:', response.status, errorText);
+      return {
+        success: false,
+        error: `API error: ${response.status}`,
+      };
+    }
+
+    const data = await response.json() as { content?: Array<{ text?: string }> };
+    const content = data.content?.[0]?.text;
+
+    if (!content) {
+      return {
+        success: false,
+        error: 'No content in API response.',
+      };
+    }
+
+    return {
+      success: true,
+      refinedPrompt: content.trim(),
+    };
+  } catch (error) {
+    console.error('[PromptEngineer] improveTranscript failed:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error occurred',
+    };
+  }
+}

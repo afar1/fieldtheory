@@ -46,6 +46,7 @@ export interface LocalQuotas {
   period: string;                  // "YYYY-MM" format (e.g., "2026-01")
   priorityMicSecondsUsed: number;  // Seconds of priority mic used this month
   autoStackSessionsUsed: number;   // Recording sessions with auto-stacking
+  textImprovementsUsed: number;    // AI text improvements used this month
   cachedTier: 'free' | 'pro';      // Cached tier for offline access
   cachedTierUpdatedAt: string;     // ISO timestamp of last tier sync
 }
