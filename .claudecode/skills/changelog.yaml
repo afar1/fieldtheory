@@ -1,0 +1,134 @@
+name: changelog
+description: Create a changelog post with optional image compositing
+instructions: |
+  You are helping create a changelog post for the Routines product.
+
+  ## User Input
+
+  The user will describe what changed or what feature/fix to announce. They may also provide an image path. Your default should be to create the changelog yourself. Here are a series of examples of the type of writing that you should mimic in terms of length and changelog style. Do not produce anything that's obviously AI. You'll find examples at the bottom!
+
+  ## Your Task
+
+  1. **Understand the change** - Ask clarifying questions if needed about:
+    - What changed or what was added?
+    - Is this a feature, improvement, fix, patch, or announcement?
+    - Should this be a draft or published immediately?
+  2. **Extract image path** - If the user mentions an image, screenshot, or file path, extract it. Common patterns:
+    - Absolute paths: `/Users/.../screenshot.png`
+    - Relative paths: `./screenshot.png`
+    - Drag-and-drop paths from Cursor's input field
+  3. **Write the changelog entry** following this style:
+    Title: Brief, Clear Feature Name
+    Short description of what changed.
+    What's new:
+    Feature name — Description with benefit
+    Another feature — Description with benefit
+    Bug fix (if applicable):
+    Fixed [specific issue]
+  4. ### Create the post using the CLI
+
+  ```text
+  npx tsx scripts/changelog-cli.ts create \
+    --title "Your Title" \
+    --content "Your content here" \
+    --category <feature|improvement|fix|patch|announcement> \
+    --draft \
+    --image <path-if-provided>
+
+  # npx tsx scripts/changelog-cli.ts create \
+
+  1. Report the result - Show the user:
+
+  - The post ID
+  - How to view it in admin ([http://localhost:3001/changelog](http://localhost:3001/changelog))
+  - How to publish it when ready
+  - How to delete it if needed
+  Important Notes
+  - Always create as draft unless user explicitly says to publish
+  - Image compositing is automatic - if an image is provided, it will be composited over a background with rounded corners and shadow
+  - Use --skip-composite only if the user explicitly wants the raw image (e.g., for GIFs)
+  - Match the writing style of existing Routines changelogs (see example above)
+  - Be concise - Changelog entries should be scannable
+
+  EXAMPLES:
+
+  Timeline: Compare to Typical Routine
+  feature
+  You can now compare any day's activity to the resident's typical routine.
+
+  What's new:
+
+  "Show typical routine" toggle — Tap to see the 14-day average beneath the current day's chart
+  Always-visible charts — Day cards no longer collapse, so you can scan activity at a glance
+  Faster loading — Charts load as you scroll instead of all at once
+  Bug fix:
+
+  Fixed missing data in the 11:30pm–12am time slot
+  Timeline: Compare to Typical Routine - Image 1
+  January 7, 2026
+  Room Activity Timeline
+  feature
+  We've added a new visualization to the daytime routine cards that shows exactly where your loved one spent their time throughout the day. The room activity chart displays a timeline from midnight to midnight, with each room represented as a row. The colored bars show when they were in each space – the brighter the color, the more time spent there during that half-hour window. This makes it easy to get a quick sense of the day's rhythm at a glance: morning in the bedroom, breakfast in the kitchen, afternoon in the living room, and so on. We've also simplified the daytime cards by removing some of the noisier metrics to keep the focus on what matters most.
+
+  Room Activity Timeline - Image 1
+  January 4, 2026
+  Fix for loading issues on older iOS devices
+  fix
+  We've made a number of improvements around how the Live 3D view loads, especially on older iPhone models (iPhone 14 and earlier). You should notice that the app is quicker to load and doesn't crash when using Safari.
+
+  December 16, 2025
+  New Feature - Birthday reminders!
+  feature
+  First off, we realize that everybody already knows and would never forget their loved one's birthday. We also know that life can get busy.
+
+  So we implemented a birthday feature. If you add your loved one's birthday (also available if you click edit) you'll get a reminder as their birthday approaches.
+
+  We think lots of small contextual things play an important role in feeling connected even when you're far away. We hope this can be one of those small things that helps. Let us know if you have any feedback or questions.
+
+  Shout out to one of our Routines users, Michael H., as this was his lovely suggestion.
+
+  New Feature - Birthday reminders! - Image 1
+  December 14, 2025
+  Routine Baseline & Timeline
+  feature
+  We've updated the Routines interface to make it easier to review patterns over time and validate what you're seeing. You'll also find that the Live, News, and About sections have been consolidated into the top card to make it easier to toggle between them in one place.
+
+  Baseline: After at least 14 days of collecting data, we generate a baseline routine that reflects your loved one's typical activity patterns
+
+  Timeline: Includes daytime summaries (white cards) and overnight summaries (gray cards), with labels that indicate whether the day/night activity is on or off relative to the baseline
+
+  We're especially interested in whether this new view is useful and whether the data looks correct. Please let us know by using the "Give feedback" button in the app!
+
+  Routine Baseline & Timeline - Image 1
+  Routine Baseline & Timeline - Image 2
+  December 2, 2025
+  New Mobile View & Other Improvements
+  feature
+  We noticed a lot of users were logging into Routines on their phones so we materially improved mobile layout and responsiveness.
+
+  We heard that the raw sensor chart for overnight analysis could be confusing and have simplified the Evening card. Evening and Day cards have a number of improvements currently in the works.
+
+  We also shipped a full redesign of the live page and tackled a number of other fixes. Have a great Thursday and hope you had a great Thanksgiving.
+
+  New Mobile View & Other Improvements - Image 1
+  November 30, 2025
+  Display audio feedback wave form
+  feature
+  We've added a visual ware form to display the input from the audio feedback form. This should help verify your microphone is working as intended!
+
+  Display audio feedback wave form - Image 1
+  November 29, 2025
+  Edit installation name
+  feature
+  We've added a new feature to edit an installation's name. If you happen to move a sensor to a new location you can now edit the name to correctly display your new location. Please note, changing the name in the Routines app will not change the name in the Density Spaces app.
+
+  Edit installation name - Image 1
+  November 23, 2025
+  Fixed automated overnight analysis
+  feature
+  Users reported seeing incorrectly calculated "sleep duration" and a bug where the analysis may change on load. This was happening because of a race condition between an old and newly generated analysis.
+
+  Both issues have been fixed and the improved algorithm will be applied to all historical date. If you see any reversion, please let us know with the feedback button!
+
+  To test it out: click the date picker > choose a date in the past > look for "Analyzing data ..." > confirm the new analysis looks correct.
+  ```

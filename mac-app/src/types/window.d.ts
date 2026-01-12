@@ -109,6 +109,7 @@ interface TranscribeAPI {
   setAbandonHotkey?: (hotkey: string) => Promise<boolean>;
   getAbandonConfirmation?: () => Promise<boolean>;
   setAbandonConfirmation?: (enabled: boolean) => Promise<void>;
+  toggleRecording?: () => Promise<void>;
   getSoundConfig?: () => Promise<SoundConfig>;
   setSoundConfig?: (config: Partial<SoundConfig>) => Promise<void>;
   getAvailableSounds?: () => Promise<SoundOption[]>;
@@ -210,7 +211,8 @@ interface ClipboardQueryOptions {
  */
 interface ClipboardHotkeys {
   screenshot?: string;
-  desktopScreenshot?: string;
+  fullScreen?: string;
+  activeWindow?: string;
   history?: string;
   continuousContext?: string;
 }
@@ -331,7 +333,9 @@ interface ClipboardAPI {
   // Cursor status indicator settings
   getCursorStatusEnabled?: () => Promise<boolean>;
   setCursorStatusEnabled?: (enabled: boolean) => Promise<boolean>;
-  
+  getHideStatusLabels?: () => Promise<boolean>;
+  setHideStatusLabels?: (hide: boolean) => Promise<boolean>;
+
   getSoundsEnabled?: () => Promise<boolean>;
   setSoundsEnabled?: (enabled: boolean) => Promise<boolean>;
   getTasksTabEnabled?: () => Promise<boolean>;
@@ -364,6 +368,7 @@ interface PermissionsAPI {
  */
 interface ElectronAPI {
   relaunch: () => void;
+  toggleDevTools: () => void;
 }
 
 /**

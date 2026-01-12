@@ -19,7 +19,7 @@ interface DataPolicyNoticeProps {
 
 // Policy messages - plain language, no legalese. Lowercase for visual consistency.
 const POLICY_TITLES: Record<PolicyContext, string> = {
-  local: 'data stored locally',
+  local: 'data on page is stored locally',
   shared: 'data shared with your team',
   feedback: 'data sent to Field Theory',
   dm: 'data private to recipient',

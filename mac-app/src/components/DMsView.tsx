@@ -10,6 +10,9 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 
+// Import transcription status type
+type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
+
 // =============================================================================
 // Types - Mirror the types from window.d.ts
 // =============================================================================
@@ -127,7 +130,11 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
   const [error, setError] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [sending, setSending] = useState(false);
-  
+
+  // Transcription state for feedback input
+  const [transcriptionStatus, setTranscriptionStatus] = useState<TranscriptionStatus>('idle');
+  const [isOnFeedbackPage, setIsOnFeedbackPage] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const replyInputRef = useRef<HTMLInputElement>(null);
@@ -265,6 +272,41 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, feedbackReplies]);
 
+  // Track if we're on the feedback compose page (no conversation/feedback selected).
+  useEffect(() => {
+    const onFeedbackPage = activeTab === 'feedback' && !selectedFeedback && !selectedConversation;
+    setIsOnFeedbackPage(onFeedbackPage);
+  }, [activeTab, selectedFeedback, selectedConversation]);
+
+  // Listen for transcription status changes.
+  useEffect(() => {
+    if (!window.transcribeAPI) return;
+
+    const unsubscribe = window.transcribeAPI.onStatusChanged((status) => {
+      setTranscriptionStatus(status);
+    });
+
+    return unsubscribe;
+  }, []);
+
+  // Listen for transcription results and auto-paste into feedback input.
+  useEffect(() => {
+    if (!window.transcribeAPI) return;
+
+    const unsubscribe = window.transcribeAPI.onResult((text) => {
+      // Only auto-paste if we're on the feedback compose page and field is empty
+      setReplyText((currentText) => {
+        // Only update if we're on feedback page and field is currently empty
+        if (isOnFeedbackPage && !currentText) {
+          return text;
+        }
+        return currentText;
+      });
+    });
+
+    return unsubscribe;
+  }, [isOnFeedbackPage]);
+
   // Get current list items based on active tab.
   const listItems = activeTab === 'dms' ? conversations : feedback;
 
@@ -376,49 +418,71 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
 
   const handleSendReply = async () => {
     if (!window.socialAPI) return;
-    
+
     // Need either text or image to send.
     const hasContent = replyText.trim() || replyImage;
     if (!hasContent) return;
-    
+
     setSending(true);
+
+    // Store values before clearing for optimistic update
+    const messageText = replyText.trim();
+    const messageImage = replyImage;
+
     try {
       if (selectedFeedback) {
         // Reply to feedback.
         const recipientId = isAdmin ? selectedFeedback.senderUserId : selectedFeedback.recipientUserId;
-        
-        if (replyImage) {
+
+        let result;
+        if (messageImage) {
           // Send image reply (with optional text).
-          await window.socialAPI.sendImageReply(
-            recipientId, 
-            replyImage.base64, 
-            replyText.trim() || undefined, 
+          result = await window.socialAPI.sendImageReply(
+            recipientId,
+            messageImage.base64,
+            messageText || undefined,
             selectedFeedback.id
           );
         } else {
           // Send text-only reply.
-          await window.socialAPI.sendTextDM(recipientId, replyText.trim(), selectedFeedback.id);
+          result = await window.socialAPI.sendTextDM(recipientId, messageText, selectedFeedback.id);
         }
-        
+
+        // Clear input fields
         setReplyText('');
         setReplyImage(null);
-        loadFeedbackDetails(selectedFeedback);
+
+        // Optimistically add the new reply to the list without full page reload
+        if (result) {
+          setFeedbackReplies(prev => [...prev, result]);
+        }
       } else if (selectedConversation) {
         // Reply to DM.
-        if (replyImage) {
-          await window.socialAPI.sendImageReply(
-            selectedConversation, 
-            replyImage.base64, 
-            replyText.trim() || undefined
+        let result;
+        if (messageImage) {
+          result = await window.socialAPI.sendImageReply(
+            selectedConversation,
+            messageImage.base64,
+            messageText || undefined
           );
         } else {
-          await window.socialAPI.sendTextDM(selectedConversation, replyText.trim());
+          result = await window.socialAPI.sendTextDM(selectedConversation, messageText);
         }
-        
+
+        // Clear input fields
         setReplyText('');
         setReplyImage(null);
-        loadMessages(selectedConversation);
+
+        // Optimistically add the new message
+        if (result) {
+          setMessages(prev => [...prev, result]);
+        }
       }
+    } catch (error) {
+      console.error('Failed to send reply:', error);
+      // On error, restore the text so user doesn't lose their message
+      setReplyText(messageText);
+      setReplyImage(messageImage);
     } finally {
       setSending(false);
     }
@@ -1330,15 +1394,42 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                 </div>
               )}
               
-              {/* Compose input */}
-              <div style={{ display: 'flex', gap: '8px', maxWidth: '500px', alignSelf: 'center', width: '100%' }}>
-                <input
-                  type="text"
-                  placeholder={replyImage ? "Add a caption (optional)..." : "Type your feedback... (paste images with Cmd+V)"}
-                  value={replyText}
-                  onChange={(e) => setReplyText(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && !sending && handleNewFeedback()}
-                  onPaste={handlePaste}
+              {/* Compose input or transcription button */}
+              {!replyText && !replyImage ? (
+                // Show transcription button when input is empty
+                <div style={{ maxWidth: '500px', alignSelf: 'center', width: '100%' }}>
+                  <button
+                    onClick={() => window.transcribeAPI?.toggleRecording?.()}
+                    disabled={transcriptionStatus === 'transcribing'}
+                    style={{
+                      width: '100%',
+                      padding: '12px 16px',
+                      fontSize: '13px',
+                      fontWeight: 500,
+                      backgroundColor: transcriptionStatus === 'recording' ? '#ef4444' : theme.accent,
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: transcriptionStatus === 'transcribing' ? 'wait' : 'pointer',
+                      opacity: transcriptionStatus === 'transcribing' ? 0.7 : 1,
+                      transition: 'all 0.2s ease',
+                    }}
+                  >
+                    {transcriptionStatus === 'recording' ? '⏹ Stop recording' :
+                     transcriptionStatus === 'transcribing' ? 'Transcribing...' :
+                     '🎤 Click to transcribe feedback'}
+                  </button>
+                </div>
+              ) : (
+                // Show input when user has typed or pasted something
+                <div style={{ display: 'flex', gap: '8px', maxWidth: '500px', alignSelf: 'center', width: '100%' }}>
+                  <input
+                    type="text"
+                    placeholder={replyImage ? "Add a caption (optional)..." : "Type your feedback... (paste images with Cmd+V)"}
+                    value={replyText}
+                    onChange={(e) => setReplyText(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && !sending && handleNewFeedback()}
+                    onPaste={handlePaste}
                   style={{
                     flex: 1,
                     padding: '10px 12px',
@@ -1363,10 +1454,11 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                     cursor: sending ? 'wait' : 'pointer',
                     opacity: sending || (!replyText.trim() && !replyImage) ? 0.5 : 1,
                   }}
-                >
-                  {sending ? 'Sending...' : 'Send'}
-                </button>
-              </div>
+                  >
+                    {sending ? 'Sending...' : 'Send'}
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             // No selection (DMs tab)

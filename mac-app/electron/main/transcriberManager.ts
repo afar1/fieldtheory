@@ -210,33 +210,88 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
+   * Normalize hotkey string for Electron's globalShortcut API.
+   * Converts shifted characters (like ~, !, @) to their base key + Shift modifier.
+   */
+  private normalizeHotkey(hotkey: string): string {
+    // Map of shifted characters to their base keys
+    const shiftedChars: Record<string, string> = {
+      '~': '`',
+      '!': '1',
+      '@': '2',
+      '#': '3',
+      '$': '4',
+      '%': '5',
+      '^': '6',
+      '&': '7',
+      '*': '8',
+      '(': '9',
+      ')': '0',
+      '_': '-',
+      '+': '=',
+      '{': '[',
+      '}': ']',
+      '|': '\\',
+      ':': ';',
+      '"': "'",
+      '<': ',',
+      '>': '.',
+      '?': '/',
+    };
+
+    // Split hotkey into parts (e.g., "Command+~" -> ["Command", "~"])
+    const parts = hotkey.split('+');
+    const lastPart = parts[parts.length - 1];
+
+    // Check if the last part is a shifted character
+    if (lastPart in shiftedChars) {
+      const baseKey = shiftedChars[lastPart];
+      // Remove the shifted char and add Shift + base key
+      parts.pop();
+      // Insert Shift before the base key (but after other modifiers like Command/Alt)
+      if (!parts.includes('Shift')) {
+        parts.push('Shift');
+      }
+      parts.push(baseKey);
+      const normalized = parts.join('+');
+      console.log(`[TranscriberManager] Normalized hotkey: ${hotkey} → ${normalized}`);
+      return normalized;
+    }
+
+    return hotkey;
+  }
+
+  /**
    * Register a global hotkey. Unregisters the previous transcription hotkey if it exists.
    * Attempts to take precedence over other apps by checking if already registered.
    */
   private async registerHotkey(hotkey: string): Promise<boolean> {
+    // Normalize the hotkey to handle shifted characters
+    const normalizedHotkey = this.normalizeHotkey(hotkey);
+
     // Unregister existing transcription hotkey only (not all hotkeys)
-    if (this.registeredHotkey && this.registeredHotkey !== hotkey) {
+    if (this.registeredHotkey && this.registeredHotkey !== normalizedHotkey) {
       globalShortcut.unregister(this.registeredHotkey);
       this.registeredHotkey = null;
     }
 
     // Check if the hotkey is already registered by another app
     // Note: This doesn't guarantee we can steal it, but we try
-    const alreadyRegistered = globalShortcut.isRegistered(hotkey);
+    const alreadyRegistered = globalShortcut.isRegistered(normalizedHotkey);
     if (alreadyRegistered) {
-      console.warn(`[TranscriberManager] Hotkey ${hotkey} is already registered, attempting to override...`);
+      console.warn(`[TranscriberManager] Hotkey ${normalizedHotkey} is already registered, attempting to override...`);
       // Try to unregister it (may not work if another app has it)
-      globalShortcut.unregister(hotkey);
+      globalShortcut.unregister(normalizedHotkey);
     }
 
     // Register new hotkey
-    const registered = globalShortcut.register(hotkey, () => {
+    const registered = globalShortcut.register(normalizedHotkey, () => {
       this.handleHotkeyPress();
     });
 
     if (!registered) {
-      console.error(`[TranscriberManager] Failed to register hotkey: ${hotkey}`);
-      
+      console.error(`[TranscriberManager] Failed to register hotkey: ${normalizedHotkey}`);
+
       // Provide helpful error message
       let errorMessage = `Failed to register hotkey: ${hotkey}`;
       if (alreadyRegistered) {
@@ -249,14 +304,14 @@ export class TranscriberManager extends EventEmitter {
           errorMessage += '. The hotkey format may be invalid or not supported.';
         }
       }
-      
+
       this.emit('error', new Error(errorMessage));
       return false;
     }
 
     this.hotkey = hotkey;
-    this.registeredHotkey = hotkey; // Track the registered hotkey
-    console.log(`[TranscriberManager] Registered transcription hotkey: ${hotkey}`);
+    this.registeredHotkey = normalizedHotkey; // Track the normalized registered hotkey
+    console.log(`[TranscriberManager] Registered transcription hotkey: ${hotkey} (normalized to ${normalizedHotkey})`);
     return true;
   }
 
@@ -413,8 +468,12 @@ export class TranscriberManager extends EventEmitter {
       
       // Strip bracketed content like [BLANK_AUDIO], [MUSIC], [SILENCE] from anywhere in the text.
       // These are whisper artifacts that shouldn't appear in final transcription.
-      // Preserve [Figure X] references by using a negative lookahead.
-      let cleanedText = trimmedText.replace(/\s*\[(?!Figure\s+[A-Z]+\])[^\]]+\]\s*/g, ' ').trim();
+      // Preserve [Figure X] references by using a negative lookahead (X can be number or letter).
+      let cleanedText = trimmedText.replace(/\s*\[(?!Figure\s+[A-Za-z0-9]+\])[^\]]+\]\s*/g, ' ').trim();
+
+      // Also strip all-caps parenthetical sound descriptions like (MUMBLING), (MUSIC), (LAUGHING).
+      // These are Whisper artifacts. Preserve normal parenthetical comments.
+      cleanedText = cleanedText.replace(/\s*\([A-Z\s]+\)\s*/g, ' ').trim();
       
       // If nothing remains after stripping brackets, treat as silence.
       if (cleanedText.length === 0) {
@@ -1065,9 +1124,12 @@ export class TranscriberManager extends EventEmitter {
     
     // If no segments parsed, fall back to appending figure references at the end.
     if (segments.length === 0) {
+      console.log('[TranscriberManager] No timestamped segments parsed, using fallback figure insertion');
       const stripped = output.replace(/\[\d{2}:\d{2}:\d{2}(?:\.\d{3})?\s*-->\s*\d{2}:\d{2}:\d{2}(?:\.\d{3})?\]/g, '');
       return this.insertFigureReferences(stripped.trim());
     }
+
+    console.log(`[TranscriberManager] Parsed ${segments.length} timestamped segments with ${this.screenshotMetadata.length} screenshots`);
     
     // Sort screenshots by capture time.
     const sortedScreenshots = [...this.screenshotMetadata].sort(
@@ -1117,20 +1179,24 @@ export class TranscriberManager extends EventEmitter {
     
     // Build final text with inline figure references.
     const resultParts: string[] = [];
-    
+    let totalFiguresAdded = 0;
+
     for (let i = 0; i < segments.length; i++) {
       let segmentText = segments[i].text;
-      
+
       const figures = segmentFigures.get(i);
       if (figures && figures.length > 0) {
         // Insert figure refs at end of this segment.
         const figureRefs = figures.map(f => `[Figure ${f}]`).join(' ');
         segmentText = `${segmentText} ${figureRefs}`;
+        totalFiguresAdded += figures.length;
       }
-      
+
       resultParts.push(segmentText);
     }
-    
+
+    console.log(`[TranscriberManager] Added ${totalFiguresAdded} inline figure references across ${segments.length} segments`);
+
     return resultParts.join(' ').trim();
   }
   
@@ -1189,8 +1255,9 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
-   * Append figure file paths at the end of text (scientific paper format).
-   * Exports images to cache and adds a "Figures:" section with paths.
+   * Append figure file paths at the end of text in scientific paper format.
+   * The text should already have inline [Figure X] references inserted.
+   * This adds a "Figures:" section at the end with the actual file paths.
    */
   private async addImagePathsToText(text: string, items: ClipboardItem[]): Promise<string> {
     const figurePaths: string[] = [];
@@ -1201,6 +1268,7 @@ export class TranscriberManager extends EventEmitter {
         const imagePath = await this.clipboardManager!.exportImageToCache(item);
         if (imagePath) {
           const obscuredPath = obscureHomePath(imagePath);
+          // Add with proper "Figure X:" label
           figurePaths.push(`Figure ${item.figureLabel}: ${obscuredPath}`);
         }
       }
@@ -1208,7 +1276,7 @@ export class TranscriberManager extends EventEmitter {
 
     // If we have figures, append them in scientific paper format
     if (figurePaths.length > 0) {
-      return `${text}\n\nFigures:\n${figurePaths.join('\n')}`;
+      return `${text}\n\n${figurePaths.join('\n')}\n\n`;
     }
 
     return text;
@@ -1246,38 +1314,48 @@ export class TranscriberManager extends EventEmitter {
     const isTerminal = await this.isFrontmostAppTerminal();
     console.log('[TranscriberManager] Frontmost app is terminal:', isTerminal);
 
+    // Check if we have a transcript with figures
+    const hasTranscriptWithFigures =
+      items.some(i => i.type === 'text' || i.type === 'transcript') &&
+      items.some(i => i.imageData);
+
     // Paste in chronological order: oldest first (top), newest last (bottom).
     // This preserves the natural flow of conversation/context building.
     for (const item of items) {
       if (item.type === 'text' || item.type === 'transcript') {
         let textContent = item.content || '';
 
-        // For terminals, replace figure references with file paths
-        if (isTerminal && this.currentStack.length > 1) {
+        // ALWAYS append figure paths at the end when there are multiple items
+        // This provides consistent figure references across all apps
+        if (this.currentStack.length > 1) {
           textContent = await this.addImagePathsToText(textContent, items);
         }
 
         clipboard.writeText(textContent);
+        this.clipboardManager?.syncClipboardHash();
         await this.pasteText();
       } else if (item.imageData) {
         if (isTerminal) {
-          // For terminals, export image to file and paste path
+          // For terminals, skip individual images if they're in the transcript's figure list.
+          if (hasTranscriptWithFigures) {
+            continue;
+          }
+          // For terminals without transcript, export image to file and paste path
           const imagePath = await this.clipboardManager!.exportImageToCache(item);
           if (imagePath) {
             const obscuredPath = obscureHomePath(imagePath);
-            const figureRef = item.figureLabel
-              ? `[Figure ${item.figureLabel} - ${obscuredPath}]`
-              : `[Image - ${obscuredPath}]`;
-            clipboard.writeText(figureRef);
+            clipboard.writeText(obscuredPath);
+            this.clipboardManager?.syncClipboardHash();
             await this.pasteText();
           }
         } else {
-          // For non-terminals, paste image buffer as before
+          // For non-terminals, paste the actual image so multimodal apps can see it.
           const imageBuffer = typeof item.imageData === 'string'
             ? Buffer.from(item.imageData, 'base64')
             : item.imageData;
           const image = nativeImage.createFromBuffer(imageBuffer);
           clipboard.writeImage(image);
+          this.clipboardManager?.syncClipboardHash();
           await this.pasteText();
         }
       }

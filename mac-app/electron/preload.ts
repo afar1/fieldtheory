@@ -27,6 +27,7 @@ const TranscribeIPCChannels = {
   SET_ABANDON_HOTKEY: 'transcribe:setAbandonHotkey',
   GET_ABANDON_CONFIRMATION: 'transcribe:getAbandonConfirmation',
   SET_ABANDON_CONFIRMATION: 'transcribe:setAbandonConfirmation',
+  TOGGLE_RECORDING: 'transcribe:toggleRecording',
   GET_SOUND_CONFIG: 'transcribe:getSoundConfig',
   SET_SOUND_CONFIG: 'transcribe:setSoundConfig',
   GET_AVAILABLE_SOUNDS: 'transcribe:getAvailableSounds',
@@ -504,6 +505,7 @@ export interface TranscribeAPI {
   setAbandonHotkey: (hotkey: string) => Promise<boolean>;
   getAbandonConfirmation: () => Promise<boolean>;
   setAbandonConfirmation: (enabled: boolean) => Promise<void>;
+  toggleRecording: () => Promise<void>;
   getSoundConfig: () => Promise<SoundConfig>;
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
   getAvailableSounds: () => Promise<SoundOption[]>;
@@ -743,6 +745,10 @@ const transcribeAPI: TranscribeAPI = {
 
   setAbandonConfirmation: async (enabled: boolean): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_ABANDON_CONFIRMATION, enabled);
+  },
+
+  toggleRecording: async (): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.TOGGLE_RECORDING);
   },
 
   getSoundConfig: async (): Promise<SoundConfig> => {
@@ -1954,6 +1960,17 @@ const diagnosticsAPI: DiagnosticsAPI = {
   },
 };
 
+// Electron API for app control and debugging
+const electronAPI = {
+  relaunch: () => {
+    ipcRenderer.send('electron:relaunch');
+  },
+  toggleDevTools: () => {
+    ipcRenderer.send('electron:toggleDevTools');
+  },
+};
+
+contextBridge.exposeInMainWorld('electronAPI', electronAPI);
 contextBridge.exposeInMainWorld('shellAPI', shellAPI);
 contextBridge.exposeInMainWorld('diagnosticsAPI', diagnosticsAPI);
 contextBridge.exposeInMainWorld('quotaAPI', quotaAPI);

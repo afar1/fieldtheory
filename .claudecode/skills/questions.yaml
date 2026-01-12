@@ -1,0 +1,4 @@
+name: questions
+description: Ask as many questions as needed until full comprehension
+instructions: |
+  Ask me as many questions as you may need until you have a full comprehension of my intent and what I'm trying to do and any important dependencies. I'm happy to answer as many questions as you'd like, even after I've answered some of your first sets of questions.

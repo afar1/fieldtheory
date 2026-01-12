@@ -13,13 +13,13 @@ import {
   Vibration,
   AppState,
   TextInput,
-  SafeAreaView,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
 } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useWhisperRecording } from './hooks/useWhisperRecording';
@@ -167,6 +167,8 @@ export default function App() {
     stopRecording,
     isReady,
   } = useWhisperRecording();
+
+  const insets = useSafeAreaInsets();
 
   const [modelDownloadProgress, setModelDownloadProgress] = useState<number | null>(null);
   const [isDownloadingModel, setIsDownloadingModel] = useState(false);
@@ -1231,7 +1233,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <GestureHandlerRootView style={{ flex: 1 }}>
-        <SafeAreaView style={styles.safeArea}>
+        <SafeAreaProvider>
         <View style={styles.container}>
           <StatusBar style="auto" />
 
@@ -1384,7 +1386,7 @@ export default function App() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={createMode.isCreating && Platform.OS === 'ios' ? 36 : 0} // 36px offset for iOS suggestion bar when creating
       >
-        <View style={styles.bottomBar}>
+        <View style={[styles.bottomBar, { paddingBottom: insets.bottom }]}>
           {createMode.isCreating ? (
             /* Create mode: Cancel | Save */
             <>
@@ -1804,7 +1806,7 @@ export default function App() {
         </KeyboardAvoidingView>
       </Modal>
         </View>
-        </SafeAreaView>
+        </SafeAreaProvider>
       </GestureHandlerRootView>
     </ErrorBoundary>
   );
@@ -1891,7 +1893,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderTopWidth: 1,
     borderTopColor: '#E0E0E0',
-    paddingBottom: 34,
     paddingTop: 8,
   },
   tabButton: {

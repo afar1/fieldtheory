@@ -220,6 +220,40 @@ export default function PopularCommands() {
     }
   }, [newCommandName, newCommandContent]);
 
+  // Check if current user is admin.
+  const isAdmin = useMemo(() => {
+    return session?.user?.email === 'andrew.mfarah@gmail.com';
+  }, [session]);
+
+  // Delete a command (admin only).
+  const handleDeleteCommand = useCallback(async (commandId: string) => {
+    if (!isAdmin) return;
+
+    const confirmed = confirm('Are you sure you want to delete this command?');
+    if (!confirmed) return;
+
+    if (!supabase) {
+      // Mock: remove locally.
+      setCommands(prev => prev.filter(cmd => cmd.id !== commandId));
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from('popular_commands')
+        .delete()
+        .eq('id', commandId);
+
+      if (error) throw error;
+
+      // Remove from local state.
+      setCommands(prev => prev.filter(cmd => cmd.id !== commandId));
+    } catch (err) {
+      console.error('Failed to delete command:', err);
+      alert('Failed to delete command');
+    }
+  }, [isAdmin]);
+
   // Check if content needs truncation (more than ~2 lines worth of text).
   const needsTruncation = useCallback((content: string) => {
     // Rough estimate: 2 lines at 11px font = ~120 chars, or has newlines that would extend it.
@@ -301,7 +335,7 @@ export default function PopularCommands() {
             </div>
           </div>
           
-          {/* Use count - smaller, positioned lower */}
+          {/* Use count and admin controls */}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', flexShrink: 0, marginLeft: '8px' }}>
             <span style={{
               fontSize: '9px',
@@ -309,6 +343,25 @@ export default function PopularCommands() {
             }}>
               {isCopied ? '✓' : formatUseCount(command.copy_count)}
             </span>
+            {isAdmin && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDeleteCommand(command.id);
+                }}
+                style={{
+                  fontSize: '9px',
+                  color: theme.isDark ? '#ef4444' : '#dc2626',
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '2px 4px',
+                }}
+                title="Delete command (Admin)"
+              >
+                ×
+              </button>
+            )}
           </div>
         </div>
         
@@ -318,8 +371,6 @@ export default function PopularCommands() {
             onClick={(e) => {
               e.stopPropagation();
               setExpandedId(isExpanded ? null : command.id);
-              setHoveredCommand(null);
-              setHoverPosition(null);
             }}
             style={{
               alignSelf: 'flex-start',

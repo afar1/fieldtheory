@@ -58,6 +58,8 @@ type ClipboardItem = {
   source: ClipboardSource;
   figureLabel: string | null; // Figure label for screenshots in stacks (e.g., "A", "B", "C")
   figureId: string | null; // Unique 5-char alphanumeric ID for searchability (e.g., "k7xm2")
+  thumbnailData?: string | null;
+  needsLazyLoad?: boolean;
 };
 
 type StackInfo = {
@@ -251,7 +253,136 @@ function combineStackText(items: ClipboardItem[]): string {
  * DraggableDroppableRow - wrapper that makes a row both draggable and a drop target.
  * Uses dnd-kit's useDraggable and useDroppable hooks.
  */
-function DraggableDroppableRow({
+// Memoized thumbnail component. Uses thumbnailData for list display, fetches full image on-demand.
+const StackImageThumbnail = React.memo(function StackImageThumbnail({
+  item,
+  onHover,
+  onPreview,
+}: {
+  item: ClipboardItem;
+  onHover: (id: number | null) => void;
+  onPreview: (preview: { type: 'image'; data: string; width: number; height: number; itemId: number; stackId: string | null; figureLabel?: string } | null) => void;
+}) {
+  const [loadedFullImageData, setLoadedFullImageData] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // For display: prefer thumbnail, then fall back to imageData (for small images or legacy).
+  const thumbnailForDisplay = item.thumbnailData || item.imageData;
+  
+  // For preview: use loaded full data, or fall back to imageData if available.
+  const fullImageData = loadedFullImageData || item.imageData;
+
+  // Memoize the thumbnail data URL for list display (~10KB, very fast).
+  const thumbnailUrl = useMemo(
+    () => thumbnailForDisplay ? `data:image/png;base64,${thumbnailForDisplay}` : null,
+    [thumbnailForDisplay]
+  );
+
+  // Fetch full image data on demand for preview modal.
+  const handleClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    
+    // If we don't have full imageData, fetch it.
+    if (!fullImageData && !isLoading) {
+      setIsLoading(true);
+      try {
+        const fullItem = await window.clipboardAPI?.getItem?.(item.id);
+        if (fullItem?.imageData) {
+          setLoadedFullImageData(fullItem.imageData);
+          onPreview({
+            type: 'image',
+            data: fullItem.imageData,
+            width: fullItem.imageWidth || 0,
+            height: fullItem.imageHeight || 0,
+            itemId: fullItem.id,
+            stackId: fullItem.stackId,
+            figureLabel: fullItem.figureLabel ?? undefined,
+          });
+        }
+      } finally {
+        setIsLoading(false);
+      }
+      return;
+    }
+
+    // We have full imageData, show preview directly.
+    if (fullImageData) {
+      onPreview({
+        type: 'image',
+        data: fullImageData,
+        width: item.imageWidth || 0,
+        height: item.imageHeight || 0,
+        itemId: item.id,
+        stackId: item.stackId,
+        figureLabel: item.figureLabel ?? undefined,
+      });
+    }
+  };
+
+  return (
+    <div
+      onMouseEnter={() => onHover(item.id)}
+      onMouseLeave={() => onHover(null)}
+      style={{ position: 'relative' }}
+      onClick={handleClick}
+    >
+      {thumbnailUrl ? (
+        <img
+          src={thumbnailUrl}
+          alt="Screenshot preview"
+          style={{
+            height: '50px',
+            width: 'auto',
+            borderRadius: '4px',
+            border: '1px solid #e0e0e0',
+            cursor: 'pointer',
+          }}
+        />
+      ) : (
+        // Placeholder for images without thumbnails (legacy items before migration).
+        <div
+          style={{
+            height: '50px',
+            width: item.imageWidth && item.imageHeight 
+              ? `${Math.round(50 * (item.imageWidth / item.imageHeight))}px`
+              : '66px',
+            borderRadius: '4px',
+            border: '1px solid #e0e0e0',
+            backgroundColor: isLoading ? '#e8e8e8' : '#f0f0f0',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            fontSize: '9px',
+            color: '#888',
+          }}
+        >
+          {isLoading ? '...' : '📷'}
+        </div>
+      )}
+      {/* Figure label badge */}
+      {item.figureLabel && (
+        <div style={{
+          position: 'absolute',
+          bottom: '2px',
+          left: '2px',
+          backgroundColor: 'rgba(0, 0, 0, 0.7)',
+          color: '#fff',
+          fontSize: '9px',
+          fontWeight: 600,
+          padding: '1px 4px',
+          borderRadius: '3px',
+          letterSpacing: '0.5px',
+        }}>
+          {item.figureLabel}
+        </div>
+      )}
+    </div>
+  );
+});
+
+// Memoized to prevent unnecessary re-renders during list navigation.
+const DraggableDroppableRow = React.memo(function DraggableDroppableRow({
   id,
   children,
   style,
@@ -287,7 +418,7 @@ function DraggableDroppableRow({
       {children}
     </div>
   );
-}
+});
 
 /**
  * KeyCap component - renders a keyboard key with clean styling.
@@ -418,7 +549,14 @@ export default function ClipboardHistory() {
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
-  
+
+  // Performance debugging: simple render counter
+  const renderCountRef = useRef(0);
+  useEffect(() => {
+    renderCountRef.current += 1;
+    console.log(`[Performance] Render #${renderCountRef.current}`);
+  });
+
   // Shared clipboard state (sharing to shared clipboard from clipboard view).
   const [sharingToTeam, setSharingToTeam] = useState<number | null>(null);
   const [sharedToTeamId, setSharedToTeamId] = useState<string | null>(null); // For success flash.
@@ -467,8 +605,8 @@ export default function ClipboardHistory() {
   // Hover states for UI interactions
   const [hoveredImageId, setHoveredImageId] = useState<number | null>(null);
   
-  type PreviewContent = 
-    | { type: 'image'; data: string; width: number; height: number; itemId: number; stackId: string | null }
+  type PreviewContent =
+    | { type: 'image'; data: string; width: number; height: number; itemId: number; stackId: string | null; figureLabel?: string }
     | { type: 'text'; content: string };
   const [preview, setPreview] = useState<PreviewContent | null>(null);
   const [previewClosing, setPreviewClosing] = useState(false);
@@ -478,24 +616,68 @@ export default function ClipboardHistory() {
   const [stackPreviewIndex, setStackPreviewIndex] = useState(0);
   const [stackPreviewItems, setStackPreviewItems] = useState<PreviewContent[]>([]);
   
-  // Build the preview sequence for a stack: [image1, image2, ..., combinedText].
-  const getStackPreviewItems = (items: ClipboardItem[]): PreviewContent[] => {
-    const previewItems: PreviewContent[] = [];
+  // Cache for prefetched full image data (for instant preview navigation).
+  const imageCache = useRef<Map<number, string>>(new Map());
+  
+  // Fetch full image data for an item, using cache if available.
+  const getFullImageData = useCallback(async (itemId: number, existingImageData?: string | null): Promise<string | null> => {
+    // If we already have the full image data, return it.
+    if (existingImageData) return existingImageData;
     
+    // Check cache first.
+    const cached = imageCache.current.get(itemId);
+    if (cached) return cached;
+    
+    // Fetch from backend.
+    const fullItem = await window.clipboardAPI?.getItem?.(itemId);
+    if (fullItem?.imageData) {
+      imageCache.current.set(itemId, fullItem.imageData);
+      return fullItem.imageData;
+    }
+    return null;
+  }, []);
+  
+  // Prefetch full images for items (for smooth preview navigation).
+  const prefetchImages = useCallback(async (itemIds: number[]) => {
+    const idsToFetch = itemIds.filter(id => !imageCache.current.has(id));
+    if (idsToFetch.length === 0) return;
+    
+    // Fetch in parallel but don't await - fire and forget for prefetching.
+    idsToFetch.forEach(async (id) => {
+      try {
+        const item = await window.clipboardAPI?.getItem?.(id);
+        if (item?.imageData) {
+          imageCache.current.set(id, item.imageData);
+        }
+      } catch {
+        // Silently ignore prefetch errors
+      }
+    });
+  }, []);
+  
+  // Build the preview sequence for a stack: [image1, image2, ..., combinedText].
+  // Uses cached images if available, or returns items that need loading.
+  const getStackPreviewItems = useCallback((items: ClipboardItem[]): PreviewContent[] => {
+    const previewItems: PreviewContent[] = [];
+
     // Add each image as a separate preview item with its ID and stackId.
+    // Use cached data if available, otherwise use thumbnail/placeholder.
     for (const item of items) {
-      if (item.imageData) {
+      if (item.imageData || item.thumbnailData) {
+        // Check cache for full image, otherwise use what we have.
+        const cachedFullImage = imageCache.current.get(item.id);
         previewItems.push({
           type: 'image',
-          data: item.imageData,
+          data: cachedFullImage || item.imageData || item.thumbnailData || '',
           width: item.imageWidth || 0,
           height: item.imageHeight || 0,
           itemId: item.id,
           stackId: item.stackId,
+          figureLabel: item.figureLabel ?? undefined,
         });
       }
     }
-    
+
     // Combine all text into one preview item at the end.
     const combinedText = items
       .filter(i => i.content)
@@ -504,9 +686,9 @@ export default function ClipboardHistory() {
     if (combinedText) {
       previewItems.push({ type: 'text', content: combinedText });
     }
-    
+
     return previewItems;
-  };
+  }, []);
   
   const dismissPreview = () => {
     if (!preview || previewClosing) return;
@@ -519,30 +701,37 @@ export default function ClipboardHistory() {
     }, 150);
   };
   
-  const getPreviewForRow = (row: ListRow): PreviewContent | null => {
+  // Get preview for a row, using cache if available.
+  const getPreviewForRow = useCallback((row: ListRow): PreviewContent | null => {
     if (row.type === 'item') {
-      if (row.item.imageData) {
+      const item = row.item;
+      if (item.imageData || item.thumbnailData) {
+        // Use cached full image if available.
+        const cachedFullImage = imageCache.current.get(item.id);
         return {
           type: 'image',
-          data: row.item.imageData,
-          width: row.item.imageWidth || 0,
-          height: row.item.imageHeight || 0,
-          itemId: row.item.id,
-          stackId: row.item.stackId,
+          data: cachedFullImage || item.imageData || item.thumbnailData || '',
+          width: item.imageWidth || 0,
+          height: item.imageHeight || 0,
+          itemId: item.id,
+          stackId: item.stackId,
+          figureLabel: item.figureLabel ?? undefined,
         };
-      } else if (row.item.content) {
-        return { type: 'text', content: row.item.content };
+      } else if (item.content) {
+        return { type: 'text', content: item.content };
       }
     } else if (row.type === 'stack') {
-      const imageItem = row.items.find(i => i.imageData);
-      if (imageItem?.imageData) {
+      const imageItem = row.items.find(i => i.imageData || i.thumbnailData);
+      if (imageItem) {
+        const cachedFullImage = imageCache.current.get(imageItem.id);
         return {
           type: 'image',
-          data: imageItem.imageData,
+          data: cachedFullImage || imageItem.imageData || imageItem.thumbnailData || '',
           width: imageItem.imageWidth || 0,
           height: imageItem.imageHeight || 0,
           itemId: imageItem.id,
           stackId: imageItem.stackId,
+          figureLabel: imageItem.figureLabel ?? undefined,
         };
       } else {
         const combinedText = row.items
@@ -555,7 +744,56 @@ export default function ClipboardHistory() {
       }
     }
     return null;
-  };
+  }, []);
+  
+  // Load full image and update preview if it's the currently displayed one.
+  const loadFullImageForPreview = useCallback(async (itemId: number, currentPreview: PreviewContent | null) => {
+    const fullImageData = await getFullImageData(itemId);
+    if (fullImageData && currentPreview?.type === 'image' && currentPreview.itemId === itemId) {
+      // Update preview with full image if still viewing this item.
+      setPreview(prev => {
+        if (prev?.type === 'image' && prev.itemId === itemId) {
+          return { ...prev, data: fullImageData };
+        }
+        return prev;
+      });
+    }
+  }, [getFullImageData]);
+  
+  // Helper: Update preview for a row during navigation.
+  // Shows preview immediately (with thumbnail/cached data), then loads full image.
+  // Also prefetches adjacent images for smooth navigation.
+  const updatePreviewForRow = useCallback((row: ListRow) => {
+    if (row.type === 'stack') {
+      const previewItems = getStackPreviewItems(row.items);
+      if (previewItems.length > 0) {
+        setStackPreviewItems(previewItems);
+        setStackPreviewIndex(0);
+        setPreview(previewItems[0]);
+        // Load full image for the first item if needed.
+        const firstImageItem = row.items.find(i => i.imageData || i.thumbnailData);
+        if (firstImageItem && !imageCache.current.has(firstImageItem.id) && !firstImageItem.imageData) {
+          loadFullImageForPreview(firstImageItem.id, previewItems[0]);
+        }
+        // Prefetch all images in the stack.
+        const imageItemIds = row.items
+          .filter(i => i.imageData || i.thumbnailData)
+          .map(i => i.id);
+        prefetchImages(imageItemIds);
+      }
+    } else {
+      setStackPreviewItems([]);
+      setStackPreviewIndex(0);
+      const newContent = getPreviewForRow(row);
+      if (newContent) {
+        setPreview(newContent);
+        // Load full image if needed.
+        if (newContent.type === 'image' && !imageCache.current.has(newContent.itemId) && !row.item.imageData) {
+          loadFullImageForPreview(newContent.itemId, newContent);
+        }
+      }
+    }
+  }, [getStackPreviewItems, getPreviewForRow, loadFullImageForPreview, prefetchImages]);
   
   const [isRecording, setIsRecording] = useState(false);
   const [transcriptionStatus, setTranscriptionStatus] = useState<'idle' | 'recording' | 'transcribing'>('idle');
@@ -598,16 +836,19 @@ export default function ClipboardHistory() {
   // App version for footer display.
   const [appVersion] = useState(() => window.updaterAPI?.getVersion?.() || '0.0.0');
   
-  // Release notes popup - show after update if version changed.
+  // Release notes popup - show after update if version changed, or on first install.
   const [showReleaseNotes, setShowReleaseNotes] = useState(() => {
     const lastVersion = localStorage.getItem('lastSeenVersion');
     const currentVersion = window.updaterAPI?.getVersion?.() || '0.0.0';
     if (lastVersion !== currentVersion) {
       localStorage.setItem('lastSeenVersion', currentVersion);
-      return lastVersion !== null; // Only show if not first run
+      // Show on first install AND on updates.
+      return true;
     }
     return false;
   });
+  // Whether the popup is showing because user hovered or confirmed "uptodate" (vs. after update).
+  const [releaseNotesLatestMode, setReleaseNotesLatestMode] = useState(false);
   const [versionHovered, setVersionHovered] = useState(false);
   
   const [allTimeStats, setAllTimeStats] = useState<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>({
@@ -878,6 +1119,9 @@ export default function ClipboardHistory() {
       }),
       window.updaterAPI.onUpdateNotAvailable(() => {
         setUpdateStatus('uptodate');
+        // Show release notes popup in "Latest" mode when confirmed up to date.
+        setReleaseNotesLatestMode(true);
+        setShowReleaseNotes(true);
         // Reset to idle after 3 seconds so the version number returns.
         setTimeout(() => setUpdateStatus('idle'), 3000);
       }),
@@ -920,13 +1164,11 @@ export default function ClipboardHistory() {
 
   // Pointer sensor with distance activation - must move 5px before drag starts.
   // This distinguishes clicks from drags.
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 5,
-      },
-    })
-  );
+  // Memoize sensor config to prevent DndContext re-renders.
+  const pointerSensorOptions = useMemo(() => ({
+    activationConstraint: { distance: 5 },
+  }), []);
+  const sensors = useSensors(useSensor(PointerSensor, pointerSensorOptions));
 
   // Format numbers with commas (e.g., 16,000)
   const formatNumber = (num: number): string => num.toLocaleString();
@@ -1020,16 +1262,34 @@ export default function ClipboardHistory() {
   }, [hasItemsAbove]);
 
   // Load items from clipboard history plus stack info.
+  // Use refs to avoid dependency cycles - offset and stacks don't need to recreate this function.
+  const offsetRef = useRef(offset);
+  const stacksRef = useRef(stacks);
+
+  // Keep refs in sync with state
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
+
+  useEffect(() => {
+    stacksRef.current = stacks;
+  }, [stacks]);
+
   const loadItems = useCallback(async (reset: boolean = false) => {
     if (!isMacOS || !window.clipboardAPI) {
       return;
     }
 
+    // Performance tracking
+    const loadStartTime = performance.now();
+    const currentOffset = offsetRef.current;
+    console.log(`[Performance] loadItems called (reset=${reset}, offset=${currentOffset}, filter=${sourceFilter}, search="${debouncedSearchQuery}")`);
+
     setLoading(true);
     try {
       const queryOptions: ClipboardQueryOptions = {
         limit: ITEMS_PER_PAGE,
-        offset: reset ? 0 : offset,
+        offset: reset ? 0 : currentOffset,
       };
 
       if (sourceFilter !== 'all') {
@@ -1040,11 +1300,15 @@ export default function ClipboardHistory() {
         queryOptions.search = debouncedSearchQuery.trim();
       }
 
+      const queryStartTime = performance.now();
       const [newItems, stacksData] = await Promise.all([
         window.clipboardAPI.queryItems(queryOptions),
-        reset ? window.clipboardAPI.getUniqueStacks?.() : Promise.resolve(stacks),
+        reset ? window.clipboardAPI.getUniqueStacks?.() : Promise.resolve(stacksRef.current),
       ]);
-      
+      const queryEndTime = performance.now();
+      console.log(`[Performance] Data query completed in ${(queryEndTime - queryStartTime).toFixed(2)}ms (${newItems.length} items)`);
+
+      const stateUpdateStartTime = performance.now();
       if (reset) {
         setItems(newItems as ClipboardItem[]);
         setStacks(stacksData || []);
@@ -1055,12 +1319,16 @@ export default function ClipboardHistory() {
       }
 
       setHasMore(newItems.length === ITEMS_PER_PAGE);
+      const stateUpdateEndTime = performance.now();
+      console.log(`[Performance] State update completed in ${(stateUpdateEndTime - stateUpdateStartTime).toFixed(2)}ms`);
     } catch (error) {
       console.error('Failed to load clipboard items:', error);
     } finally {
       setLoading(false);
+      const loadEndTime = performance.now();
+      console.log(`[Performance] Total loadItems duration: ${(loadEndTime - loadStartTime).toFixed(2)}ms`);
     }
-  }, [isMacOS, debouncedSearchQuery, offset, stacks, sourceFilter]);
+  }, [isMacOS, debouncedSearchQuery, sourceFilter]);
 
   // Check if sharing is enabled.
   // Feature is disabled by default, unlocked via Cmd+Shift+S secret toggle.
@@ -1210,6 +1478,10 @@ export default function ClipboardHistory() {
   }, [pushUndo, showFeedback]);
 
   useEffect(() => {
+    // Performance debugging: track view switches
+    const switchStartTime = performance.now();
+    console.log(`[Performance] Switching to view: ${viewMode}`);
+
     if (viewMode !== 'sketch') {
       localStorage.setItem('fieldTheoryView', viewMode);
     }
@@ -1227,18 +1499,57 @@ export default function ClipboardHistory() {
     }
     // Notify main process of sketch mode changes so it can skip auto-paste into Excalidraw.
     window.clipboardAPI?.setSketchMode?.(viewMode === 'sketch');
+
+    // Log completion time
+    requestAnimationFrame(() => {
+      const switchEndTime = performance.now();
+      console.log(`[Performance] View switch to ${viewMode} completed in ${(switchEndTime - switchStartTime).toFixed(2)}ms`);
+    });
   }, [viewMode]);
 
   useEffect(() => {
     if (!supabase) return;
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setAuthSession(session);
-      // Forward session to main process for tier sync on startup.
-      if (session) {
-        window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
+    // Initialize auth session from both Supabase client AND main process.
+    // This handles the case where main process has a valid session but Supabase client doesn't.
+    const initializeSession = async () => {
+      // First check Supabase client's localStorage.
+      const { data: { session: clientSession } } = await supabase.auth.getSession();
+
+      // Then check if main process has a session (MobileSync).
+      const mainProcessSession = await window.authAPI?.getSession?.();
+
+      // If main process has a session but client doesn't, restore it to client.
+      if (mainProcessSession && !clientSession) {
+        console.log('[ClipboardHistory] Restoring session from main process to Supabase client');
+        try {
+          const { data, error } = await supabase.auth.setSession({
+            access_token: mainProcessSession.access_token,
+            refresh_token: mainProcessSession.refresh_token,
+          });
+          if (!error && data.session) {
+            setAuthSession(data.session);
+          } else {
+            console.warn('[ClipboardHistory] Failed to restore session:', error);
+            setAuthSession(mainProcessSession);
+          }
+        } catch (err) {
+          console.error('[ClipboardHistory] Error restoring session:', err);
+          setAuthSession(mainProcessSession);
+        }
+      } else {
+        // Use whichever session we have (prefer client session if both exist).
+        setAuthSession(clientSession || mainProcessSession);
       }
-    });
+
+      // Forward valid session to main process for tier sync.
+      const finalSession = clientSession || mainProcessSession;
+      if (finalSession) {
+        window.clipboardAPI?.setSyncSession?.(finalSession.access_token, finalSession.refresh_token);
+      }
+    };
+
+    initializeSession();
 
     // Listen for auth state changes.
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -1297,7 +1608,7 @@ export default function ClipboardHistory() {
       setOffset(0);
       loadItems(true);
     }
-  }, [isVisible, debouncedSearchQuery, sourceFilter]);
+  }, [isVisible, loadItems]);
 
   useEffect(() => {
     if (!isMacOS || !window.clipboardAPI) {
@@ -1347,8 +1658,34 @@ export default function ClipboardHistory() {
       });
     });
 
-    const unsubscribeAdded = window.clipboardAPI.onItemAdded((id) => {
-      loadItems(true);
+    const unsubscribeAdded = window.clipboardAPI.onItemAdded(async (id) => {
+      // Preserve scroll position and loaded items count when adding new items
+      const scrollContainer = listRef.current?.parentElement;
+      const savedScrollTop = scrollContainer?.scrollTop ?? 0;
+      const currentOffset = offsetRef.current;
+
+      // Reload with reset, but then restore the loaded count if user had loaded more
+      await loadItems(true);
+
+      // If user had loaded more items, keep loading until we match or exceed the previous offset
+      let attempts = 0;
+      const maxAttempts = 20; // Safety limit to prevent infinite loops
+      while (offsetRef.current < currentOffset && attempts < maxAttempts) {
+        const offsetBefore = offsetRef.current;
+        await loadItems(false);
+        const offsetAfter = offsetRef.current;
+
+        // Break if offset didn't increase (no more items to load)
+        if (offsetAfter <= offsetBefore) break;
+        attempts++;
+      }
+
+      // Restore scroll position after all items are loaded
+      requestAnimationFrame(() => {
+        if (scrollContainer) {
+          scrollContainer.scrollTop = savedScrollTop;
+        }
+      });
     });
 
     const unsubscribeDeleted = window.clipboardAPI.onItemDeleted((id) => {
@@ -1423,24 +1760,25 @@ export default function ClipboardHistory() {
 
   // Build list rows with stack grouping.
   // Stacked items are grouped together, non-stacked items appear individually.
-  const buildListRows = useCallback((): ListRow[] => {
+  // Memoized to avoid recreating on every render.
+  const listRows = useMemo((): ListRow[] => {
     const rows: ListRow[] = [];
     const seenStackIds = new Set<string>();
-    
+
     // Process all items (no filtering)
     for (const item of items) {
       if (item.stackId) {
         // This item belongs to a stack
         if (!seenStackIds.has(item.stackId)) {
           seenStackIds.add(item.stackId);
-          
+
           // Find the stack info
           const stackInfo = stacks.find(s => s.stackId === item.stackId);
           if (stackInfo) {
             // Get all items in this stack
             const stackItems = items.filter((i: ClipboardItem) => i.stackId === item.stackId);
             const isExpanded = expandedStacks.has(item.stackId);
-            
+
             rows.push({
               type: 'stack',
               stack: stackInfo,
@@ -1458,12 +1796,9 @@ export default function ClipboardHistory() {
         rows.push({ type: 'item', item });
       }
     }
-    
+
     return rows;
   }, [items, stacks, expandedStacks]);
-  
-  // Memoize listRows so it's available in keyboard handler
-  const listRows = useMemo(() => buildListRows(), [buildListRows]);
 
   // Stack all items above the "context collected" separator.
   const stackItemsAboveSeparator = useCallback(async (separatorIndex: number) => {
@@ -1622,6 +1957,13 @@ export default function ClipboardHistory() {
       const hasCtrl = e.ctrlKey;
       const hasAlt = e.altKey;
       const key = e.key;
+
+      // Secret shortcut: Cmd+Shift+I to toggle Developer Tools
+      if (key === 'i' && hasMeta && hasShift && !hasCtrl && !hasAlt) {
+        e.preventDefault();
+        window.electronAPI?.toggleDevTools?.();
+        return;
+      }
 
       // If typing in the input, let it handle normal characters and Tab
       if (document.activeElement === inputRef.current && 
@@ -2019,23 +2361,7 @@ export default function ClipboardHistory() {
         // If preview is open, update preview for new row and reset stack index.
         if (preview && newIndex !== selectedIndex) {
           const newRow = listRows[newIndex];
-          if (newRow) {
-            if (newRow.type === 'stack') {
-              // Initialize stack preview for the new row.
-              const previewItems = getStackPreviewItems(newRow.items);
-              if (previewItems.length > 0) {
-                setStackPreviewItems(previewItems);
-                setStackPreviewIndex(0);
-                setPreview(previewItems[0]);
-              }
-            } else {
-              // Single item - clear stack state.
-              setStackPreviewItems([]);
-              setStackPreviewIndex(0);
-              const newContent = getPreviewForRow(newRow);
-              if (newContent) setPreview(newContent);
-            }
-          }
+          if (newRow) updatePreviewForRow(newRow);
         }
         
         const element = listRef.current?.children[newIndex] as HTMLElement;
@@ -2073,23 +2399,7 @@ export default function ClipboardHistory() {
         // If preview is open, update preview for new row and reset stack index.
         if (preview && newIndex !== selectedIndex) {
           const newRow = listRows[newIndex];
-          if (newRow) {
-            if (newRow.type === 'stack') {
-              // Initialize stack preview for the new row.
-              const previewItems = getStackPreviewItems(newRow.items);
-              if (previewItems.length > 0) {
-                setStackPreviewItems(previewItems);
-                setStackPreviewIndex(0);
-                setPreview(previewItems[0]);
-              }
-            } else {
-              // Single item - clear stack state.
-              setStackPreviewItems([]);
-              setStackPreviewIndex(0);
-              const newContent = getPreviewForRow(newRow);
-              if (newContent) setPreview(newContent);
-            }
-          }
+          if (newRow) updatePreviewForRow(newRow);
         }
         
         const element = listRef.current?.children[newIndex] as HTMLElement;
@@ -2537,16 +2847,28 @@ export default function ClipboardHistory() {
         if (e.key === 'ArrowRight') {
           e.preventDefault();
           if (stackPreviewIndex < stackPreviewItems.length - 1) {
-            setStackPreviewIndex(stackPreviewIndex + 1);
-            setPreview(stackPreviewItems[stackPreviewIndex + 1]);
+            const newIndex = stackPreviewIndex + 1;
+            const nextItem = stackPreviewItems[newIndex];
+            setStackPreviewIndex(newIndex);
+            setPreview(nextItem);
+            // Load full image if needed
+            if (nextItem.type === 'image' && !imageCache.current.has(nextItem.itemId)) {
+              loadFullImageForPreview(nextItem.itemId, nextItem);
+            }
           }
           return;
         }
         if (e.key === 'ArrowLeft') {
           e.preventDefault();
           if (stackPreviewIndex > 0) {
-            setStackPreviewIndex(stackPreviewIndex - 1);
-            setPreview(stackPreviewItems[stackPreviewIndex - 1]);
+            const newIndex = stackPreviewIndex - 1;
+            const prevItem = stackPreviewItems[newIndex];
+            setStackPreviewIndex(newIndex);
+            setPreview(prevItem);
+            // Load full image if needed
+            if (prevItem.type === 'image' && !imageCache.current.has(prevItem.itemId)) {
+              loadFullImageForPreview(prevItem.itemId, prevItem);
+            }
           }
           return;
         }
@@ -2557,21 +2879,7 @@ export default function ClipboardHistory() {
           if (nextRowIndex !== selectedIndex) {
             setSelectedIndex(nextRowIndex);
             const nextRow = listRows[nextRowIndex];
-            if (nextRow) {
-              if (nextRow.type === 'stack') {
-                const previewItems = getStackPreviewItems(nextRow.items);
-                if (previewItems.length > 0) {
-                  setStackPreviewItems(previewItems);
-                  setStackPreviewIndex(0);
-                  setPreview(previewItems[0]);
-                }
-              } else {
-                setStackPreviewItems([]);
-                setStackPreviewIndex(0);
-                const newContent = getPreviewForRow(nextRow);
-                if (newContent) setPreview(newContent);
-              }
-            }
+            if (nextRow) updatePreviewForRow(nextRow);
           }
           return;
         }
@@ -2581,21 +2889,7 @@ export default function ClipboardHistory() {
           if (prevRowIndex !== selectedIndex) {
             setSelectedIndex(prevRowIndex);
             const prevRow = listRows[prevRowIndex];
-            if (prevRow) {
-              if (prevRow.type === 'stack') {
-                const previewItems = getStackPreviewItems(prevRow.items);
-                if (previewItems.length > 0) {
-                  setStackPreviewItems(previewItems);
-                  setStackPreviewIndex(0);
-                  setPreview(previewItems[0]);
-                }
-              } else {
-                setStackPreviewItems([]);
-                setStackPreviewIndex(0);
-                const newContent = getPreviewForRow(prevRow);
-                if (newContent) setPreview(newContent);
-              }
-            }
+            if (prevRow) updatePreviewForRow(prevRow);
           }
           return;
         }
@@ -2625,17 +2919,26 @@ export default function ClipboardHistory() {
         if (hoveredImageId !== null) {
           e.preventDefault();
           const hoveredItem = items.find(item => item.id === hoveredImageId);
-          if (hoveredItem?.imageData) {
+          if (hoveredItem?.imageData || hoveredItem?.thumbnailData) {
             setStackPreviewItems([]);
             setStackPreviewIndex(0);
-            setPreview({
+            // Use cached full image if available, otherwise show what we have.
+            const cachedFullImage = imageCache.current.get(hoveredItem.id);
+            const displayData = cachedFullImage || hoveredItem.imageData || hoveredItem.thumbnailData || '';
+            const previewContent: PreviewContent = {
               type: 'image',
-              data: hoveredItem.imageData,
+              data: displayData,
               width: hoveredItem.imageWidth || 0,
               height: hoveredItem.imageHeight || 0,
               itemId: hoveredItem.id,
               stackId: hoveredItem.stackId,
-            });
+              figureLabel: hoveredItem.figureLabel ?? undefined,
+            };
+            setPreview(previewContent);
+            // Load full image in background if we only have thumbnail.
+            if (!cachedFullImage && !hoveredItem.imageData) {
+              loadFullImageForPreview(hoveredItem.id, previewContent);
+            }
           }
           return;
         }
@@ -2649,17 +2952,26 @@ export default function ClipboardHistory() {
             // Single item - no stack navigation needed.
             setStackPreviewItems([]);
             setStackPreviewIndex(0);
-            if (selectedRow.item.imageData) {
-              setPreview({
+            const item = selectedRow.item;
+            if (item.imageData || item.thumbnailData) {
+              const cachedFullImage = imageCache.current.get(item.id);
+              const displayData = cachedFullImage || item.imageData || item.thumbnailData || '';
+              const previewContent: PreviewContent = {
                 type: 'image',
-                data: selectedRow.item.imageData,
-                width: selectedRow.item.imageWidth || 0,
-                height: selectedRow.item.imageHeight || 0,
-                itemId: selectedRow.item.id,
-                stackId: selectedRow.item.stackId,
-              });
-            } else if (selectedRow.item.content) {
-              setPreview({ type: 'text', content: selectedRow.item.content });
+                data: displayData,
+                width: item.imageWidth || 0,
+                height: item.imageHeight || 0,
+                itemId: item.id,
+                stackId: item.stackId,
+                figureLabel: item.figureLabel ?? undefined,
+              };
+              setPreview(previewContent);
+              // Load full image in background if we only have thumbnail.
+              if (!cachedFullImage && !item.imageData) {
+                loadFullImageForPreview(item.id, previewContent);
+              }
+            } else if (item.content) {
+              setPreview({ type: 'text', content: item.content });
             }
           } else if (selectedRow.type === 'stack') {
             // Stack - build preview sequence and start at first item.
@@ -2668,6 +2980,16 @@ export default function ClipboardHistory() {
               setStackPreviewItems(previewItems);
               setStackPreviewIndex(0);
               setPreview(previewItems[0]);
+              // Load full image for the first item if needed.
+              const firstImageItem = selectedRow.items.find(i => i.imageData || i.thumbnailData);
+              if (firstImageItem && !imageCache.current.has(firstImageItem.id) && !firstImageItem.imageData) {
+                loadFullImageForPreview(firstImageItem.id, previewItems[0]);
+              }
+              // Prefetch all images in the stack for smooth navigation.
+              const imageItemIds = selectedRow.items
+                .filter(i => i.imageData || i.thumbnailData)
+                .map(i => i.id);
+              prefetchImages(imageItemIds);
             }
           }
           return;
@@ -2679,9 +3001,37 @@ export default function ClipboardHistory() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, sharingUnlocked, setViewMode]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, sharingUnlocked, setViewMode, updatePreviewForRow, loadFullImageForPreview, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
+  
+  // Prefetch images for selected and adjacent rows for instant preview.
+  useEffect(() => {
+    const rowsToCheck = [
+      listRows[selectedIndex - 1],
+      listRows[selectedIndex],
+      listRows[selectedIndex + 1],
+    ].filter(Boolean) as ListRow[];
+    
+    const imageItemIds: number[] = [];
+    for (const row of rowsToCheck) {
+      if (row.type === 'stack') {
+        row.items.forEach(item => {
+          if ((item.imageData || item.thumbnailData) && !imageCache.current.has(item.id)) {
+            imageItemIds.push(item.id);
+          }
+        });
+      } else if (row.item.imageData || row.item.thumbnailData) {
+        if (!imageCache.current.has(row.item.id)) {
+          imageItemIds.push(row.item.id);
+        }
+      }
+    }
+    
+    if (imageItemIds.length > 0) {
+      prefetchImages(imageItemIds);
+    }
+  }, [selectedIndex, listRows, prefetchImages]);
 
   // Handle item click with modifier key support for multi-select
   const handleItemClick = (item: ClipboardItem, index: number, e?: React.MouseEvent) => {
@@ -3463,10 +3813,10 @@ export default function ClipboardHistory() {
                 e.currentTarget.style.backgroundColor = 'transparent';
               }
             }}
-            title="Commands (C)"
+            title="Popular Commands (C)"
           >
             <span style={{ fontWeight: 400, opacity: 0.7 }}>/</span>
-            Commands
+            Popular Commands
           </button>
           
           {/* Feedback button */}
@@ -4147,7 +4497,8 @@ export default function ClipboardHistory() {
               const { stack, items: stackItems, expanded } = row;
 
               // Get images and text separately for rendering
-              const stackImages = stackItems.filter(i => (i.type === 'image' || i.type === 'screenshot') && i.imageData);
+              // Check for thumbnailData too - large images only have thumbnails in list queries.
+              const stackImages = stackItems.filter(i => (i.type === 'image' || i.type === 'screenshot') && (i.imageData || i.thumbnailData));
               const combinedText = combineStackText(stackItems);
               const hasText = combinedText.length > 0;
               // Show previousApp by default, targetApp when Option is held.
@@ -4174,6 +4525,8 @@ export default function ClipboardHistory() {
                       setHoveredRowIndex(index);
                       // Skip selection update if keyboard nav is active
                       if (keyboardNavActive) return;
+                      // Skip if already selected (prevents render cascade)
+                      if (selectedIndex === index) return;
                       // Only highlight if the item is fully visible (prevents jumping)
                       const element = e.currentTarget;
                       const container = listRef.current;
@@ -4329,54 +4682,12 @@ export default function ClipboardHistory() {
                           flexWrap: 'wrap',
                         }}>
                           {stackImages.map((item) => (
-                            <div
+                            <StackImageThumbnail
                               key={item.id}
-                              onMouseEnter={() => setHoveredImageId(item.id)}
-                              onMouseLeave={() => setHoveredImageId(null)}
-                              style={{ position: 'relative' }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (item.imageData) {
-                                  setPreview({
-                                    type: 'image',
-                                    data: item.imageData,
-                                    width: item.imageWidth || 0,
-                                    height: item.imageHeight || 0,
-                                    itemId: item.id,
-                                    stackId: item.stackId,
-                                  });
-                                }
-                              }}
-                            >
-                              <img
-                                src={`data:image/png;base64,${item.imageData}`}
-                                alt="Screenshot preview"
-                                style={{
-                                  height: '50px',
-                                  width: 'auto',
-                                  borderRadius: '4px',
-                                  border: '1px solid #e0e0e0',
-                                  cursor: 'pointer',
-                                }}
-                              />
-                              {/* Figure label badge */}
-                              {item.figureLabel && (
-                                <div style={{
-                                  position: 'absolute',
-                                  bottom: '2px',
-                                  left: '2px',
-                                  backgroundColor: 'rgba(0, 0, 0, 0.7)',
-                                  color: '#fff',
-                                  fontSize: '9px',
-                                  fontWeight: 600,
-                                  padding: '1px 4px',
-                                  borderRadius: '3px',
-                                  letterSpacing: '0.5px',
-                                }}>
-                                  {item.figureLabel}
-                                </div>
-                              )}
-                            </div>
+                              item={item}
+                              onHover={setHoveredImageId}
+                              onPreview={setPreview}
+                            />
                           ))}
                         </div>
                       )}
@@ -4853,6 +5164,8 @@ export default function ClipboardHistory() {
                       setHoveredRowIndex(index);
                       // Skip selection update if keyboard nav is active
                       if (keyboardNavActive) return;
+                      // Skip if already selected (prevents render cascade)
+                      if (selectedIndex === index) return;
                       // Only highlight if the item is fully visible (prevents jumping)
                       const element = e.currentTarget;
                       const container = listRef.current;
@@ -5179,25 +5492,44 @@ export default function ClipboardHistory() {
                       <>
                         {/* Screenshot thumbnail with preview */}
                         <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
-                          {item.imageData && (
+                          {(item.thumbnailData || item.imageData) && (
                             <div
                               style={{ position: 'relative', flexShrink: 0 }}
                               onMouseEnter={() => setHoveredImageId(item.id)}
                               onMouseLeave={() => setHoveredImageId(null)}
-                              onClick={(e) => {
+                              onClick={async (e) => {
                                 e.stopPropagation();
-                                setPreview({
-                                  type: 'image',
-                                  data: item.imageData!,
-                                  width: item.imageWidth || 0,
-                                  height: item.imageHeight || 0,
-                                  itemId: item.id,
-                                  stackId: item.stackId,
-                                });
+                                // If we have full imageData, show preview directly.
+                                // Otherwise fetch it on demand.
+                                if (item.imageData) {
+                                  setPreview({
+                                    type: 'image',
+                                    data: item.imageData,
+                                    width: item.imageWidth || 0,
+                                    height: item.imageHeight || 0,
+                                    itemId: item.id,
+                                    stackId: item.stackId,
+                                    figureLabel: item.figureLabel ?? undefined,
+                                  });
+                                } else {
+                                  // Fetch full image on demand.
+                                  const fullItem = await window.clipboardAPI?.getItem?.(item.id);
+                                  if (fullItem?.imageData) {
+                                    setPreview({
+                                      type: 'image',
+                                      data: fullItem.imageData,
+                                      width: fullItem.imageWidth || 0,
+                                      height: fullItem.imageHeight || 0,
+                                      itemId: fullItem.id,
+                                      stackId: fullItem.stackId,
+                                      figureLabel: fullItem.figureLabel ?? undefined,
+                                    });
+                                  }
+                                }
                               }}
                             >
                               <img
-                                src={`data:image/png;base64,${item.imageData}`}
+                                src={`data:image/png;base64,${item.thumbnailData || item.imageData}`}
                                 alt="Screenshot preview"
                                 style={{
                                   height: '50px',
@@ -5472,20 +5804,37 @@ export default function ClipboardHistory() {
                       )}
                       {/* Delete button - display removed, functionality preserved via keyboard shortcut */}
                       {/* Preview button - only for images */}
-                      {item.imageData && (
+                      {(item.imageData || item.thumbnailData) && (
                         <button
                           tabIndex={-1}
                           onMouseDown={(e) => e.preventDefault()}
-                          onClick={(e) => {
+                          onClick={async (e) => {
                             e.stopPropagation();
-                            setPreview({
-                              type: 'image',
-                              data: item.imageData!,
-                              width: item.imageWidth || 0,
-                              height: item.imageHeight || 0,
-                              itemId: item.id,
-                              stackId: item.stackId,
-                            });
+                            if (item.imageData) {
+                              setPreview({
+                                type: 'image',
+                                data: item.imageData,
+                                width: item.imageWidth || 0,
+                                height: item.imageHeight || 0,
+                                itemId: item.id,
+                                stackId: item.stackId,
+                                figureLabel: item.figureLabel ?? undefined,
+                              });
+                            } else {
+                              // Fetch full image on demand
+                              const fullItem = await window.clipboardAPI?.getItem?.(item.id);
+                              if (fullItem?.imageData) {
+                                setPreview({
+                                  type: 'image',
+                                  data: fullItem.imageData,
+                                  width: fullItem.imageWidth || 0,
+                                  height: fullItem.imageHeight || 0,
+                                  itemId: fullItem.id,
+                                  stackId: fullItem.stackId,
+                                  figureLabel: fullItem.figureLabel ?? undefined,
+                                });
+                              }
+                            }
                           }}
                           style={{
                             padding: '4px 6px',
@@ -5505,19 +5854,35 @@ export default function ClipboardHistory() {
                         </button>
                       )}
                       {/* Annotate button - only for images */}
-                      {item.imageData && (
+                      {(item.imageData || item.thumbnailData) && (
                         <button
                           tabIndex={-1}
                           onMouseDown={(e) => e.preventDefault()}
-                          onClick={(e) => {
+                          onClick={async (e) => {
                             e.stopPropagation();
-                            setEditingSketchItem(null);
-                            setSketchBackgroundImage({
-                              dataUrl: `data:image/png;base64,${item.imageData}`,
-                              width: item.imageWidth || 800,
-                              height: item.imageHeight || 600,
-                            });
-                            setViewMode('sketch');
+                            let imageDataToUse = item.imageData;
+                            let widthToUse = item.imageWidth || 800;
+                            let heightToUse = item.imageHeight || 600;
+                            
+                            // Fetch full image on demand if we only have thumbnail
+                            if (!imageDataToUse) {
+                              const fullItem = await window.clipboardAPI?.getItem?.(item.id);
+                              if (fullItem?.imageData) {
+                                imageDataToUse = fullItem.imageData;
+                                widthToUse = fullItem.imageWidth || 800;
+                                heightToUse = fullItem.imageHeight || 600;
+                              }
+                            }
+                            
+                            if (imageDataToUse) {
+                              setEditingSketchItem(null);
+                              setSketchBackgroundImage({
+                                dataUrl: `data:image/png;base64,${imageDataToUse}`,
+                                width: widthToUse,
+                                height: heightToUse,
+                              });
+                              setViewMode('sketch');
+                            }
                           }}
                           style={{
                             padding: '4px 6px',
@@ -5962,15 +6327,51 @@ export default function ClipboardHistory() {
               )}
             </div>
           ) : (
-            <span
+            <div
               onMouseEnter={() => setVersionHovered(true)}
               onMouseLeave={() => setVersionHovered(false)}
-              onClick={() => window.updaterAPI?.checkForUpdates?.()}
-              style={{ cursor: 'pointer', color: updateStatus === 'uptodate' ? '#22c55e' : theme.textSecondary }}
-              title="Check for updates"
+              style={{ display: 'flex', gap: '6px', alignItems: 'center' }}
             >
-              {updateStatus === 'uptodate' ? 'Up to date ✓' : versionHovered ? 'Check for updates' : `v${appVersion}`}
-            </span>
+              {versionHovered ? (
+                <>
+                  <button
+                    onClick={() => {
+                      setReleaseNotesLatestMode(true);
+                      setShowReleaseNotes(true);
+                    }}
+                    style={{
+                      cursor: 'pointer',
+                      color: theme.textSecondary,
+                      fontSize: '9px',
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                    }}
+                    title="View release notes"
+                  >
+                    Release notes
+                  </button>
+                  <button
+                    onClick={() => window.updaterAPI?.checkForUpdates?.()}
+                    style={{
+                      cursor: 'pointer',
+                      color: updateStatus === 'uptodate' ? '#22c55e' : theme.textSecondary,
+                      fontSize: '9px',
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                    }}
+                    title="Check for updates"
+                  >
+                    Check for updates
+                  </button>
+                </>
+              ) : (
+                <span style={{ color: updateStatus === 'uptodate' ? '#22c55e' : theme.textSecondary, fontSize: '9px' }}>
+                  {updateStatus === 'uptodate' ? 'Up to date ✓' : `v${appVersion}`}
+                </span>
+              )}
+            </div>
           )}
           {/* Settings toggle button */}
           <button
@@ -6545,9 +6946,9 @@ export default function ClipboardHistory() {
           }}
         >
           {preview.type === 'image' ? (
-            <div 
+            <div
               onClick={(e) => e.stopPropagation()}
-              style={{ 
+              style={{
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
@@ -6555,6 +6956,19 @@ export default function ClipboardHistory() {
                 cursor: 'default',
               }}
             >
+              {preview.figureLabel && (
+                <div style={{
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  color: theme.text,
+                  opacity: 0.7,
+                  padding: '4px 12px',
+                  borderRadius: '4px',
+                  backgroundColor: theme.isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                }}>
+                  Figure {preview.figureLabel}
+                </div>
+              )}
               <img
                 src={`data:image/png;base64,${preview.data}`}
                 alt="Preview"
@@ -6872,11 +7286,15 @@ export default function ClipboardHistory() {
       )}
     </div>
     
-    {/* Release notes popup - shows after app update */}
+    {/* Release notes popup - shows after app update, on first install, or on version hover */}
     {showReleaseNotes && (
       <ReleaseNotesPopup
         currentVersion={appVersion}
-        onDismiss={() => setShowReleaseNotes(false)}
+        onDismiss={() => {
+          setShowReleaseNotes(false);
+          setReleaseNotesLatestMode(false);
+        }}
+        isLatestMode={releaseNotesLatestMode}
       />
     )}
     </>

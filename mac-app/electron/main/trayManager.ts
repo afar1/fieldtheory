@@ -23,15 +23,34 @@ export class TrayManager {
   private showWindowCallback: (() => void) | null = null;
   private checkForUpdatesCallback: (() => void) | null = null;
   private startRecordingCallback: (() => void) | null = null;
+  private takeScreenshotCallback: (() => void) | null = null;
+  private takeFullScreenCallback: (() => void) | null = null;
+  private takeActiveWindowCallback: (() => void) | null = null;
+  private historyHotkey: string = 'Option+Space';
+  private transcriptionHotkey: string = 'Option+Shift+Space';
+  private screenshotHotkey: string = 'Command+4';
 
   constructor(audioManager: AudioManager) {
     this.audioManager = audioManager;
   }
 
   /**
+   * Update the hotkeys displayed in the menu.
+   */
+  setHotkeys(historyHotkey: string, transcriptionHotkey: string, screenshotHotkey: string): void {
+    this.historyHotkey = historyHotkey;
+    this.transcriptionHotkey = transcriptionHotkey;
+    this.screenshotHotkey = screenshotHotkey;
+    // Refresh menu if tray is active
+    if (this.tray) {
+      this.updateTray(this.audioManager.getState());
+    }
+  }
+
+  /**
    * Initialize the tray icon and set up event listeners.
    */
-  init(showWindowCallback?: () => void, checkForUpdatesCallback?: () => void, startRecordingCallback?: () => void): void {
+  init(showWindowCallback?: () => void, checkForUpdatesCallback?: () => void, startRecordingCallback?: () => void, takeScreenshotCallback?: () => void, takeFullScreenCallback?: () => void, takeActiveWindowCallback?: () => void): void {
     if (process.platform !== 'darwin') {
       console.log('[TrayManager] Not on macOS, skipping tray creation');
       return;
@@ -40,6 +59,9 @@ export class TrayManager {
     this.showWindowCallback = showWindowCallback || null;
     this.checkForUpdatesCallback = checkForUpdatesCallback || null;
     this.startRecordingCallback = startRecordingCallback || null;
+    this.takeScreenshotCallback = takeScreenshotCallback || null;
+    this.takeFullScreenCallback = takeFullScreenCallback || null;
+    this.takeActiveWindowCallback = takeActiveWindowCallback || null;
 
     const iconPath = this.getIconPath('disconnected');
     const icon = nativeImage.createFromPath(iconPath);
@@ -199,6 +221,7 @@ export class TrayManager {
     // Primary actions: Open and Start Recording.
     items.push({
       label: 'Open Field Theory',
+      accelerator: this.historyHotkey,
       click: () => {
         if (this.showWindowCallback) {
           this.showWindowCallback();
@@ -207,10 +230,41 @@ export class TrayManager {
     });
 
     items.push({
-      label: 'Start Recording',
+      label: 'Record Transcription',
+      accelerator: this.transcriptionHotkey,
       click: () => {
         if (this.startRecordingCallback) {
           this.startRecordingCallback();
+        }
+      },
+    });
+
+    items.push({
+      label: 'Take Screenshot',
+      accelerator: this.screenshotHotkey,
+      click: () => {
+        if (this.takeScreenshotCallback) {
+          this.takeScreenshotCallback();
+        }
+      },
+    });
+
+    items.push({
+      label: 'Take Full Screen Screenshot',
+      accelerator: 'Command+Shift+4',
+      click: () => {
+        if (this.takeFullScreenCallback) {
+          this.takeFullScreenCallback();
+        }
+      },
+    });
+
+    items.push({
+      label: 'Take Active Window Screenshot',
+      accelerator: 'Command+3',
+      click: () => {
+        if (this.takeActiveWindowCallback) {
+          this.takeActiveWindowCallback();
         }
       },
     });
@@ -240,7 +294,10 @@ export class TrayManager {
 
     items.push({
       label: 'Quit Field Theory',
-      role: 'quit',
+      accelerator: 'Command+Q',
+      click: () => {
+        app.quit();
+      },
     });
 
     return items;
