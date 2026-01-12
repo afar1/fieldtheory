@@ -224,9 +224,9 @@ export default function TranscriptionSettings() {
       setModelDownloadStatus(newDownloadStatus);
       
       if (modelSize === selectedModel) {
-        const availableModel = Object.entries(newDownloadStatus).find(([size, downloaded]) => 
+        const availableModel = Object.entries(newDownloadStatus).find(([size, downloaded]) =>
           downloaded && size !== modelSize
-        )?.[0] || 'base';
+        )?.[0] || 'small';
         await handleModelChange(availableModel);
       }
     } catch (err) {
@@ -446,12 +446,16 @@ export default function TranscriptionSettings() {
   const getStatusColor = () => {
     if (status === 'recording') return '#3b82f6';
     if (status === 'transcribing') return '#f59e0b';
+    if (modelStatus === 'missing') return '#dc2626';
+    if (modelStatus === 'downloading') return '#f59e0b';
     return '#22c55e';
   };
 
   const getStatusText = () => {
     if (status === 'recording') return 'Recording';
     if (status === 'transcribing') return 'Transcribing';
+    if (modelStatus === 'missing') return 'No model';
+    if (modelStatus === 'downloading') return 'Downloading';
     return 'Ready';
   };
 

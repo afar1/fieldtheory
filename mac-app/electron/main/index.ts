@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import os from 'os';
@@ -4142,21 +4142,23 @@ if (!gotTheLock) {
     }
     
     // First-run check: Show onboarding wizard if not completed.
-    // Skip onboarding for existing users (those with clipboard items) - they're updating, not new.
+    // Check permissions to determine if this is truly a new install vs an upgrade.
     const prefs = preferencesManager?.get();
     if (!prefs?.onboardingComplete) {
-      // Check if this is an existing user upgrading (they have clipboard history).
-      const hasExistingItems = clipboardManager?.hasExistingItems() ?? false;
+      // Check if core permissions are already granted (indicates existing user upgrading).
+      const micStatus = systemPreferences.getMediaAccessStatus('microphone');
+      const accessibilityStatus = systemPreferences.isTrustedAccessibilityClient(false);
+      const hasCorePermissions = micStatus === 'granted' && accessibilityStatus;
 
-      if (hasExistingItems) {
-        // Existing user - mark onboarding as complete and skip it.
-        console.log('[Main] Existing user detected (has clipboard items), skipping onboarding');
+      if (hasCorePermissions) {
+        // Existing user with permissions - mark onboarding as complete and skip it.
+        console.log('[Main] Existing user detected (has core permissions), skipping onboarding');
         await preferencesManager?.save({ onboardingComplete: true });
         // Register hotkeys since onboarding is complete
         registerHotkeysAfterOnboarding();
       } else {
-        // New user - show onboarding wizard.
-        console.log('[Main] New user detected, showing onboarding wizard');
+        // New user or permissions revoked - show onboarding wizard.
+        console.log('[Main] New user or missing permissions, showing onboarding wizard');
         onboardingWindow = createOnboardingWindow();
         const startStep = prefs?.onboardingStep ?? OnboardingStep.WELCOME;
         onboardingWindow.show(startStep);
