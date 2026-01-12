@@ -6696,11 +6696,11 @@ export default function ClipboardHistory() {
                     }
                     dismissPreview();
                   }},
-                  { label: 'message', key: 'm', action: async () => {
-                    // Navigate to Hot Mic to send as message
-                    dismissPreview();
-                    setViewMode('hotmic');
-                  }},
+                  // Message option removed - not currently supported in preview
+                  // { label: 'message', key: 'm', action: async () => {
+                  //   dismissPreview();
+                  //   setViewMode('hotmic');
+                  // }},
                   { label: 'feedback', key: 'f', action: async () => {
                     const selectedRow = listRows[selectedIndex];
                     const itemId = selectedRow?.type === 'item' 
