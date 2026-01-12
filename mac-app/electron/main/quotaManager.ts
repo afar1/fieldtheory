@@ -6,14 +6,19 @@ import { PreferencesManager, LocalQuotas } from './preferences';
 // Tracks priority mic minutes and auto-stack sessions per calendar month.
 // =============================================================================
 
-// User tier type.
-type UserTier = 'free' | 'pro';
+// User tier type. 'anonymous' is for users not logged in, determined at runtime.
+type UserTier = 'anonymous' | 'free' | 'pro';
 
-// Feature limits by tier (inlined from types/tiers.ts to avoid cross-directory import).
+// Feature limits by tier.
 const TIER_LIMITS = {
+  anonymous: {
+    priorityMicMinutes: 30,
+    autoStackSessions: 10,
+    textImprovements: 5,
+  },
   free: {
-    priorityMicMinutes: 500,
-    autoStackSessions: 50,
+    priorityMicMinutes: 100,
+    autoStackSessions: 30,
     textImprovements: 15,
   },
   pro: {
@@ -72,19 +77,21 @@ export class QuotaManager extends EventEmitter {
   }
   
   /**
-   * Get the effective tier - uses cached tier if logged in, 'free' if not.
-   * If the user is logged in but the tier hasn't been fetched yet from the server,
-   * we optimistically assume 'pro' to avoid blocking during the initial fetch window.
+   * Get the effective tier based on login state:
+   * - Not logged in → 'anonymous' (strictest limits)
+   * - Logged in + free → 'free'
+   * - Logged in + pro → 'pro' (unlimited)
    */
   private getEffectiveTier(): UserTier {
     // If no session checker set, fall back to cached tier.
     if (!this.sessionChecker) {
       return this.quotas.cachedTier;
     }
-    // If not logged in, always use free tier limits.
+    
+    // If not logged in, use anonymous tier (strictest limits).
     const hasValidSession = this.sessionChecker();
     if (!hasValidSession) {
-      return 'free';
+      return 'anonymous';
     }
 
     // User is logged in - check if tier has been fetched from server yet.
@@ -96,8 +103,6 @@ export class QuotaManager extends EventEmitter {
       const now = Date.now();
       const msSinceUpdate = now - updatedAt;
 
-      // If tier was last updated more than 60 seconds ago, it's stale and we should
-      // optimistically assume pro until the server responds with the actual tier.
       if (msSinceUpdate > 60000) {
         console.log('[QuotaManager] Using optimistic pro tier during initial fetch window');
         return 'pro';
@@ -171,8 +176,9 @@ export class QuotaManager extends EventEmitter {
 
   /**
    * Update cached tier when fetched from server.
+   * Only accepts 'free' or 'pro' since 'anonymous' is a runtime-only state.
    */
-  async setCachedTier(tier: UserTier): Promise<void> {
+  async setCachedTier(tier: 'free' | 'pro'): Promise<void> {
     await this.saveQuotas({
       ...this.quotas,
       cachedTier: tier,

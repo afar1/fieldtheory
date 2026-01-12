@@ -1180,11 +1180,14 @@ export class TranscriberManager extends EventEmitter {
     if (this.currentStack.includes(itemId)) return;
     
     // Check auto-stack quota before adding screenshots to stack during recording.
-    // Transcript gets added at the END of recording, so we check on any screenshot.
     if (this.status === 'recording' && this.quotaManager) {
       const quotaCheck = this.quotaManager.checkQuota('autoStack');
       if (!quotaCheck.allowed) {
         console.log(`[TranscriberManager] Auto-stack quota exhausted, screenshot ${itemId} saved separately`);
+        // Show cursor message with limit info.
+        if (this.cursorStatusManager) {
+          this.cursorStatusManager.showRecordingNote(`Auto-stack limit reached (${quotaCheck.used}/${quotaCheck.limit})`);
+        }
         this.emit('stackingDisabled', {
           itemId,
           message: 'Screenshot saved to Field Theory — open to stack manually',
