@@ -1764,11 +1764,18 @@ function setupClipboardIPCHandlers(): void {
 
   // Toggle between improved and original text for an item.
   ipcMain.handle(ClipboardIPCChannels.SET_USE_IMPROVED_VERSION, async (_event, itemId: number, useImproved: boolean) => {
+    // #region agent log
+    const fs = require('fs');
+    fs.appendFileSync('/Users/afar/dev/littleai/.cursor/debug.log', JSON.stringify({location:'index.ts:SET_USE_IMPROVED_VERSION',message:'IPC handler called',data:{itemId,useImproved},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'D'})+'\n');
+    // #endregion
     try {
       if (!clipboardManager) {
         return { success: false, error: 'Clipboard manager not initialized' };
       }
       clipboardManager.setUseImprovedVersion(itemId, useImproved);
+      // #region agent log
+      fs.appendFileSync('/Users/afar/dev/littleai/.cursor/debug.log', JSON.stringify({location:'index.ts:SET_USE_IMPROVED_VERSION',message:'DB update success',data:{itemId,useImproved},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'D'})+'\n');
+      // #endregion
       return { success: true };
     } catch (error) {
       console.error('[Main] setUseImprovedVersion error:', error);
