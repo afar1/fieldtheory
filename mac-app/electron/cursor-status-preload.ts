@@ -45,7 +45,12 @@ contextBridge.exposeInMainWorld('cursorStatusAPI', {
   onTutorialHint: (callback: (hint: string | null) => void) => {
     ipcRenderer.on('cursor-status-tutorial-hint', (_event, hint) => callback(hint));
   },
-  
+
+  // Recording note changes (informational warnings during recording).
+  onRecordingNote: (callback: (note: string | null) => void) => {
+    ipcRenderer.on('cursor-status-recording-note', (_event, note) => callback(note));
+  },
+
   // Send confirmation response (true = abandon, false = continue)
   sendConfirmationResponse: (abandon: boolean) => {
     ipcRenderer.send('cursor-status-confirmation-response', abandon);

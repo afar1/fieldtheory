@@ -103,6 +103,8 @@ interface TranscribeAPI {
   setSelectedModel: (modelSize: string) => Promise<void>;
   getHotkey: () => Promise<string>;
   setHotkey: (hotkey: string) => Promise<boolean>;
+  getSecondaryHotkey?: () => Promise<string | null>;
+  setSecondaryHotkey?: (hotkey: string | null) => Promise<boolean>;
   getOverlayStyle: () => Promise<'rectangle' | 'top-emerging'>;
   setOverlayStyle: (style: 'rectangle' | 'top-emerging') => Promise<void>;
   getAbandonHotkey?: () => Promise<string>;
@@ -731,6 +733,7 @@ interface CursorStatusAPI {
   onLabelVisibilityChange?: (callback: (visibility: LabelVisibility) => void) => void;
   onScreenshotModeChange?: (callback: (active: boolean) => void) => void;
   onTutorialHint?: (callback: (hint: string | null) => void) => void;
+  onRecordingNote?: (callback: (note: string | null) => void) => void;
   sendConfirmationResponse?: (abandon: boolean) => void;
   dismiss?: () => void;
   removeAllListeners: (channel: string) => void;

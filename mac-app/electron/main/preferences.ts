@@ -55,6 +55,7 @@ export interface LocalQuotas {
  */
 interface Preferences {
   transcriptionHotkey: string;
+  transcriptionSecondaryHotkey?: string;
   selectedModel: ModelSize;
   overlayStyle: OverlayStyle;
   windowState?: WindowState;

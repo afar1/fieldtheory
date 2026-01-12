@@ -650,6 +650,20 @@ function setupTranscribeIPCHandlers(): void {
     return success;
   });
 
+  ipcMain.handle(TranscribeIPCChannels.GET_SECONDARY_HOTKEY, () => {
+    if (!transcriberManager) {
+      return null;
+    }
+    return transcriberManager.getSecondaryHotkey();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_SECONDARY_HOTKEY, async (_event, hotkey: string | null) => {
+    if (!transcriberManager) {
+      throw new Error('TranscriberManager not initialized');
+    }
+    return await transcriberManager.setSecondaryHotkey(hotkey);
+  });
+
   ipcMain.handle(TranscribeIPCChannels.GET_OVERLAY_STYLE, () => {
     if (!transcriberManager) {
       return 'rectangle';
@@ -1211,6 +1225,16 @@ function setupClipboardIPCHandlers(): void {
       const hasTranscriptWithFigures = 
         items.some(i => i.type === 'text' || i.type === 'transcript') && 
         imageItems.length > 0;
+      
+      // Count images we'll actually paste (for non-terminals).
+      const imagesToPaste = isTerminal 
+        ? 0 
+        : items.filter(i => i.imageData).length;
+      
+      // Show warning for more than 10 images being pasted to multimodal apps.
+      if (imagesToPaste > 10 && cursorStatusManager) {
+        cursorStatusManager.showCriticalMessage('Pasting more than 10 images – some apps may have limits');
+      }
 
       // Build figure paths for text content if we have multiple items.
       const buildFigurePaths = async (): Promise<string> => {
@@ -1224,21 +1248,32 @@ function setupClipboardIPCHandlers(): void {
         }
         return paths.length > 0 ? `\n\n${paths.join('\n')}\n\n` : '';
       };
+      
+      // Adaptive delay for image pastes: give apps more time when pasting many images.
+      // Base delay is 100ms, scales up to 400ms for large batches.
+      const getImagePasteDelay = (imageCount: number): number => {
+        if (imageCount <= 5) return 100;
+        if (imageCount <= 10) return 150;
+        if (imageCount <= 20) return 250;
+        return 400;
+      };
+      const imagePasteDelay = getImagePasteDelay(imagesToPaste);
 
-      // Paste each item sequentially with small delays
+      // Paste each item sequentially with delays.
       for (const item of items) {
         try {
           if (item.type === 'text' || item.type === 'transcript') {
             let textContent = item.content || '';
             
-            // Add figure paths if we have multiple items (text + images).
-            if (items.length > 1) {
+            // Only add figure paths for terminals (non-terminals get actual images).
+            if (items.length > 1 && isTerminal) {
               textContent += await buildFigurePaths();
             }
             
             clipboard.writeText(textContent);
             clipboardManager.syncClipboardHash();
             await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+            await new Promise(resolve => setTimeout(resolve, 100));
           } else if (item.imageData) {
             // For terminals with transcript+figures, skip individual image paste.
             // Terminal users will use the file paths from the Figures section.
@@ -1255,6 +1290,7 @@ function setupClipboardIPCHandlers(): void {
                 clipboardManager.syncClipboardHash();
                 await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
               }
+              await new Promise(resolve => setTimeout(resolve, 100));
             } else {
               // Non-terminal: paste actual image (multimodal apps can render it).
               const imageBuffer = typeof item.imageData === 'string' 
@@ -1264,10 +1300,10 @@ function setupClipboardIPCHandlers(): void {
               clipboard.writeImage(image);
               clipboardManager.syncClipboardHash();
               await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+              // Use adaptive delay for images to prevent overwhelming target apps.
+              await new Promise(resolve => setTimeout(resolve, imagePasteDelay));
             }
           }
-          // Small delay between pastes to let the target app process
-          await new Promise(resolve => setTimeout(resolve, 100));
         } catch (itemError) {
           console.error('[Main] pasteStack: failed to paste item', item.id, itemError);
           // Continue with next item even if this one fails
@@ -3367,25 +3403,26 @@ async function initTranscriberSystem(): Promise<void> {
       }
     });
   });
-  
-  transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined);
-  await transcriberManager.init();
-  broadcastTranscribeEvents();
-  
-  // Initialize cursor status indicator - shows dot next to cursor during recording/transcribing.
+
+  // Initialize cursor status indicator BEFORE transcriberManager so it can be passed in.
   cursorStatusManager = new CursorStatusManager();
   const cursorStatusEnabled = preferencesManager.getPreference('cursorStatusEnabled') ?? true;
   cursorStatusManager.setEnabled(cursorStatusEnabled);
   const hideStatusLabels = preferencesManager.getPreference('hideStatusLabels') ?? false;
   cursorStatusManager.setHideLabels(hideStatusLabels);
-  
+
   // Load progressive label hiding state.
   const transcribingCount = preferencesManager.getPreference('transcribingLabelShownCount') ?? 0;
   const sayAnythingCount = preferencesManager.getPreference('sayAnythingLabelShownCount') ?? 0;
   const labelsExplicitlyEnabled = preferencesManager.getPreference('labelsExplicitlyEnabled') ?? false;
   cursorStatusManager.setLabelCounts(transcribingCount, sayAnythingCount);
   cursorStatusManager.setLabelsExplicitlyEnabled(labelsExplicitlyEnabled);
-  
+
+  // Now create transcriberManager with cursorStatusManager.
+  transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
+  await transcriberManager.init();
+  broadcastTranscribeEvents();
+
   // Wire up confirmation response from cursor status widget to transcriber manager
   cursorStatusManager.on('confirmation-response', ({ abandon }) => {
     transcriberManager?.handleConfirmationResponse(abandon);

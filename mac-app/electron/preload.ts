@@ -21,6 +21,8 @@ const TranscribeIPCChannels = {
   SET_SELECTED_MODEL: 'transcribe:setSelectedModel',
   GET_HOTKEY: 'transcribe:getHotkey',
   SET_HOTKEY: 'transcribe:setHotkey',
+  GET_SECONDARY_HOTKEY: 'transcribe:getSecondaryHotkey',
+  SET_SECONDARY_HOTKEY: 'transcribe:setSecondaryHotkey',
   GET_OVERLAY_STYLE: 'transcribe:getOverlayStyle',
   SET_OVERLAY_STYLE: 'transcribe:setOverlayStyle',
   GET_ABANDON_HOTKEY: 'transcribe:getAbandonHotkey',
@@ -499,6 +501,8 @@ export interface TranscribeAPI {
   setSelectedModel: (modelSize: string) => Promise<void>;
   getHotkey: () => Promise<string>;
   setHotkey: (hotkey: string) => Promise<boolean>;
+  getSecondaryHotkey: () => Promise<string | null>;
+  setSecondaryHotkey: (hotkey: string | null) => Promise<boolean>;
   getOverlayStyle: () => Promise<'rectangle' | 'top-emerging'>;
   setOverlayStyle: (style: 'rectangle' | 'top-emerging') => Promise<void>;
   getAbandonHotkey: () => Promise<string>;
@@ -721,6 +725,14 @@ const transcribeAPI: TranscribeAPI = {
 
   setHotkey: async (hotkey: string): Promise<boolean> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_HOTKEY, hotkey);
+  },
+
+  getSecondaryHotkey: async (): Promise<string | null> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_SECONDARY_HOTKEY);
+  },
+
+  setSecondaryHotkey: async (hotkey: string | null): Promise<boolean> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_SECONDARY_HOTKEY, hotkey);
   },
 
   getOverlayStyle: async (): Promise<'rectangle' | 'top-emerging'> => {

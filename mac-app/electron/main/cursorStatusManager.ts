@@ -38,7 +38,7 @@ export class CursorStatusManager extends EventEmitter {
   
   // Paste-failed state timeout - brief since message is simple now.
   private pasteFailedTimeout: NodeJS.Timeout | null = null;
-  private readonly PASTE_FAILED_DURATION_MS = 2500;
+  private readonly PASTE_FAILED_DURATION_MS = 3000;
   
   // Store last transcription for done state display
   private lastTranscription: string = '';
@@ -64,6 +64,7 @@ export class CursorStatusManager extends EventEmitter {
   // Window dimensions and offset from cursor (positioned immediately to the right)
   private readonly WINDOW_WIDTH_NORMAL = 140;
   private readonly WINDOW_WIDTH_WIDE = 345;
+  private readonly WINDOW_WIDTH_EXTRA_WIDE = 500; // For recording notes with long text
   private readonly WINDOW_HEIGHT_NORMAL = 40;
   private readonly WINDOW_HEIGHT_TALL = 160;
   private readonly CURSOR_OFFSET_X = 16;
@@ -286,13 +287,61 @@ export class CursorStatusManager extends EventEmitter {
       this.window.webContents.send('cursor-status-tutorial-hint', hint);
     }
   }
-  
+
+  private recordingNoteActive: boolean = false;
+  private recordingNoteTimeout: NodeJS.Timeout | null = null;
+
   /**
-   * Show a "no target input field" error at the cursor position.
-   * Used when pasting from clipboard history but no text input is focused.
-   * This can be called on-demand, not just during transcription flow.
+   * Show a recording note to the right of the stack indicator.
+   * Used for informational warnings during recording that don't interrupt the flow.
+   * Example: "Note: Stacking 10+ images, some input fields may have limits"
+   * Auto-dismisses after 3 seconds.
+   * @param note - The note to display, or null to clear
    */
-  showNoTargetError(message?: string): void {
+  showRecordingNote(note: string | null): void {
+    // Clear any existing timeout
+    if (this.recordingNoteTimeout) {
+      clearTimeout(this.recordingNoteTimeout);
+      this.recordingNoteTimeout = null;
+    }
+
+    this.recordingNoteActive = note !== null;
+
+    // Resize window to accommodate the note
+    if (this.state === 'recording') {
+      this.updateWindowSize('recording');
+    }
+
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send('cursor-status-recording-note', note);
+    }
+
+    // Auto-dismiss after 3 seconds
+    if (note !== null) {
+      this.recordingNoteTimeout = setTimeout(() => {
+        this.recordingNoteActive = false;
+        this.recordingNoteTimeout = null;
+        // Resize window back to normal
+        if (this.state === 'recording') {
+          this.updateWindowSize('recording');
+        }
+      }, 3000);
+    }
+  }
+
+  /**
+   * Show a critical message that always displays regardless of user preferences.
+   * Use this for important warnings, errors, or notifications that users must see.
+   * Message auto-dismisses after 2.5 seconds.
+   *
+   * Examples:
+   * - "Pasting 10+ images – some apps may have limits"
+   * - "No target input field"
+   * - "Recording stopped - maximum duration reached"
+   *
+   * @param message - The message to display to the user
+   */
+  showCriticalMessage(message: string): void {
     // Clear any pending timeouts from previous states.
     if (this.doneTimeout) {
       clearTimeout(this.doneTimeout);
@@ -302,28 +351,39 @@ export class CursorStatusManager extends EventEmitter {
       clearTimeout(this.pasteFailedTimeout);
       this.pasteFailedTimeout = null;
     }
-    
+
     this.state = 'paste-failed';
     this.updateWindowSize('paste-failed');
-    
-    // Show the window if not already visible.
-    this.show();
-    
+
+    // Force show the window even if cursor status is disabled (critical messages always show).
+    this.show(true);
+
     // Send state and data to renderer.
     this.sendStateToRenderer('paste-failed');
     if (this.window && !this.window.isDestroyed()) {
-      this.window.webContents.send('cursor-status-data', { 
-        transcription: message || 'No target input field',
-        pasteFailed: true 
+      this.window.webContents.send('cursor-status-data', {
+        transcription: message,
+        pasteFailed: true
       });
     }
-    
+
     // Auto-hide after duration.
     this.pasteFailedTimeout = setTimeout(() => {
       this.pasteFailedTimeout = null;
       this.state = 'idle';
       this.hide();
     }, this.PASTE_FAILED_DURATION_MS);
+  }
+
+  /**
+   * Show a "no target input field" error at the cursor position.
+   * Used when pasting from clipboard history but no text input is focused.
+   * This can be called on-demand, not just during transcription flow.
+   *
+   * @deprecated Use showCriticalMessage() instead for consistency
+   */
+  showNoTargetError(message?: string): void {
+    this.showCriticalMessage(message || 'No target input field');
   }
   
   /**
@@ -332,11 +392,19 @@ export class CursorStatusManager extends EventEmitter {
    */
   private updateWindowSize(state: CursorStatusState): void {
     if (!this.window || this.window.isDestroyed()) return;
-    
-    // Done state just shows "Pasted" - no wide window needed
+
+    // Determine width based on content needs
     const needsWide = state === 'confirmation' || state === 'paste-failed';
+    const needsExtraWide = state === 'recording' && this.recordingNoteActive;
     const needsTall = state === 'paste-failed'; // For wrapped transcript text
-    const width = needsWide ? this.WINDOW_WIDTH_WIDE : this.WINDOW_WIDTH_NORMAL;
+
+    let width = this.WINDOW_WIDTH_NORMAL;
+    if (needsExtraWide) {
+      width = this.WINDOW_WIDTH_EXTRA_WIDE;
+    } else if (needsWide) {
+      width = this.WINDOW_WIDTH_WIDE;
+    }
+
     const height = needsTall ? this.WINDOW_HEIGHT_TALL : this.WINDOW_HEIGHT_NORMAL;
     
     const [currentWidth, currentHeight] = this.window.getSize();
@@ -361,14 +429,16 @@ export class CursorStatusManager extends EventEmitter {
 
   /**
    * Show the cursor status overlay and start tracking.
+   * @param forceShow - If true, shows the window even when cursor status is disabled.
+   *                    Used by showCriticalMessage() to ensure important notifications always display.
    */
-  private show(): void {
-    if (!this.enabled) return;
-    
+  private show(forceShow: boolean = false): void {
+    if (!this.enabled && !forceShow) return;
+
     if (!this.window || this.window.isDestroyed()) {
       this.createWindow();
     }
-    
+
     if (this.window) {
       this.window.showInactive();
       this.startTracking();
