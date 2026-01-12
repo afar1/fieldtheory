@@ -94,6 +94,7 @@ const ClipboardIPCChannels = {
   // Improved content management
   SAVE_IMPROVED_CONTENT: 'clipboard:saveImprovedContent',
   CLEAR_IMPROVED_CONTENT: 'clipboard:clearImprovedContent',
+  SET_USE_IMPROVED_VERSION: 'clipboard:setUseImprovedVersion',
   
   // Continuous Context mode
   GET_CONTINUOUS_CONTEXT_STATE: 'clipboard:getContinuousContextState',
@@ -596,6 +597,7 @@ export interface ClipboardAPI {
   // Improved content management - store/clear improved versions of transcriptions
   saveImprovedContent: (itemId: number, improvedContent: string) => Promise<{ success: boolean; error?: string }>;
   clearImprovedContent: (itemId: number) => Promise<{ success: boolean; error?: string }>;
+  setUseImprovedVersion: (itemId: number, useImproved: boolean) => Promise<{ success: boolean; error?: string }>;
   
   // Mobile sync operations - sync iOS transcriptions to clipboard history
   setSyncSession: (accessToken: string, refreshToken: string) => Promise<boolean>;
@@ -1089,6 +1091,10 @@ const clipboardAPI: ClipboardAPI = {
 
   clearImprovedContent: async (itemId: number): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.CLEAR_IMPROVED_CONTENT, itemId);
+  },
+
+  setUseImprovedVersion: async (itemId: number, useImproved: boolean): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SET_USE_IMPROVED_VERSION, itemId, useImproved);
   },
 
   // Mobile sync operations - sync iOS transcriptions to clipboard history

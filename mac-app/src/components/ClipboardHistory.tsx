@@ -44,6 +44,7 @@ type ClipboardItem = {
   type: ClipboardItemType;
   content: string | null;
   improvedContent: string | null; // Improved version from Engineer feature
+  useImprovedVersion: boolean; // Toggle between improved and original text
   imageData: string | null;
   imageWidth: number | null;
   imageHeight: number | null;
@@ -5414,9 +5415,9 @@ export default function ClipboardHistory() {
                                   }),
                                 }}
                               >
-                                {/* Show improved content by default if available and not viewing original.
-                                    Priority: 1) viewOriginalIds override 2) transient improveResult 3) stored improvedContent 4) original content */}
-                                {viewOriginalIds.has(`item-${item.id}`)
+                                {/* Show improved or original content based on useImprovedVersion toggle.
+                                    Priority: 1) useImprovedVersion=false shows original 2) transient improveResult 3) stored improvedContent 4) original content */}
+                                {!item.useImprovedVersion && item.improvedContent
                                   ? item.content || 'Empty'
                                   : (improveResult?.stackId === `item-${item.id}` 
                                       ? improveResult.refinedPrompt 
@@ -5438,22 +5439,20 @@ export default function ClipboardHistory() {
                               padding: '2px 6px',
                               borderRadius: '3px',
                             }}>
-                              ✨ {viewOriginalIds.has(`item-${item.id}`) ? 'Viewing original' : 'Improved'}
+                              ✨ {!item.useImprovedVersion ? 'Viewing original' : 'Improved'}
                             </span>
                             <button
                               tabIndex={-1}
                               onMouseDown={(e) => e.preventDefault()}
-                              onClick={(e) => {
+                              onClick={async (e) => {
                                 e.stopPropagation();
-                                setViewOriginalIds(prev => {
-                                  const next = new Set(prev);
-                                  if (next.has(`item-${item.id}`)) {
-                                    next.delete(`item-${item.id}`);
-                                  } else {
-                                    next.add(`item-${item.id}`);
-                                  }
-                                  return next;
-                                });
+                                const newValue = !item.useImprovedVersion;
+                                // Persist to database.
+                                await window.clipboardAPI?.setUseImprovedVersion?.(item.id, newValue);
+                                // Update local state for immediate UI feedback.
+                                setItems(prev => prev.map(i => 
+                                  i.id === item.id ? { ...i, useImprovedVersion: newValue } : i
+                                ));
                               }}
                               style={{
                                 background: 'none',
@@ -5465,7 +5464,7 @@ export default function ClipboardHistory() {
                                 textDecoration: 'underline',
                               }}
                             >
-                              {viewOriginalIds.has(`item-${item.id}`) ? 'Show improved' : 'Show original'}
+                              {!item.useImprovedVersion ? 'Show improved' : 'Show original'}
                             </button>
                           </div>
                         )}

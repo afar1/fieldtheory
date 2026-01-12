@@ -52,6 +52,7 @@ export const ClipboardIPCChannels = {
   // Improved content management
   SAVE_IMPROVED_CONTENT: 'clipboard:saveImprovedContent',
   CLEAR_IMPROVED_CONTENT: 'clipboard:clearImprovedContent',
+  SET_USE_IMPROVED_VERSION: 'clipboard:setUseImprovedVersion',
   
   // Continuous Context mode - allows multi-screenshot capture sessions
   GET_CONTINUOUS_CONTEXT_STATE: 'clipboard:getContinuousContextState',
@@ -114,6 +115,7 @@ export interface ClipboardItem {
   type: ClipboardItemType;
   content: string | null;
   improvedContent: string | null; // Improved version from Engineer feature
+  useImprovedVersion: boolean; // Toggle between improved and original text
   imageData: string | null; // base64 encoded
   thumbnailData: string | null; // Small preview image (~10KB) for list view
   imageWidth: number | null;
