@@ -13,6 +13,7 @@ import { ClipboardManager, ClipboardItem, isTerminalApp, obscureHomePath } from 
 import { SoundManager } from './soundManager';
 import { QuotaManager } from './quotaManager';
 import { AudioManager } from './audioManager';
+import { CursorStatusManager } from './cursorStatusManager';
 
 const execAsync = promisify(exec);
 
@@ -47,6 +48,8 @@ export class TranscriberManager extends EventEmitter {
   private status: TranscriptionStatus = 'idle';
   private hotkey: string = 'Command+\\'; // Command+Backslash on macOS
   private registeredHotkey: string | null = null; // Track currently registered transcription hotkey
+  private secondaryHotkey: string | null = null; // Optional secondary hotkey for transcription
+  private registeredSecondaryHotkey: string | null = null; // Track currently registered secondary hotkey
   private whisperProcess: ChildProcess | null = null;
   private abandonHotkeyRegistered: boolean = false;
   private registeredAbandonHotkey: string = 'Escape'; // Track currently registered abandon hotkey
@@ -85,15 +88,17 @@ export class TranscriberManager extends EventEmitter {
   // Quota tracking for priority mic and auto-stacking.
   private quotaManager: QuotaManager | null = null;
   private audioManager: AudioManager | null = null;
+  private cursorStatusManager: CursorStatusManager | null = null;
   private recordingStartTime: number = 0;
 
-  constructor(nativeHelper: NativeHelper, preferences: PreferencesManager, clipboardManager?: ClipboardManager, quotaManager?: QuotaManager, audioManager?: AudioManager) {
+  constructor(nativeHelper: NativeHelper, preferences: PreferencesManager, clipboardManager?: ClipboardManager, quotaManager?: QuotaManager, audioManager?: AudioManager, cursorStatusManager?: CursorStatusManager) {
     super();
     this.nativeHelper = nativeHelper;
     this.preferences = preferences;
     this.clipboardManager = clipboardManager || null;
     this.quotaManager = quotaManager || null;
     this.audioManager = audioManager || null;
+    this.cursorStatusManager = cursorStatusManager || null;
     // ModelManager will be initialized with selected model in init()
     this.modelManager = new ModelManager();
     this.overlay = new RecordingOverlay();
@@ -179,7 +184,8 @@ export class TranscriberManager extends EventEmitter {
     // Load preferences
     await this.preferences.load();
     this.hotkey = this.preferences.getPreference('transcriptionHotkey');
-    
+    this.secondaryHotkey = this.preferences.getPreference('transcriptionSecondaryHotkey') || null;
+
     // Set the selected model from preferences.
     // Validate that the model is still supported (base was removed in v0.1.29).
     const validModels: ModelSize[] = ['small', 'medium', 'large'];
@@ -200,11 +206,20 @@ export class TranscriberManager extends EventEmitter {
     // Register global hotkey for normal transcription
     await this.registerHotkey(this.hotkey);
 
-    // Handle app quit - unregister hotkey
+    // Register secondary hotkey if configured
+    if (this.secondaryHotkey) {
+      await this.registerSecondaryHotkey(this.secondaryHotkey);
+    }
+
+    // Handle app quit - unregister hotkeys
     app.on('will-quit', () => {
       if (this.registeredHotkey) {
         globalShortcut.unregister(this.registeredHotkey);
         this.registeredHotkey = null;
+      }
+      if (this.registeredSecondaryHotkey) {
+        globalShortcut.unregister(this.registeredSecondaryHotkey);
+        this.registeredSecondaryHotkey = null;
       }
     });
   }
@@ -332,6 +347,86 @@ export class TranscriberManager extends EventEmitter {
    */
   getHotkey(): string {
     return this.hotkey;
+  }
+
+  /**
+   * Register the secondary transcription hotkey.
+   * Both primary and secondary hotkeys trigger the same recording action.
+   */
+  private async registerSecondaryHotkey(hotkey: string): Promise<boolean> {
+    // Normalize the hotkey to handle shifted characters
+    const normalizedHotkey = this.normalizeHotkey(hotkey);
+
+    // Unregister existing secondary hotkey if different
+    if (this.registeredSecondaryHotkey && this.registeredSecondaryHotkey !== normalizedHotkey) {
+      globalShortcut.unregister(this.registeredSecondaryHotkey);
+      this.registeredSecondaryHotkey = null;
+    }
+
+    // Check if the hotkey is already registered by another app
+    const alreadyRegistered = globalShortcut.isRegistered(normalizedHotkey);
+    if (alreadyRegistered) {
+      console.warn(`[TranscriberManager] Secondary hotkey ${normalizedHotkey} is already registered, attempting to override...`);
+      globalShortcut.unregister(normalizedHotkey);
+    }
+
+    // Register secondary hotkey with the same handler as primary
+    const registered = globalShortcut.register(normalizedHotkey, () => {
+      this.handleHotkeyPress();
+    });
+
+    if (!registered) {
+      console.error(`[TranscriberManager] Failed to register secondary hotkey: ${normalizedHotkey}`);
+      let errorMessage = `Failed to register secondary hotkey: ${hotkey}`;
+      if (alreadyRegistered) {
+        errorMessage += '. Another application may be using this hotkey. Please close that app or choose a different hotkey.';
+      } else {
+        if (!hotkey.includes('+')) {
+          errorMessage += '. Single keys may not be supported. Try using a modifier key combination (e.g., Alt+Space, Command+K).';
+        } else {
+          errorMessage += '. The hotkey format may be invalid or not supported.';
+        }
+      }
+      this.emit('error', new Error(errorMessage));
+      return false;
+    }
+
+    this.secondaryHotkey = hotkey;
+    this.registeredSecondaryHotkey = normalizedHotkey;
+    console.log(`[TranscriberManager] Registered secondary transcription hotkey: ${hotkey} (normalized to ${normalizedHotkey})`);
+    return true;
+  }
+
+  /**
+   * Set a new secondary hotkey and save to preferences.
+   * Pass null to disable the secondary hotkey.
+   */
+  async setSecondaryHotkey(hotkey: string | null): Promise<boolean> {
+    // If null, unregister and clear
+    if (!hotkey) {
+      if (this.registeredSecondaryHotkey) {
+        globalShortcut.unregister(this.registeredSecondaryHotkey);
+        this.registeredSecondaryHotkey = null;
+      }
+      this.secondaryHotkey = null;
+      await this.preferences.save({ transcriptionSecondaryHotkey: undefined });
+      console.log('[TranscriberManager] Secondary hotkey disabled');
+      return true;
+    }
+
+    const success = await this.registerSecondaryHotkey(hotkey);
+    if (success) {
+      await this.preferences.save({ transcriptionSecondaryHotkey: hotkey });
+      this.emit('secondaryHotkeyChanged', hotkey);
+    }
+    return success;
+  }
+
+  /**
+   * Get the current secondary hotkey.
+   */
+  getSecondaryHotkey(): string | null {
+    return this.secondaryHotkey;
   }
 
   /**
@@ -1054,14 +1149,19 @@ export class TranscriberManager extends EventEmitter {
           figureId,
           capturedAtMs,
         });
-        
+
         // Update the item in the database with the figure label and unique ID.
         this.clipboardManager.updateFigureLabel(itemId, figureLabel, figureId);
-        
+
         console.log(`[TranscriberManager] Screenshot ${itemId} labeled as Figure ${figureLabel} (${figureId}) at ${this.formatTimestamp(capturedAtMs)}`);
+
+        // Show warning when reaching 10 screenshots during recording.
+        if (this.screenshotMetadata.length === 10 && this.cursorStatusManager) {
+          this.cursorStatusManager.showRecordingNote('Note: Stacking 10+ images, some input fields may have limits');
+        }
       }
     }
-    
+
     this.emit('stackChanged', this.currentStack.length);
   }
   
@@ -1325,9 +1425,9 @@ export class TranscriberManager extends EventEmitter {
       if (item.type === 'text' || item.type === 'transcript') {
         let textContent = item.content || '';
 
-        // ALWAYS append figure paths at the end when there are multiple items
-        // This provides consistent figure references across all apps
-        if (this.currentStack.length > 1) {
+        // Append figure paths at the end for terminals when there are multiple items
+        // Non-terminals get inline [Figure X] refs without the file path list
+        if (this.currentStack.length > 1 && isTerminal) {
           textContent = await this.addImagePathsToText(textContent, items);
         }
 
@@ -1388,11 +1488,15 @@ export class TranscriberManager extends EventEmitter {
    */
   destroy(): void {
     this.unregisterAbandonHotkey();
-    
-    // Unregister transcription hotkey
+
+    // Unregister transcription hotkeys
     if (this.registeredHotkey) {
       globalShortcut.unregister(this.registeredHotkey);
       this.registeredHotkey = null;
+    }
+    if (this.registeredSecondaryHotkey) {
+      globalShortcut.unregister(this.registeredSecondaryHotkey);
+      this.registeredSecondaryHotkey = null;
     }
     if (this.whisperProcess) {
       this.whisperProcess.kill();

@@ -66,12 +66,17 @@ export default function CursorStatus() {
   
   // Tutorial hint - custom text shown during onboarding, overrides default recording text.
   const [tutorialHint, setTutorialHint] = useState<string | null>(null);
-  
+
+  // Recording note - informational message shown to the right of the recording indicator.
+  // Used for warnings like "Note: Stacking 10+ images, some input fields may have limits"
+  const [recordingNote, setRecordingNote] = useState<string | null>(null);
+
   // Refs for animation intervals
   const dotIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingTextTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pasteFailedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recordingNoteTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Listen for state changes from main process
   useEffect(() => {
@@ -223,13 +228,43 @@ export default function CursorStatus() {
   // Listen for tutorial hint changes (onboarding prompts shown next to cursor dot).
   useEffect(() => {
     if (!window.cursorStatusAPI?.onTutorialHint) return;
-    
+
     window.cursorStatusAPI.onTutorialHint((hint: string | null) => {
       setTutorialHint(hint);
     });
-    
+
     return () => {
       window.cursorStatusAPI?.removeAllListeners('cursor-status-tutorial-hint');
+    };
+  }, []);
+
+  // Listen for recording note changes (informational warnings during recording).
+  useEffect(() => {
+    if (!window.cursorStatusAPI?.onRecordingNote) return;
+
+    window.cursorStatusAPI.onRecordingNote((note: string | null) => {
+      // Clear any existing timeout
+      if (recordingNoteTimeoutRef.current) {
+        clearTimeout(recordingNoteTimeoutRef.current);
+        recordingNoteTimeoutRef.current = null;
+      }
+
+      setRecordingNote(note);
+
+      // Auto-dismiss after 3 seconds if note is set
+      if (note) {
+        recordingNoteTimeoutRef.current = setTimeout(() => {
+          setRecordingNote(null);
+          recordingNoteTimeoutRef.current = null;
+        }, 3000);
+      }
+    });
+
+    return () => {
+      window.cursorStatusAPI?.removeAllListeners('cursor-status-recording-note');
+      if (recordingNoteTimeoutRef.current) {
+        clearTimeout(recordingNoteTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -356,8 +391,8 @@ export default function CursorStatus() {
       return `ESC to cancel recording. Ignore to continue (${countdownSeconds}).`;
     }
     if (state === 'paste-failed') {
-      // Just show simple message, don't display the transcript.
-      return 'Transcript saved to Field Theory';
+      // Use custom message if provided, otherwise show default.
+      return pasteFailedText || 'Transcript saved to Field Theory';
     }
     return '';
   };
@@ -454,7 +489,18 @@ export default function CursorStatus() {
           )}
         </div>
       )}
-      
+
+      {/* Recording note - informational warning shown to the right during recording */}
+      {state === 'recording' && recordingNote && (
+        <div style={{
+          ...styles.labelContainer,
+          animation: 'fadeIn 150ms ease-out',
+          marginLeft: pipeCount > 0 ? '4px' : '0px',
+        }}>
+          <span style={styles.label}>{recordingNote}</span>
+        </div>
+      )}
+
       {/* Text label - fades in/out based on state */}
       {showLabel && label && (
         <div style={{
@@ -462,8 +508,10 @@ export default function CursorStatus() {
           animation: state === 'recording' && showRecordingText 
             ? 'fadeInOut 2.52s ease-out forwards' 
             : state === 'done'
-              ? 'fadeOutLabel 0.8s ease-out forwards' // Fade out with dot
-              : 'fadeIn 150ms ease-out',
+              ? 'fadeOutLabel 0.8s ease-out forwards'
+              : state === 'paste-failed'
+                ? 'fadeOutPasteFailed 3s ease-out forwards'
+                : 'fadeIn 150ms ease-out',
         }}>
           <span style={styles.label}>{label}</span>
         </div>
@@ -547,6 +595,11 @@ styleSheet.textContent = `
   @keyframes fadeOutLabel {
     0% { opacity: 1; }
     70% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  @keyframes fadeOutPasteFailed {
+    0% { opacity: 1; }
+    80% { opacity: 1; }
     100% { opacity: 0; }
   }
 `;

@@ -61,7 +61,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   // Transcription hotkey configuration
   const [transcriptionHotkey, setTranscriptionHotkey] = useState('Command+\\');
   const [isCapturingTranscriptionHotkey, setIsCapturingTranscriptionHotkey] = useState(false);
-  
+  const [secondaryTranscriptionHotkey, setSecondaryTranscriptionHotkey] = useState<string | null>(null);
+  const [isCapturingSecondaryTranscriptionHotkey, setIsCapturingSecondaryTranscriptionHotkey] = useState(false);
+
   // Abandon recording hotkey configuration
   const [abandonHotkey, setAbandonHotkey] = useState('Escape');
   const [isCapturingAbandonHotkey, setIsCapturingAbandonHotkey] = useState(false);
@@ -88,9 +90,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   
   // Permission banner state - whether to show reminders for missing permissions.
   const [showPermissionReminders, setShowPermissionReminders] = useState(true);
-  
-  // Cursor status indicator - shows dot next to cursor during recording/transcribing.
-  const [cursorStatusEnabled, setCursorStatusEnabled] = useState(true);
   
   // Hide status labels - show only colored dots.
   const [hideStatusLabels, setHideStatusLabels] = useState(false);
@@ -161,11 +160,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         setShowPermissionReminders(!hide);
       });
       
-      // Load cursor status indicator setting
-      window.clipboardAPI.getCursorStatusEnabled?.().then(enabled => {
-        setCursorStatusEnabled(enabled);
-      });
-      
       // Load hide status labels setting
       window.clipboardAPI.getHideStatusLabels?.().then(hide => {
         setHideStatusLabels(hide);
@@ -202,6 +196,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         if (hotkey) {
           setTranscriptionHotkey(hotkey);
         }
+      });
+      window.transcribeAPI.getSecondaryHotkey?.().then(hotkey => {
+        setSecondaryTranscriptionHotkey(hotkey);
       });
       window.transcribeAPI.getAbandonHotkey?.().then(hotkey => {
         if (hotkey) {
@@ -313,20 +310,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       }
     } catch (err) {
       console.error('Failed to toggle permission reminders:', err);
-    }
-  };
-  
-  // Handler for toggling cursor status indicator
-  const handleToggleCursorStatus = async (enabled: boolean) => {
-    if (!window.clipboardAPI?.setCursorStatusEnabled) return;
-
-    try {
-      const success = await window.clipboardAPI.setCursorStatusEnabled(enabled);
-      if (success) {
-        setCursorStatusEnabled(enabled);
-      }
-    } catch (err) {
-      console.error('Failed to toggle cursor status indicator:', err);
     }
   };
   
@@ -728,9 +711,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   const handleSetTranscriptionHotkey = useCallback(async (hotkeyString: string) => {
     setIsCapturingTranscriptionHotkey(false);
     setHotkeyError(null);
-    
+
     if (!window.transcribeAPI?.setHotkey) return;
-    
+
     if (!hotkeyString || isModifierOnly(hotkeyString)) {
       setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
       return;
@@ -748,7 +731,46 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       console.error('Failed to set transcription hotkey:', err);
     }
   }, []);
-  
+
+  // Handler for setting secondary transcription hotkey
+  const handleSetSecondaryTranscriptionHotkey = useCallback(async (hotkeyString: string) => {
+    setIsCapturingSecondaryTranscriptionHotkey(false);
+    setHotkeyError(null);
+
+    if (!window.transcribeAPI?.setSecondaryHotkey) return;
+
+    if (!hotkeyString || isModifierOnly(hotkeyString)) {
+      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+      return;
+    }
+
+    try {
+      const success = await window.transcribeAPI.setSecondaryHotkey(hotkeyString);
+      if (!success) {
+        setHotkeyError('Failed to register secondary hotkey. It may be in use by another application.');
+      } else {
+        setSecondaryTranscriptionHotkey(hotkeyString);
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set secondary hotkey');
+      console.error('Failed to set secondary hotkey:', err);
+    }
+  }, []);
+
+  // Handler for clearing secondary transcription hotkey
+  const handleClearSecondaryHotkey = useCallback(async () => {
+    if (!window.transcribeAPI?.setSecondaryHotkey) return;
+
+    try {
+      await window.transcribeAPI.setSecondaryHotkey(null);
+      setSecondaryTranscriptionHotkey(null);
+      setHotkeyError(null);
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to clear secondary hotkey');
+      console.error('Failed to clear secondary hotkey:', err);
+    }
+  }, []);
+
   // Handler for setting abandon recording hotkey
   const handleSetAbandonHotkey = useCallback(async (hotkeyString: string) => {
     setIsCapturingAbandonHotkey(false);
@@ -790,10 +812,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       : isCapturingContinuousContextHotkey ? 'continuousContext'
       : isCapturingTodoHotkey ? 'todo'
       : isCapturingTranscriptionHotkey ? 'transcription'
+      : isCapturingSecondaryTranscriptionHotkey ? 'secondaryTranscription'
       : isCapturingAbandonHotkey ? 'abandon'
       : null;
     if (!capturing) return;
-    
+
     const handleKeyDown = (event: KeyboardEvent) => {
       event.preventDefault();
       event.stopPropagation();
@@ -811,13 +834,17 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           handleSetTodoHotkey(hotkeyString);
         } else if (capturing === 'transcription') {
           handleSetTranscriptionHotkey(hotkeyString);
+        } else if (capturing === 'secondaryTranscription') {
+          handleSetSecondaryTranscriptionHotkey(hotkeyString);
+        } else if (capturing === 'abandon') {
+          handleSetAbandonHotkey(hotkeyString);
         }
       }
     };
-    
+
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isCapturingScreenshotHotkey, isCapturingHistoryHotkey, isCapturingFullScreenHotkey, isCapturingActiveWindowHotkey, isCapturingContinuousContextHotkey, isCapturingTodoHotkey, isCapturingTranscriptionHotkey, isCapturingAbandonHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTodoHotkey, handleSetTranscriptionHotkey, handleSetAbandonHotkey]);
+  }, [isCapturingScreenshotHotkey, isCapturingHistoryHotkey, isCapturingFullScreenHotkey, isCapturingActiveWindowHotkey, isCapturingContinuousContextHotkey, isCapturingTodoHotkey, isCapturingTranscriptionHotkey, isCapturingSecondaryTranscriptionHotkey, isCapturingAbandonHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTodoHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey]);
 
   // Check permissions on mount and when status changes
   useEffect(() => {
@@ -978,7 +1005,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           <div style={styles.rowControls}>
             <button
               onClick={() => { setIsCapturingHistoryHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingSecondaryTranscriptionHotkey}
               style={{ ...styles.btn, ...(isCapturingHistoryHotkey ? styles.btnActive : {}) }}
             >
               {isCapturingHistoryHotkey ? 'Press keys...' : clipboardHotkeys.history || '⌥Space'}
@@ -995,7 +1022,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           <div style={styles.rowControls}>
             <button
               onClick={() => { setIsCapturingTranscriptionHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingSecondaryTranscriptionHotkey}
               style={{ ...styles.btn, ...(isCapturingTranscriptionHotkey ? styles.btnActive : {}) }}
             >
               {isCapturingTranscriptionHotkey ? 'Press keys...' : transcriptionHotkey}
@@ -1006,13 +1033,33 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </div>
         </div>
 
+        {/* Secondary Transcription Hotkey */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Record Transcription (Alt)</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => { setIsCapturingSecondaryTranscriptionHotkey(true); setHotkeyError(null); }}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingSecondaryTranscriptionHotkey}
+              style={{ ...styles.btn, ...(isCapturingSecondaryTranscriptionHotkey ? styles.btnActive : {}) }}
+            >
+              {isCapturingSecondaryTranscriptionHotkey ? 'Press keys...' : (secondaryTranscriptionHotkey || 'Not set')}
+            </button>
+            {isCapturingSecondaryTranscriptionHotkey && (
+              <button onClick={() => { setIsCapturingSecondaryTranscriptionHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+            {!isCapturingSecondaryTranscriptionHotkey && secondaryTranscriptionHotkey && (
+              <button onClick={handleClearSecondaryHotkey} style={styles.btnGhost}>Clear</button>
+            )}
+          </div>
+        </div>
+
         {/* Screenshot */}
         <div style={styles.row}>
           <span style={styles.rowLabel}>Take Screenshot</span>
           <div style={styles.rowControls}>
             <button
               onClick={() => { setIsCapturingScreenshotHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingSecondaryTranscriptionHotkey}
               style={{ ...styles.btn, ...(isCapturingScreenshotHotkey ? styles.btnActive : {}) }}
             >
               {isCapturingScreenshotHotkey ? 'Press keys...' : clipboardHotkeys.screenshot || '⌘4'}
@@ -1029,7 +1076,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           <div style={styles.rowControls}>
             <button
               onClick={() => { setIsCapturingFullScreenHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingSecondaryTranscriptionHotkey}
               style={{ ...styles.btn, ...(isCapturingFullScreenHotkey ? styles.btnActive : {}) }}
             >
               {isCapturingFullScreenHotkey ? 'Press keys...' : clipboardHotkeys.fullScreen || '⌘3'}
@@ -1046,7 +1093,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           <div style={styles.rowControls}>
             <button
               onClick={() => { setIsCapturingActiveWindowHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingSecondaryTranscriptionHotkey}
               style={{ ...styles.btn, ...(isCapturingActiveWindowHotkey ? styles.btnActive : {}) }}
             >
               {isCapturingActiveWindowHotkey ? 'Press keys...' : clipboardHotkeys.activeWindow || '⌘⇧3'}
@@ -1076,25 +1123,26 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         </div>
 
         {/* Sounds toggle moved to Audio section */}
-        
-        {/* Show in Dock - WIP feature, disabled for now */}
-        <div style={{ ...styles.row, opacity: 0.5 }}>
-          <span style={styles.rowLabel}>
-            Show in Dock
-            <span style={{ marginLeft: '8px', fontSize: '9px', color: theme.textSecondary, fontWeight: 500 }}>WIP</span>
-          </span>
+
+        {/* Show in Dock - WIP feature, hidden until ready */}
+        {/* Permission Reminders - removed, always show until permissions granted */}
+        {/* Cursor Status Indicator - removed, always show the dot */}
+
+        {/* Hide Status Labels */}
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={styles.rowLabel}>Hide Status Text</span>
+            <span style={styles.rowHint}>Show only colored dots without text labels</span>
+          </div>
           <div style={styles.rowControls}>
             <button
-              disabled
-              style={{ ...styles.toggle, backgroundColor: '#d1d5db', cursor: 'not-allowed' }}
+              onClick={() => handleToggleHideStatusLabels(!hideStatusLabels)}
+              style={{ ...styles.toggle, backgroundColor: hideStatusLabels ? theme.accent : '#d1d5db' }}
             >
-              <span style={{ ...styles.toggleKnob, transform: 'translateX(2px)' }} />
+              <span style={{ ...styles.toggleKnob, transform: hideStatusLabels ? 'translateX(20px)' : 'translateX(2px)' }} />
             </button>
           </div>
         </div>
-        
-        {/* Permission Reminders - removed, always show until permissions granted */}
-        {/* Cursor Status Indicator - removed, always show status dots */}
         
         {hotkeyError && <p style={styles.error}>{hotkeyError}</p>}
       </div>

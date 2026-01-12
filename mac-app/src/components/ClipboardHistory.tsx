@@ -2816,17 +2816,23 @@ export default function ClipboardHistory() {
         } else if (hasShift) {
           setShowSettings(false);
           setViewMode(prev => {
-            // Cycle backwards: clipboard -> (hotmic if enabled) -> team -> clipboard
-            if (prev === 'clipboard') return FEATURE_HOT_MIC_ENABLED ? 'hotmic' : 'team';
-            if (prev === 'hotmic') return 'team';
+            // Cycle backwards: clipboard -> (hotmic if enabled) -> (team if unlocked) -> clipboard
+            // Skip team view if sharing is not unlocked.
+            if (prev === 'clipboard') {
+              if (FEATURE_HOT_MIC_ENABLED) return 'hotmic';
+              if (canShare) return 'team';
+              return 'clipboard';
+            }
+            if (prev === 'hotmic') return canShare ? 'team' : 'clipboard';
             if (prev === 'team') return 'clipboard';
             return 'clipboard';
           });
         } else {
           setShowSettings(false);
           setViewMode(prev => {
-            // Cycle forwards: clipboard -> team -> (hotmic if enabled) -> clipboard
-            if (prev === 'clipboard') return 'team';
+            // Cycle forwards: clipboard -> (team if unlocked) -> (hotmic if enabled) -> clipboard
+            // Skip team view if sharing is not unlocked.
+            if (prev === 'clipboard') return canShare ? 'team' : (FEATURE_HOT_MIC_ENABLED ? 'hotmic' : 'clipboard');
             if (prev === 'team') return FEATURE_HOT_MIC_ENABLED ? 'hotmic' : 'clipboard';
             if (prev === 'hotmic') return 'clipboard';
             return 'clipboard';
