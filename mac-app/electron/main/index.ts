@@ -386,7 +386,7 @@ function registerHotkeysAfterOnboarding(): void {
  * Ensures the window has access to preferencesManager for proper close handling.
  */
 function createOnboardingWindow(): OnboardingWindow {
-  const window = createOnboardingWindow();
+  const window = new OnboardingWindow();
   if (preferencesManager) {
     window.setPreferencesManager(preferencesManager);
   }
