@@ -1,5 +1,6 @@
 import { app, BrowserWindow, screen, systemPreferences, shell, desktopCapturer } from 'electron';
 import path from 'path';
+import type { PreferencesManager } from './preferences';
 
 /**
  * Onboarding step identifiers.
@@ -25,7 +26,7 @@ export interface PermissionStatus {
 
 /**
  * Manages the onboarding wizard window for first-run experience.
- * 
+ *
  * The onboarding flow guides users through:
  * 1. Welcome screen (privacy messaging)
  * 2. Microphone permission
@@ -35,10 +36,19 @@ export interface PermissionStatus {
  */
 export class OnboardingWindow {
   private window: BrowserWindow | null = null;
-  
+  private preferencesManager: PreferencesManager | null = null;
+
   // Compact window size for streamlined 2-phase onboarding (permissions + model).
   private readonly WINDOW_WIDTH = 500;
   private readonly WINDOW_HEIGHT = 450;
+
+  /**
+   * Set the preferences manager for checking onboarding completion status.
+   * This is used to prevent closing the window before onboarding is complete.
+   */
+  setPreferencesManager(manager: PreferencesManager): void {
+    this.preferencesManager = manager;
+  }
 
   /**
    * Check current permission status for all required permissions.
@@ -100,6 +110,8 @@ export class OnboardingWindow {
   /**
    * Open System Settings to the Screen Recording pane.
    * Users must manually grant screen recording permission for screenshots.
+   * Note: The x-apple.systempreferences URL scheme works on macOS 13+ as well,
+   * automatically opening System Settings instead of the legacy System Preferences.
    */
   openScreenRecordingSettings(): void {
     shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
@@ -174,6 +186,28 @@ export class OnboardingWindow {
       const indexPath = path.join(app.getAppPath(), 'dist', 'index.html');
       this.window.loadFile(indexPath, { hash: `/onboarding?step=${startStep}` });
     }
+
+    // Prevent closing the onboarding window until onboarding is complete.
+    // This ensures users can't bypass the permission requirements.
+    this.window.on('close', (event) => {
+      if (!this.preferencesManager) {
+        // If no preferences manager is set, allow closing (shouldn't happen).
+        console.warn('[Onboarding] No preferencesManager set, allowing window close');
+        return;
+      }
+
+      const prefs = this.preferencesManager.get();
+      const isComplete = prefs?.onboardingComplete ?? false;
+
+      if (!isComplete) {
+        // Prevent closing - user must complete onboarding first.
+        event.preventDefault();
+        console.log('[Onboarding] Prevented window close - onboarding not complete');
+
+        // Optional: Show a dialog informing the user they must complete onboarding.
+        // For now, we just prevent the close silently.
+      }
+    });
 
     this.window.on('closed', () => {
       this.window = null;

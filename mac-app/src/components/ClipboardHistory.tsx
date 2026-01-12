@@ -3170,12 +3170,14 @@ export default function ClipboardHistory() {
           borderBottom: showSettings ? `1px solid ${theme.border}` : 'none',
         }}
       >
-        <img 
-          src={theme.isDark ? "fieldtheory-logo-white.png" : "fieldtheory-logo-black.png"} 
-          alt="Field Theory" 
-          style={{ 
+        <img
+          src={theme.isDark ? "fieldtheory-logo-white.png" : "fieldtheory-logo-black.png"}
+          alt="Field Theory"
+          style={{
             height: '20px',
             width: 'auto',
+            maxWidth: '120px',
+            objectFit: 'contain',
           }}
         />
         {showSettings && (

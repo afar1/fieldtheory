@@ -813,12 +813,15 @@ final class KeyboardMonitor {
             sendLog(level: "info", message: "Keyboard monitoring already active")
             return true
         }
-        
-        // Check permissions first
-        guard checkInputMonitoringPermission() else {
-            sendLog(level: "error", message: "Input Monitoring permission denied")
-            return false
-        }
+
+        // NOTE: Input Monitoring permission check removed since keyboard monitoring is not currently used.
+        // If keyboard monitoring is re-enabled in the future, uncomment the permission check below.
+        // The check itself triggers the Input Monitoring permission prompt, which we want to avoid.
+
+        // guard checkInputMonitoringPermission() else {
+        //     sendLog(level: "error", message: "Input Monitoring permission denied")
+        //     return false
+        // }
         
         // Create event tap for keyDown and keyUp events
         let eventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
