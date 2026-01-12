@@ -12,16 +12,19 @@ const execAsync = promisify(exec);
 /**
  * Terminal/CLI bundle IDs that don't support image pasting.
  * For these apps, we need to paste file paths instead of image buffers.
+ * Note: VS Code/Cursor removed - their integrated terminals can render images inline.
  */
 const TERMINAL_BUNDLE_IDS = new Set([
   'com.apple.Terminal',
   'com.googlecode.iterm2',
-  'com.microsoft.VSCode',
   'dev.warp.Warp-Stable',
   'co.zeit.hyper',
   'com.github.wez.wezterm',
   'io.alacritty',
   'org.vim.MacVim',
+  'com.mitchellh.ghostty',
+  'net.kovidgoyal.kitty',
+  'org.tabby',
 ]);
 
 /**
@@ -33,15 +36,27 @@ export function isTerminalApp(bundleId: string | null): boolean {
 }
 
 /**
- * Replace home directory path with tilde (~) for privacy.
- * Converts: /Users/username/path/to/file.png
- * To: ~/path/to/file.png
+ * Replace home directory and app storage path with branded path for privacy.
+ * Converts: /Users/username/Library/Application Support/littleai-mac/figures/image.png
+ * To: ~/field-theory/image.png
  */
 export function obscureHomePath(filePath: string): string {
+  const appDataDir = app.getPath('userData');
+
+  // First, try to strip the app data directory and add field-theory branding
+  if (filePath.startsWith(appDataDir)) {
+    const relativePath = filePath.replace(appDataDir, '').replace(/^\//, '');
+    // Remove "figures/" prefix and add "~/field-theory/" instead for a technical path look
+    const filename = relativePath.replace(/^figures\//, '');
+    return `~/field-theory/${filename}`;
+  }
+
+  // Fallback: replace home directory with tilde
   const homeDir = app.getPath('home');
   if (filePath.startsWith(homeDir)) {
     return filePath.replace(homeDir, '~');
   }
+
   return filePath;
 }
 
@@ -65,6 +80,7 @@ export interface ClipboardItem {
   content: string | null;
   improvedContent: string | null; // Improved version from Engineer feature
   imageData: Buffer | null;
+  thumbnailData: Buffer | null; // Small preview image (~10KB) for list view
   imageWidth: number | null;
   imageHeight: number | null;
   imageSize: number | null;
@@ -78,6 +94,7 @@ export interface ClipboardItem {
   source: ClipboardSource; // Device source: 'mac' for local, 'ios' for mobile synced
   figureLabel: string | null; // Figure label for screenshots in stacks (e.g., "A", "B", "C")
   figureId: string | null; // Unique 5-char alphanumeric ID for searchability (e.g., "k7xm2")
+  needsLazyLoad?: boolean;
 }
 
 /**
@@ -111,7 +128,8 @@ interface ClipboardConfig {
   maxItems?: number;
   ignoreApps?: string[]; // Bundle IDs to ignore
   screenshotHotkey?: string;
-  desktopScreenshotHotkey?: string;
+  fullScreenHotkey?: string;
+  activeWindowHotkey?: string;
   historyHotkey?: string;
 }
 
@@ -135,7 +153,8 @@ const DEFAULT_CONFIG: ClipboardConfig = {
     'com.dashlane.dashlanephonefinal',
   ],
   screenshotHotkey: 'Command+4',
-  desktopScreenshotHotkey: 'Command+3',
+  fullScreenHotkey: 'Command+3',
+  activeWindowHotkey: 'Command+Shift+3',
   historyHotkey: 'Alt+Space',
 };
 
@@ -168,10 +187,12 @@ export class ClipboardManager extends EventEmitter {
   private lastContentHash: string = '';
   private config: ClipboardConfig;
   private screenshotHotkeyRegistered: boolean = false;
-  private desktopScreenshotHotkeyRegistered: boolean = false;
+  private fullScreenHotkeyRegistered: boolean = false;
+  private activeWindowHotkeyRegistered: boolean = false;
   private historyHotkeyRegistered: boolean = false;
   private screenshotCallback: ScreenshotCallback | null = null;
-  private desktopScreenshotCallback: ScreenshotCallback | null = null;
+  private fullScreenCallback: ScreenshotCallback | null = null;
+  private activeWindowCallback: ScreenshotCallback | null = null;
   private historyCallback: HistoryCallback | null = null;
   private onItemAddedCallback: ((id: number) => void) | null = null;
   
@@ -207,15 +228,18 @@ export class ClipboardManager extends EventEmitter {
   /**
    * Load hotkeys from preferences and update config.
    */
-  loadHotkeysFromPreferences(screenshotHotkey?: string, historyHotkey?: string, desktopScreenshotHotkey?: string): void {
+  loadHotkeysFromPreferences(screenshotHotkey?: string, historyHotkey?: string, fullScreenHotkey?: string, activeWindowHotkey?: string): void {
     if (screenshotHotkey) {
       this.config.screenshotHotkey = screenshotHotkey;
     }
     if (historyHotkey) {
       this.config.historyHotkey = historyHotkey;
     }
-    if (desktopScreenshotHotkey) {
-      this.config.desktopScreenshotHotkey = desktopScreenshotHotkey;
+    if (fullScreenHotkey) {
+      this.config.fullScreenHotkey = fullScreenHotkey;
+    }
+    if (activeWindowHotkey) {
+      this.config.activeWindowHotkey = activeWindowHotkey;
     }
   }
 
@@ -335,6 +359,13 @@ export class ClipboardManager extends EventEmitter {
     this.runMigration('add_figure_id', () => {
       this.db.exec(`
         ALTER TABLE clipboard_items ADD COLUMN figure_id TEXT;
+      `);
+    });
+
+    // Migration: Add thumbnail_data column for small preview images.
+    this.runMigration('add_thumbnail_data', () => {
+      this.db.exec(`
+        ALTER TABLE clipboard_items ADD COLUMN thumbnail_data BLOB;
       `);
     });
 
@@ -637,6 +668,9 @@ export class ClipboardManager extends EventEmitter {
     const size = image.getSize();
     const createdAt = Date.now();
 
+    // Generate thumbnail for list view (50px height, preserving aspect ratio).
+    const thumbnailBuffer = this.generateThumbnail(image);
+
     // Check if this item will create a new stack (stackId provided but doesn't exist yet).
     let isNewStack = false;
     if (stackId) {
@@ -648,14 +682,15 @@ export class ClipboardManager extends EventEmitter {
 
     const stmt = this.db.prepare(`
       INSERT INTO clipboard_items (
-        type, image_data, image_width, image_height, image_size,
+        type, image_data, thumbnail_data, image_width, image_height, image_size,
         source_app, source_app_name, created_at, content_hash, stack_id, source
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const result = stmt.run(
       type,
       imageBuffer,
+      thumbnailBuffer,
       size.width,
       size.height,
       imageBuffer.length,
@@ -699,11 +734,24 @@ export class ClipboardManager extends EventEmitter {
 
   /**
    * Query clipboard history with optional filters.
+   * For list view, large images return thumbnail only; use getItem() for full data.
    */
   queryItems(options: ClipboardQueryOptions = {}): ClipboardItem[] {
     const { type, search, limit = 50, offset = 0, source } = options;
 
-    let query = 'SELECT * FROM clipboard_items';
+    // Use thumbnail for display; exclude large image_data from list queries.
+    let query = `SELECT id, type, content, improved_content, 
+      CASE 
+        WHEN thumbnail_data IS NOT NULL THEN NULL 
+        WHEN length(image_data) > 102400 THEN NULL 
+        ELSE image_data 
+      END as image_data,
+      thumbnail_data,
+      image_width, image_height, image_size, source_app, source_app_name,
+      word_count, char_count, created_at, content_hash, stack_id, source,
+      figure_label, figure_id,
+      CASE WHEN thumbnail_data IS NULL AND length(image_data) > 102400 THEN 1 ELSE 0 END as needs_lazy_load
+    FROM clipboard_items`;
     const conditions: string[] = [];
     const params: any[] = [];
 
@@ -762,6 +810,7 @@ export class ClipboardManager extends EventEmitter {
       content: row.content,
       improvedContent: row.improved_content || null,
       imageData: row.image_data ? Buffer.from(row.image_data) : null,
+      thumbnailData: row.thumbnail_data ? Buffer.from(row.thumbnail_data) : null,
       imageWidth: row.image_width,
       imageHeight: row.image_height,
       imageSize: row.image_size,
@@ -775,6 +824,7 @@ export class ClipboardManager extends EventEmitter {
       source: row.source || 'mac',
       figureLabel: row.figure_label || null,
       figureId: row.figure_id || null,
+      needsLazyLoad: row.needs_lazy_load === 1,
     })) as ClipboardItem[];
   }
 
@@ -797,6 +847,7 @@ export class ClipboardManager extends EventEmitter {
       content: row.content,
       improvedContent: row.improved_content || null,
       imageData: row.image_data ? Buffer.from(row.image_data) : null,
+      thumbnailData: row.thumbnail_data ? Buffer.from(row.thumbnail_data) : null,
       imageWidth: row.image_width,
       imageHeight: row.image_height,
       imageSize: row.image_size,
@@ -899,6 +950,7 @@ export class ClipboardManager extends EventEmitter {
       content: row.content,
       improvedContent: row.improved_content || null,
       imageData: row.image_data ? Buffer.from(row.image_data) : null,
+      thumbnailData: row.thumbnail_data ? Buffer.from(row.thumbnail_data) : null,
       imageWidth: row.image_width,
       imageHeight: row.image_height,
       imageSize: row.image_size,
@@ -1173,27 +1225,26 @@ export class ClipboardManager extends EventEmitter {
         this.screenshotInProgress = false;
         this.emit('screenshotEnd');
         return id;
-      } else {
-        // Full screen capture
+      } else if (fullScreen) {
+        // Full screen capture: captures all displays immediately without interaction
         const tempPath = path.join(app.getPath('temp'), `screenshot-${Date.now()}.png`);
-        await execAsync(`screencapture -s "${tempPath}"`);
+        await execAsync(`screencapture "${tempPath}"`);
 
         // Read the captured image
         const fs = await import('fs/promises');
         try {
           const imageBuffer = await fs.readFile(tempPath);
-          // Create NativeImage from file buffer (clipboard is empty for full-screen capture)
           const image = nativeImage.createFromBuffer(imageBuffer);
-          
-          // Update lastContentHash to prevent polling from re-storing this image.
+
+          // Update lastContentHash to prevent polling from re-storing this image
           this.lastContentHash = this.hashContent(imageBuffer.toString('base64'));
-          
+
           // Store in history (with stackId if provided)
           const id = await this.storeImage(image, imageBuffer, 'screenshot', undefined, stackId);
-          
+
           // Clean up temp file
           await fs.unlink(tempPath);
-          
+
           this.screenshotInProgress = false;
           this.emit('screenshotEnd');
           return id;
@@ -1206,6 +1257,44 @@ export class ClipboardManager extends EventEmitter {
           this.emit('screenshotEnd');
           throw error;
         }
+      } else if (activeWindow) {
+        // Active window capture: captures just the frontmost window
+        const tempPath = path.join(app.getPath('temp'), `screenshot-${Date.now()}.png`);
+        await execAsync(`screencapture -w "${tempPath}"`);
+
+        // Read the captured image
+        const fs = await import('fs/promises');
+        try {
+          const imageBuffer = await fs.readFile(tempPath);
+          const image = nativeImage.createFromBuffer(imageBuffer);
+
+          // Update lastContentHash to prevent polling from re-storing this image
+          this.lastContentHash = this.hashContent(imageBuffer.toString('base64'));
+
+          // Store in history (with stackId if provided)
+          const id = await this.storeImage(image, imageBuffer, 'screenshot', undefined, stackId);
+
+          // Clean up temp file
+          await fs.unlink(tempPath);
+
+          this.screenshotInProgress = false;
+          this.emit('screenshotEnd');
+          return id;
+        } catch (error) {
+          // Clean up temp file even on error
+          try {
+            await fs.unlink(tempPath);
+          } catch {}
+          this.screenshotInProgress = false;
+          this.emit('screenshotEnd');
+          throw error;
+        }
+      } else {
+        // Fallback to region mode if no specific mode selected
+        console.warn('[ClipboardManager] No capture mode specified, defaulting to region mode');
+        this.screenshotInProgress = false;
+        this.emit('screenshotEnd');
+        return -1;
       }
     } catch (error) {
       console.error('[ClipboardManager] Screenshot capture failed:', error);
@@ -1245,25 +1334,47 @@ export class ClipboardManager extends EventEmitter {
   }
 
   /**
-   * Update desktop screenshot hotkey configuration.
+   * Update full screen screenshot hotkey configuration.
    */
-  setDesktopScreenshotHotkey(hotkey: string): boolean {
+  setFullScreenHotkey(hotkey: string): boolean {
     // Unregister old hotkey if registered
-    if (this.desktopScreenshotHotkeyRegistered && this.config.desktopScreenshotHotkey) {
-      globalShortcut.unregister(this.config.desktopScreenshotHotkey);
-      this.desktopScreenshotHotkeyRegistered = false;
+    if (this.fullScreenHotkeyRegistered && this.config.fullScreenHotkey) {
+      globalShortcut.unregister(this.config.fullScreenHotkey);
+      this.fullScreenHotkeyRegistered = false;
     }
 
     // Update config
-    this.config.desktopScreenshotHotkey = hotkey;
+    this.config.fullScreenHotkey = hotkey;
 
     // Re-register if callback exists
-    if (this.desktopScreenshotCallback && hotkey) {
-      return this.registerDesktopScreenshotHotkey(this.desktopScreenshotCallback);
+    if (this.fullScreenCallback && hotkey) {
+      return this.registerFullScreenHotkey(this.fullScreenCallback);
     }
 
     return true;
   }
+
+  /**
+   * Update active window screenshot hotkey configuration.
+   */
+  setActiveWindowHotkey(hotkey: string): boolean {
+    // Unregister old hotkey if registered
+    if (this.activeWindowHotkeyRegistered && this.config.activeWindowHotkey) {
+      globalShortcut.unregister(this.config.activeWindowHotkey);
+      this.activeWindowHotkeyRegistered = false;
+    }
+
+    // Update config
+    this.config.activeWindowHotkey = hotkey;
+
+    // Re-register if callback exists
+    if (this.activeWindowCallback && hotkey) {
+      return this.registerActiveWindowHotkey(this.activeWindowCallback);
+    }
+
+    return true;
+  }
+
 
   /**
    * Update history hotkey configuration.
@@ -1318,33 +1429,66 @@ export class ClipboardManager extends EventEmitter {
     return registered;
   }
 
+
   /**
-   * Register desktop screenshot hotkey.
+   * Register full screen screenshot hotkey (Cmd+3).
    */
-  registerDesktopScreenshotHotkey(callback: ScreenshotCallback): boolean {
-    if (!this.config.desktopScreenshotHotkey) {
+  registerFullScreenHotkey(callback: ScreenshotCallback): boolean {
+    if (!this.config.fullScreenHotkey) {
       return false;
     }
 
     // Store callback
-    this.desktopScreenshotCallback = callback;
+    this.fullScreenCallback = callback;
 
-    if (this.desktopScreenshotHotkeyRegistered) {
-      globalShortcut.unregister(this.config.desktopScreenshotHotkey);
+    if (this.fullScreenHotkeyRegistered) {
+      globalShortcut.unregister(this.config.fullScreenHotkey);
     }
 
-    const registered = globalShortcut.register(this.config.desktopScreenshotHotkey, () => {
+    const registered = globalShortcut.register(this.config.fullScreenHotkey, () => {
       const result = callback();
       if (result instanceof Promise) {
-        result.catch(err => console.error('[ClipboardManager] Desktop screenshot callback error:', err));
+        result.catch(err => console.error('[ClipboardManager] Full screen screenshot callback error:', err));
       }
     });
-    this.desktopScreenshotHotkeyRegistered = registered;
+    this.fullScreenHotkeyRegistered = registered;
 
     if (registered) {
-      console.log(`[ClipboardManager] Registered desktop screenshot hotkey: ${this.config.desktopScreenshotHotkey}`);
+      console.log(`[ClipboardManager] Registered full screen screenshot hotkey: ${this.config.fullScreenHotkey}`);
     } else {
-      console.warn(`[ClipboardManager] Failed to register desktop screenshot hotkey: ${this.config.desktopScreenshotHotkey}`);
+      console.warn(`[ClipboardManager] Failed to register full screen screenshot hotkey: ${this.config.fullScreenHotkey}`);
+    }
+
+    return registered;
+  }
+
+  /**
+   * Register active window screenshot hotkey (Cmd+Shift+3).
+   */
+  registerActiveWindowHotkey(callback: ScreenshotCallback): boolean {
+    if (!this.config.activeWindowHotkey) {
+      return false;
+    }
+
+    // Store callback
+    this.activeWindowCallback = callback;
+
+    if (this.activeWindowHotkeyRegistered) {
+      globalShortcut.unregister(this.config.activeWindowHotkey);
+    }
+
+    const registered = globalShortcut.register(this.config.activeWindowHotkey, () => {
+      const result = callback();
+      if (result instanceof Promise) {
+        result.catch(err => console.error('[ClipboardManager] Active window screenshot callback error:', err));
+      }
+    });
+    this.activeWindowHotkeyRegistered = registered;
+
+    if (registered) {
+      console.log(`[ClipboardManager] Registered active window screenshot hotkey: ${this.config.activeWindowHotkey}`);
+    } else {
+      console.warn(`[ClipboardManager] Failed to register active window screenshot hotkey: ${this.config.activeWindowHotkey}`);
     }
 
     return registered;
@@ -1383,7 +1527,8 @@ export class ClipboardManager extends EventEmitter {
   getHotkeys(): ClipboardConfig {
     return {
       screenshotHotkey: this.config.screenshotHotkey,
-      desktopScreenshotHotkey: this.config.desktopScreenshotHotkey,
+      fullScreenHotkey: this.config.fullScreenHotkey,
+      activeWindowHotkey: this.config.activeWindowHotkey,
       historyHotkey: this.config.historyHotkey,
     };
   }
@@ -1753,6 +1898,34 @@ export class ClipboardManager extends EventEmitter {
     return crypto.createHash('sha256').update(content).digest('hex');
   }
 
+  /**
+   * Generate a small thumbnail for list view display.
+   * Creates a 50px-height image (preserving aspect ratio) as PNG.
+   * Returns null if thumbnail generation fails.
+   */
+  private generateThumbnail(image: Electron.NativeImage): Buffer | null {
+    try {
+      const size = image.getSize();
+      if (size.width === 0 || size.height === 0) return null;
+
+      // Calculate thumbnail dimensions (50px height, preserve aspect ratio).
+      const targetHeight = 50;
+      const aspectRatio = size.width / size.height;
+      const targetWidth = Math.round(targetHeight * aspectRatio);
+
+      const thumbnail = image.resize({
+        width: targetWidth,
+        height: targetHeight,
+        quality: 'good',
+      });
+
+      return thumbnail.toPNG();
+    } catch (error) {
+      console.error('[ClipboardManager] Failed to generate thumbnail:', error);
+      return null;
+    }
+  }
+
   syncClipboardHash(): void {
     try {
       const text = clipboard.readText();
@@ -1822,8 +1995,19 @@ export class ClipboardManager extends EventEmitter {
     if (item.figureLabel && item.figureId) {
       filename = `figure-${item.figureLabel}-${item.figureId}.png`;
     } else {
-      // Fallback for items without figure labels
-      filename = `image-${item.id}-${Date.now()}.png`;
+      // Fallback: use timestamp-based naming like macOS screenshots
+      // Format: "Screenshot 2026-01-10 at 4.30.15 PM.png"
+      const now = new Date(item.createdAt || Date.now());
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const hours = now.getHours();
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      const seconds = String(now.getSeconds()).padStart(2, '0');
+      const period = hours >= 12 ? 'PM' : 'AM';
+      const displayHours = hours % 12 || 12;
+
+      filename = `Screenshot ${year}-${month}-${day} at ${displayHours}.${minutes}.${seconds} ${period}.png`;
     }
 
     const filePath = path.join(cacheDir, filename);
@@ -1858,11 +2042,15 @@ export class ClipboardManager extends EventEmitter {
     if (this.screenshotHotkeyRegistered && this.config.screenshotHotkey) {
       globalShortcut.unregister(this.config.screenshotHotkey);
     }
-    
-    if (this.desktopScreenshotHotkeyRegistered && this.config.desktopScreenshotHotkey) {
-      globalShortcut.unregister(this.config.desktopScreenshotHotkey);
+
+    if (this.fullScreenHotkeyRegistered && this.config.fullScreenHotkey) {
+      globalShortcut.unregister(this.config.fullScreenHotkey);
     }
-    
+
+    if (this.activeWindowHotkeyRegistered && this.config.activeWindowHotkey) {
+      globalShortcut.unregister(this.config.activeWindowHotkey);
+    }
+
     if (this.historyHotkeyRegistered && this.config.historyHotkey) {
       globalShortcut.unregister(this.config.historyHotkey);
     }

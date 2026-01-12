@@ -32,7 +32,7 @@ import {
 import {
   VisionIPCChannels,
 } from './types/vision';
-import { ClipboardItem } from './clipboardManager';
+import { ClipboardItem, isTerminalApp, obscureHomePath } from './clipboardManager';
 import { VisionModelManager, VisionModelSize } from './visionModelManager';
 import { VisionProcessor } from './visionProcessor';
 import { 
@@ -530,6 +530,14 @@ function setupTranscribeIPCHandlers(): void {
     return transcriberManager.getStatus();
   });
 
+  ipcMain.handle(TranscribeIPCChannels.TOGGLE_RECORDING, () => {
+    if (!transcriberManager) {
+      console.error('[Main] toggleRecording: transcriberManager not initialized');
+      return;
+    }
+    transcriberManager.toggleRecording();
+  });
+
   ipcMain.handle(TranscribeIPCChannels.GET_MODEL_STATUS, async () => {
     if (!transcriberManager) {
       return 'missing';
@@ -631,6 +639,14 @@ function setupTranscribeIPCHandlers(): void {
       throw new Error('TranscriberManager not initialized');
     }
     const success = await transcriberManager.setHotkey(hotkey);
+
+    // Update tray manager with new transcription hotkey
+    if (success && trayManager && clipboardManager) {
+      const historyHotkey = clipboardManager.getHotkeys().historyHotkey || 'Option+Space';
+      const screenshotHotkey = clipboardManager.getHotkeys().screenshotHotkey || 'Command+4';
+      trayManager.setHotkeys(historyHotkey, hotkey, screenshotHotkey);
+    }
+
     return success;
   });
 
@@ -815,10 +831,11 @@ function setupClipboardIPCHandlers(): void {
       return [];
     }
     const items = clipboardManager.queryItems(options);
-    // Convert Buffer to base64 for IPC
+    // Convert Buffer to base64 for IPC. For list view, thumbnailData is preferred.
     return items.map(item => ({
       ...item,
       imageData: item.imageData ? item.imageData.toString('base64') : null,
+      thumbnailData: item.thumbnailData ? item.thumbnailData.toString('base64') : null,
     }));
   });
 
@@ -833,6 +850,7 @@ function setupClipboardIPCHandlers(): void {
     return {
       ...item,
       imageData: item.imageData ? item.imageData.toString('base64') : null,
+      thumbnailData: item.thumbnailData ? item.thumbnailData.toString('base64') : null,
     };
   });
 
@@ -934,14 +952,14 @@ function setupClipboardIPCHandlers(): void {
     return clipboardManager.getHotkeys();
   });
 
-  ipcMain.handle(ClipboardIPCChannels.SET_HOTKEYS, async (_event, hotkeys: { screenshot?: string; history?: string }) => {
+  ipcMain.handle(ClipboardIPCChannels.SET_HOTKEYS, async (_event, hotkeys: { screenshot?: string; fullScreen?: string; activeWindow?: string; history?: string }) => {
     if (!clipboardManager || !preferencesManager) {
       return false;
     }
-    
+
     let success = true;
-    const prefsToSave: { clipboardScreenshotHotkey?: string; clipboardHistoryHotkey?: string } = {};
-    
+    const prefsToSave: { clipboardScreenshotHotkey?: string; clipboardFullScreenHotkey?: string; clipboardActiveWindowHotkey?: string; clipboardHistoryHotkey?: string } = {};
+
     if (hotkeys.screenshot !== undefined) {
       if (typeof hotkeys.screenshot !== 'string' || hotkeys.screenshot.trim() === '') {
         return false;
@@ -953,7 +971,31 @@ function setupClipboardIPCHandlers(): void {
         prefsToSave.clipboardScreenshotHotkey = hotkeys.screenshot;
       }
     }
-    
+
+    if (hotkeys.fullScreen !== undefined) {
+      if (typeof hotkeys.fullScreen !== 'string' || hotkeys.fullScreen.trim() === '') {
+        return false;
+      }
+      const result = clipboardManager.setFullScreenHotkey(hotkeys.fullScreen);
+      if (!result) {
+        success = false;
+      } else {
+        prefsToSave.clipboardFullScreenHotkey = hotkeys.fullScreen;
+      }
+    }
+
+    if (hotkeys.activeWindow !== undefined) {
+      if (typeof hotkeys.activeWindow !== 'string' || hotkeys.activeWindow.trim() === '') {
+        return false;
+      }
+      const result = clipboardManager.setActiveWindowHotkey(hotkeys.activeWindow);
+      if (!result) {
+        success = false;
+      } else {
+        prefsToSave.clipboardActiveWindowHotkey = hotkeys.activeWindow;
+      }
+    }
+
     if (hotkeys.history !== undefined) {
       if (typeof hotkeys.history !== 'string' || hotkeys.history.trim() === '') {
         return false;
@@ -965,12 +1007,21 @@ function setupClipboardIPCHandlers(): void {
         prefsToSave.clipboardHistoryHotkey = hotkeys.history;
       }
     }
-    
+
     // Save hotkeys to preferences
     if (Object.keys(prefsToSave).length > 0) {
       await preferencesManager.save(prefsToSave);
     }
-    
+
+    // Update tray manager if any displayed hotkey changed
+    if (trayManager && transcriberManager && (hotkeys.history !== undefined || hotkeys.screenshot !== undefined)) {
+      const currentHotkeys = clipboardManager.getHotkeys();
+      const historyHotkey = hotkeys.history || currentHotkeys.historyHotkey || 'Option+Space';
+      const transcriptionHotkey = transcriberManager.getHotkey() || 'Option+Shift+Space';
+      const screenshotHotkey = hotkeys.screenshot || currentHotkeys.screenshotHotkey || 'Command+4';
+      trayManager.setHotkeys(historyHotkey, transcriptionHotkey, screenshotHotkey);
+    }
+
     return success;
   });
 
@@ -1001,7 +1052,36 @@ function setupClipboardIPCHandlers(): void {
 
       // Put content on clipboard first.
       if (item.type === 'text' || item.type === 'transcript') {
-        clipboard.writeText(item.content || '');
+        let textContent = item.content || '';
+
+        // If this item belongs to a stack, append the figure list
+        if (item.stackId) {
+          const stackItems = clipboardManager.queryItemsByStackId(item.stackId);
+          const hasFigures = stackItems.some(i => i.imageData && i.figureLabel);
+
+          if (hasFigures) {
+            // Import the helper function
+            const { obscureHomePath } = require('./clipboardManager');
+
+            // Build figure list
+            const figurePaths: string[] = [];
+            for (const stackItem of stackItems) {
+              if (stackItem.imageData && stackItem.figureLabel) {
+                const imagePath = await clipboardManager.exportImageToCache(stackItem);
+                if (imagePath) {
+                  const obscuredPath = obscureHomePath(imagePath);
+                  figurePaths.push(`Figure ${stackItem.figureLabel}: ${obscuredPath}`);
+                }
+              }
+            }
+
+            if (figurePaths.length > 0) {
+              textContent = `${textContent}\n\n${figurePaths.join('\n')}\n\n`;
+            }
+          }
+        }
+
+        clipboard.writeText(textContent);
       } else if (item.imageData) {
         if (isTerminal) {
           // For terminals: export image to file and put path on clipboard
@@ -1114,22 +1194,77 @@ function setupClipboardIPCHandlers(): void {
       const { promisify } = require('util');
       const execAsync = promisify(exec);
       const { nativeImage } = require('electron');
-      
+
+      // Detect if frontmost app is a terminal (can't render images inline).
+      let isTerminal = false;
+      try {
+        const { stdout } = await execAsync(
+          'osascript -e \'tell application "System Events" to get bundle identifier of first process whose frontmost is true\''
+        );
+        isTerminal = isTerminalApp(stdout.trim());
+      } catch {
+        // Default to non-terminal if detection fails
+      }
+
+      // Check if we have images with figure labels (for building figure paths).
+      const imageItems = items.filter(i => i.imageData && i.figureLabel);
+      const hasTranscriptWithFigures = 
+        items.some(i => i.type === 'text' || i.type === 'transcript') && 
+        imageItems.length > 0;
+
+      // Build figure paths for text content if we have multiple items.
+      const buildFigurePaths = async (): Promise<string> => {
+        const paths: string[] = [];
+        for (const item of imageItems) {
+          const imagePath = await clipboardManager!.exportImageToCache(item);
+          if (imagePath) {
+            const obscuredPath = obscureHomePath(imagePath);
+            paths.push(`Figure ${item.figureLabel}: ${obscuredPath}`);
+          }
+        }
+        return paths.length > 0 ? `\n\n${paths.join('\n')}\n\n` : '';
+      };
+
       // Paste each item sequentially with small delays
       for (const item of items) {
         try {
           if (item.type === 'text' || item.type === 'transcript') {
-            clipboard.writeText(item.content || '');
+            let textContent = item.content || '';
+            
+            // Add figure paths if we have multiple items (text + images).
+            if (items.length > 1) {
+              textContent += await buildFigurePaths();
+            }
+            
+            clipboard.writeText(textContent);
             clipboardManager.syncClipboardHash();
             await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
           } else if (item.imageData) {
-            const imageBuffer = typeof item.imageData === 'string' 
-              ? Buffer.from(item.imageData, 'base64')
-              : item.imageData;
-            const image = nativeImage.createFromBuffer(imageBuffer);
-            clipboard.writeImage(image);
-            clipboardManager.syncClipboardHash();
-            await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+            // For terminals with transcript+figures, skip individual image paste.
+            // Terminal users will use the file paths from the Figures section.
+            if (isTerminal && hasTranscriptWithFigures) {
+              continue;
+            }
+            
+            if (isTerminal) {
+              // Terminal without transcript: paste file path instead of image.
+              const imagePath = await clipboardManager!.exportImageToCache(item);
+              if (imagePath) {
+                const obscuredPath = obscureHomePath(imagePath);
+                clipboard.writeText(obscuredPath);
+                clipboardManager.syncClipboardHash();
+                await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+              }
+            } else {
+              // Non-terminal: paste actual image (multimodal apps can render it).
+              const imageBuffer = typeof item.imageData === 'string' 
+                ? Buffer.from(item.imageData, 'base64')
+                : item.imageData;
+              const image = nativeImage.createFromBuffer(imageBuffer);
+              clipboard.writeImage(image);
+              clipboardManager.syncClipboardHash();
+              await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+            }
           }
           // Small delay between pastes to let the target app process
           await new Promise(resolve => setTimeout(resolve, 100));
@@ -1249,6 +1384,20 @@ function setupClipboardIPCHandlers(): void {
       window.hide();
     }
   });
+
+  // Toggle Developer Tools for debugging (secret shortcut: Cmd+Shift+I)
+  ipcMain.on('electron:toggleDevTools', (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (window && !window.isDestroyed()) {
+      window.webContents.toggleDevTools();
+    }
+  });
+
+  // Relaunch the app
+  ipcMain.on('electron:relaunch', () => {
+    app.relaunch();
+    app.quit();
+  });
   
   // Show "no target" error at cursor position (replaces old toast window).
   ipcMain.on('clipboard:showNoTargetError', async (_event, message?: string) => {
@@ -1270,6 +1419,7 @@ function setupClipboardIPCHandlers(): void {
     return items.map(item => ({
       ...item,
       imageData: item.imageData ? item.imageData.toString('base64') : null,
+      thumbnailData: item.thumbnailData ? item.thumbnailData.toString('base64') : null,
     }));
   });
 
@@ -2920,7 +3070,7 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   await audioManager.init();
 
   trayManager = new TrayManager(audioManager);
-  
+
   // Start recording callback - toggles recording via transcriberManager.
   // Wrapped in a function that checks if transcriberManager is ready.
   const startRecordingCallback = () => {
@@ -2930,8 +3080,80 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
       console.warn('[TrayManager] TranscriberManager not ready yet');
     }
   };
-  
-  trayManager.init(showSettingsInClipboardWindow, checkForUpdatesCallback, startRecordingCallback);
+
+  // Take screenshot callback - triggers region selection screenshot.
+  const takeScreenshotCallback = async () => {
+    if (clipboardManager) {
+      const id = await clipboardManager.captureScreenshot({ region: true });
+      if (id > 0 && transcriberManager) {
+        transcriberManager.addToStack(id);
+      }
+      if (id > 0 && visionProcessor) {
+        visionProcessor.queueImage(id).catch((error) => {
+          console.error('[Main] Failed to queue image for vision processing:', error);
+        });
+      }
+      if (id > 0) {
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
+          }
+        });
+      }
+    } else {
+      console.warn('[TrayManager] ClipboardManager not ready yet');
+    }
+  };
+
+  // Take full screen screenshot callback.
+  const takeFullScreenCallback = async () => {
+    if (clipboardManager) {
+      const id = await clipboardManager.captureScreenshot({ fullScreen: true });
+      if (id > 0 && transcriberManager) {
+        transcriberManager.addToStack(id);
+      }
+      if (id > 0 && visionProcessor) {
+        visionProcessor.queueImage(id).catch((error) => {
+          console.error('[Main] Failed to queue image for vision processing:', error);
+        });
+      }
+      if (id > 0) {
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
+          }
+        });
+      }
+    } else {
+      console.warn('[TrayManager] ClipboardManager not ready yet');
+    }
+  };
+
+  // Take active window screenshot callback.
+  const takeActiveWindowCallback = async () => {
+    if (clipboardManager) {
+      const id = await clipboardManager.captureScreenshot({ activeWindow: true });
+      if (id > 0 && transcriberManager) {
+        transcriberManager.addToStack(id);
+      }
+      if (id > 0 && visionProcessor) {
+        visionProcessor.queueImage(id).catch((error) => {
+          console.error('[Main] Failed to queue image for vision processing:', error);
+        });
+      }
+      if (id > 0) {
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
+          }
+        });
+      }
+    } else {
+      console.warn('[TrayManager] ClipboardManager not ready yet');
+    }
+  };
+
+  trayManager.init(showSettingsInClipboardWindow, checkForUpdatesCallback, startRecordingCallback, takeScreenshotCallback, takeFullScreenCallback, takeActiveWindowCallback);
 
   console.log('[Main] Audio system initialized');
 }
@@ -3027,14 +3249,14 @@ async function initTranscriberSystem(): Promise<void> {
       if (transcriberManager) {
         transcriberManager.addToStack(id);
       }
-      
+
       // Queue for vision processing if vision processor is available.
       if (visionProcessor) {
         visionProcessor.queueImage(id).catch((error) => {
           console.error('[Main] Failed to queue image for vision processing:', error);
         });
       }
-      
+
       // Notify all windows (including clipboard history window).
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
@@ -3043,7 +3265,59 @@ async function initTranscriberSystem(): Promise<void> {
       });
     }
   });
-  
+
+  // Register full screen screenshot hotkey (Cmd+3)
+  clipboardManager.registerFullScreenHotkey(async () => {
+    // Capture full screen immediately without interaction
+    const id = await clipboardManager!.captureScreenshot({ fullScreen: true });
+    if (id > 0) {
+      // Add screenshot to prompt stack tracking
+      if (transcriberManager) {
+        transcriberManager.addToStack(id);
+      }
+
+      // Queue for vision processing if vision processor is available
+      if (visionProcessor) {
+        visionProcessor.queueImage(id).catch((error) => {
+          console.error('[Main] Failed to queue image for vision processing:', error);
+        });
+      }
+
+      // Notify all windows
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
+        }
+      });
+    }
+  });
+
+  // Register active window screenshot hotkey (Cmd+Shift+3)
+  clipboardManager.registerActiveWindowHotkey(async () => {
+    // Capture just the active window
+    const id = await clipboardManager!.captureScreenshot({ activeWindow: true });
+    if (id > 0) {
+      // Add screenshot to prompt stack tracking
+      if (transcriberManager) {
+        transcriberManager.addToStack(id);
+      }
+
+      // Queue for vision processing if vision processor is available
+      if (visionProcessor) {
+        visionProcessor.queueImage(id).catch((error) => {
+          console.error('[Main] Failed to queue image for vision processing:', error);
+        });
+      }
+
+      // Notify all windows
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
+        }
+      });
+    }
+  });
+
   // Debounce to avoid repeated toggles when the hotkey auto-repeats
   let lastHistoryToggleAt = 0;
   
@@ -3401,12 +3675,34 @@ async function initTranscriberSystem(): Promise<void> {
       const currentStack = transcriberManager.getCurrentStack();
 
       if (currentStack && currentStack.length > 0) {
-        // Paste the stack (context-aware, doesn't clear after)
+        // Paste the stack (context-aware, clear after so it doesn't paste again)
         console.log(`[Main] Super Paste: pasting stack with ${currentStack.length} items`);
-        await transcriberManager.pasteStack(false); // false = don't clear stack
+        await transcriberManager.pasteStack(true); // true = clear stack after pasting
       } else {
-        // No stack - handle smart clipboard paste
-        console.log('[Main] Super Paste: no stack, checking clipboard');
+        // No stack - paste most recent item from Field Theory clipboard history
+        console.log('[Main] Super Paste: no stack, pasting most recent item from history');
+
+        if (!clipboardManager) {
+          console.error('[Main] Super Paste: clipboardManager not available');
+          return;
+        }
+
+        // Get the most recent item ID from clipboard history
+        // Query the database directly for the most recent item
+        const stmt = clipboardManager['db'].prepare('SELECT id FROM clipboard_items ORDER BY created_at DESC LIMIT 1');
+        const row = stmt.get() as { id: number } | undefined;
+
+        if (!row) {
+          console.log('[Main] Super Paste: no items in clipboard history');
+          return;
+        }
+
+        const mostRecentItem = clipboardManager.getItem(row.id);
+        if (!mostRecentItem) {
+          console.log('[Main] Super Paste: failed to get most recent item');
+          return;
+        }
+        console.log('[Main] Super Paste: pasting most recent item:', mostRecentItem.type, 'id:', mostRecentItem.id);
 
         // Get frontmost app for context detection
         try {
@@ -3422,59 +3718,40 @@ async function initTranscriberSystem(): Promise<void> {
           const { stdout } = await execAsync(`osascript -e '${script}'`);
           const bundleId = stdout.trim();
 
-          const { isTerminalApp } = require('./clipboardManager');
+          const { isTerminalApp, obscureHomePath } = require('./clipboardManager');
           const isTerminal = isTerminalApp(bundleId);
           console.log('[Main] Super Paste: frontmost app is terminal:', isTerminal);
 
-          // Check if clipboard has an image
-          if (clipboard.has('image')) {
-            const image = clipboard.readImage();
-            if (!image.isEmpty()) {
-              if (isTerminal && clipboardManager) {
-                // Export image to file and paste path
-                const imageBuffer = image.toPNG();
-                const timestamp = Date.now();
-                const tempItem = {
-                  id: timestamp,
-                  type: 'image' as const,
-                  content: null,
-                  imageData: imageBuffer,
-                  figureLabel: null,
-                  figureId: null,
-                };
-
-                const imagePath = await clipboardManager.exportImageToCache(tempItem as any);
-                if (imagePath) {
-                  const { obscureHomePath } = require('./clipboardManager');
-                  const obscuredPath = obscureHomePath(imagePath);
-                  clipboard.writeText(obscuredPath);
-                  await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-                  console.log('[Main] Super Paste: pasted image path to terminal:', obscuredPath);
-                }
-              } else {
-                // Paste image buffer normally
-                clipboard.writeImage(image);
+          // Paste the item context-aware
+          if (mostRecentItem.type === 'text' || mostRecentItem.type === 'transcript') {
+            clipboard.writeText(mostRecentItem.content || '');
+            await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+            console.log('[Main] Super Paste: pasted text');
+          } else if (mostRecentItem.imageData) {
+            if (isTerminal) {
+              // For terminals: export to file and paste path
+              const imagePath = await clipboardManager.exportImageToCache(mostRecentItem);
+              if (imagePath) {
+                const obscuredPath = obscureHomePath(imagePath);
+                // Just paste the path directly, no prefix
+                clipboard.writeText(obscuredPath);
                 await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-                console.log('[Main] Super Paste: pasted image buffer');
+                console.log('[Main] Super Paste: pasted image path to terminal:', obscuredPath);
               }
-              return;
-            }
-          }
-
-          // Check if clipboard has text
-          if (clipboard.has('text')) {
-            const text = clipboard.readText();
-            if (text) {
-              clipboard.writeText(text);
+            } else {
+              // For non-terminals: paste image buffer
+              const { nativeImage } = require('electron');
+              const imageBuffer = typeof mostRecentItem.imageData === 'string'
+                ? Buffer.from(mostRecentItem.imageData, 'base64')
+                : mostRecentItem.imageData;
+              const image = nativeImage.createFromBuffer(imageBuffer);
+              clipboard.writeImage(image);
               await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-              console.log('[Main] Super Paste: pasted text');
-              return;
+              console.log('[Main] Super Paste: pasted image buffer');
             }
           }
-
-          console.log('[Main] Super Paste: clipboard empty or unsupported format');
         } catch (error) {
-          console.error('[Main] Super Paste: error during clipboard paste:', error);
+          console.error('[Main] Super Paste: error during paste:', error);
         }
       }
     });
@@ -3655,7 +3932,15 @@ if (!gotTheLock) {
     await initAudioSystem(checkForUpdatesManual);
     await initTranscriberSystem();
     await initVisionSystem();
-    
+
+    // Update tray manager with current hotkeys for menu display
+    if (trayManager && clipboardManager && transcriberManager) {
+      const historyHotkey = clipboardManager.getHotkeys().historyHotkey || 'Option+Space';
+      const transcriptionHotkey = transcriberManager.getHotkey() || 'Option+Shift+Space';
+      const screenshotHotkey = clipboardManager.getHotkeys().screenshotHotkey || 'Command+4';
+      trayManager.setHotkeys(historyHotkey, transcriptionHotkey, screenshotHotkey);
+    }
+
     // Apply Dock visibility setting.
     // Default is panel mode (hidden from Dock). This is a WIP feature.
     if (process.platform === 'darwin') {
@@ -3752,7 +4037,17 @@ if (!gotTheLock) {
 
     // Updater IPC handlers.
     ipcMain.handle('updater:checkForUpdates', () => {
-      autoUpdater.checkForUpdates();
+      if (app.isPackaged) {
+        autoUpdater.checkForUpdates();
+      } else {
+        // In dev mode, simulate "up to date" response
+        console.log('[Updater] Dev mode: simulating update check complete (up to date)');
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send('updater:updateNotAvailable');
+          }
+        });
+      }
     });
 
     ipcMain.handle('updater:downloadUpdate', () => {
