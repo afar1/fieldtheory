@@ -5095,10 +5095,12 @@ export default function ClipboardHistory() {
                     {item.type === 'text' || item.type === 'transcript' ? (
                       <>
                         {(() => {
-                          // Use smart truncation to show beginning and end of text.
-                          const displayText = itemExpanded && improveResult?.stackId === `item-${item.id}`
-                            ? improveResult.refinedPrompt
-                            : item.content || 'Empty';
+                          // Determine which content to show based on toggle state.
+                          // Priority: transient improveResult > stored improvedContent > original content.
+                          const hasTransientImprove = improveResult?.stackId === `item-${item.id}`;
+                          const improvedText = hasTransientImprove ? improveResult.refinedPrompt : item.improvedContent;
+                          const shouldShowImproved = (hasTransientImprove || item.improvedContent) && item.useImprovedVersion;
+                          const displayText = shouldShowImproved && improvedText ? improvedText : (item.content || 'Empty');
                           const truncated = smartTruncateText(displayText, 8, containerWidth);
                           const showSmartTruncation = !itemExpanded && truncated.needsTruncation;
                           const colorValue = detectColor(item.content);
@@ -5254,9 +5256,14 @@ export default function ClipboardHistory() {
                                 }}
                               >
                                 {/* Show improved or original content based on useImprovedVersion toggle. */}
-                                {item.improvedContent && !item.useImprovedVersion
-                                  ? item.content || 'Empty'
-                                  : (item.improvedContent || item.content || 'Empty')}
+                                {(() => {
+                                  // Same logic as smart truncation path.
+                                  const hasTransientImprove = improveResult?.stackId === `item-${item.id}`;
+                                  const improvedText = hasTransientImprove ? improveResult.refinedPrompt : item.improvedContent;
+                                  const shouldShowImproved = (hasTransientImprove || item.improvedContent) && item.useImprovedVersion;
+                                  const displayText = shouldShowImproved && improvedText ? improvedText : (item.content || 'Empty');
+                                  return displayText;
+                                })()}
                               </span>
                             </div>
                           );
@@ -5282,9 +5289,7 @@ export default function ClipboardHistory() {
                               onClick={async (e) => {
                                 e.stopPropagation();
                                 const newValue = !item.useImprovedVersion;
-                                // Persist to database.
                                 await window.clipboardAPI?.setUseImprovedVersion?.(item.id, newValue);
-                                // Update local state for immediate UI feedback.
                                 setItems(prev => prev.map(i => 
                                   i.id === item.id ? { ...i, useImprovedVersion: newValue } : i
                                 ));
