@@ -3413,7 +3413,12 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize quota manager for tracking local usage.
   quotaManager = new QuotaManager(preferencesManager);
-  
+
+  // Connect quota manager to tray for menu bar display
+  if (trayManager) {
+    trayManager.setQuotaManager(quotaManager);
+  }
+
   // Broadcast quota changes to all windows so UI can update in real-time.
   quotaManager.on('quotaChanged', (quotas) => {
     const formatted = {

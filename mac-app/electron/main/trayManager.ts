@@ -2,15 +2,16 @@ import { Tray, Menu, nativeImage, app, MenuItemConstructorOptions, net } from 'e
 import path from 'path';
 import { AudioState } from './types/audio';
 import { AudioManager } from './audioManager';
+import { QuotaManager } from './quotaManager';
 
 /**
  * TrayManager creates and manages the menu bar icon and context menu.
- * 
+ *
  * The icon changes based on Little One's connection and lock status:
  * - Disconnected: Gray/dim icon
  * - Connected (not locked): Normal icon
  * - Connected + Locked: Active/highlighted icon
- * 
+ *
  * The context menu provides:
  * - Status display
  * - Lock toggle checkbox
@@ -20,6 +21,7 @@ import { AudioManager } from './audioManager';
 export class TrayManager {
   private tray: Tray | null = null;
   private audioManager: AudioManager;
+  private quotaManager: QuotaManager | null = null;
   private showWindowCallback: (() => void) | null = null;
   private checkForUpdatesCallback: (() => void) | null = null;
   private startRecordingCallback: (() => void) | null = null;
@@ -30,8 +32,29 @@ export class TrayManager {
   private transcriptionHotkey: string = 'Option+Shift+Space';
   private screenshotHotkey: string = 'Command+4';
 
-  constructor(audioManager: AudioManager) {
+  constructor(audioManager: AudioManager, quotaManager?: QuotaManager) {
     this.audioManager = audioManager;
+    this.quotaManager = quotaManager || null;
+  }
+
+  /**
+   * Set the quota manager and listen for quota changes.
+   */
+  setQuotaManager(quotaManager: QuotaManager): void {
+    this.quotaManager = quotaManager;
+
+    // Listen for quota changes to update menu
+    this.quotaManager.on('quotaChanged', () => {
+      this.updateTray(this.audioManager.getState());
+    });
+    this.quotaManager.on('tierChanged', () => {
+      this.updateTray(this.audioManager.getState());
+    });
+
+    // Refresh menu to show quota
+    if (this.tray) {
+      this.updateTray(this.audioManager.getState());
+    }
   }
 
   /**
@@ -71,6 +94,7 @@ export class TrayManager {
     this.audioManager.on('stateChanged', (state: AudioState) => {
       this.updateTray(state);
     });
+
     this.updateTray(this.audioManager.getState());
 
     console.log('[TrayManager] Initialized');
@@ -270,6 +294,31 @@ export class TrayManager {
     });
 
     items.push({ type: 'separator' });
+
+    // Show quota usage for non-pro users
+    if (this.quotaManager) {
+      const quotas = this.quotaManager.getQuotas();
+      const tier = quotas.tier;
+
+      if (tier !== 'pro') {
+        const micMinutes = Math.floor(quotas.priorityMic.used / 60);
+        const micLimit = quotas.priorityMic.limit === Infinity ? '∞' : Math.floor(quotas.priorityMic.limit / 60);
+        const stackUsed = quotas.autoStack.used;
+        const stackLimit = quotas.autoStack.limit === Infinity ? '∞' : quotas.autoStack.limit;
+
+        items.push({
+          label: `Usage: ${micMinutes}/${micLimit} mins · ${stackUsed}/${stackLimit} stacks`,
+          enabled: false,
+        });
+      } else {
+        items.push({
+          label: 'Pro Plan: Unlimited',
+          enabled: false,
+        });
+      }
+
+      items.push({ type: 'separator' });
+    }
 
     items.push({
       label: 'Settings…',

@@ -938,27 +938,8 @@ export default function ClipboardHistory() {
     };
   }, [isVisible]);
   
-  // Quota exhausted modal state.
-  const [quotaExhausted, setQuotaExhausted] = useState<{
-    feature: 'priorityMic' | 'autoStack';
-    featureName: string;
-    limitDisplay: string;
-  } | null>(null);
-  
-  // Listen for quota exhausted events.
-  useEffect(() => {
-    if (!window.quotaAPI?.onQuotaExhausted) return;
-    
-    const cleanup = window.quotaAPI.onQuotaExhausted((data) => {
-      setQuotaExhausted({
-        feature: data.feature,
-        featureName: data.featureName,
-        limitDisplay: data.limitDisplay,
-      });
-    });
-    
-    return cleanup;
-  }, []);
+  // Quota exhausted events are no longer shown as blocking modals.
+  // Users can continue using all features except the quota-limited one.
   
   // Listen for quota changes to update footer in real-time.
   useEffect(() => {
@@ -6186,97 +6167,8 @@ export default function ClipboardHistory() {
         </div>
       </div>
       
-      {/* Quota exhausted modal */}
-      {quotaExhausted && (
-        <div
-          onClick={() => setQuotaExhausted(null)}
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
-            backdropFilter: 'blur(4px)',
-            WebkitBackdropFilter: 'blur(4px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 10002,
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              backgroundColor: theme.bg,
-              borderRadius: '12px',
-              padding: '24px',
-              maxWidth: '360px',
-              width: '90%',
-              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
-              border: `1px solid ${theme.border}`,
-            }}
-          >
-            <h3 style={{ margin: '0 0 12px 0', fontSize: '16px', color: theme.text, fontWeight: '600' }}>
-              Quota Reached
-            </h3>
-            <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: theme.textSecondary, lineHeight: '1.5' }}>
-              You've used all your {quotaExhausted.featureName} for this month ({quotaExhausted.limitDisplay}).
-              Resets on the 1st.
-            </p>
-            <p style={{ margin: '0 0 20px 0', fontSize: '13px', color: theme.textSecondary, lineHeight: '1.5' }}>
-              Subscribe to Pro for unlimited access.
-            </p>
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => setQuotaExhausted(null)}
-                style={{
-                  padding: '8px 16px',
-                  fontSize: '12px',
-                  backgroundColor: 'transparent',
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '6px',
-                  color: theme.textSecondary,
-                  cursor: 'pointer',
-                }}
-              >
-                Later
-              </button>
-              <button
-                onClick={() => {
-                  // Require sign-in before upgrading.
-                  if (!authSession?.user?.id) {
-                    alert('Sign in or create an account to upgrade.');
-                    setQuotaExhausted(null);
-                    setViewMode('team');
-                    return;
-                  }
-                  // Open Stripe checkout with user ID for webhook linking.
-                  const userId = authSession.user.id;
-                  const paymentLink = window.stripeConfig?.paymentLink || '';
-                  window.shellAPI?.openExternal(
-                    `${paymentLink}?client_reference_id=${userId}`
-                  );
-                  setQuotaExhausted(null);
-                }}
-                style={{
-                  padding: '8px 16px',
-                  fontSize: '12px',
-                  backgroundColor: theme.accent,
-                  border: 'none',
-                  borderRadius: '6px',
-                  color: '#fff',
-                  cursor: 'pointer',
-                  fontWeight: '500',
-                }}
-              >
-                Upgrade
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      
+      {/* Quota exhausted modal removed - users should be able to continue using other features */}
+
       {/* Sign-in prompt modal - shown when user tries to share without being logged in */}
       {showSignInPrompt && (
         <div

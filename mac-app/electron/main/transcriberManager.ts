@@ -479,6 +479,11 @@ export class TranscriberManager extends EventEmitter {
         const quotaCheck = this.quotaManager.checkQuota('priorityMic');
         if (!quotaCheck.allowed) {
           console.log('[TranscriberManager] Priority mic quota exhausted');
+          const usedMinutes = Math.floor(quotaCheck.used / 60);
+          const limitMinutes = Math.floor(quotaCheck.limit / 60);
+          this.cursorStatusManager?.showCriticalMessage(
+            `Priority mic quota reached (${usedMinutes}/${limitMinutes} mins). Upgrade for unlimited.`
+          );
           this.emit('quotaExhausted', quotaCheck);
           return;
         }

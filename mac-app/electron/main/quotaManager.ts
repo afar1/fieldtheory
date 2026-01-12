@@ -371,6 +371,7 @@ export class QuotaManager extends EventEmitter {
   /**
    * Format priority mic usage for display.
    * Returns "0 of 500 priority mic mins" or "0 of ∞ priority mic mins".
+   * Caps displayed usage at limit (shows "30 of 30" not "35 of 30").
    */
   formatPriorityMicUsage(): string {
     const status = this.getPriorityMicStatus();
@@ -379,31 +380,36 @@ export class QuotaManager extends EventEmitter {
       return `${usedMinutes} of ∞ priority mic mins`;
     }
     const limitMinutes = Math.floor(status.limit / 60);
-    return `${usedMinutes} of ${limitMinutes} priority mic mins`;
+    const displayedMinutes = Math.min(usedMinutes, limitMinutes);
+    return `${displayedMinutes} of ${limitMinutes} priority mic mins`;
   }
 
   /**
    * Format auto-stack usage for display.
    * Returns "7 of 50 auto-stacks" or "7 of ∞ auto-stacks".
+   * Caps displayed usage at limit (shows "30 of 30" not "35 of 30").
    */
   formatAutoStackUsage(): string {
     const status = this.getAutoStackStatus();
     if (isUnlimited(status.limit)) {
       return `${status.used} of ∞ auto-stacks`;
     }
-    return `${status.used} of ${status.limit} auto-stacks`;
+    const displayedUsed = Math.min(status.used, status.limit);
+    return `${displayedUsed} of ${status.limit} auto-stacks`;
   }
 
   /**
    * Format text improvement usage for display.
    * Returns "3 of 15 improvements" or "3 of ∞ improvements".
+   * Caps displayed usage at limit (shows "15 of 15" not "18 of 15").
    */
   formatTextImproveUsage(): string {
     const status = this.getTextImproveStatus();
     if (isUnlimited(status.limit)) {
       return `${status.used} of ∞ improvements`;
     }
-    return `${status.used} of ${status.limit} improvements`;
+    const displayedUsed = Math.min(status.used, status.limit);
+    return `${displayedUsed} of ${status.limit} improvements`;
   }
 
   /**
