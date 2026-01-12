@@ -71,6 +71,8 @@ export class QuotaManager extends EventEmitter {
   
   /**
    * Get the effective tier - uses cached tier if logged in, 'free' if not.
+   * If the user is logged in but the tier hasn't been fetched yet from the server,
+   * we optimistically assume 'pro' to avoid blocking during the initial fetch window.
    */
   private getEffectiveTier(): UserTier {
     // If no session checker set, fall back to cached tier.
@@ -78,9 +80,28 @@ export class QuotaManager extends EventEmitter {
       return this.quotas.cachedTier;
     }
     // If not logged in, always use free tier limits.
-    if (!this.sessionChecker()) {
+    const hasValidSession = this.sessionChecker();
+    if (!hasValidSession) {
       return 'free';
     }
+
+    // User is logged in - check if tier has been fetched from server yet.
+    // If cached tier is 'free' but we haven't updated it recently (within 60 seconds of app start),
+    // it's likely the default value and the real tier hasn't been fetched yet.
+    // In this case, be optimistic and assume 'pro' to avoid blocking during initial load.
+    if (this.quotas.cachedTier === 'free' && this.quotas.cachedTierUpdatedAt) {
+      const updatedAt = new Date(this.quotas.cachedTierUpdatedAt).getTime();
+      const now = Date.now();
+      const msSinceUpdate = now - updatedAt;
+
+      // If tier was last updated more than 60 seconds ago, it's stale and we should
+      // optimistically assume pro until the server responds with the actual tier.
+      if (msSinceUpdate > 60000) {
+        console.log('[QuotaManager] Using optimistic pro tier during initial fetch window');
+        return 'pro';
+      }
+    }
+
     return this.quotas.cachedTier;
   }
 

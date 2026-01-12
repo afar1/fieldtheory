@@ -115,6 +115,7 @@ export interface ClipboardItem {
   content: string | null;
   improvedContent: string | null; // Improved version from Engineer feature
   imageData: string | null; // base64 encoded
+  thumbnailData: string | null; // Small preview image (~10KB) for list view
   imageWidth: number | null;
   imageHeight: number | null;
   imageSize: number | null;
@@ -128,6 +129,7 @@ export interface ClipboardItem {
   source: ClipboardSource; // Device source: 'mac' for local, 'ios' for mobile synced
   figureLabel: string | null; // Figure label for screenshots in stacks (e.g., "A", "B", "C")
   figureId: string | null; // Unique 5-char alphanumeric ID for searchability (e.g., "k7xm2")
+  needsLazyLoad?: boolean; // PERF: True if imageData was excluded from query (>100KB), fetch via getItem()
 }
 
 /**
@@ -167,7 +169,8 @@ export interface ClipboardQueryOptions {
  */
 export interface ClipboardHotkeys {
   screenshot?: string;
-  desktopScreenshot?: string;
+  fullScreen?: string;
+  activeWindow?: string;
   history?: string;
   continuousContext?: string;
 }

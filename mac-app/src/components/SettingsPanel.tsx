@@ -37,14 +37,16 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   } | null>(null);
   
   // Clipboard hotkey configuration
-  const [clipboardHotkeys, setClipboardHotkeys] = useState<{ screenshot?: string; history?: string; desktopScreenshot?: string }>({
+  const [clipboardHotkeys, setClipboardHotkeys] = useState<{ screenshot?: string; history?: string; fullScreen?: string; activeWindow?: string }>({
     screenshot: 'CommandOrControl+Shift+4',
     history: 'CommandOrControl+Shift+V',
-    desktopScreenshot: 'Command+3',
+    fullScreen: 'Command+3',
+    activeWindow: 'Command+Shift+3',
   });
   const [isCapturingScreenshotHotkey, setIsCapturingScreenshotHotkey] = useState(false);
   const [isCapturingHistoryHotkey, setIsCapturingHistoryHotkey] = useState(false);
-  const [isCapturingDesktopScreenshotHotkey, setIsCapturingDesktopScreenshotHotkey] = useState(false);
+  const [isCapturingFullScreenHotkey, setIsCapturingFullScreenHotkey] = useState(false);
+  const [isCapturingActiveWindowHotkey, setIsCapturingActiveWindowHotkey] = useState(false);
   const [hotkeyError, setHotkeyError] = useState<string | null>(null);
   
   // Continuous Context configuration
@@ -597,28 +599,53 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     }
   }, []);
   
-  // Handler for setting desktop screenshot hotkey
-  const handleSetDesktopScreenshotHotkey = useCallback(async (hotkeyString: string) => {
-    setIsCapturingDesktopScreenshotHotkey(false);
+  // Handler for setting full screen screenshot hotkey
+  const handleSetFullScreenHotkey = useCallback(async (hotkeyString: string) => {
+    setIsCapturingFullScreenHotkey(false);
     setHotkeyError(null);
-    
+
     if (!window.clipboardAPI) return;
-    
+
     if (!hotkeyString || isModifierOnly(hotkeyString)) {
       setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
       return;
     }
 
     try {
-      const success = await window.clipboardAPI.setHotkeys({ desktopScreenshot: hotkeyString });
+      const success = await window.clipboardAPI.setHotkeys({ fullScreen: hotkeyString });
       if (!success) {
-        setHotkeyError('Failed to register desktop screenshot hotkey. It may be in use by another application.');
+        setHotkeyError('Failed to register full screen screenshot hotkey. It may be in use by another application.');
       } else {
-        setClipboardHotkeys(prev => ({ ...prev, desktopScreenshot: hotkeyString }));
+        setClipboardHotkeys(prev => ({ ...prev, fullScreen: hotkeyString }));
       }
     } catch (err) {
-      setHotkeyError(err instanceof Error ? err.message : 'Failed to set desktop screenshot hotkey');
-      console.error('Failed to set desktop screenshot hotkey:', err);
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set full screen screenshot hotkey');
+      console.error('Failed to set full screen screenshot hotkey:', err);
+    }
+  }, []);
+
+  // Handler for setting active window screenshot hotkey
+  const handleSetActiveWindowHotkey = useCallback(async (hotkeyString: string) => {
+    setIsCapturingActiveWindowHotkey(false);
+    setHotkeyError(null);
+
+    if (!window.clipboardAPI) return;
+
+    if (!hotkeyString || isModifierOnly(hotkeyString)) {
+      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+      return;
+    }
+
+    try {
+      const success = await window.clipboardAPI.setHotkeys({ activeWindow: hotkeyString });
+      if (!success) {
+        setHotkeyError('Failed to register active window screenshot hotkey. It may be in use by another application.');
+      } else {
+        setClipboardHotkeys(prev => ({ ...prev, activeWindow: hotkeyString }));
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set active window screenshot hotkey');
+      console.error('Failed to set active window screenshot hotkey:', err);
     }
   }, []);
   
@@ -756,9 +783,10 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   
   // Capture hotkey when user is setting any shortcut.
   useEffect(() => {
-    const capturing = isCapturingScreenshotHotkey ? 'screenshot' 
-      : isCapturingHistoryHotkey ? 'history' 
-      : isCapturingDesktopScreenshotHotkey ? 'desktopScreenshot'
+    const capturing = isCapturingScreenshotHotkey ? 'screenshot'
+      : isCapturingHistoryHotkey ? 'history'
+      : isCapturingFullScreenHotkey ? 'fullScreen'
+      : isCapturingActiveWindowHotkey ? 'activeWindow'
       : isCapturingContinuousContextHotkey ? 'continuousContext'
       : isCapturingTodoHotkey ? 'todo'
       : isCapturingTranscriptionHotkey ? 'transcription'
@@ -775,8 +803,10 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           handleSetScreenshotHotkey(hotkeyString);
         } else if (capturing === 'history') {
           handleSetHistoryHotkey(hotkeyString);
-        } else if (capturing === 'desktopScreenshot') {
-          handleSetDesktopScreenshotHotkey(hotkeyString);
+        } else if (capturing === 'fullScreen') {
+          handleSetFullScreenHotkey(hotkeyString);
+        } else if (capturing === 'activeWindow') {
+          handleSetActiveWindowHotkey(hotkeyString);
         } else if (capturing === 'todo') {
           handleSetTodoHotkey(hotkeyString);
         } else if (capturing === 'transcription') {
@@ -787,7 +817,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isCapturingScreenshotHotkey, isCapturingHistoryHotkey, isCapturingDesktopScreenshotHotkey, isCapturingContinuousContextHotkey, isCapturingTodoHotkey, isCapturingTranscriptionHotkey, isCapturingAbandonHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetDesktopScreenshotHotkey, handleSetContinuousContextHotkey, handleSetTodoHotkey, handleSetTranscriptionHotkey, handleSetAbandonHotkey]);
+  }, [isCapturingScreenshotHotkey, isCapturingHistoryHotkey, isCapturingFullScreenHotkey, isCapturingActiveWindowHotkey, isCapturingContinuousContextHotkey, isCapturingTodoHotkey, isCapturingTranscriptionHotkey, isCapturingAbandonHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTodoHotkey, handleSetTranscriptionHotkey, handleSetAbandonHotkey]);
 
   // Check permissions on mount and when status changes
   useEffect(() => {
@@ -948,7 +978,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           <div style={styles.rowControls}>
             <button
               onClick={() => { setIsCapturingHistoryHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
               style={{ ...styles.btn, ...(isCapturingHistoryHotkey ? styles.btnActive : {}) }}
             >
               {isCapturingHistoryHotkey ? 'Press keys...' : clipboardHotkeys.history || '⌥Space'}
@@ -961,11 +991,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         
         {/* Transcription (Record) */}
         <div style={styles.row}>
-          <span style={styles.rowLabel}>Transcription</span>
+          <span style={styles.rowLabel}>Record Transcription</span>
           <div style={styles.rowControls}>
             <button
               onClick={() => { setIsCapturingTranscriptionHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
               style={{ ...styles.btn, ...(isCapturingTranscriptionHotkey ? styles.btnActive : {}) }}
             >
               {isCapturingTranscriptionHotkey ? 'Press keys...' : transcriptionHotkey}
@@ -978,11 +1008,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
 
         {/* Screenshot */}
         <div style={styles.row}>
-          <span style={styles.rowLabel}>Screenshot</span>
+          <span style={styles.rowLabel}>Take Screenshot</span>
           <div style={styles.rowControls}>
             <button
               onClick={() => { setIsCapturingScreenshotHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
               style={{ ...styles.btn, ...(isCapturingScreenshotHotkey ? styles.btnActive : {}) }}
             >
               {isCapturingScreenshotHotkey ? 'Press keys...' : clipboardHotkeys.screenshot || '⌘4'}
@@ -993,19 +1023,36 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </div>
         </div>
 
-        {/* Desktop Screenshot */}
+        {/* Full Screen Screenshot */}
         <div style={styles.row}>
-          <span style={styles.rowLabel}>Desktop Screenshot</span>
+          <span style={styles.rowLabel}>Take Full Screen Screenshot</span>
           <div style={styles.rowControls}>
             <button
-              onClick={() => { setIsCapturingDesktopScreenshotHotkey(true); setHotkeyError(null); }}
-              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingDesktopScreenshotHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
-              style={{ ...styles.btn, ...(isCapturingDesktopScreenshotHotkey ? styles.btnActive : {}) }}
+              onClick={() => { setIsCapturingFullScreenHotkey(true); setHotkeyError(null); }}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
+              style={{ ...styles.btn, ...(isCapturingFullScreenHotkey ? styles.btnActive : {}) }}
             >
-              {isCapturingDesktopScreenshotHotkey ? 'Press keys...' : clipboardHotkeys.desktopScreenshot || '⌘3'}
+              {isCapturingFullScreenHotkey ? 'Press keys...' : clipboardHotkeys.fullScreen || '⌘3'}
             </button>
-            {isCapturingDesktopScreenshotHotkey && (
-              <button onClick={() => { setIsCapturingDesktopScreenshotHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            {isCapturingFullScreenHotkey && (
+              <button onClick={() => { setIsCapturingFullScreenHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+          </div>
+        </div>
+
+        {/* Active Window Screenshot */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Take Active Window Screenshot</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => { setIsCapturingActiveWindowHotkey(true); setHotkeyError(null); }}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey}
+              style={{ ...styles.btn, ...(isCapturingActiveWindowHotkey ? styles.btnActive : {}) }}
+            >
+              {isCapturingActiveWindowHotkey ? 'Press keys...' : clipboardHotkeys.activeWindow || '⌘⇧3'}
+            </button>
+            {isCapturingActiveWindowHotkey && (
+              <button onClick={() => { setIsCapturingActiveWindowHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
             )}
           </div>
         </div>
