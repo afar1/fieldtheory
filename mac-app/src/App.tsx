@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import AudioSettingsPanel from './components/AudioSettingsPanel';
 import TranscriptionSettings from './components/TranscriptionSettings';
 import VisionSettings from './components/VisionSettings';
+import CommandsSettings from './components/CommandsSettings';
 
 export default function App() {
   const [darkMode, setDarkMode] = useState(() => {
@@ -779,6 +780,12 @@ export default function App() {
                 When enabled, press the hotkey to start continuous screenshotting. Each screenshot is automatically saved and stacked. Press Escape during capture to stop. Transcription during capture will be added to the same stack.
               </p>
             </div>
+          </div>
+
+          {/* Portable Commands Section */}
+          <div style={styles.settingsSection}>
+            <h3 style={styles.sectionTitle}>Portable Commands</h3>
+            <CommandsSettings />
           </div>
         </div>
 

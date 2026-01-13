@@ -1978,6 +1978,83 @@ const diagnosticsAPI: DiagnosticsAPI = {
   },
 };
 
+// =============================================================================
+// Commands API - Portable commands management
+// =============================================================================
+
+const CommandsIPCChannels = {
+  GET_DIRECTORY: 'commands:getDirectory',
+  SET_DIRECTORY: 'commands:setDirectory',
+  BROWSE_DIRECTORY: 'commands:browseDirectory',
+  GET_COMMANDS: 'commands:getCommands',
+  REFRESH_COMMANDS: 'commands:refreshCommands',
+  GET_COMMAND_CONTENT: 'commands:getCommandContent',
+  COMMANDS_CHANGED: 'commands:commandsChanged',
+  DIRECTORY_CHANGED: 'commands:directoryChanged',
+} as const;
+
+type PortableCommandInfo = {
+  name: string;
+  displayName: string;
+  filePath: string;
+};
+
+const commandsAPI = {
+  // Get the currently configured commands directory.
+  getDirectory: async (): Promise<string | null> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_DIRECTORY);
+  },
+
+  // Set the commands directory path.
+  setDirectory: async (directoryPath: string | null): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.SET_DIRECTORY, directoryPath);
+  },
+
+  // Open a file dialog to select a commands directory.
+  browseDirectory: async (): Promise<string | null> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.BROWSE_DIRECTORY);
+  },
+
+  // Get all available commands.
+  getCommands: async (): Promise<PortableCommandInfo[]> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_COMMANDS);
+  },
+
+  // Refresh the commands list by rescanning the directory.
+  refreshCommands: async (): Promise<PortableCommandInfo[]> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.REFRESH_COMMANDS);
+  },
+
+  // Get the content of a specific command.
+  getCommandContent: async (commandName: string): Promise<{ content: string; filePath: string } | null> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_COMMAND_CONTENT, commandName);
+  },
+
+  // Listen for commands changed events.
+  onCommandsChanged: (callback: (commands: PortableCommandInfo[]) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, commands: PortableCommandInfo[]) => {
+      callback(commands);
+    };
+    ipcRenderer.on(CommandsIPCChannels.COMMANDS_CHANGED, handler);
+    return () => {
+      ipcRenderer.removeListener(CommandsIPCChannels.COMMANDS_CHANGED, handler);
+    };
+  },
+
+  // Listen for directory changed events.
+  onDirectoryChanged: (callback: (directoryPath: string | null) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, directoryPath: string | null) => {
+      callback(directoryPath);
+    };
+    ipcRenderer.on(CommandsIPCChannels.DIRECTORY_CHANGED, handler);
+    return () => {
+      ipcRenderer.removeListener(CommandsIPCChannels.DIRECTORY_CHANGED, handler);
+    };
+  },
+};
+
+type CommandsAPI = typeof commandsAPI;
+
 // Electron API for app control and debugging
 const electronAPI = {
   relaunch: () => {
@@ -2002,6 +2079,7 @@ contextBridge.exposeInMainWorld('todoAPI', todoAPI);
 contextBridge.exposeInMainWorld('authAPI', authAPI);
 contextBridge.exposeInMainWorld('sharedClipboardAPI', sharedClipboardAPI);
 contextBridge.exposeInMainWorld('socialAPI', socialAPI);
+contextBridge.exposeInMainWorld('commandsAPI', commandsAPI);
 
 contextBridge.exposeInMainWorld('platform', {
   isMacOS: process.platform === 'darwin',
@@ -2040,6 +2118,7 @@ declare global {
     quotaAPI: QuotaAPI;
     shellAPI: ShellAPI;
     diagnosticsAPI: DiagnosticsAPI;
+    commandsAPI: CommandsAPI;
     stripeConfig: {
       paymentLink: string;
       portalLink: string;

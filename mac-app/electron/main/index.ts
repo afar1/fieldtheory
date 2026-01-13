@@ -48,6 +48,8 @@ import { TodoIPCChannels } from './types/todo';
 import { CursorStatusManager, CursorStatusState } from './cursorStatusManager';
 import { QuotaManager } from './quotaManager';
 import { DiagnosticsCollector } from './diagnosticsCollector';
+import { CommandsManager, PortableCommand } from './commandsManager';
+import { CommandsIPCChannels } from './types/commands';
 
 // Load environment variables from .env.local for Supabase credentials.
 // In development, the file is in the mac-app directory.
@@ -146,6 +148,7 @@ let onboardingWindow: OnboardingWindow | null = null;
 let cursorStatusManager: CursorStatusManager | null = null;
 let quotaManager: QuotaManager | null = null;
 let diagnosticsCollector: DiagnosticsCollector | null = null;
+let commandsManager: CommandsManager | null = null;
 
 // Track pending update state so windows can query it when they open.
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
@@ -2413,6 +2416,84 @@ function setupClipboardIPCHandlers(): void {
   });
 
   // =========================================================================
+  // Commands IPC Handlers - Portable commands management
+  // =========================================================================
+
+  ipcMain.handle(CommandsIPCChannels.GET_DIRECTORY, async () => {
+    if (!commandsManager) {
+      return null;
+    }
+    return commandsManager.getDirectory();
+  });
+
+  ipcMain.handle(CommandsIPCChannels.SET_DIRECTORY, async (_event, directoryPath: string | null) => {
+    if (!commandsManager || !preferencesManager) {
+      return { success: false, error: 'Not initialized' };
+    }
+    try {
+      await commandsManager.setDirectory(directoryPath);
+      await preferencesManager.save({ commandsDirectory: directoryPath || undefined });
+      return { success: true };
+    } catch (error) {
+      console.error('[Main] Failed to set commands directory:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  });
+
+  ipcMain.handle(CommandsIPCChannels.BROWSE_DIRECTORY, async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select Commands Directory',
+      message: 'Choose a folder containing your command markdown files',
+      properties: ['openDirectory', 'createDirectory'],
+      buttonLabel: 'Select',
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+
+    return result.filePaths[0];
+  });
+
+  ipcMain.handle(CommandsIPCChannels.GET_COMMANDS, async () => {
+    if (!commandsManager) {
+      return [];
+    }
+    return commandsManager.getCommands().map(cmd => ({
+      name: cmd.name,
+      displayName: cmd.displayName,
+      filePath: cmd.filePath,
+    }));
+  });
+
+  ipcMain.handle(CommandsIPCChannels.REFRESH_COMMANDS, async () => {
+    if (!commandsManager) {
+      return [];
+    }
+    await commandsManager.refresh();
+    return commandsManager.getCommands().map(cmd => ({
+      name: cmd.name,
+      displayName: cmd.displayName,
+      filePath: cmd.filePath,
+    }));
+  });
+
+  ipcMain.handle(CommandsIPCChannels.GET_COMMAND_CONTENT, async (_event, commandName: string) => {
+    if (!commandsManager) {
+      return null;
+    }
+    const command = commandsManager.getCommand(commandName);
+    if (!command) {
+      return null;
+    }
+    const loaded = await commandsManager.loadCommandContent(command);
+    if (!loaded) {
+      return null;
+    }
+    return { content: loaded.content, filePath: loaded.filePath };
+  });
+
+  // =========================================================================
   // Shared Clipboard IPC Handlers - Shared clipboard for collaboration
   // =========================================================================
 
@@ -3470,6 +3551,36 @@ async function initTranscriberSystem(): Promise<void> {
   if (audioManager) {
     diagnosticsCollector.setAudioManager(audioManager);
   }
+
+  // Initialize commands manager for portable commands feature.
+  commandsManager = new CommandsManager();
+  
+  // Load saved commands directory from preferences.
+  const savedCommandsDir = preferencesManager.getPreference('commandsDirectory');
+  if (savedCommandsDir) {
+    await commandsManager.setDirectory(savedCommandsDir);
+  }
+  
+  // Broadcast commands changes to all windows.
+  commandsManager.on('commandsChanged', (commands: PortableCommand[]) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(CommandsIPCChannels.COMMANDS_CHANGED, commands.map((cmd: PortableCommand) => ({
+          name: cmd.name,
+          displayName: cmd.displayName,
+          filePath: cmd.filePath,
+        })));
+      }
+    });
+  });
+  
+  commandsManager.on('directoryChanged', (directoryPath) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(CommandsIPCChannels.DIRECTORY_CHANGED, directoryPath);
+      }
+    });
+  });
 
   // Set up escape key priority: dismiss clipboard history before canceling recording
   transcriberManager.setClipboardHistoryVisibilityChecker(() => {

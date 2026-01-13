@@ -806,6 +806,34 @@ interface StripeConfig {
   portalLink: string;
 }
 
+// =============================================================================
+// Portable Commands Types
+// =============================================================================
+
+/**
+ * Represents a portable command (markdown file) for display in the UI.
+ */
+interface PortableCommandInfo {
+  name: string;           // Command name (filename without extension)
+  displayName: string;    // Human-readable name
+  filePath: string;       // Full path to the markdown file
+}
+
+/**
+ * Commands API for managing portable commands (markdown files).
+ * Allows users to bring their commands from other tools like Claude, Cursor, etc.
+ */
+interface CommandsAPI {
+  getDirectory: () => Promise<string | null>;
+  setDirectory: (directoryPath: string | null) => Promise<{ success: boolean; error?: string }>;
+  browseDirectory: () => Promise<string | null>;
+  getCommands: () => Promise<PortableCommandInfo[]>;
+  refreshCommands: () => Promise<PortableCommandInfo[]>;
+  getCommandContent: (commandName: string) => Promise<{ content: string; filePath: string } | null>;
+  onCommandsChanged: (callback: (commands: PortableCommandInfo[]) => void) => () => void;
+  onDirectoryChanged: (callback: (directoryPath: string | null) => void) => () => void;
+}
+
 /**
  * Extend the Window interface with our custom APIs.
  */
@@ -826,6 +854,7 @@ declare global {
     cursorStatusAPI?: CursorStatusAPI;
     quotaAPI?: QuotaAPI;
     shellAPI?: ShellAPI;
+    commandsAPI?: CommandsAPI;
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;
   }
