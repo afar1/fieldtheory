@@ -28,6 +28,10 @@ export default function CommandsSettings() {
   // Error state.
   const [error, setError] = useState<string | null>(null);
 
+  // Manual path input mode.
+  const [showManualInput, setShowManualInput] = useState(false);
+  const [manualPath, setManualPath] = useState('');
+
   // Load initial state.
   useEffect(() => {
     if (!window.commandsAPI) {
@@ -105,6 +109,31 @@ export default function CommandsSettings() {
       setError(err instanceof Error ? err.message : 'Unknown error');
     }
   }, []);
+
+  // Handle manual path submission.
+  const handleManualPathSubmit = useCallback(async () => {
+    if (!window.commandsAPI || !manualPath.trim()) return;
+
+    setError(null);
+    try {
+      // Expand ~ to home directory
+      let expandedPath = manualPath.trim();
+      if (expandedPath.startsWith('~/')) {
+        // The backend will handle the expansion, but we can show it nicely
+        expandedPath = manualPath.trim();
+      }
+
+      const result = await window.commandsAPI.setDirectory(expandedPath);
+      if (result.success) {
+        setShowManualInput(false);
+        setManualPath('');
+      } else {
+        setError(result.error || 'Failed to set directory');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error');
+    }
+  }, [manualPath]);
 
   if (loading) {
     return (
@@ -208,21 +237,116 @@ export default function CommandsSettings() {
               </button>
             </div>
           ) : (
-            <button
-              onClick={handleBrowse}
-              style={{
-                padding: '10px 16px',
-                fontSize: '13px',
-                fontWeight: 500,
-                color: '#fff',
-                backgroundColor: '#3b82f6',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-              }}
-            >
-              Select Directory
-            </button>
+            <div>
+              {showManualInput ? (
+                /* Manual path input */
+                <div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <input
+                      type="text"
+                      value={manualPath}
+                      onChange={(e) => setManualPath(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleManualPathSubmit()}
+                      placeholder="Enter path (e.g., ~/.cursor/rules)"
+                      style={{
+                        flex: 1,
+                        padding: '8px 12px',
+                        fontSize: '13px',
+                        fontFamily: 'monospace',
+                        backgroundColor: theme.isDark ? '#2d2d2d' : '#fff',
+                        border: `1px solid ${theme.isDark ? '#404040' : '#d1d5db'}`,
+                        borderRadius: '6px',
+                        color: theme.text,
+                        outline: 'none',
+                      }}
+                      autoFocus
+                    />
+                    <button
+                      onClick={handleManualPathSubmit}
+                      disabled={!manualPath.trim()}
+                      style={{
+                        padding: '8px 16px',
+                        fontSize: '13px',
+                        fontWeight: 500,
+                        color: '#fff',
+                        backgroundColor: manualPath.trim() ? '#3b82f6' : '#9ca3af',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: manualPath.trim() ? 'pointer' : 'not-allowed',
+                      }}
+                    >
+                      Set
+                    </button>
+                    <button
+                      onClick={() => { setShowManualInput(false); setManualPath(''); }}
+                      style={{
+                        padding: '8px 12px',
+                        fontSize: '13px',
+                        color: theme.textSecondary,
+                        backgroundColor: 'transparent',
+                        border: `1px solid ${theme.isDark ? '#404040' : '#d1d5db'}`,
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  <p style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '8px', marginBottom: 0 }}>
+                    Supports ~ for home directory (e.g., ~/.cursor/rules)
+                  </p>
+                </div>
+              ) : (
+                /* Browse or enter path buttons */
+                <div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      onClick={handleBrowse}
+                      style={{
+                        padding: '10px 16px',
+                        fontSize: '13px',
+                        fontWeight: 500,
+                        color: '#fff',
+                        backgroundColor: '#3b82f6',
+                        border: 'none',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Browse...
+                    </button>
+                    <button
+                      onClick={() => setShowManualInput(true)}
+                      style={{
+                        padding: '10px 16px',
+                        fontSize: '13px',
+                        fontWeight: 500,
+                        color: theme.isDark ? '#e5e5e5' : '#374151',
+                        backgroundColor: theme.isDark ? '#2d2d2d' : '#fff',
+                        border: `1px solid ${theme.isDark ? '#404040' : '#d1d5db'}`,
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Enter Path
+                    </button>
+                  </div>
+
+                  {/* Common locations hint */}
+                  <p style={{
+                    fontSize: '11px',
+                    color: theme.textSecondary,
+                    marginTop: '12px',
+                    marginBottom: '0',
+                    lineHeight: '1.5',
+                  }}>
+                    <strong>Common locations:</strong><br />
+                    • <code style={{ fontSize: '10px', backgroundColor: theme.isDark ? '#2d2d2d' : '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>~/.cursor/rules</code> — Cursor rules<br />
+                    • <code style={{ fontSize: '10px', backgroundColor: theme.isDark ? '#2d2d2d' : '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>~/Documents/commands</code> — Custom commands
+                  </p>
+                </div>
+              )}
+            </div>
           )}
         </div>
 

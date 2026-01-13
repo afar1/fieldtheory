@@ -31,6 +31,8 @@ const TranscribeIPCChannels = {
   SET_ABANDON_CONFIRMATION: 'transcribe:setAbandonConfirmation',
   GET_AUTO_IMPROVE: 'transcribe:getAutoImprove',
   SET_AUTO_IMPROVE: 'transcribe:setAutoImprove',
+  GET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:getAutoImproveMinWords',
+  SET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:setAutoImproveMinWords',
   TOGGLE_RECORDING: 'transcribe:toggleRecording',
   GET_SOUND_CONFIG: 'transcribe:getSoundConfig',
   SET_SOUND_CONFIG: 'transcribe:setSoundConfig',
@@ -514,6 +516,8 @@ export interface TranscribeAPI {
   setAbandonConfirmation: (enabled: boolean) => Promise<void>;
   getAutoImprove: () => Promise<boolean>;
   setAutoImprove: (enabled: boolean) => Promise<void>;
+  getAutoImproveMinWords: () => Promise<number>;
+  setAutoImproveMinWords: (minWords: number) => Promise<void>;
   toggleRecording: () => Promise<void>;
   getSoundConfig: () => Promise<SoundConfig>;
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
@@ -771,6 +775,14 @@ const transcribeAPI: TranscribeAPI = {
 
   setAutoImprove: async (enabled: boolean): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE, enabled);
+  },
+
+  getAutoImproveMinWords: async (): Promise<number> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_MIN_WORDS);
+  },
+
+  setAutoImproveMinWords: async (minWords: number): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE_MIN_WORDS, minWords);
   },
 
   toggleRecording: async (): Promise<void> => {

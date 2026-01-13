@@ -25,6 +25,8 @@ export const TranscribeIPCChannels = {
   TOGGLE_RECORDING: 'transcribe:toggleRecording',
   GET_AUTO_IMPROVE: 'transcribe:getAutoImprove',
   SET_AUTO_IMPROVE: 'transcribe:setAutoImprove',
+  GET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:getAutoImproveMinWords',
+  SET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:setAutoImproveMinWords',
 
   // Sound settings
   GET_SOUND_CONFIG: 'transcribe:getSoundConfig',
@@ -110,6 +112,8 @@ export interface TranscribeAPI {
   toggleRecording: () => Promise<void>;
   getAutoImprove: () => Promise<boolean>;
   setAutoImprove: (enabled: boolean) => Promise<void>;
+  getAutoImproveMinWords: () => Promise<number>;
+  setAutoImproveMinWords: (minWords: number) => Promise<void>;
   getSoundConfig: () => Promise<SoundConfig>;
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
   getAvailableSounds: () => Promise<SoundOption[]>;

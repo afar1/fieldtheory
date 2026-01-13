@@ -25,6 +25,7 @@ export class TrayManager {
   private quotaManager: QuotaManager | null = null;
   private transcriberManager: TranscriberManager | null = null;
   private showWindowCallback: (() => void) | null = null;
+  private showMainWindowCallback: (() => void) | null = null;
   private checkForUpdatesCallback: (() => void) | null = null;
   private startRecordingCallback: (() => void) | null = null;
   private takeScreenshotCallback: (() => void) | null = null;
@@ -97,13 +98,14 @@ export class TrayManager {
   /**
    * Initialize the tray icon and set up event listeners.
    */
-  init(showWindowCallback?: () => void, checkForUpdatesCallback?: () => void, startRecordingCallback?: () => void, takeScreenshotCallback?: () => void, takeFullScreenCallback?: () => void, takeActiveWindowCallback?: () => void): void {
+  init(showWindowCallback?: () => void, checkForUpdatesCallback?: () => void, startRecordingCallback?: () => void, takeScreenshotCallback?: () => void, takeFullScreenCallback?: () => void, takeActiveWindowCallback?: () => void, showMainWindowCallback?: () => void): void {
     if (process.platform !== 'darwin') {
       console.log('[TrayManager] Not on macOS, skipping tray creation');
       return;
     }
 
     this.showWindowCallback = showWindowCallback || null;
+    this.showMainWindowCallback = showMainWindowCallback || null;
     this.checkForUpdatesCallback = checkForUpdatesCallback || null;
     this.startRecordingCallback = startRecordingCallback || null;
     this.takeScreenshotCallback = takeScreenshotCallback || null;
