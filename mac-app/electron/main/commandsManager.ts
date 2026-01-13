@@ -74,16 +74,39 @@ export class CommandsManager extends EventEmitter {
   async setDirectory(directoryPath: string | null): Promise<void> {
     // Stop watching old directory
     if (this.watcherAbort) {
-      this.watcherAbort.abort();
+      try {
+        this.watcherAbort.abort();
+      } catch (e) {
+        // Ignore abort errors
+      }
       this.watcherAbort = null;
     }
 
-    this.directoryPath = directoryPath;
+    // Expand ~ to home directory
+    let expandedPath = directoryPath;
+    if (expandedPath && expandedPath.startsWith('~/')) {
+      const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+      expandedPath = path.join(homeDir, expandedPath.slice(2));
+    } else if (expandedPath === '~') {
+      expandedPath = process.env.HOME || process.env.USERPROFILE || '';
+    }
+
+    this.directoryPath = expandedPath;
     this.commands.clear();
 
-    if (directoryPath) {
-      await this.scanDirectory();
-      this.startWatching();
+    if (expandedPath) {
+      try {
+        await this.scanDirectory();
+      } catch (error) {
+        console.error('[CommandsManager] Error scanning directory:', error);
+      }
+
+      // Start watching in a try-catch - don't let watcher issues crash the app
+      try {
+        this.startWatching();
+      } catch (error) {
+        console.warn('[CommandsManager] Could not start file watcher (non-fatal):', error);
+      }
     }
 
     this.emit('directoryChanged', directoryPath);
@@ -213,27 +236,40 @@ export class CommandsManager extends EventEmitter {
 
   /**
    * Start watching the directory for changes.
+   * Note: fs.watch with recursive can be unstable on macOS, so we wrap in try-catch
+   * and gracefully degrade if watching fails.
    */
   private startWatching(): void {
     if (!this.directoryPath) return;
 
     try {
       this.watcherAbort = new AbortController();
-      
+
       // Use fs.watch with AbortController for cleanup
-      fs.watch(
+      // Wrap in try-catch because recursive watching can be unstable on macOS
+      const watcher = fs.watch(
         this.directoryPath,
         { recursive: true, signal: this.watcherAbort.signal },
         async (eventType, filename) => {
-          if (filename && this.isMarkdownFile(filename)) {
-            console.log(`[CommandsManager] File changed: ${filename}`);
-            // Rescan the directory to update commands
-            this.commands.clear();
-            await this.scanDirectory();
-            this.emit('commandsChanged', this.getCommands());
+          try {
+            if (filename && this.isMarkdownFile(filename)) {
+              console.log(`[CommandsManager] File changed: ${filename}`);
+              // Rescan the directory to update commands
+              this.commands.clear();
+              await this.scanDirectory();
+              this.emit('commandsChanged', this.getCommands());
+            }
+          } catch (error) {
+            console.error('[CommandsManager] Error handling file change:', error);
           }
         }
       );
+
+      // Handle watcher errors gracefully
+      watcher.on('error', (error) => {
+        console.warn('[CommandsManager] File watcher error (non-fatal):', error);
+        // Don't crash - the commands will still work, just won't auto-refresh
+      });
       
       console.log(`[CommandsManager] Watching directory: ${this.directoryPath}`);
     } catch (error) {

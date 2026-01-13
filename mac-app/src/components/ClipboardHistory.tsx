@@ -1534,17 +1534,29 @@ export default function ClipboardHistory() {
     initializeSession();
 
     // Listen for auth state changes.
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      // Log auth event to help debug unexpected sign-outs.
+      // Events: INITIAL_SESSION, SIGNED_IN, SIGNED_OUT, TOKEN_REFRESHED, USER_UPDATED
+      console.log(`[ClipboardHistory] Auth event: ${event}, session: ${session ? 'present' : 'null'}`);
+
       setAuthSession(session);
       // Forward session changes to main process.
       if (session) {
         window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
       } else {
-        window.clipboardAPI?.clearSyncSession?.();
-        // Clear unread indicators when signing out.
-        setHasUnreadDMs(false);
-        setHasUnreadFeedback(false);
-        setHasUnreadShared(false);
+        // Only clear the main process session on explicit sign-out.
+        // For other null-session events (token refresh failure, localStorage cleared),
+        // the main process may still have a valid session it can recover from.
+        if (event === 'SIGNED_OUT') {
+          console.log(`[ClipboardHistory] User signed out - clearing sync session`);
+          window.clipboardAPI?.clearSyncSession?.();
+          // Clear unread indicators when signing out.
+          setHasUnreadDMs(false);
+          setHasUnreadFeedback(false);
+          setHasUnreadShared(false);
+        } else {
+          console.log(`[ClipboardHistory] Session became null after ${event} event - not clearing main process session (may recover)`);
+        }
       }
     });
 

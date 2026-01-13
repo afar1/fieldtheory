@@ -674,14 +674,19 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
       setCheckingAuth(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log(`[SharedContextView] Auth event: ${event}, session: ${session ? 'present' : 'null'}`);
       // IMPORTANT: Must set sync session BEFORE updating React state.
       // Otherwise, the useEffect that calls loadTeamItems() fires before
       // the main process has the session, causing queryItems to return empty.
       if (session) {
         await window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
-      } else {
+      } else if (event === 'SIGNED_OUT') {
+        // Only clear on explicit sign-out, not on token refresh failures.
+        console.log(`[SharedContextView] User signed out - clearing sync session`);
         window.clipboardAPI?.clearSyncSession?.();
+      } else {
+        console.log(`[SharedContextView] Session became null after ${event} event - not clearing main process session`);
       }
       setSession(session);
       setCheckingAuth(false);

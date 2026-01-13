@@ -623,13 +623,18 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
     });
 
     // Listen for auth state changes (sign in, sign out, token refresh).
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log(`[TeamView] Auth event: ${event}, session: ${session ? 'present' : 'null'}`);
       setSession(session);
       setCheckingAuth(false);
       if (session) {
         window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
-      } else {
+      } else if (event === 'SIGNED_OUT') {
+        // Only clear on explicit sign-out, not on token refresh failures.
+        console.log(`[TeamView] User signed out - clearing sync session`);
         window.clipboardAPI?.clearSyncSession?.();
+      } else {
+        console.log(`[TeamView] Session became null after ${event} event - not clearing main process session`);
       }
     });
 

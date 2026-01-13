@@ -295,112 +295,152 @@ function registerHotkeysAfterOnboarding(): void {
   }
 
   // Register Cmd+Shift+V (Super Paste)
+  // If there's an active stack in TranscriberManager (transcript + screenshots), paste the full stack.
+  // Otherwise, paste the most recent item from clipboard history.
+  // Uses content-based deduplication to prevent accidental double-pastes.
   const superPasteHotkey = 'Command+Shift+V';
-  let superPasteInProgress = false;
-  let superPasteTimeout: NodeJS.Timeout | null = null;
+  let lastSuperPastedStackKey: string | null = null;
+  let lastSuperPasteTime: number = 0;
+  const SUPER_PASTE_DEDUPE_WINDOW_MS = 250; // Only dedupe same content within 250ms
+
   try {
     globalShortcut.register(superPasteHotkey, async () => {
       console.log('[Main] Super Paste triggered');
 
-      // Debounce: prevent double-firing within 500ms
-      if (superPasteInProgress) {
-        console.log('[Main] Super Paste: already in progress, ignoring');
+      if (!clipboardManager) {
+        console.error('[Main] Super Paste: clipboardManager not available');
         return;
       }
 
-      superPasteInProgress = true;
+      const now = Date.now();
 
-      // Safety timeout: reset debounce after 1 second even if operation doesn't complete
-      // This prevents blocking legitimate retries if something fails silently
-      if (superPasteTimeout) {
-        clearTimeout(superPasteTimeout);
+      // Get most recent item from clipboard history
+      const stmt = clipboardManager['db'].prepare('SELECT id FROM clipboard_items ORDER BY created_at DESC LIMIT 1');
+      const row = stmt.get() as { id: number } | undefined;
+
+      if (!row) {
+        console.log('[Main] Super Paste: no items in clipboard history');
+        return;
       }
-      superPasteTimeout = setTimeout(() => {
-        if (superPasteInProgress) {
-          console.log('[Main] Super Paste: timeout reached, resetting debounce flag');
-          superPasteInProgress = false;
+
+      const mostRecentItem = clipboardManager.getItem(row.id);
+      if (!mostRecentItem) {
+        console.log('[Main] Super Paste: failed to get most recent item');
+        return;
+      }
+
+      // Check if this item belongs to a stack - if so, paste the whole stack
+      let itemsToPaste: typeof mostRecentItem[] = [mostRecentItem];
+      let pasteKey = `item:${mostRecentItem.id}`;
+
+      if (mostRecentItem.stackId) {
+        const stackItems = clipboardManager.queryItemsByStackId(mostRecentItem.stackId);
+        if (stackItems.length > 1) {
+          itemsToPaste = stackItems;
+          pasteKey = `stack:${mostRecentItem.stackId}`;
+          console.log('[Main] Super Paste: found stack with', stackItems.length, 'items');
         }
-      }, 1000);
+      }
+
+      // Content-based deduplication
+      if (pasteKey === lastSuperPastedStackKey &&
+          (now - lastSuperPasteTime) < SUPER_PASTE_DEDUPE_WINDOW_MS) {
+        console.log('[Main] Super Paste: same content pasted recently, skipping duplicate');
+        return;
+      }
+
+      // Get frontmost app info
+      const { exec } = require('child_process');
+      const { promisify } = require('util');
+      const execAsync = promisify(exec);
+
+      let bundleId = '';
+      let isTerminal = false;
+      try {
+        const script = `
+          tell application "System Events"
+            set frontApp to first application process whose frontmost is true
+            return (bundle identifier of frontApp)
+          end tell
+        `;
+        const { stdout } = await execAsync(`osascript -e '${script}'`);
+        bundleId = stdout.trim();
+        const { isTerminalApp } = require('./clipboardManager');
+        isTerminal = isTerminalApp(bundleId);
+      } catch (e) {
+        console.error('[Main] Super Paste: failed to get frontmost app:', e);
+      }
+
+      console.log('[Main] Super Paste: pasting', itemsToPaste.length, 'item(s), frontmost:', bundleId, 'isTerminal:', isTerminal);
 
       try {
-        // Super Paste always pastes the most recent item (text or image)
-        // It's essentially "Cmd+V for terminals" - brings clipboard history to terminals
-        console.log('[Main] Super Paste: pasting most recent item from history');
+        // For terminals with stacks, combine text with image paths
+        if (isTerminal && itemsToPaste.length > 1) {
+          // Find text/transcript items and image items
+          const textItems = itemsToPaste.filter(i => i.type === 'text' || i.type === 'transcript');
+          const imageItems = itemsToPaste.filter(i => i.imageData);
 
-        if (!clipboardManager) {
-          console.error('[Main] Super Paste: clipboardManager not available');
-          return;
-        }
-
-        const stmt = clipboardManager['db'].prepare('SELECT id FROM clipboard_items ORDER BY created_at DESC LIMIT 1');
-        const row = stmt.get() as { id: number } | undefined;
-
-        if (!row) {
-          console.log('[Main] Super Paste: no items in clipboard history');
-          return;
-        }
-
-        const mostRecentItem = clipboardManager.getItem(row.id);
-        if (!mostRecentItem) {
-          console.log('[Main] Super Paste: failed to get most recent item');
-          return;
-        }
-        console.log('[Main] Super Paste: pasting most recent item:', mostRecentItem.type, 'id:', mostRecentItem.id, 'created:', mostRecentItem.createdAt);
-
-        try {
-          const script = `
-            tell application "System Events"
-              set frontApp to first application process whose frontmost is true
-              return (bundle identifier of frontApp)
-            end tell
-          `;
-          const { exec } = require('child_process');
-          const { promisify } = require('util');
-          const execAsync = promisify(exec);
-          const { stdout } = await execAsync(`osascript -e '${script}'`);
-          const bundleId = stdout.trim();
-
-          const { isTerminalApp } = require('./clipboardManager');
-          const isTerminal = isTerminalApp(bundleId);
-          console.log('[Main] Super Paste: frontmost app is terminal:', isTerminal);
-
-          if (mostRecentItem.type === 'text' || mostRecentItem.type === 'transcript') {
-            clipboard.writeText(mostRecentItem.content || '');
-            console.log('[Main] Super Paste: wrote text to clipboard, triggering paste...');
-            await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-            console.log('[Main] Super Paste: pasted text');
-          } else if (mostRecentItem.imageData) {
-            if (isTerminal) {
-              const imagePath = await clipboardManager.exportImageToCache(mostRecentItem);
-              if (imagePath) {
-                // Use real path for terminals - they need actual filesystem paths
-                clipboard.writeText(imagePath);
-                console.log('[Main] Super Paste: wrote image path to clipboard:', imagePath, ', triggering paste...');
-                await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-                console.log('[Main] Super Paste: pasted image path to terminal');
-              }
-            } else {
-              const { nativeImage } = require('electron');
-              const imageBuffer = typeof mostRecentItem.imageData === 'string'
-                ? Buffer.from(mostRecentItem.imageData, 'base64')
-                : mostRecentItem.imageData;
-              const image = nativeImage.createFromBuffer(imageBuffer);
-              clipboard.writeImage(image);
-              console.log('[Main] Super Paste: wrote image buffer to clipboard, triggering paste...');
-              await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-              console.log('[Main] Super Paste: pasted image buffer');
+          // Build combined text with figure paths
+          let combinedText = '';
+          for (const item of textItems) {
+            if (item.content) {
+              combinedText += item.content + '\n';
             }
           }
-        } catch (error) {
-          console.error('[Main] Super Paste: error during paste:', error);
+
+          // Add figure paths for images
+          if (imageItems.length > 0) {
+            combinedText += '\nFigures:\n';
+            for (const item of imageItems) {
+              const imagePath = await clipboardManager.exportImageToCache(item);
+              if (imagePath) {
+                const label = item.figureLabel || '';
+                combinedText += `[Figure ${label}] ${imagePath}\n`;
+              }
+            }
+          }
+
+          clipboard.writeText(combinedText.trim());
+          await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+          console.log('[Main] Super Paste: pasted combined text + image paths to terminal');
+
+        } else {
+          // Paste items sequentially
+          for (const item of itemsToPaste) {
+            if (item.type === 'text' || item.type === 'transcript') {
+              clipboard.writeText(item.content || '');
+              await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+              console.log('[Main] Super Paste: pasted text');
+            } else if (item.imageData) {
+              if (isTerminal) {
+                const imagePath = await clipboardManager.exportImageToCache(item);
+                if (imagePath) {
+                  clipboard.writeText(imagePath);
+                  await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+                  console.log('[Main] Super Paste: pasted image path to terminal');
+                }
+              } else {
+                const { nativeImage } = require('electron');
+                const imageBuffer = typeof item.imageData === 'string'
+                  ? Buffer.from(item.imageData, 'base64')
+                  : item.imageData;
+                const image = nativeImage.createFromBuffer(imageBuffer);
+                clipboard.writeImage(image);
+                await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+                console.log('[Main] Super Paste: pasted image');
+              }
+            }
+            // Small delay between items
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
         }
-      } finally {
-        // Clear timeout and reset flag
-        if (superPasteTimeout) {
-          clearTimeout(superPasteTimeout);
-          superPasteTimeout = null;
-        }
-        superPasteInProgress = false;
+
+        // Update tracking after successful paste
+        lastSuperPastedStackKey = pasteKey;
+        lastSuperPasteTime = now;
+
+      } catch (error) {
+        console.error('[Main] Super Paste: error during paste:', error);
       }
     });
     console.log(`[Main] Registered super paste hotkey: ${superPasteHotkey}`);
@@ -1031,6 +1071,20 @@ function setupTranscribeIPCHandlers(): void {
     if (trayManager) {
       trayManager.refreshMenu();
     }
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_MIN_WORDS, () => {
+    if (!transcriberManager) {
+      return 100; // Default value
+    }
+    return transcriberManager.getAutoImproveMinWords();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_MIN_WORDS, async (_event, minWords: number) => {
+    if (!transcriberManager) {
+      throw new Error('TranscriberManager not initialized');
+    }
+    await transcriberManager.setAutoImproveMinWords(minWords);
   });
 
   // Sound settings handlers.
@@ -2760,7 +2814,12 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle(CommandsIPCChannels.BROWSE_DIRECTORY, async () => {
-    const result = await dialog.showOpenDialog({
+    // NSPanel windows (like clipboard history) don't support modal dialogs properly.
+    // Use mainWindow as parent, or show dialog without parent if mainWindow doesn't exist.
+    // This ensures the dialog appears and works correctly.
+    const parentWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+
+    const result = await dialog.showOpenDialog(parentWindow as BrowserWindow, {
       title: 'Select Commands Directory',
       message: 'Choose a folder containing your command markdown files',
       properties: ['openDirectory', 'createDirectory'],
@@ -3616,7 +3675,7 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
     }
   };
 
-  trayManager.init(showSettingsInClipboardWindow, checkForUpdatesCallback, startRecordingCallback, takeScreenshotCallback, takeFullScreenCallback, takeActiveWindowCallback);
+  trayManager.init(showSettingsInClipboardWindow, checkForUpdatesCallback, startRecordingCallback, takeScreenshotCallback, takeFullScreenCallback, takeActiveWindowCallback, showMainWindow);
 
   console.log('[Main] Audio system initialized');
 }

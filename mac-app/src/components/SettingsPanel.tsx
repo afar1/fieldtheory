@@ -9,6 +9,7 @@ import AudioSettingsPanel from './AudioSettingsPanel';
 import TranscriptionSettings from './TranscriptionSettings';
 import PromptSettings from './PromptSettings';
 import DiagnosticsModal from './DiagnosticsModal';
+import CommandsSettings from './CommandsSettings';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
 import { useTheme } from '../contexts/ThemeContext';
@@ -351,15 +352,20 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     });
 
     // Listen for auth changes (triggered by TeamView sign-in or token refresh).
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log(`[SettingsPanel] Auth event: ${event}, session: ${session ? 'present' : 'null'}`);
       setSession(session);
       if (session) {
         window.clipboardAPI?.setSyncSession?.(
           session.access_token,
           session.refresh_token
         );
-      } else {
+      } else if (event === 'SIGNED_OUT') {
+        // Only clear on explicit sign-out, not on token refresh failures.
+        console.log(`[SettingsPanel] User signed out - clearing sync session`);
         window.clipboardAPI?.clearSyncSession?.();
+      } else {
+        console.log(`[SettingsPanel] Session became null after ${event} event - not clearing main process session`);
       }
     });
 
@@ -1176,6 +1182,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         <TranscriptionSettings />
       </div>
 
+      {/* Portable Commands Section */}
+      <div style={styles.section}>
+        <SectionHeader title="Portable Commands" />
+        <CommandsSettings />
+      </div>
 
       {/* Support Section - diagnostics and troubleshooting */}
       <div style={styles.section}>

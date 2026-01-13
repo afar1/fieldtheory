@@ -90,6 +90,8 @@ interface Preferences {
 
   // Auto-improve transcripts - automatically run AI improvement on completed transcripts
   autoImproveTranscripts?: boolean;
+  // Minimum word count for auto-improve - only improve transcripts with at least this many words
+  autoImproveMinWords?: number;  // Default: 100, Range: 0-500, Increment: 10
 
   // Custom system prompt for the Engineer feature.
   // If set, overrides the default prompt loaded from file.
