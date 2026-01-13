@@ -87,7 +87,10 @@ interface Preferences {
   // Abandon recording settings - hotkey to cancel recording and whether to confirm
   abandonRecordingHotkey?: string;
   abandonRecordingConfirmation?: boolean;
-  
+
+  // Auto-improve transcripts - automatically run AI improvement on completed transcripts
+  autoImproveTranscripts?: boolean;
+
   // Custom system prompt for the Engineer feature.
   // If set, overrides the default prompt loaded from file.
   customSystemPrompt?: string;

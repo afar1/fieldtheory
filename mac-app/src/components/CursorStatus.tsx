@@ -551,17 +551,19 @@ const styles: Record<string, React.CSSProperties> = {
   labelContainer: {
     backgroundColor: 'rgba(30, 30, 30, 0.85)',
     borderRadius: '4px',
-    padding: '4px 4px 4px 4px',
-    maxWidth: '320px',
+    padding: '4px 8px',
+    maxWidth: '500px', // Increased from 320px to accommodate longer messages
     marginTop: '-6px',
   },
   label: {
     fontSize: '11px',
     fontWeight: 500,
-    lineHeight: '14px',
+    lineHeight: '16px', // Increased from 14px for better multi-line readability
     color: 'rgba(255, 255, 255, 0.9)',
     fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
-    whiteSpace: 'nowrap', // Prevent text wrapping for short labels like "Say anything"
+    whiteSpace: 'normal', // Allow wrapping for long messages
+    wordWrap: 'break-word', // Break long words if needed
+    overflowWrap: 'break-word', // Modern property for word breaking
   },
   helpText: {
     fontSize: '10px',

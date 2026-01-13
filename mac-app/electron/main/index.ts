@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import os from 'os';
@@ -152,6 +152,310 @@ let commandsManager: CommandsManager | null = null;
 
 // Track pending update state so windows can query it when they open.
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
+
+/**
+ * Register all application hotkeys.
+ * Called after onboarding is complete to avoid triggering permission prompts during setup.
+ */
+function registerHotkeysAfterOnboarding(): void {
+  if (!clipboardManager || !preferencesManager) {
+    console.warn('[Main] Cannot register hotkeys: managers not initialized');
+    return;
+  }
+
+  console.log('[Main] Registering all hotkeys');
+  const prefs = preferencesManager.get();
+
+  // Register continuous context hotkey if enabled
+  if (prefs.continuousContextEnabled) {
+    clipboardManager.registerContinuousContextHotkey(async () => {
+      if (!clipboardManager) return;
+
+      const state = clipboardManager.getContinuousContextState();
+      if (state.active) {
+        // If already active, stop it
+        clipboardManager.stopContinuousContext();
+      } else {
+        // Start continuous context mode
+        await clipboardManager.startContinuousContext();
+      }
+    });
+  }
+
+  // Register clipboard hotkeys (screenshot, full screen, active window)
+  clipboardManager.registerScreenshotHotkey(async () => {
+    console.log('[Main] Screenshot hotkey (Cmd+4) triggered');
+    const id = await clipboardManager!.captureScreenshot({ region: true });
+    console.log('[Main] Screenshot captured, id:', id);
+    if (id > 0) {
+      if (transcriberManager) {
+        transcriberManager.addToStack(id);
+        console.log('[Main] Screenshot added to transcriber stack');
+      }
+      if (visionProcessor) {
+        visionProcessor.queueImage(id).catch((error) => {
+          console.error('[Main] Failed to queue image for vision processing:', error);
+        });
+      }
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
+        }
+      });
+    }
+  });
+
+  clipboardManager.registerFullScreenHotkey(async () => {
+    const id = await clipboardManager!.captureScreenshot({ fullScreen: true });
+    if (id > 0) {
+      if (transcriberManager) {
+        transcriberManager.addToStack(id);
+      }
+      if (visionProcessor) {
+        visionProcessor.queueImage(id).catch((error) => {
+          console.error('[Main] Failed to queue image for vision processing:', error);
+        });
+      }
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
+        }
+      });
+    }
+  });
+
+  clipboardManager.registerActiveWindowHotkey(async () => {
+    const id = await clipboardManager!.captureScreenshot({ activeWindow: true });
+    if (id > 0) {
+      if (transcriberManager) {
+        transcriberManager.addToStack(id);
+      }
+      if (visionProcessor) {
+        visionProcessor.queueImage(id).catch((error) => {
+          console.error('[Main] Failed to queue image for vision processing:', error);
+        });
+      }
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
+        }
+      });
+    }
+  });
+
+  // Register history hotkey (Option+Space)
+  let lastHistoryToggleAt = 0;
+  clipboardManager.registerHistoryHotkey(async () => {
+    const now = Date.now();
+    if (now - lastHistoryToggleAt < 250) return;
+    lastHistoryToggleAt = now;
+
+    if (!clipboardHistoryWindow) {
+      clipboardHistoryWindow = initClipboardHistoryWindow();
+    }
+
+    const visible = clipboardHistoryWindow.isVisible();
+    const showInDock = preferencesManager?.getPreference('showInDock') ?? false;
+
+    if (!visible) {
+      clipboardHistoryWindow.playOpenSound();
+      const boundsToUse = restoreClipboardHistoryBounds();
+      clipboardHistoryWindow.show(boundsToUse, false, true);
+      clipboardHistoryWindow.capturePreviousAppBeforeShow();
+    } else if (!showInDock) {
+      const overlayVisible = transcriberManager?.isRecordingOverlayVisible() ?? false;
+      clipboardHistoryWindow.hide(!overlayVisible);
+    }
+  });
+
+  // Register Cmd+Shift+T (Tasks tab toggle)
+  const todoHotkey = 'Command+Shift+T';
+  let lastTodoToggleAt = 0;
+  try {
+    globalShortcut.register(todoHotkey, async () => {
+      const now = Date.now();
+      if (now - lastTodoToggleAt < 250) return;
+      lastTodoToggleAt = now;
+
+      if (!preferencesManager) return;
+
+      const currentValue = preferencesManager.getPreference('tasksTabEnabled') ?? false;
+      const newValue = !currentValue;
+      await preferencesManager.save({ tasksTabEnabled: newValue });
+
+      if (clipboardHistoryWindow) {
+        clipboardHistoryWindow.getWindow()?.webContents.send('clipboard:tasksTabToggled', newValue);
+      }
+
+      console.log(`[Main] Tasks tab toggled: ${newValue ? 'enabled' : 'disabled'}`);
+    });
+    console.log(`[Main] Registered tasks toggle hotkey: ${todoHotkey}`);
+  } catch (err) {
+    console.error('[Main] Failed to register tasks toggle hotkey:', err);
+  }
+
+  // Register Cmd+Shift+V (Super Paste)
+  const superPasteHotkey = 'Command+Shift+V';
+  let superPasteInProgress = false;
+  let superPasteTimeout: NodeJS.Timeout | null = null;
+  try {
+    globalShortcut.register(superPasteHotkey, async () => {
+      console.log('[Main] Super Paste triggered');
+
+      // Debounce: prevent double-firing within 500ms
+      if (superPasteInProgress) {
+        console.log('[Main] Super Paste: already in progress, ignoring');
+        return;
+      }
+
+      superPasteInProgress = true;
+
+      // Safety timeout: reset debounce after 1 second even if operation doesn't complete
+      // This prevents blocking legitimate retries if something fails silently
+      if (superPasteTimeout) {
+        clearTimeout(superPasteTimeout);
+      }
+      superPasteTimeout = setTimeout(() => {
+        if (superPasteInProgress) {
+          console.log('[Main] Super Paste: timeout reached, resetting debounce flag');
+          superPasteInProgress = false;
+        }
+      }, 1000);
+
+      try {
+        // Super Paste always pastes the most recent item (text or image)
+        // It's essentially "Cmd+V for terminals" - brings clipboard history to terminals
+        console.log('[Main] Super Paste: pasting most recent item from history');
+
+        if (!clipboardManager) {
+          console.error('[Main] Super Paste: clipboardManager not available');
+          return;
+        }
+
+        const stmt = clipboardManager['db'].prepare('SELECT id FROM clipboard_items ORDER BY created_at DESC LIMIT 1');
+        const row = stmt.get() as { id: number } | undefined;
+
+        if (!row) {
+          console.log('[Main] Super Paste: no items in clipboard history');
+          return;
+        }
+
+        const mostRecentItem = clipboardManager.getItem(row.id);
+        if (!mostRecentItem) {
+          console.log('[Main] Super Paste: failed to get most recent item');
+          return;
+        }
+        console.log('[Main] Super Paste: pasting most recent item:', mostRecentItem.type, 'id:', mostRecentItem.id, 'created:', mostRecentItem.createdAt);
+
+        try {
+          const script = `
+            tell application "System Events"
+              set frontApp to first application process whose frontmost is true
+              return (bundle identifier of frontApp)
+            end tell
+          `;
+          const { exec } = require('child_process');
+          const { promisify } = require('util');
+          const execAsync = promisify(exec);
+          const { stdout } = await execAsync(`osascript -e '${script}'`);
+          const bundleId = stdout.trim();
+
+          const { isTerminalApp } = require('./clipboardManager');
+          const isTerminal = isTerminalApp(bundleId);
+          console.log('[Main] Super Paste: frontmost app is terminal:', isTerminal);
+
+          if (mostRecentItem.type === 'text' || mostRecentItem.type === 'transcript') {
+            clipboard.writeText(mostRecentItem.content || '');
+            console.log('[Main] Super Paste: wrote text to clipboard, triggering paste...');
+            await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+            console.log('[Main] Super Paste: pasted text');
+          } else if (mostRecentItem.imageData) {
+            if (isTerminal) {
+              const imagePath = await clipboardManager.exportImageToCache(mostRecentItem);
+              if (imagePath) {
+                // Use real path for terminals - they need actual filesystem paths
+                clipboard.writeText(imagePath);
+                console.log('[Main] Super Paste: wrote image path to clipboard:', imagePath, ', triggering paste...');
+                await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+                console.log('[Main] Super Paste: pasted image path to terminal');
+              }
+            } else {
+              const { nativeImage } = require('electron');
+              const imageBuffer = typeof mostRecentItem.imageData === 'string'
+                ? Buffer.from(mostRecentItem.imageData, 'base64')
+                : mostRecentItem.imageData;
+              const image = nativeImage.createFromBuffer(imageBuffer);
+              clipboard.writeImage(image);
+              console.log('[Main] Super Paste: wrote image buffer to clipboard, triggering paste...');
+              await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+              console.log('[Main] Super Paste: pasted image buffer');
+            }
+          }
+        } catch (error) {
+          console.error('[Main] Super Paste: error during paste:', error);
+        }
+      } finally {
+        // Clear timeout and reset flag
+        if (superPasteTimeout) {
+          clearTimeout(superPasteTimeout);
+          superPasteTimeout = null;
+        }
+        superPasteInProgress = false;
+      }
+    });
+    console.log(`[Main] Registered super paste hotkey: ${superPasteHotkey}`);
+  } catch (err) {
+    console.error('[Main] Failed to register super paste hotkey:', err);
+  }
+
+  // Register Cmd+Shift+\ (Auto-improve toggle)
+  const autoImproveToggleHotkey = 'Command+Shift+\\';
+  try {
+    globalShortcut.register(autoImproveToggleHotkey, async () => {
+      console.log('[Main] Auto-improve toggle triggered');
+
+      if (!transcriberManager) {
+        console.error('[Main] Auto-improve toggle: transcriberManager not available');
+        return;
+      }
+
+      const currentState = transcriberManager.getAutoImprove();
+      const newState = !currentState;
+      await transcriberManager.setAutoImprove(newState);
+
+      console.log(`[Main] Auto-improve toggled: ${currentState} → ${newState}`);
+
+      // Refresh tray menu to show updated state
+      if (trayManager) {
+        trayManager.refreshMenu();
+      }
+
+      // Show cursor notification of the new state
+      if (cursorStatusManager) {
+        cursorStatusManager.showRecordingNote(
+          newState ? 'Auto-improve enabled' : 'Auto-improve disabled'
+        );
+      }
+    });
+    console.log(`[Main] Registered auto-improve toggle hotkey: ${autoImproveToggleHotkey}`);
+  } catch (err) {
+    console.error('[Main] Failed to register auto-improve toggle hotkey:', err);
+  }
+
+  console.log('[Main] Hotkeys registered successfully');
+}
+
+/**
+ * Create and initialize an OnboardingWindow instance.
+ * Ensures the window has access to preferencesManager for proper close handling.
+ */
+function createOnboardingWindow(): OnboardingWindow {
+  const window = new OnboardingWindow();
+  if (preferencesManager) {
+    window.setPreferencesManager(preferencesManager);
+  }
+  return window;
+}
 
 /**
  * Create the main application window.
@@ -710,6 +1014,25 @@ function setupTranscribeIPCHandlers(): void {
     await transcriberManager.setAbandonConfirmation(enabled);
   });
 
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE, () => {
+    if (!transcriberManager) {
+      return false;
+    }
+    return transcriberManager.getAutoImprove();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE, async (_event, enabled: boolean) => {
+    if (!transcriberManager) {
+      throw new Error('TranscriberManager not initialized');
+    }
+    await transcriberManager.setAutoImprove(enabled);
+
+    // Refresh tray menu to show updated state
+    if (trayManager) {
+      trayManager.refreshMenu();
+    }
+  });
+
   // Sound settings handlers.
   ipcMain.handle(TranscribeIPCChannels.GET_SOUND_CONFIG, () => {
     if (!transcriberManager) {
@@ -1080,17 +1403,14 @@ function setupClipboardIPCHandlers(): void {
           const hasFigures = stackItems.some(i => i.imageData && i.figureLabel);
 
           if (hasFigures) {
-            // Import the helper function
-            const { obscureHomePath } = require('./clipboardManager');
-
-            // Build figure list
+            // Build figure list with real paths (for terminal compatibility)
             const figurePaths: string[] = [];
             for (const stackItem of stackItems) {
               if (stackItem.imageData && stackItem.figureLabel) {
                 const imagePath = await clipboardManager.exportImageToCache(stackItem);
                 if (imagePath) {
-                  const obscuredPath = obscureHomePath(imagePath);
-                  figurePaths.push(`Figure ${stackItem.figureLabel}: ${obscuredPath}`);
+                  // Use real path for terminal compatibility
+                  figurePaths.push(`Figure ${stackItem.figureLabel}: ${imagePath}`);
                 }
               }
             }
@@ -1107,11 +1427,10 @@ function setupClipboardIPCHandlers(): void {
           // For terminals: export image to file and put path on clipboard
           const imagePath = await clipboardManager.exportImageToCache(item);
           if (imagePath) {
-            const { obscureHomePath } = require('./clipboardManager');
-            const obscuredPath = obscureHomePath(imagePath);
+            // Use real path for terminal compatibility
             const figureRef = item.figureLabel
-              ? `Figure ${item.figureLabel}: ${obscuredPath}`
-              : obscuredPath;
+              ? `Figure ${item.figureLabel}: ${imagePath}`
+              : imagePath;
             clipboard.writeText(figureRef);
           } else {
             console.error('[Main] Failed to export image for terminal paste');
@@ -1248,8 +1567,8 @@ function setupClipboardIPCHandlers(): void {
         for (const item of imageItems) {
           const imagePath = await clipboardManager!.exportImageToCache(item);
           if (imagePath) {
-            const obscuredPath = obscureHomePath(imagePath);
-            paths.push(`Figure ${item.figureLabel}: ${obscuredPath}`);
+            // Use real path for terminal compatibility
+            paths.push(`Figure ${item.figureLabel}: ${imagePath}`);
           }
         }
         return paths.length > 0 ? `\n\n${paths.join('\n')}\n\n` : '';
@@ -1294,8 +1613,8 @@ function setupClipboardIPCHandlers(): void {
               // Terminal without transcript: paste file path instead of image.
               const imagePath = await clipboardManager!.exportImageToCache(item);
               if (imagePath) {
-                const obscuredPath = obscureHomePath(imagePath);
-                clipboard.writeText(obscuredPath);
+                // Use real path for terminal compatibility
+                clipboard.writeText(imagePath);
                 clipboardManager.syncClipboardHash();
                 await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
               }
@@ -2833,7 +3152,7 @@ function setupOnboardingIPCHandlers(): void {
   // Get current permission status for all required permissions.
   ipcMain.handle(OnboardingIPCChannels.GET_PERMISSION_STATUS, async () => {
     if (!onboardingWindow) {
-      onboardingWindow = new OnboardingWindow();
+      onboardingWindow = createOnboardingWindow();
     }
     return await onboardingWindow.getPermissionStatus();
   });
@@ -2841,7 +3160,7 @@ function setupOnboardingIPCHandlers(): void {
   // Request microphone permission - shows system dialog if not determined.
   ipcMain.handle(OnboardingIPCChannels.REQUEST_MICROPHONE, async () => {
     if (!onboardingWindow) {
-      onboardingWindow = new OnboardingWindow();
+      onboardingWindow = createOnboardingWindow();
     }
     return await onboardingWindow.requestMicrophonePermission();
   });
@@ -2849,7 +3168,7 @@ function setupOnboardingIPCHandlers(): void {
   // Open System Settings to Accessibility pane.
   ipcMain.handle(OnboardingIPCChannels.OPEN_ACCESSIBILITY_SETTINGS, async () => {
     if (!onboardingWindow) {
-      onboardingWindow = new OnboardingWindow();
+      onboardingWindow = createOnboardingWindow();
     }
     onboardingWindow.openAccessibilitySettings();
     return true;
@@ -2858,7 +3177,7 @@ function setupOnboardingIPCHandlers(): void {
   // Open System Settings to Screen Recording pane.
   ipcMain.handle(OnboardingIPCChannels.OPEN_SCREEN_RECORDING_SETTINGS, async () => {
     if (!onboardingWindow) {
-      onboardingWindow = new OnboardingWindow();
+      onboardingWindow = createOnboardingWindow();
     }
     onboardingWindow.openScreenRecordingSettings();
     return true;
@@ -2868,7 +3187,7 @@ function setupOnboardingIPCHandlers(): void {
   // This saves users from manually clicking "+" to add the app.
   ipcMain.handle(OnboardingIPCChannels.TRIGGER_SCREEN_RECORDING_PROMPT, async () => {
     if (!onboardingWindow) {
-      onboardingWindow = new OnboardingWindow();
+      onboardingWindow = createOnboardingWindow();
     }
     await onboardingWindow.triggerScreenRecordingPrompt();
     return true;
@@ -2905,7 +3224,11 @@ function setupOnboardingIPCHandlers(): void {
   ipcMain.handle(OnboardingIPCChannels.COMPLETE_ONBOARDING, async () => {
     if (!preferencesManager) return false;
     await preferencesManager.save({ onboardingComplete: true });
-    
+
+    // Register hotkeys now that onboarding is complete
+    console.log('[Main] Onboarding complete, registering hotkeys');
+    registerHotkeysAfterOnboarding();
+
     // Close onboarding window and show clipboard history.
     if (onboardingWindow) {
       onboardingWindow.close();
@@ -2953,7 +3276,7 @@ function setupOnboardingIPCHandlers(): void {
     }
     
     // Show onboarding window from the beginning.
-    onboardingWindow = new OnboardingWindow();
+    onboardingWindow = createOnboardingWindow();
     onboardingWindow.show(OnboardingStep.WELCOME);
     
     console.log('[Main] Onboarding reset - showing wizard from start');
@@ -3364,137 +3687,16 @@ async function initTranscriberSystem(): Promise<void> {
     });
   });
   
-  // Register continuous context hotkey if enabled
-  if (prefs.continuousContextEnabled) {
-    clipboardManager.registerContinuousContextHotkey(async () => {
-      if (!clipboardManager) return;
-      
-      const state = clipboardManager.getContinuousContextState();
-      if (state.active) {
-        // If already active, stop it
-        clipboardManager.stopContinuousContext();
-      } else {
-        // Start continuous context mode
-        await clipboardManager.startContinuousContext();
-      }
-    });
-  }
-  
-  // Register clipboard hotkeys
-  clipboardManager.registerScreenshotHotkey(async () => {
-    // Capture screenshot with region selection (drag to select).
-    const id = await clipboardManager!.captureScreenshot({ region: true });
-    if (id > 0) {
-      // Add screenshot to prompt stack tracking (for auto-stacking during recording).
-      if (transcriberManager) {
-        transcriberManager.addToStack(id);
-      }
-
-      // Queue for vision processing if vision processor is available.
-      if (visionProcessor) {
-        visionProcessor.queueImage(id).catch((error) => {
-          console.error('[Main] Failed to queue image for vision processing:', error);
-        });
-      }
-
-      // Notify all windows (including clipboard history window).
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
-        }
-      });
-    }
-  });
-
-  // Register full screen screenshot hotkey (Cmd+3)
-  clipboardManager.registerFullScreenHotkey(async () => {
-    // Capture full screen immediately without interaction
-    const id = await clipboardManager!.captureScreenshot({ fullScreen: true });
-    if (id > 0) {
-      // Add screenshot to prompt stack tracking
-      if (transcriberManager) {
-        transcriberManager.addToStack(id);
-      }
-
-      // Queue for vision processing if vision processor is available
-      if (visionProcessor) {
-        visionProcessor.queueImage(id).catch((error) => {
-          console.error('[Main] Failed to queue image for vision processing:', error);
-        });
-      }
-
-      // Notify all windows
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
-        }
-      });
-    }
-  });
-
-  // Register active window screenshot hotkey (Cmd+Shift+3)
-  clipboardManager.registerActiveWindowHotkey(async () => {
-    // Capture just the active window
-    const id = await clipboardManager!.captureScreenshot({ activeWindow: true });
-    if (id > 0) {
-      // Add screenshot to prompt stack tracking
-      if (transcriberManager) {
-        transcriberManager.addToStack(id);
-      }
-
-      // Queue for vision processing if vision processor is available
-      if (visionProcessor) {
-        visionProcessor.queueImage(id).catch((error) => {
-          console.error('[Main] Failed to queue image for vision processing:', error);
-        });
-      }
-
-      // Notify all windows
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
-        }
-      });
-    }
-  });
-
-  // Debounce to avoid repeated toggles when the hotkey auto-repeats
-  let lastHistoryToggleAt = 0;
-  
-  clipboardManager.registerHistoryHotkey(async () => {
-    const now = Date.now();
-    if (now - lastHistoryToggleAt < 250) return;
-    lastHistoryToggleAt = now;
-
-    if (!clipboardHistoryWindow) {
-      clipboardHistoryWindow = initClipboardHistoryWindow();
-    }
-
-    const visible = clipboardHistoryWindow.isVisible();
-    const showInDock = preferencesManager?.getPreference('showInDock') ?? false;
-
-    if (!visible) {
-      // Play sound immediately for responsive feedback.
-      clipboardHistoryWindow.playOpenSound();
-      
-      // Show window immediately for snappy UX.
-      const boundsToUse = restoreClipboardHistoryBounds();
-      clipboardHistoryWindow.show(boundsToUse, false, true); // skipSound=true since we already played it
-      
-      // Capture frontmost app in background (updates target app info after window shows).
-      // Not awaited - window appears instantly, target app info updates ~200ms later.
-      clipboardHistoryWindow.capturePreviousAppBeforeShow();
-    } else if (!showInDock) {
-      // Panel mode: toggle behavior - hide window and restore focus.
-      const overlayVisible = transcriberManager?.isRecordingOverlayVisible() ?? false;
-      clipboardHistoryWindow.hide(!overlayVisible);
-    }
-    // When showInDock is true and visible: do nothing (normal app behavior).
-  });
+  // Hotkeys will be registered after checking onboarding status (see below in app.whenReady).
 
   // Initialize quota manager for tracking local usage.
   quotaManager = new QuotaManager(preferencesManager);
-  
+
+  // Connect quota manager to tray for menu bar display
+  if (trayManager) {
+    trayManager.setQuotaManager(quotaManager);
+  }
+
   // Broadcast quota changes to all windows so UI can update in real-time.
   quotaManager.on('quotaChanged', (quotas) => {
     const formatted = {
@@ -3526,6 +3728,11 @@ async function initTranscriberSystem(): Promise<void> {
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
   await transcriberManager.init();
   broadcastTranscribeEvents();
+
+  // Pass transcriberManager to trayManager for auto-improve toggle
+  if (trayManager) {
+    trayManager.setTranscriberManager(transcriberManager);
+  }
 
   // Wire up confirmation response from cursor status widget to transcriber manager
   cursorStatusManager.on('confirmation-response', ({ abandon }) => {
@@ -3803,133 +4010,9 @@ async function initTranscriberSystem(): Promise<void> {
     });
   }
 
-  // Cmd+Shift+T toggles Tasks tab visibility.
-  const todoHotkey = 'Command+Shift+T';
-  let lastTodoToggleAt = 0;
-  
-  try {
-    globalShortcut.register(todoHotkey, async () => {
-      // Debounce to avoid repeated toggles when the hotkey auto-repeats.
-      const now = Date.now();
-      if (now - lastTodoToggleAt < 250) return;
-      lastTodoToggleAt = now;
-
-      if (!preferencesManager) return;
-
-      const currentValue = preferencesManager.getPreference('tasksTabEnabled') ?? false;
-      const newValue = !currentValue;
-      await preferencesManager.save({ tasksTabEnabled: newValue });
-      
-      if (clipboardHistoryWindow) {
-        clipboardHistoryWindow.getWindow()?.webContents.send('clipboard:tasksTabToggled', newValue);
-      }
-      
-      console.log(`[Main] Tasks tab toggled: ${newValue ? 'enabled' : 'disabled'}`);
-    });
-    console.log(`[Main] Registered tasks toggle hotkey: ${todoHotkey}`);
-  } catch (err) {
-    console.error('[Main] Failed to register tasks toggle hotkey:', err);
-  }
-
-  // Cmd+Shift+V = "Super Paste" - pastes last stack or smart clipboard paste
-  const superPasteHotkey = 'Command+Shift+V';
-  try {
-    globalShortcut.register(superPasteHotkey, async () => {
-      console.log('[Main] Super Paste triggered');
-
-      if (!transcriberManager) {
-        console.error('[Main] Super Paste: transcriberManager not available');
-        return;
-      }
-
-      // Check if there's a recent stack to paste
-      const currentStack = transcriberManager.getCurrentStack();
-
-      if (currentStack && currentStack.length > 0) {
-        // Paste the stack (context-aware, clear after so it doesn't paste again)
-        console.log(`[Main] Super Paste: pasting stack with ${currentStack.length} items`);
-        await transcriberManager.pasteStack(true); // true = clear stack after pasting
-      } else {
-        // No stack - paste most recent item from Field Theory clipboard history
-        console.log('[Main] Super Paste: no stack, pasting most recent item from history');
-
-        if (!clipboardManager) {
-          console.error('[Main] Super Paste: clipboardManager not available');
-          return;
-        }
-
-        // Get the most recent item ID from clipboard history
-        // Query the database directly for the most recent item
-        const stmt = clipboardManager['db'].prepare('SELECT id FROM clipboard_items ORDER BY created_at DESC LIMIT 1');
-        const row = stmt.get() as { id: number } | undefined;
-
-        if (!row) {
-          console.log('[Main] Super Paste: no items in clipboard history');
-          return;
-        }
-
-        const mostRecentItem = clipboardManager.getItem(row.id);
-        if (!mostRecentItem) {
-          console.log('[Main] Super Paste: failed to get most recent item');
-          return;
-        }
-        console.log('[Main] Super Paste: pasting most recent item:', mostRecentItem.type, 'id:', mostRecentItem.id);
-
-        // Get frontmost app for context detection
-        try {
-          const script = `
-            tell application "System Events"
-              set frontApp to first application process whose frontmost is true
-              return (bundle identifier of frontApp)
-            end tell
-          `;
-          const { exec } = require('child_process');
-          const { promisify } = require('util');
-          const execAsync = promisify(exec);
-          const { stdout } = await execAsync(`osascript -e '${script}'`);
-          const bundleId = stdout.trim();
-
-          const { isTerminalApp, obscureHomePath } = require('./clipboardManager');
-          const isTerminal = isTerminalApp(bundleId);
-          console.log('[Main] Super Paste: frontmost app is terminal:', isTerminal);
-
-          // Paste the item context-aware
-          if (mostRecentItem.type === 'text' || mostRecentItem.type === 'transcript') {
-            clipboard.writeText(mostRecentItem.content || '');
-            await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-            console.log('[Main] Super Paste: pasted text');
-          } else if (mostRecentItem.imageData) {
-            if (isTerminal) {
-              // For terminals: export to file and paste path
-              const imagePath = await clipboardManager.exportImageToCache(mostRecentItem);
-              if (imagePath) {
-                const obscuredPath = obscureHomePath(imagePath);
-                // Just paste the path directly, no prefix
-                clipboard.writeText(obscuredPath);
-                await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-                console.log('[Main] Super Paste: pasted image path to terminal:', obscuredPath);
-              }
-            } else {
-              // For non-terminals: paste image buffer
-              const { nativeImage } = require('electron');
-              const imageBuffer = typeof mostRecentItem.imageData === 'string'
-                ? Buffer.from(mostRecentItem.imageData, 'base64')
-                : mostRecentItem.imageData;
-              const image = nativeImage.createFromBuffer(imageBuffer);
-              clipboard.writeImage(image);
-              await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-              console.log('[Main] Super Paste: pasted image buffer');
-            }
-          }
-        } catch (error) {
-          console.error('[Main] Super Paste: error during paste:', error);
-        }
-      }
-    });
-    console.log(`[Main] Registered super paste hotkey: ${superPasteHotkey}`);
-  } catch (err) {
-    console.error('[Main] Failed to register super paste hotkey:', err);
-  }
+  // NOTE: Tasks toggle (Cmd+Shift+T) and Super Paste (Cmd+Shift+V) hotkeys
+  // are now registered in registerHotkeysAfterOnboarding() to avoid permission
+  // prompts during onboarding.
 
   console.log('[Main] Transcription system initialized');
 }
@@ -4071,24 +4154,27 @@ if (!gotTheLock) {
     }
 
     // Register keyboard shortcut to reset onboarding (Cmd+Shift+O).
-    // Useful for testing and development.
-    globalShortcut.register('Command+Shift+O', async () => {
-      console.log('[Main] Reset onboarding shortcut triggered');
-      if (!preferencesManager) return;
-      
-      await preferencesManager.save({ 
-        onboardingComplete: false,
-        onboardingStep: undefined,
+    // Only in unpackaged (development) builds.
+    if (!app.isPackaged) {
+      globalShortcut.register('Command+Shift+O', async () => {
+        console.log('[Main] Reset onboarding shortcut triggered (dev mode)');
+        if (!preferencesManager) return;
+
+        await preferencesManager.save({
+          onboardingComplete: false,
+          onboardingStep: undefined,
+        });
+
+        if (onboardingWindow) {
+          onboardingWindow.close();
+          onboardingWindow = null;
+        }
+
+        onboardingWindow = createOnboardingWindow();
+        onboardingWindow.show(OnboardingStep.WELCOME);
       });
-      
-      if (onboardingWindow) {
-        onboardingWindow.close();
-        onboardingWindow = null;
-      }
-      
-      onboardingWindow = new OnboardingWindow();
-      onboardingWindow.show(OnboardingStep.WELCOME);
-    });
+      console.log('[Main] Registered reset onboarding hotkey (dev mode only)');
+    }
 
     // Manual update check function for tray menu.
     function checkForUpdatesManual(): void {
@@ -4248,23 +4334,32 @@ if (!gotTheLock) {
     }
     
     // First-run check: Show onboarding wizard if not completed.
-    // Skip onboarding for existing users (those with clipboard items) - they're updating, not new.
+    // Check permissions to determine if this is truly a new install vs an upgrade.
     const prefs = preferencesManager?.get();
     if (!prefs?.onboardingComplete) {
-      // Check if this is an existing user upgrading (they have clipboard history).
-      const hasExistingItems = clipboardManager?.hasExistingItems() ?? false;
-      
-      if (hasExistingItems) {
-        // Existing user - mark onboarding as complete and skip it.
-        console.log('[Main] Existing user detected (has clipboard items), skipping onboarding');
-        preferencesManager?.save({ onboardingComplete: true });
+      // Check if core permissions are already granted (indicates existing user upgrading).
+      const micStatus = systemPreferences.getMediaAccessStatus('microphone');
+      const accessibilityStatus = systemPreferences.isTrustedAccessibilityClient(false);
+      const hasCorePermissions = micStatus === 'granted' && accessibilityStatus;
+
+      if (hasCorePermissions) {
+        // Existing user with permissions - mark onboarding as complete and skip it.
+        console.log('[Main] Existing user detected (has core permissions), skipping onboarding');
+        await preferencesManager?.save({ onboardingComplete: true });
+        // Register hotkeys since onboarding is complete
+        registerHotkeysAfterOnboarding();
       } else {
-        // New user - show onboarding wizard.
-        console.log('[Main] New user detected, showing onboarding wizard');
-        onboardingWindow = new OnboardingWindow();
+        // New user or permissions revoked - show onboarding wizard.
+        console.log('[Main] New user or missing permissions, showing onboarding wizard');
+        onboardingWindow = createOnboardingWindow();
         const startStep = prefs?.onboardingStep ?? OnboardingStep.WELCOME;
         onboardingWindow.show(startStep);
+        // Hotkeys will be registered when onboarding completes (see onboarding:complete handler)
       }
+    } else {
+      // Onboarding already complete - register hotkeys immediately
+      console.log('[Main] Onboarding already complete, registering hotkeys');
+      registerHotkeysAfterOnboarding();
     }
     // createWindow(); // Commented out for testing - app runs in background, opens manually
 

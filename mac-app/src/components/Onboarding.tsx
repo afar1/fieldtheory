@@ -53,9 +53,14 @@ function PermissionsPhase({
   onRefreshPermissions,
   onContinue,
 }: PermissionsPhaseProps) {
-  const allGranted = 
-    permissions.microphone === 'granted' && 
-    permissions.accessibility && 
+  // Require microphone + accessibility (core permissions).
+  // Screen recording is optional but recommended.
+  const corePermissionsGranted =
+    permissions.microphone === 'granted' &&
+    permissions.accessibility;
+
+  const allGranted =
+    corePermissionsGranted &&
     permissions.screenRecording;
 
   // Auto-refresh permissions when window gains focus.
@@ -75,35 +80,45 @@ function PermissionsPhase({
       <div style={styles.checklist}>
         {/* Microphone */}
         <PermissionRow
-          label="Microphone Access"
-          description="Capture your voice for transcription"
+          label="Microphone"
+          description="Required for voice transcription"
           granted={permissions.microphone === 'granted'}
           denied={permissions.microphone === 'denied'}
           onGrant={onRequestMicrophone}
+          grantButtonText="Allow"
+          required={true}
         />
 
         {/* Accessibility */}
         <PermissionRow
-          label="Accessibility Access"
-          description="Paste transcribed text into any app"
+          label="Accessibility"
+          description="Required to paste text into apps"
           granted={permissions.accessibility}
           onGrant={onOpenAccessibility}
-          instructions="Toggle on Field Theory in System Settings"
+          grantButtonText="Open Settings"
+          required={true}
         />
 
         {/* Screen Recording */}
         <PermissionRow
-          label="Screen Recording Access"
-          description="Take screenshots for AI context"
+          label="Screen Recording"
+          description="Optional: Enables screenshot context"
           granted={permissions.screenRecording}
           onGrant={onOpenScreenRecording}
-          instructions="Toggle on Field Theory in System Settings"
+          grantButtonText="Open Settings"
+          required={false}
         />
       </div>
 
       {allGranted && (
         <div style={styles.successBanner}>
           All permissions granted
+        </div>
+      )}
+
+      {corePermissionsGranted && !allGranted && (
+        <div style={styles.warningBanner}>
+          Screen Recording is recommended for screenshots but not required
         </div>
       )}
 
@@ -115,14 +130,14 @@ function PermissionsPhase({
         <kbd style={styles.kbd}>Space</kbd>
       </div>
 
-      <button 
+      <button
         style={{
           ...styles.primaryButton,
-          opacity: allGranted ? 1 : 0.5,
-          cursor: allGranted ? 'pointer' : 'not-allowed',
+          opacity: corePermissionsGranted ? 1 : 0.5,
+          cursor: corePermissionsGranted ? 'pointer' : 'not-allowed',
         }}
         onClick={onContinue}
-        disabled={!allGranted}
+        disabled={!corePermissionsGranted}
       >
         Continue
       </button>
@@ -136,10 +151,11 @@ interface PermissionRowProps {
   granted: boolean;
   denied?: boolean;
   onGrant: () => void;
-  instructions?: string;
+  grantButtonText?: string;
+  required?: boolean;
 }
 
-function PermissionRow({ label, description, granted, denied, onGrant, instructions }: PermissionRowProps) {
+function PermissionRow({ label, description, granted, denied, onGrant, grantButtonText = "Grant", required = false }: PermissionRowProps) {
   return (
     <div style={styles.permissionRow}>
       <div style={styles.permissionCheck}>
@@ -150,20 +166,20 @@ function PermissionRow({ label, description, granted, denied, onGrant, instructi
         )}
       </div>
       <div style={styles.permissionContent}>
-        <div style={styles.permissionLabel}>{label}</div>
+        <div style={styles.permissionLabel}>
+          {label}
+          {required && <span style={styles.requiredBadge}>Required</span>}
+        </div>
         <div style={styles.permissionDescription}>{description}</div>
         {denied && (
           <div style={styles.deniedText}>
             Access denied. Please enable in System Settings.
           </div>
         )}
-        {instructions && !granted && (
-          <div style={styles.instructionsText}>{instructions}</div>
-        )}
       </div>
       {!granted && (
         <button style={styles.grantButton} onClick={onGrant}>
-          Grant
+          {grantButtonText}
         </button>
       )}
     </div>
@@ -679,9 +695,24 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '13px',
     fontWeight: 500,
     color: '#1a1a1a',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+  },
+  requiredBadge: {
+    fontSize: '9px',
+    fontWeight: 600,
+    color: '#dc2626',
+    backgroundColor: '#fee2e2',
+    padding: '1px 5px',
+    borderRadius: '3px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.02em',
   },
   permissionDescription: {
-    display: 'none',
+    fontSize: '11px',
+    color: '#6b7280',
+    marginTop: '2px',
   },
   deniedText: {
     fontSize: '11px',
@@ -825,6 +856,19 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: '8px',
     fontSize: '12px',
     color: '#166534',
+    width: '100%',
+    textAlign: 'center',
+  },
+
+  // Warning banner (for optional permissions).
+  warningBanner: {
+    backgroundColor: '#fffbeb',
+    border: '1px solid #fcd34d',
+    borderRadius: '4px',
+    padding: '6px 10px',
+    marginBottom: '8px',
+    fontSize: '11px',
+    color: '#92400e',
     width: '100%',
     textAlign: 'center',
   },
