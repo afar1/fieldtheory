@@ -111,6 +111,11 @@ interface TranscribeAPI {
   setAbandonHotkey?: (hotkey: string) => Promise<boolean>;
   getAbandonConfirmation?: () => Promise<boolean>;
   setAbandonConfirmation?: (enabled: boolean) => Promise<void>;
+  getAutoImprove?: () => Promise<boolean>;
+  setAutoImprove?: (enabled: boolean) => Promise<void>;
+  getAutoImproveMinWords?: () => Promise<number>;
+  setAutoImproveMinWords?: (minWords: number) => Promise<void>;
+  getDownloadingModels?: () => Promise<string[]>;
   toggleRecording?: () => Promise<void>;
   getSoundConfig?: () => Promise<SoundConfig>;
   setSoundConfig?: (config: Partial<SoundConfig>) => Promise<void>;

@@ -664,7 +664,20 @@ export class TranscriberManager extends EventEmitter {
 
       // Check if we should improve: explicit request OR auto-improve enabled
       const autoImproveEnabled = this.getAutoImprove();
-      const shouldTriggerImprovement = shouldImprove || autoImproveEnabled;
+
+      // For auto-improve, check word count meets minimum threshold
+      // Explicit improvement requests (shouldImprove) always run regardless of word count
+      let shouldTriggerImprovement = shouldImprove;
+      if (!shouldImprove && autoImproveEnabled) {
+        const wordCount = cleanedText.trim().split(/\s+/).filter(w => w.length > 0).length;
+        const minWords = this.getAutoImproveMinWords();
+        if (wordCount >= minWords) {
+          shouldTriggerImprovement = true;
+          console.log(`[TranscriberManager] Auto-improve triggered: ${wordCount} words >= ${minWords} minimum`);
+        } else {
+          console.log(`[TranscriberManager] Auto-improve skipped: ${wordCount} words < ${minWords} minimum`);
+        }
+      }
 
       if (shouldTriggerImprovement && FEATURE_IMPROVE_ENABLED && this.clipboardManager) {
         // Check quota before calling AI.
@@ -714,8 +727,10 @@ export class TranscriberManager extends EventEmitter {
       this.lastTranscription = finalText;
       
       // Paste, check accessibility in parallel for UI feedback.
+      // Don't clear stack after auto-paste so Super Paste (Cmd+Shift+V) can re-paste if needed.
+      // Stack is cleared when next recording starts.
       const accessibilityCheckPromise = this.nativeHelper.checkFocusedTextInput();
-      await this.pasteStack();
+      await this.pasteStack(false);
       this.emit('result', finalText);
       
       // Set status to idle BEFORE emitting paste events.
@@ -921,6 +936,25 @@ export class TranscriberManager extends EventEmitter {
    */
   getAutoImprove(): boolean {
     return this.preferences.getPreference('autoImproveTranscripts') ?? false;
+  }
+
+  /**
+   * Set the minimum word count for auto-improve to trigger.
+   * Transcripts below this word count will skip auto-improve.
+   */
+  async setAutoImproveMinWords(minWords: number): Promise<void> {
+    // Clamp to valid range: 0-500
+    const clamped = Math.max(0, Math.min(500, minWords));
+    await this.preferences.save({ autoImproveMinWords: clamped });
+    console.log(`[TranscriberManager] Auto-improve min words set to ${clamped}`);
+  }
+
+  /**
+   * Get the minimum word count for auto-improve.
+   * Default is 100 words.
+   */
+  getAutoImproveMinWords(): number {
+    return this.preferences.getPreference('autoImproveMinWords') ?? 100;
   }
 
   // ---------------------------------------------------------------------------
@@ -1436,9 +1470,9 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
-   * Check if the frontmost application is a terminal/CLI.
+   * Get the bundle identifier of the frontmost application.
    */
-  private async isFrontmostAppTerminal(): Promise<boolean> {
+  private async getFrontmostAppBundleId(): Promise<string | null> {
     try {
       const script = `
         tell application "System Events"
@@ -1447,12 +1481,19 @@ export class TranscriberManager extends EventEmitter {
         end tell
       `;
       const { stdout } = await execAsync(`osascript -e '${script}'`);
-      const bundleId = stdout.trim();
-      return isTerminalApp(bundleId);
+      return stdout.trim() || null;
     } catch (error) {
       console.error('[TranscriberManager] Failed to get frontmost app:', error);
-      return false;
+      return null;
     }
+  }
+
+  /**
+   * Check if the frontmost application is a terminal/CLI.
+   */
+  private async isFrontmostAppTerminal(): Promise<boolean> {
+    const bundleId = await this.getFrontmostAppBundleId();
+    return isTerminalApp(bundleId);
   }
 
   /**
@@ -1486,6 +1527,7 @@ export class TranscriberManager extends EventEmitter {
    * Paste all items in the current stack.
    * Pastes text and images sequentially with delays between each.
    * Skips paste if sketch mode is active to avoid pasting into Excalidraw.
+   * Skips paste if Field Theory itself is frontmost to avoid pasting into own UI.
    * @param clearAfter - Whether to clear the stack after pasting (default: true for auto-paste, false for manual)
    */
   async pasteStack(clearAfter: boolean = true): Promise<void> {
@@ -1502,6 +1544,18 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
+    // Skip paste if Field Theory itself is frontmost - user may have clicked in our UI.
+    // Content is still in clipboard, user can Cmd+V manually in their target app.
+    const frontmostBundleId = await this.getFrontmostAppBundleId();
+    if (frontmostBundleId === 'com.fieldtheory.app' || frontmostBundleId === 'com.oscar.app.experimental') {
+      console.log('[TranscriberManager] Field Theory is frontmost, skipping auto-paste (text in clipboard)');
+      this.emit('paste-failed', 'Field Theory has focus - press Cmd+V in your target app', this.lastTranscription);
+      if (clearAfter) {
+        this.clearStack();
+      }
+      return;
+    }
+
     const items = this.currentStack
       .map(id => this.clipboardManager!.getItem(id))
       .filter((item): item is ClipboardItem => item !== null);
@@ -1511,7 +1565,7 @@ export class TranscriberManager extends EventEmitter {
     }
 
     // Detect if frontmost app is a terminal/CLI
-    const isTerminal = await this.isFrontmostAppTerminal();
+    const isTerminal = isTerminalApp(frontmostBundleId);
     console.log('[TranscriberManager] Frontmost app is terminal:', isTerminal);
 
     // Check if we have a transcript with figures
