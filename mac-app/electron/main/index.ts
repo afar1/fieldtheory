@@ -181,10 +181,13 @@ function registerHotkeysAfterOnboarding(): void {
 
   // Register clipboard hotkeys (screenshot, full screen, active window)
   clipboardManager.registerScreenshotHotkey(async () => {
+    console.log('[Main] Screenshot hotkey (Cmd+4) triggered');
     const id = await clipboardManager!.captureScreenshot({ region: true });
+    console.log('[Main] Screenshot captured, id:', id);
     if (id > 0) {
       if (transcriberManager) {
         transcriberManager.addToStack(id);
+        console.log('[Main] Screenshot added to transcriber stack');
       }
       if (visionProcessor) {
         visionProcessor.queueImage(id).catch((error) => {
@@ -290,22 +293,36 @@ function registerHotkeysAfterOnboarding(): void {
 
   // Register Cmd+Shift+V (Super Paste)
   const superPasteHotkey = 'Command+Shift+V';
+  let superPasteInProgress = false;
+  let superPasteTimeout: NodeJS.Timeout | null = null;
   try {
     globalShortcut.register(superPasteHotkey, async () => {
       console.log('[Main] Super Paste triggered');
 
-      if (!transcriberManager) {
-        console.error('[Main] Super Paste: transcriberManager not available');
+      // Debounce: prevent double-firing within 500ms
+      if (superPasteInProgress) {
+        console.log('[Main] Super Paste: already in progress, ignoring');
         return;
       }
 
-      const currentStack = transcriberManager.getCurrentStack();
+      superPasteInProgress = true;
 
-      if (currentStack && currentStack.length > 0) {
-        console.log(`[Main] Super Paste: pasting stack with ${currentStack.length} items`);
-        await transcriberManager.pasteStack(true);
-      } else {
-        console.log('[Main] Super Paste: no stack, pasting most recent item from history');
+      // Safety timeout: reset debounce after 1 second even if operation doesn't complete
+      // This prevents blocking legitimate retries if something fails silently
+      if (superPasteTimeout) {
+        clearTimeout(superPasteTimeout);
+      }
+      superPasteTimeout = setTimeout(() => {
+        if (superPasteInProgress) {
+          console.log('[Main] Super Paste: timeout reached, resetting debounce flag');
+          superPasteInProgress = false;
+        }
+      }, 1000);
+
+      try {
+        // Super Paste always pastes the most recent item (text or image)
+        // It's essentially "Cmd+V for terminals" - brings clipboard history to terminals
+        console.log('[Main] Super Paste: pasting most recent item from history');
 
         if (!clipboardManager) {
           console.error('[Main] Super Paste: clipboardManager not available');
@@ -325,7 +342,7 @@ function registerHotkeysAfterOnboarding(): void {
           console.log('[Main] Super Paste: failed to get most recent item');
           return;
         }
-        console.log('[Main] Super Paste: pasting most recent item:', mostRecentItem.type, 'id:', mostRecentItem.id);
+        console.log('[Main] Super Paste: pasting most recent item:', mostRecentItem.type, 'id:', mostRecentItem.id, 'created:', mostRecentItem.createdAt);
 
         try {
           const script = `
@@ -340,22 +357,24 @@ function registerHotkeysAfterOnboarding(): void {
           const { stdout } = await execAsync(`osascript -e '${script}'`);
           const bundleId = stdout.trim();
 
-          const { isTerminalApp, obscureHomePath } = require('./clipboardManager');
+          const { isTerminalApp } = require('./clipboardManager');
           const isTerminal = isTerminalApp(bundleId);
           console.log('[Main] Super Paste: frontmost app is terminal:', isTerminal);
 
           if (mostRecentItem.type === 'text' || mostRecentItem.type === 'transcript') {
             clipboard.writeText(mostRecentItem.content || '');
+            console.log('[Main] Super Paste: wrote text to clipboard, triggering paste...');
             await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
             console.log('[Main] Super Paste: pasted text');
           } else if (mostRecentItem.imageData) {
             if (isTerminal) {
               const imagePath = await clipboardManager.exportImageToCache(mostRecentItem);
               if (imagePath) {
-                const obscuredPath = obscureHomePath(imagePath);
-                clipboard.writeText(obscuredPath);
+                // Use real path for terminals - they need actual filesystem paths
+                clipboard.writeText(imagePath);
+                console.log('[Main] Super Paste: wrote image path to clipboard:', imagePath, ', triggering paste...');
                 await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-                console.log('[Main] Super Paste: pasted image path to terminal:', obscuredPath);
+                console.log('[Main] Super Paste: pasted image path to terminal');
               }
             } else {
               const { nativeImage } = require('electron');
@@ -364,6 +383,7 @@ function registerHotkeysAfterOnboarding(): void {
                 : mostRecentItem.imageData;
               const image = nativeImage.createFromBuffer(imageBuffer);
               clipboard.writeImage(image);
+              console.log('[Main] Super Paste: wrote image buffer to clipboard, triggering paste...');
               await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
               console.log('[Main] Super Paste: pasted image buffer');
             }
@@ -371,11 +391,52 @@ function registerHotkeysAfterOnboarding(): void {
         } catch (error) {
           console.error('[Main] Super Paste: error during paste:', error);
         }
+      } finally {
+        // Clear timeout and reset flag
+        if (superPasteTimeout) {
+          clearTimeout(superPasteTimeout);
+          superPasteTimeout = null;
+        }
+        superPasteInProgress = false;
       }
     });
     console.log(`[Main] Registered super paste hotkey: ${superPasteHotkey}`);
   } catch (err) {
     console.error('[Main] Failed to register super paste hotkey:', err);
+  }
+
+  // Register Cmd+Shift+\ (Auto-improve toggle)
+  const autoImproveToggleHotkey = 'Command+Shift+\\';
+  try {
+    globalShortcut.register(autoImproveToggleHotkey, async () => {
+      console.log('[Main] Auto-improve toggle triggered');
+
+      if (!transcriberManager) {
+        console.error('[Main] Auto-improve toggle: transcriberManager not available');
+        return;
+      }
+
+      const currentState = transcriberManager.getAutoImprove();
+      const newState = !currentState;
+      await transcriberManager.setAutoImprove(newState);
+
+      console.log(`[Main] Auto-improve toggled: ${currentState} → ${newState}`);
+
+      // Refresh tray menu to show updated state
+      if (trayManager) {
+        trayManager.refreshMenu();
+      }
+
+      // Show cursor notification of the new state
+      if (cursorStatusManager) {
+        cursorStatusManager.showRecordingNote(
+          newState ? 'Auto-improve enabled' : 'Auto-improve disabled'
+        );
+      }
+    });
+    console.log(`[Main] Registered auto-improve toggle hotkey: ${autoImproveToggleHotkey}`);
+  } catch (err) {
+    console.error('[Main] Failed to register auto-improve toggle hotkey:', err);
   }
 
   console.log('[Main] Hotkeys registered successfully');
@@ -950,6 +1011,25 @@ function setupTranscribeIPCHandlers(): void {
     await transcriberManager.setAbandonConfirmation(enabled);
   });
 
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE, () => {
+    if (!transcriberManager) {
+      return false;
+    }
+    return transcriberManager.getAutoImprove();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE, async (_event, enabled: boolean) => {
+    if (!transcriberManager) {
+      throw new Error('TranscriberManager not initialized');
+    }
+    await transcriberManager.setAutoImprove(enabled);
+
+    // Refresh tray menu to show updated state
+    if (trayManager) {
+      trayManager.refreshMenu();
+    }
+  });
+
   // Sound settings handlers.
   ipcMain.handle(TranscribeIPCChannels.GET_SOUND_CONFIG, () => {
     if (!transcriberManager) {
@@ -1320,17 +1400,14 @@ function setupClipboardIPCHandlers(): void {
           const hasFigures = stackItems.some(i => i.imageData && i.figureLabel);
 
           if (hasFigures) {
-            // Import the helper function
-            const { obscureHomePath } = require('./clipboardManager');
-
-            // Build figure list
+            // Build figure list with real paths (for terminal compatibility)
             const figurePaths: string[] = [];
             for (const stackItem of stackItems) {
               if (stackItem.imageData && stackItem.figureLabel) {
                 const imagePath = await clipboardManager.exportImageToCache(stackItem);
                 if (imagePath) {
-                  const obscuredPath = obscureHomePath(imagePath);
-                  figurePaths.push(`Figure ${stackItem.figureLabel}: ${obscuredPath}`);
+                  // Use real path for terminal compatibility
+                  figurePaths.push(`Figure ${stackItem.figureLabel}: ${imagePath}`);
                 }
               }
             }
@@ -1347,11 +1424,10 @@ function setupClipboardIPCHandlers(): void {
           // For terminals: export image to file and put path on clipboard
           const imagePath = await clipboardManager.exportImageToCache(item);
           if (imagePath) {
-            const { obscureHomePath } = require('./clipboardManager');
-            const obscuredPath = obscureHomePath(imagePath);
+            // Use real path for terminal compatibility
             const figureRef = item.figureLabel
-              ? `Figure ${item.figureLabel}: ${obscuredPath}`
-              : obscuredPath;
+              ? `Figure ${item.figureLabel}: ${imagePath}`
+              : imagePath;
             clipboard.writeText(figureRef);
           } else {
             console.error('[Main] Failed to export image for terminal paste');
@@ -1488,8 +1564,8 @@ function setupClipboardIPCHandlers(): void {
         for (const item of imageItems) {
           const imagePath = await clipboardManager!.exportImageToCache(item);
           if (imagePath) {
-            const obscuredPath = obscureHomePath(imagePath);
-            paths.push(`Figure ${item.figureLabel}: ${obscuredPath}`);
+            // Use real path for terminal compatibility
+            paths.push(`Figure ${item.figureLabel}: ${imagePath}`);
           }
         }
         return paths.length > 0 ? `\n\n${paths.join('\n')}\n\n` : '';
@@ -1534,8 +1610,8 @@ function setupClipboardIPCHandlers(): void {
               // Terminal without transcript: paste file path instead of image.
               const imagePath = await clipboardManager!.exportImageToCache(item);
               if (imagePath) {
-                const obscuredPath = obscureHomePath(imagePath);
-                clipboard.writeText(obscuredPath);
+                // Use real path for terminal compatibility
+                clipboard.writeText(imagePath);
                 clipboardManager.syncClipboardHash();
                 await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
               }
@@ -3571,6 +3647,11 @@ async function initTranscriberSystem(): Promise<void> {
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
   await transcriberManager.init();
   broadcastTranscribeEvents();
+
+  // Pass transcriberManager to trayManager for auto-improve toggle
+  if (trayManager) {
+    trayManager.setTranscriberManager(transcriberManager);
+  }
 
   // Wire up confirmation response from cursor status widget to transcriber manager
   cursorStatusManager.on('confirmation-response', ({ abandon }) => {
