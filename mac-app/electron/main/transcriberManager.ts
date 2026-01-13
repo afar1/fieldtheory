@@ -15,6 +15,7 @@ import { QuotaManager } from './quotaManager';
 import { AudioManager } from './audioManager';
 import { CursorStatusManager } from './cursorStatusManager';
 import { improveTranscript, setApiKey as setEngineerApiKey } from './promptEngineer';
+import { CommandsManager } from './commandsManager';
 
 // Feature flag for live transcript improvement.
 // When enabled, users can trigger AI improvement by ending recording with a different hotkey than started.
@@ -75,6 +76,13 @@ export class TranscriberManager extends EventEmitter {
     figureId: string;
     capturedAtMs: number; // Timestamp relative to recording start
   }> = [];
+
+  // Portable commands detected in the current transcription.
+  // Tracks command names and file paths for terminal formatting.
+  private detectedCommands: Array<{
+    name: string;
+    filePath: string;
+  }> = [];
   
   // Clipboard history visibility checker - allows escape key to dismiss clipboard history first
   private clipboardHistoryVisibilityChecker: (() => boolean) | null = null;
@@ -94,13 +102,14 @@ export class TranscriberManager extends EventEmitter {
   private quotaManager: QuotaManager | null = null;
   private audioManager: AudioManager | null = null;
   private cursorStatusManager: CursorStatusManager | null = null;
+  private commandsManager: CommandsManager | null = null;
   private recordingStartTime: number = 0;
   
   // Track which hotkey started recording for cross-hotkey improvement trigger.
   // If user starts with primary and ends with secondary (or vice versa), trigger improvement.
   private startedWithSecondaryHotkey: boolean = false;
 
-  constructor(nativeHelper: NativeHelper, preferences: PreferencesManager, clipboardManager?: ClipboardManager, quotaManager?: QuotaManager, audioManager?: AudioManager, cursorStatusManager?: CursorStatusManager) {
+  constructor(nativeHelper: NativeHelper, preferences: PreferencesManager, clipboardManager?: ClipboardManager, quotaManager?: QuotaManager, audioManager?: AudioManager, cursorStatusManager?: CursorStatusManager, commandsManager?: CommandsManager) {
     super();
     this.nativeHelper = nativeHelper;
     this.preferences = preferences;
@@ -108,6 +117,7 @@ export class TranscriberManager extends EventEmitter {
     this.quotaManager = quotaManager || null;
     this.audioManager = audioManager || null;
     this.cursorStatusManager = cursorStatusManager || null;
+    this.commandsManager = commandsManager || null;
     // ModelManager will be initialized with selected model in init()
     this.modelManager = new ModelManager();
     this.overlay = new RecordingOverlay();
@@ -181,6 +191,13 @@ export class TranscriberManager extends EventEmitter {
 
   setSketchModeChecker(checker: () => boolean): void {
     this.sketchModeChecker = checker;
+  }
+
+  /**
+   * Set the commands manager for portable commands feature.
+   */
+  setCommandsManager(manager: CommandsManager): void {
+    this.commandsManager = manager;
   }
 
   /**
@@ -500,9 +517,10 @@ export class TranscriberManager extends EventEmitter {
       this.hasAudioContent = false;
       this.pendingAbandonConfirmation = false;
       
-      // Clear stack and screenshot metadata from previous recording session.
+      // Clear stack, screenshot metadata, and detected commands from previous recording session.
       this.currentStack = [];
       this.screenshotMetadata = [];
+      this.detectedCommands = [];
       
       // Show overlay
       this.overlay.showRecording();
@@ -602,7 +620,27 @@ export class TranscriberManager extends EventEmitter {
       
       // Figure references are now inserted inline during transcription parsing
       // (in parseTimestampedOutput) when screenshots were captured during recording.
-      
+
+      // Detect portable commands in the transcription.
+      // If user says "use the debug command", insert [cmd:debug.md] reference.
+      this.detectedCommands = [];
+      if (this.commandsManager) {
+        const commandDetection = this.commandsManager.detectCommands(cleanedText);
+        if (commandDetection.detected) {
+          // Insert [cmd:name.md] references at the end of the text
+          cleanedText = this.commandsManager.insertCommandReferences(
+            cleanedText,
+            commandDetection.matchedCommands
+          );
+          // Store detected commands for terminal formatting later
+          this.detectedCommands = commandDetection.matchedCommands.map(cmd => ({
+            name: cmd.name,
+            filePath: cmd.filePath,
+          }));
+          console.log(`[TranscriberManager] Detected commands: ${this.detectedCommands.map(c => c.name).join(', ')}`);
+        }
+      }
+
       // Store transcription in clipboard history.
       if (this.clipboardManager) {
         // Check if continuous context mode is active - if so, use its stackId.
@@ -1187,6 +1225,7 @@ export class TranscriberManager extends EventEmitter {
   clearStack(): void {
     this.currentStack = [];
     this.screenshotMetadata = [];
+    this.detectedCommands = [];
     this.emit('stackChanged', 0);
   }
 
@@ -1497,6 +1536,34 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
+   * Format text for terminal output by converting [cmd:name.md] to numbered refs.
+   * Adds a "Commands:" section at the end with file paths.
+   */
+  private formatCommandsForTerminal(text: string): string {
+    if (this.detectedCommands.length === 0) {
+      return text;
+    }
+
+    let formattedText = text;
+    const commandPaths: string[] = [];
+
+    this.detectedCommands.forEach((cmd, index) => {
+      const cmdNum = index + 1;
+      // Replace [cmd:name.md] with [cmd1], [cmd2], etc.
+      const refPattern = new RegExp(`\\[cmd:${cmd.name}\\.md\\]`, 'gi');
+      formattedText = formattedText.replace(refPattern, `[cmd${cmdNum}]`);
+      commandPaths.push(`[cmd${cmdNum}] ${cmd.filePath}`);
+    });
+
+    // Add the commands list at the end
+    if (commandPaths.length > 0) {
+      formattedText += '\n\nCommands:\n' + commandPaths.join('\n');
+    }
+
+    return formattedText;
+  }
+
+  /**
    * Append figure file paths at the end of text in scientific paper format.
    * The text should already have inline [Figure X] references inserted.
    * This adds a "Figures:" section at the end with the actual file paths.
@@ -1586,6 +1653,12 @@ export class TranscriberManager extends EventEmitter {
         // Non-terminals get inline [Figure X] refs without the file path list.
         if (this.currentStack.length > 1 && isTerminal) {
           textContent = await this.addImagePathsToText(textContent, items);
+        }
+
+        // Format command references for terminals: [cmd:name.md] -> [cmd1] with paths list.
+        // Non-terminals keep [cmd:name.md] references which some apps can resolve.
+        if (isTerminal && this.detectedCommands.length > 0) {
+          textContent = this.formatCommandsForTerminal(textContent);
         }
 
         clipboard.writeText(textContent);

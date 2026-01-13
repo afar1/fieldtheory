@@ -279,15 +279,15 @@ export class CommandsManager extends EventEmitter {
 
   /**
    * Detect command invocations in user text.
-   * 
-   * Looks for patterns like:
-   * - "use the X command"
-   * - "please use the X command"
-   * - "use commands X, Y, Z"
-   * - "apply the X command"
-   * - "invoke X command"
-   * 
-   * Returns detection results including matched and unmatched commands.
+   *
+   * Simple detection: looks for the word "command" near a known command name.
+   * This is flexible enough to catch natural speech variations like:
+   * - "use the debug command"
+   * - "debug command please"
+   * - "with the debug command"
+   * - "apply the debug command here"
+   *
+   * Returns detection results including matched commands.
    */
   detectCommands(text: string): CommandDetectionResult {
     const result: CommandDetectionResult = {
@@ -303,62 +303,55 @@ export class CommandsManager extends EventEmitter {
       return result;
     }
 
-    // Normalize text for pattern matching
     const lowerText = text.toLowerCase();
 
-    // Patterns to detect command invocations:
-    // Pattern 1: "use (the)? [command_name] command(s)?"
-    // Pattern 2: "use command(s)? [command_name](, [command_name])*"
-    // Pattern 3: "apply/invoke (the)? [command_name] command"
-    // Pattern 4: "please use (the)? [command_name]"
-    
-    const patterns = [
-      // "use the X command" or "use X command"
-      /(?:use|apply|invoke|run)\s+(?:the\s+)?["']?(\w[\w\s-]*)["']?\s+commands?/gi,
-      // "use commands X, Y" or "use command X"
-      /(?:use|apply|invoke|run)\s+commands?\s+["']?(\w[\w\s,-]*)["']?/gi,
-      // "please use X" when X is a known command
-      /please\s+use\s+(?:the\s+)?["']?(\w[\w\s-]*)["']?/gi,
-    ];
-
-    const detectedNames = new Set<string>();
-
-    for (const pattern of patterns) {
-      let match;
-      while ((match = pattern.exec(lowerText)) !== null) {
-        // Extract command names (may be comma-separated)
-        const namesStr = match[1];
-        const names = namesStr
-          .split(/[,\s]+and\s+|,\s*/)
-          .map(n => n.trim().toLowerCase())
-          .filter(n => n.length > 0);
-
-        for (const name of names) {
-          detectedNames.add(name);
-        }
-      }
+    // Check if "command" or "commands" appears in the text
+    if (!lowerText.includes('command')) {
+      return result;
     }
 
-    // Check which detected names match actual commands
-    for (const name of detectedNames) {
-      const command = this.getCommand(name);
-      if (command) {
-        result.matchedCommands.push(command);
-        result.commandNames.push(name);
-      } else {
-        result.unmatchedNames.push(name);
+    // For each known command, check if its name appears near "command"
+    for (const [commandName, command] of this.commands) {
+      // Find all occurrences of the command name
+      let searchStart = 0;
+      while (true) {
+        const nameIndex = lowerText.indexOf(commandName, searchStart);
+        if (nameIndex === -1) break;
+
+        // Check if "command" appears within 30 characters of the command name
+        const windowStart = Math.max(0, nameIndex - 30);
+        const windowEnd = Math.min(lowerText.length, nameIndex + commandName.length + 30);
+        const nearbyText = lowerText.slice(windowStart, windowEnd);
+
+        if (nearbyText.includes('command')) {
+          result.matchedCommands.push(command);
+          result.commandNames.push(commandName);
+          break; // Found this command, move to next
+        }
+
+        searchStart = nameIndex + 1;
       }
     }
 
     result.detected = result.matchedCommands.length > 0;
 
-    // Strip command references from text for cleaner prompt
+    // Strip command invocation phrases from text for cleaner output
     if (result.detected) {
       let cleanText = text;
-      for (const pattern of patterns) {
-        cleanText = cleanText.replace(pattern, '');
+      // Remove common patterns that mention commands
+      for (const name of result.commandNames) {
+        // Remove variations like "use the X command", "X command", "command X"
+        const patterns = [
+          new RegExp(`\\b(?:use|apply|run|invoke|with)\\s+(?:the\\s+)?${name}\\s+commands?\\b`, 'gi'),
+          new RegExp(`\\b${name}\\s+commands?\\b`, 'gi'),
+          new RegExp(`\\bcommands?\\s+${name}\\b`, 'gi'),
+        ];
+        for (const pattern of patterns) {
+          cleanText = cleanText.replace(pattern, '');
+        }
       }
-      result.textWithoutCommandRefs = cleanText.trim();
+      // Clean up extra whitespace
+      result.textWithoutCommandRefs = cleanText.replace(/\s+/g, ' ').trim();
     }
 
     return result;
@@ -430,6 +423,56 @@ End of User Commands
 ---
 
 `;
+  }
+
+  /**
+   * Insert inline command references into text (like [Figure A] for screenshots).
+   * Format: [cmd:command-name.md]
+   * Returns the text with references inserted at the end.
+   */
+  insertCommandReferences(text: string, commands: PortableCommand[]): string {
+    if (commands.length === 0) {
+      return text;
+    }
+
+    // Add command references at the end of the text
+    const refs = commands.map(cmd => `[cmd:${cmd.name}.md]`).join(' ');
+    return `${text} ${refs}`;
+  }
+
+  /**
+   * Format commands for terminal output with numbered references.
+   * Similar to how figures are displayed for terminals.
+   *
+   * Example output:
+   * Your text here [cmd1] [cmd2]
+   *
+   * Commands:
+   * [cmd1] /path/to/debug.md
+   * [cmd2] /path/to/review.md
+   */
+  formatCommandsForTerminal(text: string, commands: PortableCommand[]): string {
+    if (commands.length === 0) {
+      return text;
+    }
+
+    // Replace [cmd:name.md] references with numbered [cmd1], [cmd2], etc.
+    let formattedText = text;
+    const commandPaths: string[] = [];
+
+    commands.forEach((cmd, index) => {
+      const cmdNum = index + 1;
+      const refPattern = new RegExp(`\\[cmd:${cmd.name}\\.md\\]`, 'gi');
+      formattedText = formattedText.replace(refPattern, `[cmd${cmdNum}]`);
+      commandPaths.push(`[cmd${cmdNum}] ${cmd.filePath}`);
+    });
+
+    // Add the commands list at the end
+    if (commandPaths.length > 0) {
+      formattedText += '\n\nCommands:\n' + commandPaths.join('\n');
+    }
+
+    return formattedText;
   }
 
   /**
