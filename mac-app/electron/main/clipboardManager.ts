@@ -61,6 +61,29 @@ export function obscureHomePath(filePath: string): string {
 }
 
 /**
+ * Resolve branded Field Theory paths back to real filesystem paths.
+ * Converts: ~/field-theory/image.png
+ * To: /Users/username/Library/Application Support/littleai-mac/figures/image.png
+ */
+export function resolveFieldTheoryPath(brandedPath: string): string {
+  // Handle ~/field-theory/ branded paths
+  if (brandedPath.startsWith('~/field-theory/')) {
+    const filename = brandedPath.replace('~/field-theory/', '');
+    const appDataDir = app.getPath('userData');
+    return path.join(appDataDir, 'figures', filename);
+  }
+
+  // Handle regular ~ home paths
+  if (brandedPath.startsWith('~/')) {
+    const homeDir = app.getPath('home');
+    return brandedPath.replace('~', homeDir);
+  }
+
+  // Already a full path
+  return brandedPath;
+}
+
+/**
  * Type of clipboard item.
  */
 export type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';

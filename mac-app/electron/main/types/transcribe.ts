@@ -23,6 +23,8 @@ export const TranscribeIPCChannels = {
   GET_ABANDON_CONFIRMATION: 'transcribe:getAbandonConfirmation',
   SET_ABANDON_CONFIRMATION: 'transcribe:setAbandonConfirmation',
   TOGGLE_RECORDING: 'transcribe:toggleRecording',
+  GET_AUTO_IMPROVE: 'transcribe:getAutoImprove',
+  SET_AUTO_IMPROVE: 'transcribe:setAutoImprove',
 
   // Sound settings
   GET_SOUND_CONFIG: 'transcribe:getSoundConfig',
@@ -106,6 +108,8 @@ export interface TranscribeAPI {
   getAbandonConfirmation: () => Promise<boolean>;
   setAbandonConfirmation: (enabled: boolean) => Promise<void>;
   toggleRecording: () => Promise<void>;
+  getAutoImprove: () => Promise<boolean>;
+  setAutoImprove: (enabled: boolean) => Promise<void>;
   getSoundConfig: () => Promise<SoundConfig>;
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
   getAvailableSounds: () => Promise<SoundOption[]>;

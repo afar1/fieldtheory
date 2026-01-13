@@ -9,7 +9,7 @@ import { NativeHelper } from './nativeHelper';
 import { ModelManager, ModelSize } from './modelManager';
 import { PreferencesManager } from './preferences';
 import { RecordingOverlay } from './recordingOverlay';
-import { ClipboardManager, ClipboardItem, isTerminalApp, obscureHomePath } from './clipboardManager';
+import { ClipboardManager, ClipboardItem, isTerminalApp } from './clipboardManager';
 import { SoundManager } from './soundManager';
 import { QuotaManager } from './quotaManager';
 import { AudioManager } from './audioManager';
@@ -479,6 +479,11 @@ export class TranscriberManager extends EventEmitter {
         const quotaCheck = this.quotaManager.checkQuota('priorityMic');
         if (!quotaCheck.allowed) {
           console.log('[TranscriberManager] Priority mic quota exhausted');
+          const usedMinutes = Math.floor(quotaCheck.used / 60);
+          const limitMinutes = Math.floor(quotaCheck.limit / 60);
+          this.cursorStatusManager?.showCriticalMessage(
+            `Priority mic quota reached (${usedMinutes}/${limitMinutes} mins). Upgrade for unlimited.`
+          );
           this.emit('quotaExhausted', quotaCheck);
           return;
         }
@@ -652,12 +657,16 @@ export class TranscriberManager extends EventEmitter {
       }
       
       this.lastTranscription = cleanedText;
-      
-      // If improvement was triggered (cross-hotkey), run AI improvement on the transcript.
+
+      // If improvement was triggered (cross-hotkey) OR auto-improve is enabled, run AI improvement.
       let finalText = cleanedText;
       let improvedText: string | null = null;
-      
-      if (shouldImprove && FEATURE_IMPROVE_ENABLED && this.clipboardManager) {
+
+      // Check if we should improve: explicit request OR auto-improve enabled
+      const autoImproveEnabled = this.getAutoImprove();
+      const shouldTriggerImprovement = shouldImprove || autoImproveEnabled;
+
+      if (shouldTriggerImprovement && FEATURE_IMPROVE_ENABLED && this.clipboardManager) {
         // Check quota before calling AI.
         const quotaCheck = this.quotaManager?.checkQuota('textImprove');
         if (quotaCheck && !quotaCheck.allowed) {
@@ -897,6 +906,21 @@ export class TranscriberManager extends EventEmitter {
    */
   getAbandonConfirmation(): boolean {
     return this.preferences.getPreference('abandonRecordingConfirmation') ?? true;
+  }
+
+  /**
+   * Set whether to automatically improve transcripts after completion.
+   */
+  async setAutoImprove(enabled: boolean): Promise<void> {
+    await this.preferences.save({ autoImproveTranscripts: enabled });
+    console.log(`[TranscriberManager] Auto-improve ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
+  /**
+   * Get whether auto-improve is enabled for transcripts.
+   */
+  getAutoImprove(): boolean {
+    return this.preferences.getPreference('autoImproveTranscripts') ?? false;
   }
 
   // ---------------------------------------------------------------------------
@@ -1178,18 +1202,29 @@ export class TranscriberManager extends EventEmitter {
    */
   addToStack(itemId: number): void {
     if (this.currentStack.includes(itemId)) return;
-    
+
     // Check auto-stack quota before adding screenshots to stack during recording.
-    // Transcript gets added at the END of recording, so we check on any screenshot.
+    // Free tier: Allow first screenshot to stack (users can experience transcript + 1 figure)
+    // Pro tier: Unlimited screenshots
     if (this.status === 'recording' && this.quotaManager) {
-      const quotaCheck = this.quotaManager.checkQuota('autoStack');
-      if (!quotaCheck.allowed) {
-        console.log(`[TranscriberManager] Auto-stack quota exhausted, screenshot ${itemId} saved separately`);
-        this.emit('stackingDisabled', {
-          itemId,
-          message: 'Screenshot saved to Field Theory — open to stack manually',
-        });
-        return;
+      // Count existing screenshots in stack (use screenshotMetadata length as proxy)
+      const existingScreenshots = this.screenshotMetadata.length;
+
+      // Only check quota if there's already 1+ screenshot (allow first one always)
+      if (existingScreenshots >= 1) {
+        const quotaCheck = this.quotaManager.checkQuota('autoStack');
+        if (!quotaCheck.allowed) {
+          console.log(`[TranscriberManager] Auto-stack quota exhausted, screenshot ${itemId} saved separately (${existingScreenshots} already stacked)`);
+          // Show cursor message with limit info.
+          if (this.cursorStatusManager) {
+            this.cursorStatusManager.showRecordingNote(`Auto-stack limit reached (${quotaCheck.used}/${quotaCheck.limit}) — upgrade for more`);
+          }
+          this.emit('stackingDisabled', {
+            itemId,
+            message: 'Screenshot saved to Field Theory — open to stack manually',
+          });
+          return;
+        }
       }
     }
     
@@ -1433,9 +1468,8 @@ export class TranscriberManager extends EventEmitter {
       if (item.imageData && item.figureLabel) {
         const imagePath = await this.clipboardManager!.exportImageToCache(item);
         if (imagePath) {
-          const obscuredPath = obscureHomePath(imagePath);
-          // Add with proper "Figure X:" label
-          figurePaths.push(`Figure ${item.figureLabel}: ${obscuredPath}`);
+          // Use real path for terminal compatibility
+          figurePaths.push(`Figure ${item.figureLabel}: ${imagePath}`);
         }
       }
     }
@@ -1512,8 +1546,8 @@ export class TranscriberManager extends EventEmitter {
           // For terminals without transcript, export image to file and paste path
           const imagePath = await this.clipboardManager!.exportImageToCache(item);
           if (imagePath) {
-            const obscuredPath = obscureHomePath(imagePath);
-            clipboard.writeText(obscuredPath);
+            // Use real path for terminal compatibility
+            clipboard.writeText(imagePath);
             this.clipboardManager?.syncClipboardHash();
             await this.pasteText();
           }

@@ -9,6 +9,18 @@ import { useTheme } from '../contexts/ThemeContext';
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.37': [
+    'Fixed critical onboarding crash preventing first-run setup',
+    'Fixed release notes button not opening',
+    'Fixed update button showing wrong text when up to date',
+    'Allow deleting last model and show proper "no model" state',
+  ],
+  '0.1.36': [
+    'Fixed onboarding not showing on fresh install',
+    'Fixed model status showing green before download',
+    'Removed non-existent base model references',
+    'Removed Message button from preview mode',
+  ],
   '0.1.33': [
     'Renamed Commands to Popular Commands with admin delete controls',
     'Improved release notes popup with hover delay and positioning',
@@ -35,6 +47,8 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.37': 'Jan 11 2026',
+  '0.1.36': 'Jan 11 2026',
   '0.1.33': 'Jan 10 2026',
   '0.1.32': 'Jan 10 2026',
   '0.1.31': 'Dec 15 2025',
