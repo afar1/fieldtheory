@@ -29,6 +29,8 @@ const TranscribeIPCChannels = {
   SET_ABANDON_HOTKEY: 'transcribe:setAbandonHotkey',
   GET_ABANDON_CONFIRMATION: 'transcribe:getAbandonConfirmation',
   SET_ABANDON_CONFIRMATION: 'transcribe:setAbandonConfirmation',
+  GET_AUTO_IMPROVE: 'transcribe:getAutoImprove',
+  SET_AUTO_IMPROVE: 'transcribe:setAutoImprove',
   TOGGLE_RECORDING: 'transcribe:toggleRecording',
   GET_SOUND_CONFIG: 'transcribe:getSoundConfig',
   SET_SOUND_CONFIG: 'transcribe:setSoundConfig',
@@ -510,6 +512,8 @@ export interface TranscribeAPI {
   setAbandonHotkey: (hotkey: string) => Promise<boolean>;
   getAbandonConfirmation: () => Promise<boolean>;
   setAbandonConfirmation: (enabled: boolean) => Promise<void>;
+  getAutoImprove: () => Promise<boolean>;
+  setAutoImprove: (enabled: boolean) => Promise<void>;
   toggleRecording: () => Promise<void>;
   getSoundConfig: () => Promise<SoundConfig>;
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
@@ -759,6 +763,14 @@ const transcribeAPI: TranscribeAPI = {
 
   setAbandonConfirmation: async (enabled: boolean): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_ABANDON_CONFIRMATION, enabled);
+  },
+
+  getAutoImprove: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE);
+  },
+
+  setAutoImprove: async (enabled: boolean): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE, enabled);
   },
 
   toggleRecording: async (): Promise<void> => {

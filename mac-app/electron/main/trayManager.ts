@@ -3,6 +3,7 @@ import path from 'path';
 import { AudioState } from './types/audio';
 import { AudioManager } from './audioManager';
 import { QuotaManager } from './quotaManager';
+import { TranscriberManager } from './transcriberManager';
 
 /**
  * TrayManager creates and manages the menu bar icon and context menu.
@@ -22,6 +23,7 @@ export class TrayManager {
   private tray: Tray | null = null;
   private audioManager: AudioManager;
   private quotaManager: QuotaManager | null = null;
+  private transcriberManager: TranscriberManager | null = null;
   private showWindowCallback: (() => void) | null = null;
   private checkForUpdatesCallback: (() => void) | null = null;
   private startRecordingCallback: (() => void) | null = null;
@@ -52,6 +54,28 @@ export class TrayManager {
     });
 
     // Refresh menu to show quota
+    if (this.tray) {
+      this.updateTray(this.audioManager.getState());
+    }
+  }
+
+  /**
+   * Set the transcriber manager for accessing auto-improve state.
+   */
+  setTranscriberManager(transcriberManager: TranscriberManager): void {
+    this.transcriberManager = transcriberManager;
+
+    // Refresh menu to show auto-improve toggle
+    if (this.tray) {
+      this.updateTray(this.audioManager.getState());
+    }
+  }
+
+  /**
+   * Refresh the tray menu with current state.
+   * Call this when settings change to update the menu display.
+   */
+  refreshMenu(): void {
     if (this.tray) {
       this.updateTray(this.audioManager.getState());
     }
@@ -302,12 +326,18 @@ export class TrayManager {
 
       if (tier !== 'pro') {
         const micMinutes = Math.floor(quotas.priorityMic.used / 60);
-        const micLimit = quotas.priorityMic.limit === Infinity ? '∞' : Math.floor(quotas.priorityMic.limit / 60);
+        const micLimitNum = quotas.priorityMic.limit === Infinity ? Infinity : Math.floor(quotas.priorityMic.limit / 60);
+        const micLimit = micLimitNum === Infinity ? '∞' : micLimitNum;
         const stackUsed = quotas.autoStack.used;
-        const stackLimit = quotas.autoStack.limit === Infinity ? '∞' : quotas.autoStack.limit;
+        const stackLimitNum = quotas.autoStack.limit === Infinity ? Infinity : quotas.autoStack.limit;
+        const stackLimit = stackLimitNum === Infinity ? '∞' : stackLimitNum;
+
+        // Cap displayed usage at limit (don't show over-usage in menu bar)
+        const displayMicMinutes = micLimitNum === Infinity ? micMinutes : Math.min(micMinutes, micLimitNum);
+        const displayStackUsed = stackLimitNum === Infinity ? stackUsed : Math.min(stackUsed, stackLimitNum);
 
         items.push({
-          label: `Usage: ${micMinutes}/${micLimit} mins · ${stackUsed}/${stackLimit} stacks`,
+          label: `Usage: ${displayMicMinutes}/${micLimit} mins · ${displayStackUsed}/${stackLimit} stacks`,
           enabled: false,
         });
       } else {
@@ -317,6 +347,23 @@ export class TrayManager {
         });
       }
 
+      items.push({ type: 'separator' });
+    }
+
+    // Auto-improve toggle
+    if (this.transcriberManager) {
+      const autoImproveEnabled = this.transcriberManager.getAutoImprove();
+      items.push({
+        label: `Auto-Improve Transcripts (${autoImproveEnabled ? 'On' : 'Off'})`,
+        accelerator: 'Command+Shift+\\',
+        click: async () => {
+          if (this.transcriberManager) {
+            const currentState = this.transcriberManager.getAutoImprove();
+            await this.transcriberManager.setAutoImprove(!currentState);
+            // Menu will refresh automatically on next open
+          }
+        },
+      });
       items.push({ type: 'separator' });
     }
 
