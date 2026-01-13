@@ -3820,7 +3820,12 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize commands manager for portable commands feature.
   commandsManager = new CommandsManager();
-  
+
+  // Wire up commands manager to transcriber manager for command detection.
+  if (transcriberManager) {
+    transcriberManager.setCommandsManager(commandsManager);
+  }
+
   // Load saved commands directory from preferences.
   const savedCommandsDir = preferencesManager.getPreference('commandsDirectory');
   if (savedCommandsDir) {
