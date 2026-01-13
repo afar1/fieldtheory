@@ -16,6 +16,7 @@ import { AudioManager } from './audioManager';
 import { CursorStatusManager } from './cursorStatusManager';
 import { improveTranscript, setApiKey as setEngineerApiKey } from './promptEngineer';
 import { CommandsManager } from './commandsManager';
+import * as plist from 'plist';
 
 // Feature flag for live transcript improvement.
 // When enabled, users can trigger AI improvement by ending recording with a different hotkey than started.
@@ -1656,14 +1657,30 @@ export class TranscriberManager extends EventEmitter {
         }
 
         // Format command references for terminals: [cmd:name.md] -> [cmd1] with paths list.
-        // Non-terminals keep [cmd:name.md] references which some apps can resolve.
+        // Non-terminals: strip [cmd:name.md] refs since we'll paste files as attachments.
         if (isTerminal && this.detectedCommands.length > 0) {
           textContent = this.formatCommandsForTerminal(textContent);
+        } else if (!isTerminal && this.detectedCommands.length > 0) {
+          // For multimodal apps, strip command references from text
+          // since we'll paste the actual files as attachments
+          textContent = textContent.replace(/\s*\[cmd:[^\]]+\]/g, '').trim();
         }
 
         clipboard.writeText(textContent);
         this.clipboardManager?.syncClipboardHash();
         await this.pasteText();
+
+        // For multimodal apps, paste command files as actual file attachments
+        // using NSFilenamesPboardType so apps can receive them like Finder-copied files
+        if (!isTerminal && this.detectedCommands.length > 0) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          const filePaths = this.detectedCommands.map(cmd => cmd.filePath);
+          const plistData = plist.build(filePaths);
+          clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
+          this.clipboardManager?.syncClipboardHash();
+          await this.pasteText();
+          console.log(`[TranscriberManager] Pasted ${filePaths.length} command file(s) as attachments`);
+        }
       } else if (item.imageData) {
         if (isTerminal) {
           // For terminals, skip individual images if they're in the transcript's figure list.
