@@ -31,7 +31,8 @@ export default function TranscriptionSettings() {
   const [isCapturingAbandonHotkey, setIsCapturingAbandonHotkey] = useState(false);
   const [abandonHotkeyError, setAbandonHotkeyError] = useState<string | null>(null);
   const [abandonConfirmation, setAbandonConfirmation] = useState(true);
-  
+  const [autoImprove, setAutoImprove] = useState(false);
+
   const [soundsEnabled, setSoundsEnabled] = useState(true);
   const [recordingStartSound, setRecordingStartSound] = useState<string | undefined>('ButtonClickDown.mp3');
   const [recordingStopSound, setRecordingStopSound] = useState<string | undefined>('ButtonClickUp.mp3');
@@ -51,7 +52,7 @@ export default function TranscriptionSettings() {
 
     const fetchStatus = async () => {
       try {
-        const [currentStatus, currentModelStatus, currentHotkey, models, currentSelectedModel, downloadStatus, downloadingModels, currentOverlayStyle, currentAbandonHotkey, currentAbandonConfirmation, soundConfig, sounds] = await Promise.all([
+        const [currentStatus, currentModelStatus, currentHotkey, models, currentSelectedModel, downloadStatus, downloadingModels, currentOverlayStyle, currentAbandonHotkey, currentAbandonConfirmation, currentAutoImprove, soundConfig, sounds] = await Promise.all([
           window.transcribeAPI!.getStatus(),
           window.transcribeAPI!.getModelStatus(),
           window.transcribeAPI!.getHotkey(),
@@ -62,6 +63,7 @@ export default function TranscriptionSettings() {
           window.transcribeAPI!.getOverlayStyle(),
           window.transcribeAPI!.getAbandonHotkey?.() ?? 'Escape',
           window.transcribeAPI!.getAbandonConfirmation?.() ?? true,
+          window.transcribeAPI!.getAutoImprove?.() ?? false,
           window.transcribeAPI!.getSoundConfig?.() ?? { enabled: true, recordingStart: 'ButtonClickDown.mp3', recordingStop: 'ButtonClickUp.mp3', recordingCancel: 'AlertBonk.mp3', windowOpen: 'WindowOpen.mp3', windowClose: 'WindowClose.mp3', transcribing: 'Beep.mp3', paste: 'ButtonClickUp.mp3' },
           window.transcribeAPI!.getAvailableSounds?.() ?? [],
         ]);
@@ -78,6 +80,7 @@ export default function TranscriptionSettings() {
         setOverlayStyle(currentOverlayStyle);
         setAbandonHotkey(currentAbandonHotkey);
         setAbandonConfirmation(currentAbandonConfirmation);
+        setAutoImprove(currentAutoImprove);
         setSoundsEnabled(soundConfig.enabled);
         setRecordingStartSound(soundConfig.recordingStart);
         setRecordingStopSound(soundConfig.recordingStop);
@@ -271,7 +274,7 @@ export default function TranscriptionSettings() {
   
   const handleAbandonConfirmationChange = useCallback(async (enabled: boolean) => {
     if (!window.transcribeAPI?.setAbandonConfirmation) return;
-    
+
     setAbandonConfirmation(enabled);
     try {
       await window.transcribeAPI.setAbandonConfirmation(enabled);
@@ -279,7 +282,18 @@ export default function TranscriptionSettings() {
       console.error('Failed to change abandon confirmation setting:', err);
     }
   }, []);
-  
+
+  const handleAutoImproveChange = useCallback(async (enabled: boolean) => {
+    if (!window.transcribeAPI?.setAutoImprove) return;
+
+    setAutoImprove(enabled);
+    try {
+      await window.transcribeAPI.setAutoImprove(enabled);
+    } catch (err) {
+      console.error('Failed to change auto-improve setting:', err);
+    }
+  }, []);
+
   const handleSoundsEnabledChange = useCallback(async (enabled: boolean) => {
     if (!window.transcribeAPI?.setSoundConfig) return;
     
@@ -665,6 +679,25 @@ export default function TranscriptionSettings() {
       </div>
 
       {error && <p style={styles.error}>{error}</p>}
+
+      {/* Auto-Improve Toggle */}
+      <div style={{ ...styles.soundsSection, marginTop: '16px' }}>
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={styles.rowLabel}>Auto-Improve Transcripts</span>
+            <span style={{ fontSize: '11px', color: '#9ca3af' }}>
+              Automatically enhance transcripts with AI after completion
+            </span>
+          </div>
+          <button
+            onClick={() => handleAutoImproveChange(!autoImprove)}
+            style={{ ...styles.toggle, backgroundColor: autoImprove ? '#22c55e' : '#d1d5db' }}
+            title={autoImprove ? 'Auto-improve enabled' : 'Auto-improve disabled'}
+          >
+            <span style={{ ...styles.toggleKnob, transform: autoImprove ? 'translateX(20px)' : 'translateX(2px)' }} />
+          </button>
+        </div>
+      </div>
 
       <div style={styles.modelsSection}>
         <div style={styles.sectionHeader}>
