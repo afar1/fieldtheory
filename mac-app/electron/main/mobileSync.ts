@@ -289,7 +289,6 @@ export class MobileSync extends EventEmitter {
       // Success - clear the failed token tracker.
       this.lastFailedToken = null;
       this.session = data.session;
-      console.log('[MobileSync] Session set for user:', this.session?.user?.email);
     }
 
     // Start periodic sync now that we're authenticated.
