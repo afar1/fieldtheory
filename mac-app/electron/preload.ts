@@ -2075,6 +2075,32 @@ const commandsAPI = {
       ipcRenderer.removeListener(CommandsIPCChannels.DIRECTORY_CHANGED, handler);
     };
   },
+
+  // Command Launcher specific methods (Cmd+Shift+K popup)
+
+  // Invoke a command by name (paste file or reference to target app).
+  invokeCommand: async (commandName: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('commands:invoke', commandName);
+  },
+
+  // Resize the command launcher window.
+  launcherResize: (height: number): void => {
+    ipcRenderer.send('command-launcher:resize', height);
+  },
+
+  // Close the command launcher window.
+  launcherClose: (): void => {
+    ipcRenderer.send('command-launcher:close');
+  },
+
+  // Listen for reset events (when launcher is shown).
+  onLauncherReset: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('command-launcher:reset', handler);
+    return () => {
+      ipcRenderer.removeListener('command-launcher:reset', handler);
+    };
+  },
 };
 
 type CommandsAPI = typeof commandsAPI;
