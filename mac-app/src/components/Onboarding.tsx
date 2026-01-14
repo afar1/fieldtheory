@@ -1,12 +1,14 @@
 import { useEffect, useState, useCallback } from 'react';
+import { supabase } from '../supabaseClient';
 
 // =============================================================================
-// Onboarding - 2-phase onboarding flow for Field Theory
+// Onboarding - 3-phase onboarding flow for Field Theory
 // Phase 1: Permissions (microphone, accessibility, screen recording)
 // Phase 2: Model (voice model selection and download)
+// Phase 3: Account (email sign-in required)
 // =============================================================================
 
-type OnboardingPhase = 'permissions' | 'model';
+type OnboardingPhase = 'permissions' | 'model' | 'account';
 
 type PermissionStatus = {
   microphone: 'granted' | 'denied' | 'not-determined';
@@ -53,14 +55,10 @@ function PermissionsPhase({
   onRefreshPermissions,
   onContinue,
 }: PermissionsPhaseProps) {
-  // Require microphone + accessibility (core permissions).
-  // Screen recording is optional but recommended.
-  const corePermissionsGranted =
-    permissions.microphone === 'granted' &&
-    permissions.accessibility;
-
+  // All three permissions are required to continue.
   const allGranted =
-    corePermissionsGranted &&
+    permissions.microphone === 'granted' &&
+    permissions.accessibility &&
     permissions.screenRecording;
 
   // Auto-refresh permissions when window gains focus.
@@ -81,44 +79,35 @@ function PermissionsPhase({
         {/* Microphone */}
         <PermissionRow
           label="Microphone"
-          description="Required for voice transcription"
+          description="Handles voice transcription"
           granted={permissions.microphone === 'granted'}
           denied={permissions.microphone === 'denied'}
           onGrant={onRequestMicrophone}
           grantButtonText="Allow"
-          required={true}
         />
 
         {/* Accessibility */}
         <PermissionRow
           label="Accessibility"
-          description="Required to paste text into apps"
+          description="Handles copying and pasting into applications"
           granted={permissions.accessibility}
           onGrant={onOpenAccessibility}
           grantButtonText="Open Settings"
-          required={true}
         />
 
         {/* Screen Recording */}
         <PermissionRow
           label="Screen Recording"
-          description="Optional: Enables screenshot context"
+          description="Enables ability to take screenshots"
           granted={permissions.screenRecording}
           onGrant={onOpenScreenRecording}
           grantButtonText="Open Settings"
-          required={false}
         />
       </div>
 
       {allGranted && (
         <div style={styles.successBanner}>
           All permissions granted
-        </div>
-      )}
-
-      {corePermissionsGranted && !allGranted && (
-        <div style={styles.warningBanner}>
-          Screen Recording is recommended for screenshots but not required
         </div>
       )}
 
@@ -133,11 +122,11 @@ function PermissionsPhase({
       <button
         style={{
           ...styles.primaryButton,
-          opacity: corePermissionsGranted ? 1 : 0.5,
-          cursor: corePermissionsGranted ? 'pointer' : 'not-allowed',
+          opacity: allGranted ? 1 : 0.5,
+          cursor: allGranted ? 'pointer' : 'not-allowed',
         }}
         onClick={onContinue}
-        disabled={!corePermissionsGranted}
+        disabled={!allGranted}
       >
         Continue
       </button>
@@ -152,10 +141,9 @@ interface PermissionRowProps {
   denied?: boolean;
   onGrant: () => void;
   grantButtonText?: string;
-  required?: boolean;
 }
 
-function PermissionRow({ label, description, granted, denied, onGrant, grantButtonText = "Grant", required = false }: PermissionRowProps) {
+function PermissionRow({ label, description, granted, denied, onGrant, grantButtonText = "Grant" }: PermissionRowProps) {
   return (
     <div style={styles.permissionRow}>
       <div style={styles.permissionCheck}>
@@ -168,7 +156,6 @@ function PermissionRow({ label, description, granted, denied, onGrant, grantButt
       <div style={styles.permissionContent}>
         <div style={styles.permissionLabel}>
           {label}
-          {required && <span style={styles.requiredBadge}>Required</span>}
         </div>
         <div style={styles.permissionDescription}>{description}</div>
         {denied && (
@@ -233,13 +220,26 @@ function ModelPhase({
           const isDownloading = downloadingModel === modelKey;
           const isSelected = selectedModel === modelKey;
           
+          // Determine border and shadow styles
+          const isRecommended = info.recommended;
+          let borderColor = '#e5e7eb';
+          let boxShadow = 'none';
+
+          if (isSelected && isDownloaded) {
+            borderColor = '#14372A';
+          } else if (isRecommended) {
+            borderColor = '#3b82f6'; // Blue border for recommended
+            boxShadow = '0 2px 8px rgba(59, 130, 246, 0.15)'; // Subtle blue shadow
+          }
+
           return (
-            <div 
+            <div
               key={modelKey}
               onClick={() => isDownloaded && onSelectModel(modelKey)}
               style={{
                 ...styles.modelCard,
-                borderColor: isSelected && isDownloaded ? '#14372A' : '#e5e7eb',
+                borderColor,
+                boxShadow,
                 backgroundColor: isSelected && isDownloaded ? '#f0fdf4' : '#fff',
                 cursor: isDownloaded ? 'pointer' : 'default',
               }}
@@ -317,7 +317,7 @@ function ModelPhase({
         })}
       </div>
 
-      <button 
+      <button
         style={{
           ...styles.primaryButton,
           opacity: canFinish ? 1 : 0.5,
@@ -327,8 +327,157 @@ function ModelPhase({
         onClick={onFinish}
         disabled={!canFinish}
       >
-        Done
+        Continue
       </button>
+    </div>
+  );
+}
+
+// =============================================================================
+// Phase 3: Account (Email Sign-In)
+// =============================================================================
+
+interface AccountPhaseProps {
+  onFinish: () => void;
+}
+
+function AccountPhase({ onFinish }: AccountPhaseProps) {
+  const [email, setEmail] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [isRequestingOtp, setIsRequestingOtp] = useState(false);
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleRequestOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim() || isRequestingOtp) return;
+
+    setIsRequestingOtp(true);
+    setError(null);
+
+    try {
+      const result = await window.authAPI?.requestOtp(email.trim());
+      if (result?.error) {
+        setError(result.error);
+      } else {
+        setOtpSent(true);
+      }
+    } catch (err) {
+      setError('Failed to send verification code. Please try again.');
+    } finally {
+      setIsRequestingOtp(false);
+    }
+  };
+
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!otpCode.trim() || isVerifyingOtp) return;
+
+    setIsVerifyingOtp(true);
+    setError(null);
+
+    try {
+      const result = await window.authAPI?.verifyOtp(email.trim(), otpCode.trim());
+      if (result?.error) {
+        setError(result.error);
+      } else if (result?.session) {
+        // Set session in Supabase client
+        if (supabase) {
+          await supabase.auth.setSession({
+            access_token: result.session.access_token,
+            refresh_token: result.session.refresh_token,
+          });
+        }
+        // Forward session to main process for sync
+        await window.clipboardAPI?.setSyncSession?.(
+          result.session.access_token,
+          result.session.refresh_token
+        );
+        // Complete onboarding
+        onFinish();
+      }
+    } catch (err) {
+      setError('Failed to verify code. Please try again.');
+    } finally {
+      setIsVerifyingOtp(false);
+    }
+  };
+
+  return (
+    <div style={styles.phase}>
+      <h1 style={styles.title}>Create Your Free Account</h1>
+      <p style={styles.subtitle}>
+        Sign in to get started with Field Theory.
+      </p>
+
+      <div style={styles.accountForm}>
+        {!otpSent ? (
+          <form onSubmit={handleRequestOtp} style={styles.form}>
+            <input
+              type="email"
+              placeholder="Enter your email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              disabled={isRequestingOtp}
+              style={styles.input}
+              autoFocus
+            />
+            <button
+              type="submit"
+              disabled={isRequestingOtp || !email.trim()}
+              style={{
+                ...styles.primaryButton,
+                opacity: isRequestingOtp || !email.trim() ? 0.5 : 1,
+                cursor: isRequestingOtp || !email.trim() ? 'not-allowed' : 'pointer',
+                width: '100%',
+              }}
+            >
+              {isRequestingOtp ? 'Sending...' : 'Send Verification Code'}
+            </button>
+          </form>
+        ) : (
+          <form onSubmit={handleVerifyOtp} style={styles.form}>
+            <p style={styles.otpSentText}>
+              Code sent to {email}
+            </p>
+            <input
+              type="text"
+              placeholder="Enter code"
+              value={otpCode}
+              onChange={(e) => setOtpCode(e.target.value)}
+              disabled={isVerifyingOtp}
+              style={styles.otpInput}
+              autoFocus
+            />
+            <button
+              type="submit"
+              disabled={isVerifyingOtp || !otpCode.trim()}
+              style={{
+                ...styles.primaryButton,
+                opacity: isVerifyingOtp || !otpCode.trim() ? 0.5 : 1,
+                cursor: isVerifyingOtp || !otpCode.trim() ? 'not-allowed' : 'pointer',
+                width: '100%',
+              }}
+            >
+              {isVerifyingOtp ? 'Verifying...' : 'Verify Code'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setOtpSent(false); setOtpCode(''); setError(null); }}
+              style={styles.secondaryButton}
+            >
+              Use a different email
+            </button>
+          </form>
+        )}
+
+        {error && (
+          <div style={styles.errorBanner}>
+            {error}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -502,6 +651,7 @@ export default function Onboarding() {
 
   // Phase navigation.
   const goToModel = useCallback(() => setPhase('model'), []);
+  const goToAccount = useCallback(() => setPhase('account'), []);
 
   // Complete onboarding.
   const finish = useCallback(async () => {
@@ -550,8 +700,13 @@ export default function Onboarding() {
             onDownloadModel={downloadModel}
             onCancelDownload={cancelDownload}
             onDeleteModel={deleteModel}
-            onFinish={finish}
+            onFinish={goToAccount}
           />
+        );
+
+      case 'account':
+        return (
+          <AccountPhase onFinish={finish} />
         );
     }
   };
@@ -576,7 +731,7 @@ interface PhaseIndicatorProps {
 }
 
 function PhaseIndicator({ current, onGoToPhase }: PhaseIndicatorProps) {
-  const phases: OnboardingPhase[] = ['permissions', 'model'];
+  const phases: OnboardingPhase[] = ['permissions', 'model', 'account'];
   const currentIndex = phases.indexOf(current);
 
   return (
@@ -698,16 +853,6 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     gap: '6px',
-  },
-  requiredBadge: {
-    fontSize: '9px',
-    fontWeight: 600,
-    color: '#dc2626',
-    backgroundColor: '#fee2e2',
-    padding: '1px 5px',
-    borderRadius: '3px',
-    textTransform: 'uppercase',
-    letterSpacing: '0.02em',
   },
   permissionDescription: {
     fontSize: '11px',
@@ -860,19 +1005,6 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: 'center',
   },
 
-  // Warning banner (for optional permissions).
-  warningBanner: {
-    backgroundColor: '#fffbeb',
-    border: '1px solid #fcd34d',
-    borderRadius: '4px',
-    padding: '6px 10px',
-    marginBottom: '8px',
-    fontSize: '11px',
-    color: '#92400e',
-    width: '100%',
-    textAlign: 'center',
-  },
-
   // Shortcut hint.
   shortcutHint: {
     display: 'flex',
@@ -915,6 +1047,65 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 500,
     cursor: 'pointer',
     transition: 'opacity 0.2s',
+  },
+
+  // Secondary button.
+  secondaryButton: {
+    backgroundColor: 'transparent',
+    color: '#6b7280',
+    border: 'none',
+    padding: '8px 16px',
+    fontSize: '12px',
+    fontWeight: 500,
+    cursor: 'pointer',
+    marginTop: '8px',
+  },
+
+  // Account form styles.
+  accountForm: {
+    width: '100%',
+    maxWidth: '300px',
+  },
+  form: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+  },
+  input: {
+    width: '100%',
+    padding: '10px 12px',
+    fontSize: '14px',
+    border: '1px solid #e5e7eb',
+    borderRadius: '6px',
+    outline: 'none',
+    boxSizing: 'border-box',
+  },
+  otpInput: {
+    width: '100%',
+    padding: '12px',
+    fontSize: '18px',
+    textAlign: 'center',
+    letterSpacing: '4px',
+    border: '1px solid #e5e7eb',
+    borderRadius: '6px',
+    outline: 'none',
+    boxSizing: 'border-box',
+  },
+  otpSentText: {
+    fontSize: '12px',
+    color: '#6b7280',
+    textAlign: 'center',
+    margin: '0 0 4px 0',
+  },
+  errorBanner: {
+    backgroundColor: '#fef2f2',
+    border: '1px solid #fecaca',
+    borderRadius: '4px',
+    padding: '8px 12px',
+    marginTop: '12px',
+    fontSize: '12px',
+    color: '#dc2626',
+    textAlign: 'center',
   },
 
   // Phase indicator.
