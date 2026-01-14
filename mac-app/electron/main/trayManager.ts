@@ -4,6 +4,7 @@ import { AudioState } from './types/audio';
 import { AudioManager } from './audioManager';
 import { QuotaManager } from './quotaManager';
 import { TranscriberManager } from './transcriberManager';
+import type { PreferencesManager } from './preferences';
 
 /**
  * TrayManager creates and manages the menu bar icon and context menu.
@@ -24,8 +25,10 @@ export class TrayManager {
   private audioManager: AudioManager;
   private quotaManager: QuotaManager | null = null;
   private transcriberManager: TranscriberManager | null = null;
+  private preferencesManager: PreferencesManager | null = null;
   private showWindowCallback: (() => void) | null = null;
   private showMainWindowCallback: (() => void) | null = null;
+  private showOnboardingCallback: (() => void) | null = null;
   private checkForUpdatesCallback: (() => void) | null = null;
   private startRecordingCallback: (() => void) | null = null;
   private takeScreenshotCallback: (() => void) | null = null;
@@ -35,9 +38,10 @@ export class TrayManager {
   private transcriptionHotkey: string = 'Option+Shift+Space';
   private screenshotHotkey: string = 'Command+4';
 
-  constructor(audioManager: AudioManager, quotaManager?: QuotaManager) {
+  constructor(audioManager: AudioManager, quotaManager?: QuotaManager, preferencesManager?: PreferencesManager) {
     this.audioManager = audioManager;
     this.quotaManager = quotaManager || null;
+    this.preferencesManager = preferencesManager || null;
   }
 
   /**
@@ -70,6 +74,13 @@ export class TrayManager {
     if (this.tray) {
       this.updateTray(this.audioManager.getState());
     }
+  }
+
+  /**
+   * Set the callback to show the onboarding window.
+   */
+  setShowOnboardingCallback(callback: () => void): void {
+    this.showOnboardingCallback = callback;
   }
 
   /**
@@ -202,12 +213,38 @@ export class TrayManager {
 
   /**
    * Build the context menu items based on current state.
-   * 
+   *
    * Shows: Priority Mic: [name] at top, then device submenu, then helper text.
    * The "Enable Priority Microphone" toggle is removed - priority mode is auto-enabled
    * when a priority device is selected.
+   *
+   * During onboarding, only shows "Quit Field Theory" - all other options are disabled
+   * until onboarding is complete.
    */
   private buildContextMenu(state: AudioState): MenuItemConstructorOptions[] {
+    // During onboarding, show minimal menu with only Quit option
+    const prefs = this.preferencesManager?.get();
+    if (!prefs?.onboardingComplete) {
+      return [
+        {
+          label: 'Complete Onboarding…',
+          click: () => {
+            if (this.showOnboardingCallback) {
+              this.showOnboardingCallback();
+            }
+          },
+        },
+        { type: 'separator' },
+        {
+          label: 'Quit Field Theory',
+          accelerator: 'Command+Q',
+          click: () => {
+            app.quit();
+          },
+        },
+      ];
+    }
+
     const { priorityMode, priorityDeviceId, userOverrideId, defaultInputId, devices } = state;
 
     const currentDefaultDevice = devices.find((d) => d.id === defaultInputId);
