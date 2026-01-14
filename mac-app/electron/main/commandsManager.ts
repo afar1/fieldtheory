@@ -280,12 +280,18 @@ export class CommandsManager extends EventEmitter {
   /**
    * Detect command invocations in user text.
    *
-   * Simple detection: looks for the word "command" near a known command name.
-   * This is flexible enough to catch natural speech variations like:
-   * - "use the debug command"
-   * - "debug command please"
-   * - "with the debug command"
-   * - "apply the debug command here"
+   * Uses smart detection based on singular vs plural usage:
+   * - "command" (singular) → find the ONE nearest command name
+   * - "commands" (plural) → find multiple command names (list mode)
+   *
+   * This prevents false positives where a command name happens to be a common word.
+   * For example: "please include some stuff and run the flow command"
+   * → only matches "flow", not "include" (even if "include" is a command name)
+   *
+   * Examples:
+   * - "run the include command" → matches: include
+   * - "please include some stuff and run the flow command" → matches: flow only
+   * - "use the commands include, commit, and main" → matches: include, commit, main
    *
    * Returns detection results including matched commands.
    */
@@ -305,56 +311,189 @@ export class CommandsManager extends EventEmitter {
 
     const lowerText = text.toLowerCase();
 
-    // Check if "command" or "commands" appears in the text
+    // Check if "command" or "commands" appears in the text.
     if (!lowerText.includes('command')) {
       return result;
     }
 
-    // For each known command, check if its name appears near "command"
+    // Track which commands we've already matched to avoid duplicates.
+    const matchedCommandNames = new Set<string>();
+
+    // Find all occurrences of "command" (singular) and "commands" (plural).
+    // We process them in order of appearance to handle cases correctly.
+    const commandWordMatches = this.findCommandWords(lowerText);
+
+    for (const match of commandWordMatches) {
+      if (match.isPlural) {
+        // Plural "commands" → look for multiple command names in a list.
+        // Typically appears as: "use the commands X, Y, and Z"
+        const listCommands = this.findCommandsInList(lowerText, match.index, matchedCommandNames);
+        for (const cmd of listCommands) {
+          if (!matchedCommandNames.has(cmd.name)) {
+            matchedCommandNames.add(cmd.name);
+            result.matchedCommands.push(cmd);
+            result.commandNames.push(cmd.name);
+          }
+        }
+      } else {
+        // Singular "command" → find the ONE nearest command name.
+        const nearestCommand = this.findNearestCommand(lowerText, match.index, matchedCommandNames);
+        if (nearestCommand && !matchedCommandNames.has(nearestCommand.name)) {
+          matchedCommandNames.add(nearestCommand.name);
+          result.matchedCommands.push(nearestCommand);
+          result.commandNames.push(nearestCommand.name);
+        }
+      }
+    }
+
+    result.detected = result.matchedCommands.length > 0;
+
+    // Strip command invocation phrases from text for cleaner output.
+    if (result.detected) {
+      let cleanText = text;
+      // Remove common patterns that mention commands.
+      for (const name of result.commandNames) {
+        // Escape special regex characters in command name.
+        const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // Remove variations like "use the X command", "X command", "command X".
+        const patterns = [
+          new RegExp(`\\b(?:use|apply|run|invoke|with)\\s+(?:the\\s+)?${escapedName}\\s+commands?\\b`, 'gi'),
+          new RegExp(`\\b${escapedName}\\s+commands?\\b`, 'gi'),
+          new RegExp(`\\bcommands?\\s+${escapedName}\\b`, 'gi'),
+          // Also handle list patterns like "commands X, Y, and Z".
+          new RegExp(`\\bcommands\\s+(?:${escapedName}(?:,\\s*|\\s+and\\s+|\\s+))+`, 'gi'),
+        ];
+        for (const pattern of patterns) {
+          cleanText = cleanText.replace(pattern, '');
+        }
+      }
+      // Clean up extra whitespace.
+      result.textWithoutCommandRefs = cleanText.replace(/\s+/g, ' ').trim();
+    }
+
+    return result;
+  }
+
+  /**
+   * Find all occurrences of "command" and "commands" in text.
+   * Returns matches in order of appearance with info about singular vs plural.
+   */
+  private findCommandWords(text: string): Array<{ index: number; isPlural: boolean }> {
+    const matches: Array<{ index: number; isPlural: boolean }> = [];
+    
+    // Use regex to find "command" or "commands" as whole words.
+    const regex = /\bcommands?\b/gi;
+    let match;
+    
+    while ((match = regex.exec(text)) !== null) {
+      const isPlural = match[0].toLowerCase() === 'commands';
+      matches.push({ index: match.index, isPlural });
+    }
+    
+    return matches;
+  }
+
+  /**
+   * Find the nearest command name to a given position (for singular "command").
+   * Looks within a 50-character window on either side of the "command" word.
+   * Returns the closest matching command, or null if none found.
+   */
+  private findNearestCommand(
+    text: string, 
+    commandWordIndex: number,
+    alreadyMatched: Set<string>
+  ): PortableCommand | null {
+    const windowSize = 50;
+    const windowStart = Math.max(0, commandWordIndex - windowSize);
+    const windowEnd = Math.min(text.length, commandWordIndex + 'command'.length + windowSize);
+    
+    let nearestCommand: PortableCommand | null = null;
+    let nearestDistance = Infinity;
+
     for (const [commandName, command] of this.commands) {
-      // Find all occurrences of the command name
+      // Skip commands we've already matched.
+      if (alreadyMatched.has(commandName)) continue;
+
+      // Find all occurrences of this command name in the text.
       let searchStart = 0;
       while (true) {
-        const nameIndex = lowerText.indexOf(commandName, searchStart);
+        const nameIndex = text.indexOf(commandName, searchStart);
         if (nameIndex === -1) break;
 
-        // Check if "command" appears within 30 characters of the command name
-        const windowStart = Math.max(0, nameIndex - 30);
-        const windowEnd = Math.min(lowerText.length, nameIndex + commandName.length + 30);
-        const nearbyText = lowerText.slice(windowStart, windowEnd);
-
-        if (nearbyText.includes('command')) {
-          result.matchedCommands.push(command);
-          result.commandNames.push(commandName);
-          break; // Found this command, move to next
+        // Check if this occurrence is within our window.
+        if (nameIndex >= windowStart && nameIndex <= windowEnd) {
+          // Verify it's a word boundary (not part of another word).
+          if (this.isWordBoundary(text, nameIndex, commandName)) {
+            // Calculate distance from the "command" word.
+            const distance = Math.abs(nameIndex - commandWordIndex);
+            if (distance < nearestDistance) {
+              nearestDistance = distance;
+              nearestCommand = command;
+            }
+          }
         }
 
         searchStart = nameIndex + 1;
       }
     }
 
-    result.detected = result.matchedCommands.length > 0;
+    return nearestCommand;
+  }
 
-    // Strip command invocation phrases from text for cleaner output
-    if (result.detected) {
-      let cleanText = text;
-      // Remove common patterns that mention commands
-      for (const name of result.commandNames) {
-        // Remove variations like "use the X command", "X command", "command X"
-        const patterns = [
-          new RegExp(`\\b(?:use|apply|run|invoke|with)\\s+(?:the\\s+)?${name}\\s+commands?\\b`, 'gi'),
-          new RegExp(`\\b${name}\\s+commands?\\b`, 'gi'),
-          new RegExp(`\\bcommands?\\s+${name}\\b`, 'gi'),
-        ];
-        for (const pattern of patterns) {
-          cleanText = cleanText.replace(pattern, '');
+  /**
+   * Find multiple commands in a list following "commands" (plural).
+   * Handles patterns like: "use the commands X, Y, and Z"
+   * Looks for command names in the text following the "commands" word.
+   */
+  private findCommandsInList(
+    text: string,
+    commandsWordIndex: number,
+    alreadyMatched: Set<string>
+  ): PortableCommand[] {
+    const foundCommands: PortableCommand[] = [];
+    
+    // Look at the text following "commands" - typically a comma-separated list.
+    // We look ahead 100 characters or until a sentence boundary.
+    const searchStart = commandsWordIndex + 'commands'.length;
+    const searchEnd = Math.min(text.length, searchStart + 100);
+    
+    // Find sentence boundaries (period, question mark, exclamation).
+    const remainingText = text.slice(searchStart, searchEnd);
+    const sentenceEnd = remainingText.search(/[.!?]/);
+    const listText = sentenceEnd !== -1 
+      ? remainingText.slice(0, sentenceEnd) 
+      : remainingText;
+
+    // Search for each known command in the list portion.
+    for (const [commandName, command] of this.commands) {
+      if (alreadyMatched.has(commandName)) continue;
+
+      const nameIndex = listText.toLowerCase().indexOf(commandName);
+      if (nameIndex !== -1) {
+        // Verify word boundary.
+        if (this.isWordBoundary(listText.toLowerCase(), nameIndex, commandName)) {
+          foundCommands.push(command);
         }
       }
-      // Clean up extra whitespace
-      result.textWithoutCommandRefs = cleanText.replace(/\s+/g, ' ').trim();
     }
 
-    return result;
+    return foundCommands;
+  }
+
+  /**
+   * Check if a match at a given index represents a complete word.
+   * Returns true if the character before and after the match is a word boundary.
+   */
+  private isWordBoundary(text: string, index: number, word: string): boolean {
+    const beforeChar = index > 0 ? text[index - 1] : ' ';
+    const afterChar = index + word.length < text.length ? text[index + word.length] : ' ';
+    
+    // Word boundaries: whitespace, punctuation, or string boundary.
+    const boundaryPattern = /[\s,.:;!?'"()\[\]{}|<>\/\\-]/;
+    const isBeforeBoundary = index === 0 || boundaryPattern.test(beforeChar);
+    const isAfterBoundary = index + word.length === text.length || boundaryPattern.test(afterChar);
+    
+    return isBeforeBoundary && isAfterBoundary;
   }
 
   /**

@@ -16,6 +16,9 @@ export const CommandsIPCChannels = {
   // Command content
   GET_COMMAND_CONTENT: 'commands:getCommandContent',
   
+  // Direct invocation (from command launcher)
+  INVOKE_COMMAND: 'commands:invoke',
+  
   // Events
   COMMANDS_CHANGED: 'commands:commandsChanged',
   DIRECTORY_CHANGED: 'commands:directoryChanged',

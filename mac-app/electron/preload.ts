@@ -610,6 +610,7 @@ export interface ClipboardAPI {
   // Mobile sync operations - sync iOS transcriptions to clipboard history
   setSyncSession: (accessToken: string, refreshToken: string) => Promise<boolean>;
   clearSyncSession: () => Promise<boolean>;
+  getSyncSession: () => Promise<{ accessToken: string; refreshToken: string; expiresAt: number; user: { id: string; email: string } | null } | null>;
   syncMobileTranscripts: () => Promise<number>;
   forceSyncAll: () => Promise<number>;
   getSyncEnabled: () => Promise<boolean>;
@@ -1128,6 +1129,10 @@ const clipboardAPI: ClipboardAPI = {
 
   clearSyncSession: async (): Promise<boolean> => {
     return ipcRenderer.invoke('clipboard:clearSyncSession');
+  },
+
+  getSyncSession: async (): Promise<{ accessToken: string; refreshToken: string; expiresAt: number; user: { id: string; email: string } | null } | null> => {
+    return ipcRenderer.invoke('clipboard:getSyncSession');
   },
 
   syncMobileTranscripts: async (): Promise<number> => {
@@ -2073,6 +2078,32 @@ const commandsAPI = {
     ipcRenderer.on(CommandsIPCChannels.DIRECTORY_CHANGED, handler);
     return () => {
       ipcRenderer.removeListener(CommandsIPCChannels.DIRECTORY_CHANGED, handler);
+    };
+  },
+
+  // Command Launcher specific methods (Cmd+Shift+K popup)
+
+  // Invoke a command by name (paste file or reference to target app).
+  invokeCommand: async (commandName: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('commands:invoke', commandName);
+  },
+
+  // Resize the command launcher window.
+  launcherResize: (height: number): void => {
+    ipcRenderer.send('command-launcher:resize', height);
+  },
+
+  // Close the command launcher window.
+  launcherClose: (): void => {
+    ipcRenderer.send('command-launcher:close');
+  },
+
+  // Listen for reset events (when launcher is shown).
+  onLauncherReset: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('command-launcher:reset', handler);
+    return () => {
+      ipcRenderer.removeListener('command-launcher:reset', handler);
     };
   },
 };
