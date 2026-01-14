@@ -610,6 +610,7 @@ export interface ClipboardAPI {
   // Mobile sync operations - sync iOS transcriptions to clipboard history
   setSyncSession: (accessToken: string, refreshToken: string) => Promise<boolean>;
   clearSyncSession: () => Promise<boolean>;
+  getSyncSession: () => Promise<{ accessToken: string; refreshToken: string; expiresAt: number; user: { id: string; email: string } | null } | null>;
   syncMobileTranscripts: () => Promise<number>;
   forceSyncAll: () => Promise<number>;
   getSyncEnabled: () => Promise<boolean>;
@@ -1128,6 +1129,10 @@ const clipboardAPI: ClipboardAPI = {
 
   clearSyncSession: async (): Promise<boolean> => {
     return ipcRenderer.invoke('clipboard:clearSyncSession');
+  },
+
+  getSyncSession: async (): Promise<{ accessToken: string; refreshToken: string; expiresAt: number; user: { id: string; email: string } | null } | null> => {
+    return ipcRenderer.invoke('clipboard:getSyncSession');
   },
 
   syncMobileTranscripts: async (): Promise<number> => {

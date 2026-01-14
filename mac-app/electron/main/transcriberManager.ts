@@ -490,6 +490,13 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
+    // Block recording until onboarding is complete.
+    const onboardingComplete = this.preferences.getPreference('onboardingComplete');
+    if (!onboardingComplete) {
+      console.log('[TranscriberManager] Recording blocked - onboarding not complete');
+      return;
+    }
+
     // Check priority mic quota if a priority device is selected.
     if (this.quotaManager && this.audioManager) {
       const state = this.audioManager.getState();
@@ -811,8 +818,7 @@ export class TranscriberManager extends EventEmitter {
 
     try {
       console.log('[TranscriberManager] Cancelling recording (abandon hotkey pressed)');
-      // Play cancel sound to indicate recording was abandoned (user-configurable).
-      this.soundManager.play('recordingCancel');
+      // Note: Cancel sound removed to avoid audio feedback on abandoned recordings.
       await this.nativeHelper.cancelRecording();
       this.setStatus('idle');
       this.hasAudioContent = false;

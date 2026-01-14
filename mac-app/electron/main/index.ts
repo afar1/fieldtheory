@@ -32,7 +32,7 @@ import {
 import {
   VisionIPCChannels,
 } from './types/vision';
-import { ClipboardItem, isTerminalApp, obscureHomePath } from './clipboardManager';
+import { ClipboardItem, isTerminalApp, isIDEWithTerminal, obscureHomePath } from './clipboardManager';
 import { VisionModelManager, VisionModelSize } from './visionModelManager';
 import { VisionProcessor } from './visionProcessor';
 import { 
@@ -928,16 +928,22 @@ function showSettingsInClipboardWindow(): void {
  * Called from app 'activate' event handler.
  */
 function showClipboardHistoryOnActivate(): void {
+  // Don't show clipboard history if onboarding is not complete.
+  const prefs = preferencesManager?.get();
+  if (!prefs?.onboardingComplete) {
+    return;
+  }
+
   // Don't show clipboard history if the command launcher is visible.
   // This prevents both windows from opening when user triggers Cmd+Shift+K.
   if (commandLauncherWindow?.isVisible()) {
     return;
   }
-  
+
   if (!clipboardHistoryWindow) {
     clipboardHistoryWindow = initClipboardHistoryWindow();
   }
-  
+
   // Always show the clipboard window when app is activated (e.g., Dock icon click).
   const boundsToUse = restoreClipboardHistoryBounds();
   clipboardHistoryWindow.show(boundsToUse);
@@ -2317,6 +2323,33 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
+  // Get session from main process for recovery when renderer localStorage is cleared.
+  // This allows the renderer to recover auth state without re-login.
+  ipcMain.handle(ClipboardIPCChannels.GET_SYNC_SESSION, async () => {
+    if (!mobileSync) {
+      return null;
+    }
+    const session = mobileSync.getSession();
+    if (!session) {
+      return null;
+    }
+    // Only return tokens if session is not expired.
+    const now = Math.floor(Date.now() / 1000);
+    if (session.expires_at && session.expires_at <= now) {
+      console.log('[Main] getSyncSession: Session expired, not returning tokens');
+      return null;
+    }
+    return {
+      accessToken: session.access_token,
+      refreshToken: session.refresh_token,
+      expiresAt: session.expires_at,
+      user: session.user ? {
+        id: session.user.id,
+        email: session.user.email,
+      } : null,
+    };
+  });
+
   ipcMain.handle(ClipboardIPCChannels.SYNC_MOBILE_TRANSCRIPTS, async () => {
     if (!mobileSync) {
       return 0;
@@ -3020,9 +3053,12 @@ function setupClipboardIPCHandlers(): void {
       // Get the app that was active before the launcher opened.
       const targetApp = commandLauncherWindow?.getPreviousApp();
       const isTerminal = targetApp ? isTerminalApp(targetApp.bundleId) : false;
+      const isIDE = targetApp ? isIDEWithTerminal(targetApp.bundleId) : false;
 
-      if (isTerminal) {
-        // For terminals: paste a text reference with the file path below.
+      // Use text-based file path for terminals and IDEs with integrated terminals.
+      // IDEs like Cursor/VS Code work better with file paths that can be used in their terminals.
+      if (isTerminal || isIDE) {
+        // For terminals and IDEs: paste a text reference with the file path below.
         const referenceText = `[run this command: ${command.name}.md]\n${command.filePath}`;
         clipboard.writeText(referenceText);
         clipboardManager?.syncClipboardHash();
@@ -3042,7 +3078,7 @@ function setupClipboardIPCHandlers(): void {
 
       await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
 
-      console.log(`[CommandLauncher] Invoked command: ${command.name} (terminal: ${isTerminal})`);
+      console.log(`[CommandLauncher] Invoked command: ${command.name} (terminal: ${isTerminal}, ide: ${isIDE})`);
       return { success: true };
     } catch (error) {
       console.error('[CommandLauncher] Error invoking command:', error);
@@ -4342,6 +4378,12 @@ if (!gotTheLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
+    // If onboarding is not complete, focus the onboarding window instead.
+    const prefs = preferencesManager?.get();
+    if (!prefs?.onboardingComplete && onboardingWindow?.isVisible()) {
+      // Focus is handled by the onboarding window itself.
+      return;
+    }
     // Show clipboard history when user tries to launch app again
     showClipboardHistoryOnActivate();
   });
