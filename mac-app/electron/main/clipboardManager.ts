@@ -12,7 +12,7 @@ const execAsync = promisify(exec);
 /**
  * Terminal/CLI bundle IDs that don't support image pasting.
  * For these apps, we need to paste file paths instead of image buffers.
- * Note: VS Code/Cursor removed - their integrated terminals can render images inline.
+ * Note: VS Code/Cursor not included here - they can render images inline.
  */
 const TERMINAL_BUNDLE_IDS = new Set([
   'com.apple.Terminal',
@@ -28,11 +28,33 @@ const TERMINAL_BUNDLE_IDS = new Set([
 ]);
 
 /**
+ * IDEs with integrated terminals that should receive file paths as text
+ * when invoking commands. These apps have terminals that work better with
+ * text-based file references than clipboard file attachments.
+ */
+const IDE_WITH_TERMINAL_BUNDLE_IDS = new Set([
+  'com.todesktop.230313mzl4w4u92', // Cursor
+  'com.microsoft.VSCode',          // VS Code
+  'com.microsoft.VSCodeInsiders',  // VS Code Insiders
+  'dev.zed.Zed',                   // Zed
+  'dev.zed.Zed-Preview',           // Zed Preview
+]);
+
+/**
  * Check if a bundle ID belongs to a terminal/CLI application.
  */
 export function isTerminalApp(bundleId: string | null): boolean {
   if (!bundleId) return false;
   return TERMINAL_BUNDLE_IDS.has(bundleId);
+}
+
+/**
+ * Check if a bundle ID belongs to an IDE with an integrated terminal.
+ * These apps should receive file paths as text for command invocations.
+ */
+export function isIDEWithTerminal(bundleId: string | null): boolean {
+  if (!bundleId) return false;
+  return IDE_WITH_TERMINAL_BUNDLE_IDS.has(bundleId);
 }
 
 /**

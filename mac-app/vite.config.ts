@@ -22,6 +22,7 @@ export default defineConfig(({ mode }) => {
           overlay: path.resolve(__dirname, 'overlay.html'),
           clipboardHistory: path.resolve(__dirname, 'clipboard-history.html'),
           cursorStatus: path.resolve(__dirname, 'cursor-status.html'),
+          commandLauncher: path.resolve(__dirname, 'command-launcher.html'),
         },
       },
     },

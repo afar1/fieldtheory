@@ -75,6 +75,7 @@ export const ClipboardIPCChannels = {
   // Mobile sync operations
   SET_SYNC_SESSION: 'clipboard:setSyncSession',
   CLEAR_SYNC_SESSION: 'clipboard:clearSyncSession',
+  GET_SYNC_SESSION: 'clipboard:getSyncSession', // Recover session from main process
   SYNC_MOBILE_TRANSCRIPTS: 'clipboard:syncMobileTranscripts',
   FORCE_SYNC_ALL: 'clipboard:forceSyncAll',
   GET_SYNC_ENABLED: 'clipboard:getSyncEnabled',
