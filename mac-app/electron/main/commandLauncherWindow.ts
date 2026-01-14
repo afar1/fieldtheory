@@ -58,9 +58,9 @@ export class CommandLauncherWindow {
   private previousApp: RunningApp | null = null;
   
   // Window dimensions - starts small, expands for results.
-  private readonly WINDOW_WIDTH = 225;
+  private readonly WINDOW_WIDTH = 340;
   private readonly WINDOW_HEIGHT_COLLAPSED = 42;
-  private readonly WINDOW_HEIGHT_EXPANDED = 240;
+  private readonly WINDOW_HEIGHT_EXPANDED = 300;
   
   constructor() {
     // Listen for resize requests from renderer.
