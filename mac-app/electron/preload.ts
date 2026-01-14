@@ -641,7 +641,11 @@ export interface ClipboardAPI {
   // Show in Dock and Cmd+Tab
   getShowInDock?: () => Promise<boolean>;
   setShowInDock?: (show: boolean) => Promise<boolean>;
-  
+
+  // Launch at login
+  getLaunchAtLogin?: () => Promise<boolean>;
+  setLaunchAtLogin?: (enabled: boolean) => Promise<{ success: boolean; enabled: boolean }>;
+
   // Sounds enabled (master toggle)
   getSoundsEnabled?: () => Promise<boolean>;
   setSoundsEnabled?: (enabled: boolean) => Promise<boolean>;
@@ -1224,6 +1228,15 @@ const clipboardAPI: ClipboardAPI = {
   
   setShowInDock: async (show: boolean): Promise<boolean> => {
     return ipcRenderer.invoke('clipboard:setShowInDock', show);
+  },
+
+  // Launch at login.
+  getLaunchAtLogin: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:getLaunchAtLogin');
+  },
+
+  setLaunchAtLogin: async (enabled: boolean): Promise<{ success: boolean; enabled: boolean }> => {
+    return ipcRenderer.invoke('clipboard:setLaunchAtLogin', enabled);
   },
 
   // Sounds enabled (master toggle for all sounds).

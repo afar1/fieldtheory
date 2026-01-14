@@ -286,48 +286,58 @@ function CommandLauncher() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Load commands from the filesystem.
+  const loadCommands = useCallback(async () => {
+    try {
+      const cmds = await window.commandsAPI.getCommands();
+      setCommands(cmds || []);
+    } catch (err) {
+      console.error('[CommandLauncher] Failed to load commands:', err);
+    }
+  }, []);
+
+  // Load hotkeys from preferences.
+  const loadHotkeys = useCallback(async () => {
+    try {
+      const [clipboardHotkeys, transcriptionHotkey, tasksHotkey] = await Promise.all([
+        window.clipboardAPI?.getHotkeys?.() ?? {},
+        window.transcribeAPI?.getHotkey?.() ?? DEFAULT_HOTKEYS.transcription,
+        window.todoAPI?.getHotkey?.() ?? DEFAULT_HOTKEYS.tasks,
+      ]);
+
+      setHotkeys({
+        screenshot: clipboardHotkeys.screenshot || DEFAULT_HOTKEYS.screenshot,
+        fullScreen: clipboardHotkeys.fullScreen || DEFAULT_HOTKEYS.fullScreen,
+        activeWindow: clipboardHotkeys.activeWindow || DEFAULT_HOTKEYS.activeWindow,
+        history: clipboardHotkeys.history || DEFAULT_HOTKEYS.history,
+        transcription: transcriptionHotkey as string || DEFAULT_HOTKEYS.transcription,
+        tasks: tasksHotkey as string || DEFAULT_HOTKEYS.tasks,
+        superPaste: DEFAULT_HOTKEYS.superPaste,
+      });
+    } catch (err) {
+      console.error('[CommandLauncher] Failed to load hotkeys:', err);
+    }
+  }, []);
+
   // Load commands and hotkeys on mount.
   useEffect(() => {
-    // Load portable commands.
-    window.commandsAPI.getCommands().then((cmds: PortableCommandInfo[]) => {
-      setCommands(cmds || []);
-    });
-
-    // Load hotkeys.
-    async function loadHotkeys() {
-      try {
-        const [clipboardHotkeys, transcriptionHotkey, tasksHotkey] = await Promise.all([
-          window.clipboardAPI?.getHotkeys?.() ?? {},
-          window.transcribeAPI?.getHotkey?.() ?? DEFAULT_HOTKEYS.transcription,
-          window.todoAPI?.getHotkey?.() ?? DEFAULT_HOTKEYS.tasks,
-        ]);
-
-        setHotkeys({
-          screenshot: clipboardHotkeys.screenshot || DEFAULT_HOTKEYS.screenshot,
-          fullScreen: clipboardHotkeys.fullScreen || DEFAULT_HOTKEYS.fullScreen,
-          activeWindow: clipboardHotkeys.activeWindow || DEFAULT_HOTKEYS.activeWindow,
-          history: clipboardHotkeys.history || DEFAULT_HOTKEYS.history,
-          transcription: transcriptionHotkey as string || DEFAULT_HOTKEYS.transcription,
-          tasks: tasksHotkey as string || DEFAULT_HOTKEYS.tasks,
-          superPaste: DEFAULT_HOTKEYS.superPaste,
-        });
-      } catch (err) {
-        console.error('[CommandLauncher] Failed to load hotkeys:', err);
-      }
-    }
+    loadCommands();
     loadHotkeys();
 
     // Listen for reset events (when window is shown).
+    // Reload commands each time to pick up newly added commands without restart.
     const handleReset = () => {
       setQuery('');
       setFiltered([]);
       setSelectedIndex(0);
       inputRef.current?.focus();
+      // Reload commands to pick up any new ones added since last open.
+      loadCommands();
     };
 
     const unsubscribe = window.commandsAPI.onLauncherReset(handleReset);
     return () => unsubscribe();
-  }, []);
+  }, [loadCommands, loadHotkeys]);
 
   // Build all items (commands + actions).
   const allItems = useMemo(() => {

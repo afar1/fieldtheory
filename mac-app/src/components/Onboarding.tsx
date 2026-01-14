@@ -2,13 +2,14 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 
 // =============================================================================
-// Onboarding - 3-phase onboarding flow for Field Theory
+// Onboarding - 4-phase onboarding flow for Field Theory
 // Phase 1: Permissions (microphone, accessibility, screen recording)
 // Phase 2: Model (voice model selection and download)
 // Phase 3: Account (email sign-in required)
+// Phase 4: Shortcuts (keyboard shortcuts reference - no dot indicator)
 // =============================================================================
 
-type OnboardingPhase = 'permissions' | 'model' | 'account';
+type OnboardingPhase = 'permissions' | 'model' | 'account' | 'shortcuts';
 
 type PermissionStatus = {
   microphone: 'granted' | 'denied' | 'not-determined';
@@ -33,6 +34,21 @@ const MODELS: Record<ModelSize, ModelInfo> = {
 
 // Model selection order (natural size order: small to large).
 const MODEL_ORDER: ModelSize[] = ['small', 'medium', 'large'];
+
+// Phase to step number mapping for persistence.
+const PHASE_TO_STEP: Record<OnboardingPhase, number> = {
+  permissions: 0,
+  model: 1,
+  account: 2,
+  shortcuts: 3,
+};
+
+const STEP_TO_PHASE: Record<number, OnboardingPhase> = {
+  0: 'permissions',
+  1: 'model',
+  2: 'account',
+  3: 'shortcuts',
+};
 
 // =============================================================================
 // Phase 1: Permissions
@@ -83,7 +99,7 @@ function PermissionsPhase({
           granted={permissions.microphone === 'granted'}
           denied={permissions.microphone === 'denied'}
           onGrant={onRequestMicrophone}
-          grantButtonText="Allow"
+          grantButtonText={permissions.microphone === 'denied' ? 'Open Settings' : 'Allow'}
         />
 
         {/* Accessibility */}
@@ -102,6 +118,7 @@ function PermissionsPhase({
           granted={permissions.screenRecording}
           onGrant={onOpenScreenRecording}
           grantButtonText="Open Settings"
+          showRestartHint={!permissions.screenRecording}
         />
       </div>
 
@@ -110,14 +127,6 @@ function PermissionsPhase({
           All permissions granted
         </div>
       )}
-
-      {/* Shortcut hint */}
-      <div style={styles.shortcutHint}>
-        <span style={styles.shortcutLabel}>Open Field Theory anytime:</span>
-        <kbd style={styles.kbd}>Option</kbd>
-        <span style={styles.shortcutPlus}>+</span>
-        <kbd style={styles.kbd}>Space</kbd>
-      </div>
 
       <button
         style={{
@@ -141,9 +150,14 @@ interface PermissionRowProps {
   denied?: boolean;
   onGrant: () => void;
   grantButtonText?: string;
+  showRestartHint?: boolean;
 }
 
-function PermissionRow({ label, description, granted, denied, onGrant, grantButtonText = "Grant" }: PermissionRowProps) {
+function PermissionRow({ label, description, granted, denied, onGrant, grantButtonText = "Grant", showRestartHint }: PermissionRowProps) {
+  const handleRestart = () => {
+    window.electronAPI?.relaunch?.();
+  };
+
   return (
     <div style={styles.permissionRow}>
       <div style={styles.permissionCheck}>
@@ -159,8 +173,17 @@ function PermissionRow({ label, description, granted, denied, onGrant, grantButt
         </div>
         <div style={styles.permissionDescription}>{description}</div>
         {denied && (
-          <div style={styles.deniedText}>
-            Access denied. Please enable in System Settings.
+          <div style={styles.restartHint}>
+            Access denied. Enable in System Settings.
+          </div>
+        )}
+        {showRestartHint && (
+          <div style={styles.restartHint}>
+            May need to{' '}
+            <span style={styles.restartLink} onClick={handleRestart}>
+              restart app
+            </span>
+            {' '}to take effect.
           </div>
         )}
       </div>
@@ -348,6 +371,49 @@ function AccountPhase({ onFinish }: AccountPhaseProps) {
   const [isRequestingOtp, setIsRequestingOtp] = useState(false);
   const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isCheckingSession, setIsCheckingSession] = useState(true);
+  const [existingEmail, setExistingEmail] = useState<string | null>(null);
+  const [launchAtLogin, setLaunchAtLogin] = useState(true);
+  const [launchAtLoginError, setLaunchAtLoginError] = useState(false);
+
+  // Load launch at login setting on mount (checks actual system state).
+  useEffect(() => {
+    window.clipboardAPI?.getLaunchAtLogin?.().then((enabled) => {
+      setLaunchAtLogin(enabled);
+    });
+  }, []);
+
+  // Check if user is already logged in on mount.
+  useEffect(() => {
+    const checkSession = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user?.email) {
+          setExistingEmail(session.user.email);
+        }
+      } catch (err) {
+        console.error('[Onboarding] Failed to check session:', err);
+      } finally {
+        setIsCheckingSession(false);
+      }
+    };
+    checkSession();
+  }, []);
+
+  const handleLaunchAtLoginChange = async (checked: boolean) => {
+    setLaunchAtLogin(checked);
+    setLaunchAtLoginError(false);
+    const result = await window.clipboardAPI?.setLaunchAtLogin?.(checked);
+    if (result && !result.success) {
+      // Setting failed - update checkbox to actual state and show error
+      setLaunchAtLogin(result.enabled);
+      setLaunchAtLoginError(true);
+    }
+  };
+
+  const openLoginItemsSettings = () => {
+    window.electronAPI?.openExternal?.('x-apple.systempreferences:com.apple.LoginItems-Settings.extension');
+  };
 
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -403,6 +469,54 @@ function AccountPhase({ onFinish }: AccountPhaseProps) {
       setIsVerifyingOtp(false);
     }
   };
+
+  // Show loading state while checking session.
+  if (isCheckingSession) {
+    return (
+      <div style={styles.phase}>
+        <h1 style={styles.title}>Checking account...</h1>
+      </div>
+    );
+  }
+
+  // If already logged in, show confirmation and continue button.
+  if (existingEmail) {
+    return (
+      <div style={styles.phase}>
+        <h1 style={styles.title}>Welcome Back</h1>
+        <p style={styles.subtitle}>
+          You're signed in as {existingEmail}
+        </p>
+
+        <div style={{ marginTop: '20px' }}>
+          <label style={styles.launchAtLoginLabel}>
+            <input
+              type="checkbox"
+              checked={launchAtLogin}
+              onChange={(e) => handleLaunchAtLoginChange(e.target.checked)}
+              style={styles.launchAtLoginCheckbox}
+            />
+            Launch Field Theory on login
+          </label>
+          {launchAtLoginError && (
+            <div style={styles.launchAtLoginError}>
+              Enable in{' '}
+              <span style={styles.launchAtLoginLink} onClick={openLoginItemsSettings}>
+                System Settings
+              </span>
+            </div>
+          )}
+        </div>
+
+        <button
+          style={{ ...styles.primaryButton, marginTop: '16px' }}
+          onClick={onFinish}
+        >
+          Continue
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div style={styles.phase}>
@@ -477,7 +591,322 @@ function AccountPhase({ onFinish }: AccountPhaseProps) {
             {error}
           </div>
         )}
+
+        {!otpSent && (
+          <div style={{ marginTop: '16px' }}>
+            <label style={styles.launchAtLoginLabel}>
+              <input
+                type="checkbox"
+                checked={launchAtLogin}
+                onChange={(e) => handleLaunchAtLoginChange(e.target.checked)}
+                style={styles.launchAtLoginCheckbox}
+              />
+              Launch Field Theory on login
+            </label>
+            {launchAtLoginError && (
+              <div style={styles.launchAtLoginError}>
+                Enable in{' '}
+                <span style={styles.launchAtLoginLink} onClick={openLoginItemsSettings}>
+                  System Settings
+                </span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// Phase 4: Shortcuts (final screen - practice keyboard shortcuts)
+// =============================================================================
+
+interface ShortcutsPhaseProps {
+  onFinish: () => void;
+}
+
+interface ShortcutDef {
+  id: string;
+  label: string;
+  keys: string[];
+  match: (e: KeyboardEvent) => boolean;
+}
+
+// Parse a hotkey string like "Command+Shift+4" into display keys and a match function.
+function parseHotkey(hotkeyStr: string): { keys: string[]; match: (e: KeyboardEvent) => boolean } {
+  const parts = hotkeyStr.split('+').map(p => p.trim());
+  const displayKeys: string[] = [];
+
+  let needsMeta = false;
+  let needsAlt = false;
+  let needsShift = false;
+  let needsCtrl = false;
+  let mainKey = '';
+
+  for (const part of parts) {
+    const lower = part.toLowerCase();
+    if (lower === 'command' || lower === 'cmd' || lower === '⌘') {
+      needsMeta = true;
+      displayKeys.push('⌘');
+    } else if (lower === 'alt' || lower === 'option') {
+      needsAlt = true;
+      displayKeys.push('Option');
+    } else if (lower === 'shift') {
+      needsShift = true;
+      displayKeys.push('Shift');
+    } else if (lower === 'ctrl' || lower === 'control') {
+      needsCtrl = true;
+      displayKeys.push('Ctrl');
+    } else {
+      // Main key
+      mainKey = lower;
+      // Display the key nicely
+      if (lower === 'space') {
+        displayKeys.push('Space');
+      } else if (lower === 'escape' || lower === 'esc') {
+        displayKeys.push('Esc');
+      } else if (lower === '\\') {
+        displayKeys.push('\\');
+      } else {
+        displayKeys.push(part.toUpperCase());
+      }
+    }
+  }
+
+  // Build match function
+  const match = (e: KeyboardEvent): boolean => {
+    if (needsMeta !== e.metaKey) return false;
+    if (needsAlt !== e.altKey) return false;
+    if (needsShift !== e.shiftKey) return false;
+    if (needsCtrl !== e.ctrlKey) return false;
+
+    // Check the main key
+    if (mainKey === 'space') return e.code === 'Space';
+    if (mainKey === 'escape' || mainKey === 'esc') return e.code === 'Escape';
+    if (mainKey === '\\') return e.code === 'Backslash';
+    if (/^[0-9]$/.test(mainKey)) return e.code === `Digit${mainKey}`;
+    if (/^[a-z]$/.test(mainKey)) return e.code === `Key${mainKey.toUpperCase()}`;
+    if (/^f[0-9]+$/.test(mainKey)) return e.code === mainKey.toUpperCase();
+
+    return false;
+  };
+
+  return { keys: displayKeys, match };
+}
+
+// Default shortcuts (used as fallback).
+const DEFAULT_SHORTCUTS: ShortcutDef[] = [
+  {
+    id: 'transcription',
+    label: 'Start / End transcription',
+    keys: ['Option', 'Shift', 'Space'],
+    match: (e: KeyboardEvent) => e.altKey && e.shiftKey && e.code === 'Space',
+  },
+  {
+    id: 'screenshot',
+    label: 'Take screenshot',
+    keys: ['⌘', '4'],
+    match: (e: KeyboardEvent) => e.metaKey && !e.shiftKey && e.code === 'Digit4',
+  },
+  {
+    id: 'commandLauncher',
+    label: 'Open command launcher',
+    keys: ['⌘', 'Shift', 'K'],
+    match: (e: KeyboardEvent) => e.metaKey && e.shiftKey && e.code === 'KeyK',
+  },
+  {
+    id: 'openApp',
+    label: 'Open Field Theory',
+    keys: ['Option', 'Space'],
+    match: (e: KeyboardEvent) => e.altKey && !e.shiftKey && e.code === 'Space',
+  },
+];
+
+function ShortcutsPhase({ onFinish }: ShortcutsPhaseProps) {
+  const [completedCount, setCompletedCount] = useState(0);
+  const [hasCompletedOnce, setHasCompletedOnce] = useState(false);
+  const [shortcuts, setShortcuts] = useState<ShortcutDef[]>(DEFAULT_SHORTCUTS);
+
+  // Load user's actual hotkey preferences on mount.
+  useEffect(() => {
+    const loadHotkeys = async () => {
+      try {
+        const [transcriptionHotkey, clipboardHotkeys] = await Promise.all([
+          window.transcribeAPI?.getHotkey?.(),
+          window.clipboardAPI?.getHotkeys?.(),
+        ]);
+
+        const newShortcuts: ShortcutDef[] = [];
+
+        // Transcription hotkey
+        if (transcriptionHotkey) {
+          const parsed = parseHotkey(transcriptionHotkey);
+          newShortcuts.push({
+            id: 'transcription',
+            label: 'Start / End transcription',
+            ...parsed,
+          });
+        } else {
+          newShortcuts.push(DEFAULT_SHORTCUTS[0]);
+        }
+
+        // Screenshot hotkey
+        if (clipboardHotkeys?.screenshot) {
+          const parsed = parseHotkey(clipboardHotkeys.screenshot);
+          newShortcuts.push({
+            id: 'screenshot',
+            label: 'Take screenshot',
+            ...parsed,
+          });
+        } else {
+          newShortcuts.push(DEFAULT_SHORTCUTS[1]);
+        }
+
+        // Command launcher (hardcoded, not configurable)
+        newShortcuts.push(DEFAULT_SHORTCUTS[2]);
+
+        // Open Field Theory (clipboard history hotkey)
+        if (clipboardHotkeys?.history) {
+          const parsed = parseHotkey(clipboardHotkeys.history);
+          newShortcuts.push({
+            id: 'openApp',
+            label: 'Open Field Theory',
+            ...parsed,
+          });
+        } else {
+          newShortcuts.push(DEFAULT_SHORTCUTS[3]);
+        }
+
+        setShortcuts(newShortcuts);
+      } catch (err) {
+        console.error('[Onboarding] Failed to load hotkeys:', err);
+        // Keep default shortcuts on error
+      }
+    };
+
+    loadHotkeys();
+  }, []);
+
+  // Listen for keyboard shortcuts.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (completedCount >= shortcuts.length) return;
+
+      const currentShortcut = shortcuts[completedCount];
+      if (currentShortcut.match(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        const newCount = completedCount + 1;
+        setCompletedCount(newCount);
+        if (newCount >= shortcuts.length) {
+          setHasCompletedOnce(true);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [completedCount, shortcuts]);
+
+  const allComplete = completedCount >= shortcuts.length;
+
+  return (
+    <div style={styles.phase}>
+      <h1 style={styles.title}>Practice these shortcuts</h1>
+      <p style={styles.subtitle}>
+        Press each shortcut to continue
+      </p>
+
+      <div style={{ ...styles.shortcutsList, gap: '2px' }}>
+        {shortcuts.map((shortcut, index) => {
+          const isCompleted = index < completedCount;
+          const isCurrent = index === completedCount;
+
+          return (
+            <div
+              key={shortcut.id}
+              style={{
+                ...styles.shortcutRow,
+                backgroundColor: isCompleted ? 'rgba(34, 197, 94, 0.1)' : isCurrent ? 'rgba(59, 130, 246, 0.1)' : 'transparent',
+                borderRadius: '6px',
+                padding: '8px 10px',
+                margin: '0 -10px',
+                transition: 'background-color 0.2s ease',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{
+                  width: '20px',
+                  height: '20px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '13px',
+                  color: isCompleted ? '#22c55e' : isCurrent ? '#3b82f6' : '#9ca3af',
+                }}>
+                  {isCompleted ? '✓' : isCurrent ? '→' : '○'}
+                </span>
+                <span style={{
+                  ...styles.shortcutAction,
+                  fontSize: '13px',
+                  color: isCompleted ? '#22c55e' : isCurrent ? '#111827' : '#9ca3af',
+                  fontWeight: isCurrent ? 600 : 400,
+                }}>
+                  {shortcut.label}
+                </span>
+              </div>
+              <div style={styles.shortcutKeys}>
+                {shortcut.keys.map((key, keyIndex) => (
+                  <span key={keyIndex} style={{ display: 'flex', alignItems: 'center' }}>
+                    {keyIndex > 0 && <span style={{ ...styles.shortcutPlus, fontSize: '11px' }}>+</span>}
+                    <kbd style={{
+                      ...styles.kbd,
+                      fontSize: '11px',
+                      padding: '2px 6px',
+                      backgroundColor: isCompleted ? '#dcfce7' : isCurrent ? '#dbeafe' : '#f3f4f6',
+                      color: isCompleted ? '#16a34a' : isCurrent ? '#2563eb' : '#6b7280',
+                      borderColor: isCompleted ? '#bbf7d0' : isCurrent ? '#bfdbfe' : '#e5e7eb',
+                    }}>
+                      {key}
+                    </kbd>
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+        {allComplete && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '2px' }}>
+            <button
+              onClick={() => setCompletedCount(0)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#9ca3af',
+                fontSize: '10px',
+                cursor: 'pointer',
+                padding: '2px 6px',
+              }}
+            >
+              practice again
+            </button>
+          </div>
+        )}
+      </div>
+
+      <button
+        style={{
+          ...styles.primaryButton,
+          marginTop: '16px',
+          opacity: hasCompletedOnce ? 1 : 0.5,
+          cursor: hasCompletedOnce ? 'pointer' : 'not-allowed',
+        }}
+        onClick={onFinish}
+        disabled={!hasCompletedOnce}
+      >
+        Get Started
+      </button>
     </div>
   );
 }
@@ -513,21 +942,48 @@ export default function Onboarding() {
       }
 
       try {
+        // Read initial step from URL params (set by main process).
+        // With hash routing, params are in the hash: #/onboarding?step=2
+        const hash = window.location.hash;
+        const queryIndex = hash.indexOf('?');
+        if (queryIndex !== -1) {
+          const queryString = hash.slice(queryIndex + 1);
+          const urlParams = new URLSearchParams(queryString);
+          const stepParam = urlParams.get('step');
+          if (stepParam) {
+            const stepNum = parseInt(stepParam, 10);
+            const initialPhase = STEP_TO_PHASE[stepNum];
+            if (initialPhase) {
+              setPhase(initialPhase);
+            }
+          }
+        }
+
         const state = await window.onboardingAPI.getState();
         setPermissions(state.permissions);
-        
+
         // Load current hotkeys, selected model, and download status for all models.
         if (window.transcribeAPI) {
           // Load the currently selected model.
-          const currentModel = await window.transcribeAPI.getSelectedModel();
-          if (currentModel && ['small', 'medium', 'large'].includes(currentModel)) {
-            setSelectedModel(currentModel as ModelSize);
-          }
-          
+          let currentModel = await window.transcribeAPI.getSelectedModel();
+
           // Load download status for all models.
           const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
           setModelDownloadStatus(downloadStatus);
-          
+
+          // If the current model isn't downloaded but another model is, auto-select a downloaded model.
+          if (currentModel && !downloadStatus[currentModel]) {
+            const downloadedModel = MODEL_ORDER.find(m => downloadStatus[m]);
+            if (downloadedModel) {
+              currentModel = downloadedModel;
+              await window.transcribeAPI.setSelectedModel(downloadedModel);
+            }
+          }
+
+          if (currentModel && ['small', 'medium', 'large'].includes(currentModel)) {
+            setSelectedModel(currentModel as ModelSize);
+          }
+
           // Check if a download is already in progress.
           const downloadingModels = await window.transcribeAPI.getDownloadingModels?.() ?? [];
           if (downloadingModels.length > 0) {
@@ -649,9 +1105,19 @@ export default function Onboarding() {
     await window.transcribeAPI.setSelectedModel(model);
   }, []);
 
-  // Phase navigation.
-  const goToModel = useCallback(() => setPhase('model'), []);
-  const goToAccount = useCallback(() => setPhase('account'), []);
+  // Phase navigation - saves step to preferences for resume on restart.
+  const goToModel = useCallback(async () => {
+    setPhase('model');
+    await window.onboardingAPI?.setStep?.(PHASE_TO_STEP.model);
+  }, []);
+  const goToAccount = useCallback(async () => {
+    setPhase('account');
+    await window.onboardingAPI?.setStep?.(PHASE_TO_STEP.account);
+  }, []);
+  const goToShortcuts = useCallback(async () => {
+    setPhase('shortcuts');
+    await window.onboardingAPI?.setStep?.(PHASE_TO_STEP.shortcuts);
+  }, []);
 
   // Complete onboarding.
   const finish = useCallback(async () => {
@@ -706,7 +1172,12 @@ export default function Onboarding() {
 
       case 'account':
         return (
-          <AccountPhase onFinish={finish} />
+          <AccountPhase onFinish={goToShortcuts} />
+        );
+
+      case 'shortcuts':
+        return (
+          <ShortcutsPhase onFinish={finish} />
         );
     }
   };
@@ -731,30 +1202,35 @@ interface PhaseIndicatorProps {
 }
 
 function PhaseIndicator({ current, onGoToPhase }: PhaseIndicatorProps) {
-  const phases: OnboardingPhase[] = ['permissions', 'model', 'account'];
-  const currentIndex = phases.indexOf(current);
+  const allPhases: OnboardingPhase[] = ['permissions', 'model', 'account', 'shortcuts'];
+  const currentIndex = allPhases.indexOf(current);
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
   return (
     <div style={styles.phaseIndicator}>
-      {phases.map((p, i) => {
-        // Can click on completed phases (before current) to go back.
+      {allPhases.map((p, i) => {
+        // Can only click on completed phases (before current) to go back.
         const canClick = i < currentIndex;
+        const isCurrentOrPast = i <= currentIndex;
+        // When hovering a clickable dot, only that dot stays filled
+        const isFilled = hoveredIndex !== null && canClick
+          ? i === hoveredIndex
+          : isCurrentOrPast;
         return (
           <div
             key={p}
             onClick={canClick ? () => onGoToPhase(p) : undefined}
             style={{
               ...styles.phaseDot,
-              backgroundColor: i <= currentIndex ? '#14372A' : '#d1d5db',
+              backgroundColor: isFilled ? '#14372A' : '#d1d5db',
               cursor: canClick ? 'pointer' : 'default',
-              transition: 'transform 0.15s ease',
-              transform: canClick ? 'scale(1)' : 'scale(1)',
+              transition: 'background-color 0.15s ease',
             }}
-            onMouseEnter={(e) => {
-              if (canClick) e.currentTarget.style.transform = 'scale(1.3)';
+            onMouseEnter={() => {
+              if (canClick) setHoveredIndex(i);
             }}
-            onMouseLeave={(e) => {
-              if (canClick) e.currentTarget.style.transform = 'scale(1)';
+            onMouseLeave={() => {
+              setHoveredIndex(null);
             }}
           />
         );
@@ -859,10 +1335,15 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#6b7280',
     marginTop: '2px',
   },
-  deniedText: {
-    fontSize: '11px',
-    color: '#dc2626',
-    marginTop: '2px',
+  restartHint: {
+    fontSize: '10px',
+    color: '#9ca3af',
+    marginTop: '4px',
+  },
+  restartLink: {
+    color: '#3b82f6',
+    cursor: 'pointer',
+    textDecoration: 'underline',
   },
   instructionsText: {
     fontSize: '11px',
@@ -910,6 +1391,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     gap: '2px',
     flex: 1,
+    textAlign: 'left',
   },
   modelCardHeader: {
     display: 'flex',
@@ -1005,7 +1487,7 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: 'center',
   },
 
-  // Shortcut hint.
+  // Shortcut hint (used on permissions phase).
   shortcutHint: {
     display: 'flex',
     alignItems: 'center',
@@ -1034,6 +1516,34 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: '4px',
     boxShadow: '0 1px 0 #d1d5db',
     fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+  },
+
+  // Shortcuts list (used on final shortcuts phase).
+  shortcutsList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+    width: '100%',
+    marginBottom: '20px',
+  },
+  shortcutRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '10px 14px',
+    backgroundColor: '#ffffff',
+    border: '1px solid #e5e7eb',
+    borderRadius: '8px',
+  },
+  shortcutAction: {
+    fontSize: '13px',
+    fontWeight: 500,
+    color: '#1a1a1a',
+  },
+  shortcutKeys: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
   },
 
   // Primary button.
@@ -1122,5 +1632,33 @@ const styles: Record<string, React.CSSProperties> = {
     height: '6px',
     borderRadius: '50%',
     transition: 'background-color 0.2s',
+  },
+
+  // Launch at login checkbox (subtle, account phase).
+  launchAtLoginLabel: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    marginTop: '20px',
+    fontSize: '11px',
+    color: '#9ca3af',
+    cursor: 'pointer',
+  },
+  launchAtLoginCheckbox: {
+    width: '12px',
+    height: '12px',
+    cursor: 'pointer',
+    accentColor: '#9ca3af',
+  },
+  launchAtLoginError: {
+    fontSize: '10px',
+    color: '#9ca3af',
+    marginTop: '4px',
+    marginLeft: '18px',
+  },
+  launchAtLoginLink: {
+    color: '#3b82f6',
+    cursor: 'pointer',
+    textDecoration: 'underline',
   },
 };

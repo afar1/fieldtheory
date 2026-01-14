@@ -130,7 +130,10 @@ interface Preferences {
   
   // Show in Dock and Cmd+Tab - when enabled, app appears in Dock and application switcher.
   showInDock?: boolean;
-  
+
+  // Launch at login - start Field Theory automatically when macOS starts.
+  launchAtLogin?: boolean;
+
   // Portable Commands - directory path where user's command markdown files are stored.
   // Can point to Claude skills, Cursor rules, or any directory with .md files.
   commandsDirectory?: string;
