@@ -15,7 +15,6 @@ import DataPolicyNotice from './DataPolicyNotice';
 import ReleaseNotesPopup from './ReleaseNotesPopup';
 import type { SketchViewHandle } from './SketchView';
 import { FEATURE_HOT_MIC_ENABLED, FEATURE_IMPROVE_ENABLED, FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED } from '../featureFlags';
-import { useLauncherActions, matchActions, type LauncherAction, type LauncherActionId } from '../utils/launcherActions';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
 const SketchView = React.lazy(() => import('./SketchView'));
@@ -1135,9 +1134,6 @@ export default function ClipboardHistory() {
   const [pendingItemSelection, setPendingItemSelection] = useState<number | null>(null);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
 
-  // Command launcher state - Cmd+K style launcher for core actions.
-  const [launcherSelectedIndex, setLauncherSelectedIndex] = useState(0);
-  
   // DM modal state - for sending DMs to contacts.
   const [showDMModal, setShowDMModal] = useState(false);
   const [dmRecipientQuery, setDmRecipientQuery] = useState('');
@@ -1155,65 +1151,6 @@ export default function ClipboardHistory() {
     activationConstraint: { distance: 5 },
   }), []);
   const sensors = useSensors(useSensor(PointerSensor, pointerSensorOptions));
-
-  // Command launcher hook - provides core actions with live hotkey values.
-  const handleLauncherAction = useCallback((actionId: LauncherActionId) => {
-    // Handle actions that need to be executed via state changes.
-    switch (actionId) {
-      case 'settings':
-        setShowSettings(true);
-        setSearchQuery('');
-        break;
-      case 'field-theory':
-        // Already in Field Theory - just switch to clipboard view.
-        setViewMode('clipboard');
-        setSearchQuery('');
-        break;
-      case 'toggle-tasks':
-        setViewMode('todo');
-        setSearchQuery('');
-        break;
-      case 'open-history':
-        setViewMode('clipboard');
-        setSearchQuery('');
-        break;
-      case 'full-screen-screenshot':
-      case 'active-window-screenshot':
-      case 'super-paste':
-        // These are global hotkeys - just clear the search.
-        // They're triggered via keyboard shortcuts from main process.
-        setSearchQuery('');
-        break;
-      default:
-        setSearchQuery('');
-        break;
-    }
-    setLauncherSelectedIndex(0);
-  }, []);
-
-  const { actions: launcherActions } = useLauncherActions(handleLauncherAction);
-
-  // Compute matched launcher actions based on current search query.
-  const matchedLauncherActions = useMemo(() => {
-    // If query is "?" show all actions.
-    if (searchQuery.trim() === '?') {
-      return launcherActions;
-    }
-    // If query starts with "/" it's a command search, not action search.
-    if (searchQuery.startsWith('/')) {
-      return [];
-    }
-    // Match against search query.
-    return matchActions(launcherActions, searchQuery);
-  }, [launcherActions, searchQuery]);
-
-  // Whether the launcher is active (showing actions).
-  const launcherActive = matchedLauncherActions.length > 0 && viewMode === 'clipboard' && !showSettings;
-
-  // Reset launcher selection when matched actions change.
-  useEffect(() => {
-    setLauncherSelectedIndex(0);
-  }, [matchedLauncherActions.length]);
 
   // Format numbers with commas (e.g., 16,000)
   const formatNumber = (num: number): string => num.toLocaleString();
@@ -2377,13 +2314,6 @@ export default function ClipboardHistory() {
           setShowShortcutsModal(false);
           return;
         }
-        // If launcher is active (showing results), clear search to dismiss it.
-        if (launcherActive) {
-          e.preventDefault();
-          setSearchQuery('');
-          setLauncherSelectedIndex(0);
-          return;
-        }
         // If search input is focused, blur it and select first item instead of closing
         if (document.activeElement === inputRef.current) {
           e.preventDefault();
@@ -2400,31 +2330,6 @@ export default function ClipboardHistory() {
         }
         window.clipboardAPI?.closeWindow();
         return;
-      }
-
-      // Command Launcher Navigation - intercept arrow keys and Enter when launcher is active.
-      if (launcherActive) {
-        if (key === 'ArrowDown' || (key === 'j' && !hasMeta && !hasCtrl && !hasAlt)) {
-          e.preventDefault();
-          setLauncherSelectedIndex(prev => 
-            Math.min(prev + 1, matchedLauncherActions.length - 1)
-          );
-          return;
-        }
-        if (key === 'ArrowUp' || (key === 'k' && !hasMeta && !hasCtrl && !hasAlt)) {
-          e.preventDefault();
-          setLauncherSelectedIndex(prev => Math.max(prev - 1, 0));
-          return;
-        }
-        if (key === 'Enter') {
-          e.preventDefault();
-          const selectedAction = matchedLauncherActions[launcherSelectedIndex];
-          if (selectedAction) {
-            selectedAction.execute();
-            handleLauncherAction(selectedAction.id);
-          }
-          return;
-        }
       }
 
       // J/ArrowDown - Move selection down (Gmail-style)
@@ -4283,89 +4188,10 @@ export default function ClipboardHistory() {
                 color: theme.textSecondary,
                 fontSize: '11px',
               }}>
-                <span>Type a command. <span style={{ opacity: 0.6 }}>? to expand</span></span>
+                <span>search...</span>
               </div>
             )}
           </div>
-          
-          {/* Command Launcher Results - Shows when typing matches actions or when ? is typed */}
-          {launcherActive && (
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                marginBottom: '8px',
-                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-                borderRadius: '8px',
-                border: `1px solid ${theme.border}`,
-                overflow: 'hidden',
-              }}
-            >
-              {/* Section header for actions */}
-              <div style={{
-                padding: '6px 12px 4px 12px',
-                fontSize: '10px',
-                fontWeight: 600,
-                color: theme.textSecondary,
-                textTransform: 'uppercase',
-                letterSpacing: '0.5px',
-                borderBottom: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}`,
-              }}>
-                Actions
-              </div>
-              
-              {/* Action list */}
-              {matchedLauncherActions.map((action, idx) => (
-                <div
-                  key={action.id}
-                  onClick={() => {
-                    action.execute();
-                    handleLauncherAction(action.id);
-                  }}
-                  onMouseEnter={() => setLauncherSelectedIndex(idx)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '8px 12px',
-                    cursor: 'pointer',
-                    backgroundColor: idx === launcherSelectedIndex 
-                      ? (theme.isDark ? 'rgba(59, 130, 246, 0.2)' : 'rgba(59, 130, 246, 0.1)')
-                      : 'transparent',
-                    transition: 'background-color 0.1s ease',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ fontSize: '14px' }}>{action.icon}</span>
-                    <span style={{ fontSize: '12px', color: theme.text }}>{action.name}</span>
-                  </div>
-                  <span style={{ 
-                    fontSize: '10px', 
-                    color: theme.textSecondary,
-                    fontFamily: 'system-ui, -apple-system, sans-serif',
-                    letterSpacing: '0.5px',
-                  }}>
-                    {action.hotkeyDisplay}
-                  </span>
-                </div>
-              ))}
-              
-              {/* Hint at bottom */}
-              <div style={{
-                padding: '4px 12px 6px 12px',
-                fontSize: '10px',
-                color: theme.textSecondary,
-                borderTop: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)'}`,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-              }}>
-                <span>↑↓ navigate</span>
-                <span>↵ select</span>
-                <span>esc close</span>
-              </div>
-            </div>
-          )}
           
           {/* Selection actions bar - slides in when active */}
           <div
