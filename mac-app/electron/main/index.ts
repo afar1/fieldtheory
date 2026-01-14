@@ -41,6 +41,7 @@ import {
   setCustomSystemPrompt,
   getActiveSystemPrompt,
   loadDefaultSystemPrompt,
+  improveTranscript,
 } from './promptEngineer';
 import { OnboardingWindow, OnboardingStep } from './onboardingWindow';
 import { OnboardingIPCChannels } from './types/onboarding';
@@ -50,6 +51,7 @@ import { QuotaManager } from './quotaManager';
 import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, PortableCommand } from './commandsManager';
 import { CommandsIPCChannels } from './types/commands';
+import { CommandLauncherWindow } from './commandLauncherWindow';
 
 // Load environment variables from .env.local for Supabase credentials.
 // In development, the file is in the mac-app directory.
@@ -149,6 +151,7 @@ let cursorStatusManager: CursorStatusManager | null = null;
 let quotaManager: QuotaManager | null = null;
 let diagnosticsCollector: DiagnosticsCollector | null = null;
 let commandsManager: CommandsManager | null = null;
+let commandLauncherWindow: CommandLauncherWindow | null = null;
 
 // Track pending update state so windows can query it when they open.
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
@@ -482,7 +485,126 @@ function registerHotkeysAfterOnboarding(): void {
     console.error('[Main] Failed to register auto-improve toggle hotkey:', err);
   }
 
+  // Register Cmd+Shift+K (Command Launcher / Clipboard History Toggle)
+  // Cycles between: command launcher → clipboard history → command launcher
+  const commandLauncherHotkey = 'Command+Shift+K';
+  try {
+    globalShortcut.register(commandLauncherHotkey, async () => {
+      console.log('[Main] Command launcher toggle triggered');
+      
+      const clipboardVisible = clipboardHistoryWindow?.isVisible() ?? false;
+      const launcherVisible = commandLauncherWindow?.isVisible() ?? false;
+      
+      if (clipboardVisible) {
+        // Clipboard history is visible → close it, open command launcher
+        clipboardHistoryWindow?.hide();
+        if (commandLauncherWindow) {
+          await commandLauncherWindow.show();
+        }
+      } else if (launcherVisible) {
+        // Command launcher is visible → close it, open clipboard history
+        commandLauncherWindow?.hide();
+        if (!clipboardHistoryWindow) {
+          clipboardHistoryWindow = initClipboardHistoryWindow();
+        }
+        const boundsToUse = restoreClipboardHistoryBounds();
+        clipboardHistoryWindow.show(boundsToUse);
+      } else {
+        // Neither visible → open command launcher
+        if (commandLauncherWindow) {
+          await commandLauncherWindow.show();
+        }
+      }
+    });
+    console.log(`[Main] Registered command launcher hotkey: ${commandLauncherHotkey}`);
+  } catch (err) {
+    console.error('[Main] Failed to register command launcher hotkey:', err);
+  }
+
+  // Register Cmd+Shift+I (Improve Selected Text)
+  const improveTextHotkey = 'Command+Shift+I';
+  try {
+    globalShortcut.register(improveTextHotkey, async () => {
+      console.log('[Main] Improve text triggered');
+      await handleImproveSelectedText();
+    });
+    console.log(`[Main] Registered improve text hotkey: ${improveTextHotkey}`);
+  } catch (err) {
+    console.error('[Main] Failed to register improve text hotkey:', err);
+  }
+
   console.log('[Main] Hotkeys registered successfully');
+}
+
+/**
+ * Handle Cmd+Shift+I to improve selected text.
+ * 
+ * Flow:
+ * 1. Simulate Cmd+C to copy selected text (selection stays highlighted)
+ * 2. If nothing selected, abort silently
+ * 3. Show blue dot (improving state)
+ * 4. Call improveTranscript API
+ * 5. Paste improved text (replaces selection)
+ * 6. Show green dot (done state)
+ */
+async function handleImproveSelectedText(): Promise<void> {
+  const { exec } = require('child_process');
+  const { promisify } = require('util');
+  const execAsync = promisify(exec);
+
+  try {
+    // Simulate Cmd+C to copy selected text. The selection stays highlighted
+    // so when we paste, it will replace the selected text.
+    await execAsync('osascript -e \'tell application "System Events" to keystroke "c" using command down\'');
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Read clipboard to get the selected text.
+    const selectedText = clipboard.readText();
+
+    // If nothing selected, abort silently.
+    if (!selectedText || selectedText.trim().length === 0) {
+      console.log('[ImproveText] No text selected, aborting');
+      return;
+    }
+
+    // Show blue dot (improving state).
+    cursorStatusManager?.setState('improving');
+
+    // Get API key.
+    const apiKey = preferencesManager?.getApiKey();
+    if (!apiKey) {
+      console.error('[ImproveText] No API key configured');
+      cursorStatusManager?.setState('idle');
+      return;
+    }
+
+    // Call improve API.
+    setEngineerApiKey(apiKey);
+    const result = await improveTranscript(selectedText);
+
+    if (!result.success || !result.refinedPrompt) {
+      console.error('[ImproveText] Improvement failed:', result.error);
+      cursorStatusManager?.setState('idle');
+      return;
+    }
+
+    // Paste improved text. Since the original text is still selected,
+    // this will replace it with the improved version.
+    clipboard.writeText(result.refinedPrompt);
+    clipboardManager?.syncClipboardHash();
+    await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+
+    // Show done state briefly.
+    cursorStatusManager?.setState('done');
+
+    // Track quota usage.
+    await quotaManager?.incrementTextImprove();
+
+    console.log('[ImproveText] Text improved and pasted successfully');
+  } catch (error) {
+    console.error('[ImproveText] Error:', error);
+    cursorStatusManager?.setState('idle');
+  }
 }
 
 /**
@@ -806,6 +928,12 @@ function showSettingsInClipboardWindow(): void {
  * Called from app 'activate' event handler.
  */
 function showClipboardHistoryOnActivate(): void {
+  // Don't show clipboard history if the command launcher is visible.
+  // This prevents both windows from opening when user triggers Cmd+Shift+K.
+  if (commandLauncherWindow?.isVisible()) {
+    return;
+  }
+  
   if (!clipboardHistoryWindow) {
     clipboardHistoryWindow = initClipboardHistoryWindow();
   }
@@ -2871,6 +2999,57 @@ function setupClipboardIPCHandlers(): void {
     return { content: loaded.content, filePath: loaded.filePath };
   });
 
+  // Handle direct command invocation from command launcher (Cmd+Shift+K).
+  // Gets the command, determines if target is terminal, and pastes appropriately.
+  ipcMain.handle('commands:invoke', async (_event, commandName: string) => {
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
+    const plist = require('plist');
+
+    if (!commandsManager) {
+      return { success: false, error: 'Not initialized' };
+    }
+
+    const command = commandsManager.getCommand(commandName);
+    if (!command) {
+      return { success: false, error: 'Command not found' };
+    }
+
+    try {
+      // Get the app that was active before the launcher opened.
+      const targetApp = commandLauncherWindow?.getPreviousApp();
+      const isTerminal = targetApp ? isTerminalApp(targetApp.bundleId) : false;
+
+      if (isTerminal) {
+        // For terminals: paste a text reference with the file path below.
+        const referenceText = `[run this command: ${command.name}.md]\n${command.filePath}`;
+        clipboard.writeText(referenceText);
+        clipboardManager?.syncClipboardHash();
+      } else {
+        // For other apps: paste the .md file as an attachment.
+        const filePaths = [command.filePath];
+        const plistData = plist.build(filePaths);
+        clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
+        clipboardManager?.syncClipboardHash();
+      }
+
+      // Refocus the previous app and paste.
+      if (targetApp) {
+        await execAsync(`osascript -e 'tell application "${targetApp.name}" to activate'`);
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+
+      await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+
+      console.log(`[CommandLauncher] Invoked command: ${command.name} (terminal: ${isTerminal})`);
+      return { success: true };
+    } catch (error) {
+      console.error('[CommandLauncher] Error invoking command:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  });
+
   // =========================================================================
   // Shared Clipboard IPC Handlers - Shared clipboard for collaboration
   // =========================================================================
@@ -3566,7 +3745,11 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   
   // Show clipboard history when Field Theory becomes frontmost (e.g., via Cmd+Tab).
   nativeHelper.on('appBecameFrontmost', () => {
+    // Skip if clipboard history is already visible.
     if (clipboardHistoryWindow?.isVisible()) return;
+    
+    // Skip if command launcher is visible (don't show both windows).
+    if (commandLauncherWindow?.isVisible()) return;
     
     if (!clipboardHistoryWindow) {
       clipboardHistoryWindow = initClipboardHistoryWindow();
@@ -3852,6 +4035,9 @@ async function initTranscriberSystem(): Promise<void> {
       }
     });
   });
+
+  // Initialize command launcher window for Cmd+Shift+K.
+  commandLauncherWindow = new CommandLauncherWindow();
 
   // Set up escape key priority: dismiss clipboard history before canceling recording
   transcriberManager.setClipboardHistoryVisibilityChecker(() => {
