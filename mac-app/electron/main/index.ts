@@ -915,10 +915,16 @@ function initClipboardHistoryWindow(): ClipboardHistoryWindow {
  * This is called from the tray menu "Settings..." item.
  */
 function showSettingsInClipboardWindow(): void {
+  // Don't show settings if onboarding is not complete.
+  const prefs = preferencesManager?.get();
+  if (!prefs?.onboardingComplete) {
+    return;
+  }
+
   if (!clipboardHistoryWindow) {
     clipboardHistoryWindow = initClipboardHistoryWindow();
   }
-  
+
   const boundsToUse = restoreClipboardHistoryBounds();
   clipboardHistoryWindow.show(boundsToUse, true);
 }
@@ -1092,7 +1098,7 @@ function setupTranscribeIPCHandlers(): void {
 
   ipcMain.handle(TranscribeIPCChannels.GET_SELECTED_MODEL, () => {
     if (!transcriberManager) {
-      return 'base';
+      return 'small';
     }
     return transcriberManager.getSelectedModel();
   });
@@ -1947,8 +1953,15 @@ function setupClipboardIPCHandlers(): void {
 
   // Relaunch the app
   ipcMain.on('electron:relaunch', () => {
+    console.log('[Main] Relaunch requested');
+    // Close all windows first
+    BrowserWindow.getAllWindows().forEach(window => {
+      if (!window.isDestroyed()) {
+        window.destroy();
+      }
+    });
     app.relaunch();
-    app.quit();
+    app.exit(0);
   });
   
   // Show "no target" error at cursor position (replaces old toast window).
@@ -2815,6 +2828,40 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
+  // Launch at login - start app automatically when macOS starts.
+  // Returns the actual system state, not just the preference.
+  ipcMain.handle('clipboard:getLaunchAtLogin', async () => {
+    if (process.platform === 'darwin') {
+      const settings = app.getLoginItemSettings();
+      return settings.openAtLogin;
+    }
+    // Fallback to preference for non-macOS
+    if (!preferencesManager) {
+      return false;
+    }
+    return preferencesManager.getPreference('launchAtLogin') ?? true;
+  });
+
+  ipcMain.handle('clipboard:setLaunchAtLogin', async (_event, enabled: boolean) => {
+    if (!preferencesManager) {
+      return { success: false, enabled: false };
+    }
+    await preferencesManager.save({ launchAtLogin: enabled });
+
+    // Apply immediately using Electron's login item settings.
+    if (process.platform === 'darwin') {
+      app.setLoginItemSettings({
+        openAtLogin: enabled,
+        openAsHidden: true, // Start in background (menu bar app)
+      });
+
+      // Verify the setting was applied
+      const settings = app.getLoginItemSettings();
+      return { success: settings.openAtLogin === enabled, enabled: settings.openAtLogin };
+    }
+    return { success: true, enabled };
+  });
+
   // Sounds enabled - master toggle for all sounds.
   ipcMain.handle('clipboard:getSoundsEnabled', async () => {
     if (!preferencesManager) {
@@ -3503,6 +3550,11 @@ function setupOnboardingIPCHandlers(): void {
     console.log('[Main] Onboarding complete, registering hotkeys');
     registerHotkeysAfterOnboarding();
 
+    // Refresh tray menu to show full options
+    if (trayManager) {
+      trayManager.refreshMenu();
+    }
+
     // Close onboarding window and show clipboard history.
     if (onboardingWindow) {
       onboardingWindow.close();
@@ -3515,7 +3567,15 @@ function setupOnboardingIPCHandlers(): void {
   ipcMain.handle(OnboardingIPCChannels.SKIP_ONBOARDING, async () => {
     if (!preferencesManager) return false;
     await preferencesManager.save({ onboardingComplete: true });
-    
+
+    // Register hotkeys now that onboarding is complete
+    registerHotkeysAfterOnboarding();
+
+    // Refresh tray menu to show full options
+    if (trayManager) {
+      trayManager.refreshMenu();
+    }
+
     // Close onboarding window.
     if (onboardingWindow) {
       onboardingWindow.close();
@@ -3536,23 +3596,37 @@ function setupOnboardingIPCHandlers(): void {
   // Useful for testing and development.
   ipcMain.handle(OnboardingIPCChannels.RESET_ONBOARDING, async () => {
     if (!preferencesManager) return false;
-    
+
     // Clear onboarding state.
-    await preferencesManager.save({ 
+    await preferencesManager.save({
       onboardingComplete: false,
       onboardingStep: undefined,
     });
-    
+
+    // Unregister hotkeys - they shouldn't work during onboarding.
+    globalShortcut.unregisterAll();
+    console.log('[Main] Unregistered all hotkeys for onboarding reset');
+
+    // Hide clipboard history window if visible.
+    if (clipboardHistoryWindow?.isVisible()) {
+      clipboardHistoryWindow.hide();
+    }
+
+    // Refresh tray menu to show onboarding options.
+    if (trayManager) {
+      trayManager.refreshMenu();
+    }
+
     // Close any existing onboarding window.
     if (onboardingWindow) {
       onboardingWindow.close();
       onboardingWindow = null;
     }
-    
+
     // Show onboarding window from the beginning.
     onboardingWindow = createOnboardingWindow();
     onboardingWindow.show(OnboardingStep.WELCOME);
-    
+
     console.log('[Main] Onboarding reset - showing wizard from start');
     return true;
   });
@@ -3779,24 +3853,6 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
     }
   });
   
-  // Show clipboard history when Field Theory becomes frontmost (e.g., via Cmd+Tab).
-  nativeHelper.on('appBecameFrontmost', () => {
-    // Skip if clipboard history is already visible.
-    if (clipboardHistoryWindow?.isVisible()) return;
-    
-    // Skip if command launcher is visible (don't show both windows).
-    if (commandLauncherWindow?.isVisible()) return;
-    
-    if (!clipboardHistoryWindow) {
-      clipboardHistoryWindow = initClipboardHistoryWindow();
-    }
-    
-    clipboardHistoryWindow.playOpenSound();
-    const boundsToUse = restoreClipboardHistoryBounds();
-    clipboardHistoryWindow.show(boundsToUse, false, true);
-    clipboardHistoryWindow.capturePreviousAppBeforeShow();
-  });
-
   audioManager = new AudioManager(nativeHelper);
   
   // Load saved priority device from preferences
@@ -3810,7 +3866,7 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   });
   await audioManager.init();
 
-  trayManager = new TrayManager(audioManager);
+  trayManager = new TrayManager(audioManager, undefined, preferencesManager);
 
   // Start recording callback - toggles recording via transcriberManager.
   // Wrapped in a function that checks if transcriberManager is ready.
@@ -3895,6 +3951,16 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   };
 
   trayManager.init(showSettingsInClipboardWindow, checkForUpdatesCallback, startRecordingCallback, takeScreenshotCallback, takeFullScreenCallback, takeActiveWindowCallback, showMainWindow);
+
+  // Set up callback to show onboarding window from tray menu
+  trayManager.setShowOnboardingCallback(() => {
+    if (!onboardingWindow) {
+      onboardingWindow = createOnboardingWindow();
+    }
+    const prefs = preferencesManager?.get();
+    const startStep = prefs?.onboardingStep ?? OnboardingStep.WELCOME;
+    onboardingWindow.show(startStep);
+  });
 
   console.log('[Main] Audio system initialized');
 }
@@ -4244,19 +4310,25 @@ async function initTranscriberSystem(): Promise<void> {
         return;
       }
       
+      // Don't show Hot Mic during onboarding.
+      const prefs = preferencesManager?.get();
+      if (!prefs?.onboardingComplete) {
+        return;
+      }
+
       // Check if Hot Mic is enabled for this user.
       const hotMicEnabled = await socialSync!.getHotMicEnabled();
       if (!hotMicEnabled) {
         console.log('[Main] Hot Mic is disabled, skipping overlay');
         return;
       }
-      
+
       // Check if user is currently recording (don't interrupt).
       if (clipboardHistoryWindow?.getRecordingActive()) {
         console.log('[Main] User is recording, skipping Hot Mic overlay');
         return;
       }
-      
+
       // Show the clipboard history window if it's not visible.
       if (clipboardHistoryWindow && !clipboardHistoryWindow.isVisible()) {
         console.log('[Main] Showing clipboard history window for Hot Mic');
@@ -4501,6 +4573,15 @@ if (!gotTheLock) {
       }
     }
 
+    // Apply launch at login setting.
+    if (process.platform === 'darwin') {
+      const launchAtLogin = preferencesManager?.getPreference('launchAtLogin') ?? true;
+      app.setLoginItemSettings({
+        openAtLogin: launchAtLogin,
+        openAsHidden: true,
+      });
+    }
+
     // Check for updates on startup and periodically (production only).
     // DEBUG: Force update check even in dev mode for testing
     {
@@ -4625,35 +4706,157 @@ if (!gotTheLock) {
       });
     }
     
-    // First-run check: Show onboarding wizard if not completed.
-    // Check permissions to determine if this is truly a new install vs an upgrade.
+    // Permission and model check at startup - always verify all requirements are met.
+    // If any permission is missing or model not downloaded, show onboarding regardless of previous completion state.
     const prefs = preferencesManager?.get();
-    if (!prefs?.onboardingComplete) {
-      // Check if core permissions are already granted (indicates existing user upgrading).
-      const micStatus = systemPreferences.getMediaAccessStatus('microphone');
-      const accessibilityStatus = systemPreferences.isTrustedAccessibilityClient(false);
-      const hasCorePermissions = micStatus === 'granted' && accessibilityStatus;
+    const micStatus = systemPreferences.getMediaAccessStatus('microphone');
+    const accessibilityStatus = systemPreferences.isTrustedAccessibilityClient(false);
+    const screenStatus = systemPreferences.getMediaAccessStatus('screen');
 
-      if (hasCorePermissions) {
-        // Existing user with permissions - mark onboarding as complete and skip it.
-        console.log('[Main] Existing user detected (has core permissions), skipping onboarding');
+    // Check if voice model is downloaded
+    const modelDownloaded = transcriberManager?.getModelManager()
+      ? await transcriberManager.getModelManager().isModelAvailable()
+      : false;
+
+    // Check if user is authenticated
+    const isAuthenticated = mobileSync?.isAuthenticated() ?? false;
+
+    // All three permissions, model download, AND authentication are required for full app functionality
+    const isFullyReady =
+      micStatus === 'granted' &&
+      accessibilityStatus &&
+      screenStatus === 'granted' &&
+      modelDownloaded &&
+      isAuthenticated;
+
+    // Log startup state for debugging
+    console.log('[Main] Startup requirements check:');
+    console.log(`  - Microphone: ${micStatus}`);
+    console.log(`  - Accessibility: ${accessibilityStatus}`);
+    console.log(`  - Screen Recording: ${screenStatus}`);
+    console.log(`  - Model Downloaded: ${modelDownloaded}`);
+    console.log(`  - Authenticated: ${isAuthenticated}`);
+    console.log(`  - onboardingComplete: ${prefs?.onboardingComplete ?? 'undefined'}`);
+    console.log(`  - isFullyReady: ${isFullyReady}`);
+
+    if (isFullyReady) {
+      // All requirements met - mark onboarding complete and allow app access
+      if (!prefs?.onboardingComplete) {
+        console.log('[Main] All requirements met, marking onboarding complete');
         await preferencesManager?.save({ onboardingComplete: true });
-        // Register hotkeys since onboarding is complete
-        registerHotkeysAfterOnboarding();
-      } else {
-        // New user or permissions revoked - show onboarding wizard.
-        console.log('[Main] New user or missing permissions, showing onboarding wizard');
-        onboardingWindow = createOnboardingWindow();
-        const startStep = prefs?.onboardingStep ?? OnboardingStep.WELCOME;
-        onboardingWindow.show(startStep);
-        // Hotkeys will be registered when onboarding completes (see onboarding:complete handler)
       }
-    } else {
-      // Onboarding already complete - register hotkeys immediately
-      console.log('[Main] Onboarding already complete, registering hotkeys');
+      console.log('[Main] All requirements met, registering hotkeys');
       registerHotkeysAfterOnboarding();
+    } else {
+      // Missing requirements - force onboarding flow
+      console.log('[Main] Missing requirements, showing onboarding wizard');
+
+      // Reset onboarding state if it was previously complete
+      if (prefs?.onboardingComplete) {
+        console.log('[Main] Resetting onboarding state due to missing requirements');
+        await preferencesManager?.save({ onboardingComplete: false });
+      }
+
+      onboardingWindow = createOnboardingWindow();
+
+      // Determine the correct starting step based on what's missing
+      // If only auth is missing (all permissions + model OK), start at account phase (step 2)
+      const hasAllPermissionsAndModel =
+        micStatus === 'granted' &&
+        accessibilityStatus &&
+        screenStatus === 'granted' &&
+        modelDownloaded;
+
+      let startStep: number;
+      if (hasAllPermissionsAndModel && !isAuthenticated) {
+        // Only auth is missing - go straight to account phase
+        startStep = 2; // account phase
+        console.log('[Main] Only auth missing, starting at account phase');
+      } else {
+        // Other requirements missing - use saved step or start from beginning
+        startStep = prefs?.onboardingStep ?? OnboardingStep.WELCOME;
+      }
+
+      onboardingWindow.show(startStep);
+      // Hotkeys will be registered when onboarding completes (see onboarding:complete handler)
     }
-    // createWindow(); // Commented out for testing - app runs in background, opens manually
+
+    // Monitor permissions and auth periodically - if any are revoked/lost, show onboarding again
+    const REQUIREMENT_CHECK_INTERVAL = 5000; // Check every 5 seconds
+    setInterval(async () => {
+      const currentPrefs = preferencesManager?.get();
+      if (!currentPrefs?.onboardingComplete) {
+        // Already in onboarding mode, no need to check
+        return;
+      }
+
+      const mic = systemPreferences.getMediaAccessStatus('microphone');
+      const accessibility = systemPreferences.isTrustedAccessibilityClient(false);
+      const screen = systemPreferences.getMediaAccessStatus('screen');
+      const authenticated = mobileSync?.isAuthenticated() ?? false;
+
+      const hasAllPermissions = mic === 'granted' && accessibility && screen === 'granted';
+
+      // Check if permissions are revoked
+      if (!hasAllPermissions) {
+        console.log('[Main] Permission revoked, forcing onboarding flow');
+        console.log(`  - Microphone: ${mic}`);
+        console.log(`  - Accessibility: ${accessibility}`);
+        console.log(`  - Screen Recording: ${screen}`);
+
+        // Unregister all hotkeys - they shouldn't work without permissions
+        globalShortcut.unregisterAll();
+        console.log('[Main] Unregistered all hotkeys due to permission revocation');
+
+        // Reset onboarding state
+        await preferencesManager?.save({ onboardingComplete: false });
+
+        // Refresh tray menu to show onboarding option
+        if (trayManager) {
+          trayManager.refreshMenu();
+        }
+
+        // Hide clipboard window if visible
+        if (clipboardHistoryWindow?.isVisible()) {
+          clipboardHistoryWindow.hide();
+        }
+
+        // Show onboarding window at beginning
+        if (!onboardingWindow) {
+          onboardingWindow = createOnboardingWindow();
+        }
+        onboardingWindow.show(OnboardingStep.WELCOME);
+        return;
+      }
+
+      // Check if user logged out (permissions OK but auth lost)
+      if (!authenticated) {
+        console.log('[Main] User logged out, forcing onboarding to account phase');
+
+        // Unregister all hotkeys - app requires login
+        globalShortcut.unregisterAll();
+        console.log('[Main] Unregistered all hotkeys due to logout');
+
+        // Reset onboarding state
+        await preferencesManager?.save({ onboardingComplete: false });
+
+        // Refresh tray menu to show onboarding option
+        if (trayManager) {
+          trayManager.refreshMenu();
+        }
+
+        // Hide clipboard window if visible
+        if (clipboardHistoryWindow?.isVisible()) {
+          clipboardHistoryWindow.hide();
+        }
+
+        // Show onboarding window at account phase (step 2)
+        if (!onboardingWindow) {
+          onboardingWindow = createOnboardingWindow();
+        }
+        onboardingWindow.show(2); // account phase
+      }
+    }, REQUIREMENT_CHECK_INTERVAL);
 
     app.on('activate', () => {
       // Always show clipboard history when app becomes active.

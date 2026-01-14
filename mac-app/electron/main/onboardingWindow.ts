@@ -1,4 +1,4 @@
-import { app, BrowserWindow, screen, systemPreferences, shell, desktopCapturer } from 'electron';
+import { app, BrowserWindow, screen, systemPreferences, shell, desktopCapturer, dialog } from 'electron';
 import path from 'path';
 import type { PreferencesManager } from './preferences';
 
@@ -37,10 +37,18 @@ export interface PermissionStatus {
 export class OnboardingWindow {
   private window: BrowserWindow | null = null;
   private preferencesManager: PreferencesManager | null = null;
+  private isAppQuitting = false;
 
   // Compact window size for streamlined 2-phase onboarding (permissions + model).
   private readonly WINDOW_WIDTH = 500;
   private readonly WINDOW_HEIGHT = 450;
+
+  constructor() {
+    // Track when app is quitting to allow window close without confirmation.
+    app.on('before-quit', () => {
+      this.isAppQuitting = true;
+    });
+  }
 
   /**
    * Set the preferences manager for checking onboarding completion status.
@@ -68,7 +76,6 @@ export class OnboardingWindow {
     // Check screen recording permission (needed for screenshots).
     const screenStatusRaw = systemPreferences.getMediaAccessStatus('screen');
     const screenRecordingStatus = screenStatusRaw === 'granted';
-    console.log('[Onboarding] Screen recording permission status:', screenStatusRaw, '→', screenRecordingStatus);
     
     return {
       microphone: micStatus,
@@ -80,21 +87,23 @@ export class OnboardingWindow {
   /**
    * Request microphone permission.
    * Returns true if permission was granted.
+   * If permission was previously denied, opens System Settings instead.
    */
   async requestMicrophonePermission(): Promise<boolean> {
     const status = systemPreferences.getMediaAccessStatus('microphone');
-    
+
     if (status === 'granted') {
       return true;
     }
-    
+
     if (status === 'not-determined') {
       // Request permission - this will show the system dialog.
       const granted = await systemPreferences.askForMediaAccess('microphone');
       return granted;
     }
-    
-    // Permission was denied - user needs to go to System Settings.
+
+    // Permission was denied/revoked - open System Settings since we can't request again.
+    shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone');
     return false;
   }
 
@@ -144,7 +153,10 @@ export class OnboardingWindow {
    */
   show(startStep: OnboardingStep = OnboardingStep.WELCOME): void {
     if (this.window && !this.window.isDestroyed()) {
+      // Bring to front on macOS
+      this.window.show();
       this.window.focus();
+      app.focus({ steal: true });
       return;
     }
 
@@ -161,6 +173,7 @@ export class OnboardingWindow {
       height: this.WINDOW_HEIGHT,
       x,
       y,
+      show: false, // Don't show until ready-to-show fires
       resizable: false,
       minimizable: false,
       maximizable: false,
@@ -176,6 +189,15 @@ export class OnboardingWindow {
       },
     });
 
+    // Show and focus the window when ready.
+    this.window.once('ready-to-show', () => {
+      if (this.window && !this.window.isDestroyed()) {
+        this.window.show();
+        this.window.focus();
+        app.focus({ steal: true });
+      }
+    });
+
     // Load the onboarding page with the start step as a query param.
     const startUrl = process.env.ELECTRON_START_URL;
     if (startUrl) {
@@ -187,11 +209,14 @@ export class OnboardingWindow {
       this.window.loadFile(indexPath, { hash: `/onboarding?step=${startStep}` });
     }
 
-    // Prevent closing the onboarding window until onboarding is complete.
-    // This ensures users can't bypass the permission requirements.
-    this.window.on('close', (event) => {
+    // Handle close during onboarding - show quit confirmation.
+    this.window.on('close', async (event) => {
+      // If app is quitting (Cmd+Q or menu quit), allow immediate close.
+      if (this.isAppQuitting) {
+        return;
+      }
+
       if (!this.preferencesManager) {
-        // If no preferences manager is set, allow closing (shouldn't happen).
         console.warn('[Onboarding] No preferencesManager set, allowing window close');
         return;
       }
@@ -199,13 +224,26 @@ export class OnboardingWindow {
       const prefs = this.preferencesManager.get();
       const isComplete = prefs?.onboardingComplete ?? false;
 
-      if (!isComplete) {
-        // Prevent closing - user must complete onboarding first.
+      if (!isComplete && this.window && !this.window.isDestroyed()) {
+        // Prevent the default close and show confirmation dialog.
         event.preventDefault();
-        console.log('[Onboarding] Prevented window close - onboarding not complete');
 
-        // Optional: Show a dialog informing the user they must complete onboarding.
-        // For now, we just prevent the close silently.
+        const { response } = await dialog.showMessageBox(this.window, {
+          type: 'question',
+          buttons: ['Continue Onboarding', 'Quit Field Theory'],
+          defaultId: 0,
+          cancelId: 0,
+          title: 'Quit Field Theory?',
+          message: 'Quit Field Theory?',
+          detail: 'You haven\'t finished setting up. Are you sure you want to quit?',
+        });
+
+        if (response === 1) {
+          // User chose to quit - set flag and quit app
+          this.isAppQuitting = true;
+          app.quit();
+        }
+        // Otherwise, do nothing - keep onboarding open
       }
     });
 

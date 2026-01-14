@@ -103,7 +103,10 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   
   // Show in Dock - whether app appears in Dock and Cmd+Tab.
   const [showInDock, setShowInDock] = useState(false);
-  
+
+  // Launch at login - start app when macOS starts.
+  const [launchAtLogin, setLaunchAtLogin] = useState(true);
+
   // Subscription tier state - 'free' or 'pro'.
   const [userTier, setUserTier] = useState<'free' | 'pro'>('free');
   
@@ -179,6 +182,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       // Load show in dock setting
       window.clipboardAPI.getShowInDock?.().then(show => {
         setShowInDock(show);
+      });
+
+      // Load launch at login setting
+      window.clipboardAPI.getLaunchAtLogin?.().then(enabled => {
+        setLaunchAtLogin(enabled);
       });
     }
     
@@ -1193,6 +1201,25 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         <SectionHeader title="Support" />
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={styles.rowLabel}>Launch on Login</span>
+            <span style={styles.rowHint}>Start Field Theory when you log in</span>
+          </div>
+          <label style={styles.toggleContainer}>
+            <input
+              type="checkbox"
+              checked={launchAtLogin}
+              onChange={async (e) => {
+                const enabled = e.target.checked;
+                setLaunchAtLogin(enabled);
+                await window.clipboardAPI?.setLaunchAtLogin?.(enabled);
+              }}
+              style={styles.toggleInput}
+            />
+            <span style={styles.toggleSlider} />
+          </label>
+        </div>
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <span style={styles.rowLabel}>Diagnostics</span>
             <span style={styles.rowHint}>View system info for troubleshooting</span>
           </div>
@@ -1201,6 +1228,18 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             style={styles.linkBtn}
           >
             View
+          </button>
+        </div>
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={styles.rowLabel}>Restart Onboarding</span>
+            <span style={styles.rowHint}>Go through the setup flow again</span>
+          </div>
+          <button
+            onClick={() => window.onboardingAPI?.reset?.()}
+            style={styles.linkBtn}
+          >
+            Start
           </button>
         </div>
       </div>
