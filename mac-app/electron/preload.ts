@@ -86,9 +86,21 @@ const ClipboardIPCChannels = {
   
   // API key management (stored securely via OS keychain)
   GET_API_KEY_STATUS: 'clipboard:getApiKeyStatus',
+  GET_API_KEY_INFO: 'clipboard:getApiKeyInfo',
+  TEST_API_KEY: 'clipboard:testApiKey',
   SET_API_KEY: 'clipboard:setApiKey',
   CLEAR_API_KEY: 'clipboard:clearApiKey',
-  
+
+  // Local LLM model management
+  GET_LOCAL_LLM_MODELS: 'clipboard:getLocalLLMModels',
+  GET_LOCAL_LLM_STATUS: 'clipboard:getLocalLLMStatus',
+  GET_LOCAL_LLM_SELECTED: 'clipboard:getLocalLLMSelected',
+  SET_LOCAL_LLM_SELECTED: 'clipboard:setLocalLLMSelected',
+  DOWNLOAD_LOCAL_LLM: 'clipboard:downloadLocalLLM',
+  DELETE_LOCAL_LLM: 'clipboard:deleteLocalLLM',
+  GET_USE_LOCAL_LLM: 'clipboard:getUseLocalLLM',
+  SET_USE_LOCAL_LLM: 'clipboard:setUseLocalLLM',
+
   // System prompt customization for Engineer feature
   GET_SYSTEM_PROMPT: 'clipboard:getSystemPrompt',
   SET_SYSTEM_PROMPT: 'clipboard:setSystemPrompt',
@@ -593,9 +605,22 @@ export interface ClipboardAPI {
   
   // API key management (stored securely via OS keychain)
   getApiKeyStatus: () => Promise<{ hasKey: boolean }>;
+  getApiKeyInfo: () => Promise<{ hasKey: boolean; maskedKey: string | null; provider: string }>;
+  testApiKey: () => Promise<{ success: boolean; error?: string; provider?: string; warning?: string }>;
   setApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>;
   clearApiKey: () => Promise<{ success: boolean; error?: string }>;
-  
+
+  // Local LLM model management
+  getLocalLLMModels: () => Promise<Record<string, { name: string; filename: string; sizeBytes: number; description: string }>>;
+  getLocalLLMStatus: () => Promise<Record<string, boolean>>;
+  getLocalLLMSelected: () => Promise<string>;
+  setLocalLLMSelected: (model: string) => Promise<{ success: boolean; error?: string }>;
+  downloadLocalLLM: (model: string) => Promise<{ success: boolean; error?: string }>;
+  deleteLocalLLM: (model: string) => Promise<{ success: boolean; error?: string }>;
+  getUseLocalLLM: () => Promise<boolean>;
+  setUseLocalLLM: (useLocal: boolean) => Promise<{ success: boolean; error?: string }>;
+  onLocalLLMDownloadProgress: (callback: (data: { model: string; downloaded: number; total: number }) => void) => () => void;
+
   // System prompt customization for Engineer feature
   getSystemPrompt: () => Promise<{ prompt: string; isCustom: boolean }>;
   setSystemPrompt: (prompt: string) => Promise<{ success: boolean; error?: string }>;
@@ -1088,12 +1113,63 @@ const clipboardAPI: ClipboardAPI = {
     return ipcRenderer.invoke(ClipboardIPCChannels.GET_API_KEY_STATUS);
   },
 
+  getApiKeyInfo: async (): Promise<{ hasKey: boolean; maskedKey: string | null; provider: string }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_API_KEY_INFO);
+  },
+
+  testApiKey: async (): Promise<{ success: boolean; error?: string; provider?: string; warning?: string }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.TEST_API_KEY);
+  },
+
   setApiKey: async (apiKey: string): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.SET_API_KEY, apiKey);
   },
 
   clearApiKey: async (): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.CLEAR_API_KEY);
+  },
+
+  // Local LLM model management
+  getLocalLLMModels: async () => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_LOCAL_LLM_MODELS);
+  },
+
+  getLocalLLMStatus: async () => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_LOCAL_LLM_STATUS);
+  },
+
+  getLocalLLMSelected: async () => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_LOCAL_LLM_SELECTED);
+  },
+
+  setLocalLLMSelected: async (model: string) => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SET_LOCAL_LLM_SELECTED, model);
+  },
+
+  downloadLocalLLM: async (model: string) => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.DOWNLOAD_LOCAL_LLM, model);
+  },
+
+  deleteLocalLLM: async (model: string) => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.DELETE_LOCAL_LLM, model);
+  },
+
+  getUseLocalLLM: async () => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_USE_LOCAL_LLM);
+  },
+
+  setUseLocalLLM: async (useLocal: boolean) => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SET_USE_LOCAL_LLM, useLocal);
+  },
+
+  onLocalLLMDownloadProgress: (callback: (data: { model: string; downloaded: number; total: number }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { model: string; downloaded: number; total: number }) => {
+      callback(data);
+    };
+    ipcRenderer.on('local-llm:download-progress', handler);
+    return () => {
+      ipcRenderer.removeListener('local-llm:download-progress', handler);
+    };
   },
 
   // System prompt customization for Engineer feature

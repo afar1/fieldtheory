@@ -275,16 +275,35 @@ export class MobileSync extends EventEmitter {
       const refreshResult = await this.supabase.auth.refreshSession({ refresh_token: refreshToken });
 
       if (refreshResult.error || !refreshResult.data.session) {
-        // Refresh also failed - tokens are truly invalid
-        this.lastFailedToken = accessToken;
-        console.log('[MobileSync] Session refresh failed, user needs to sign in again:', refreshResult.error?.message);
-        this.clearSession();
-        return;
-      }
+        // Check if this is a network error worth retrying
+        if (this.isNetworkError(refreshResult.error)) {
+          console.log('[MobileSync] Network error during refresh, retrying in 500ms...');
+          await new Promise(resolve => setTimeout(resolve, 500));
 
-      // Refresh succeeded! Use the new session
-      console.log('[MobileSync] Session successfully refreshed for user:', refreshResult.data.session.user?.email);
-      this.session = refreshResult.data.session;
+          const retryResult = await this.supabase.auth.refreshSession({ refresh_token: refreshToken });
+          if (!retryResult.error && retryResult.data.session) {
+            console.log('[MobileSync] Retry succeeded for user:', retryResult.data.session.user?.email);
+            this.session = retryResult.data.session;
+            // Continue to start sync below
+          } else {
+            // Retry also failed
+            this.lastFailedToken = accessToken;
+            console.log('[MobileSync] Session refresh retry failed:', retryResult.error?.message);
+            this.clearSession();
+            return;
+          }
+        } else {
+          // Non-network error (e.g., invalid_grant) - don't retry, it won't help
+          this.lastFailedToken = accessToken;
+          console.log('[MobileSync] Session refresh failed (not retryable):', refreshResult.error?.message);
+          this.clearSession();
+          return;
+        }
+      } else {
+        // First refresh succeeded
+        console.log('[MobileSync] Session successfully refreshed for user:', refreshResult.data.session.user?.email);
+        this.session = refreshResult.data.session;
+      }
     } else {
       // Success - clear the failed token tracker.
       this.lastFailedToken = null;
@@ -307,33 +326,63 @@ export class MobileSync extends EventEmitter {
   /**
    * Attempt to refresh the current session. Called when app becomes active
    * to ensure tokens are fresh after periods of inactivity.
+   *
+   * @param force - If true, refresh regardless of expiry time. Use on startup
+   *                when access token may be expired but refresh token is still valid.
+   * @returns true if session is valid after this call, false if logged out
    */
-  async refreshSessionIfNeeded(): Promise<void> {
+  async refreshSessionIfNeeded(force: boolean = false): Promise<boolean> {
     if (!this.supabase || !this.session) {
-      return;
+      return false;
     }
 
-    // Check if token is close to expiration (within 5 minutes)
     const expiresAt = this.session.expires_at;
-    if (!expiresAt) return;
+    if (!expiresAt) return !!this.session;
 
     const now = Math.floor(Date.now() / 1000);
     const fiveMinutes = 5 * 60;
+    const isExpired = expiresAt <= now;
+    const isExpiringSoon = expiresAt - now < fiveMinutes;
 
-    if (expiresAt - now < fiveMinutes) {
-      console.log('[MobileSync] Token expiring soon, refreshing session...');
+    // Refresh if: forced, already expired, or expiring within 5 minutes
+    if (force || isExpired || isExpiringSoon) {
+      const reason = isExpired ? 'expired' : (force ? 'forced' : 'expiring soon');
+      console.log(`[MobileSync] Token ${reason}, refreshing session...`);
 
       const { data, error } = await this.supabase.auth.refreshSession();
 
       if (error || !data.session) {
-        console.log('[MobileSync] Session refresh failed:', error?.message);
+        // Check if this is a network error worth retrying
+        if (this.isNetworkError(error)) {
+          console.log('[MobileSync] Network error during refresh, retrying in 500ms...');
+          await new Promise(resolve => setTimeout(resolve, 500));
+
+          const retryResult = await this.supabase.auth.refreshSession();
+          if (!retryResult.error && retryResult.data.session) {
+            this.session = retryResult.data.session;
+            console.log('[MobileSync] Session refresh retry succeeded, new expiry:',
+              new Date((retryResult.data.session.expires_at || 0) * 1000).toISOString());
+            return true;
+          }
+          // Retry also failed
+          console.log('[MobileSync] Session refresh retry failed:', retryResult.error?.message);
+        } else {
+          // Non-network error - don't retry
+          console.log('[MobileSync] Session refresh failed (not retryable):', error?.message);
+        }
+
         this.clearSession();
-        return;
+        return false;
       }
 
       this.session = data.session;
-      console.log('[MobileSync] Session refreshed successfully');
+      console.log('[MobileSync] Session refreshed successfully, new expiry:',
+        new Date((data.session.expires_at || 0) * 1000).toISOString());
+      return true;
     }
+
+    // Token is still valid, no refresh needed
+    return true;
   }
   
   /**
@@ -363,6 +412,22 @@ export class MobileSync extends EventEmitter {
     } catch (err) {
       console.error('[MobileSync] Error fetching tier:', err);
     }
+  }
+
+  /**
+   * Check if an error is network-related (retryable) vs token validation (not retryable).
+   * Network errors are transient and worth retrying. Token errors mean the refresh token
+   * is invalid and retrying won't help.
+   */
+  private isNetworkError(error: { message?: string } | null): boolean {
+    if (!error?.message) return false;
+    const msg = error.message.toLowerCase();
+    return msg.includes('fetch') ||
+           msg.includes('network') ||
+           msg.includes('timeout') ||
+           msg.includes('econnrefused') ||
+           msg.includes('etimedout') ||
+           msg.includes('socket');
   }
 
   /**

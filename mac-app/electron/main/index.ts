@@ -35,13 +35,15 @@ import {
 import { ClipboardItem, isTerminalApp, isIDEWithTerminal, obscureHomePath } from './clipboardManager';
 import { VisionModelManager, VisionModelSize } from './visionModelManager';
 import { VisionProcessor } from './visionProcessor';
-import { 
-  engineerStack, 
+import {
+  engineerStack,
   setApiKey as setEngineerApiKey,
   setCustomSystemPrompt,
   getActiveSystemPrompt,
   loadDefaultSystemPrompt,
   improveTranscript,
+  setLocalLLMManager as setEngineerLocalLLMManager,
+  setUseLocalLLM as setEngineerUseLocalLLM,
 } from './promptEngineer';
 import { OnboardingWindow, OnboardingStep } from './onboardingWindow';
 import { OnboardingIPCChannels } from './types/onboarding';
@@ -52,6 +54,7 @@ import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, PortableCommand } from './commandsManager';
 import { CommandsIPCChannels } from './types/commands';
 import { CommandLauncherWindow } from './commandLauncherWindow';
+import { LocalLLMManager, LLMModelSize } from './localLLMManager';
 
 // Load environment variables from .env.local for Supabase credentials.
 // In development, the file is in the mac-app directory.
@@ -144,6 +147,7 @@ let clipboardHistoryWindow: ClipboardHistoryWindow | null = null;
 let visionModelManager: VisionModelManager | null = null;
 let visionProcessor: VisionProcessor | null = null;
 let mobileSync: MobileSync | null = null;
+let localLLMManager: LocalLLMManager | null = null;
 let sharedClipboardSync: SharedClipboardSync | null = null;
 let socialSync: SocialSync | null = null;
 let onboardingWindow: OnboardingWindow | null = null;
@@ -2179,6 +2183,163 @@ function setupClipboardIPCHandlers(): void {
     }
   });
 
+  // Get API key info (masked key + detected provider) for display.
+  ipcMain.handle(ClipboardIPCChannels.GET_API_KEY_INFO, async () => {
+    if (!preferencesManager) {
+      return { hasKey: false, maskedKey: null, provider: 'unknown' };
+    }
+    const hasKey = preferencesManager.hasApiKey();
+    const maskedKey = preferencesManager.getMaskedApiKey();
+    const provider = preferencesManager.detectProvider();
+    return { hasKey, maskedKey, provider };
+  });
+
+  // Test the API key by making a lightweight API call.
+  ipcMain.handle(ClipboardIPCChannels.TEST_API_KEY, async () => {
+    if (!preferencesManager) {
+      return { success: false, error: 'Preferences not initialized' };
+    }
+
+    const apiKey = preferencesManager.getApiKey();
+    if (!apiKey) {
+      return { success: false, error: 'No API key configured' };
+    }
+
+    const provider = preferencesManager.detectProvider();
+
+    try {
+      // Test based on detected provider
+      if (provider === 'anthropic') {
+        // Use the messages endpoint with a minimal request
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: 'claude-3-haiku-20240307',
+            max_tokens: 1,
+            messages: [{ role: 'user', content: 'Hi' }],
+          }),
+        });
+
+        if (response.ok) {
+          return { success: true, provider: 'anthropic' };
+        }
+
+        const errorData = await response.json().catch(() => ({})) as { error?: { message?: string } };
+        const errorMessage = errorData?.error?.message || `API returned status ${response.status}`;
+        return { success: false, error: errorMessage, provider: 'anthropic' };
+      } else if (provider === 'openai') {
+        // Test OpenAI with models endpoint (doesn't consume tokens)
+        const response = await fetch('https://api.openai.com/v1/models', {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+          },
+        });
+
+        if (response.ok) {
+          return { success: true, provider: 'openai' };
+        }
+
+        const errorData = await response.json().catch(() => ({})) as { error?: { message?: string } };
+        const errorMessage = errorData?.error?.message || `API returned status ${response.status}`;
+        return { success: false, error: errorMessage, provider: 'openai' };
+      } else {
+        // For other providers, just validate the key format is recognized
+        return {
+          success: true,
+          provider,
+          warning: 'Key format recognized but connection not verified'
+        };
+      }
+    } catch (error) {
+      console.error('[Main] testApiKey error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Connection failed',
+        provider,
+      };
+    }
+  });
+
+  // =========================================================================
+  // Local LLM Management - Download and use local models for transcript improvement
+  // =========================================================================
+
+  // Get available local LLM models and their info.
+  ipcMain.handle(ClipboardIPCChannels.GET_LOCAL_LLM_MODELS, async () => {
+    return localLLMManager?.getAvailableModels() ?? {};
+  });
+
+  // Get download status for all local LLM models.
+  ipcMain.handle(ClipboardIPCChannels.GET_LOCAL_LLM_STATUS, async () => {
+    return localLLMManager?.getDownloadStatus() ?? {};
+  });
+
+  // Get the currently selected local LLM model.
+  ipcMain.handle(ClipboardIPCChannels.GET_LOCAL_LLM_SELECTED, async () => {
+    return localLLMManager?.getSelectedModel() ?? 'llama-3.2-3b';
+  });
+
+  // Set the selected local LLM model.
+  ipcMain.handle(ClipboardIPCChannels.SET_LOCAL_LLM_SELECTED, async (_event, model: LLMModelSize) => {
+    try {
+      await localLLMManager?.setSelectedModel(model);
+      await preferencesManager?.save({ selectedLocalLLM: model });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to set model' };
+    }
+  });
+
+  // Download a local LLM model with progress events.
+  ipcMain.handle(ClipboardIPCChannels.DOWNLOAD_LOCAL_LLM, async (event, model: LLMModelSize) => {
+    if (!localLLMManager) {
+      return { success: false, error: 'Local LLM manager not initialized' };
+    }
+
+    try {
+      await localLLMManager.downloadModelForSize(model, (downloaded, total) => {
+        // Send progress to renderer
+        event.sender.send('local-llm:download-progress', { model, downloaded, total });
+      });
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Download failed' };
+    }
+  });
+
+  // Delete a local LLM model.
+  ipcMain.handle(ClipboardIPCChannels.DELETE_LOCAL_LLM, async (_event, model: LLMModelSize) => {
+    try {
+      await localLLMManager?.deleteModelForSize(model);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Delete failed' };
+    }
+  });
+
+  // Get whether to use local LLM for transcript improvement.
+  ipcMain.handle(ClipboardIPCChannels.GET_USE_LOCAL_LLM, async () => {
+    return preferencesManager?.getPreference('useLocalLLM') ?? false;
+  });
+
+  // Set whether to use local LLM for transcript improvement.
+  ipcMain.handle(ClipboardIPCChannels.SET_USE_LOCAL_LLM, async (_event, useLocal: boolean) => {
+    try {
+      await preferencesManager?.save({ useLocalLLM: useLocal });
+      // Update promptEngineer with the new setting
+      setEngineerUseLocalLLM(useLocal);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to save setting' };
+    }
+  });
+
   // =========================================================================
   // System Prompt Customization - User can modify how transcriptions are improved
   // =========================================================================
@@ -3752,9 +3913,10 @@ function broadcastTranscribeEvents(): void {
     }
   });
   
-  transcriberManager.on('paste-failed', (message, transcription) => {
+  transcriberManager.on('paste-failed', (_message, _transcription) => {
     if (cursorStatusManager) {
-      cursorStatusManager.setStateWithData('paste-failed', { transcription: transcription || message });
+      // Don't show the actual transcription - just indicate it was saved
+      cursorStatusManager.setStateWithData('paste-failed', { transcription: 'Saved to Field Theory' });
     }
   });
   
@@ -3833,6 +3995,17 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   if (!preferencesManager) {
     preferencesManager = new PreferencesManager();
     await preferencesManager.load();
+  }
+
+  // Initialize local LLM manager
+  if (!localLLMManager) {
+    const savedLLMModel = preferencesManager.getPreference('selectedLocalLLM') as LLMModelSize | undefined;
+    localLLMManager = new LocalLLMManager(savedLLMModel || 'llama-3.2-3b');
+
+    // Wire up local LLM with promptEngineer
+    setEngineerLocalLLMManager(localLLMManager);
+    const useLocal = preferencesManager.getPreference('useLocalLLM') as boolean | undefined;
+    setEngineerUseLocalLLM(useLocal ?? false);
   }
 
   nativeHelper = new NativeHelper();
@@ -4181,17 +4354,39 @@ async function initTranscriberSystem(): Promise<void> {
   
   // Check if mobileSync already has a session from stored credentials.
   // If so, initialize sharedClipboardSync and socialSync with it.
-  const existingSession = mobileSync.getSession();
+  let existingSession = mobileSync.getSession();
   // @ts-ignore - Access internal supabase client.
   const existingSupabaseClient = mobileSync['supabase'];
-  
-  // Validate session is not expired. Supabase may return stale sessions from storage
-  // before background refresh completes, so we check expires_at explicitly.
-  const isSessionValid = existingSession && existingSession.expires_at && 
-    existingSession.expires_at > Math.floor(Date.now() / 1000);
-  
+
+  // Check if we have a session (even if access token is expired).
+  // The refresh token may still be valid for days, so we should try to refresh.
+  const hasSession = existingSession && existingSession.refresh_token;
+  const now = Math.floor(Date.now() / 1000);
+  const isAccessTokenExpired = existingSession?.expires_at && existingSession.expires_at <= now;
+
+  if (hasSession && isAccessTokenExpired) {
+    // Access token expired but we have a refresh token - try to refresh before giving up.
+    // This handles the common case where the app was closed for more than 1 hour.
+    console.log('[Main] Session found but access token expired, attempting refresh...');
+    const refreshSucceeded = await mobileSync.refreshSessionIfNeeded(true); // force refresh
+
+    if (refreshSucceeded) {
+      // Refresh succeeded - get the updated session
+      existingSession = mobileSync.getSession();
+      console.log('[Main] Session refresh succeeded on startup');
+    } else {
+      // Refresh failed - session is truly invalid
+      console.log('[Main] Session refresh failed on startup, user needs to log in again');
+      existingSession = null;
+    }
+  }
+
+  // Now check if we have a valid session (either fresh or successfully refreshed)
+  const isSessionValid = existingSession && existingSession.expires_at &&
+    existingSession.expires_at > now;
+
   if (isSessionValid && existingSupabaseClient) {
-    console.log('[Main] Found existing session on startup, initializing syncs');
+    console.log('[Main] Found valid session on startup, initializing syncs');
     sharedClipboardSync.setSupabaseClient(existingSupabaseClient);
     sharedClipboardSync.setSession(existingSession);
     socialSync.setSupabaseClient(existingSupabaseClient);
@@ -4200,7 +4395,7 @@ async function initTranscriberSystem(): Promise<void> {
     // which triggers mobileSync.setSession -> fetchAndEmitCurrentTier.
   } else {
     // No valid session on startup - ensure cached tier is 'free'.
-    // This handles: expired sessions, app crash without logout, stale session files.
+    // This handles: expired refresh tokens, app crash without logout, corrupted session files.
     if (quotaManager && quotaManager.getCachedTier() === 'pro') {
       console.log('[Main] No valid session but cached tier is pro, resetting to free');
       await quotaManager.setCachedTier('free');
