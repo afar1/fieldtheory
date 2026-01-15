@@ -1,6 +1,6 @@
 {
   "name": "littleai-mac",
-  "version": "0.1.41",
+  "version": "0.1.42",
   "private": true,
   "main": "electron-dist/main/index.js",
   "scripts": {
@@ -15,8 +15,8 @@
     "build:whisper": "scripts/build-whisper.sh",
     "build:all": "npm run build:native && npm run build:whisper && npm run build",
     "build:experimental": "EXPERIMENTAL=true npm run build",
-    "rebuild": "electron-rebuild -f -w better-sqlite3",
-    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "rebuild": "electron-rebuild -f -w better-sqlite3,node-llama-cpp",
+    "postinstall": "electron-rebuild -f -w better-sqlite3,node-llama-cpp",
     "start": "electron .",
     "package": "npm run build:all && electron-builder",
     "package:experimental": "npm run build:all && electron-builder --config electron-builder.experimental.json",
@@ -31,6 +31,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "better-sqlite3": "^12.5.0",
     "electron-updater": "^6.6.2",
+    "node-llama-cpp": "^3.15.0",
     "plist": "^3.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
