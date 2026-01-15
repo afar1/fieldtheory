@@ -85,36 +85,50 @@ export class CommandLauncherWindow {
   /**
    * Show the command launcher window.
    * Captures the previous app before showing so we know where to paste.
+   * Centers on the frontmost app's window if possible, otherwise on display.
    */
   async show(): Promise<void> {
-    // Capture the frontmost app before showing the launcher.
-    await this.capturePreviousApp();
-    
+    // Capture the frontmost app and window bounds before showing the launcher.
+    const [, windowBounds] = await Promise.all([
+      this.capturePreviousApp(),
+      this.getFrontmostWindowBounds(),
+    ]);
+
     // If window exists but is destroyed, reset it.
     if (this.window && this.window.isDestroyed()) {
       this.window = null;
     }
-    
+
     if (!this.window) {
       this.createWindow();
     }
-    
-    // Position dead center of active display.
-    const cursorPoint = screen.getCursorScreenPoint();
-    const display = screen.getDisplayNearestPoint(cursorPoint);
-    const x = Math.round(display.bounds.x + (display.bounds.width - this.WINDOW_WIDTH) / 2);
-    const y = Math.round(display.bounds.y + (display.bounds.height - this.WINDOW_HEIGHT_EXPANDED) / 2 - 50);
-    
+
+    let x: number;
+    let y: number;
+
+    if (windowBounds) {
+      // Center on the frontmost application's window
+      x = Math.round(windowBounds.x + (windowBounds.width - this.WINDOW_WIDTH) / 2);
+      y = Math.round(windowBounds.y + (windowBounds.height - this.WINDOW_HEIGHT_EXPANDED) / 2 - 50);
+      console.log(`[CommandLauncher] Centering on app window at (${windowBounds.x}, ${windowBounds.y}) ${windowBounds.width}x${windowBounds.height}`);
+    } else {
+      // Fallback: center on active display
+      const cursorPoint = screen.getCursorScreenPoint();
+      const display = screen.getDisplayNearestPoint(cursorPoint);
+      x = Math.round(display.bounds.x + (display.bounds.width - this.WINDOW_WIDTH) / 2);
+      y = Math.round(display.bounds.y + (display.bounds.height - this.WINDOW_HEIGHT_EXPANDED) / 2 - 50);
+    }
+
     this.window!.setBounds({
       x,
       y,
       width: this.WINDOW_WIDTH,
       height: this.WINDOW_HEIGHT_COLLAPSED,
     });
-    
+
     this.window!.show();
     this.window!.focus();
-    
+
     // Tell renderer to reset state.
     this.window!.webContents.send('command-launcher:reset');
   }
@@ -155,7 +169,7 @@ export class CommandLauncherWindow {
       `;
       const { stdout } = await execAsync(`osascript -e '${script}'`);
       const [bundleId, name] = stdout.trim().split('|');
-      
+
       if (bundleId && name && !isElectronApp(bundleId, name)) {
         this.previousApp = { bundleId, name };
         console.log(`[CommandLauncher] Captured previous app: ${name} (${bundleId})`);
@@ -166,6 +180,34 @@ export class CommandLauncherWindow {
       console.error('[CommandLauncher] Failed to get frontmost app:', error);
       this.previousApp = null;
     }
+  }
+
+  /**
+   * Get the bounds of the frontmost application's window.
+   * Returns null if unable to get bounds.
+   */
+  private async getFrontmostWindowBounds(): Promise<{ x: number; y: number; width: number; height: number } | null> {
+    try {
+      const script = `
+        tell application "System Events"
+          set frontApp to first application process whose frontmost is true
+          set frontWindow to first window of frontApp
+          set {x, y} to position of frontWindow
+          set {w, h} to size of frontWindow
+          return (x as text) & "," & (y as text) & "," & (w as text) & "," & (h as text)
+        end tell
+      `;
+      const { stdout } = await execAsync(`osascript -e '${script}'`);
+      const [x, y, width, height] = stdout.trim().split(',').map(Number);
+
+      if (!isNaN(x) && !isNaN(y) && !isNaN(width) && !isNaN(height) && width > 0 && height > 0) {
+        return { x, y, width, height };
+      }
+    } catch (error) {
+      // Many apps don't expose window bounds via AppleScript - this is expected
+      console.log('[CommandLauncher] Could not get frontmost window bounds, will center on display');
+    }
+    return null;
   }
   
   /**
