@@ -303,9 +303,22 @@ interface ClipboardAPI {
   
   // API key management (stored securely via OS keychain)
   getApiKeyStatus?: () => Promise<{ hasKey: boolean }>;
+  getApiKeyInfo?: () => Promise<{ hasKey: boolean; maskedKey: string | null; provider: string }>;
+  testApiKey?: () => Promise<{ success: boolean; error?: string; provider?: string; warning?: string }>;
   setApiKey?: (apiKey: string) => Promise<{ success: boolean; error?: string }>;
   clearApiKey?: () => Promise<{ success: boolean; error?: string }>;
-  
+
+  // Local LLM model management
+  getLocalLLMModels?: () => Promise<Record<string, { name: string; filename: string; sizeBytes: number; description: string }>>;
+  getLocalLLMStatus?: () => Promise<Record<string, boolean>>;
+  getLocalLLMSelected?: () => Promise<string>;
+  setLocalLLMSelected?: (model: string) => Promise<{ success: boolean; error?: string }>;
+  downloadLocalLLM?: (model: string) => Promise<{ success: boolean; error?: string }>;
+  deleteLocalLLM?: (model: string) => Promise<{ success: boolean; error?: string }>;
+  getUseLocalLLM?: () => Promise<boolean>;
+  setUseLocalLLM?: (useLocal: boolean) => Promise<{ success: boolean; error?: string }>;
+  onLocalLLMDownloadProgress?: (callback: (data: { model: string; downloaded: number; total: number }) => void) => () => void;
+
   // System prompt customization for Engineer feature
   getSystemPrompt?: () => Promise<{ prompt: string; isCustom: boolean }>;
   setSystemPrompt?: (prompt: string) => Promise<{ success: boolean; error?: string }>;

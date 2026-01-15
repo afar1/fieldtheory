@@ -40,8 +40,20 @@ export const ClipboardIPCChannels = {
   
   // API key management (stored securely via OS keychain)
   GET_API_KEY_STATUS: 'clipboard:getApiKeyStatus',
+  GET_API_KEY_INFO: 'clipboard:getApiKeyInfo',
+  TEST_API_KEY: 'clipboard:testApiKey',
   SET_API_KEY: 'clipboard:setApiKey',
   CLEAR_API_KEY: 'clipboard:clearApiKey',
+
+  // Local LLM model management
+  GET_LOCAL_LLM_MODELS: 'clipboard:getLocalLLMModels',
+  GET_LOCAL_LLM_STATUS: 'clipboard:getLocalLLMStatus',
+  GET_LOCAL_LLM_SELECTED: 'clipboard:getLocalLLMSelected',
+  SET_LOCAL_LLM_SELECTED: 'clipboard:setLocalLLMSelected',
+  DOWNLOAD_LOCAL_LLM: 'clipboard:downloadLocalLLM',
+  DELETE_LOCAL_LLM: 'clipboard:deleteLocalLLM',
+  GET_USE_LOCAL_LLM: 'clipboard:getUseLocalLLM',
+  SET_USE_LOCAL_LLM: 'clipboard:setUseLocalLLM',
   
   // System prompt customization for Engineer feature
   GET_SYSTEM_PROMPT: 'clipboard:getSystemPrompt',

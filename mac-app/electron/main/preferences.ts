@@ -93,6 +93,10 @@ interface Preferences {
   // Minimum word count for auto-improve - only improve transcripts with at least this many words
   autoImproveMinWords?: number;  // Default: 100, Range: 0-500, Increment: 10
 
+  // Local LLM settings - use downloaded model instead of API for transcript improvement
+  useLocalLLM?: boolean;
+  selectedLocalLLM?: string;  // Model size: '1b' or '3b'
+
   // Custom system prompt for the Engineer feature.
   // If set, overrides the default prompt loaded from file.
   customSystemPrompt?: string;
@@ -291,6 +295,59 @@ export class PreferencesManager {
   async clearApiKey(): Promise<void> {
     await this.save({ anthropicApiKeyEncrypted: undefined });
     console.log('[PreferencesManager] API key cleared');
+  }
+
+  /**
+   * Get masked version of the API key for display purposes.
+   * Shows first 7 chars and last 4 chars, with dots in between.
+   * Example: "sk-ant-•••••xy12"
+   */
+  getMaskedApiKey(): string | null {
+    const key = this.getApiKey();
+    if (!key || key.length < 12) {
+      return null;
+    }
+    const prefix = key.slice(0, 7);
+    const suffix = key.slice(-4);
+    return `${prefix}•••••${suffix}`;
+  }
+
+  /**
+   * Detect the API provider from the key format.
+   * Returns the provider name or 'unknown' if not recognized.
+   */
+  detectProvider(apiKey?: string): 'anthropic' | 'openai' | 'google' | 'groq' | 'mistral' | 'unknown' {
+    const key = apiKey || this.getApiKey();
+    if (!key) return 'unknown';
+
+    // Anthropic keys start with "sk-ant-"
+    if (key.startsWith('sk-ant-')) {
+      return 'anthropic';
+    }
+
+    // OpenAI keys start with "sk-" (but not "sk-ant-")
+    // Also includes "sk-proj-" format for project-specific keys
+    if (key.startsWith('sk-') && !key.startsWith('sk-ant-')) {
+      return 'openai';
+    }
+
+    // Groq keys start with "gsk_"
+    if (key.startsWith('gsk_')) {
+      return 'groq';
+    }
+
+    // Google/Gemini keys are typically "AIza" prefix
+    if (key.startsWith('AIza')) {
+      return 'google';
+    }
+
+    // Mistral keys are typically alphanumeric without specific prefix
+    // They're usually 32 chars and all lowercase alphanumeric
+    if (/^[a-zA-Z0-9]{32}$/.test(key)) {
+      return 'mistral';
+    }
+
+    return 'unknown';
   }
 }
 

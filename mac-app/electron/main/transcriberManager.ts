@@ -105,6 +105,7 @@ export class TranscriberManager extends EventEmitter {
   private cursorStatusManager: CursorStatusManager | null = null;
   private commandsManager: CommandsManager | null = null;
   private recordingStartTime: number = 0;
+  private skipNextPasteFailedNotification: boolean = false;
   
   // Track which hotkey started recording for cross-hotkey improvement trigger.
   // If user starts with primary and ends with secondary (or vice versa), trigger improvement.
@@ -732,25 +733,30 @@ export class TranscriberManager extends EventEmitter {
           console.log('[TranscriberManager] Text improve quota exhausted');
           this.cursorStatusManager?.showCriticalMessage('Improvement quota exhausted');
         } else {
-          // Set API key from preferences if available.
+          // Check if we can improve: either local LLM is enabled or API key exists.
+          const useLocalLLM = this.preferences.getPreference('useLocalLLM') as boolean | undefined;
           const apiKey = this.preferences.getApiKey();
+
+          // Set API key if available (needed for API fallback).
           if (apiKey) {
             setEngineerApiKey(apiKey);
-            
+          }
+
+          if (useLocalLLM || apiKey) {
             // Show improving state.
             this.cursorStatusManager?.setState('improving');
-            
-            console.log('[TranscriberManager] Running AI improvement on transcript...');
+
+            console.log(`[TranscriberManager] Running AI improvement on transcript (mode: ${useLocalLLM ? 'local' : 'API'})...`);
             const result = await improveTranscript(cleanedText);
-            
+
             if (result.success && result.refinedPrompt) {
               improvedText = result.refinedPrompt;
               finalText = improvedText;
               console.log('[TranscriberManager] Transcript improved successfully');
-              
+
               // Track quota usage.
               await this.quotaManager?.incrementTextImprove();
-              
+
               // Save improved content to the transcript item in the database.
               // The transcript item is the last one added to currentStack.
               const transcriptItemId = this.currentStack[this.currentStack.length - 1];
@@ -759,39 +765,43 @@ export class TranscriberManager extends EventEmitter {
               }
             } else {
               console.error('[TranscriberManager] Improvement failed:', result.error);
-              this.cursorStatusManager?.showCriticalMessage('Failed to improve');
+              this.cursorStatusManager?.showCriticalMessage('Improvement failed');
               // Fall back to original transcript - don't block paste.
             }
           } else {
-            console.log('[TranscriberManager] No API key configured for improvement');
-            this.cursorStatusManager?.showCriticalMessage('API key not configured');
+            console.log('[TranscriberManager] No improvement method available (no API key, no local model)');
+            this.cursorStatusManager?.showCriticalMessage('Enable local model or add API key in Settings');
+            // Skip paste-failed notification since we're showing the config message
+            this.skipNextPasteFailedNotification = true;
           }
         }
       }
-      
+
       // Update lastTranscription with the final text (improved or original).
       this.lastTranscription = finalText;
-      
+
       // Paste, check accessibility in parallel for UI feedback.
       // Don't clear stack after auto-paste so Super Paste (Cmd+Shift+V) can re-paste if needed.
       // Stack is cleared when next recording starts.
       const accessibilityCheckPromise = this.nativeHelper.checkFocusedTextInput();
       await this.pasteStack(false);
       this.emit('result', finalText);
-      
+
       // Set status to idle BEFORE emitting paste events.
       // This prevents the idle transition from overriding paste-failed UI.
       this.setStatus('idle');
       this.handleOverlayAfterTranscription();
-      
+
       // Use accessibility result to choose UI feedback (paste already happened)
       const hasTextInput = await accessibilityCheckPromise;
       if (hasTextInput) {
         this.emit('paste-success', cleanedText);
-      } else {
+      } else if (!this.skipNextPasteFailedNotification) {
         console.log('[TranscriberManager] Accessibility: no text input - showing fallback UI');
         this.emit('paste-failed', 'No text input focused', cleanedText);
       }
+      // Reset the skip flag
+      this.skipNextPasteFailedNotification = false;
     } catch (error) {
       console.error('[TranscriberManager] Transcription failed:', error);
       this.setStatus('idle');

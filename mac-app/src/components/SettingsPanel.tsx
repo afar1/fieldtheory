@@ -87,8 +87,23 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
   const [apiKeySaving, setApiKeySaving] = useState(false);
-  const [showApiKey, setShowApiKey] = useState(false);
-  
+  const [maskedApiKey, setMaskedApiKey] = useState<string | null>(null);
+  const [detectedProvider, setDetectedProvider] = useState<string>('unknown');
+  const [apiKeyTesting, setApiKeyTesting] = useState(false);
+  const [apiKeyTestResult, setApiKeyTestResult] = useState<{ success: boolean; error?: string } | null>(null);
+
+  // Auto-improve transcripts state
+  const [autoImprove, setAutoImprove] = useState(false);
+  const [autoImproveMinWords, setAutoImproveMinWords] = useState(60);
+
+  // Local LLM state
+  const [useLocalLLM, setUseLocalLLM] = useState(false);
+  const [localLLMModels, setLocalLLMModels] = useState<Record<string, { name: string; filename: string; sizeBytes: number; description: string }>>({});
+  const [localLLMStatus, setLocalLLMStatus] = useState<Record<string, boolean>>({});
+  const [selectedLocalLLM, setSelectedLocalLLM] = useState<string>('llama-3.2-3b');
+  const [downloadingLocalLLM, setDownloadingLocalLLM] = useState<string | null>(null);
+  const [localLLMProgress, setLocalLLMProgress] = useState<{ downloaded: number; total: number } | null>(null);
+
   // Permission banner state - whether to show reminders for missing permissions.
   const [showPermissionReminders, setShowPermissionReminders] = useState(true);
   
@@ -154,11 +169,40 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         }
       });
       
-      // Load API key status
-      window.clipboardAPI.getApiKeyStatus?.().then(status => {
-        setHasApiKey(status.hasKey);
+      // Load API key info (status, masked key, provider)
+      window.clipboardAPI.getApiKeyInfo?.().then(info => {
+        setHasApiKey(info.hasKey);
+        setMaskedApiKey(info.maskedKey);
+        setDetectedProvider(info.provider);
       });
-      
+
+      // Load auto-improve settings
+      window.transcribeAPI?.getAutoImprove?.().then(enabled => {
+        setAutoImprove(enabled);
+      });
+      window.transcribeAPI?.getAutoImproveMinWords?.().then(minWords => {
+        setAutoImproveMinWords(minWords);
+      });
+
+      // Load local LLM settings
+      window.clipboardAPI?.getLocalLLMModels?.().then(models => {
+        setLocalLLMModels(models);
+      });
+      window.clipboardAPI?.getLocalLLMStatus?.().then(status => {
+        setLocalLLMStatus(status);
+      });
+      window.clipboardAPI?.getLocalLLMSelected?.().then(model => {
+        setSelectedLocalLLM(model);
+      });
+      window.clipboardAPI?.getUseLocalLLM?.().then(useLocal => {
+        setUseLocalLLM(useLocal);
+      });
+
+      // Subscribe to download progress
+      const unsubProgress = window.clipboardAPI?.onLocalLLMDownloadProgress?.((data) => {
+        setLocalLLMProgress({ downloaded: data.downloaded, total: data.total });
+      });
+
       // Load permission banner setting
       window.clipboardAPI.getHideScreenRecordingBanner?.().then(hide => {
         setShowPermissionReminders(!hide);
@@ -258,16 +302,22 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   // Handler for saving API key
   const handleSaveApiKey = async () => {
     if (!window.clipboardAPI?.setApiKey || !apiKeyInput.trim()) return;
-    
+
     setApiKeySaving(true);
     setApiKeyError(null);
-    
+    setApiKeyTestResult(null);
+
     try {
       const result = await window.clipboardAPI.setApiKey(apiKeyInput.trim());
       if (result.success) {
         setHasApiKey(true);
         setApiKeyInput('');
-        setShowApiKey(false);
+        // Refresh API key info to get masked key and provider
+        const info = await window.clipboardAPI.getApiKeyInfo?.();
+        if (info) {
+          setMaskedApiKey(info.maskedKey);
+          setDetectedProvider(info.provider);
+        }
       } else {
         setApiKeyError(result.error || 'Failed to save API key');
       }
@@ -277,22 +327,128 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       setApiKeySaving(false);
     }
   };
-  
+
   // Handler for clearing API key
   const handleClearApiKey = async () => {
     if (!window.clipboardAPI?.clearApiKey) return;
-    
+
     try {
       const result = await window.clipboardAPI.clearApiKey();
       if (result.success) {
         setHasApiKey(false);
         setApiKeyInput('');
+        setMaskedApiKey(null);
+        setDetectedProvider('unknown');
+        setApiKeyTestResult(null);
       }
     } catch (err) {
       console.error('Failed to clear API key:', err);
     }
   };
-  
+
+  // Handler for testing API key connection
+  const handleTestApiKey = async () => {
+    if (!window.clipboardAPI?.testApiKey) return;
+
+    setApiKeyTesting(true);
+    setApiKeyTestResult(null);
+
+    try {
+      const result = await window.clipboardAPI.testApiKey();
+      setApiKeyTestResult(result);
+    } catch (err) {
+      setApiKeyTestResult({
+        success: false,
+        error: err instanceof Error ? err.message : 'Connection test failed'
+      });
+    } finally {
+      setApiKeyTesting(false);
+    }
+  };
+
+  // Handler for toggling auto-improve
+  const handleAutoImproveChange = async (enabled: boolean) => {
+    if (!window.transcribeAPI?.setAutoImprove) return;
+
+    setAutoImprove(enabled);
+    try {
+      await window.transcribeAPI.setAutoImprove(enabled);
+    } catch (err) {
+      console.error('Failed to change auto-improve setting:', err);
+    }
+  };
+
+  // Handler for changing auto-improve minimum words
+  const handleAutoImproveMinWordsChange = async (minWords: number) => {
+    if (!window.transcribeAPI?.setAutoImproveMinWords) return;
+
+    setAutoImproveMinWords(minWords);
+    try {
+      await window.transcribeAPI.setAutoImproveMinWords(minWords);
+    } catch (err) {
+      console.error('Failed to change auto-improve min words:', err);
+    }
+  };
+
+  // Handler for toggling use local LLM
+  const handleUseLocalLLMChange = async (useLocal: boolean) => {
+    if (!window.clipboardAPI?.setUseLocalLLM) return;
+
+    setUseLocalLLM(useLocal);
+    try {
+      await window.clipboardAPI.setUseLocalLLM(useLocal);
+    } catch (err) {
+      console.error('Failed to change use local LLM setting:', err);
+    }
+  };
+
+  // Handler for downloading local LLM model
+  const handleDownloadLocalLLM = async (model: string) => {
+    if (!window.clipboardAPI?.downloadLocalLLM || downloadingLocalLLM) return;
+
+    setDownloadingLocalLLM(model);
+    setLocalLLMProgress(null);
+    try {
+      const result = await window.clipboardAPI.downloadLocalLLM(model);
+      if (result.success) {
+        // Refresh status
+        const status = await window.clipboardAPI.getLocalLLMStatus?.();
+        if (status) setLocalLLMStatus(status);
+      }
+    } catch (err) {
+      console.error('Failed to download local LLM:', err);
+    } finally {
+      setDownloadingLocalLLM(null);
+      setLocalLLMProgress(null);
+    }
+  };
+
+  // Handler for deleting local LLM model
+  const handleDeleteLocalLLM = async (model: string) => {
+    if (!window.clipboardAPI?.deleteLocalLLM) return;
+
+    try {
+      await window.clipboardAPI.deleteLocalLLM(model);
+      // Refresh status
+      const status = await window.clipboardAPI.getLocalLLMStatus?.();
+      if (status) setLocalLLMStatus(status);
+    } catch (err) {
+      console.error('Failed to delete local LLM:', err);
+    }
+  };
+
+  // Handler for selecting local LLM model
+  const handleSelectLocalLLM = async (model: string) => {
+    if (!window.clipboardAPI?.setLocalLLMSelected) return;
+
+    setSelectedLocalLLM(model);
+    try {
+      await window.clipboardAPI.setLocalLLMSelected(model);
+    } catch (err) {
+      console.error('Failed to select local LLM:', err);
+    }
+  };
+
   // Handler for toggling continuous context enabled state
   const handleToggleContinuousContext = async (enabled: boolean) => {
     if (!window.clipboardAPI?.setContinuousContextEnabled) return;
@@ -1008,6 +1164,306 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </div>
         </div>
       )}
+
+      {/* Auto-Improve Transcripts Section */}
+      <div style={styles.section}>
+        <SectionHeader title="Auto-Improve Transcripts" />
+
+        {/* Auto-Improve Toggle */}
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={styles.rowLabel}>Auto-Improve</span>
+            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+              Automatically enhance transcripts with AI
+            </span>
+          </div>
+          <button
+            onClick={() => handleAutoImproveChange(!autoImprove)}
+            style={{ ...styles.toggle, backgroundColor: autoImprove ? '#22c55e' : '#d1d5db' }}
+          >
+            <span style={{ ...styles.toggleKnob, transform: autoImprove ? 'translateX(20px)' : 'translateX(2px)' }} />
+          </button>
+        </div>
+
+        {/* Settings shown when auto-improve is enabled */}
+        {autoImprove && (
+          <>
+            {/* Minimum words slider */}
+            <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: `1px solid ${theme.border}` }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <span style={{ fontSize: '13px', color: theme.text }}>Minimum words to improve</span>
+                <span style={{ fontSize: '13px', fontWeight: 500, color: theme.text }}>{autoImproveMinWords} words</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="500"
+                step="10"
+                value={autoImproveMinWords}
+                onChange={(e) => handleAutoImproveMinWordsChange(Number(e.target.value))}
+                style={{
+                  width: '100%',
+                  height: '6px',
+                  borderRadius: '3px',
+                  background: `linear-gradient(to right, #22c55e 0%, #22c55e ${(autoImproveMinWords / 500) * 100}%, ${theme.border} ${(autoImproveMinWords / 500) * 100}%, ${theme.border} 100%)`,
+                  appearance: 'none',
+                  cursor: 'pointer',
+                }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
+                <span style={{ fontSize: '11px', color: theme.textSecondary }}>0</span>
+                <span style={{ fontSize: '11px', color: theme.textSecondary }}>500</span>
+              </div>
+            </div>
+
+            {/* Method Selector - API vs Local */}
+            <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: `1px solid ${theme.border}` }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <span style={{ fontSize: '13px', color: theme.text }}>Method</span>
+                <div style={{
+                  display: 'flex',
+                  borderRadius: '6px',
+                  overflow: 'hidden',
+                  border: `1px solid ${theme.border}`,
+                }}>
+                  <button
+                    onClick={() => handleUseLocalLLMChange(false)}
+                    style={{
+                      padding: '4px 12px',
+                      fontSize: '12px',
+                      fontWeight: 500,
+                      border: 'none',
+                      cursor: 'pointer',
+                      backgroundColor: !useLocalLLM ? theme.accent : 'transparent',
+                      color: !useLocalLLM ? '#fff' : theme.text,
+                      transition: 'background-color 0.2s',
+                    }}
+                  >
+                    API
+                  </button>
+                  <button
+                    onClick={() => handleUseLocalLLMChange(true)}
+                    style={{
+                      padding: '4px 12px',
+                      fontSize: '12px',
+                      fontWeight: 500,
+                      border: 'none',
+                      borderLeft: `1px solid ${theme.border}`,
+                      cursor: 'pointer',
+                      backgroundColor: useLocalLLM ? theme.accent : 'transparent',
+                      color: useLocalLLM ? '#fff' : theme.text,
+                      transition: 'background-color 0.2s',
+                    }}
+                  >
+                    Local
+                  </button>
+                </div>
+              </div>
+
+              {/* API Mode - show API key input */}
+              {!useLocalLLM && (
+                <div style={{ marginTop: '8px' }}>
+                  {hasApiKey ? (
+                    <>
+                      <div style={styles.row}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{
+                            ...styles.statusDot,
+                            backgroundColor: apiKeyTestResult?.success ? '#22c55e' : (apiKeyTestResult?.success === false ? '#ef4444' : '#9ca3af'),
+                          }} />
+                          <span style={{ fontSize: '13px', color: theme.textSecondary }}>{maskedApiKey || '•••••••'}</span>
+                          {detectedProvider !== 'unknown' && (
+                            <span style={{
+                              padding: '2px 6px',
+                              borderRadius: '4px',
+                              fontSize: '10px',
+                              fontWeight: 600,
+                              backgroundColor: theme.accent,
+                              color: '#fff',
+                              textTransform: 'capitalize' as const,
+                            }}>
+                              {detectedProvider}
+                            </span>
+                          )}
+                        </div>
+                        <div style={styles.rowControls}>
+                          <button
+                            onClick={handleTestApiKey}
+                            disabled={apiKeyTesting}
+                            style={styles.linkBtn}
+                          >
+                            {apiKeyTesting ? 'Testing...' : 'Test'}
+                          </button>
+                          <button
+                            onClick={handleClearApiKey}
+                            style={{ ...styles.linkBtn, color: '#dc2626' }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                      {apiKeyTestResult && (
+                        <p style={{
+                          fontSize: '12px',
+                          color: apiKeyTestResult.success ? '#22c55e' : '#ef4444',
+                          margin: '4px 0 0 16px',
+                        }}>
+                          {apiKeyTestResult.success ? 'Connected' : apiKeyTestResult.error}
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <input
+                          type="password"
+                          value={apiKeyInput}
+                          onChange={(e) => setApiKeyInput(e.target.value)}
+                          placeholder="Paste API key"
+                          style={{
+                            ...styles.input,
+                            flex: 1,
+                            minWidth: 0,
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveApiKey();
+                          }}
+                        />
+                        <button
+                          onClick={handleSaveApiKey}
+                          disabled={apiKeySaving || !apiKeyInput.trim()}
+                          style={{
+                            ...styles.btn,
+                            backgroundColor: apiKeyInput.trim() ? theme.accent : undefined,
+                            color: apiKeyInput.trim() ? '#fff' : undefined,
+                            border: apiKeyInput.trim() ? 'none' : undefined,
+                            opacity: apiKeySaving || !apiKeyInput.trim() ? 0.5 : 1,
+                          }}
+                        >
+                          {apiKeySaving ? '...' : 'Save'}
+                        </button>
+                      </div>
+                      {apiKeyError && <p style={styles.error}>{apiKeyError}</p>}
+                    </>
+                  )}
+                  {/* Fallback note */}
+                  {Object.values(localLLMStatus).some(Boolean) && (
+                    <p style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '8px' }}>
+                      Falls back to local model if offline
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Local Mode - show model list */}
+              {useLocalLLM && (
+            <div style={{ marginTop: '8px' }}>
+              {Object.entries(localLLMModels).map(([modelId, model]) => {
+                const isDownloaded = localLLMStatus[modelId] || false;
+                const isDownloading = downloadingLocalLLM === modelId;
+                const isSelected = selectedLocalLLM === modelId;
+                const sizeMB = Math.round(model.sizeBytes / 1024 / 1024);
+                const progressPercent = localLLMProgress && isDownloading
+                  ? Math.round((localLLMProgress.downloaded / localLLMProgress.total) * 100)
+                  : 0;
+
+                return (
+                  <div
+                    key={modelId}
+                    onClick={() => isDownloaded && !isSelected && handleSelectLocalLLM(modelId)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 12px',
+                      marginBottom: '4px',
+                      borderRadius: '6px',
+                      border: `1px solid ${isSelected && isDownloaded ? theme.accent : theme.border}`,
+                      backgroundColor: isSelected && isDownloaded ? theme.bgSecondary : 'transparent',
+                      cursor: isDownloaded ? 'pointer' : 'default',
+                      transition: 'border-color 0.2s, background-color 0.2s',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      {/* Selection indicator */}
+                      <div style={{
+                        width: '16px',
+                        height: '16px',
+                        borderRadius: '50%',
+                        border: `2px solid ${isSelected && isDownloaded ? theme.accent : isDownloaded ? theme.border : 'transparent'}`,
+                        backgroundColor: isSelected && isDownloaded ? theme.accent : 'transparent',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                      }}>
+                        {isSelected && isDownloaded && (
+                          <div style={{
+                            width: '6px',
+                            height: '6px',
+                            borderRadius: '50%',
+                            backgroundColor: '#fff',
+                          }} />
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                        <span style={{ fontSize: '13px', fontWeight: isSelected ? 600 : 500, color: theme.text }}>
+                          {model.name}
+                        </span>
+                        <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                          {sizeMB}MB {isDownloaded && '· Downloaded'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div style={styles.rowControls} onClick={(e) => e.stopPropagation()}>
+                      {isDownloading && localLLMProgress ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <div style={{
+                            width: '60px',
+                            height: '4px',
+                            backgroundColor: theme.border,
+                            borderRadius: '2px',
+                            overflow: 'hidden',
+                          }}>
+                            <div style={{
+                              width: `${progressPercent}%`,
+                              height: '100%',
+                              backgroundColor: '#3b82f6',
+                              transition: 'width 0.3s',
+                            }} />
+                          </div>
+                          <span style={{ fontSize: '11px', color: theme.textSecondary }}>{progressPercent}%</span>
+                        </div>
+                      ) : isDownloaded ? (
+                        <button
+                          onClick={() => handleDeleteLocalLLM(modelId)}
+                          style={{ ...styles.linkBtn, color: '#9ca3af' }}
+                        >
+                          Delete
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleDownloadLocalLLM(modelId)}
+                          disabled={downloadingLocalLLM !== null}
+                          style={{
+                            ...styles.btn,
+                            opacity: downloadingLocalLLM !== null ? 0.5 : 1,
+                          }}
+                        >
+                          Download
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
 
       {/* Keyboard Shortcuts Section - First for easy access */}
       <div style={styles.section}>

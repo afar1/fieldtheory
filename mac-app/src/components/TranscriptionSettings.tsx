@@ -31,8 +31,6 @@ export default function TranscriptionSettings() {
   const [isCapturingAbandonHotkey, setIsCapturingAbandonHotkey] = useState(false);
   const [abandonHotkeyError, setAbandonHotkeyError] = useState<string | null>(null);
   const [abandonConfirmation, setAbandonConfirmation] = useState(true);
-  const [autoImprove, setAutoImprove] = useState(false);
-  const [autoImproveMinWords, setAutoImproveMinWords] = useState(100);
 
   const [soundsEnabled, setSoundsEnabled] = useState(true);
   const [recordingStartSound, setRecordingStartSound] = useState<string | undefined>('ButtonClickDown.mp3');
@@ -53,7 +51,7 @@ export default function TranscriptionSettings() {
 
     const fetchStatus = async () => {
       try {
-        const [currentStatus, currentModelStatus, currentHotkey, models, currentSelectedModel, downloadStatus, downloadingModels, currentOverlayStyle, currentAbandonHotkey, currentAbandonConfirmation, currentAutoImprove, currentAutoImproveMinWords, soundConfig, sounds] = await Promise.all([
+        const [currentStatus, currentModelStatus, currentHotkey, models, currentSelectedModel, downloadStatus, downloadingModels, currentOverlayStyle, currentAbandonHotkey, currentAbandonConfirmation, soundConfig, sounds] = await Promise.all([
           window.transcribeAPI!.getStatus(),
           window.transcribeAPI!.getModelStatus(),
           window.transcribeAPI!.getHotkey(),
@@ -64,8 +62,6 @@ export default function TranscriptionSettings() {
           window.transcribeAPI!.getOverlayStyle(),
           window.transcribeAPI!.getAbandonHotkey?.() ?? 'Escape',
           window.transcribeAPI!.getAbandonConfirmation?.() ?? true,
-          window.transcribeAPI!.getAutoImprove?.() ?? false,
-          window.transcribeAPI!.getAutoImproveMinWords?.() ?? 100,
           window.transcribeAPI!.getSoundConfig?.() ?? { enabled: true, recordingStart: 'ButtonClickDown.mp3', recordingStop: 'ButtonClickUp.mp3', recordingCancel: 'AlertBonk.mp3', windowOpen: 'WindowOpen.mp3', windowClose: 'WindowClose.mp3', transcribing: 'Beep.mp3', paste: 'ButtonClickUp.mp3' },
           window.transcribeAPI!.getAvailableSounds?.() ?? [],
         ]);
@@ -82,8 +78,6 @@ export default function TranscriptionSettings() {
         setOverlayStyle(currentOverlayStyle);
         setAbandonHotkey(currentAbandonHotkey);
         setAbandonConfirmation(currentAbandonConfirmation);
-        setAutoImprove(currentAutoImprove);
-        setAutoImproveMinWords(currentAutoImproveMinWords);
         setSoundsEnabled(soundConfig.enabled);
         setRecordingStartSound(soundConfig.recordingStart);
         setRecordingStopSound(soundConfig.recordingStop);
@@ -283,28 +277,6 @@ export default function TranscriptionSettings() {
       await window.transcribeAPI.setAbandonConfirmation(enabled);
     } catch (err) {
       console.error('Failed to change abandon confirmation setting:', err);
-    }
-  }, []);
-
-  const handleAutoImproveChange = useCallback(async (enabled: boolean) => {
-    if (!window.transcribeAPI?.setAutoImprove) return;
-
-    setAutoImprove(enabled);
-    try {
-      await window.transcribeAPI.setAutoImprove(enabled);
-    } catch (err) {
-      console.error('Failed to change auto-improve setting:', err);
-    }
-  }, []);
-
-  const handleAutoImproveMinWordsChange = useCallback(async (minWords: number) => {
-    if (!window.transcribeAPI?.setAutoImproveMinWords) return;
-
-    setAutoImproveMinWords(minWords);
-    try {
-      await window.transcribeAPI.setAutoImproveMinWords(minWords);
-    } catch (err) {
-      console.error('Failed to change auto-improve min words setting:', err);
     }
   }, []);
 
@@ -693,58 +665,6 @@ export default function TranscriptionSettings() {
       </div>
 
       {error && <p style={styles.error}>{error}</p>}
-
-      {/* Auto-Improve Toggle */}
-      <div style={{ ...styles.soundsSection, marginTop: '16px' }}>
-        <div style={styles.row}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            <span style={styles.rowLabel}>Auto-Improve Transcripts</span>
-            <span style={{ fontSize: '11px', color: '#9ca3af' }}>
-              Automatically enhance transcripts with AI after completion
-            </span>
-          </div>
-          <button
-            onClick={() => handleAutoImproveChange(!autoImprove)}
-            style={{ ...styles.toggle, backgroundColor: autoImprove ? '#22c55e' : '#d1d5db' }}
-            title={autoImprove ? 'Auto-improve enabled' : 'Auto-improve disabled'}
-          >
-            <span style={{ ...styles.toggleKnob, transform: autoImprove ? 'translateX(20px)' : 'translateX(2px)' }} />
-          </button>
-        </div>
-
-        {/* Minimum word count slider - only shown when auto-improve is enabled */}
-        {autoImprove && (
-          <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid #e5e7eb' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <span style={{ fontSize: '13px', color: '#374151' }}>Minimum words to improve</span>
-              <span style={{ fontSize: '13px', fontWeight: 500, color: '#111827' }}>{autoImproveMinWords} words</span>
-            </div>
-            <input
-              type="range"
-              min="0"
-              max="500"
-              step="10"
-              value={autoImproveMinWords}
-              onChange={(e) => handleAutoImproveMinWordsChange(Number(e.target.value))}
-              style={{
-                width: '100%',
-                height: '6px',
-                borderRadius: '3px',
-                background: `linear-gradient(to right, #22c55e 0%, #22c55e ${(autoImproveMinWords / 500) * 100}%, #e5e7eb ${(autoImproveMinWords / 500) * 100}%, #e5e7eb 100%)`,
-                appearance: 'none',
-                cursor: 'pointer',
-              }}
-            />
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
-              <span style={{ fontSize: '11px', color: '#9ca3af' }}>0</span>
-              <span style={{ fontSize: '11px', color: '#9ca3af' }}>500</span>
-            </div>
-            <p style={{ fontSize: '11px', color: '#6b7280', marginTop: '8px' }}>
-              Transcripts with fewer words will skip auto-improvement
-            </p>
-          </div>
-        )}
-      </div>
 
       <div style={styles.modelsSection}>
         <div style={styles.sectionHeader}>

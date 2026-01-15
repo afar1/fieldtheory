@@ -10,6 +10,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { LocalLLMManager } from './localLLMManager';
 
 // API key is provided at runtime from preferences or environment.
 let anthropicApiKey: string | null = null;
@@ -17,6 +18,25 @@ let anthropicApiKey: string | null = null;
 // Custom system prompt (set from preferences at runtime).
 // If null, use the default system prompt from file.
 let customSystemPrompt: string | null = null;
+
+// Local LLM settings
+let localLLMManager: LocalLLMManager | null = null;
+let useLocalLLM: boolean = false;
+
+/**
+ * Set the local LLM manager instance.
+ */
+export function setLocalLLMManager(manager: LocalLLMManager): void {
+  localLLMManager = manager;
+}
+
+/**
+ * Set whether to use local LLM for transcript improvement.
+ */
+export function setUseLocalLLM(useLocal: boolean): void {
+  useLocalLLM = useLocal;
+  console.log('[PromptEngineer] Use local LLM:', useLocal);
+}
 
 /**
  * Set the Anthropic API key for the engineer service.
@@ -260,7 +280,7 @@ export async function engineerStack(
 }
 
 /**
- * Hardcoded system prompt for transcript improvement.
+ * Hardcoded system prompt for transcript improvement (API/large models).
  * Not user-modifiable to ensure consistent quality.
  */
 const IMPROVE_TRANSCRIPT_PROMPT = `Rewrite this spoken feedback as clear prose. Same meaning, fewer words, no ambiguity. Replace vague references with specific names. Remove filler words. Keep it as one paragraph. Do not add structure, bullets, or headers.
@@ -268,26 +288,145 @@ const IMPROVE_TRANSCRIPT_PROMPT = `Rewrite this spoken feedback as clear prose. 
 IMPORTANT: Preserve any [Figure X] references exactly as written. These reference images and must remain in the output in their original positions relative to the surrounding text.`;
 
 /**
+ * Simpler prompt for local LLM (1B/3B models need explicit, simple instructions).
+ * Critical: Must emphasize returning ONLY the text, no explanations.
+ */
+const LOCAL_LLM_TRANSCRIPT_PROMPT = `You are a transcript cleaner. Clean up the text below. Remove filler words like "um", "uh", "like", "you know". Fix grammar. Keep the same meaning. Output ONLY the cleaned text. Do not explain. Do not add commentary. Do not say "Here is" or similar.`;
+
+/**
+ * Strip common LLM preambles and postambles from output.
+ * Small models often add "Here is..." or explanatory text despite instructions.
+ */
+function cleanLocalLLMOutput(output: string): string {
+  let cleaned = output.trim();
+
+  // Remove common preambles (case-insensitive)
+  const preambles = [
+    /^here(?:'s| is) (?:the )?(?:cleaned|improved|corrected|rewritten|revised).*?[:.\n]/i,
+    /^(?:the )?(?:cleaned|improved|corrected|rewritten|revised).*?[:.\n]/i,
+    /^sure[,!.]?\s*/i,
+    /^okay[,!.]?\s*/i,
+    /^certainly[,!.]?\s*/i,
+  ];
+
+  for (const pattern of preambles) {
+    cleaned = cleaned.replace(pattern, '');
+  }
+
+  // Remove quotes if the whole response is quoted
+  if ((cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+      (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+    cleaned = cleaned.slice(1, -1);
+  }
+
+  return cleaned.trim();
+}
+
+/**
+ * Try to improve transcript using local LLM.
+ * Returns null if local LLM is not available.
+ */
+async function tryLocalLLM(rawTranscript: string): Promise<EngineerResult | null> {
+  if (!localLLMManager) {
+    return null;
+  }
+
+  // Check if model is downloaded
+  const isAvailable = await localLLMManager.isModelAvailableForSize(localLLMManager.getSelectedModel());
+  if (!isAvailable) {
+    return null;
+  }
+
+  console.log('[PromptEngineer] Using local LLM for transcript improvement');
+
+  // Use simpler prompt for local models
+  const result = await localLLMManager.generateResponse(
+    LOCAL_LLM_TRANSCRIPT_PROMPT,
+    rawTranscript.trim(),
+    512  // Shorter max tokens - transcript cleanup shouldn't need much
+  );
+
+  if (result.success && result.response) {
+    const cleaned = cleanLocalLLMOutput(result.response);
+    return {
+      success: true,
+      refinedPrompt: cleaned,
+    };
+  }
+
+  console.error('[PromptEngineer] Local LLM failed:', result.error);
+  return {
+    success: false,
+    error: result.error || 'Local LLM failed',
+  };
+}
+
+/**
+ * Check if network is available by attempting a lightweight request.
+ */
+async function isNetworkAvailable(): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+
+    const response = await fetch('https://api.anthropic.com/', {
+      method: 'HEAD',
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+    return true;
+  } catch (error) {
+    console.log('[PromptEngineer] Network check failed:', error instanceof Error ? error.message : 'unknown');
+    return false;
+  }
+}
+
+/**
  * Improve a transcript by cleaning up spoken language into clear prose.
  * Uses a hardcoded prompt optimized for transcript improvement.
- * 
+ *
+ * Mode selection:
+ * - If useLocalLLM is true: use local model
+ * - If useLocalLLM is false (API mode): use API, but fall back to local if network unavailable
+ *
  * @param rawTranscript - The raw transcribed text to improve
  * @returns The improved text, or error if failed
  */
 export async function improveTranscript(rawTranscript: string): Promise<EngineerResult> {
-  const apiKey = getApiKey();
-  
-  if (!apiKey) {
-    return {
-      success: false,
-      error: 'Anthropic API key not configured. Please set it in Settings.',
-    };
-  }
-
   if (!rawTranscript || rawTranscript.trim().length === 0) {
     return {
       success: false,
       error: 'No transcript provided to improve.',
+    };
+  }
+
+  // If local LLM mode is explicitly enabled, use it
+  if (useLocalLLM) {
+    const localResult = await tryLocalLLM(rawTranscript);
+    if (localResult) {
+      return localResult;
+    }
+    // Local LLM was selected but isn't available
+    return {
+      success: false,
+      error: 'Local model not available. Download a model in Settings.',
+    };
+  }
+
+  // API mode - try API first, fall back to local if network unavailable
+  const apiKey = getApiKey();
+
+  if (!apiKey) {
+    // No API key - try local as fallback
+    const localResult = await tryLocalLLM(rawTranscript);
+    if (localResult) {
+      console.log('[PromptEngineer] No API key, using local LLM fallback');
+      return localResult;
+    }
+    return {
+      success: false,
+      error: 'No API key configured and no local model available.',
     };
   }
 
@@ -300,8 +439,9 @@ export async function improveTranscript(rawTranscript: string): Promise<Engineer
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-5-20250929',
-        max_tokens: 4096,
+        // Use Haiku for fast, cheap transcript improvement
+        model: 'claude-3-5-haiku-20241022',
+        max_tokens: 1024,
         system: IMPROVE_TRANSCRIPT_PROMPT,
         messages: [
           {
@@ -336,10 +476,18 @@ export async function improveTranscript(rawTranscript: string): Promise<Engineer
       refinedPrompt: content.trim(),
     };
   } catch (error) {
-    console.error('[PromptEngineer] improveTranscript failed:', error);
+    // Network error - try local LLM as fallback
+    console.error('[PromptEngineer] API request failed, checking for local fallback:', error);
+
+    const localResult = await tryLocalLLM(rawTranscript);
+    if (localResult) {
+      console.log('[PromptEngineer] Network unavailable, using local LLM fallback');
+      return localResult;
+    }
+
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error occurred',
+      error: 'Network unavailable and no local model available.',
     };
   }
 }
