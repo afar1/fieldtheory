@@ -32,6 +32,16 @@ function deobfuscate(obfuscated: string): string {
 }
 
 /**
+ * Check if a string looks like a valid API key (printable ASCII only).
+ * Returns false if the string contains garbage/corrupted characters.
+ */
+function isValidApiKeyFormat(key: string): boolean {
+  // API keys should only contain printable ASCII (32-126) and common separators
+  // eslint-disable-next-line no-control-regex
+  return /^[\x20-\x7E]+$/.test(key) && key.length >= 10;
+}
+
+/**
  * Window state for persistence.
  */
 interface WindowState {
@@ -291,7 +301,7 @@ export class PreferencesManager {
 
   /**
    * Retrieve the API key, deobfuscating from storage.
-   * Returns null if no key is stored or deobfuscation fails.
+   * Returns null if no key is stored, deobfuscation fails, or key is corrupted.
    */
   getApiKey(): string | null {
     const obfuscated = this.preferences.anthropicApiKeyEncrypted;
@@ -300,7 +310,13 @@ export class PreferencesManager {
     }
 
     try {
-      return deobfuscate(obfuscated);
+      const key = deobfuscate(obfuscated);
+      // Validate the deobfuscated key looks like a real API key
+      if (!isValidApiKeyFormat(key)) {
+        console.warn('[PreferencesManager] Stored API key appears corrupted, treating as empty');
+        return null;
+      }
+      return key;
     } catch (error) {
       console.error('[PreferencesManager] Failed to deobfuscate API key:', error);
       return null;
@@ -324,17 +340,38 @@ export class PreferencesManager {
 
   /**
    * Get masked version of the API key for display purposes.
-   * Shows first 7 chars and last 4 chars, with dots in between.
-   * Example: "sk-ant-•••••xy12"
+   * Shows the identifiable prefix followed by fixed dots.
+   * Example: "sk-ant-api03-••••••••"
    */
   getMaskedApiKey(): string | null {
     const key = this.getApiKey();
     if (!key || key.length < 12) {
       return null;
     }
-    const prefix = key.slice(0, 7);
-    const suffix = key.slice(-4);
-    return `${prefix}•••••${suffix}`;
+
+    // Find the identifiable prefix (first segment with alphanumerics)
+    // For Anthropic: "sk-ant-api03-" prefix
+    // For OpenAI: "sk-proj-" or "sk-" prefix
+    // For others: first 8-12 chars
+    let prefixLength = 7;
+
+    if (key.startsWith('sk-ant-api')) {
+      // Anthropic format: sk-ant-api03-...
+      const match = key.match(/^sk-ant-api\d+-/);
+      prefixLength = match ? match[0].length : 13;
+    } else if (key.startsWith('sk-proj-')) {
+      prefixLength = 8;
+    } else if (key.startsWith('sk-')) {
+      prefixLength = 3;
+    } else if (key.startsWith('gsk_')) {
+      prefixLength = 4;
+    } else if (key.startsWith('AIza')) {
+      prefixLength = 4;
+    }
+
+    const prefix = key.slice(0, prefixLength);
+    // Use fixed 8 dots for clean display
+    return `${prefix}••••••••`;
   }
 
   /**

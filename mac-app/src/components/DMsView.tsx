@@ -93,6 +93,15 @@ function formatRelativeTime(timestamp: number): string {
 }
 
 /**
+ * Format timestamp to date string like "Jan 8, 2024".
+ */
+function formatDate(timestamp: number): string {
+  const date = new Date(timestamp);
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+}
+
+/**
  * Get display name for a contact (name or email).
  */
 function getDisplayName(name: string | null, email: string | null): string {
@@ -123,6 +132,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
   const [activeTab, setActiveTab] = useState<'dms' | 'feedback'>(feedbackOnly ? 'feedback' : 'dms');
   const [selectedFeedback, setSelectedFeedback] = useState<SocialMessage | null>(null);
   const [feedbackReplies, setFeedbackReplies] = useState<SocialMessage[]>([]);
+  const [feedbackFilter, setFeedbackFilter] = useState<'all' | 'open' | 'resolved' | 'archived'>('all');
   const [activityLog, setActivityLog] = useState<ActivityLogEntry[]>([]);
   const [replyText, setReplyText] = useState('');
   const [replyImage, setReplyImage] = useState<{ base64: string; preview: string } | null>(null);
@@ -136,6 +146,14 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
   // Transcription state for feedback input
   const [transcriptionStatus, setTranscriptionStatus] = useState<TranscriptionStatus>('idle');
   const [isOnFeedbackPage, setIsOnFeedbackPage] = useState(false);
+
+  // Expanded image state for click-to-expand thumbnails
+  const [expandedImage, setExpandedImage] = useState<{ url: string; alt: string } | null>(null);
+
+  // Resizable panel state
+  const [panelWidth, setPanelWidth] = useState(220);
+  const [isResizing, setIsResizing] = useState(false);
+  const [panelCollapsed, setPanelCollapsed] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -309,6 +327,20 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, feedbackReplies]);
 
+  // Close expanded image on ESC key.
+  useEffect(() => {
+    if (!expandedImage) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setExpandedImage(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [expandedImage]);
+
   // Track if we're on the feedback compose page (no conversation/feedback selected).
   useEffect(() => {
     const onFeedbackPage = activeTab === 'feedback' && !selectedFeedback && !selectedConversation;
@@ -351,6 +383,32 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
   useEffect(() => {
     setSelectedIndex(0);
   }, [activeTab]);
+
+  // Handle panel resize.
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const newWidth = Math.min(Math.max(e.clientX - 12, 150), 400);
+      setPanelWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [isResizing]);
 
   // Keyboard navigation.
   useEffect(() => {
@@ -585,15 +643,23 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
 
   const handleStatusChange = async (feedbackId: string, status: 'open' | 'resolved' | 'archived') => {
     if (!window.socialAPI) return;
-    
+
     // Only admin can archive.
     if (status === 'archived' && !isAdmin) return;
-    
+
     await window.socialAPI.updateFeedbackStatus(feedbackId, status);
-    loadData();
-    
+
+    // Optimistic update - update local state without full reload
+    setFeedback(prev => prev.map(f =>
+      f.id === feedbackId ? { ...f, feedbackStatus: status } : f
+    ));
+
+    // Update selected feedback if it's the one being changed
     if (selectedFeedback && selectedFeedback.id === feedbackId) {
-      loadFeedbackDetails(selectedFeedback);
+      setSelectedFeedback({ ...selectedFeedback, feedbackStatus: status });
+
+      // Reload activity log to show the status change
+      loadFeedbackDetails({ ...selectedFeedback, feedbackStatus: status });
     }
   };
 
@@ -764,23 +830,65 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
         alignItems: 'center',
       }}>
         {feedbackOnly ? (
-          // Feedback-only mode: show header instead of tabs.
-          <div style={{ 
-            fontSize: '12px', 
-            fontWeight: 500, 
-            color: theme.text,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-          }}>
-            Send Feedback
-            <span style={{ fontSize: '10px', color: theme.textSecondary, fontWeight: 400 }}>
-              Use Field Theory to transcribe your feedback
-            </span>
-          </div>
-        ) : (
-          // Full mode: show DMs and Feedback tabs.
+          // Feedback-only mode: hamburger left, add new right.
           <>
+            {/* Hamburger menu - collapse/expand list */}
+            <button
+              onClick={() => setPanelCollapsed(!panelCollapsed)}
+              style={{
+                padding: '4px 6px',
+                fontSize: '12px',
+                backgroundColor: 'transparent',
+                color: theme.textSecondary,
+                border: 'none',
+                cursor: 'pointer',
+                borderRadius: '3px',
+                lineHeight: 1,
+              }}
+              title={panelCollapsed ? 'Show list' : 'Hide list'}
+            >
+              ☰
+            </button>
+
+            {/* Add New button - go to compose view */}
+            <button
+              onClick={() => setSelectedFeedback(null)}
+              style={{
+                marginLeft: 'auto',
+                padding: '4px 8px',
+                fontSize: '9px',
+                backgroundColor: 'transparent',
+                color: theme.textSecondary,
+                border: `1px solid ${theme.inputBorder}`,
+                borderRadius: '4px',
+                cursor: 'pointer',
+                outline: 'none',
+              }}
+            >
+              + Add New
+            </button>
+          </>
+        ) : (
+          // Full mode: hamburger left, tabs center, add new right.
+          <>
+            {/* Hamburger menu - collapse/expand list */}
+            <button
+              onClick={() => setPanelCollapsed(!panelCollapsed)}
+              style={{
+                padding: '4px 6px',
+                fontSize: '12px',
+                backgroundColor: 'transparent',
+                color: theme.textSecondary,
+                border: 'none',
+                cursor: 'pointer',
+                borderRadius: '3px',
+                lineHeight: 1,
+              }}
+              title={panelCollapsed ? 'Show list' : 'Hide list'}
+            >
+              ☰
+            </button>
+
             {(['dms', 'feedback'] as const).map((tab) => (
               <button
                 key={tab}
@@ -825,24 +933,26 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                 )}
               </button>
             ))}
-            
-            {/* Add Friend button - only show in full mode */}
-            <button
-              onClick={() => setShowAddFriend(true)}
-              style={{
-                marginLeft: 'auto',
-                padding: '4px 8px',
-                fontSize: '9px',
-                backgroundColor: 'transparent',
-                color: theme.textSecondary,
-                border: `1px solid ${theme.inputBorder}`,
-                borderRadius: '4px',
-                cursor: 'pointer',
-                outline: 'none',
-              }}
-            >
-              + Add Friend
-            </button>
+
+            {/* Add New button - go to compose view (only show on feedback tab) */}
+            {activeTab === 'feedback' && (
+              <button
+                onClick={() => setSelectedFeedback(null)}
+                style={{
+                  marginLeft: 'auto',
+                  padding: '4px 8px',
+                  fontSize: '9px',
+                  backgroundColor: 'transparent',
+                  color: theme.textSecondary,
+                  border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  outline: 'none',
+                }}
+              >
+                + Add New
+              </button>
+            )}
           </>
         )}
       </div>
@@ -927,24 +1037,129 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
         </div>
       )}
 
+      {/* Expanded Image Modal */}
+      {expandedImage && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.8)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 101,
+            cursor: 'pointer',
+          }}
+          onClick={() => setExpandedImage(null)}
+        >
+          <img
+            src={expandedImage.url}
+            alt={expandedImage.alt}
+            style={{
+              maxWidth: '90%',
+              maxHeight: '80%',
+              borderRadius: '8px',
+              boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+          {/* Action buttons */}
+          <div
+            style={{
+              display: 'flex',
+              gap: '12px',
+              marginTop: '16px',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={async () => {
+                try {
+                  // Fetch image and add to clipboard/field
+                  const response = await fetch(expandedImage.url);
+                  const blob = await response.blob();
+                  const reader = new FileReader();
+                  reader.onloadend = async () => {
+                    const base64 = (reader.result as string).split(',')[1];
+                    if (base64 && window.clipboardAPI?.addImageItem) {
+                      await window.clipboardAPI.addImageItem(base64);
+                      setExpandedImage(null);
+                    }
+                  };
+                  reader.readAsDataURL(blob);
+                } catch (err) {
+                  console.error('Failed to add image to field:', err);
+                }
+              }}
+              style={{
+                padding: '10px 20px',
+                fontSize: '13px',
+                fontWeight: 500,
+                backgroundColor: theme.accent,
+                color: '#fff',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+              }}
+            >
+              Add to Field
+            </button>
+          </div>
+          {/* Close button */}
+          <button
+            onClick={() => setExpandedImage(null)}
+            style={{
+              position: 'absolute',
+              top: '20px',
+              right: '20px',
+              width: '32px',
+              height: '32px',
+              borderRadius: '50%',
+              backgroundColor: 'rgba(255,255,255,0.2)',
+              color: '#fff',
+              border: 'none',
+              cursor: 'pointer',
+              fontSize: '18px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+            title="Close (ESC)"
+          >
+            ×
+          </button>
+          {/* ESC hint */}
+          <div style={{
+            position: 'absolute',
+            bottom: '20px',
+            color: 'rgba(255,255,255,0.5)',
+            fontSize: '11px',
+          }}>
+            Press ESC to close
+          </div>
+        </div>
+      )}
+
       {/* Main content area */}
       <div style={{
         flex: 1,
         display: 'flex',
-        gap: '12px',
         overflow: 'hidden',
       }}>
-        {/* Left panel: Conversations or Feedback list */}
-        <div
-          ref={listRef}
-          style={{
-            width: '200px',
-            flexShrink: 0,
-            overflowY: 'auto',
-            borderRight: `1px solid ${theme.inputBorder}`,
-            paddingRight: '12px',
-          }}
-        >
+        {/* Left panel: Conversations or Feedback list (hidden when collapsed for feedback) */}
+        {!(panelCollapsed && activeTab === 'feedback') && (
+          <>
+          <div
+            ref={listRef}
+            style={{
+              width: `${panelWidth}px`,
+              flexShrink: 0,
+              overflowY: 'auto',
+              paddingRight: '8px',
+              position: 'relative',
+            }}
+          >
           {activeTab === 'dms' ? (
             // DM Conversations list
             conversations.length === 0 ? (
@@ -1003,58 +1218,137 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
               ))
             )
           ) : (
-            // Feedback list
-            feedback.length === 0 ? (
-              <div style={{ color: theme.textSecondary, fontSize: '11px', padding: '8px' }}>
-                No feedback yet. Press F on an item to submit feedback.
-              </div>
-            ) : (
-              feedback.map((item, index) => (
-                <div
-                  key={item.id}
-                  onClick={() => {
-                    setSelectedFeedback(item);
-                    setSelectedIndex(index);
-                  }}
-                  style={{
-                    padding: '8px',
-                    marginBottom: '4px',
-                    borderRadius: '4px',
-                    backgroundColor: selectedFeedback?.id === item.id 
-                      ? theme.bgSecondary 
-                      : index === selectedIndex 
-                        ? `${theme.bgSecondary}80` 
-                        : 'transparent',
-                    cursor: 'pointer',
-                    opacity: item.feedbackStatus === 'archived' ? 0.5 : 1,
-                    outline: index === selectedIndex ? `1px solid ${theme.accent}40` : 'none',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: '2px' }}>
-                    {renderStatusBadge(item.feedbackStatus)}
-                    <span style={{ marginLeft: 'auto', fontSize: '9px', color: theme.textSecondary }}>
-                      {formatRelativeTime(item.createdAt)}
-                    </span>
-                  </div>
-                  <div style={{
-                    fontSize: '10px',
-                    color: theme.text,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}>
-                    {item.contentText?.slice(0, 50) || '[Image]'}
-                  </div>
-                  {isAdmin && (
-                    <div style={{ fontSize: '9px', color: theme.textSecondary, marginTop: '2px' }}>
-                      From: {item.senderEmail}
-                    </div>
-                  )}
+            // Feedback list with filter
+            <>
+              {/* Filter tabs */}
+              {feedback.length > 0 && (
+                <div style={{
+                  display: 'flex',
+                  gap: '4px',
+                  marginBottom: '8px',
+                }}>
+                  {(['all', 'open', 'resolved', 'archived'] as const).map((filter) => {
+                    const count = filter === 'all'
+                      ? feedback.length
+                      : feedback.filter(f => f.feedbackStatus === filter).length;
+                    const isActive = feedbackFilter === filter;
+                    const label = filter === 'all' ? 'All'
+                      : filter === 'resolved' ? 'Done'
+                      : filter.charAt(0).toUpperCase() + filter.slice(1);
+                    return (
+                      <button
+                        key={filter}
+                        onClick={() => setFeedbackFilter(filter)}
+                        style={{
+                          padding: '4px 8px',
+                          fontSize: '9px',
+                          fontWeight: isActive ? 600 : 400,
+                          backgroundColor: isActive ? theme.accent : 'transparent',
+                          color: isActive ? '#fff' : theme.textSecondary,
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {label} {count}
+                      </button>
+                    );
+                  })}
                 </div>
-              ))
-            )
+              )}
+
+              {/* Filtered feedback list */}
+              {feedback.length === 0 ? (
+                <div style={{ color: theme.textSecondary, fontSize: '11px', padding: '8px' }}>
+                  No feedback yet. Press F on an item to submit feedback.
+                </div>
+              ) : (
+                feedback
+                  .filter(item => feedbackFilter === 'all' || item.feedbackStatus === feedbackFilter)
+                  .map((item, index) => {
+                    // Status indicator: ● open, ✓ resolved, 📁 archived
+                    const statusIcon = item.feedbackStatus === 'open' ? '●'
+                      : item.feedbackStatus === 'resolved' ? '✓'
+                      : '📁';
+                    const statusColor = item.feedbackStatus === 'open' ? '#f59e0b'
+                      : item.feedbackStatus === 'resolved' ? '#10b981'
+                      : theme.textSecondary;
+
+                    return (
+                      <div
+                        key={item.id}
+                        onClick={() => {
+                          setSelectedFeedback(item);
+                          setSelectedIndex(index);
+                        }}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: '6px',
+                          padding: '8px 6px',
+                          borderRadius: '4px',
+                          backgroundColor: selectedFeedback?.id === item.id
+                            ? theme.bgSecondary
+                            : 'transparent',
+                          cursor: 'pointer',
+                          opacity: item.feedbackStatus === 'archived' ? 0.6 : 1,
+                          marginBottom: '2px',
+                        }}
+                      >
+                        <span style={{
+                          color: statusColor,
+                          fontSize: item.feedbackStatus === 'archived' ? '9px' : '10px',
+                          lineHeight: '16px',
+                          width: '12px',
+                          flexShrink: 0,
+                        }}>
+                          {statusIcon}
+                        </span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{
+                            fontSize: '11px',
+                            color: theme.text,
+                            lineHeight: '16px',
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden',
+                          }}>
+                            {item.contentType === 'image' && !item.contentText ? '🖼 Image' : item.contentText || '🖼 Image'}
+                          </div>
+                          <div style={{
+                            fontSize: '9px',
+                            color: theme.textSecondary,
+                            marginTop: '2px',
+                          }}>
+                            {formatDate(item.createdAt)}{isAdmin && item.senderEmail ? ` · ${item.senderEmail}` : ''}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+              )}
+            </>
           )}
-        </div>
+          </div>
+
+          {/* Resize handle */}
+          <div
+            onMouseDown={() => setIsResizing(true)}
+            style={{
+              width: '4px',
+              cursor: 'col-resize',
+              backgroundColor: isResizing ? theme.accent : 'transparent',
+              transition: 'background-color 0.15s',
+              flexShrink: 0,
+              marginRight: '8px',
+            }}
+            onMouseEnter={(e) => { if (!isResizing) e.currentTarget.style.backgroundColor = theme.inputBorder; }}
+            onMouseLeave={(e) => { if (!isResizing) e.currentTarget.style.backgroundColor = 'transparent'; }}
+          />
+        </>
+        )}
 
         {/* Right panel: Messages or Feedback detail */}
         <div style={{
@@ -1062,6 +1356,8 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
+          borderLeft: (panelCollapsed && activeTab === 'feedback') ? 'none' : `1px solid ${theme.inputBorder}`,
+          paddingLeft: (panelCollapsed && activeTab === 'feedback') ? '0' : '12px',
         }}>
           {activeTab === 'dms' && selectedConversation ? (
             // DM Messages
@@ -1090,17 +1386,25 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                         color: isFromMe ? '#fff' : theme.text,
                       }}>
                         {msg.contentType === 'image' && msg.imageUrl && (
-                          <CachedImage
-                            imageUrl={msg.imageUrl}
-                            itemId={msg.id}
-                            alt="Shared image"
-                            style={{
-                              maxWidth: '200px',
-                              borderRadius: '4px',
-                              marginBottom: msg.contentText ? '4px' : 0,
-                            }}
-                            onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                          />
+                          <div
+                            onClick={() => setExpandedImage({ url: msg.imageUrl!, alt: 'Shared image' })}
+                            style={{ cursor: 'pointer' }}
+                            title="Click to expand"
+                          >
+                            <CachedImage
+                              imageUrl={msg.imageUrl}
+                              itemId={msg.id}
+                              alt="Shared image"
+                              style={{
+                                maxWidth: '80px',
+                                maxHeight: '80px',
+                                borderRadius: '4px',
+                                marginBottom: msg.contentText ? '4px' : 0,
+                                objectFit: 'cover',
+                              }}
+                              onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                            />
+                          </div>
                         )}
                         {msg.contentText && (
                           <div style={{ fontSize: '12px', whiteSpace: 'pre-wrap' }}>
@@ -1206,28 +1510,94 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
               </div>
             </>
           ) : activeTab === 'feedback' && selectedFeedback ? (
-            // Feedback detail
+            // Feedback thread - unified message view
             <>
-              {/* Status controls */}
+              {/* Header with status */}
               <div style={{
                 display: 'flex',
                 gap: '8px',
-                marginBottom: '12px',
+                marginBottom: '8px',
                 alignItems: 'center',
+                paddingBottom: '8px',
+                borderBottom: `1px solid ${theme.inputBorder}`,
               }}>
-                {renderStatusBadge(selectedFeedback.feedbackStatus)}
-                <div style={{ display: 'flex', gap: '4px', marginLeft: 'auto' }}>
+                {/* Prev/Next navigation when collapsed */}
+                {panelCollapsed && (
+                  <div style={{ display: 'flex', gap: '2px', marginRight: '4px' }}>
+                    <button
+                      onClick={() => {
+                        const filtered = feedback.filter(item => feedbackFilter === 'all' || item.feedbackStatus === feedbackFilter);
+                        const currentIdx = filtered.findIndex(f => f.id === selectedFeedback.id);
+                        if (currentIdx > 0) {
+                          setSelectedFeedback(filtered[currentIdx - 1]);
+                        }
+                      }}
+                      disabled={(() => {
+                        const filtered = feedback.filter(item => feedbackFilter === 'all' || item.feedbackStatus === feedbackFilter);
+                        return filtered.findIndex(f => f.id === selectedFeedback.id) <= 0;
+                      })()}
+                      style={{
+                        padding: '2px 6px',
+                        fontSize: '10px',
+                        backgroundColor: 'transparent',
+                        color: theme.textSecondary,
+                        border: `1px solid ${theme.inputBorder}`,
+                        borderRadius: '3px',
+                        cursor: 'pointer',
+                        opacity: (() => {
+                          const filtered = feedback.filter(item => feedbackFilter === 'all' || item.feedbackStatus === feedbackFilter);
+                          return filtered.findIndex(f => f.id === selectedFeedback.id) <= 0 ? 0.3 : 1;
+                        })(),
+                      }}
+                    >
+                      ‹
+                    </button>
+                    <button
+                      onClick={() => {
+                        const filtered = feedback.filter(item => feedbackFilter === 'all' || item.feedbackStatus === feedbackFilter);
+                        const currentIdx = filtered.findIndex(f => f.id === selectedFeedback.id);
+                        if (currentIdx < filtered.length - 1) {
+                          setSelectedFeedback(filtered[currentIdx + 1]);
+                        }
+                      }}
+                      disabled={(() => {
+                        const filtered = feedback.filter(item => feedbackFilter === 'all' || item.feedbackStatus === feedbackFilter);
+                        const currentIdx = filtered.findIndex(f => f.id === selectedFeedback.id);
+                        return currentIdx >= filtered.length - 1;
+                      })()}
+                      style={{
+                        padding: '2px 6px',
+                        fontSize: '10px',
+                        backgroundColor: 'transparent',
+                        color: theme.textSecondary,
+                        border: `1px solid ${theme.inputBorder}`,
+                        borderRadius: '3px',
+                        cursor: 'pointer',
+                        opacity: (() => {
+                          const filtered = feedback.filter(item => feedbackFilter === 'all' || item.feedbackStatus === feedbackFilter);
+                          const currentIdx = filtered.findIndex(f => f.id === selectedFeedback.id);
+                          return currentIdx >= filtered.length - 1 ? 0.3 : 1;
+                        })(),
+                      }}
+                    >
+                      ›
+                    </button>
+                  </div>
+                )}
+                {/* Status action buttons as primary header element */}
+                <div style={{ display: 'flex', gap: '4px' }}>
                   <button
                     onClick={() => handleStatusChange(selectedFeedback.id, 'open')}
                     disabled={selectedFeedback.feedbackStatus === 'open'}
                     style={{
                       padding: '4px 8px',
                       fontSize: '9px',
-                      backgroundColor: selectedFeedback.feedbackStatus === 'open' ? theme.bgSecondary : 'transparent',
-                      color: theme.textSecondary,
-                      border: `1px solid ${theme.inputBorder}`,
+                      backgroundColor: selectedFeedback.feedbackStatus === 'open' ? theme.accent : 'transparent',
+                      color: selectedFeedback.feedbackStatus === 'open' ? '#fff' : theme.textSecondary,
+                      border: `1px solid ${selectedFeedback.feedbackStatus === 'open' ? theme.accent : theme.inputBorder}`,
                       borderRadius: '4px',
-                      cursor: 'pointer',
+                      cursor: selectedFeedback.feedbackStatus === 'open' ? 'default' : 'pointer',
+                      fontWeight: selectedFeedback.feedbackStatus === 'open' ? 500 : 400,
                     }}
                   >
                     Open
@@ -1238,11 +1608,12 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                     style={{
                       padding: '4px 8px',
                       fontSize: '9px',
-                      backgroundColor: selectedFeedback.feedbackStatus === 'resolved' ? theme.bgSecondary : 'transparent',
-                      color: theme.textSecondary,
-                      border: `1px solid ${theme.inputBorder}`,
+                      backgroundColor: selectedFeedback.feedbackStatus === 'resolved' ? '#22c55e' : 'transparent',
+                      color: selectedFeedback.feedbackStatus === 'resolved' ? '#fff' : theme.textSecondary,
+                      border: `1px solid ${selectedFeedback.feedbackStatus === 'resolved' ? '#22c55e' : theme.inputBorder}`,
                       borderRadius: '4px',
-                      cursor: 'pointer',
+                      cursor: selectedFeedback.feedbackStatus === 'resolved' ? 'default' : 'pointer',
+                      fontWeight: selectedFeedback.feedbackStatus === 'resolved' ? 500 : 400,
                     }}
                   >
                     Resolved
@@ -1254,11 +1625,12 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                       style={{
                         padding: '4px 8px',
                         fontSize: '9px',
-                        backgroundColor: selectedFeedback.feedbackStatus === 'archived' ? theme.bgSecondary : 'transparent',
-                        color: theme.textSecondary,
-                        border: `1px solid ${theme.inputBorder}`,
+                        backgroundColor: selectedFeedback.feedbackStatus === 'archived' ? theme.textSecondary : 'transparent',
+                        color: selectedFeedback.feedbackStatus === 'archived' ? '#fff' : theme.textSecondary,
+                        border: `1px solid ${selectedFeedback.feedbackStatus === 'archived' ? theme.textSecondary : theme.inputBorder}`,
                         borderRadius: '4px',
-                        cursor: 'pointer',
+                        cursor: selectedFeedback.feedbackStatus === 'archived' ? 'default' : 'pointer',
+                        fontWeight: selectedFeedback.feedbackStatus === 'archived' ? 500 : 400,
                       }}
                     >
                       Archive
@@ -1267,117 +1639,166 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                 </div>
               </div>
 
-              {/* Original feedback content */}
-              <div style={{
-                padding: '12px',
-                backgroundColor: theme.bgSecondary,
-                borderRadius: '8px',
-                marginBottom: '12px',
-              }}>
-                {selectedFeedback.contentType === 'image' && selectedFeedback.imageUrl && (
-                  <CachedImage
-                    imageUrl={selectedFeedback.imageUrl}
-                    itemId={selectedFeedback.id}
-                    alt="Feedback screenshot"
-                    style={{
-                      maxWidth: '100%',
-                      borderRadius: '4px',
-                      marginBottom: selectedFeedback.contentText ? '8px' : 0,
-                    }}
-                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                  />
-                )}
-                {selectedFeedback.contentText && (
-                  <div style={{ fontSize: '12px', color: theme.text, whiteSpace: 'pre-wrap' }}>
-                    {selectedFeedback.contentText}
-                  </div>
-                )}
-                <div style={{ fontSize: '9px', color: theme.textSecondary, marginTop: '8px' }}>
-                  Submitted {formatRelativeTime(selectedFeedback.createdAt)}
-                  {isAdmin && ` by ${selectedFeedback.senderEmail}`}
-                </div>
-              </div>
-
-              {/* Activity log */}
-              {activityLog.length > 0 && (
-                <div style={{ marginBottom: '12px' }}>
-                  <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '4px' }}>
-                    Activity
-                  </div>
-                  {activityLog.map((entry) => (
-                    <div key={entry.id} style={{
-                      fontSize: '10px',
-                      color: theme.textSecondary,
-                      padding: '4px 0',
-                    }}>
-                      <span style={{ color: theme.text }}>{entry.userEmail}</span>
-                      {' '}
-                      {entry.action === 'created' && 'submitted feedback'}
-                      {entry.action === 'status_changed' && `changed status from ${entry.oldStatus} to ${entry.newStatus}`}
-                      {entry.action === 'replied' && 'replied'}
-                      {' '}
-                      <span>{formatRelativeTime(entry.createdAt)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Replies thread */}
+              {/* Message thread - scrollable */}
               <div style={{ flex: 1, overflowY: 'auto', marginBottom: '8px' }}>
-                {feedbackReplies.map((reply) => (
-                  <div
-                    key={reply.id}
-                    style={{
-                      padding: '8px 12px',
-                      marginBottom: '4px',
-                      borderRadius: '6px',
-                      backgroundColor: theme.bgSecondary,
-                    }}
-                  >
-                    <div style={{ fontSize: '9px', color: theme.textSecondary, marginBottom: '2px' }}>
-                      {reply.senderEmail} • {formatRelativeTime(reply.createdAt)}
-                    </div>
-                    {reply.contentType === 'image' && reply.imageUrl && (
+                {/* Original feedback as first message */}
+                <div style={{
+                  padding: '8px 12px',
+                  marginBottom: '8px',
+                  borderRadius: '6px',
+                  backgroundColor: theme.bgSecondary,
+                  borderLeft: `3px solid ${theme.accent}`,
+                }}>
+                  <div style={{ fontSize: '9px', color: theme.textSecondary, marginBottom: '4px' }}>
+                    {selectedFeedback.senderEmail || 'You'} • {formatRelativeTime(selectedFeedback.createdAt)}
+                    <span style={{
+                      marginLeft: '6px',
+                      padding: '1px 4px',
+                      backgroundColor: theme.accent,
+                      color: '#fff',
+                      borderRadius: '3px',
+                      fontSize: '8px',
+                    }}>
+                      Original
+                    </span>
+                  </div>
+                  {selectedFeedback.contentType === 'image' && selectedFeedback.imageUrl && (
+                    <div
+                      onClick={() => setExpandedImage({ url: selectedFeedback.imageUrl!, alt: 'Feedback screenshot' })}
+                      style={{ cursor: 'pointer', display: 'inline-block' }}
+                      title="Click to expand"
+                    >
                       <CachedImage
-                        imageUrl={reply.imageUrl}
-                        itemId={reply.id}
-                        alt="Reply image"
+                        imageUrl={selectedFeedback.imageUrl}
+                        itemId={selectedFeedback.id}
+                        alt="Feedback screenshot"
                         style={{
-                          maxWidth: '200px',
+                          maxWidth: '120px',
+                          maxHeight: '120px',
                           borderRadius: '4px',
-                          marginBottom: reply.contentText ? '4px' : 0,
+                          marginBottom: selectedFeedback.contentText ? '4px' : 0,
+                          objectFit: 'cover',
                         }}
                         onError={(e) => { e.currentTarget.style.display = 'none'; }}
                       />
-                    )}
-                    {reply.contentText && (
-                      <div style={{ fontSize: '12px', color: theme.text }}>
-                        {reply.contentText}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                    </div>
+                  )}
+                  {selectedFeedback.contentText && (
+                    <div style={{ fontSize: '12px', color: theme.text, whiteSpace: 'pre-wrap' }}>
+                      {selectedFeedback.contentText}
+                    </div>
+                  )}
+                </div>
+
+                {/* Combine activity log and replies chronologically */}
+                {(() => {
+                  // Merge activity entries and replies, sorted by time
+                  const threadItems: Array<{ type: 'activity' | 'reply'; item: any; time: number }> = [];
+
+                  // Add activity log entries (skip 'created' since original is shown above)
+                  activityLog.forEach(entry => {
+                    if (entry.action !== 'created') {
+                      threadItems.push({ type: 'activity', item: entry, time: entry.createdAt });
+                    }
+                  });
+
+                  // Add replies
+                  feedbackReplies.forEach(reply => {
+                    threadItems.push({ type: 'reply', item: reply, time: reply.createdAt });
+                  });
+
+                  // Sort by time
+                  threadItems.sort((a, b) => a.time - b.time);
+
+                  return threadItems.map((threadItem, idx) => {
+                    if (threadItem.type === 'activity') {
+                      const entry = threadItem.item as ActivityLogEntry;
+                      return (
+                        <div key={`activity-${entry.id}`} style={{
+                          textAlign: 'center',
+                          fontSize: '10px',
+                          color: theme.textSecondary,
+                          padding: '4px 0',
+                          marginBottom: '4px',
+                        }}>
+                          {entry.action === 'status_changed' && (
+                            <>Status changed to <strong>{entry.newStatus}</strong> • {formatRelativeTime(entry.createdAt)}</>
+                          )}
+                          {entry.action === 'replied' && (
+                            <>{entry.userEmail} replied • {formatRelativeTime(entry.createdAt)}</>
+                          )}
+                        </div>
+                      );
+                    } else {
+                      const reply = threadItem.item as SocialMessage;
+                      return (
+                        <div
+                          key={reply.id}
+                          style={{
+                            padding: '8px 12px',
+                            marginBottom: '4px',
+                            borderRadius: '6px',
+                            backgroundColor: theme.bgSecondary,
+                          }}
+                        >
+                          <div style={{ fontSize: '9px', color: theme.textSecondary, marginBottom: '2px' }}>
+                            {/* Show "Field Theory Support" for admin replies instead of personal email */}
+                            {reply.senderUserId === selectedFeedback.senderUserId
+                              ? (reply.senderEmail || 'You')
+                              : 'Field Theory Support'
+                            } • {formatRelativeTime(reply.createdAt)}
+                          </div>
+                          {reply.contentType === 'image' && reply.imageUrl && (
+                            <div
+                              onClick={() => setExpandedImage({ url: reply.imageUrl!, alt: 'Reply image' })}
+                              style={{ cursor: 'pointer', display: 'inline-block' }}
+                              title="Click to expand"
+                            >
+                              <CachedImage
+                                imageUrl={reply.imageUrl}
+                                itemId={reply.id}
+                                alt="Reply image"
+                                style={{
+                                  maxWidth: '80px',
+                                  maxHeight: '80px',
+                                  borderRadius: '4px',
+                                  marginBottom: reply.contentText ? '4px' : 0,
+                                  objectFit: 'cover',
+                                }}
+                                onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                              />
+                            </div>
+                          )}
+                          {reply.contentText && (
+                            <div style={{ fontSize: '12px', color: theme.text }}>
+                              {reply.contentText}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                  });
+                })()}
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* Reply input with image preview */}
+              {/* Reply input */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {/* Image preview - shown when an image is pasted */}
                 {replyImage && (
-                  <div style={{ 
-                    position: 'relative', 
+                  <div style={{
+                    position: 'relative',
                     display: 'inline-block',
                     alignSelf: 'flex-start',
                   }}>
-                    <img 
-                      src={replyImage.preview} 
-                      alt="Pasted image" 
-                      style={{ 
-                        maxWidth: '200px', 
-                        maxHeight: '120px', 
+                    <img
+                      src={replyImage.preview}
+                      alt="Pasted image"
+                      style={{
+                        maxWidth: '200px',
+                        maxHeight: '120px',
                         borderRadius: '4px',
                         border: `1px solid ${theme.inputBorder}`,
-                      }} 
+                      }}
                     />
                     <button
                       onClick={clearReplyImage}
@@ -1404,13 +1825,11 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                     </button>
                   </div>
                 )}
-                
-                {/* Text input and send button */}
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <input
                     ref={replyInputRef}
                     type="text"
-                    placeholder={replyImage ? "Add a caption (optional)..." : "Add a reply... (paste images with Cmd+V)"}
+                    placeholder={replyImage ? "Add a caption..." : "Type a message... (Cmd+V to paste images)"}
                     value={replyText}
                     onChange={(e) => setReplyText(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && !sending && handleSendReply()}
@@ -1439,7 +1858,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                       opacity: sending || (!replyText.trim() && !replyImage) ? 0.5 : 1,
                     }}
                   >
-                    {sending ? 'Sending...' : 'Reply'}
+                    {sending ? 'Sending...' : 'Send'}
                   </button>
                 </div>
               </div>
@@ -1451,131 +1870,144 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
               display: 'flex',
               flexDirection: 'column',
               justifyContent: 'center',
+              alignItems: 'center',
               padding: '20px',
             }}>
-              <div style={{ textAlign: 'center', marginBottom: '16px' }}>
-                <div style={{ fontSize: '14px', fontWeight: 500, color: theme.text, marginBottom: '4px' }}>
-                  New Feedback
+              {/* Wrapper for consistent width */}
+              <div style={{ maxWidth: '500px', width: '100%' }}>
+                <div style={{ fontSize: '14px', fontWeight: 500, color: theme.text, marginBottom: '12px', textAlign: 'left' }}>
+                  Send Feedback
                 </div>
-                <div style={{ fontSize: '11px', color: theme.textSecondary }}>
-                  Type a message, paste an image, or use <kbd style={{ 
-                    padding: '1px 4px', 
-                    backgroundColor: theme.bgSecondary, 
-                    borderRadius: '3px',
-                    fontSize: '10px',
-                  }}>F</kbd> on a Field to send it as feedback
-                </div>
-              </div>
-              
-              {/* Image preview */}
-              {replyImage && (
-                <div style={{ 
-                  position: 'relative', 
-                  display: 'inline-block',
-                  alignSelf: 'center',
-                  marginBottom: '8px',
+
+                {/* Card container */}
+                <div style={{
+                  width: '100%',
+                  border: `1px solid ${theme.inputBorder}`,
+                  borderRadius: '8px',
+                  overflow: 'hidden',
                 }}>
-                  <img 
-                    src={replyImage.preview} 
-                    alt="Pasted image" 
-                    style={{ 
-                      maxWidth: '300px', 
-                      maxHeight: '200px', 
-                      borderRadius: '4px',
-                      border: `1px solid ${theme.inputBorder}`,
-                    }} 
-                  />
-                  <button
-                    onClick={clearReplyImage}
-                    style={{
-                      position: 'absolute',
-                      top: '-6px',
-                      right: '-6px',
-                      width: '18px',
-                      height: '18px',
-                      borderRadius: '50%',
-                      backgroundColor: '#ef4444',
-                      color: '#fff',
-                      border: 'none',
-                      cursor: 'pointer',
-                      fontSize: '10px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      lineHeight: 1,
-                    }}
-                    title="Remove image"
-                  >
-                    ×
-                  </button>
-                </div>
-              )}
-              
-              {/* Compose input or transcription button */}
-              {!replyText && !replyImage ? (
-                // Show transcription button when input is empty
-                <div style={{ maxWidth: '500px', alignSelf: 'center', width: '100%' }}>
-                  <button
-                    onClick={() => window.transcribeAPI?.toggleRecording?.()}
-                    disabled={transcriptionStatus === 'transcribing'}
-                    style={{
-                      width: '100%',
-                      padding: '12px 16px',
-                      fontSize: '13px',
-                      fontWeight: 500,
-                      backgroundColor: transcriptionStatus === 'recording' ? '#ef4444' : theme.accent,
-                      color: '#fff',
-                      border: 'none',
-                      borderRadius: '6px',
-                      cursor: transcriptionStatus === 'transcribing' ? 'wait' : 'pointer',
-                      opacity: transcriptionStatus === 'transcribing' ? 0.7 : 1,
-                      transition: 'all 0.2s ease',
-                    }}
-                  >
-                    {transcriptionStatus === 'recording' ? '⏹ Stop recording' :
-                     transcriptionStatus === 'transcribing' ? 'Transcribing...' :
-                     '🎤 Click to transcribe feedback'}
-                  </button>
-                </div>
-              ) : (
-                // Show input when user has typed or pasted something
-                <div style={{ display: 'flex', gap: '8px', maxWidth: '500px', alignSelf: 'center', width: '100%' }}>
+                {/* Image preview */}
+                {replyImage && (
+                  <div style={{
+                    position: 'relative',
+                    padding: '12px',
+                    borderBottom: `1px solid ${theme.inputBorder}`,
+                  }}>
+                    <img
+                      src={replyImage.preview}
+                      alt="Pasted image"
+                      style={{
+                        maxWidth: '100%',
+                        maxHeight: '200px',
+                        borderRadius: '4px',
+                        display: 'block',
+                      }}
+                    />
+                    <button
+                      onClick={clearReplyImage}
+                      style={{
+                        position: 'absolute',
+                        top: '6px',
+                        right: '6px',
+                        width: '18px',
+                        height: '18px',
+                        borderRadius: '50%',
+                        backgroundColor: '#ef4444',
+                        color: '#fff',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '10px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        lineHeight: 1,
+                      }}
+                      title="Remove image"
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
+
+                {/* Text input row */}
+                <div style={{ display: 'flex', padding: '8px' }}>
                   <input
                     type="text"
-                    placeholder={replyImage ? "Add a caption (optional)..." : "Type your feedback... (paste images with Cmd+V)"}
+                    placeholder={replyImage ? "Add a caption..." : "Type or paste..."}
                     value={replyText}
                     onChange={(e) => setReplyText(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && !sending && handleNewFeedback()}
                     onPaste={handlePaste}
-                  style={{
-                    flex: 1,
-                    padding: '10px 12px',
-                    fontSize: '12px',
-                    border: `1px solid ${theme.inputBorder}`,
-                    borderRadius: '6px',
-                    backgroundColor: theme.inputBg,
-                    color: theme.text,
-                  }}
-                />
-                <button
-                  onClick={handleNewFeedback}
-                  disabled={sending || (!replyText.trim() && !replyImage)}
-                  style={{
-                    padding: '10px 16px',
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    backgroundColor: theme.accent,
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: '6px',
-                    cursor: sending ? 'wait' : 'pointer',
-                    opacity: sending || (!replyText.trim() && !replyImage) ? 0.5 : 1,
-                  }}
+                    style={{
+                      flex: 1,
+                      padding: '8px 10px',
+                      fontSize: '12px',
+                      border: 'none',
+                      backgroundColor: 'transparent',
+                      color: theme.text,
+                      outline: 'none',
+                    }}
+                  />
+                  <button
+                    onClick={handleNewFeedback}
+                    disabled={sending || (!replyText.trim() && !replyImage)}
+                    style={{
+                      padding: '8px 14px',
+                      fontSize: '12px',
+                      fontWeight: 500,
+                      backgroundColor: theme.accent,
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: '5px',
+                      cursor: sending ? 'wait' : 'pointer',
+                      opacity: sending || (!replyText.trim() && !replyImage) ? 0.5 : 1,
+                    }}
                   >
-                    {sending ? 'Sending...' : 'Send'}
+                    {sending ? '...' : 'Send'}
                   </button>
                 </div>
-              )}
+
+                {/* Divider */}
+                <div style={{ borderTop: `1px solid ${theme.inputBorder}` }} />
+
+                {/* Transcription button */}
+                <button
+                  onClick={() => window.transcribeAPI?.toggleRecording?.()}
+                  disabled={transcriptionStatus === 'transcribing'}
+                  style={{
+                    width: '100%',
+                    padding: '10px 16px',
+                    fontSize: '12px',
+                    backgroundColor: transcriptionStatus === 'recording' ? '#ef4444' : 'transparent',
+                    color: transcriptionStatus === 'recording' ? '#fff' : theme.textSecondary,
+                    border: 'none',
+                    cursor: transcriptionStatus === 'transcribing' ? 'wait' : 'pointer',
+                    opacity: transcriptionStatus === 'transcribing' ? 0.7 : 1,
+                    transition: 'all 0.2s ease',
+                  }}
+                >
+                  {transcriptionStatus === 'recording' ? '⏹ Stop recording' :
+                   transcriptionStatus === 'transcribing' ? 'Transcribing...' :
+                   '🎤 Record voice feedback'}
+                </button>
+              </div>
+
+                {/* Email link outside card */}
+                <div style={{
+                  marginTop: '12px',
+                  fontSize: '11px',
+                  color: theme.textSecondary,
+                  textAlign: 'right',
+                }}>
+                  or email{' '}
+                  <a
+                    href="mailto:support@fieldtheory.dev"
+                    style={{ color: theme.accent, textDecoration: 'none' }}
+                  >
+                    support@fieldtheory.dev
+                  </a>
+                </div>
+              </div>
             </div>
           ) : (
             // No selection (DMs tab)
