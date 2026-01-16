@@ -92,9 +92,9 @@ function formatHotkeyDisplay(hotkey: string): string {
 // =============================================================================
 
 const DEFAULT_HOTKEYS = {
-  screenshot: 'Shift+Command+4',
-  fullScreen: 'Command+3',
-  activeWindow: 'Shift+Command+3',
+  screenshot: 'Alt+4',
+  fullScreen: 'Alt+3',
+  activeWindow: 'Shift+Alt+3',
   history: 'Option+Space',
   transcription: 'Command+\\',
   tasks: 'Shift+Command+T',

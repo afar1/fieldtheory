@@ -52,6 +52,8 @@ export class ModelManager {
   private modelsDir: string;
   private selectedModel: ModelSize = 'small';
   private downloadingModels: Set<ModelSize> = new Set();
+  private statusCache: { status: Record<ModelSize, boolean>; timestamp: number } | null = null;
+  private static STATUS_CACHE_TTL = 5000; // 5 second cache
 
   constructor(selectedModel?: ModelSize) {
     const appDataPath = app.getPath('userData');
@@ -97,19 +99,35 @@ export class ModelManager {
   }
 
   /**
+   * Invalidate the status cache. Called after downloads/deletes.
+   */
+  invalidateCache(): void {
+    this.statusCache = null;
+  }
+
+  /**
    * Get download status for all models.
    * Returns a record mapping model sizes to whether they are downloaded.
+   * Results are cached for 5 seconds to avoid repeated filesystem checks.
    */
   async getDownloadStatus(): Promise<Record<ModelSize, boolean>> {
+    // Return cached status if valid
+    if (this.statusCache && Date.now() - this.statusCache.timestamp < ModelManager.STATUS_CACHE_TTL) {
+      return this.statusCache.status;
+    }
+
     const status: Record<ModelSize, boolean> = {} as Record<ModelSize, boolean>;
     const modelSizes: ModelSize[] = ['small', 'medium', 'large'];
-    
+
     await Promise.all(
       modelSizes.map(async (size) => {
         status[size] = await this.isModelAvailableForSize(size);
       })
     );
-    
+
+    // Cache the result
+    this.statusCache = { status, timestamp: Date.now() };
+
     return status;
   }
 
@@ -223,6 +241,7 @@ export class ModelManager {
       // Verify download
       if (await this.isModelAvailableForSize(size)) {
         console.log(`[ModelManager] Model ${size} downloaded successfully`);
+        this.invalidateCache();
       } else {
         throw new Error(`Downloaded file validation failed for ${size} model`);
       }
@@ -330,6 +349,7 @@ export class ModelManager {
       const modelPath = this.getModelPathForSize(size);
       await fs.unlink(modelPath);
       console.log(`[ModelManager] Deleted model ${size}`);
+      this.invalidateCache();
       return true;
     } catch (error: any) {
       if (error.code === 'ENOENT') {

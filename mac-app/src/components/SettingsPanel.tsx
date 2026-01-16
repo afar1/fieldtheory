@@ -58,7 +58,13 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   // Todo hotkey configuration
   const [todoHotkey, setTodoHotkey] = useState('Command+Shift+T');
   const [isCapturingTodoHotkey, setIsCapturingTodoHotkey] = useState(false);
-  
+
+  // Additional hotkeys (SuperPaste, CommandLauncher, ImproveText, AutoImprove)
+  const [superPasteHotkey, setSuperPasteHotkey] = useState('Command+Shift+V');
+  const [isCapturingSuperPasteHotkey, setIsCapturingSuperPasteHotkey] = useState(false);
+  const [commandLauncherHotkey, setCommandLauncherHotkey] = useState('Command+Shift+K');
+  const [isCapturingCommandLauncherHotkey, setIsCapturingCommandLauncherHotkey] = useState(false);
+
   // Transcription hotkey configuration
   const [transcriptionHotkey, setTranscriptionHotkey] = useState('Command+\\');
   const [isCapturingTranscriptionHotkey, setIsCapturingTranscriptionHotkey] = useState(false);
@@ -100,7 +106,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   const [useLocalLLM, setUseLocalLLM] = useState(false);
   const [localLLMModels, setLocalLLMModels] = useState<Record<string, { name: string; filename: string; sizeBytes: number; description: string }>>({});
   const [localLLMStatus, setLocalLLMStatus] = useState<Record<string, boolean>>({});
-  const [selectedLocalLLM, setSelectedLocalLLM] = useState<string>('llama-3.2-3b');
+  const [selectedLocalLLM, setSelectedLocalLLM] = useState<string>('llama-3.2-1b');
   const [downloadingLocalLLM, setDownloadingLocalLLM] = useState<string | null>(null);
   const [localLLMProgress, setLocalLLMProgress] = useState<{ downloaded: number; total: number } | null>(null);
 
@@ -242,7 +248,17 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         }
       });
     }
-    
+
+    // Load additional hotkeys (SuperPaste, CommandLauncher)
+    if (window.hotkeyAPI) {
+      window.hotkeyAPI.getHotkey('superPaste').then(hotkey => {
+        if (hotkey) setSuperPasteHotkey(hotkey);
+      });
+      window.hotkeyAPI.getHotkey('commandLauncher').then(hotkey => {
+        if (hotkey) setCommandLauncherHotkey(hotkey);
+      });
+    }
+
     // Load transcription hotkeys
     if (window.transcribeAPI) {
       window.transcribeAPI.getHotkey().then(hotkey => {
@@ -731,9 +747,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   const handleSetScreenshotHotkey = useCallback(async (hotkeyString: string) => {
     setIsCapturingScreenshotHotkey(false);
     setHotkeyError(null);
-    
+
     if (!window.clipboardAPI) return;
-    
+
     if (!hotkeyString || isModifierOnly(hotkeyString)) {
       setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
       return;
@@ -749,6 +765,17 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     } catch (err) {
       setHotkeyError(err instanceof Error ? err.message : 'Failed to set screenshot hotkey');
       console.error('Failed to set screenshot hotkey:', err);
+    }
+  }, []);
+
+  // Handler for clearing screenshot hotkey
+  const handleClearScreenshotHotkey = useCallback(async () => {
+    if (!window.clipboardAPI) return;
+    try {
+      await window.clipboardAPI.setHotkeys({ screenshot: '' });
+      setClipboardHotkeys(prev => ({ ...prev, screenshot: '' }));
+    } catch (err) {
+      console.error('Failed to clear screenshot hotkey:', err);
     }
   }, []);
   
@@ -777,6 +804,17 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     }
   }, []);
 
+  // Handler for clearing full screen screenshot hotkey
+  const handleClearFullScreenHotkey = useCallback(async () => {
+    if (!window.clipboardAPI) return;
+    try {
+      await window.clipboardAPI.setHotkeys({ fullScreen: '' });
+      setClipboardHotkeys(prev => ({ ...prev, fullScreen: '' }));
+    } catch (err) {
+      console.error('Failed to clear full screen screenshot hotkey:', err);
+    }
+  }, []);
+
   // Handler for setting active window screenshot hotkey
   const handleSetActiveWindowHotkey = useCallback(async (hotkeyString: string) => {
     setIsCapturingActiveWindowHotkey(false);
@@ -799,6 +837,17 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     } catch (err) {
       setHotkeyError(err instanceof Error ? err.message : 'Failed to set active window screenshot hotkey');
       console.error('Failed to set active window screenshot hotkey:', err);
+    }
+  }, []);
+
+  // Handler for clearing active window screenshot hotkey
+  const handleClearActiveWindowHotkey = useCallback(async () => {
+    if (!window.clipboardAPI) return;
+    try {
+      await window.clipboardAPI.setHotkeys({ activeWindow: '' });
+      setClipboardHotkeys(prev => ({ ...prev, activeWindow: '' }));
+    } catch (err) {
+      console.error('Failed to clear active window screenshot hotkey:', err);
     }
   }, []);
   
@@ -876,7 +925,57 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       console.error('Failed to set todo hotkey:', err);
     }
   }, []);
-  
+
+  // Handler for setting Super Paste hotkey
+  const handleSetSuperPasteHotkey = useCallback(async (hotkeyString: string) => {
+    setIsCapturingSuperPasteHotkey(false);
+    setHotkeyError(null);
+
+    if (!window.hotkeyAPI?.setHotkey) return;
+
+    if (!hotkeyString || isModifierOnly(hotkeyString)) {
+      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+      return;
+    }
+
+    try {
+      const result = await window.hotkeyAPI.setHotkey('superPaste', hotkeyString);
+      if (!result.success) {
+        setHotkeyError(result.error || 'Failed to register Super Paste hotkey.');
+      } else {
+        setSuperPasteHotkey(hotkeyString);
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set Super Paste hotkey');
+      console.error('Failed to set Super Paste hotkey:', err);
+    }
+  }, []);
+
+  // Handler for setting Command Launcher hotkey
+  const handleSetCommandLauncherHotkey = useCallback(async (hotkeyString: string) => {
+    setIsCapturingCommandLauncherHotkey(false);
+    setHotkeyError(null);
+
+    if (!window.hotkeyAPI?.setHotkey) return;
+
+    if (!hotkeyString || isModifierOnly(hotkeyString)) {
+      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+      return;
+    }
+
+    try {
+      const result = await window.hotkeyAPI.setHotkey('commandLauncher', hotkeyString);
+      if (!result.success) {
+        setHotkeyError(result.error || 'Failed to register Command Launcher hotkey.');
+      } else {
+        setCommandLauncherHotkey(hotkeyString);
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set Command Launcher hotkey');
+      console.error('Failed to set Command Launcher hotkey:', err);
+    }
+  }, []);
+
   // Handler for setting transcription hotkey
   const handleSetTranscriptionHotkey = useCallback(async (hotkeyString: string) => {
     setIsCapturingTranscriptionHotkey(false);
@@ -984,6 +1083,8 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       : isCapturingTranscriptionHotkey ? 'transcription'
       : isCapturingSecondaryTranscriptionHotkey ? 'secondaryTranscription'
       : isCapturingAbandonHotkey ? 'abandon'
+      : isCapturingSuperPasteHotkey ? 'superPaste'
+      : isCapturingCommandLauncherHotkey ? 'commandLauncher'
       : null;
     if (!capturing) return;
 
@@ -1008,13 +1109,17 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           handleSetSecondaryTranscriptionHotkey(hotkeyString);
         } else if (capturing === 'abandon') {
           handleSetAbandonHotkey(hotkeyString);
+        } else if (capturing === 'superPaste') {
+          handleSetSuperPasteHotkey(hotkeyString);
+        } else if (capturing === 'commandLauncher') {
+          handleSetCommandLauncherHotkey(hotkeyString);
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isCapturingScreenshotHotkey, isCapturingHistoryHotkey, isCapturingFullScreenHotkey, isCapturingActiveWindowHotkey, isCapturingContinuousContextHotkey, isCapturingTodoHotkey, isCapturingTranscriptionHotkey, isCapturingSecondaryTranscriptionHotkey, isCapturingAbandonHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTodoHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey]);
+  }, [isCapturingScreenshotHotkey, isCapturingHistoryHotkey, isCapturingFullScreenHotkey, isCapturingActiveWindowHotkey, isCapturingContinuousContextHotkey, isCapturingTodoHotkey, isCapturingTranscriptionHotkey, isCapturingSecondaryTranscriptionHotkey, isCapturingAbandonHotkey, isCapturingSuperPasteHotkey, isCapturingCommandLauncherHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTodoHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey]);
 
   // Check permissions on mount and when status changes
   useEffect(() => {
@@ -1355,111 +1460,84 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                 </div>
               )}
 
-              {/* Local Mode - show model list */}
-              {useLocalLLM && (
-            <div style={{ marginTop: '8px' }}>
-              {Object.entries(localLLMModels).map(([modelId, model]) => {
+              {/* Local Mode - show model download */}
+              {useLocalLLM && (() => {
+                const modelId = 'llama-3.2-1b';
+                const model = localLLMModels[modelId];
+                if (!model) return null;
                 const isDownloaded = localLLMStatus[modelId] || false;
                 const isDownloading = downloadingLocalLLM === modelId;
-                const isSelected = selectedLocalLLM === modelId;
                 const sizeMB = Math.round(model.sizeBytes / 1024 / 1024);
                 const progressPercent = localLLMProgress && isDownloading
                   ? Math.round((localLLMProgress.downloaded / localLLMProgress.total) * 100)
                   : 0;
 
                 return (
-                  <div
-                    key={modelId}
-                    onClick={() => isDownloaded && !isSelected && handleSelectLocalLLM(modelId)}
-                    style={{
+                  <div style={{ marginTop: '8px' }}>
+                    <div style={{
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',
                       padding: '8px 12px',
-                      marginBottom: '4px',
                       borderRadius: '6px',
-                      border: `1px solid ${isSelected && isDownloaded ? theme.accent : theme.border}`,
-                      backgroundColor: isSelected && isDownloaded ? theme.bgSecondary : 'transparent',
-                      cursor: isDownloaded ? 'pointer' : 'default',
-                      transition: 'border-color 0.2s, background-color 0.2s',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      {/* Selection indicator */}
-                      <div style={{
-                        width: '16px',
-                        height: '16px',
-                        borderRadius: '50%',
-                        border: `2px solid ${isSelected && isDownloaded ? theme.accent : isDownloaded ? theme.border : 'transparent'}`,
-                        backgroundColor: isSelected && isDownloaded ? theme.accent : 'transparent',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        flexShrink: 0,
-                      }}>
-                        {isSelected && isDownloaded && (
-                          <div style={{
-                            width: '6px',
-                            height: '6px',
-                            borderRadius: '50%',
-                            backgroundColor: '#fff',
-                          }} />
-                        )}
-                      </div>
+                      border: `1px solid ${theme.border}`,
+                      backgroundColor: 'transparent',
+                    }}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
-                        <span style={{ fontSize: '13px', fontWeight: isSelected ? 600 : 500, color: theme.text }}>
+                        <span style={{ fontSize: '13px', fontWeight: 500, color: theme.text }}>
                           {model.name}
                         </span>
                         <span style={{ fontSize: '11px', color: theme.textSecondary }}>
                           {sizeMB}MB {isDownloaded && '· Downloaded'}
                         </span>
                       </div>
-                    </div>
 
-                    <div style={styles.rowControls} onClick={(e) => e.stopPropagation()}>
-                      {isDownloading && localLLMProgress ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <div style={{
-                            width: '60px',
-                            height: '4px',
-                            backgroundColor: theme.border,
-                            borderRadius: '2px',
-                            overflow: 'hidden',
-                          }}>
+                      <div style={styles.rowControls}>
+                        {isDownloading && localLLMProgress ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <div style={{
-                              width: `${progressPercent}%`,
-                              height: '100%',
-                              backgroundColor: '#3b82f6',
-                              transition: 'width 0.3s',
-                            }} />
+                              width: '60px',
+                              height: '4px',
+                              backgroundColor: theme.border,
+                              borderRadius: '2px',
+                              overflow: 'hidden',
+                            }}>
+                              <div style={{
+                                width: `${progressPercent}%`,
+                                height: '100%',
+                                backgroundColor: '#3b82f6',
+                                transition: 'width 0.3s',
+                              }} />
+                            </div>
+                            <span style={{ fontSize: '11px', color: theme.textSecondary }}>{progressPercent}%</span>
                           </div>
-                          <span style={{ fontSize: '11px', color: theme.textSecondary }}>{progressPercent}%</span>
-                        </div>
-                      ) : isDownloaded ? (
-                        <button
-                          onClick={() => handleDeleteLocalLLM(modelId)}
-                          style={{ ...styles.linkBtn, color: '#9ca3af' }}
-                        >
-                          Delete
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => handleDownloadLocalLLM(modelId)}
-                          disabled={downloadingLocalLLM !== null}
-                          style={{
-                            ...styles.btn,
-                            opacity: downloadingLocalLLM !== null ? 0.5 : 1,
-                          }}
-                        >
-                          Download
-                        </button>
-                      )}
+                        ) : isDownloaded ? (
+                          <button
+                            onClick={() => handleDeleteLocalLLM(modelId)}
+                            style={{ ...styles.linkBtn, color: '#9ca3af' }}
+                          >
+                            Delete
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleDownloadLocalLLM(modelId)}
+                            disabled={downloadingLocalLLM !== null}
+                            style={{
+                              ...styles.btn,
+                              opacity: downloadingLocalLLM !== null ? 0.5 : 1,
+                            }}
+                          >
+                            Download
+                          </button>
+                        )}
+                      </div>
                     </div>
+                    <p style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '8px', marginBottom: 0 }}>
+                      Experimental feature. Results may vary.
+                    </p>
                   </div>
                 );
-              })}
-            </div>
-              )}
+              })()}
             </div>
           </>
         )}
@@ -1532,10 +1610,13 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
               disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingSecondaryTranscriptionHotkey}
               style={{ ...styles.btn, ...(isCapturingScreenshotHotkey ? styles.btnActive : {}) }}
             >
-              {isCapturingScreenshotHotkey ? 'Press keys...' : clipboardHotkeys.screenshot || '⌘4'}
+              {isCapturingScreenshotHotkey ? 'Press keys...' : clipboardHotkeys.screenshot || 'Not set'}
             </button>
             {isCapturingScreenshotHotkey && (
               <button onClick={() => { setIsCapturingScreenshotHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+            {!isCapturingScreenshotHotkey && clipboardHotkeys.screenshot && (
+              <button onClick={handleClearScreenshotHotkey} style={styles.btnGhost}>Clear</button>
             )}
           </div>
         </div>
@@ -1549,10 +1630,13 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
               disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingSecondaryTranscriptionHotkey}
               style={{ ...styles.btn, ...(isCapturingFullScreenHotkey ? styles.btnActive : {}) }}
             >
-              {isCapturingFullScreenHotkey ? 'Press keys...' : clipboardHotkeys.fullScreen || '⌘3'}
+              {isCapturingFullScreenHotkey ? 'Press keys...' : clipboardHotkeys.fullScreen || 'Not set'}
             </button>
             {isCapturingFullScreenHotkey && (
               <button onClick={() => { setIsCapturingFullScreenHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+            {!isCapturingFullScreenHotkey && clipboardHotkeys.fullScreen && (
+              <button onClick={handleClearFullScreenHotkey} style={styles.btnGhost}>Clear</button>
             )}
           </div>
         </div>
@@ -1566,10 +1650,13 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
               disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingSecondaryTranscriptionHotkey}
               style={{ ...styles.btn, ...(isCapturingActiveWindowHotkey ? styles.btnActive : {}) }}
             >
-              {isCapturingActiveWindowHotkey ? 'Press keys...' : clipboardHotkeys.activeWindow || '⌘⇧3'}
+              {isCapturingActiveWindowHotkey ? 'Press keys...' : clipboardHotkeys.activeWindow || 'Not set'}
             </button>
             {isCapturingActiveWindowHotkey && (
               <button onClick={() => { setIsCapturingActiveWindowHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+            {!isCapturingActiveWindowHotkey && clipboardHotkeys.activeWindow && (
+              <button onClick={handleClearActiveWindowHotkey} style={styles.btnGhost}>Clear</button>
             )}
           </div>
         </div>
@@ -1584,11 +1671,37 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </span>
           <div style={styles.rowControls}>
             <button
-              disabled
-              style={{ ...styles.btn, opacity: 0.7, cursor: 'default' }}
+              onClick={() => { setIsCapturingSuperPasteHotkey(true); setHotkeyError(null); }}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingSecondaryTranscriptionHotkey || isCapturingSuperPasteHotkey || isCapturingCommandLauncherHotkey}
+              style={{ ...styles.btn, ...(isCapturingSuperPasteHotkey ? styles.btnActive : {}) }}
             >
-              ⌘⇧V
+              {isCapturingSuperPasteHotkey ? 'Press keys...' : (superPasteHotkey || 'Not set')}
             </button>
+            {isCapturingSuperPasteHotkey && (
+              <button onClick={() => { setIsCapturingSuperPasteHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+          </div>
+        </div>
+
+        {/* Command Launcher */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>
+            Command Launcher
+            <span style={{ marginLeft: '8px', fontSize: '10px', color: theme.textSecondary }}>
+              (quick access to commands)
+            </span>
+          </span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => { setIsCapturingCommandLauncherHotkey(true); setHotkeyError(null); }}
+              disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingSecondaryTranscriptionHotkey || isCapturingSuperPasteHotkey || isCapturingCommandLauncherHotkey}
+              style={{ ...styles.btn, ...(isCapturingCommandLauncherHotkey ? styles.btnActive : {}) }}
+            >
+              {isCapturingCommandLauncherHotkey ? 'Press keys...' : (commandLauncherHotkey || 'Not set')}
+            </button>
+            {isCapturingCommandLauncherHotkey && (
+              <button onClick={() => { setIsCapturingCommandLauncherHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
           </div>
         </div>
 

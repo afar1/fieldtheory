@@ -80,6 +80,12 @@ interface Preferences {
   
   // Todo hotkey - opens clipboard history in todo view mode
   todoHotkey?: string;
+
+  // Previously hardcoded hotkeys - now customizable
+  superPasteHotkey?: string;
+  commandLauncherHotkey?: string;
+  improveTextHotkey?: string;
+  autoImproveHotkey?: string;
   
   // All-time statistics tracking
   improvedPromptsCount?: number;
@@ -147,15 +153,21 @@ const DEFAULT_PREFERENCES: Preferences = {
   transcriptionHotkey: 'Command+\\',
   selectedModel: 'small',
   overlayStyle: 'rectangle',
-  clipboardScreenshotHotkey: 'Command+4',
-  clipboardDesktopScreenshotHotkey: 'Command+3',
+  clipboardScreenshotHotkey: 'Alt+4',
+  clipboardDesktopScreenshotHotkey: 'Alt+3',
   clipboardHistoryHotkey: 'Alt+Space',
   continuousContextEnabled: false,
-  continuousContextHotkey: 'Shift+Command+4', // Default: Shift + screenshot hotkey
+  continuousContextHotkey: 'Shift+Alt+4', // Default: Shift + screenshot hotkey
   abandonRecordingHotkey: 'Escape', // Default: Escape key to cancel recording
   abandonRecordingConfirmation: true, // Default: confirm before abandoning if there's audio
   todoHotkey: 'Command+Shift+T', // Default: Cmd+Shift+T for todo list
-  
+
+  // Previously hardcoded hotkeys - now customizable
+  superPasteHotkey: 'Command+Shift+V',
+  commandLauncherHotkey: 'Command+Shift+K',
+  improveTextHotkey: 'Command+Shift+I',
+  autoImproveHotkey: 'Command+Shift+\\',
+
   // Sound settings - enabled by default with click sounds
   soundsEnabled: true,
   recordingStartSound: 'ButtonClickDown.mp3',
