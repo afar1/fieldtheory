@@ -9,6 +9,17 @@ import { useTheme } from '../contexts/ThemeContext';
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.45': [
+    'No more keychain approval prompts',
+    'Faster onboarding for returning users (skip shortcuts practice)',
+    'Cleaner version hover UI',
+  ],
+  '0.1.44': [
+    'Customizable hotkeys for Super Paste and Command Launcher in Settings',
+    'Improved local LLM with 8K output tokens for longer transcripts',
+    'Fixed screenshot hotkeys showing "Not set" incorrectly',
+    'Fixed Super Paste double-trigger issue',
+  ],
   '0.1.37': [
     'Fixed critical onboarding crash preventing first-run setup',
     'Fixed release notes button not opening',
@@ -47,6 +58,8 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.45': 'Jan 15 2026',
+  '0.1.44': 'Jan 15 2026',
   '0.1.37': 'Jan 11 2026',
   '0.1.36': 'Jan 11 2026',
   '0.1.33': 'Jan 10 2026',
