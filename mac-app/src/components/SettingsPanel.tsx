@@ -850,7 +850,18 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       console.error('Failed to clear active window screenshot hotkey:', err);
     }
   }, []);
-  
+
+  // Handler for clearing all screenshot hotkeys (use Mac defaults)
+  const handleClearAllScreenshotHotkeys = useCallback(async () => {
+    if (!window.clipboardAPI) return;
+    try {
+      await window.clipboardAPI.setHotkeys({ screenshot: '', fullScreen: '', activeWindow: '' });
+      setClipboardHotkeys(prev => ({ ...prev, screenshot: '', fullScreen: '', activeWindow: '' }));
+    } catch (err) {
+      console.error('Failed to clear screenshot hotkeys:', err);
+    }
+  }, []);
+
   // Handler for setting history hotkey
   const handleSetHistoryHotkey = useCallback(async (hotkeyString: string) => {
     setIsCapturingHistoryHotkey(false);
@@ -1660,6 +1671,23 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             )}
           </div>
         </div>
+
+        {/* Clear all screenshot shortcuts helper */}
+        {(clipboardHotkeys.screenshot || clipboardHotkeys.fullScreen || clipboardHotkeys.activeWindow) && (
+          <div style={{ marginTop: '-4px', marginBottom: '8px', paddingLeft: '12px' }}>
+            <button
+              onClick={handleClearAllScreenshotHotkeys}
+              style={{
+                ...styles.btnGhost,
+                fontSize: '11px',
+                color: theme.textSecondary,
+                padding: '2px 0',
+              }}
+            >
+              Clear all screenshot shortcuts (use Mac defaults)
+            </button>
+          </div>
+        )}
 
         {/* Super Paste - Smart context-aware paste */}
         <div style={styles.row}>

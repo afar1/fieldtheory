@@ -900,13 +900,10 @@ function ShortcutsPhase({ onFinish }: ShortcutsPhaseProps) {
         style={{
           ...styles.primaryButton,
           marginTop: '16px',
-          opacity: hasCompletedOnce ? 1 : 0.5,
-          cursor: hasCompletedOnce ? 'pointer' : 'not-allowed',
         }}
         onClick={onFinish}
-        disabled={!hasCompletedOnce}
       >
-        Get Started
+        {hasCompletedOnce ? 'Get Started' : 'Skip Practice'}
       </button>
     </div>
   );
