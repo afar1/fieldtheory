@@ -362,9 +362,10 @@ function ModelPhase({
 
 interface AccountPhaseProps {
   onFinish: () => void;
+  onFinishReturning?: () => void; // Skip shortcuts for returning users
 }
 
-function AccountPhase({ onFinish }: AccountPhaseProps) {
+function AccountPhase({ onFinish, onFinishReturning }: AccountPhaseProps) {
   const [email, setEmail] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [otpSent, setOtpSent] = useState(false);
@@ -510,7 +511,7 @@ function AccountPhase({ onFinish }: AccountPhaseProps) {
 
         <button
           style={{ ...styles.primaryButton, marginTop: '16px' }}
-          onClick={onFinish}
+          onClick={onFinishReturning || onFinish}
         >
           Continue
         </button>
@@ -1172,7 +1173,7 @@ export default function Onboarding() {
 
       case 'account':
         return (
-          <AccountPhase onFinish={goToShortcuts} />
+          <AccountPhase onFinish={goToShortcuts} onFinishReturning={finish} />
         );
 
       case 'shortcuts':

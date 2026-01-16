@@ -6109,23 +6109,6 @@ export default function ClipboardHistory() {
             >
               {versionHovered ? (
                 <>
-                  <button
-                    onClick={() => {
-                      setReleaseNotesLatestMode(true);
-                      setShowReleaseNotes(true);
-                    }}
-                    style={{
-                      cursor: 'pointer',
-                      color: theme.textSecondary,
-                      fontSize: '9px',
-                      background: 'none',
-                      border: 'none',
-                      padding: 0,
-                    }}
-                    title="View release notes"
-                  >
-                    Release notes
-                  </button>
                   {updateStatus === 'uptodate' ? (
                     <span style={{ color: '#22c55e', fontSize: '9px' }}>
                       Up to date ✓
