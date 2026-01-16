@@ -894,6 +894,34 @@ export class SocialSync extends EventEmitter {
   }
 
   /**
+   * Mark multiple messages as read in a single batch.
+   * More efficient than calling markAsRead for each message.
+   */
+  async markAsReadBatch(messageIds: string[]): Promise<boolean> {
+    if (!this.supabase || messageIds.length === 0) return false;
+    const userId = this.getUserId();
+    if (!userId) return false;
+
+    try {
+      const { error } = await this.supabase
+        .from('messages')
+        .update({ read_at: new Date().toISOString() })
+        .in('id', messageIds)
+        .eq('recipient_user_id', userId);
+
+      if (error) {
+        console.error('[SocialSync] Batch mark as read failed:', error);
+        return false;
+      }
+
+      return true;
+    } catch (err) {
+      console.error('[SocialSync] Failed to batch mark as read:', err);
+      return false;
+    }
+  }
+
+  /**
    * Check if there are any unread messages.
    */
   async hasUnreadMessages(): Promise<boolean> {

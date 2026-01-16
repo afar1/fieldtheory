@@ -3466,6 +3466,14 @@ function setupClipboardIPCHandlers(): void {
     return await socialSync.markAsRead(messageId);
   });
 
+  // DM: Mark multiple messages as read in batch.
+  ipcMain.handle(SocialIPCChannels.MARK_AS_READ_BATCH, async (_event, messageIds: string[]) => {
+    if (!socialSync) {
+      return false;
+    }
+    return await socialSync.markAsReadBatch(messageIds);
+  });
+
   // DM: Check if there are unread messages.
   ipcMain.handle(SocialIPCChannels.HAS_UNREAD, async () => {
     if (!socialSync) {

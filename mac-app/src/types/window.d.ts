@@ -694,6 +694,7 @@ interface SocialAPI {
   getConversations: () => Promise<DMConversation[]>;
   getDMsWithUser: (otherUserId: string) => Promise<SocialMessage[]>;
   markAsRead: (messageId: string) => Promise<boolean>;
+  markAsReadBatch: (messageIds: string[]) => Promise<boolean>;
   hasUnread: () => Promise<boolean>;
   hasUnreadFeedback: () => Promise<boolean>;
   

@@ -9,6 +9,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
+import CachedImage from './CachedImage';
 
 // Import transcription status type
 type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
@@ -128,6 +129,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
   const [addFriendEmail, setAddFriendEmail] = useState('');
   const [showAddFriend, setShowAddFriend] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [sending, setSending] = useState(false);
 
@@ -145,30 +147,29 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
 
   const loadData = useCallback(async () => {
     if (!window.socialAPI) return;
-    
+
     setLoading(true);
+    setLoadError(null);
     try {
       const [convos, admin, contactList] = await Promise.all([
         window.socialAPI.getConversations(),
         window.socialAPI.isAdmin(),
         window.socialAPI.getContacts(),
       ]);
-      
+
       setConversations(convos);
       setIsAdmin(admin);
       setContacts(contactList);
-      
+
       // Load feedback based on admin status.
       if (admin) {
         const allFeedback = await window.socialAPI.getAllFeedback();
         setFeedback(allFeedback);
-        
-        // Mark unread feedback items as read when admin views the list.
-        // Admin is the recipient of user-submitted feedback.
-        for (const item of allFeedback) {
-          if (!item.readAt) {
-            await window.socialAPI.markAsRead(item.id);
-          }
+
+        // Mark unread feedback items as read when admin views the list (batch).
+        const unreadIds = allFeedback.filter(item => !item.readAt).map(item => item.id);
+        if (unreadIds.length > 0) {
+          window.socialAPI.markAsReadBatch(unreadIds); // Fire and forget
         }
       } else {
         const myFeedback = await window.socialAPI.getMyFeedback();
@@ -176,6 +177,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
       }
     } catch (err) {
       console.error('[DMsView] Failed to load data:', err);
+      setLoadError('Failed to load messages. Please check your connection.');
     } finally {
       setLoading(false);
     }
@@ -184,49 +186,43 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
   // Load messages for selected conversation.
   const loadMessages = useCallback(async (otherUserId: string) => {
     if (!window.socialAPI) return;
-    
+
     const msgs = await window.socialAPI.getDMsWithUser(otherUserId);
     setMessages(msgs);
-    
-    // Mark messages from the other user as read.
-    for (const msg of msgs) {
-      if (!msg.readAt && msg.senderUserId === otherUserId) {
-        await window.socialAPI.markAsRead(msg.id);
-      }
+
+    // Mark messages from the other user as read (batch).
+    const unreadIds = msgs
+      .filter(msg => !msg.readAt && msg.senderUserId === otherUserId)
+      .map(msg => msg.id);
+    if (unreadIds.length > 0) {
+      window.socialAPI.markAsReadBatch(unreadIds); // Fire and forget
     }
   }, []);
 
   // Load feedback replies and activity log, and mark as read.
   const loadFeedbackDetails = useCallback(async (feedbackItem: SocialMessage) => {
     if (!window.socialAPI) return;
-    
+
     const [replies, log] = await Promise.all([
       window.socialAPI.getFeedbackReplies(feedbackItem.id),
       window.socialAPI.getActivityLog(feedbackItem.id),
     ]);
-    
+
     setFeedbackReplies(replies);
     setActivityLog(log);
-    
-    // Mark the original feedback as read if unread.
-    let markedAny = false;
+
+    // Mark feedback and unread replies as read (batch).
+    const unreadIds: string[] = [];
     if (!feedbackItem.readAt) {
-      await window.socialAPI.markAsRead(feedbackItem.id);
-      markedAny = true;
+      unreadIds.push(feedbackItem.id);
     }
-    
-    // Mark unread replies as read.
     for (const reply of replies) {
       if (!reply.readAt) {
-        await window.socialAPI.markAsRead(reply.id);
-        markedAny = true;
+        unreadIds.push(reply.id);
       }
     }
-    
-    // Reload feedback list if we marked anything as read.
-    if (markedAny) {
-      const feedbackList = await window.socialAPI.getMyFeedback();
-      setFeedback(feedbackList);
+    if (unreadIds.length > 0) {
+      window.socialAPI.markAsReadBatch(unreadIds); // Fire and forget
     }
   }, []);
 
@@ -250,22 +246,63 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
   }, [selectedFeedback, loadFeedbackDetails]);
 
   // Listen for new messages (Hot Mic).
+  // IMPORTANT: Avoid full loadData() on every message - use targeted updates.
   useEffect(() => {
     if (!window.socialAPI) return;
-    
+
     const unsubscribe = window.socialAPI.onMessageReceived((message) => {
-      // Refresh conversations list.
-      loadData();
-      
-      // If the message is for the current conversation, add it.
-      if (selectedConversation && 
-          (message.senderUserId === selectedConversation || message.recipientUserId === selectedConversation)) {
-        setMessages(prev => [...prev, message]);
+      console.log('[DMsView] Message received:', message.type, message.id);
+
+      if (message.type === 'dm') {
+        // Update conversations list with new message
+        setConversations(prev => {
+          const otherUserId = message.senderUserId;
+          const existing = prev.find(c => c.otherUserId === otherUserId);
+
+          if (existing) {
+            // Update existing conversation
+            return prev.map(c =>
+              c.otherUserId === otherUserId
+                ? { ...c, lastMessage: message, unreadCount: c.unreadCount + 1 }
+                : c
+            ).sort((a, b) => {
+              // Sort by last message time (newest first)
+              const aTime = a.lastMessage?.createdAt || 0;
+              const bTime = b.lastMessage?.createdAt || 0;
+              return bTime - aTime;
+            });
+          } else {
+            // New conversation - add to list
+            const newConvo: DMConversation = {
+              otherUserId: message.senderUserId,
+              otherUserEmail: message.senderEmail || '',
+              otherUserName: message.senderName,
+              relationshipType: null,
+              lastMessage: message,
+              unreadCount: 1,
+            };
+            return [newConvo, ...prev];
+          }
+        });
+
+        // If viewing this conversation, add message to thread
+        if (selectedConversation === message.senderUserId) {
+          setMessages(prev => [...prev, message]);
+        }
+      } else if (message.type === 'feedback') {
+        // Add to feedback list if it's a new feedback item or reply
+        if (!message.parentMessageId) {
+          // New feedback item
+          setFeedback(prev => [message, ...prev]);
+        } else if (selectedFeedback?.id === message.parentMessageId) {
+          // Reply to currently selected feedback
+          setFeedbackReplies(prev => [...prev, message]);
+        }
       }
     });
-    
+
     return unsubscribe;
-  }, [loadData, selectedConversation]);
+  }, [selectedConversation, selectedFeedback]);
 
   // Scroll to bottom when messages change.
   useEffect(() => {
@@ -619,17 +656,94 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
   // Render
   // ==========================================================================
 
+  // Loading skeleton component
+  const SkeletonItem = ({ width = '100%', height = '12px' }: { width?: string; height?: string }) => (
+    <div
+      style={{
+        width,
+        height,
+        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+        borderRadius: '4px',
+        animation: 'pulse 1.5s ease-in-out infinite',
+      }}
+    />
+  );
+
   if (loading) {
     return (
       <div style={{
         flex: 1,
         display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        padding: '0 16px 16px 16px',
+      }}>
+        {/* Skeleton tabs */}
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+          <SkeletonItem width="100px" height="28px" />
+          <SkeletonItem width="100px" height="28px" />
+        </div>
+
+        <div style={{ flex: 1, display: 'flex', gap: '12px', overflow: 'hidden' }}>
+          {/* Skeleton conversation list */}
+          <div style={{ width: '200px', flexShrink: 0, paddingRight: '12px' }}>
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} style={{ padding: '8px', marginBottom: '4px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '6px' }}>
+                  <SkeletonItem width="120px" height="14px" />
+                </div>
+                <SkeletonItem width="160px" height="10px" />
+              </div>
+            ))}
+          </div>
+
+          {/* Skeleton content area */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <SkeletonItem width="200px" height="16px" />
+            </div>
+          </div>
+        </div>
+
+        {/* CSS animation for pulse effect */}
+        <style>{`
+          @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+          }
+        `}</style>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div style={{
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        color: theme.textSecondary,
-        fontSize: '12px',
+        gap: '12px',
+        padding: '20px',
       }}>
-        Loading...
+        <div style={{ color: '#ef4444', fontSize: '12px', textAlign: 'center' }}>
+          {loadError}
+        </div>
+        <button
+          onClick={loadData}
+          style={{
+            padding: '8px 16px',
+            fontSize: '11px',
+            backgroundColor: theme.accent,
+            color: '#fff',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+          }}
+        >
+          Retry
+        </button>
       </div>
     );
   }
@@ -976,8 +1090,9 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                         color: isFromMe ? '#fff' : theme.text,
                       }}>
                         {msg.contentType === 'image' && msg.imageUrl && (
-                          <img
-                            src={msg.imageUrl}
+                          <CachedImage
+                            imageUrl={msg.imageUrl}
+                            itemId={msg.id}
                             alt="Shared image"
                             style={{
                               maxWidth: '200px',
@@ -1160,8 +1275,9 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                 marginBottom: '12px',
               }}>
                 {selectedFeedback.contentType === 'image' && selectedFeedback.imageUrl && (
-                  <img
-                    src={selectedFeedback.imageUrl}
+                  <CachedImage
+                    imageUrl={selectedFeedback.imageUrl}
+                    itemId={selectedFeedback.id}
                     alt="Feedback screenshot"
                     style={{
                       maxWidth: '100%',
@@ -1222,8 +1338,9 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                       {reply.senderEmail} • {formatRelativeTime(reply.createdAt)}
                     </div>
                     {reply.contentType === 'image' && reply.imageUrl && (
-                      <img
-                        src={reply.imageUrl}
+                      <CachedImage
+                        imageUrl={reply.imageUrl}
+                        itemId={reply.id}
                         alt="Reply image"
                         style={{
                           maxWidth: '200px',

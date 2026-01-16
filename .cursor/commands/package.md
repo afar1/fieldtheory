@@ -13,3 +13,13 @@ Always include all necessary files in the release:
 This application manages its releases in the field-releases repo.
 
 You can find the credentials necessary for notarization and GitHub in my .env.local file in the root directory.
+
+## In-app release notes
+
+**Important:** Update `src/components/ReleaseNotesPopup.tsx` with release notes for each version. Add an entry to both:
+- `RELEASE_NOTES` - array of 1-4 bullet points describing what's new
+- `RELEASE_DATES` - the release date in format 'Jan 15 2026'
+
+This shows the "What's new" popup to users after they update. If you skip this, users won't see any release notes in the app.
+
+**Before packaging:** Draft the release notes and confirm them with me before building. I may want to make changes to the wording or add/remove items.

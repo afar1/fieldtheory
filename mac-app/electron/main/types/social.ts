@@ -9,6 +9,7 @@ export const SocialIPCChannels = {
   GET_CONVERSATIONS: 'social:getConversations',
   GET_DMS_WITH_USER: 'social:getDMsWithUser',
   MARK_AS_READ: 'social:markAsRead',
+  MARK_AS_READ_BATCH: 'social:markAsReadBatch',
   HAS_UNREAD: 'social:hasUnread',
   HAS_UNREAD_FEEDBACK: 'social:hasUnreadFeedback',
   
