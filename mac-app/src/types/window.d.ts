@@ -870,6 +870,15 @@ interface HotkeyAPI {
 /**
  * Extend the Window interface with our custom APIs.
  */
+/**
+ * Theme API for dark mode synchronization across windows.
+ */
+interface ThemeAPI {
+  getTheme: () => Promise<boolean>;
+  setTheme: (isDark: boolean) => Promise<void>;
+  onThemeChanged: (callback: (isDark: boolean) => void) => () => void;
+}
+
 declare global {
   interface Window {
     audioAPI?: AudioAPI;
@@ -889,6 +898,7 @@ declare global {
     quotaAPI?: QuotaAPI;
     shellAPI?: ShellAPI;
     commandsAPI?: CommandsAPI;
+    themeAPI?: ThemeAPI;
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;
   }

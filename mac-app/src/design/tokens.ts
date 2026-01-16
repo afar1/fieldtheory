@@ -23,9 +23,58 @@ export const colors = {
     bgAlt: '#2a2a2a',        // Slightly lighter for cards
     text: '#e8e8e8',         // Light text
     textMuted: '#999999',    // Muted secondary text
-    accent: '#1a4a35',       // Lighter version for dark mode
+    accent: '#3d8b6a',       // Brighter green for dark mode visibility
     border: '#3a3a3a',       // Dark border
     dots: '#4a4a4a',         // Dotted separator in dark mode
+  },
+} as const;
+
+// -----------------------------------------------------------------------------
+// Surface Elevation (Dark Mode)
+// In dark mode, elevation = lighter colors (opposite of light mode shadows)
+// -----------------------------------------------------------------------------
+
+export const surfaces = {
+  light: {
+    0: '#faf9f7',  // Base - window background
+    1: '#f5f4f2',  // Elevated - cards, panels
+    2: '#ffffff',  // Higher - inputs, dialogs
+    3: '#ffffff',  // Highest - tooltips, dropdowns
+  },
+  dark: {
+    0: '#1e1e1e',  // Base - window background
+    1: '#252525',  // Elevated - cards, panels
+    2: '#2a2a2a',  // Higher - inputs, dialogs
+    3: '#333333',  // Highest - tooltips, dropdowns
+  },
+} as const;
+
+// -----------------------------------------------------------------------------
+// Semantic Colors
+// Status and feedback colors with dark mode desaturated variants
+// -----------------------------------------------------------------------------
+
+export const semantic = {
+  light: {
+    error: '#dc2626',
+    errorBg: '#fef2f2',
+    success: '#16a34a',
+    successBg: '#f0fdf4',
+    warning: '#d97706',
+    warningBg: '#fffbeb',
+    info: '#2563eb',
+    infoBg: '#eff6ff',
+  },
+  dark: {
+    // Lighter/desaturated for dark backgrounds
+    error: '#f87171',
+    errorBg: 'rgba(248, 113, 113, 0.15)',
+    success: '#4ade80',
+    successBg: 'rgba(74, 222, 128, 0.15)',
+    warning: '#fbbf24',
+    warningBg: 'rgba(251, 191, 36, 0.15)',
+    info: '#60a5fa',
+    infoBg: 'rgba(96, 165, 250, 0.15)',
   },
 } as const;
 
@@ -85,13 +134,23 @@ export const borderRadius = {
 
 // -----------------------------------------------------------------------------
 // Shadows
-// Minimal shadows to keep the flat, paper-like aesthetic.
+// Light mode uses shadows for depth, dark mode uses lighter surfaces instead
 // -----------------------------------------------------------------------------
 
 export const shadows = {
-  sm: '0 1px 2px rgba(0, 0, 0, 0.05)',
-  base: '0 1px 3px rgba(0, 0, 0, 0.1)',
-  md: '0 4px 6px rgba(0, 0, 0, 0.1)',
+  light: {
+    sm: '0 1px 2px rgba(0, 0, 0, 0.05)',
+    base: '0 1px 3px rgba(0, 0, 0, 0.1)',
+    md: '0 4px 6px rgba(0, 0, 0, 0.1)',
+    lg: '0 8px 16px rgba(0, 0, 0, 0.1)',
+  },
+  dark: {
+    // Softer shadows in dark mode - elevation is shown via lighter surfaces
+    sm: '0 1px 2px rgba(0, 0, 0, 0.3)',
+    base: '0 1px 3px rgba(0, 0, 0, 0.4)',
+    md: '0 4px 6px rgba(0, 0, 0, 0.4)',
+    lg: '0 8px 16px rgba(0, 0, 0, 0.5)',
+  },
 } as const;
 
 // -----------------------------------------------------------------------------
@@ -104,18 +163,35 @@ export type ColorScheme = 'light' | 'dark';
 export interface Theme {
   isDark: boolean;
   glassEnabled: boolean;
+  // Core colors
   bg: string;
   bgSecondary: string;
+  bgTertiary: string;
   text: string;
   textSecondary: string;
   border: string;
   accent: string;
   accentHover: string;
+  // Selection
   selectedBg: string;
   selectedBorder: string;
+  // Inputs
   inputBg: string;
   inputBorder: string;
+  // Misc
   dots: string;
+  // Semantic colors
+  error: string;
+  errorBg: string;
+  success: string;
+  successBg: string;
+  warning: string;
+  warningBg: string;
+  info: string;
+  infoBg: string;
+  // Shadows
+  shadow: string;
+  shadowMd: string;
 }
 
 // -----------------------------------------------------------------------------
@@ -126,44 +202,83 @@ export interface Theme {
 export const lightTheme: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   bg: colors.light.bg,
   bgSecondary: colors.light.bgAlt,
+  bgTertiary: surfaces.light[2],
   text: colors.light.text,
   textSecondary: colors.light.textMuted,
   border: colors.light.border,
   accent: colors.light.accent,
-  accentHover: '#0f2a1f',  // Darker on hover
-  selectedBg: 'rgba(20, 55, 42, 0.08)',  // Light green tint
+  accentHover: '#0f2a1f',
+  selectedBg: 'rgba(20, 55, 42, 0.08)',
   selectedBorder: colors.light.accent,
   inputBg: '#ffffff',
   inputBorder: colors.light.border,
   dots: colors.light.dots,
+  // Semantic
+  error: semantic.light.error,
+  errorBg: semantic.light.errorBg,
+  success: semantic.light.success,
+  successBg: semantic.light.successBg,
+  warning: semantic.light.warning,
+  warningBg: semantic.light.warningBg,
+  info: semantic.light.info,
+  infoBg: semantic.light.infoBg,
+  // Shadows
+  shadow: shadows.light.base,
+  shadowMd: shadows.light.md,
 };
 
 export const darkThemeSolid: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   bg: colors.dark.bg,
-  bgSecondary: colors.dark.bgAlt,
+  bgSecondary: surfaces.dark[1],
+  bgTertiary: surfaces.dark[2],
   text: colors.dark.text,
   textSecondary: colors.dark.textMuted,
   border: colors.dark.border,
   accent: colors.dark.accent,
-  accentHover: '#2a6a4f',  // Lighter green on hover
-  selectedBg: 'rgba(26, 74, 53, 0.12)',  // Light green tint
+  accentHover: '#4da87d',
+  selectedBg: 'rgba(61, 139, 106, 0.15)',
   selectedBorder: colors.dark.accent,
-  inputBg: colors.dark.bgAlt,
+  inputBg: surfaces.dark[2],
   inputBorder: 'rgba(255, 255, 255, 0.15)',
   dots: colors.dark.dots,
+  // Semantic
+  error: semantic.dark.error,
+  errorBg: semantic.dark.errorBg,
+  success: semantic.dark.success,
+  successBg: semantic.dark.successBg,
+  warning: semantic.dark.warning,
+  warningBg: semantic.dark.warningBg,
+  info: semantic.dark.info,
+  infoBg: semantic.dark.infoBg,
+  // Shadows
+  shadow: shadows.dark.base,
+  shadowMd: shadows.dark.md,
 };
 
 export const darkThemeGlass: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   bg: 'rgba(30, 30, 30, 0.85)',
-  bgSecondary: 'rgba(42, 42, 42, 0.9)',
+  bgSecondary: 'rgba(37, 37, 37, 0.9)',
+  bgTertiary: 'rgba(42, 42, 42, 0.95)',
   text: colors.dark.text,
   textSecondary: colors.dark.textMuted,
   border: colors.dark.border,
   accent: colors.dark.accent,
-  accentHover: '#2a6a4f',
-  selectedBg: 'rgba(26, 74, 53, 0.12)',
+  accentHover: '#4da87d',
+  selectedBg: 'rgba(61, 139, 106, 0.15)',
   selectedBorder: colors.dark.accent,
   inputBg: 'rgba(42, 42, 42, 0.9)',
   inputBorder: 'rgba(255, 255, 255, 0.15)',
   dots: colors.dark.dots,
+  // Semantic
+  error: semantic.dark.error,
+  errorBg: semantic.dark.errorBg,
+  success: semantic.dark.success,
+  successBg: semantic.dark.successBg,
+  warning: semantic.dark.warning,
+  warningBg: semantic.dark.warningBg,
+  info: semantic.dark.info,
+  infoBg: semantic.dark.infoBg,
+  // Shadows
+  shadow: shadows.dark.base,
+  shadowMd: shadows.dark.md,
 };

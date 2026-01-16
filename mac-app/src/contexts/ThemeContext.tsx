@@ -1,10 +1,10 @@
 // =============================================================================
-// ThemeContext - Provides theme (light/dark) based on system preference
-// with glass effect toggle for performance.
-// Uses unified design tokens from www/styles.css for consistency.
+// ThemeContext - Provides theme (light/dark) with manual toggle.
+// Uses unified design tokens for consistency across all windows.
+// Syncs theme preference via IPC for multi-window support.
 // =============================================================================
 
-import { createContext, useContext, useState, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import {
   Theme,
   lightTheme,
@@ -43,10 +43,33 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return true;
   });
 
+  // Listen for theme changes from other windows via IPC
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.themeAPI) return;
+
+    const unsubscribe = window.themeAPI.onThemeChanged((newIsDark: boolean) => {
+      setIsDark(newIsDark);
+      localStorage.setItem('darkMode', String(newIsDark));
+    });
+
+    // Get initial theme from main process
+    window.themeAPI.getTheme?.().then((savedIsDark: boolean) => {
+      if (savedIsDark !== isDark) {
+        setIsDark(savedIsDark);
+        localStorage.setItem('darkMode', String(savedIsDark));
+      }
+    });
+
+    return unsubscribe;
+  }, []);
+
   const toggleDarkMode = () => {
     const newValue = !isDark;
     setIsDark(newValue);
     localStorage.setItem('darkMode', String(newValue));
+
+    // Notify main process to sync to other windows
+    window.themeAPI?.setTheme?.(newValue);
   };
 
   const toggleGlass = () => {
@@ -76,4 +99,3 @@ export function useTheme() {
   }
   return context;
 }
-
