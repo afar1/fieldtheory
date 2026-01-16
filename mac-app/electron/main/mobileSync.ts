@@ -30,6 +30,40 @@ class FileStorage implements SupportedStorage {
     this.loadFromDisk();
   }
 
+  /**
+   * Get raw session data from storage for manual recovery.
+   * This is used when getSession() returns null but we may still have valid refresh_token.
+   */
+  getRawSessionData(): { access_token?: string; refresh_token?: string; expires_at?: number; user?: { email?: string } } | null {
+    try {
+      // Supabase stores session under a key like 'sb-<project-ref>-auth-token'
+      // We check multiple patterns to be robust against Supabase version changes.
+      const authKeyPatterns = ['auth-token', 'supabase.auth.token', 'session'];
+
+      for (const [key, value] of this.storage.entries()) {
+        const matchesPattern = authKeyPatterns.some(pattern => key.includes(pattern));
+        if (matchesPattern) {
+          const parsed = JSON.parse(value);
+          if (parsed?.refresh_token) {
+            console.log('[FileStorage] Found session data under key:', key);
+            return parsed;
+          }
+        }
+      }
+
+      // Log what keys we do have for debugging
+      const keys = Array.from(this.storage.keys());
+      if (keys.length > 0) {
+        console.log('[FileStorage] Storage keys present:', keys);
+      } else {
+        console.log('[FileStorage] Storage is empty');
+      }
+    } catch (err) {
+      console.warn('[FileStorage] Failed to parse raw session:', err);
+    }
+    return null;
+  }
+
   private loadFromDisk(): void {
     try {
       if (fs.existsSync(this.filePath)) {
@@ -147,13 +181,14 @@ export class MobileSync extends EventEmitter {
   private preferences: PreferencesManager;
   private supabase: SupabaseClient | null = null;
   private session: Session | null = null;
+  private fileStorage: FileStorage | null = null;
   private syncInterval: NodeJS.Timeout | null = null;
   private lastSyncedAt: number = 0;
   private syncEnabled: boolean = true;
 
   // Track which client_ids we've already synced to avoid duplicates.
   private syncedClientIds: Set<string> = new Set();
-  
+
   // Track which sketch client_ids we've already synced.
   private syncedSketchIds: Set<string> = new Set();
 
@@ -195,10 +230,11 @@ export class MobileSync extends EventEmitter {
     // localStorage is tied to the Chromium partition which can change between versions.
     // Explicit WebSocket transport fixes Realtime timeouts in Node.js < v22 / Electron.
     const userDataPath = app.getPath('userData');
+    this.fileStorage = new FileStorage(userDataPath);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     this.supabase = createClient(url, anonKey, {
       auth: {
-        storage: new FileStorage(userDataPath),
+        storage: this.fileStorage,
         autoRefreshToken: false, // Disabled - renderer is source of truth for token refresh
         persistSession: true,
         detectSessionInUrl: false,
@@ -218,30 +254,91 @@ export class MobileSync extends EventEmitter {
   /**
    * Restore session from file storage on startup.
    * This enables auto-login after app updates.
+   *
+   * If getSession() returns null (e.g., access token expired), we attempt
+   * to manually refresh using the stored refresh_token.
    */
   private async restoreSessionFromStorage(): Promise<void> {
     if (!this.supabase) return;
-    
+
     try {
       const { data, error } = await this.supabase.auth.getSession();
-      
+
       if (error) {
-        console.log('[MobileSync] No stored session to restore:', error.message);
-        return;
+        console.log('[MobileSync] Error getting session:', error.message);
+        // Don't return yet - try manual refresh below
       }
-      
-      if (data.session) {
+
+      if (data?.session) {
         this.session = data.session;
         console.log('[MobileSync] Restored session for user:', data.session.user?.email);
-        
+
         // Start periodic sync now that we're authenticated.
         this.startPeriodicSync();
         this.setupTodoRealtimeSubscription();
         this.setupProfileRealtimeSubscription();
         this.fetchAndEmitCurrentTier();
-      } else {
-        console.log('[MobileSync] No session found in storage');
+        return;
       }
+
+      // getSession() returned null - attempt manual refresh using stored refresh_token.
+      // This handles the case where access_token expired but refresh_token is still valid.
+      console.log('[MobileSync] getSession() returned null, checking for stored refresh_token...');
+
+      const rawSession = this.fileStorage?.getRawSessionData();
+      if (rawSession) {
+        // Verbose diagnostic logging to help debug session expiry issues
+        const now = Math.floor(Date.now() / 1000);
+        const expiresAt = rawSession.expires_at || 0;
+        const expiredAgoMinutes = Math.floor((now - expiresAt) / 60);
+        const expiredAgoHours = Math.floor(expiredAgoMinutes / 60);
+
+        console.log('[MobileSync] Stored session diagnostic:', {
+          user: rawSession.user?.email || 'unknown',
+          hasAccessToken: !!rawSession.access_token,
+          hasRefreshToken: !!rawSession.refresh_token,
+          accessTokenExpiresAt: expiresAt > 0 ? new Date(expiresAt * 1000).toISOString() : 'unknown',
+          accessTokenExpiredAgo: expiredAgoHours > 0
+            ? `${expiredAgoHours} hours, ${expiredAgoMinutes % 60} minutes`
+            : `${expiredAgoMinutes} minutes`,
+          currentTime: new Date().toISOString(),
+        });
+
+        if (rawSession.refresh_token) {
+          console.log('[MobileSync] Attempting manual refresh with stored refresh_token...');
+
+          const { data: refreshData, error: refreshError } = await this.supabase.auth.refreshSession({
+            refresh_token: rawSession.refresh_token,
+          });
+
+          if (refreshError) {
+            // Log detailed error to help diagnose refresh token expiry vs other issues
+            console.log('[MobileSync] Manual refresh failed:', {
+              error: refreshError.message,
+              code: (refreshError as any).code,
+              status: (refreshError as any).status,
+              hint: 'If error is "invalid_grant" or "token expired", the refresh token has expired. User must re-login.',
+            });
+            return;
+          }
+
+          if (refreshData.session) {
+            this.session = refreshData.session;
+            console.log('[MobileSync] Manual refresh succeeded for user:', refreshData.session.user?.email);
+
+            // Start periodic sync now that we're authenticated.
+            this.startPeriodicSync();
+            this.setupTodoRealtimeSubscription();
+            this.setupProfileRealtimeSubscription();
+            this.fetchAndEmitCurrentTier();
+            return;
+          }
+        } else {
+          console.log('[MobileSync] No refresh_token in stored session - user must re-login');
+        }
+      }
+
+      console.log('[MobileSync] No stored session found - user must login');
     } catch (err) {
       console.warn('[MobileSync] Failed to restore session:', err);
     }
