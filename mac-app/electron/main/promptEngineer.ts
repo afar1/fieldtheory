@@ -285,13 +285,15 @@ export async function engineerStack(
  */
 const IMPROVE_TRANSCRIPT_PROMPT = `Rewrite this spoken feedback as clear prose. Same meaning, fewer words, no ambiguity. Replace vague references with specific names. Remove filler words. Keep it as one paragraph. Do not add structure, bullets, or headers.
 
-IMPORTANT: Preserve any [Figure X] references exactly as written. These reference images and must remain in the output in their original positions relative to the surrounding text.`;
+IMPORTANT: Preserve any [Figure X] references and [cmd:name.md] references exactly as written. These reference images and commands that must remain in the output in their original positions relative to the surrounding text.`;
 
 /**
- * Simpler prompt for local LLM (1B/3B models need explicit, simple instructions).
- * Critical: Must emphasize returning ONLY the text, no explanations.
+ * Prompt for local LLM transcript improvement.
+ * Identical to cloud prompt for consistency.
  */
-const LOCAL_LLM_TRANSCRIPT_PROMPT = `You are a transcript cleaner. Clean up the text below. Remove filler words like "um", "uh", "like", "you know". Fix grammar. Keep the same meaning. Output ONLY the cleaned text. Do not explain. Do not add commentary. Do not say "Here is" or similar.`;
+const LOCAL_LLM_TRANSCRIPT_PROMPT = `Rewrite this spoken feedback as clear prose. Same meaning, fewer words, no ambiguity. Replace vague references with specific names. Remove filler words. Keep it as one paragraph. Do not add structure, bullets, or headers.
+
+IMPORTANT: Preserve any [Figure X] references and [cmd:name.md] references exactly as written. These reference images and commands that must remain in the output in their original positions relative to the surrounding text.`;
 
 /**
  * Strip common LLM preambles and postambles from output.
@@ -339,11 +341,16 @@ async function tryLocalLLM(rawTranscript: string): Promise<EngineerResult | null
 
   console.log('[PromptEngineer] Using local LLM for transcript improvement');
 
+  // For local models, use generous output limit since user isn't paying per token.
+  // The real constraint is the context window (16K tokens configured in localLLMManager).
+  // Transcript cleanup typically produces similar or shorter output than input.
+  const maxOutputTokens = 8192;
+
   // Use simpler prompt for local models
   const result = await localLLMManager.generateResponse(
     LOCAL_LLM_TRANSCRIPT_PROMPT,
     rawTranscript.trim(),
-    512  // Shorter max tokens - transcript cleanup shouldn't need much
+    maxOutputTokens
   );
 
   if (result.success && result.response) {

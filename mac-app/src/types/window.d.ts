@@ -853,11 +853,26 @@ interface CommandsAPI {
 }
 
 /**
+ * Valid hotkey IDs that can be get/set via the hotkeyAPI.
+ */
+type HotkeyId = 'superPaste' | 'commandLauncher' | 'improveText' | 'autoImprove';
+
+/**
+ * Generic hotkey management API for UI-configurable hotkeys.
+ */
+interface HotkeyAPI {
+  getHotkey: (id: HotkeyId) => Promise<string | null>;
+  setHotkey: (id: HotkeyId, key: string) => Promise<{ success: boolean; error?: string }>;
+  getAllHotkeys: () => Promise<Record<HotkeyId, string | null>>;
+}
+
+/**
  * Extend the Window interface with our custom APIs.
  */
 declare global {
   interface Window {
     audioAPI?: AudioAPI;
+    hotkeyAPI?: HotkeyAPI;
     transcribeAPI?: TranscribeAPI;
     clipboardAPI?: ClipboardAPI;
     visionAPI?: VisionAPI;

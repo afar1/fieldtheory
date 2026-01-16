@@ -199,7 +199,7 @@ export class MobileSync extends EventEmitter {
     this.supabase = createClient(url, anonKey, {
       auth: {
         storage: new FileStorage(userDataPath),
-        autoRefreshToken: true,
+        autoRefreshToken: false, // Disabled - renderer is source of truth for token refresh
         persistSession: true,
         detectSessionInUrl: false,
       },

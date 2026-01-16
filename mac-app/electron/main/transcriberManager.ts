@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import { app, globalShortcut, clipboard, nativeImage, Notification } from 'electron';
+import { getHotkeyManager } from './hotkeyManager';
 import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import { exec } from 'child_process';
@@ -239,16 +240,12 @@ export class TranscriberManager extends EventEmitter {
       await this.registerSecondaryHotkey(this.secondaryHotkey);
     }
 
-    // Handle app quit - unregister hotkeys
+    // Handle app quit - unregister hotkeys via HotkeyManager
+    // Note: HotkeyManager.unregisterAll() is also called from index.ts on will-quit,
+    // but we clear our local state here for consistency.
     app.on('will-quit', () => {
-      if (this.registeredHotkey) {
-        globalShortcut.unregister(this.registeredHotkey);
-        this.registeredHotkey = null;
-      }
-      if (this.registeredSecondaryHotkey) {
-        globalShortcut.unregister(this.registeredSecondaryHotkey);
-        this.registeredSecondaryHotkey = null;
-      }
+      this.registeredHotkey = null;
+      this.registeredSecondaryHotkey = null;
     });
   }
 
@@ -306,46 +303,28 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Register a global hotkey. Unregisters the previous transcription hotkey if it exists.
-   * Attempts to take precedence over other apps by checking if already registered.
+   * Uses HotkeyManager for centralized registration.
    */
   private async registerHotkey(hotkey: string): Promise<boolean> {
     // Normalize the hotkey to handle shifted characters
     const normalizedHotkey = this.normalizeHotkey(hotkey);
 
-    // Unregister existing transcription hotkey only (not all hotkeys)
-    if (this.registeredHotkey && this.registeredHotkey !== normalizedHotkey) {
-      globalShortcut.unregister(this.registeredHotkey);
-      this.registeredHotkey = null;
-    }
-
-    // Check if the hotkey is already registered by another app
-    // Note: This doesn't guarantee we can steal it, but we try
-    const alreadyRegistered = globalShortcut.isRegistered(normalizedHotkey);
-    if (alreadyRegistered) {
-      console.warn(`[TranscriberManager] Hotkey ${normalizedHotkey} is already registered, attempting to override...`);
-      // Try to unregister it (may not work if another app has it)
-      globalShortcut.unregister(normalizedHotkey);
-    }
-
-    // Register new hotkey (primary = isSecondary false)
-    const registered = globalShortcut.register(normalizedHotkey, () => {
+    const hotkeyManager = getHotkeyManager();
+    const result = hotkeyManager.register('transcription', normalizedHotkey, () => {
       this.handleHotkeyPress(false);
     });
 
-    if (!registered) {
+    if (!result.success) {
       console.error(`[TranscriberManager] Failed to register hotkey: ${normalizedHotkey}`);
 
       // Provide helpful error message
       let errorMessage = `Failed to register hotkey: ${hotkey}`;
-      if (alreadyRegistered) {
-        errorMessage += '. Another application may be using this hotkey. Please close that app or choose a different hotkey.';
-      } else {
-        // Check if it's a single key that Electron might not support
-        if (!hotkey.includes('+')) {
-          errorMessage += '. Single keys may not be supported. Try using a modifier key combination (e.g., Alt+Space, Command+K).';
-        } else {
-          errorMessage += '. The hotkey format may be invalid or not supported.';
-        }
+      if (result.conflictWith) {
+        errorMessage += `. Conflicts with ${result.conflictWith}. Please choose a different hotkey.`;
+      } else if (result.error) {
+        errorMessage += `. ${result.error}`;
+      } else if (!hotkey.includes('+')) {
+        errorMessage += '. Single keys may not be supported. Try using a modifier key combination (e.g., Alt+Space, Command+K).';
       }
 
       this.emit('error', new Error(errorMessage));
@@ -353,7 +332,7 @@ export class TranscriberManager extends EventEmitter {
     }
 
     this.hotkey = hotkey;
-    this.registeredHotkey = normalizedHotkey; // Track the normalized registered hotkey
+    this.registeredHotkey = normalizedHotkey;
     console.log(`[TranscriberManager] Registered transcription hotkey: ${hotkey} (normalized to ${normalizedHotkey})`);
     return true;
   }
@@ -380,40 +359,26 @@ export class TranscriberManager extends EventEmitter {
   /**
    * Register the secondary transcription hotkey.
    * Both primary and secondary hotkeys trigger the same recording action.
+   * Uses HotkeyManager for centralized registration.
    */
   private async registerSecondaryHotkey(hotkey: string): Promise<boolean> {
     // Normalize the hotkey to handle shifted characters
     const normalizedHotkey = this.normalizeHotkey(hotkey);
 
-    // Unregister existing secondary hotkey if different
-    if (this.registeredSecondaryHotkey && this.registeredSecondaryHotkey !== normalizedHotkey) {
-      globalShortcut.unregister(this.registeredSecondaryHotkey);
-      this.registeredSecondaryHotkey = null;
-    }
-
-    // Check if the hotkey is already registered by another app
-    const alreadyRegistered = globalShortcut.isRegistered(normalizedHotkey);
-    if (alreadyRegistered) {
-      console.warn(`[TranscriberManager] Secondary hotkey ${normalizedHotkey} is already registered, attempting to override...`);
-      globalShortcut.unregister(normalizedHotkey);
-    }
-
-    // Register secondary hotkey (isSecondary = true)
-    const registered = globalShortcut.register(normalizedHotkey, () => {
+    const hotkeyManager = getHotkeyManager();
+    const result = hotkeyManager.register('transcriptionSecondary', normalizedHotkey, () => {
       this.handleHotkeyPress(true);
     });
 
-    if (!registered) {
+    if (!result.success) {
       console.error(`[TranscriberManager] Failed to register secondary hotkey: ${normalizedHotkey}`);
       let errorMessage = `Failed to register secondary hotkey: ${hotkey}`;
-      if (alreadyRegistered) {
-        errorMessage += '. Another application may be using this hotkey. Please close that app or choose a different hotkey.';
-      } else {
-        if (!hotkey.includes('+')) {
-          errorMessage += '. Single keys may not be supported. Try using a modifier key combination (e.g., Alt+Space, Command+K).';
-        } else {
-          errorMessage += '. The hotkey format may be invalid or not supported.';
-        }
+      if (result.conflictWith) {
+        errorMessage += `. Conflicts with ${result.conflictWith}. Please choose a different hotkey.`;
+      } else if (result.error) {
+        errorMessage += `. ${result.error}`;
+      } else if (!hotkey.includes('+')) {
+        errorMessage += '. Single keys may not be supported. Try using a modifier key combination (e.g., Alt+Space, Command+K).';
       }
       this.emit('error', new Error(errorMessage));
       return false;
@@ -432,10 +397,9 @@ export class TranscriberManager extends EventEmitter {
   async setSecondaryHotkey(hotkey: string | null): Promise<boolean> {
     // If null, unregister and clear
     if (!hotkey) {
-      if (this.registeredSecondaryHotkey) {
-        globalShortcut.unregister(this.registeredSecondaryHotkey);
-        this.registeredSecondaryHotkey = null;
-      }
+      const hotkeyManager = getHotkeyManager();
+      hotkeyManager.unregister('transcriptionSecondary');
+      this.registeredSecondaryHotkey = null;
       this.secondaryHotkey = null;
       await this.preferences.save({ transcriptionSecondaryHotkey: undefined });
       console.log('[TranscriberManager] Secondary hotkey disabled');
@@ -1752,15 +1716,13 @@ export class TranscriberManager extends EventEmitter {
   destroy(): void {
     this.unregisterAbandonHotkey();
 
-    // Unregister transcription hotkeys
-    if (this.registeredHotkey) {
-      globalShortcut.unregister(this.registeredHotkey);
-      this.registeredHotkey = null;
-    }
-    if (this.registeredSecondaryHotkey) {
-      globalShortcut.unregister(this.registeredSecondaryHotkey);
-      this.registeredSecondaryHotkey = null;
-    }
+    // Unregister transcription hotkeys via HotkeyManager
+    const hotkeyManager = getHotkeyManager();
+    hotkeyManager.unregister('transcription');
+    hotkeyManager.unregister('transcriptionSecondary');
+    this.registeredHotkey = null;
+    this.registeredSecondaryHotkey = null;
+
     if (this.whisperProcess) {
       this.whisperProcess.kill();
       this.whisperProcess = null;

@@ -1,5 +1,6 @@
 import { app, clipboard, globalShortcut, nativeImage, systemPreferences } from 'electron';
 import Database from 'better-sqlite3';
+import { getHotkeyManager, HotkeyId } from './hotkeyManager';
 import path from 'path';
 import fs from 'fs';
 import { exec, spawn, ChildProcess } from 'child_process';
@@ -198,9 +199,9 @@ const DEFAULT_CONFIG: ClipboardConfig = {
     'com.lastpass.LastPass',
     'com.dashlane.dashlanephonefinal',
   ],
-  screenshotHotkey: 'Command+4',
-  fullScreenHotkey: 'Command+3',
-  activeWindowHotkey: 'Command+Shift+3',
+  screenshotHotkey: 'Alt+4',
+  fullScreenHotkey: 'Alt+3',
+  activeWindowHotkey: 'Shift+Alt+3',
   historyHotkey: 'Alt+Space',
 };
 
@@ -247,7 +248,7 @@ export class ClipboardManager extends EventEmitter {
   private continuousContextStackId: string | null = null;
   private continuousContextScreenshotCount: number = 0;
   private continuousContextHotkeyRegistered: boolean = false;
-  private continuousContextHotkey: string = 'Shift+Command+4';
+  private continuousContextHotkey: string = 'Shift+Alt+4';
   private continuousContextEnabled: boolean = false;
   private continuousContextCallback: (() => void) | null = null;
   private screencaptureProcess: ChildProcess | null = null;
@@ -1383,220 +1384,154 @@ export class ClipboardManager extends EventEmitter {
    * Update screenshot hotkey configuration.
    */
   setScreenshotHotkey(hotkey: string): boolean {
-    // Unregister old hotkey if registered
-    if (this.screenshotHotkeyRegistered && this.config.screenshotHotkey) {
-      globalShortcut.unregister(this.config.screenshotHotkey);
-      this.screenshotHotkeyRegistered = false;
-    }
+    const hotkeyManager = getHotkeyManager();
 
     // Update config
     this.config.screenshotHotkey = hotkey;
 
-    // Re-register if callback exists
-    if (this.screenshotCallback && hotkey) {
-      return this.registerScreenshotHotkey(this.screenshotCallback);
-    }
+    // Change hotkey via HotkeyManager
+    const result = hotkeyManager.change('screenshot', hotkey);
+    this.screenshotHotkeyRegistered = result.success && !!hotkey;
 
-    return true;
+    return result.success;
   }
 
   /**
    * Update full screen screenshot hotkey configuration.
    */
   setFullScreenHotkey(hotkey: string): boolean {
-    // Unregister old hotkey if registered
-    if (this.fullScreenHotkeyRegistered && this.config.fullScreenHotkey) {
-      globalShortcut.unregister(this.config.fullScreenHotkey);
-      this.fullScreenHotkeyRegistered = false;
-    }
+    const hotkeyManager = getHotkeyManager();
 
     // Update config
     this.config.fullScreenHotkey = hotkey;
 
-    // Re-register if callback exists
-    if (this.fullScreenCallback && hotkey) {
-      return this.registerFullScreenHotkey(this.fullScreenCallback);
-    }
+    // Change hotkey via HotkeyManager
+    const result = hotkeyManager.change('fullScreenshot', hotkey);
+    this.fullScreenHotkeyRegistered = result.success && !!hotkey;
 
-    return true;
+    return result.success;
   }
 
   /**
    * Update active window screenshot hotkey configuration.
    */
   setActiveWindowHotkey(hotkey: string): boolean {
-    // Unregister old hotkey if registered
-    if (this.activeWindowHotkeyRegistered && this.config.activeWindowHotkey) {
-      globalShortcut.unregister(this.config.activeWindowHotkey);
-      this.activeWindowHotkeyRegistered = false;
-    }
+    const hotkeyManager = getHotkeyManager();
 
     // Update config
     this.config.activeWindowHotkey = hotkey;
 
-    // Re-register if callback exists
-    if (this.activeWindowCallback && hotkey) {
-      return this.registerActiveWindowHotkey(this.activeWindowCallback);
-    }
+    // Change hotkey via HotkeyManager
+    const result = hotkeyManager.change('activeWindowScreenshot', hotkey);
+    this.activeWindowHotkeyRegistered = result.success && !!hotkey;
 
-    return true;
+    return result.success;
   }
-
 
   /**
    * Update history hotkey configuration.
    */
   setHistoryHotkey(hotkey: string): boolean {
-    // Unregister old hotkey if registered
-    if (this.historyHotkeyRegistered && this.config.historyHotkey) {
-      globalShortcut.unregister(this.config.historyHotkey);
-      this.historyHotkeyRegistered = false;
-    }
+    const hotkeyManager = getHotkeyManager();
 
     // Update config
     this.config.historyHotkey = hotkey;
 
-    // Re-register if callback exists
-    if (this.historyCallback && hotkey) {
-      return this.registerHistoryHotkey(this.historyCallback);
-    }
+    // Change hotkey via HotkeyManager
+    const result = hotkeyManager.change('clipboardHistory', hotkey);
+    this.historyHotkeyRegistered = result.success && !!hotkey;
 
-    return true;
+    return result.success;
   }
 
   /**
    * Register screenshot hotkey.
    */
   registerScreenshotHotkey(callback: ScreenshotCallback): boolean {
-    if (!this.config.screenshotHotkey) {
-      return false;
-    }
-
     // Store callback
     this.screenshotCallback = callback;
 
-    if (this.screenshotHotkeyRegistered) {
-      globalShortcut.unregister(this.config.screenshotHotkey);
-    }
-
-    const registered = globalShortcut.register(this.config.screenshotHotkey, () => {
+    const hotkeyManager = getHotkeyManager();
+    const wrappedCallback = () => {
       const result = callback();
       if (result instanceof Promise) {
         result.catch(err => console.error('[ClipboardManager] Screenshot callback error:', err));
       }
-    });
-    this.screenshotHotkeyRegistered = registered;
+    };
 
-    if (registered) {
-      console.log(`[ClipboardManager] Registered screenshot hotkey: ${this.config.screenshotHotkey}`);
-    } else {
-      console.warn(`[ClipboardManager] Failed to register screenshot hotkey: ${this.config.screenshotHotkey}`);
-    }
+    const result = hotkeyManager.register('screenshot', this.config.screenshotHotkey || '', wrappedCallback);
+    this.screenshotHotkeyRegistered = result.success;
 
-    return registered;
+    return result.success;
   }
 
 
   /**
-   * Register full screen screenshot hotkey (Cmd+3).
+   * Register full screen screenshot hotkey (Alt+3).
    */
   registerFullScreenHotkey(callback: ScreenshotCallback): boolean {
-    if (!this.config.fullScreenHotkey) {
-      return false;
-    }
-
     // Store callback
     this.fullScreenCallback = callback;
 
-    if (this.fullScreenHotkeyRegistered) {
-      globalShortcut.unregister(this.config.fullScreenHotkey);
-    }
-
-    const registered = globalShortcut.register(this.config.fullScreenHotkey, () => {
+    const hotkeyManager = getHotkeyManager();
+    const wrappedCallback = () => {
       const result = callback();
       if (result instanceof Promise) {
         result.catch(err => console.error('[ClipboardManager] Full screen screenshot callback error:', err));
       }
-    });
-    this.fullScreenHotkeyRegistered = registered;
+    };
 
-    if (registered) {
-      console.log(`[ClipboardManager] Registered full screen screenshot hotkey: ${this.config.fullScreenHotkey}`);
-    } else {
-      console.warn(`[ClipboardManager] Failed to register full screen screenshot hotkey: ${this.config.fullScreenHotkey}`);
-    }
+    const result = hotkeyManager.register('fullScreenshot', this.config.fullScreenHotkey || '', wrappedCallback);
+    this.fullScreenHotkeyRegistered = result.success;
 
-    return registered;
+    return result.success;
   }
 
   /**
-   * Register active window screenshot hotkey (Cmd+Shift+3).
+   * Register active window screenshot hotkey (Shift+Alt+3).
    */
   registerActiveWindowHotkey(callback: ScreenshotCallback): boolean {
-    if (!this.config.activeWindowHotkey) {
-      return false;
-    }
-
     // Store callback
     this.activeWindowCallback = callback;
 
-    if (this.activeWindowHotkeyRegistered) {
-      globalShortcut.unregister(this.config.activeWindowHotkey);
-    }
-
-    const registered = globalShortcut.register(this.config.activeWindowHotkey, () => {
+    const hotkeyManager = getHotkeyManager();
+    const wrappedCallback = () => {
       const result = callback();
       if (result instanceof Promise) {
         result.catch(err => console.error('[ClipboardManager] Active window screenshot callback error:', err));
       }
-    });
-    this.activeWindowHotkeyRegistered = registered;
+    };
 
-    if (registered) {
-      console.log(`[ClipboardManager] Registered active window screenshot hotkey: ${this.config.activeWindowHotkey}`);
-    } else {
-      console.warn(`[ClipboardManager] Failed to register active window screenshot hotkey: ${this.config.activeWindowHotkey}`);
-    }
+    const result = hotkeyManager.register('activeWindowScreenshot', this.config.activeWindowHotkey || '', wrappedCallback);
+    this.activeWindowHotkeyRegistered = result.success;
 
-    return registered;
+    return result.success;
   }
 
   /**
    * Register clipboard history hotkey.
    */
   registerHistoryHotkey(callback: HistoryCallback): boolean {
-    if (!this.config.historyHotkey) {
-      return false;
-    }
-
     // Store callback
     this.historyCallback = callback;
 
-    if (this.historyHotkeyRegistered) {
-      globalShortcut.unregister(this.config.historyHotkey);
-    }
+    const hotkeyManager = getHotkeyManager();
+    const result = hotkeyManager.register('clipboardHistory', this.config.historyHotkey || '', callback);
+    this.historyHotkeyRegistered = result.success;
 
-    const registered = globalShortcut.register(this.config.historyHotkey, callback);
-    this.historyHotkeyRegistered = registered;
-
-    if (registered) {
-      console.log(`[ClipboardManager] Registered history hotkey: ${this.config.historyHotkey}`);
-    } else {
-      console.warn(`[ClipboardManager] Failed to register history hotkey: ${this.config.historyHotkey}`);
-    }
-
-    return registered;
+    return result.success;
   }
 
   /**
    * Get current hotkey configuration.
+   * Returns short field names to match frontend expectations.
    */
-  getHotkeys(): ClipboardConfig {
+  getHotkeys(): { screenshot?: string; fullScreen?: string; activeWindow?: string; history?: string } {
     return {
-      screenshotHotkey: this.config.screenshotHotkey,
-      fullScreenHotkey: this.config.fullScreenHotkey,
-      activeWindowHotkey: this.config.activeWindowHotkey,
-      historyHotkey: this.config.historyHotkey,
+      screenshot: this.config.screenshotHotkey,
+      fullScreen: this.config.fullScreenHotkey,
+      activeWindow: this.config.activeWindowHotkey,
+      history: this.config.historyHotkey,
     };
   }
 
@@ -1611,16 +1546,15 @@ export class ClipboardManager extends EventEmitter {
    */
   setContinuousContextEnabled(enabled: boolean): void {
     this.continuousContextEnabled = enabled;
-    
+    const hotkeyManager = getHotkeyManager();
+
     if (enabled && this.continuousContextCallback) {
       this.registerContinuousContextHotkey(this.continuousContextCallback);
     } else if (!enabled && this.continuousContextHotkeyRegistered) {
-      if (this.continuousContextHotkey) {
-        globalShortcut.unregister(this.continuousContextHotkey);
-        this.continuousContextHotkeyRegistered = false;
-      }
+      hotkeyManager.unregister('continuousContext');
+      this.continuousContextHotkeyRegistered = false;
     }
-    
+
     console.log(`[ClipboardManager] Continuous Context ${enabled ? 'enabled' : 'disabled'}`);
   }
 
@@ -1635,17 +1569,14 @@ export class ClipboardManager extends EventEmitter {
    * Set the continuous context hotkey.
    */
   setContinuousContextHotkey(hotkey: string): boolean {
-    // Unregister old hotkey
-    if (this.continuousContextHotkeyRegistered && this.continuousContextHotkey) {
-      globalShortcut.unregister(this.continuousContextHotkey);
-      this.continuousContextHotkeyRegistered = false;
-    }
-
+    const hotkeyManager = getHotkeyManager();
     this.continuousContextHotkey = hotkey;
 
-    // Re-register if enabled and callback exists
-    if (this.continuousContextEnabled && this.continuousContextCallback) {
-      return this.registerContinuousContextHotkey(this.continuousContextCallback);
+    // Change hotkey via HotkeyManager if enabled
+    if (this.continuousContextEnabled) {
+      const result = hotkeyManager.change('continuousContext', hotkey);
+      this.continuousContextHotkeyRegistered = result.success && !!hotkey;
+      return result.success;
     }
 
     return true;
@@ -1679,26 +1610,13 @@ export class ClipboardManager extends EventEmitter {
       return false;
     }
 
-    if (!this.continuousContextHotkey) {
-      return false;
-    }
-
     this.continuousContextCallback = callback;
 
-    if (this.continuousContextHotkeyRegistered) {
-      globalShortcut.unregister(this.continuousContextHotkey);
-    }
+    const hotkeyManager = getHotkeyManager();
+    const result = hotkeyManager.register('continuousContext', this.continuousContextHotkey || '', callback);
+    this.continuousContextHotkeyRegistered = result.success;
 
-    const registered = globalShortcut.register(this.continuousContextHotkey, callback);
-    this.continuousContextHotkeyRegistered = registered;
-
-    if (registered) {
-      console.log(`[ClipboardManager] Registered continuous context hotkey: ${this.continuousContextHotkey}`);
-    } else {
-      console.warn(`[ClipboardManager] Failed to register continuous context hotkey: ${this.continuousContextHotkey}`);
-    }
-
-    return registered;
+    return result.success;
   }
 
   /**
