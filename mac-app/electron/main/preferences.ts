@@ -1,8 +1,35 @@
-import { app, safeStorage } from 'electron';
+import { app } from 'electron';
 import fs from 'fs/promises';
 import path from 'path';
 
 import { ModelSize } from './modelManager';
+
+/**
+ * Simple obfuscation for API keys stored locally.
+ * Not cryptographically secure, but prevents casual copying from the prefs file.
+ * Uses XOR with a static key + base64 encoding.
+ */
+const OBFUSCATION_KEY = 'fth3ory2026';
+
+function obfuscate(plainText: string): string {
+  const bytes = Buffer.from(plainText, 'utf-8');
+  const keyBytes = Buffer.from(OBFUSCATION_KEY, 'utf-8');
+  const result = Buffer.alloc(bytes.length);
+  for (let i = 0; i < bytes.length; i++) {
+    result[i] = bytes[i] ^ keyBytes[i % keyBytes.length];
+  }
+  return result.toString('base64');
+}
+
+function deobfuscate(obfuscated: string): string {
+  const bytes = Buffer.from(obfuscated, 'base64');
+  const keyBytes = Buffer.from(OBFUSCATION_KEY, 'utf-8');
+  const result = Buffer.alloc(bytes.length);
+  for (let i = 0; i < bytes.length; i++) {
+    result[i] = bytes[i] ^ keyBytes[i % keyBytes.length];
+  }
+  return result.toString('utf-8');
+}
 
 /**
  * Window state for persistence.
@@ -253,43 +280,29 @@ export class PreferencesManager {
   }
 
   /**
-   * Securely store an API key using OS keychain via Electron safeStorage.
-   * The key is encrypted and stored as base64 in preferences.
+   * Store an API key with local obfuscation.
+   * Not cryptographically secure, but prevents casual copying from prefs file.
    */
   async setApiKey(plainTextKey: string): Promise<void> {
-    if (!safeStorage.isEncryptionAvailable()) {
-      console.warn('[PreferencesManager] safeStorage not available, falling back to plain storage');
-      // Fallback for systems without keychain - still better than nothing
-      await this.save({ anthropicApiKeyEncrypted: Buffer.from(plainTextKey).toString('base64') });
-      return;
-    }
-
-    const encrypted = safeStorage.encryptString(plainTextKey);
-    const encryptedBase64 = encrypted.toString('base64');
-    await this.save({ anthropicApiKeyEncrypted: encryptedBase64 });
-    console.log('[PreferencesManager] API key securely stored');
+    const obfuscated = obfuscate(plainTextKey);
+    await this.save({ anthropicApiKeyEncrypted: obfuscated });
+    console.log('[PreferencesManager] API key stored');
   }
 
   /**
-   * Retrieve the API key, decrypting from OS keychain.
-   * Returns null if no key is stored or decryption fails.
+   * Retrieve the API key, deobfuscating from storage.
+   * Returns null if no key is stored or deobfuscation fails.
    */
   getApiKey(): string | null {
-    const encryptedBase64 = this.preferences.anthropicApiKeyEncrypted;
-    if (!encryptedBase64) {
+    const obfuscated = this.preferences.anthropicApiKeyEncrypted;
+    if (!obfuscated) {
       return null;
     }
 
     try {
-      if (!safeStorage.isEncryptionAvailable()) {
-        // Fallback: decode base64 if safeStorage wasn't available when storing
-        return Buffer.from(encryptedBase64, 'base64').toString('utf-8');
-      }
-
-      const encryptedBuffer = Buffer.from(encryptedBase64, 'base64');
-      return safeStorage.decryptString(encryptedBuffer);
+      return deobfuscate(obfuscated);
     } catch (error) {
-      console.error('[PreferencesManager] Failed to decrypt API key:', error);
+      console.error('[PreferencesManager] Failed to deobfuscate API key:', error);
       return null;
     }
   }
