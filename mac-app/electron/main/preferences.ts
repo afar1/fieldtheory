@@ -174,6 +174,9 @@ interface Preferences {
   // Portable Commands - directory path where user's command markdown files are stored.
   // Can point to Claude skills, Cursor rules, or any directory with .md files.
   commandsDirectory?: string;
+
+  // Dark mode preference - synced across all windows.
+  darkMode?: boolean;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
@@ -220,6 +223,9 @@ const DEFAULT_PREFERENCES: Preferences = {
   
   // Show in Dock - disabled by default (panel mode). WIP feature.
   showInDock: false,
+
+  // Dark mode - disabled by default (light mode).
+  darkMode: false,
 };
 
 /**

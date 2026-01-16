@@ -2246,7 +2246,19 @@ const electronAPI = {
   },
 };
 
+// Theme API for dark mode synchronization
+const themeAPI = {
+  getTheme: (): Promise<boolean> => ipcRenderer.invoke('theme:get'),
+  setTheme: (isDark: boolean): Promise<void> => ipcRenderer.invoke('theme:set', isDark),
+  onThemeChanged: (callback: (isDark: boolean) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, isDark: boolean) => callback(isDark);
+    ipcRenderer.on('theme:changed', handler);
+    return () => ipcRenderer.removeListener('theme:changed', handler);
+  },
+};
+
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);
+contextBridge.exposeInMainWorld('themeAPI', themeAPI);
 contextBridge.exposeInMainWorld('shellAPI', shellAPI);
 contextBridge.exposeInMainWorld('diagnosticsAPI', diagnosticsAPI);
 contextBridge.exposeInMainWorld('quotaAPI', quotaAPI);

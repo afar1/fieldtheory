@@ -957,6 +957,29 @@ function setupIPCHandlers(): void {
 }
 
 /**
+ * Set up IPC handlers for theme synchronization across windows.
+ */
+function setupThemeIPCHandlers(): void {
+  // Get current theme preference
+  ipcMain.handle('theme:get', () => {
+    return preferencesManager?.getPreference('darkMode') ?? false;
+  });
+
+  // Set theme preference and broadcast to all windows
+  ipcMain.handle('theme:set', async (_event, isDark: boolean) => {
+    if (preferencesManager) {
+      await preferencesManager.save({ darkMode: isDark });
+    }
+
+    // Broadcast to all windows
+    const allWindows = BrowserWindow.getAllWindows();
+    for (const win of allWindows) {
+      win.webContents.send('theme:changed', isDark);
+    }
+  });
+}
+
+/**
  * Set up all IPC handlers for transcription-related communication.
  */
 function setupTranscribeIPCHandlers(): void {
@@ -4604,6 +4627,7 @@ if (!gotTheLock) {
     console.log('[Main] App ready');
 
     setupIPCHandlers();
+    setupThemeIPCHandlers();
     setupTranscribeIPCHandlers();
     setupVisionIPCHandlers();
     setupClipboardIPCHandlers();
