@@ -19,7 +19,7 @@ async function dynamicImport(modulePath: string): Promise<any> {
  * Available local LLM model sizes.
  * Smaller models are faster but less capable.
  */
-export type LLMModelSize = 'llama-3.2-1b' | 'llama-3.2-3b';
+export type LLMModelSize = 'llama-3.2-1b';
 
 /**
  * Model metadata including name, URL, and expected size.
@@ -44,13 +44,6 @@ const LLM_MODELS: Record<LLMModelSize, LLMModelInfo> = {
     sizeBytes: 900 * 1024 * 1024, // ~900MB
     description: '1B (900MB) - Fast, good for simple tasks',
   },
-  'llama-3.2-3b': {
-    name: 'Llama 3.2 3B',
-    filename: 'Llama-3.2-3B-Instruct-Q4_K_M.gguf',
-    url: 'https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf',
-    sizeBytes: 2000 * 1024 * 1024, // ~2GB
-    description: '3B (2GB) - Better quality, recommended',
-  },
 };
 
 /**
@@ -62,7 +55,7 @@ const IDLE_UNLOAD_MINUTES = 5;
 
 export class LocalLLMManager {
   private modelsDir: string;
-  private selectedModel: LLMModelSize = 'llama-3.2-3b';
+  private selectedModel: LLMModelSize = 'llama-3.2-1b';
   private downloadingModels: Set<LLMModelSize> = new Set();
   private llama: any = null;
   private model: any = null;
@@ -72,6 +65,8 @@ export class LocalLLMManager {
   private isInitializing: boolean = false;
   private lastUsedAt: number = 0;
   private idleTimer: NodeJS.Timeout | null = null;
+  private statusCache: { status: Record<LLMModelSize, boolean>; timestamp: number } | null = null;
+  private static STATUS_CACHE_TTL = 5000; // 5 second cache
 
   constructor(selectedModel?: LLMModelSize) {
     const appDataPath = app.getPath('userData');
@@ -139,17 +134,33 @@ export class LocalLLMManager {
   }
 
   /**
+   * Invalidate the status cache. Called after downloads/deletes.
+   */
+  invalidateCache(): void {
+    this.statusCache = null;
+  }
+
+  /**
    * Get download status for all models.
+   * Results are cached for 5 seconds to avoid repeated filesystem checks.
    */
   async getDownloadStatus(): Promise<Record<LLMModelSize, boolean>> {
+    // Return cached status if valid
+    if (this.statusCache && Date.now() - this.statusCache.timestamp < LocalLLMManager.STATUS_CACHE_TTL) {
+      return this.statusCache.status;
+    }
+
     const status: Record<LLMModelSize, boolean> = {} as Record<LLMModelSize, boolean>;
-    const modelSizes: LLMModelSize[] = ['llama-3.2-1b', 'llama-3.2-3b'];
+    const modelSizes: LLMModelSize[] = ['llama-3.2-1b'];
 
     await Promise.all(
       modelSizes.map(async (size) => {
         status[size] = await this.isModelAvailableForSize(size);
       })
     );
+
+    // Cache the result
+    this.statusCache = { status, timestamp: Date.now() };
 
     return status;
   }
@@ -228,6 +239,7 @@ export class LocalLLMManager {
 
       if (await this.isModelAvailableForSize(size)) {
         console.log(`[LocalLLMManager] Model ${size} downloaded successfully`);
+        this.invalidateCache();
       } else {
         throw new Error(`Downloaded file validation failed for ${size} model`);
       }
@@ -309,6 +321,7 @@ export class LocalLLMManager {
       const modelPath = this.getModelPathForSize(size);
       await fs.unlink(modelPath);
       console.log(`[LocalLLMManager] Deleted model ${size}`);
+      this.invalidateCache();
       return true;
     } catch (error: any) {
       if (error.code === 'ENOENT') {
@@ -349,7 +362,9 @@ export class LocalLLMManager {
 
       this.llama = await getLlama();
       this.model = await this.llama.loadModel({ modelPath });
-      this.context = await this.model.createContext();
+      // Use larger context size (16K) to handle long transcripts (5000+ words)
+      // Default context is often 2K-4K which truncates long inputs
+      this.context = await this.model.createContext({ contextSize: 16384 });
       this.contextSequence = this.context.getSequence();
 
       console.log(`[LocalLLMManager] Model ${this.selectedModel} loaded successfully`);

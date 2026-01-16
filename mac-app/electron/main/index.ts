@@ -33,8 +33,8 @@ import {
   VisionIPCChannels,
 } from './types/vision';
 import { ClipboardItem, isTerminalApp, isIDEWithTerminal, obscureHomePath } from './clipboardManager';
+import { getHotkeyManager } from './hotkeyManager';
 import { VisionModelManager, VisionModelSize } from './visionModelManager';
-import { VisionProcessor } from './visionProcessor';
 import {
   engineerStack,
   setApiKey as setEngineerApiKey,
@@ -145,7 +145,6 @@ let preferencesManager: PreferencesManager | null = null;
 let clipboardManager: ClipboardManager | null = null;
 let clipboardHistoryWindow: ClipboardHistoryWindow | null = null;
 let visionModelManager: VisionModelManager | null = null;
-let visionProcessor: VisionProcessor | null = null;
 let mobileSync: MobileSync | null = null;
 let localLLMManager: LocalLLMManager | null = null;
 let sharedClipboardSync: SharedClipboardSync | null = null;
@@ -173,36 +172,26 @@ function registerHotkeysAfterOnboarding(): void {
   console.log('[Main] Registering all hotkeys');
   const prefs = preferencesManager.get();
 
-  // Register continuous context hotkey if enabled
-  if (prefs.continuousContextEnabled) {
-    clipboardManager.registerContinuousContextHotkey(async () => {
-      if (!clipboardManager) return;
-
-      const state = clipboardManager.getContinuousContextState();
-      if (state.active) {
-        // If already active, stop it
-        clipboardManager.stopContinuousContext();
-      } else {
-        // Start continuous context mode
-        await clipboardManager.startContinuousContext();
-      }
-    });
-  }
+  // Continuous Context feature disabled for now - will be re-enabled later
+  // if (prefs.continuousContextEnabled) {
+  //   clipboardManager.registerContinuousContextHotkey(async () => {
+  //     if (!clipboardManager) return;
+  //     const state = clipboardManager.getContinuousContextState();
+  //     if (state.active) {
+  //       clipboardManager.stopContinuousContext();
+  //     } else {
+  //       await clipboardManager.startContinuousContext();
+  //     }
+  //   });
+  // }
 
   // Register clipboard hotkeys (screenshot, full screen, active window)
   clipboardManager.registerScreenshotHotkey(async () => {
-    console.log('[Main] Screenshot hotkey (Cmd+4) triggered');
+    console.log('[Main] Screenshot hotkey triggered');
     const id = await clipboardManager!.captureScreenshot({ region: true });
-    console.log('[Main] Screenshot captured, id:', id);
     if (id > 0) {
       if (transcriberManager) {
         transcriberManager.addToStack(id);
-        console.log('[Main] Screenshot added to transcriber stack');
-      }
-      if (visionProcessor) {
-        visionProcessor.queueImage(id).catch((error) => {
-          console.error('[Main] Failed to queue image for vision processing:', error);
-        });
       }
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
@@ -218,11 +207,6 @@ function registerHotkeysAfterOnboarding(): void {
       if (transcriberManager) {
         transcriberManager.addToStack(id);
       }
-      if (visionProcessor) {
-        visionProcessor.queueImage(id).catch((error) => {
-          console.error('[Main] Failed to queue image for vision processing:', error);
-        });
-      }
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
@@ -236,11 +220,6 @@ function registerHotkeysAfterOnboarding(): void {
     if (id > 0) {
       if (transcriberManager) {
         transcriberManager.addToStack(id);
-      }
-      if (visionProcessor) {
-        visionProcessor.queueImage(id).catch((error) => {
-          console.error('[Main] Failed to queue image for vision processing:', error);
-        });
       }
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
@@ -275,51 +254,50 @@ function registerHotkeysAfterOnboarding(): void {
     }
   });
 
-  // Register Cmd+Shift+T (Tasks tab toggle)
-  const todoHotkey = 'Command+Shift+T';
+  // Register TODO hotkey (Tasks tab toggle) - now customizable via HotkeyManager
+  const hotkeyManager = getHotkeyManager();
+  const todoHotkey = prefs.todoHotkey || 'Command+Shift+T';
   let lastTodoToggleAt = 0;
-  try {
-    globalShortcut.register(todoHotkey, async () => {
-      const now = Date.now();
-      if (now - lastTodoToggleAt < 250) return;
-      lastTodoToggleAt = now;
 
-      if (!preferencesManager) return;
+  hotkeyManager.register('todo', todoHotkey, async () => {
+    const now = Date.now();
+    if (now - lastTodoToggleAt < 250) return;
+    lastTodoToggleAt = now;
 
-      const currentValue = preferencesManager.getPreference('tasksTabEnabled') ?? false;
-      const newValue = !currentValue;
-      await preferencesManager.save({ tasksTabEnabled: newValue });
+    if (!preferencesManager) return;
 
-      if (clipboardHistoryWindow) {
-        clipboardHistoryWindow.getWindow()?.webContents.send('clipboard:tasksTabToggled', newValue);
-      }
+    const currentValue = preferencesManager.getPreference('tasksTabEnabled') ?? false;
+    const newValue = !currentValue;
+    await preferencesManager.save({ tasksTabEnabled: newValue });
 
-      console.log(`[Main] Tasks tab toggled: ${newValue ? 'enabled' : 'disabled'}`);
-    });
-    console.log(`[Main] Registered tasks toggle hotkey: ${todoHotkey}`);
-  } catch (err) {
-    console.error('[Main] Failed to register tasks toggle hotkey:', err);
-  }
+    if (clipboardHistoryWindow) {
+      clipboardHistoryWindow.getWindow()?.webContents.send('clipboard:tasksTabToggled', newValue);
+    }
 
-  // Register Cmd+Shift+V (Super Paste)
+    console.log(`[Main] Tasks tab toggled: ${newValue ? 'enabled' : 'disabled'}`);
+  });
+
+  // Register Super Paste hotkey - now customizable via HotkeyManager
   // If there's an active stack in TranscriberManager (transcript + screenshots), paste the full stack.
   // Otherwise, paste the most recent item from clipboard history.
-  // Uses content-based deduplication to prevent accidental double-pastes.
-  const superPasteHotkey = 'Command+Shift+V';
-  let lastSuperPastedStackKey: string | null = null;
+  const superPasteHotkey = prefs.superPasteHotkey || 'Command+Shift+V';
   let lastSuperPasteTime: number = 0;
-  const SUPER_PASTE_DEDUPE_WINDOW_MS = 250; // Only dedupe same content within 250ms
+  const SUPER_PASTE_DEBOUNCE_MS = 500; // Ignore rapid triggers within 500ms
 
-  try {
-    globalShortcut.register(superPasteHotkey, async () => {
+  hotkeyManager.register('superPaste', superPasteHotkey, async () => {
+      // Debounce: ignore if triggered too recently (handles key repeat / multiple triggers)
+      const now = Date.now();
+      if (now - lastSuperPasteTime < SUPER_PASTE_DEBOUNCE_MS) {
+        return;
+      }
+      lastSuperPasteTime = now;
+
       console.log('[Main] Super Paste triggered');
 
       if (!clipboardManager) {
         console.error('[Main] Super Paste: clipboardManager not available');
         return;
       }
-
-      const now = Date.now();
 
       // Get most recent item from clipboard history
       const stmt = clipboardManager['db'].prepare('SELECT id FROM clipboard_items ORDER BY created_at DESC LIMIT 1');
@@ -338,22 +316,13 @@ function registerHotkeysAfterOnboarding(): void {
 
       // Check if this item belongs to a stack - if so, paste the whole stack
       let itemsToPaste: typeof mostRecentItem[] = [mostRecentItem];
-      let pasteKey = `item:${mostRecentItem.id}`;
 
       if (mostRecentItem.stackId) {
         const stackItems = clipboardManager.queryItemsByStackId(mostRecentItem.stackId);
         if (stackItems.length > 1) {
           itemsToPaste = stackItems;
-          pasteKey = `stack:${mostRecentItem.stackId}`;
           console.log('[Main] Super Paste: found stack with', stackItems.length, 'items');
         }
-      }
-
-      // Content-based deduplication
-      if (pasteKey === lastSuperPastedStackKey &&
-          (now - lastSuperPasteTime) < SUPER_PASTE_DEDUPE_WINDOW_MS) {
-        console.log('[Main] Super Paste: same content pasted recently, skipping duplicate');
-        return;
       }
 
       // Get frontmost app info
@@ -442,58 +411,44 @@ function registerHotkeysAfterOnboarding(): void {
           }
         }
 
-        // Update tracking after successful paste
-        lastSuperPastedStackKey = pasteKey;
-        lastSuperPasteTime = now;
-
       } catch (error) {
         console.error('[Main] Super Paste: error during paste:', error);
       }
-    });
-    console.log(`[Main] Registered super paste hotkey: ${superPasteHotkey}`);
-  } catch (err) {
-    console.error('[Main] Failed to register super paste hotkey:', err);
-  }
+  });
 
-  // Register Cmd+Shift+\ (Auto-improve toggle)
-  const autoImproveToggleHotkey = 'Command+Shift+\\';
-  try {
-    globalShortcut.register(autoImproveToggleHotkey, async () => {
-      console.log('[Main] Auto-improve toggle triggered');
+  // Register Auto-improve toggle hotkey - now customizable via HotkeyManager
+  const autoImproveHotkey = prefs.autoImproveHotkey || 'Command+Shift+\\';
+  hotkeyManager.register('autoImprove', autoImproveHotkey, async () => {
+    console.log('[Main] Auto-improve toggle triggered');
 
-      if (!transcriberManager) {
-        console.error('[Main] Auto-improve toggle: transcriberManager not available');
-        return;
-      }
+    if (!transcriberManager) {
+      console.error('[Main] Auto-improve toggle: transcriberManager not available');
+      return;
+    }
 
-      const currentState = transcriberManager.getAutoImprove();
-      const newState = !currentState;
-      await transcriberManager.setAutoImprove(newState);
+    const currentState = transcriberManager.getAutoImprove();
+    const newState = !currentState;
+    await transcriberManager.setAutoImprove(newState);
 
-      console.log(`[Main] Auto-improve toggled: ${currentState} → ${newState}`);
+    console.log(`[Main] Auto-improve toggled: ${currentState} → ${newState}`);
 
-      // Refresh tray menu to show updated state
-      if (trayManager) {
-        trayManager.refreshMenu();
-      }
+    // Refresh tray menu to show updated state
+    if (trayManager) {
+      trayManager.refreshMenu();
+    }
 
-      // Show cursor notification of the new state
-      if (cursorStatusManager) {
-        cursorStatusManager.showRecordingNote(
-          newState ? 'Auto-improve enabled' : 'Auto-improve disabled'
-        );
-      }
-    });
-    console.log(`[Main] Registered auto-improve toggle hotkey: ${autoImproveToggleHotkey}`);
-  } catch (err) {
-    console.error('[Main] Failed to register auto-improve toggle hotkey:', err);
-  }
+    // Show cursor notification of the new state
+    if (cursorStatusManager) {
+      cursorStatusManager.showRecordingNote(
+        newState ? 'Auto-improve enabled' : 'Auto-improve disabled'
+      );
+    }
+  });
 
-  // Register Cmd+Shift+K (Command Launcher / Clipboard History Toggle)
+  // Register Command Launcher hotkey - now customizable via HotkeyManager
   // Cycles between: command launcher → clipboard history → command launcher
-  const commandLauncherHotkey = 'Command+Shift+K';
-  try {
-    globalShortcut.register(commandLauncherHotkey, async () => {
+  const commandLauncherHotkey = prefs.commandLauncherHotkey || 'Command+Shift+K';
+  hotkeyManager.register('commandLauncher', commandLauncherHotkey, async () => {
       console.log('[Main] Command launcher toggle triggered');
       
       const clipboardVisible = clipboardHistoryWindow?.isVisible() ?? false;
@@ -519,23 +474,14 @@ function registerHotkeysAfterOnboarding(): void {
           await commandLauncherWindow.show();
         }
       }
-    });
-    console.log(`[Main] Registered command launcher hotkey: ${commandLauncherHotkey}`);
-  } catch (err) {
-    console.error('[Main] Failed to register command launcher hotkey:', err);
-  }
+  });
 
-  // Register Cmd+Shift+I (Improve Selected Text)
-  const improveTextHotkey = 'Command+Shift+I';
-  try {
-    globalShortcut.register(improveTextHotkey, async () => {
-      console.log('[Main] Improve text triggered');
-      await handleImproveSelectedText();
-    });
-    console.log(`[Main] Registered improve text hotkey: ${improveTextHotkey}`);
-  } catch (err) {
-    console.error('[Main] Failed to register improve text hotkey:', err);
-  }
+  // Register Improve Text hotkey - now customizable via HotkeyManager
+  const improveTextHotkey = prefs.improveTextHotkey || 'Command+Shift+I';
+  hotkeyManager.register('improveText', improveTextHotkey, async () => {
+    console.log('[Main] Improve text triggered');
+    await handleImproveSelectedText();
+  });
 
   console.log('[Main] Hotkeys registered successfully');
 }
@@ -1133,8 +1079,8 @@ function setupTranscribeIPCHandlers(): void {
 
     // Update tray manager with new transcription hotkey
     if (success && trayManager && clipboardManager) {
-      const historyHotkey = clipboardManager.getHotkeys().historyHotkey || 'Option+Space';
-      const screenshotHotkey = clipboardManager.getHotkeys().screenshotHotkey || 'Command+4';
+      const historyHotkey = clipboardManager.getHotkeys().history || 'Option+Space';
+      const screenshotHotkey = clipboardManager.getHotkeys().screenshot || 'Command+4';
       trayManager.setHotkeys(historyHotkey, hotkey, screenshotHotkey);
     }
 
@@ -1499,9 +1445,10 @@ function setupClipboardIPCHandlers(): void {
     const prefsToSave: { clipboardScreenshotHotkey?: string; clipboardFullScreenHotkey?: string; clipboardActiveWindowHotkey?: string; clipboardHistoryHotkey?: string } = {};
 
     if (hotkeys.screenshot !== undefined) {
-      if (typeof hotkeys.screenshot !== 'string' || hotkeys.screenshot.trim() === '') {
+      if (typeof hotkeys.screenshot !== 'string') {
         return false;
       }
+      // Empty string clears the hotkey
       const result = clipboardManager.setScreenshotHotkey(hotkeys.screenshot);
       if (!result) {
         success = false;
@@ -1511,9 +1458,10 @@ function setupClipboardIPCHandlers(): void {
     }
 
     if (hotkeys.fullScreen !== undefined) {
-      if (typeof hotkeys.fullScreen !== 'string' || hotkeys.fullScreen.trim() === '') {
+      if (typeof hotkeys.fullScreen !== 'string') {
         return false;
       }
+      // Empty string clears the hotkey
       const result = clipboardManager.setFullScreenHotkey(hotkeys.fullScreen);
       if (!result) {
         success = false;
@@ -1523,9 +1471,10 @@ function setupClipboardIPCHandlers(): void {
     }
 
     if (hotkeys.activeWindow !== undefined) {
-      if (typeof hotkeys.activeWindow !== 'string' || hotkeys.activeWindow.trim() === '') {
+      if (typeof hotkeys.activeWindow !== 'string') {
         return false;
       }
+      // Empty string clears the hotkey
       const result = clipboardManager.setActiveWindowHotkey(hotkeys.activeWindow);
       if (!result) {
         success = false;
@@ -1554,9 +1503,9 @@ function setupClipboardIPCHandlers(): void {
     // Update tray manager if any displayed hotkey changed
     if (trayManager && transcriberManager && (hotkeys.history !== undefined || hotkeys.screenshot !== undefined)) {
       const currentHotkeys = clipboardManager.getHotkeys();
-      const historyHotkey = hotkeys.history || currentHotkeys.historyHotkey || 'Option+Space';
+      const historyHotkey = hotkeys.history || currentHotkeys.history || 'Option+Space';
       const transcriptionHotkey = transcriberManager.getHotkey() || 'Option+Shift+Space';
-      const screenshotHotkey = hotkeys.screenshot || currentHotkeys.screenshotHotkey || 'Command+4';
+      const screenshotHotkey = hotkeys.screenshot || currentHotkeys.screenshot || 'Command+4';
       trayManager.setHotkeys(historyHotkey, transcriptionHotkey, screenshotHotkey);
     }
 
@@ -2282,7 +2231,7 @@ function setupClipboardIPCHandlers(): void {
 
   // Get the currently selected local LLM model.
   ipcMain.handle(ClipboardIPCChannels.GET_LOCAL_LLM_SELECTED, async () => {
-    return localLLMManager?.getSelectedModel() ?? 'llama-3.2-3b';
+    return localLLMManager?.getSelectedModel() ?? 'llama-3.2-1b';
   });
 
   // Set the selected local LLM model.
@@ -2463,8 +2412,12 @@ function setupClipboardIPCHandlers(): void {
     }
   });
 
-  // Clean up temp files on app quit
+  // Clean up temp files and hotkeys on app quit
   app.on('will-quit', () => {
+    // Unregister all hotkeys via HotkeyManager
+    const hotkeyManager = getHotkeyManager();
+    hotkeyManager.unregisterAll();
+
     const fs = require('fs');
     for (const tempFile of dragTempFiles) {
       try {
@@ -2763,39 +2716,79 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle(TodoIPCChannels.SET_TODO_HOTKEY, async (_event, hotkey: string) => {
-    if (!preferencesManager || !clipboardManager) {
+    if (!preferencesManager) {
       return false;
     }
-    
-    // Unregister old hotkey and register new one.
+
+    // Use HotkeyManager.change() to atomically change the hotkey
+    const hotkeyManager = getHotkeyManager();
+    const result = hotkeyManager.change('todo', hotkey);
+
+    if (result.success) {
+      await preferencesManager.save({ todoHotkey: hotkey });
+      return true;
+    }
+
+    console.error('[Main] Failed to change todo hotkey:', result.error);
+    return false;
+  });
+
+  // =========================================================================
+  // Generic Hotkey IPC Handlers (for UI-configurable hotkeys)
+  // =========================================================================
+
+  // Preference key mapping for each hotkey ID
+  const hotkeyPreferenceKeys: Record<string, string> = {
+    superPaste: 'superPasteHotkey',
+    commandLauncher: 'commandLauncherHotkey',
+    improveText: 'improveTextHotkey',
+    autoImprove: 'autoImproveHotkey',
+  };
+
+  // Default values for each hotkey
+  const hotkeyDefaults: Record<string, string> = {
+    superPaste: 'Command+Shift+V',
+    commandLauncher: 'Command+Shift+K',
+    improveText: 'Command+Shift+I',
+    autoImprove: 'Command+Shift+\\',
+  };
+
+  ipcMain.handle('hotkey:get', async (_event, id: string) => {
+    if (!preferencesManager || !hotkeyPreferenceKeys[id]) {
+      return hotkeyDefaults[id] || null;
+    }
     const prefs = await preferencesManager.load();
-    const oldHotkey = prefs.todoHotkey || 'Command+Shift+T';
-    
-    try {
-      globalShortcut.unregister(oldHotkey);
-    } catch {
-      // Ignore if old hotkey wasn't registered.
+    const prefKey = hotkeyPreferenceKeys[id];
+    return ((prefs as any)[prefKey] as string) || hotkeyDefaults[id] || null;
+  });
+
+  ipcMain.handle('hotkey:set', async (_event, id: string, key: string) => {
+    if (!preferencesManager || !hotkeyPreferenceKeys[id]) {
+      return { success: false, error: 'Invalid hotkey ID' };
     }
-    
-    try {
-      const success = globalShortcut.register(hotkey, () => {
-        // Show clipboard history window in todo view mode.
-        if (clipboardHistoryWindow) {
-          clipboardHistoryWindow.show();
-          // Send event to switch to todo view.
-          clipboardHistoryWindow.getWindow()?.webContents.send(TodoIPCChannels.SHOW_TODOS);
-        }
-      });
-      
-      if (success) {
-        await preferencesManager.save({ todoHotkey: hotkey });
-        return true;
-      }
-      return false;
-    } catch (err) {
-      console.error('[Main] Failed to register todo hotkey:', err);
-      return false;
+
+    const hotkeyManager = getHotkeyManager();
+    const result = hotkeyManager.change(id as any, key);
+
+    if (result.success) {
+      const prefKey = hotkeyPreferenceKeys[id];
+      await preferencesManager.save({ [prefKey]: key });
+      return { success: true };
     }
+
+    return { success: false, error: result.error };
+  });
+
+  ipcMain.handle('hotkey:getAll', async () => {
+    if (!preferencesManager) {
+      return hotkeyDefaults;
+    }
+    const prefs = await preferencesManager.load();
+    const result: Record<string, string | null> = {};
+    for (const [id, prefKey] of Object.entries(hotkeyPreferenceKeys)) {
+      result[id] = ((prefs as any)[prefKey] as string) || hotkeyDefaults[id] || null;
+    }
+    return result;
   });
 
   // =========================================================================
@@ -4000,7 +3993,7 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   // Initialize local LLM manager
   if (!localLLMManager) {
     const savedLLMModel = preferencesManager.getPreference('selectedLocalLLM') as LLMModelSize | undefined;
-    localLLMManager = new LocalLLMManager(savedLLMModel || 'llama-3.2-3b');
+    localLLMManager = new LocalLLMManager(savedLLMModel || 'llama-3.2-1b');
 
     // Wire up local LLM with promptEngineer
     setEngineerLocalLLMManager(localLLMManager);
@@ -4055,15 +4048,10 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   const takeScreenshotCallback = async () => {
     if (clipboardManager) {
       const id = await clipboardManager.captureScreenshot({ region: true });
-      if (id > 0 && transcriberManager) {
-        transcriberManager.addToStack(id);
-      }
-      if (id > 0 && visionProcessor) {
-        visionProcessor.queueImage(id).catch((error) => {
-          console.error('[Main] Failed to queue image for vision processing:', error);
-        });
-      }
       if (id > 0) {
+        if (transcriberManager) {
+          transcriberManager.addToStack(id);
+        }
         BrowserWindow.getAllWindows().forEach((window) => {
           if (!window.isDestroyed()) {
             window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
@@ -4079,15 +4067,10 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   const takeFullScreenCallback = async () => {
     if (clipboardManager) {
       const id = await clipboardManager.captureScreenshot({ fullScreen: true });
-      if (id > 0 && transcriberManager) {
-        transcriberManager.addToStack(id);
-      }
-      if (id > 0 && visionProcessor) {
-        visionProcessor.queueImage(id).catch((error) => {
-          console.error('[Main] Failed to queue image for vision processing:', error);
-        });
-      }
       if (id > 0) {
+        if (transcriberManager) {
+          transcriberManager.addToStack(id);
+        }
         BrowserWindow.getAllWindows().forEach((window) => {
           if (!window.isDestroyed()) {
             window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
@@ -4103,15 +4086,10 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   const takeActiveWindowCallback = async () => {
     if (clipboardManager) {
       const id = await clipboardManager.captureScreenshot({ activeWindow: true });
-      if (id > 0 && transcriberManager) {
-        transcriberManager.addToStack(id);
-      }
-      if (id > 0 && visionProcessor) {
-        visionProcessor.queueImage(id).catch((error) => {
-          console.error('[Main] Failed to queue image for vision processing:', error);
-        });
-      }
       if (id > 0) {
+        if (transcriberManager) {
+          transcriberManager.addToStack(id);
+        }
         BrowserWindow.getAllWindows().forEach((window) => {
           if (!window.isDestroyed()) {
             window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
@@ -4174,35 +4152,31 @@ async function initTranscriberSystem(): Promise<void> {
   );
   
   // Load continuous context preferences
-  clipboardManager.loadContinuousContextFromPreferences(
-    prefs.continuousContextEnabled,
-    prefs.continuousContextHotkey
-  );
-  
+  // Continuous Context feature disabled for now
+  // clipboardManager.loadContinuousContextFromPreferences(
+  //   prefs.continuousContextEnabled,
+  //   prefs.continuousContextHotkey
+  // );
+
   // Listen for continuous context state changes and broadcast to renderer
-  clipboardManager.on('continuousContextChanged', (state: ContinuousContextState) => {
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(ClipboardIPCChannels.CONTINUOUS_CONTEXT_CHANGED, state);
-      }
-    });
-  });
+  // Disabled for now
+  // clipboardManager.on('continuousContextChanged', (state: ContinuousContextState) => {
+  //   BrowserWindow.getAllWindows().forEach((window) => {
+  //     if (!window.isDestroyed()) {
+  //       window.webContents.send(ClipboardIPCChannels.CONTINUOUS_CONTEXT_CHANGED, state);
+  //     }
+  //   });
+  // });
   
   // When continuous context captures a screenshot, notify all windows
-  clipboardManager.on('continuousContextScreenshot', (itemId: number) => {
-    // Queue for vision processing if available
-    if (visionProcessor) {
-      visionProcessor.queueImage(itemId).catch((error) => {
-        console.error('[Main] Failed to queue continuous context image for vision:', error);
-      });
-    }
-    
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, itemId);
-      }
-    });
-  });
+  // Disabled for now
+  // clipboardManager.on('continuousContextScreenshot', (itemId: number) => {
+  //   BrowserWindow.getAllWindows().forEach((window) => {
+  //     if (!window.isDestroyed()) {
+  //       window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, itemId);
+  //     }
+  //   });
+  // });
   
   // Hotkeys will be registered after checking onboarding status (see below in app.whenReady).
 
@@ -4571,42 +4545,26 @@ async function initTranscriberSystem(): Promise<void> {
 }
 
 /**
- * Initialize the vision system.
+ * Initialize clipboard callbacks for auto-stacking.
  */
-async function initVisionSystem(): Promise<void> {
-  console.log('[Main] Initializing vision system...');
-
+async function initClipboardCallbacks(): Promise<void> {
   if (!clipboardManager) {
-    console.error('[Main] Cannot initialize vision - clipboardManager not available');
+    console.error('[Main] Cannot initialize clipboard callbacks - clipboardManager not available');
     return;
   }
 
-  visionModelManager = new VisionModelManager();
-  visionProcessor = new VisionProcessor(visionModelManager, clipboardManager);
-
-  // Update clipboard manager callback to include vision processing and auto-stacking.
-  // This ensures ALL clipboard items (text, images, screenshots) are:
-  // 1. Added to the recording stack if user is currently recording
-  // 2. Processed by vision if available (images only)
+  // Set up callback for auto-stacking clipboard items during recording.
+  // This ensures ALL clipboard items (text, images, screenshots) are added to the recording stack.
   clipboardManager.setOnItemAdded((id) => {
     const item = clipboardManager!.getItem(id);
-    
+
     // Add ALL items to recording stack if user is currently recording.
     // This enables any clipboard copy (text, images, screenshots) to participate in auto-stacking.
     if (item && transcriberManager && transcriberManager.getStatus() === 'recording') {
       transcriberManager.addToStack(id);
       console.log(`[Main] Added clipboard ${item.type} ${id} to recording stack`);
     }
-    
-    // Queue images for vision processing if vision processor is available.
-    if (item && (item.type === 'image' || item.type === 'screenshot')) {
-      if (visionProcessor) {
-        visionProcessor.queueImage(id).catch((error) => {
-          console.error('[Main] Failed to queue image for vision processing:', error);
-        });
-      }
-    }
-    
+
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
@@ -4614,28 +4572,7 @@ async function initVisionSystem(): Promise<void> {
     });
   });
 
-  // Listen for description ready events
-  visionProcessor.on('descriptionReady', (itemId: number, description: string) => {
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(VisionIPCChannels.DESCRIPTION_READY, itemId, description);
-        // Also send item update to refresh UI
-        window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, itemId);
-      }
-    });
-  });
-
-  // Listen for errors
-  visionProcessor.on('error', (itemId: number, error: Error) => {
-    console.error(`[Main] Vision processing error for item ${itemId}:`, error);
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(VisionIPCChannels.ERROR, itemId, error.message);
-      }
-    });
-  });
-
-  console.log('[Main] Vision system initialized');
+  console.log('[Main] Clipboard callbacks initialized');
 }
 
 // Prevent multiple instances of the app.
@@ -4747,13 +4684,13 @@ if (!gotTheLock) {
 
     await initAudioSystem(checkForUpdatesManual);
     await initTranscriberSystem();
-    await initVisionSystem();
+    await initClipboardCallbacks();
 
     // Update tray manager with current hotkeys for menu display
     if (trayManager && clipboardManager && transcriberManager) {
-      const historyHotkey = clipboardManager.getHotkeys().historyHotkey || 'Option+Space';
+      const historyHotkey = clipboardManager.getHotkeys().history || 'Option+Space';
       const transcriptionHotkey = transcriberManager.getHotkey() || 'Option+Shift+Space';
-      const screenshotHotkey = clipboardManager.getHotkeys().screenshotHotkey || 'Command+4';
+      const screenshotHotkey = clipboardManager.getHotkeys().screenshot || 'Command+4';
       trayManager.setHotkeys(historyHotkey, transcriptionHotkey, screenshotHotkey);
     }
 

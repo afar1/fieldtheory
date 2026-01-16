@@ -1,6 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 // Define IPC channels locally to avoid import issues
+
+// Generic hotkey management channels
+const HotkeyIPCChannels = {
+  GET_HOTKEY: 'hotkey:get',
+  SET_HOTKEY: 'hotkey:set',
+  GET_ALL_HOTKEYS: 'hotkey:getAll',
+} as const;
+
 const AudioIPCChannels = {
   GET_STATE: 'audio:getState',
   SET_PRIORITY_MODE: 'audio:setPriorityMode',
@@ -506,6 +514,15 @@ export interface AudioAPI {
   onStateChanged: (callback: (state: AudioState) => void) => () => void;
 }
 
+// Valid hotkey IDs that can be get/set via the hotkeyAPI
+export type HotkeyId = 'superPaste' | 'commandLauncher' | 'improveText' | 'autoImprove';
+
+export interface HotkeyAPI {
+  getHotkey: (id: HotkeyId) => Promise<string | null>;
+  setHotkey: (id: HotkeyId, key: string) => Promise<{ success: boolean; error?: string }>;
+  getAllHotkeys: () => Promise<Record<HotkeyId, string | null>>;
+}
+
 export interface TranscribeAPI {
   getStatus: () => Promise<TranscriptionStatus>;
   getModelStatus: () => Promise<ModelStatus>;
@@ -719,6 +736,20 @@ const audioAPI: AudioAPI = {
     return () => {
       ipcRenderer.removeListener(AudioIPCChannels.STATE_CHANGED, handler);
     };
+  },
+};
+
+const hotkeyAPI: HotkeyAPI = {
+  getHotkey: async (id: HotkeyId): Promise<string | null> => {
+    return ipcRenderer.invoke(HotkeyIPCChannels.GET_HOTKEY, id);
+  },
+
+  setHotkey: async (id: HotkeyId, key: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(HotkeyIPCChannels.SET_HOTKEY, id, key);
+  },
+
+  getAllHotkeys: async (): Promise<Record<HotkeyId, string | null>> => {
+    return ipcRenderer.invoke(HotkeyIPCChannels.GET_ALL_HOTKEYS);
   },
 };
 
@@ -2214,6 +2245,7 @@ contextBridge.exposeInMainWorld('shellAPI', shellAPI);
 contextBridge.exposeInMainWorld('diagnosticsAPI', diagnosticsAPI);
 contextBridge.exposeInMainWorld('quotaAPI', quotaAPI);
 contextBridge.exposeInMainWorld('audioAPI', audioAPI);
+contextBridge.exposeInMainWorld('hotkeyAPI', hotkeyAPI);
 contextBridge.exposeInMainWorld('transcribeAPI', transcribeAPI);
 contextBridge.exposeInMainWorld('clipboardAPI', clipboardAPI);
 contextBridge.exposeInMainWorld('permissionsAPI', permissionsAPI);
