@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { useTheme, Theme } from '../contexts/ThemeContext';
 
 type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
 type ModelStatus = 'downloaded' | 'downloading' | 'missing';
@@ -11,6 +12,7 @@ type ModelInfo = {
 };
 
 export default function TranscriptionSettings() {
+  const { theme } = useTheme();
   const [status, setStatus] = useState<TranscriptionStatus>('idle');
   const [modelStatus, setModelStatus] = useState<ModelStatus>('missing');
   const [downloadProgress, setDownloadProgress] = useState<{ downloaded: number; total: number } | null>(null);
@@ -43,6 +45,8 @@ export default function TranscriptionSettings() {
   const [availableSounds, setAvailableSounds] = useState<Array<{ id: string; name: string; category: string }>>([]);
 
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
+
+  const styles = getStyles(theme);
 
   useEffect(() => {
     if (!isMacOS || !window.transcribeAPI) {
@@ -769,16 +773,16 @@ export default function TranscriptionSettings() {
 // =============================================================================
 // Unified Design System - Only 2 font sizes: 13px body, 11px headers
 // =============================================================================
-const styles: Record<string, React.CSSProperties> = {
+const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   container: {
     padding: 0,
   },
   notAvailable: {
-    color: '#6b7280',
+    color: theme.textSecondary,
     fontStyle: 'italic',
     fontSize: '13px',
   },
-  
+
   // Flat row layout: label left, control right.
   row: {
     display: 'flex',
@@ -789,12 +793,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
   rowLabel: {
     fontSize: '13px',
-    color: '#374151',
+    color: theme.text,
     fontWeight: 400,
   },
   rowValue: {
     fontSize: '13px',
-    color: '#111827',
+    color: theme.text,
     fontWeight: 500,
     display: 'flex',
     alignItems: 'center',
@@ -804,7 +808,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     gap: '8px',
   },
-  
+
   // Status dot indicator.
   statusDot: {
     width: '8px',
@@ -813,35 +817,35 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'inline-block',
     marginRight: '6px',
   },
-  
+
   // Unified button styles.
   btn: {
     padding: '6px 12px',
     fontSize: '13px',
     fontWeight: 500,
-    color: '#374151',
-    backgroundColor: '#fff',
-    border: '1px solid #d1d5db',
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
     minWidth: '80px',
     textAlign: 'center' as const,
   },
   btnActive: {
-    backgroundColor: '#3b82f6',
+    backgroundColor: theme.info,
     color: '#fff',
-    borderColor: '#3b82f6',
+    borderColor: theme.info,
   },
   btnGhost: {
     backgroundColor: 'transparent',
     border: 'none',
-    color: '#6b7280',
+    color: theme.textSecondary,
     minWidth: 'auto',
     padding: '6px 8px',
     fontSize: '13px',
     cursor: 'pointer',
   },
-  
+
   // Toggle switch.
   toggle: {
     position: 'relative' as const,
@@ -867,26 +871,26 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
     transition: 'transform 0.2s',
   },
-  
+
   // Select dropdown.
   select: {
     padding: '6px 12px',
     fontSize: '13px',
-    color: '#374151',
-    backgroundColor: '#fff',
-    border: '1px solid #d1d5db',
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
     minWidth: '160px',
   },
-  
+
   // Error text.
   error: {
     fontSize: '13px',
-    color: '#ef4444',
+    color: theme.error,
     margin: '4px 0',
   },
-  
+
   // Sounds section.
   soundsSection: {
     marginTop: '16px',
@@ -894,14 +898,14 @@ const styles: Record<string, React.CSSProperties> = {
   selectSmall: {
     padding: '4px 8px',
     fontSize: '13px',
-    color: '#374151',
-    backgroundColor: '#fff',
-    border: '1px solid #d1d5db',
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
     minWidth: '140px',
   },
-  
+
   // Models section.
   modelsSection: {
     marginTop: '16px',
@@ -915,7 +919,7 @@ const styles: Record<string, React.CSSProperties> = {
   sectionTitle: {
     fontSize: '11px',
     fontWeight: 600,
-    color: '#9ca3af',
+    color: theme.textSecondary,
     textTransform: 'uppercase' as const,
     letterSpacing: '0.08em',
     whiteSpace: 'nowrap' as const,
@@ -923,9 +927,9 @@ const styles: Record<string, React.CSSProperties> = {
   sectionLine: {
     flex: 1,
     height: '1px',
-    backgroundColor: '#e5e7eb',
+    backgroundColor: theme.border,
   },
-  
+
   // Model list and cards.
   modelsList: {
     display: 'flex',
@@ -939,7 +943,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'space-between',
     padding: '8px 12px',
     borderRadius: '6px',
-    border: '1px solid #e5e7eb',
+    border: `1px solid ${theme.border}`,
   },
   modelCardContent: {
     display: 'flex',
@@ -953,24 +957,24 @@ const styles: Record<string, React.CSSProperties> = {
   },
   modelSize: {
     fontSize: '13px',
-    color: '#9ca3af',
+    color: theme.textSecondary,
   },
   modelHint: {
     fontSize: '11px',
-    color: '#9ca3af',
+    color: theme.textSecondary,
   },
   downloadedBadge: {
     fontSize: '11px',
     fontWeight: 500,
-    color: '#22c55e',
+    color: theme.success,
   },
-  
+
   // Progress bar for downloads.
   progressBar: {
     position: 'relative' as const,
     width: '80px',
     height: '6px',
-    backgroundColor: '#e5e7eb',
+    backgroundColor: theme.border,
     borderRadius: '3px',
     overflow: 'hidden',
   },
@@ -979,7 +983,7 @@ const styles: Record<string, React.CSSProperties> = {
     top: 0,
     left: 0,
     height: '100%',
-    backgroundColor: '#3b82f6',
+    backgroundColor: theme.info,
     borderRadius: '3px',
     transition: 'width 0.3s ease',
   },
@@ -988,7 +992,7 @@ const styles: Record<string, React.CSSProperties> = {
     top: '10px',
     left: 0,
     fontSize: '11px',
-    color: '#6b7280',
+    color: theme.textSecondary,
   },
-};
+});
 
