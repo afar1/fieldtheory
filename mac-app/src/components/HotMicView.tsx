@@ -412,8 +412,8 @@ export default function HotMicView({ onSendDM, hotMicEnabled, onHotMicToggle }: 
     if (!type) return null;
     
     const colors = {
-      team: { bg: '#3b82f6', text: '#fff' },
-      friend: { bg: '#10b981', text: '#fff' },
+      team: { bg: theme.info, text: '#fff' },
+      friend: { bg: theme.success, text: '#fff' },
       pending: { bg: '#6b7280', text: '#fff' },
     };
     
@@ -473,7 +473,7 @@ export default function HotMicView({ onSendDM, hotMicEnabled, onHotMicToggle }: 
           onClick={onHotMicToggle}
           style={{
             fontSize: '10px',
-            color: hotMicEnabled ? '#DC2626' : theme.textSecondary,
+            color: hotMicEnabled ? theme.error : theme.textSecondary,
             display: 'flex',
             alignItems: 'center',
             gap: '4px',
@@ -556,7 +556,7 @@ export default function HotMicView({ onSendDM, hotMicEnabled, onHotMicToggle }: 
               minWidth: '14px',
               height: '14px',
               borderRadius: '7px',
-              backgroundColor: '#3b82f6',
+              backgroundColor: theme.info,
               color: '#fff',
               fontSize: '9px',
               fontWeight: 600,
@@ -613,7 +613,7 @@ export default function HotMicView({ onSendDM, hotMicEnabled, onHotMicToggle }: 
               }}
             />
             {error && (
-              <div style={{ color: '#ef4444', fontSize: '11px', marginBottom: '8px' }}>
+              <div style={{ color: theme.error, fontSize: '11px', marginBottom: '8px' }}>
                 {error}
               </div>
             )}
@@ -720,7 +720,7 @@ export default function HotMicView({ onSendDM, hotMicEnabled, onHotMicToggle }: 
                         style={{
                           padding: '4px 10px',
                           fontSize: '10px',
-                          backgroundColor: '#10b981',
+                          backgroundColor: theme.success,
                           color: '#fff',
                           border: 'none',
                           borderRadius: '4px',
@@ -905,7 +905,7 @@ export default function HotMicView({ onSendDM, hotMicEnabled, onHotMicToggle }: 
                       width: '8px',
                       height: '8px',
                       borderRadius: '50%',
-                      backgroundColor: '#3b82f6',
+                      backgroundColor: theme.info,
                       display: 'inline-block',
                     }} />
                   )}
@@ -957,7 +957,7 @@ export default function HotMicView({ onSendDM, hotMicEnabled, onHotMicToggle }: 
                         padding: '8px 12px',
                         borderRadius: '8px',
                         backgroundColor: isFromMe 
-                          ? (msg.isHotMic ? '#DC2626' : theme.accent) 
+                          ? (msg.isHotMic ? theme.error : theme.accent) 
                           : theme.bgSecondary,
                         color: isFromMe ? '#fff' : theme.text,
                         position: 'relative',
@@ -969,7 +969,7 @@ export default function HotMicView({ onSendDM, hotMicEnabled, onHotMicToggle }: 
                             top: '-6px',
                             right: isFromMe ? 'auto' : '-6px',
                             left: isFromMe ? '-6px' : 'auto',
-                            backgroundColor: '#DC2626',
+                            backgroundColor: theme.error,
                             color: '#fff',
                             fontSize: '8px',
                             padding: '2px 4px',
@@ -1039,7 +1039,7 @@ export default function HotMicView({ onSendDM, hotMicEnabled, onHotMicToggle }: 
                         width: '18px',
                         height: '18px',
                         borderRadius: '50%',
-                        backgroundColor: '#ef4444',
+                        backgroundColor: theme.error,
                         color: '#fff',
                         border: 'none',
                         cursor: 'pointer',
@@ -1099,7 +1099,7 @@ export default function HotMicView({ onSendDM, hotMicEnabled, onHotMicToggle }: 
                     style={{
                       padding: '8px 12px',
                       fontSize: '11px',
-                      backgroundColor: '#DC2626',
+                      backgroundColor: theme.error,
                       color: '#fff',
                       border: 'none',
                       borderRadius: '4px',

@@ -25,7 +25,7 @@ interface SettingsPanelProps {
  * clipboard history context.
  */
 export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback }: SettingsPanelProps) {
-  const { theme } = useTheme();
+  const { theme, toggleDarkMode } = useTheme();
   // Permissions state
   const [permissions, setPermissions] = useState<{ accessibilityGranted: boolean } | null>(null);
   const [showPermissionsGate, setShowPermissionsGate] = useState(false);
@@ -1211,6 +1211,25 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   return (
     <div style={styles.container}>
       {permissionsWarning}
+
+      {/* Appearance Section - Dark mode toggle */}
+      <div style={styles.section}>
+        <SectionHeader title="Appearance" />
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={styles.rowLabel}>Dark Mode</span>
+            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+              Switch between light and dark themes
+            </span>
+          </div>
+          <button
+            onClick={toggleDarkMode}
+            style={{ ...styles.toggle, backgroundColor: theme.isDark ? theme.success : '#d1d5db' }}
+          >
+            <span style={{ ...styles.toggleKnob, transform: theme.isDark ? 'translateX(20px)' : 'translateX(2px)' }} />
+          </button>
+        </div>
+      </div>
 
       {/* System Access Section - Permission status with quick links to settings */}
       {systemPermissions && (
