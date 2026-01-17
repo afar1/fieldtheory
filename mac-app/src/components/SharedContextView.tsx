@@ -1648,12 +1648,12 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
               style={{
                 padding: '12px',
                 marginBottom: '16px',
-                backgroundColor: '#10b98120',
+                backgroundColor: theme.successBg,
                 borderRadius: '6px',
-                border: '1px solid #10b981',
+                border: `1px solid ${theme.success}`,
               }}
             >
-              <p style={{ margin: 0, fontSize: '12px', color: '#10b981' }}>
+              <p style={{ margin: 0, fontSize: '12px', color: theme.success }}>
                 {successMessage}
               </p>
             </div>
@@ -1676,7 +1676,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
                     style={{ ...inputStyle, marginBottom: '12px' }}
                   />
                   {authError && (
-                    <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: '#ef4444' }}>
+                    <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: theme.error }}>
                       {authError}
                     </p>
                   )}
@@ -1751,7 +1751,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
                     autoFocus
                   />
                   {authError && (
-                    <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: '#ef4444' }}>
+                    <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: theme.error }}>
                       {authError}
                     </p>
                   )}
@@ -1859,7 +1859,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
             </button>
           </form>
           {addMemberError && (
-            <p style={{ margin: '8px 0 0 0', fontSize: '11px', color: '#ef4444' }}>{addMemberError}</p>
+            <p style={{ margin: '8px 0 0 0', fontSize: '11px', color: theme.error }}>{addMemberError}</p>
           )}
           {teamMembers.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
@@ -2267,7 +2267,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
                       {/* Footer */}
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
                         <div style={{ fontSize: '10px', color: theme.textSecondary, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={theme.warning} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <rect x="4" y="4" width="16" height="6" rx="1" />
                             <rect x="4" y="14" width="16" height="6" rx="1" />
                           </svg>

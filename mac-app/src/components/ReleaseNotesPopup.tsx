@@ -147,7 +147,7 @@ export default function ReleaseNotesPopup({ currentVersion, onDismiss, isLatestM
             </span>
             <span style={{
               fontSize: '11px',
-              color: isLatestMode ? '#22c55e' : theme.textSecondary,
+              color: isLatestMode ? theme.success : theme.textSecondary,
               fontWeight: 400,
             }}>
               {isLatestMode ? 'Latest' : "What's new"}

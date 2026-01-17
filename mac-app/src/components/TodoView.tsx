@@ -775,7 +775,7 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
               style={{
                 padding: '4px 8px',
                 fontSize: '10px',
-                color: '#ef4444',
+                color: theme.error,
                 backgroundColor: 'transparent',
                 border: 'none',
                 cursor: 'pointer',

@@ -1,6 +1,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import Onboarding from './components/Onboarding';
+import { ThemeProvider } from './contexts/ThemeContext';
+import './styles.css';
 
 /**
  * Entry point for the onboarding wizard window.
@@ -9,7 +11,9 @@ import Onboarding from './components/Onboarding';
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 root.render(
   <React.StrictMode>
-    <Onboarding />
+    <ThemeProvider>
+      <Onboarding />
+    </ThemeProvider>
   </React.StrictMode>
 );
 
