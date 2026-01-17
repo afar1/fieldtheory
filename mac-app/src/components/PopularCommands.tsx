@@ -5,7 +5,7 @@
 // =============================================================================
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { useTheme } from '../contexts/ThemeContext';
+import { useTheme, Theme } from '../contexts/ThemeContext';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
 
@@ -24,7 +24,8 @@ type Command = {
  */
 export default function PopularCommands() {
   const { theme } = useTheme();
-  
+  const styles = getStyles(theme);
+
   // Commands state.
   const [commands, setCommands] = useState<Command[]>([]);
   const [loading, setLoading] = useState(true);
@@ -650,7 +651,7 @@ function getMockCommands(): Command[] {
   ];
 }
 
-const styles: Record<string, React.CSSProperties> = {
+const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   container: {
     display: 'flex',
     flexDirection: 'column',
@@ -672,9 +673,11 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     padding: '8px 12px',
     fontSize: '13px',
-    border: '1px solid #d1d5db',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     outline: 'none',
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    color: theme.text,
   },
   shareButton: {
     padding: '8px 16px',
@@ -690,30 +693,34 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     gap: '8px',
     padding: '12px 16px',
-    borderBottom: '1px solid #e5e7eb',
+    borderBottom: `1px solid ${theme.border}`,
   },
   formInput: {
     padding: '8px 12px',
     fontSize: '13px',
-    border: '1px solid #d1d5db',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     outline: 'none',
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    color: theme.text,
   },
   formTextarea: {
     padding: '8px 12px',
     fontSize: '13px',
-    border: '1px solid #d1d5db',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     outline: 'none',
     resize: 'vertical',
     fontFamily: 'monospace',
     minHeight: '80px',
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    color: theme.text,
   },
   submitButton: {
     padding: '8px 16px',
     fontSize: '13px',
     fontWeight: 500,
-    backgroundColor: '#10b981',
+    backgroundColor: theme.success,
     color: '#fff',
     border: 'none',
     borderRadius: '6px',
@@ -722,7 +729,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   errorText: {
     fontSize: '13px',
-    color: '#ef4444',
+    color: theme.error,
     margin: 0,
   },
   errorBanner: {
@@ -730,14 +737,14 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: '8px 16px',
-    backgroundColor: '#fef2f2',
-    color: '#dc2626',
+    backgroundColor: theme.errorBg,
+    color: theme.error,
     fontSize: '13px',
   },
   retryButton: {
     padding: '4px 12px',
     fontSize: '12px',
-    backgroundColor: '#dc2626',
+    backgroundColor: theme.error,
     color: '#fff',
     border: 'none',
     borderRadius: '4px',
@@ -758,6 +765,7 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: '0.08em',
     marginBottom: '8px',
     marginTop: 0,
+    color: theme.textSecondary,
   },
   commandRow: {
     display: 'flex',
@@ -766,7 +774,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '10px 12px',
     marginBottom: '6px',
     borderRadius: '6px',
-    border: '1px solid #e5e7eb',
+    border: `1px solid ${theme.border}`,
     transition: 'background-color 0.15s, border-color 0.15s',
   },
   commandLeft: {
@@ -796,10 +804,12 @@ const styles: Record<string, React.CSSProperties> = {
   commandName: {
     fontSize: '11px',
     fontWeight: 600,
+    color: theme.text,
   },
   commandPreview: {
     fontSize: '11px',
     lineHeight: '1.4',
+    color: theme.textSecondary,
   },
   commandRight: {
     display: 'flex',
@@ -811,6 +821,7 @@ const styles: Record<string, React.CSSProperties> = {
   copyCount: {
     fontSize: '9px',
     fontWeight: 400,
+    color: theme.textSecondary,
   },
   emptyState: {
     display: 'flex',
@@ -818,5 +829,6 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     height: '200px',
     fontSize: '13px',
+    color: theme.textSecondary,
   },
-};
+});

@@ -5,7 +5,7 @@
 // =============================================================================
 
 import { useEffect, useState, useCallback } from 'react';
-import { useTheme } from '../contexts/ThemeContext';
+import { useTheme, Theme } from '../contexts/ThemeContext';
 
 /**
  * Default example input - a messy transcription to demonstrate the Engineer feature.
@@ -49,7 +49,8 @@ Provide recommendations as a prioritized list with:
  */
 export default function PromptSettings() {
   const { theme } = useTheme();
-  
+  const styles = getStyles(theme);
+
   // System prompt state
   const [systemPrompt, setSystemPrompt] = useState('');
   const [originalPrompt, setOriginalPrompt] = useState('');
@@ -240,11 +241,11 @@ export default function PromptSettings() {
 // =============================================================================
 // Unified Design System - Only 2 font sizes: 13px body, 11px headers
 // =============================================================================
-const styles: Record<string, React.CSSProperties> = {
+const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   container: {
     padding: 0,
   },
-  
+
   // Flat row layout.
   row: {
     display: 'flex',
@@ -256,12 +257,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
   rowLabel: {
     fontSize: '13px',
-    color: '#374151',
+    color: theme.text,
     fontWeight: 400,
   },
   rowValue: {
     fontSize: '13px',
-    color: '#111827',
+    color: theme.text,
     fontWeight: 500,
   },
   rowControls: {
@@ -269,34 +270,34 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     gap: '8px',
   },
-  
+
   // Example section (collapsible).
   exampleContainer: {
     display: 'flex',
     flexDirection: 'column',
     gap: '6px',
     padding: '10px',
-    backgroundColor: '#f9fafb',
+    backgroundColor: theme.isDark ? theme.surface1 : '#f9fafb',
     borderRadius: '6px',
     marginBottom: '12px',
   },
   exampleBox: {
-    backgroundColor: '#fff',
+    backgroundColor: theme.isDark ? theme.surface2 : '#fff',
     borderRadius: '6px',
-    border: '1px solid #e5e7eb',
+    border: `1px solid ${theme.border}`,
     padding: '10px',
   },
   exampleLabel: {
     fontSize: '11px',
     fontWeight: 600,
-    color: '#9ca3af',
+    color: theme.textSecondary,
     textTransform: 'uppercase' as const,
     letterSpacing: '0.05em',
     marginBottom: '4px',
   },
   exampleContent: {
     fontSize: '10px',
-    color: '#374151',
+    color: theme.text,
     lineHeight: 1.5,
   },
   preformatted: {
@@ -306,16 +307,16 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
     lineHeight: 1.5,
-    color: '#374151',
+    color: theme.text,
   },
   arrow: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     fontSize: '13px',
-    color: '#9ca3af',
+    color: theme.textSecondary,
   },
-  
+
   // Editor section.
   editorSection: {
     marginTop: '4px',
@@ -327,13 +328,15 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '10px',
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
     lineHeight: 1.5,
-    border: '1px solid #d1d5db',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     resize: 'vertical',
     boxSizing: 'border-box',
     outline: 'none',
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    color: theme.text,
   },
-  
+
   // Action buttons.
   actions: {
     display: 'flex',
@@ -346,42 +349,42 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '6px 12px',
     fontSize: '13px',
     fontWeight: 500,
-    color: '#374151',
-    backgroundColor: '#fff',
-    border: '1px solid #d1d5db',
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
   },
   btnPrimary: {
     color: '#fff',
-    backgroundColor: '#3b82f6',
-    borderColor: '#3b82f6',
+    backgroundColor: theme.info,
+    borderColor: theme.info,
   },
-  
+
   // Badges and indicators.
   customBadge: {
     fontSize: '11px',
     fontWeight: 500,
-    color: '#7c3aed',
-    backgroundColor: '#ede9fe',
+    color: theme.isDark ? '#a78bfa' : '#7c3aed',
+    backgroundColor: theme.isDark ? 'rgba(167,139,250,0.15)' : '#ede9fe',
     padding: '2px 8px',
     borderRadius: '10px',
   },
   unsavedIndicator: {
     fontSize: '13px',
-    color: '#f59e0b',
+    color: theme.warning,
     fontWeight: 600,
   },
-  
+
   // Error/success messages.
   error: {
     fontSize: '13px',
-    color: '#dc2626',
+    color: theme.error,
     marginTop: '8px',
   },
   success: {
     fontSize: '13px',
-    color: '#059669',
+    color: theme.success,
     marginTop: '8px',
   },
-};
+});
