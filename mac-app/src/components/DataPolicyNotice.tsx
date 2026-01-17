@@ -33,11 +33,11 @@ export default function DataPolicyNotice({ context, style }: DataPolicyNoticePro
   const { theme } = useTheme();
   const title = POLICY_TITLES[context];
 
-  // Determine icon color based on context.
-  const getIconColor = () => {
+  // Determine color based on context - subtle and unobtrusive
+  const getTextColor = () => {
     switch (context) {
       case 'local':
-        return theme.success; // Green for local/private
+        return theme.textSecondary; // Subtle muted text for local
       case 'shared':
         return theme.info; // Blue for shared
       case 'feedback':
@@ -56,9 +56,9 @@ export default function DataPolicyNotice({ context, style }: DataPolicyNoticePro
         alignItems: 'center',
         padding: '3px 6px',
         fontSize: '9px',
-        fontWeight: 500,
-        color: getIconColor(),
-        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+        fontWeight: 400,
+        color: getTextColor(),
+        backgroundColor: 'transparent',
         borderRadius: '4px',
         whiteSpace: 'nowrap',
         flexShrink: 0,
