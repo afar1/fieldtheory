@@ -3427,7 +3427,7 @@ export default function ClipboardHistory() {
             
             // Hot Mic: red when selected AND enabled, otherwise normal accent.
             const bgColor = isSelected
-              ? (isHotMic && hotMicEnabled ? '#DC2626' : (mode === 'team' ? (theme.isDark ? '#8b5cf6' : '#7c3aed') : theme.accent))
+              ? (isHotMic && hotMicEnabled ? theme.error : (mode === 'team' ? (theme.isDark ? '#8b5cf6' : '#7c3aed') : theme.accent))
               : 'transparent';
             
             return (
@@ -3500,7 +3500,7 @@ export default function ClipboardHistory() {
                     width: '6px',
                     height: '6px',
                     borderRadius: '50%',
-                    backgroundColor: '#3b82f6',
+                    backgroundColor: theme.info,
                   }} />
                 )}
                 {/* Unread indicator for Shared Fields tab - only when authenticated */}
@@ -3512,7 +3512,7 @@ export default function ClipboardHistory() {
                     width: '6px',
                     height: '6px',
                     borderRadius: '50%',
-                    backgroundColor: '#3b82f6',
+                    backgroundColor: theme.info,
                   }} />
                 )}
               </button>
@@ -3588,7 +3588,7 @@ export default function ClipboardHistory() {
                 style={{
                   width: '6px',
                   height: '6px',
-                  backgroundColor: transcriptionStatus === 'recording' ? '#ef4444' : '#af52de',
+                  backgroundColor: transcriptionStatus === 'recording' ? theme.error : '#af52de',
                   borderRadius: '50%',
                   animation: 'pulse 1.5s ease-in-out infinite',
                 }}
@@ -3596,7 +3596,7 @@ export default function ClipboardHistory() {
               <span style={{ 
                 fontSize: '9px', 
                 fontWeight: 500, 
-                color: transcriptionStatus === 'recording' ? '#ef4444' : '#af52de',
+                color: transcriptionStatus === 'recording' ? theme.error : '#af52de',
                 cursor: 'help',
               }}>
                 {transcriptionStatus === 'recording' ? 'Recording' : 'Transcribing'}
@@ -3767,7 +3767,7 @@ export default function ClipboardHistory() {
                 width: '6px',
                 height: '6px',
                 borderRadius: '50%',
-                backgroundColor: '#3b82f6',
+                backgroundColor: theme.info,
               }} />
             )}
           </button>
@@ -3845,7 +3845,7 @@ export default function ClipboardHistory() {
                   style={{
                     width: '6px',
                     height: '6px',
-                    backgroundColor: transcriptionStatus === 'recording' ? '#ef4444' : '#af52de',
+                    backgroundColor: transcriptionStatus === 'recording' ? theme.error : '#af52de',
                     borderRadius: '50%',
                     animation: 'pulse 1.5s ease-in-out infinite',
                   }}
@@ -3853,7 +3853,7 @@ export default function ClipboardHistory() {
                 <span style={{ 
                   fontSize: '9px', 
                   fontWeight: 500, 
-                  color: transcriptionStatus === 'recording' ? '#ef4444' : '#af52de',
+                  color: transcriptionStatus === 'recording' ? theme.error : '#af52de',
                 }}>
                   {transcriptionStatus === 'recording' ? 'Recording' : 'Transcribing'}
                 </span>
@@ -4666,8 +4666,8 @@ export default function ClipboardHistory() {
                                     display: 'inline-block',
                                     fontSize: '9px',
                                     fontWeight: 600,
-                                    color: '#34C759',
-                                    backgroundColor: '#e8f5e9',
+                                    color: theme.success,
+                                    backgroundColor: theme.successBg,
                                     padding: '2px 6px',
                                     borderRadius: '3px',
                                     marginLeft: '8px',
@@ -4708,8 +4708,8 @@ export default function ClipboardHistory() {
                           display: 'inline-block',
                           fontSize: '9px',
                           fontWeight: 600,
-                          color: '#34C759',
-                          backgroundColor: '#e8f5e9',
+                          color: theme.success,
+                          backgroundColor: theme.successBg,
                           padding: '2px 6px',
                           borderRadius: '3px',
                           marginBottom: '4px',
@@ -4750,9 +4750,9 @@ export default function ClipboardHistory() {
                       marginTop: '4px',
                     }}>
                       {/* Metadata - left side with stack icon */}
-                      <div style={{ fontSize: '10px', color: improveResult?.stackId === stack.stackId ? '#34C759' : theme.textSecondary, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <div style={{ fontSize: '10px', color: improveResult?.stackId === stack.stackId ? theme.success : theme.textSecondary, display: 'flex', alignItems: 'center', gap: '4px' }}>
                         {/* Stack icon - layered rectangles */}
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={improveResult?.stackId === stack.stackId ? '#34C759' : '#F59E0B'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={improveResult?.stackId === stack.stackId ? theme.success : theme.warning} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <rect x="4" y="4" width="16" height="6" rx="1" />
                           <rect x="4" y="14" width="16" height="6" rx="1" />
                         </svg>
@@ -4816,7 +4816,7 @@ export default function ClipboardHistory() {
                                 ? (theme.isDark ? 'rgba(16, 185, 129, 0.2)' : 'rgba(16, 185, 129, 0.15)')
                                 : 'transparent',
                               color: sharedToTeamId === `stack-${stackItems.map(i => i.id).join(',')}`
-                                ? '#10b981' : theme.textSecondary,
+                                ? theme.success : theme.textSecondary,
                               border: 'none',
                               borderRadius: '4px',
                               cursor: 'pointer',
@@ -5193,8 +5193,8 @@ export default function ClipboardHistory() {
                                       display: 'inline-block',
                                       fontSize: '9px',
                                       fontWeight: 600,
-                                      color: '#34C759',
-                                      backgroundColor: '#e8f5e9',
+                                      color: theme.success,
+                                      backgroundColor: theme.successBg,
                                       padding: '2px 6px',
                                       borderRadius: '3px',
                                       marginLeft: '8px',
@@ -5271,8 +5271,8 @@ export default function ClipboardHistory() {
                               display: 'inline-block',
                               fontSize: '9px',
                               fontWeight: 600,
-                              color: '#34C759',
-                              backgroundColor: '#e8f5e9',
+                              color: theme.success,
+                              backgroundColor: theme.successBg,
                               padding: '2px 6px',
                               borderRadius: '3px',
                             }}>
@@ -5294,7 +5294,7 @@ export default function ClipboardHistory() {
                                 border: 'none',
                                 padding: 0,
                                 fontSize: '9px',
-                                color: '#3b82f6',
+                                color: theme.info,
                                 cursor: 'pointer',
                                 textDecoration: 'underline',
                               }}
@@ -5455,7 +5455,7 @@ export default function ClipboardHistory() {
                             {' • '}
                             {formatRelativeTime(item.createdAt)}
                             {improveResult?.stackId === `item-${item.id}` && (
-                              <span style={{ color: '#34C759', marginLeft: '4px' }}>• ✨ improved</span>
+                              <span style={{ color: theme.success, marginLeft: '4px' }}>• ✨ improved</span>
                             )}
                           </>
                         ) : (
@@ -5523,7 +5523,7 @@ export default function ClipboardHistory() {
                             backgroundColor: sharedToTeamId === `item-${item.id}` 
                               ? (theme.isDark ? 'rgba(16, 185, 129, 0.2)' : 'rgba(16, 185, 129, 0.15)')
                               : 'transparent',
-                            color: sharedToTeamId === `item-${item.id}` ? '#10b981' : theme.textSecondary,
+                            color: sharedToTeamId === `item-${item.id}` ? theme.success : theme.textSecondary,
                             border: 'none',
                             borderRadius: '4px',
                             cursor: sharingToTeam === item.id ? 'wait' : 'pointer',
@@ -6012,7 +6012,7 @@ export default function ClipboardHistory() {
                   <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/>
                   <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>
                 </svg>
-                <span style={{ fontSize: '10px', color: updateStatus === 'error' ? '#ef4444' : theme.text }}>
+                <span style={{ fontSize: '10px', color: updateStatus === 'error' ? theme.error : theme.text }}>
                   {updateStatus === 'checking' ? 'Checking...' : updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'Update ready' : updateStatus === 'error' ? `Update failed: ${updateError}` : 'Update available'}
                 </span>
                 {/* Shimmer overlay */}
@@ -6110,7 +6110,7 @@ export default function ClipboardHistory() {
               {versionHovered ? (
                 <>
                   {updateStatus === 'uptodate' ? (
-                    <span style={{ color: '#22c55e', fontSize: '9px' }}>
+                    <span style={{ color: theme.success, fontSize: '9px' }}>
                       Up to date ✓
                     </span>
                   ) : (
@@ -6131,7 +6131,7 @@ export default function ClipboardHistory() {
                   )}
                 </>
               ) : (
-                <span style={{ color: updateStatus === 'uptodate' ? '#22c55e' : theme.textSecondary, fontSize: '9px' }}>
+                <span style={{ color: updateStatus === 'uptodate' ? theme.success : theme.textSecondary, fontSize: '9px' }}>
                   {updateStatus === 'uptodate' ? 'Up to date ✓' : `v${appVersion}`}
                 </span>
               )}
@@ -6946,7 +6946,7 @@ export default function ClipboardHistory() {
                   fontSize: '13px',
                   fontWeight: 500,
                   color: '#fff',
-                  backgroundColor: '#3b82f6',
+                  backgroundColor: theme.info,
                   border: 'none',
                   borderRadius: '6px',
                   cursor: 'pointer',

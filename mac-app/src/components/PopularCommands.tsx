@@ -282,7 +282,7 @@ export default function PopularCommands() {
             ? (theme.isDark ? '#064e3b' : '#d1fae5')
             : (theme.isDark ? 'rgba(255,255,255,0.03)' : '#fff'),
           borderColor: isCopied
-            ? (theme.isDark ? '#10b981' : '#34d399')
+            ? theme.success
             : (theme.isDark ? '#404040' : '#e5e7eb'),
           cursor: 'pointer',
           flexDirection: 'column',

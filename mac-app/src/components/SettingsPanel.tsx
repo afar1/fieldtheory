@@ -1222,7 +1222,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span style={{
                 ...styles.statusDot,
-                backgroundColor: systemPermissions.microphone === 'granted' ? '#22c55e' : '#ef4444',
+                backgroundColor: systemPermissions.microphone === 'granted' ? theme.success : theme.error,
               }} />
               <span style={styles.rowLabel}>Microphone</span>
             </div>
@@ -1239,7 +1239,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span style={{
                 ...styles.statusDot,
-                backgroundColor: systemPermissions.accessibility ? '#22c55e' : '#ef4444',
+                backgroundColor: systemPermissions.accessibility ? theme.success : theme.error,
               }} />
               <span style={styles.rowLabel}>Accessibility</span>
             </div>
@@ -1256,7 +1256,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span style={{
                 ...styles.statusDot,
-                backgroundColor: systemPermissions.screenRecording ? '#22c55e' : '#ef4444',
+                backgroundColor: systemPermissions.screenRecording ? theme.success : theme.error,
               }} />
               <span style={styles.rowLabel}>Screen Recording</span>
             </div>
@@ -1284,7 +1284,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </div>
           <button
             onClick={() => handleAutoImproveChange(!autoImprove)}
-            style={{ ...styles.toggle, backgroundColor: autoImprove ? '#22c55e' : '#d1d5db' }}
+            style={{ ...styles.toggle, backgroundColor: autoImprove ? theme.success : '#d1d5db' }}
           >
             <span style={{ ...styles.toggleKnob, transform: autoImprove ? 'translateX(20px)' : 'translateX(2px)' }} />
           </button>
@@ -1310,7 +1310,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                   width: '100%',
                   height: '6px',
                   borderRadius: '3px',
-                  background: `linear-gradient(to right, #22c55e 0%, #22c55e ${(autoImproveMinWords / 500) * 100}%, ${theme.border} ${(autoImproveMinWords / 500) * 100}%, ${theme.border} 100%)`,
+                  background: `linear-gradient(to right, ${theme.success} 0%, ${theme.success} ${(autoImproveMinWords / 500) * 100}%, ${theme.border} ${(autoImproveMinWords / 500) * 100}%, ${theme.border} 100%)`,
                   appearance: 'none',
                   cursor: 'pointer',
                 }}
@@ -1374,7 +1374,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <span style={{
                             ...styles.statusDot,
-                            backgroundColor: apiKeyTestResult?.success ? '#22c55e' : (apiKeyTestResult?.success === false ? '#ef4444' : '#9ca3af'),
+                            backgroundColor: apiKeyTestResult?.success ? theme.success : (apiKeyTestResult?.success === false ? theme.error : '#9ca3af'),
                           }} />
                           <span style={{ fontSize: '13px', color: theme.textSecondary }}>{maskedApiKey || '•••••••'}</span>
                           {detectedProvider !== 'unknown' && (
@@ -1401,7 +1401,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                           </button>
                           <button
                             onClick={handleClearApiKey}
-                            style={{ ...styles.linkBtn, color: '#dc2626' }}
+                            style={{ ...styles.linkBtn, color: theme.error }}
                           >
                             Remove
                           </button>
@@ -1410,7 +1410,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                       {apiKeyTestResult && (
                         <p style={{
                           fontSize: '12px',
-                          color: apiKeyTestResult.success ? '#22c55e' : '#ef4444',
+                          color: apiKeyTestResult.success ? theme.success : theme.error,
                           margin: '4px 0 0 16px',
                         }}>
                           {apiKeyTestResult.success ? 'Connected' : apiKeyTestResult.error}
@@ -1505,7 +1505,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                               <div style={{
                                 width: `${progressPercent}%`,
                                 height: '100%',
-                                backgroundColor: '#3b82f6',
+                                backgroundColor: theme.info,
                                 transition: 'width 0.3s',
                               }} />
                             </div>
@@ -1919,7 +1919,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                     }}
                     style={{
                       ...styles.linkBtn,
-                      color: '#dc2626',
+                      color: theme.error,
                       fontSize: '12px',
                     }}
                   >
@@ -2004,7 +2004,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
               <strong>Important:</strong> You may continue to use the Basic plan without an account. 
               All local screenshots, transcripts, and drawings will remain on your machine.
             </p>
-            <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: '#dc2626', fontWeight: 500 }}>
+            <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: theme.error, fontWeight: 500 }}>
               This cannot be undone.
             </p>
             
@@ -2032,7 +2032,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             </div>
             
             {deleteError && (
-              <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: '#dc2626' }}>
+              <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: theme.error }}>
                 {deleteError}
               </p>
             )}
@@ -2054,7 +2054,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                 disabled={deleteLoading || deleteConfirmEmail.toLowerCase() !== session?.user?.email?.toLowerCase()}
                 style={{
                   ...styles.btn,
-                  backgroundColor: '#dc2626',
+                  backgroundColor: theme.error,
                   color: '#fff',
                   border: 'none',
                   opacity: deleteLoading || deleteConfirmEmail.toLowerCase() !== session?.user?.email?.toLowerCase() ? 0.5 : 1,

@@ -37,9 +37,9 @@ export default function DataPolicyNotice({ context, style }: DataPolicyNoticePro
   const getIconColor = () => {
     switch (context) {
       case 'local':
-        return theme.isDark ? '#10b981' : '#059669'; // Green for local/private
+        return theme.success; // Green for local/private
       case 'shared':
-        return theme.isDark ? '#3b82f6' : '#2563eb'; // Blue for shared
+        return theme.info; // Blue for shared
       case 'feedback':
         return theme.isDark ? '#f59e0b' : '#d97706'; // Amber for feedback
       case 'dm':

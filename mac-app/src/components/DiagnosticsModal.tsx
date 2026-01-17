@@ -105,7 +105,7 @@ export default function DiagnosticsModal({ isOpen, onClose, onSendAsFeedback }: 
             disabled={isLoading || sending || sent}
             style={{
               ...styles.sendButton,
-              backgroundColor: sent ? '#22c55e' : theme.accent,
+              backgroundColor: sent ? theme.success : theme.accent,
               opacity: isLoading || sending ? 0.5 : 1,
             }}
           >

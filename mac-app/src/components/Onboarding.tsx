@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
+import { useTheme } from '../contexts/ThemeContext';
 
 // =============================================================================
 // Onboarding - 4-phase onboarding flow for Field Theory
@@ -251,7 +252,7 @@ function ModelPhase({
           if (isSelected && isDownloaded) {
             borderColor = '#14372A';
           } else if (isRecommended) {
-            borderColor = '#3b82f6'; // Blue border for recommended
+            borderColor = theme.info; // Blue border for recommended
             boxShadow = '0 2px 8px rgba(59, 130, 246, 0.15)'; // Subtle blue shadow
           }
 
@@ -303,7 +304,7 @@ function ModelPhase({
                 {isDownloaded ? (
                   <div style={styles.modelCardActions}>
                     {isSelected ? (
-                      <span style={{ fontSize: '11px', color: '#22c55e', fontWeight: 500 }}>Active</span>
+                      <span style={{ fontSize: '11px', color: theme.success, fontWeight: 500 }}>Active</span>
                     ) : (
                       <span style={{ fontSize: '11px', color: '#9ca3af' }}>Ready</span>
                     )}
@@ -844,14 +845,14 @@ function ShortcutsPhase({ onFinish }: ShortcutsPhaseProps) {
                   alignItems: 'center',
                   justifyContent: 'center',
                   fontSize: '13px',
-                  color: isCompleted ? '#22c55e' : isCurrent ? '#3b82f6' : '#9ca3af',
+                  color: isCompleted ? theme.success : isCurrent ? theme.info : '#9ca3af',
                 }}>
                   {isCompleted ? '✓' : isCurrent ? '→' : '○'}
                 </span>
                 <span style={{
                   ...styles.shortcutAction,
                   fontSize: '13px',
-                  color: isCompleted ? '#22c55e' : isCurrent ? '#111827' : '#9ca3af',
+                  color: isCompleted ? theme.success : isCurrent ? '#111827' : '#9ca3af',
                   fontWeight: isCurrent ? 600 : 400,
                 }}>
                   {shortcut.label}
@@ -917,6 +918,7 @@ function ShortcutsPhase({ onFinish }: ShortcutsPhaseProps) {
 // =============================================================================
 
 export default function Onboarding() {
+  const { theme } = useTheme();
   const [phase, setPhase] = useState<OnboardingPhase>('permissions');
   const [isLoading, setIsLoading] = useState(true);
   
