@@ -226,7 +226,7 @@ export default function CommandsSettings() {
                   padding: '8px 12px',
                   fontSize: '12px',
                   fontWeight: 500,
-                  color: theme.isDark ? '#f87171' : '#dc2626',
+                  color: theme.error,
                   backgroundColor: 'transparent',
                   border: `1px solid ${theme.isDark ? '#404040' : '#d1d5db'}`,
                   borderRadius: '6px',
@@ -269,7 +269,7 @@ export default function CommandsSettings() {
                         fontSize: '13px',
                         fontWeight: 500,
                         color: '#fff',
-                        backgroundColor: manualPath.trim() ? '#3b82f6' : '#9ca3af',
+                        backgroundColor: manualPath.trim() ? theme.info : '#9ca3af',
                         border: 'none',
                         borderRadius: '6px',
                         cursor: manualPath.trim() ? 'pointer' : 'not-allowed',
@@ -307,7 +307,7 @@ export default function CommandsSettings() {
                         fontSize: '13px',
                         fontWeight: 500,
                         color: '#fff',
-                        backgroundColor: '#3b82f6',
+                        backgroundColor: theme.info,
                         border: 'none',
                         borderRadius: '6px',
                         cursor: 'pointer',
@@ -355,7 +355,7 @@ export default function CommandsSettings() {
           <p style={{
             marginTop: '8px',
             fontSize: '12px',
-            color: '#ef4444',
+            color: theme.error,
           }}>
             {error}
           </p>

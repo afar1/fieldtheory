@@ -351,7 +351,7 @@ export default function PopularCommands() {
                 }}
                 style={{
                   fontSize: '9px',
-                  color: theme.isDark ? '#ef4444' : '#dc2626',
+                  color: theme.error,
                   backgroundColor: 'transparent',
                   border: 'none',
                   cursor: 'pointer',

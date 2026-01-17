@@ -4,6 +4,7 @@
 // =============================================================================
 
 import { useEffect, useState, useCallback } from 'react';
+import { useTheme } from '../contexts/ThemeContext';
 
 type VisionModelStatus = 'downloaded' | 'downloading' | 'missing';
 
@@ -18,6 +19,7 @@ type VisionModelInfo = {
  * VisionSettings displays vision model status and management.
  */
 export default function VisionSettings() {
+  const { theme } = useTheme();
   const [modelStatus, setModelStatus] = useState<VisionModelStatus>('missing');
   const [downloadProgress, setDownloadProgress] = useState<{ downloaded: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -164,7 +166,7 @@ export default function VisionSettings() {
           <span style={styles.statusLabel}>Model Status:</span>
           <span style={{
             ...styles.statusValue,
-            color: modelStatus === 'downloaded' ? '#22c55e' : modelStatus === 'downloading' ? '#f59e0b' : '#ef4444',
+            color: modelStatus === 'downloaded' ? theme.success : modelStatus === 'downloading' ? theme.warning : theme.error,
           }}>
             {modelStatus === 'downloaded' && 'Downloaded'}
             {modelStatus === 'downloading' && 'Downloading...'}
@@ -206,7 +208,7 @@ export default function VisionSettings() {
               <div key={size} style={{
                 ...styles.modelItem,
                 backgroundColor: isSelected ? '#f0f9ff' : '#f9fafb',
-                borderColor: isSelected ? '#3b82f6' : '#e5e7eb',
+                borderColor: isSelected ? theme.info : '#e5e7eb',
               }}>
                 <div style={styles.modelItemHeader}>
                   <div>

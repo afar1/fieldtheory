@@ -715,7 +715,7 @@ export default function TranscriptionSettings() {
                   key={size}
                   style={{
                     ...styles.modelCard,
-                    borderLeft: isSelected ? '3px solid #3b82f6' : isDownloaded ? '3px solid #22c55e' : '3px solid #e5e7eb',
+                    borderLeft: isSelected ? `3px solid ${theme.info}` : isDownloaded ? `3px solid ${theme.success}` : '3px solid #e5e7eb',
                     backgroundColor: isSelected ? '#f0f9ff' : 'transparent',
                   }}
                 >
