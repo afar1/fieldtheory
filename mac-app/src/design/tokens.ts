@@ -19,13 +19,13 @@ export const colors = {
     dots: '#d4d4d4',         // Dotted separator color
   },
   dark: {
-    bg: '#1e1e1e',           // Medium dark, not too harsh
-    bgAlt: '#2a2a2a',        // Slightly lighter for cards
+    bg: '#15181e',           // Darker background matching iTerm (R:21 G:24 B:30)
+    bgAlt: '#1c1f26',        // Slightly lighter for cards
     text: '#e8e8e8',         // Light text
     textMuted: '#a8a8a8',    // Muted secondary text (brighter for contrast)
     accent: '#3d8b6a',       // Brighter green for dark mode visibility
-    border: '#3a3a3a',       // Dark border
-    dots: '#4a4a4a',         // Dotted separator in dark mode
+    border: '#2a2d35',       // Dark border
+    dots: '#3a3d45',         // Dotted separator in dark mode
   },
 } as const;
 
@@ -42,10 +42,10 @@ export const surfaces = {
     3: '#ffffff',  // Highest - tooltips, dropdowns
   },
   dark: {
-    0: '#1e1e1e',  // Base - window background
-    1: '#252525',  // Elevated - cards, panels
-    2: '#2a2a2a',  // Higher - inputs, dialogs
-    3: '#333333',  // Highest - tooltips, dropdowns
+    0: '#15181e',  // Base - window background (matching iTerm)
+    1: '#1c1f26',  // Elevated - cards, panels
+    2: '#22262e',  // Higher - inputs, dialogs
+    3: '#2a2e38',  // Highest - tooltips, dropdowns
   },
 } as const;
 
@@ -274,23 +274,23 @@ export const darkThemeSolid: Omit<Theme, 'isDark' | 'glassEnabled'> = {
 };
 
 export const darkThemeGlass: Omit<Theme, 'isDark' | 'glassEnabled'> = {
-  bg: 'rgba(30, 30, 30, 0.85)',
-  background: 'rgba(30, 30, 30, 0.85)',
-  bgSecondary: 'rgba(37, 37, 37, 0.9)',
-  bgTertiary: 'rgba(42, 42, 42, 0.95)',
+  bg: 'rgba(21, 24, 30, 0.85)',
+  background: 'rgba(21, 24, 30, 0.85)',
+  bgSecondary: 'rgba(28, 31, 38, 0.9)',
+  bgTertiary: 'rgba(34, 38, 46, 0.95)',
   text: colors.dark.text,
   textSecondary: colors.dark.textMuted,
   border: colors.dark.border,
   accent: colors.dark.accent,
   accentHover: '#4da87d',
   // Surface elevation (glass versions)
-  surface0: 'rgba(30, 30, 30, 0.85)',
-  surface1: 'rgba(37, 37, 37, 0.9)',
-  surface2: 'rgba(42, 42, 42, 0.95)',
-  surface3: 'rgba(51, 51, 51, 0.95)',
+  surface0: 'rgba(21, 24, 30, 0.85)',
+  surface1: 'rgba(28, 31, 38, 0.9)',
+  surface2: 'rgba(34, 38, 46, 0.95)',
+  surface3: 'rgba(42, 46, 56, 0.95)',
   selectedBg: 'rgba(61, 139, 106, 0.15)',
   selectedBorder: colors.dark.accent,
-  inputBg: 'rgba(42, 42, 42, 0.9)',
+  inputBg: 'rgba(34, 38, 46, 0.9)',
   inputBorder: 'rgba(255, 255, 255, 0.15)',
   dots: colors.dark.dots,
   // Semantic
