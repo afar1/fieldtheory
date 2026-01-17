@@ -22,7 +22,7 @@ export const colors = {
     bg: '#1e1e1e',           // Medium dark, not too harsh
     bgAlt: '#2a2a2a',        // Slightly lighter for cards
     text: '#e8e8e8',         // Light text
-    textMuted: '#999999',    // Muted secondary text
+    textMuted: '#a8a8a8',    // Muted secondary text (brighter for contrast)
     accent: '#3d8b6a',       // Brighter green for dark mode visibility
     border: '#3a3a3a',       // Dark border
     dots: '#4a4a4a',         // Dotted separator in dark mode
@@ -165,6 +165,7 @@ export interface Theme {
   glassEnabled: boolean;
   // Core colors
   bg: string;
+  background: string; // Alias for bg
   bgSecondary: string;
   bgTertiary: string;
   text: string;
@@ -172,6 +173,11 @@ export interface Theme {
   border: string;
   accent: string;
   accentHover: string;
+  // Surface elevation (for dark mode depth)
+  surface0: string;
+  surface1: string;
+  surface2: string;
+  surface3: string;
   // Selection
   selectedBg: string;
   selectedBorder: string;
@@ -201,6 +207,7 @@ export interface Theme {
 
 export const lightTheme: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   bg: colors.light.bg,
+  background: colors.light.bg,
   bgSecondary: colors.light.bgAlt,
   bgTertiary: surfaces.light[2],
   text: colors.light.text,
@@ -208,6 +215,11 @@ export const lightTheme: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   border: colors.light.border,
   accent: colors.light.accent,
   accentHover: '#0f2a1f',
+  // Surface elevation
+  surface0: surfaces.light[0],
+  surface1: surfaces.light[1],
+  surface2: surfaces.light[2],
+  surface3: surfaces.light[3],
   selectedBg: 'rgba(20, 55, 42, 0.08)',
   selectedBorder: colors.light.accent,
   inputBg: '#ffffff',
@@ -229,6 +241,7 @@ export const lightTheme: Omit<Theme, 'isDark' | 'glassEnabled'> = {
 
 export const darkThemeSolid: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   bg: colors.dark.bg,
+  background: colors.dark.bg,
   bgSecondary: surfaces.dark[1],
   bgTertiary: surfaces.dark[2],
   text: colors.dark.text,
@@ -236,6 +249,11 @@ export const darkThemeSolid: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   border: colors.dark.border,
   accent: colors.dark.accent,
   accentHover: '#4da87d',
+  // Surface elevation
+  surface0: surfaces.dark[0],
+  surface1: surfaces.dark[1],
+  surface2: surfaces.dark[2],
+  surface3: surfaces.dark[3],
   selectedBg: 'rgba(61, 139, 106, 0.15)',
   selectedBorder: colors.dark.accent,
   inputBg: surfaces.dark[2],
@@ -257,6 +275,7 @@ export const darkThemeSolid: Omit<Theme, 'isDark' | 'glassEnabled'> = {
 
 export const darkThemeGlass: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   bg: 'rgba(30, 30, 30, 0.85)',
+  background: 'rgba(30, 30, 30, 0.85)',
   bgSecondary: 'rgba(37, 37, 37, 0.9)',
   bgTertiary: 'rgba(42, 42, 42, 0.95)',
   text: colors.dark.text,
@@ -264,6 +283,11 @@ export const darkThemeGlass: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   border: colors.dark.border,
   accent: colors.dark.accent,
   accentHover: '#4da87d',
+  // Surface elevation (glass versions)
+  surface0: 'rgba(30, 30, 30, 0.85)',
+  surface1: 'rgba(37, 37, 37, 0.9)',
+  surface2: 'rgba(42, 42, 42, 0.95)',
+  surface3: 'rgba(51, 51, 51, 0.95)',
   selectedBg: 'rgba(61, 139, 106, 0.15)',
   selectedBorder: colors.dark.accent,
   inputBg: 'rgba(42, 42, 42, 0.9)',
