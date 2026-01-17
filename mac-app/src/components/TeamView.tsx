@@ -1599,17 +1599,17 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
               style={{
                 padding: '12px',
                 marginBottom: '16px',
-                backgroundColor: '#10b98120',
+                backgroundColor: theme.successBg,
                 borderRadius: '6px',
-                border: '1px solid #10b981',
+                border: `1px solid ${theme.success}`,
               }}
             >
-              <p style={{ margin: 0, fontSize: '12px', color: '#10b981' }}>
+              <p style={{ margin: 0, fontSize: '12px', color: theme.success }}>
                 {successMessage}
               </p>
               <button
                 onClick={() => switchAuthMode('signIn')}
-                style={{ ...linkStyle, marginTop: '8px', color: '#10b981' }}
+                style={{ ...linkStyle, marginTop: '8px', color: theme.success }}
               >
                 Back to sign in
               </button>
@@ -1638,7 +1638,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
                     style={{ ...inputStyle, marginBottom: '12px' }}
                   />
                   {authError && (
-                    <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: '#ef4444' }}>
+                    <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: theme.error }}>
                       {authError}
                     </p>
                   )}
@@ -1683,7 +1683,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
                     autoFocus
                   />
                   {authError && (
-                    <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: '#ef4444' }}>
+                    <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: theme.error }}>
                       {authError}
                     </p>
                   )}
@@ -1765,7 +1765,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
                   style={{ ...inputStyle, marginBottom: '12px' }}
                 />
                 {authError && (
-                  <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: '#ef4444' }}>
+                  <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: theme.error }}>
                     {authError}
                   </p>
                 )}
@@ -1809,7 +1809,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
                   style={{ ...inputStyle, marginBottom: '12px' }}
                 />
                 {authError && (
-                  <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: '#ef4444' }}>
+                  <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: theme.error }}>
                     {authError}
                   </p>
                 )}
@@ -1893,8 +1893,8 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
                   padding: '2px 6px',
                   fontSize: '10px',
                   backgroundColor: 'transparent',
-                  color: '#ef4444',
-                  border: '1px solid #ef4444',
+                  color: theme.error,
+                  border: `1px solid ${theme.error}`,
                   borderRadius: '4px',
                   cursor: 'pointer',
                 }}
@@ -1942,7 +1942,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
               </button>
             </div>
             {addMemberError && (
-              <p style={{ margin: '8px 0 0 0', fontSize: '10px', color: '#ef4444' }}>
+              <p style={{ margin: '8px 0 0 0', fontSize: '10px', color: theme.error }}>
                 {addMemberError}
               </p>
             )}
@@ -2723,7 +2723,7 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
                     {item.type === 'transcript' && (
                       <>
                         <span>•</span>
-                        <span style={{ color: '#10b981' }}>Transcript</span>
+                        <span style={{ color: theme.success }}>Transcript</span>
                       </>
                     )}
                     <InitialsBadge email={item.sharedByEmail} />

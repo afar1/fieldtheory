@@ -444,11 +444,11 @@ export default function TranscriptionSettings() {
   }
 
   const getStatusColor = () => {
-    if (status === 'recording') return '#3b82f6';
-    if (status === 'transcribing') return '#f59e0b';
-    if (selectedModel === 'none' || modelStatus === 'missing') return '#dc2626';
-    if (modelStatus === 'downloading') return '#f59e0b';
-    return '#22c55e';
+    if (status === 'recording') return theme.info;
+    if (status === 'transcribing') return theme.warning;
+    if (selectedModel === 'none' || modelStatus === 'missing') return theme.error;
+    if (modelStatus === 'downloading') return theme.warning;
+    return theme.success;
   };
 
   const getStatusText = () => {
@@ -477,7 +477,7 @@ export default function TranscriptionSettings() {
           <div style={styles.sectionLine} />
           <button
             onClick={() => handleSoundsEnabledChange(!soundsEnabled)}
-            style={{ ...styles.toggle, backgroundColor: soundsEnabled ? '#22c55e' : '#d1d5db' }}
+            style={{ ...styles.toggle, backgroundColor: soundsEnabled ? theme.success : '#d1d5db' }}
             title={soundsEnabled ? 'Sounds enabled' : 'Sounds disabled'}
           >
             <span style={{ ...styles.toggleKnob, transform: soundsEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />

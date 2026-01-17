@@ -605,8 +605,8 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
     if (!type) return null;
     
     const colors = {
-      team: { bg: '#3b82f6', text: '#fff' },
-      friend: { bg: '#10b981', text: '#fff' },
+      team: { bg: theme.info, text: '#fff' },
+      friend: { bg: theme.success, text: '#fff' },
       pending: { bg: '#6b7280', text: '#fff' },
     };
     
@@ -631,8 +631,8 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
     if (!status) return null;
     
     const colors = {
-      open: { bg: '#f59e0b', text: '#000' },
-      resolved: { bg: '#10b981', text: '#fff' },
+      open: { bg: theme.warning, text: '#000' },
+      resolved: { bg: theme.success, text: '#fff' },
       archived: { bg: '#6b7280', text: '#fff' },
     };
     
@@ -727,7 +727,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
         gap: '12px',
         padding: '20px',
       }}>
-        <div style={{ color: '#ef4444', fontSize: '12px', textAlign: 'center' }}>
+        <div style={{ color: theme.error, fontSize: '12px', textAlign: 'center' }}>
           {loadError}
         </div>
         <button
@@ -889,7 +889,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
               }}
             />
             {error && (
-              <div style={{ color: '#ef4444', fontSize: '11px', marginBottom: '8px' }}>
+              <div style={{ color: theme.error, fontSize: '11px', marginBottom: '8px' }}>
                 {error}
               </div>
             )}
@@ -1150,7 +1150,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                         width: '18px',
                         height: '18px',
                         borderRadius: '50%',
-                        backgroundColor: '#ef4444',
+                        backgroundColor: theme.error,
                         color: '#fff',
                         border: 'none',
                         cursor: 'pointer',
@@ -1388,7 +1388,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                         width: '18px',
                         height: '18px',
                         borderRadius: '50%',
-                        backgroundColor: '#ef4444',
+                        backgroundColor: theme.error,
                         color: '#fff',
                         border: 'none',
                         cursor: 'pointer',
@@ -1494,7 +1494,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                       width: '18px',
                       height: '18px',
                       borderRadius: '50%',
-                      backgroundColor: '#ef4444',
+                      backgroundColor: theme.error,
                       color: '#fff',
                       border: 'none',
                       cursor: 'pointer',
@@ -1523,7 +1523,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                       padding: '12px 16px',
                       fontSize: '13px',
                       fontWeight: 500,
-                      backgroundColor: transcriptionStatus === 'recording' ? '#ef4444' : theme.accent,
+                      backgroundColor: transcriptionStatus === 'recording' ? theme.error : theme.accent,
                       color: '#fff',
                       border: 'none',
                       borderRadius: '6px',
