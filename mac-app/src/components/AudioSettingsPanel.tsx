@@ -4,6 +4,7 @@
 // =============================================================================
 
 import { useEffect, useState, useCallback } from 'react';
+import { useTheme, Theme } from '../contexts/ThemeContext';
 
 // Import types for the API exposed via preload.
 // Note: These are available on window.audioAPI and window.platform.
@@ -29,9 +30,12 @@ interface AudioState {
  * for managing Little One's priority lock feature.
  */
 export default function AudioSettingsPanel() {
+  const { theme } = useTheme();
   const [audioState, setAudioState] = useState<AudioState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const styles = getStyles(theme);
 
   // Check if we're on macOS (audio features only available there).
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
@@ -182,7 +186,7 @@ export default function AudioSettingsPanel() {
 // =============================================================================
 // Unified Design System - Only 2 font sizes: 13px body, 11px headers
 // =============================================================================
-const styles: Record<string, React.CSSProperties> = {
+const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   container: {
     padding: 0,
   },
@@ -190,15 +194,15 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'none', // Hidden in new design - section header comes from parent
   },
   notAvailable: {
-    color: '#6b7280',
+    color: theme.textSecondary,
     fontStyle: 'italic',
     fontSize: '13px',
   },
   error: {
-    color: '#ef4444',
+    color: theme.error,
     fontSize: '13px',
   },
-  
+
   // Flat row layout.
   row: {
     display: 'flex',
@@ -209,12 +213,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
   rowLabel: {
     fontSize: '13px',
-    color: '#374151',
+    color: theme.text,
     fontWeight: 400,
   },
   rowValue: {
     fontSize: '13px',
-    color: '#111827',
+    color: theme.text,
     fontWeight: 500,
   },
   rowControls: {
@@ -222,19 +226,19 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     gap: '8px',
   },
-  
+
   // Button styles.
   btn: {
     padding: '6px 12px',
     fontSize: '13px',
     fontWeight: 500,
-    color: '#374151',
-    backgroundColor: '#fff',
-    border: '1px solid #d1d5db',
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
   },
-  
+
   // Toggle switch.
   toggle: {
     position: 'relative' as const,
@@ -260,19 +264,19 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
     transition: 'transform 0.2s',
   },
-  
+
   // Select dropdown.
   select: {
     padding: '6px 12px',
     fontSize: '13px',
-    color: '#374151',
-    backgroundColor: '#fff',
-    border: '1px solid #d1d5db',
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
     minWidth: '180px',
   },
-  
+
   // Section header with divider line.
   devicesSection: {
     marginTop: '12px',
@@ -286,7 +290,7 @@ const styles: Record<string, React.CSSProperties> = {
   sectionTitle: {
     fontSize: '11px',
     fontWeight: 600,
-    color: '#9ca3af',
+    color: theme.textSecondary,
     textTransform: 'uppercase' as const,
     letterSpacing: '0.08em',
     whiteSpace: 'nowrap' as const,
@@ -294,9 +298,9 @@ const styles: Record<string, React.CSSProperties> = {
   sectionLine: {
     flex: 1,
     height: '1px',
-    backgroundColor: '#e5e7eb',
+    backgroundColor: theme.border,
   },
-  
+
   // Device row (compact).
   deviceRow: {
     display: 'flex',
@@ -309,17 +313,17 @@ const styles: Record<string, React.CSSProperties> = {
   deviceMeta: {
     display: 'block',
     fontSize: '11px',
-    color: '#9ca3af',
+    color: theme.textSecondary,
     marginTop: '2px',
   },
   priorityBadge: {
     fontSize: '13px',
-    color: '#22c55e',
+    color: theme.success,
   },
   emptyMessage: {
     padding: '12px',
-    color: '#6b7280',
+    color: theme.textSecondary,
     fontStyle: 'italic',
     fontSize: '13px',
   },
-};
+});

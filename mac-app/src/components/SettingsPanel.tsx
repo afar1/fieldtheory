@@ -12,7 +12,7 @@ import DiagnosticsModal from './DiagnosticsModal';
 import CommandsSettings from './CommandsSettings';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
-import { useTheme } from '../contexts/ThemeContext';
+import { useTheme, Theme } from '../contexts/ThemeContext';
 
 interface SettingsPanelProps {
   onNavigateToSignIn?: () => void;
@@ -136,7 +136,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   
   // Diagnostics modal visibility.
   const [showDiagnostics, setShowDiagnostics] = useState(false);
-  
+
+  const styles = getStyles(theme);
+
   // Load system permissions on mount and when window gains focus
   useEffect(() => {
     const loadSystemPermissions = async () => {
@@ -2097,7 +2099,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
 }
 
 // Styles consistent with ClipboardHistory styling
-const styles: Record<string, React.CSSProperties> = {
+const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   container: {
     padding: '16px',
     overflowY: 'auto',
@@ -2111,24 +2113,24 @@ const styles: Record<string, React.CSSProperties> = {
     height: '100%',
   },
   loadingText: {
-    color: '#6b7280',
+    color: theme.textSecondary,
     fontSize: '13px',
   },
-  
+
   // ==========================================================================
   // NEW UNIFIED DESIGN SYSTEM - Only 2 font sizes: 13px body, 11px headers
   // ==========================================================================
-  
+
   title: {
     fontSize: '13px',
     fontWeight: 600,
     marginTop: 0,
     marginBottom: '24px',
-    color: '#111827',
+    color: theme.text,
     textTransform: 'uppercase' as const,
     letterSpacing: '0.05em',
   },
-  
+
   // Section with divider line
   section: {
     marginBottom: '20px',
@@ -2142,7 +2144,7 @@ const styles: Record<string, React.CSSProperties> = {
   sectionTitle: {
     fontSize: '11px',
     fontWeight: 600,
-    color: '#9ca3af',
+    color: theme.textSecondary,
     textTransform: 'uppercase' as const,
     letterSpacing: '0.08em',
     whiteSpace: 'nowrap' as const,
@@ -2150,9 +2152,9 @@ const styles: Record<string, React.CSSProperties> = {
   sectionLine: {
     flex: 1,
     height: '1px',
-    backgroundColor: '#e5e7eb',
+    backgroundColor: theme.border,
   },
-  
+
   // Flat row layout: label left, control right
   row: {
     display: 'flex',
@@ -2163,12 +2165,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
   rowLabel: {
     fontSize: '13px',
-    color: '#374151',
+    color: theme.text,
     fontWeight: 400,
   },
   rowValue: {
     fontSize: '13px',
-    color: '#111827',
+    color: theme.text,
     fontWeight: 500,
   },
   rowControls: {
@@ -2178,56 +2180,56 @@ const styles: Record<string, React.CSSProperties> = {
   },
   rowHint: {
     fontSize: '13px',
-    color: '#6b7280',
+    color: theme.textSecondary,
     fontWeight: 400,
   },
-  
+
   // Unified button styles
   btn: {
     padding: '6px 12px',
     fontSize: '13px',
     fontWeight: 500,
-    color: '#374151',
-    backgroundColor: '#fff',
-    border: '1px solid #d1d5db',
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
     minWidth: '80px',
     textAlign: 'center' as const,
   },
   btnActive: {
-    backgroundColor: '#14372A',
+    backgroundColor: theme.accent,
     color: '#fff',
-    borderColor: '#14372A',
+    borderColor: theme.accent,
   },
   btnDanger: {
-    color: '#dc2626',
-    borderColor: '#fecaca',
-    backgroundColor: '#fef2f2',
+    color: theme.error,
+    borderColor: theme.isDark ? 'rgba(248,113,113,0.3)' : '#fecaca',
+    backgroundColor: theme.errorBg,
   },
   btnSuccess: {
     color: '#fff',
-    backgroundColor: '#14372A',
-    borderColor: '#14372A',
+    backgroundColor: theme.accent,
+    borderColor: theme.accent,
   },
   btnGhost: {
     backgroundColor: 'transparent',
     border: 'none',
-    color: '#6b7280',
+    color: theme.textSecondary,
     minWidth: 'auto',
     padding: '6px 8px',
   },
   linkBtn: {
     backgroundColor: 'transparent',
     border: 'none',
-    color: '#6b7280',
+    color: theme.textSecondary,
     fontSize: '13px',
     padding: '4px 0',
     cursor: 'pointer',
     textDecoration: 'underline',
     textUnderlineOffset: '2px',
   },
-  
+
   // Toggle switch
   toggle: {
     position: 'relative' as const,
@@ -2253,31 +2255,31 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
     transition: 'transform 0.2s',
   },
-  
+
   // Select dropdown
   select: {
     padding: '6px 12px',
     fontSize: '13px',
-    color: '#374151',
-    backgroundColor: '#fff',
-    border: '1px solid #d1d5db',
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
     minWidth: '160px',
   },
-  
+
   // Input field
   input: {
     padding: '6px 12px',
     fontSize: '13px',
-    color: '#111827',
-    backgroundColor: '#fff',
-    border: '1px solid #d1d5db',
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     outline: 'none',
     flex: 1,
   },
-  
+
   // Status indicators
   statusDot: {
     width: '8px',
@@ -2286,40 +2288,40 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'inline-block',
     marginRight: '6px',
   },
-  statusGreen: { backgroundColor: '#14372A' },
-  statusYellow: { backgroundColor: '#f59e0b' },
-  statusRed: { backgroundColor: '#ef4444' },
-  statusGray: { backgroundColor: '#9ca3af' },
-  
+  statusGreen: { backgroundColor: theme.success },
+  statusYellow: { backgroundColor: theme.warning },
+  statusRed: { backgroundColor: theme.error },
+  statusGray: { backgroundColor: theme.textSecondary },
+
   // Error text
   error: {
     fontSize: '13px',
-    color: '#ef4444',
+    color: theme.error,
     marginTop: '4px',
   },
-  
+
   // Model list (compact)
   modelRow: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: '8px 0',
-    borderBottom: '1px solid #f3f4f6',
+    borderBottom: `1px solid ${theme.border}`,
   },
   modelName: {
     fontSize: '13px',
-    color: '#374151',
+    color: theme.text,
   },
   modelSize: {
     fontSize: '13px',
-    color: '#9ca3af',
+    color: theme.textSecondary,
     marginLeft: '8px',
   },
-  
+
   // Permissions warning (compact)
   permissionsWarning: {
-    backgroundColor: '#fffbeb',
-    border: '1px solid #f59e0b',
+    backgroundColor: theme.warningBg,
+    border: `1px solid ${theme.warning}`,
     borderRadius: '6px',
     padding: '12px',
     marginBottom: '20px',
@@ -2331,12 +2333,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
   permissionsText: {
     fontSize: '13px',
-    color: '#92400e',
+    color: theme.isDark ? theme.warning : '#92400e',
     margin: 0,
   },
   permissionsButton: {
     padding: '6px 12px',
-    backgroundColor: '#f59e0b',
+    backgroundColor: theme.warning,
     color: 'white',
     border: 'none',
     borderRadius: '6px',
@@ -2344,14 +2346,14 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '13px',
     fontWeight: 500,
   },
-  
+
   // Login form (compact)
   loginForm: {
     display: 'flex',
     flexDirection: 'column' as const,
     gap: '8px',
   },
-  
+
   // Legacy compatibility - keeping for nested components
   hotkeyCard: {
     padding: 0,
@@ -2365,7 +2367,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   hotkeyLabel: {
     fontSize: '13px',
-    color: '#374151',
+    color: theme.text,
   },
   hotkeyButtonRow: {
     display: 'flex',
@@ -2376,45 +2378,47 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '6px 12px',
     fontSize: '13px',
     fontWeight: 500,
-    color: '#374151',
-    backgroundColor: '#fff',
-    border: '1px solid #d1d5db',
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
   },
   hotkeyButtonActive: {
-    backgroundColor: '#14372A',
+    backgroundColor: theme.accent,
     color: '#fff',
-    borderColor: '#14372A',
+    borderColor: theme.accent,
   },
   cancelButton: {
     padding: '6px 8px',
     fontSize: '13px',
-    color: '#6b7280',
+    color: theme.textSecondary,
     backgroundColor: 'transparent',
     border: 'none',
     cursor: 'pointer',
   },
   hotkeyError: {
     fontSize: '13px',
-    color: '#ef4444',
+    color: theme.error,
     marginTop: '4px',
   },
   loginInput: {
     padding: '8px 12px',
     fontSize: '13px',
-    border: '1px solid #d1d5db',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     outline: 'none',
     width: '100%',
     boxSizing: 'border-box' as const,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    color: theme.text,
   },
   loginButton: {
     padding: '8px 16px',
     fontSize: '13px',
     fontWeight: 500,
     color: '#fff',
-    backgroundColor: '#14372A',
+    backgroundColor: theme.accent,
     border: 'none',
     borderRadius: '6px',
     cursor: 'pointer',
@@ -2422,9 +2426,9 @@ const styles: Record<string, React.CSSProperties> = {
   signOutButton: {
     padding: '6px 12px',
     fontSize: '13px',
-    color: '#6b7280',
+    color: theme.textSecondary,
     backgroundColor: 'transparent',
-    border: '1px solid #d1d5db',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
   },
@@ -2437,9 +2441,9 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '6px 12px',
     fontSize: '13px',
     fontWeight: 500,
-    color: '#374151',
-    backgroundColor: '#fff',
-    border: '1px solid #d1d5db',
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
   },
@@ -2447,15 +2451,15 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '6px 12px',
     fontSize: '13px',
     fontWeight: 500,
-    color: '#6b7280',
-    backgroundColor: '#f9fafb',
-    border: '1px solid #e5e7eb',
+    color: theme.textSecondary,
+    backgroundColor: theme.isDark ? theme.surface1 : '#f9fafb',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
   },
   syncStatusText: {
     fontSize: '13px',
-    color: '#6b7280',
+    color: theme.textSecondary,
     marginTop: '4px',
   },
   sectionDescription: {
@@ -2467,4 +2471,4 @@ const styles: Record<string, React.CSSProperties> = {
   hotkeyHelp: {
     display: 'none', // Hide help text in new design
   },
-};
+});

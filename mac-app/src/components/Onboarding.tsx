@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
-import { useTheme } from '../contexts/ThemeContext';
+import { useTheme, Theme } from '../contexts/ThemeContext';
 
 // =============================================================================
 // Onboarding - 4-phase onboarding flow for Field Theory
@@ -919,6 +919,7 @@ function ShortcutsPhase({ onFinish }: ShortcutsPhaseProps) {
 
 export default function Onboarding() {
   const { theme } = useTheme();
+  const styles = getStyles(theme);
   const [phase, setPhase] = useState<OnboardingPhase>('permissions');
   const [isLoading, setIsLoading] = useState(true);
   
@@ -1246,12 +1247,12 @@ function PhaseIndicator({ current, onGoToPhase }: PhaseIndicatorProps) {
 // Styles
 // =============================================================================
 
-const styles: Record<string, React.CSSProperties> = {
+const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   container: {
     display: 'flex',
     flexDirection: 'column',
     height: '100vh',
-    backgroundColor: '#faf9f7',
+    backgroundColor: theme.background,
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
     paddingTop: '28px', // Account for macOS title bar.
   },
@@ -1273,12 +1274,12 @@ const styles: Record<string, React.CSSProperties> = {
   title: {
     fontSize: '18px',
     fontWeight: 600,
-    color: '#1a1a1a',
+    color: theme.text,
     margin: '0 0 2px 0',
   },
   subtitle: {
     fontSize: '12px',
-    color: '#6b7280',
+    color: theme.textSecondary,
     margin: '0 0 12px 0',
     lineHeight: 1.3,
   },
@@ -1299,8 +1300,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
-    backgroundColor: '#ffffff',
-    border: '1px solid #e5e7eb',
+    backgroundColor: theme.isDark ? theme.surface1 : '#ffffff',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     padding: '8px 10px',
     textAlign: 'left',
@@ -1314,12 +1315,12 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   checkmark: {
-    color: '#22c55e',
+    color: theme.success,
     fontSize: '14px',
     fontWeight: 'bold',
   },
   unchecked: {
-    color: '#d1d5db',
+    color: theme.border,
     fontSize: '14px',
   },
   permissionContent: {
@@ -1328,33 +1329,33 @@ const styles: Record<string, React.CSSProperties> = {
   permissionLabel: {
     fontSize: '13px',
     fontWeight: 500,
-    color: '#1a1a1a',
+    color: theme.text,
     display: 'flex',
     alignItems: 'center',
     gap: '6px',
   },
   permissionDescription: {
     fontSize: '11px',
-    color: '#6b7280',
+    color: theme.textSecondary,
     marginTop: '2px',
   },
   restartHint: {
     fontSize: '10px',
-    color: '#9ca3af',
+    color: theme.textSecondary,
     marginTop: '4px',
   },
   restartLink: {
-    color: '#3b82f6',
+    color: theme.info,
     cursor: 'pointer',
     textDecoration: 'underline',
   },
   instructionsText: {
     fontSize: '11px',
-    color: '#9ca3af',
+    color: theme.textSecondary,
     marginTop: '2px',
   },
   grantButton: {
-    backgroundColor: '#14372A',
+    backgroundColor: theme.accent,
     color: '#ffffff',
     border: 'none',
     borderRadius: '4px',
@@ -1377,7 +1378,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     padding: '10px 12px',
     borderRadius: '6px',
-    border: '1px solid #e5e7eb',
+    border: `1px solid ${theme.border}`,
     transition: 'border-color 0.15s, background-color 0.15s',
   },
   modelCardCheck: {
@@ -1413,15 +1414,15 @@ const styles: Record<string, React.CSSProperties> = {
   recommendedBadge: {
     fontSize: '9px',
     fontWeight: 600,
-    color: '#14372A',
-    backgroundColor: '#dcfce7',
+    color: theme.isDark ? theme.success : '#14372A',
+    backgroundColor: theme.successBg,
     padding: '1px 5px',
     borderRadius: '3px',
     textTransform: 'uppercase',
     letterSpacing: '0.02em',
   },
   downloadButton: {
-    backgroundColor: '#14372A',
+    backgroundColor: theme.accent,
     color: '#ffffff',
     border: 'none',
     borderRadius: '4px',
@@ -1431,9 +1432,9 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
   },
   cancelButton: {
-    backgroundColor: '#f3f4f6',
-    color: '#6b7280',
-    border: '1px solid #e5e7eb',
+    backgroundColor: theme.isDark ? theme.surface2 : '#f3f4f6',
+    color: theme.textSecondary,
+    border: `1px solid ${theme.border}`,
     borderRadius: '4px',
     padding: '5px 12px',
     fontSize: '11px',
@@ -1442,7 +1443,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   deleteButton: {
     backgroundColor: 'transparent',
-    color: '#9ca3af',
+    color: theme.textSecondary,
     border: 'none',
     padding: '2px 6px',
     fontSize: '12px',
@@ -1461,31 +1462,31 @@ const styles: Record<string, React.CSSProperties> = {
   progressBar: {
     flex: 1,
     height: '4px',
-    backgroundColor: '#e5e7eb',
+    backgroundColor: theme.border,
     borderRadius: '2px',
     overflow: 'hidden',
   },
   progressFill: {
     height: '100%',
-    backgroundColor: '#14372A',
+    backgroundColor: theme.accent,
     transition: 'width 0.3s ease',
   },
   progressText: {
     fontSize: '11px',
-    color: '#6b7280',
+    color: theme.textSecondary,
     minWidth: '32px',
     textAlign: 'right',
   },
 
   // Success banner.
   successBanner: {
-    backgroundColor: '#f0fdf4',
-    border: '1px solid #bbf7d0',
+    backgroundColor: theme.successBg,
+    border: `1px solid ${theme.isDark ? 'rgba(74,222,128,0.3)' : '#bbf7d0'}`,
     borderRadius: '4px',
     padding: '6px 10px',
     marginBottom: '8px',
     fontSize: '12px',
-    color: '#166534',
+    color: theme.isDark ? theme.success : '#166534',
     width: '100%',
     textAlign: 'center',
   },
@@ -1501,23 +1502,23 @@ const styles: Record<string, React.CSSProperties> = {
   },
   shortcutLabel: {
     fontSize: '11px',
-    color: '#6b7280',
+    color: theme.textSecondary,
     marginRight: '4px',
   },
   shortcutPlus: {
     fontSize: '11px',
-    color: '#9ca3af',
+    color: theme.textSecondary,
   },
   kbd: {
     display: 'inline-block',
     padding: '3px 8px',
     fontSize: '11px',
     fontWeight: 500,
-    color: '#374151',
-    backgroundColor: '#f3f4f6',
-    border: '1px solid #d1d5db',
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface2 : '#f3f4f6',
+    border: `1px solid ${theme.border}`,
     borderRadius: '4px',
-    boxShadow: '0 1px 0 #d1d5db',
+    boxShadow: `0 1px 0 ${theme.border}`,
     fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
   },
 
@@ -1534,14 +1535,14 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: '10px 14px',
-    backgroundColor: '#ffffff',
-    border: '1px solid #e5e7eb',
+    backgroundColor: theme.isDark ? theme.surface1 : '#ffffff',
+    border: `1px solid ${theme.border}`,
     borderRadius: '8px',
   },
   shortcutAction: {
     fontSize: '13px',
     fontWeight: 500,
-    color: '#1a1a1a',
+    color: theme.text,
   },
   shortcutKeys: {
     display: 'flex',
@@ -1551,7 +1552,7 @@ const styles: Record<string, React.CSSProperties> = {
 
   // Primary button.
   primaryButton: {
-    backgroundColor: '#14372A',
+    backgroundColor: theme.accent,
     color: '#ffffff',
     border: 'none',
     borderRadius: '6px',
@@ -1565,7 +1566,7 @@ const styles: Record<string, React.CSSProperties> = {
   // Secondary button.
   secondaryButton: {
     backgroundColor: 'transparent',
-    color: '#6b7280',
+    color: theme.textSecondary,
     border: 'none',
     padding: '8px 16px',
     fontSize: '12px',
@@ -1588,10 +1589,12 @@ const styles: Record<string, React.CSSProperties> = {
     width: '100%',
     padding: '10px 12px',
     fontSize: '14px',
-    border: '1px solid #e5e7eb',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     outline: 'none',
     boxSizing: 'border-box',
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    color: theme.text,
   },
   otpInput: {
     width: '100%',
@@ -1599,25 +1602,27 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '18px',
     textAlign: 'center',
     letterSpacing: '4px',
-    border: '1px solid #e5e7eb',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     outline: 'none',
     boxSizing: 'border-box',
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    color: theme.text,
   },
   otpSentText: {
     fontSize: '12px',
-    color: '#6b7280',
+    color: theme.textSecondary,
     textAlign: 'center',
     margin: '0 0 4px 0',
   },
   errorBanner: {
-    backgroundColor: '#fef2f2',
-    border: '1px solid #fecaca',
+    backgroundColor: theme.errorBg,
+    border: `1px solid ${theme.isDark ? 'rgba(248,113,113,0.3)' : '#fecaca'}`,
     borderRadius: '4px',
     padding: '8px 12px',
     marginTop: '12px',
     fontSize: '12px',
-    color: '#dc2626',
+    color: theme.error,
     textAlign: 'center',
   },
 
@@ -1628,7 +1633,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     gap: '6px',
     padding: '10px',
-    borderTop: '1px solid #f1f5f9',
+    borderTop: `1px solid ${theme.border}`,
   },
   phaseDot: {
     width: '6px',
@@ -1644,24 +1649,24 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '6px',
     marginTop: '20px',
     fontSize: '11px',
-    color: '#9ca3af',
+    color: theme.textSecondary,
     cursor: 'pointer',
   },
   launchAtLoginCheckbox: {
     width: '12px',
     height: '12px',
     cursor: 'pointer',
-    accentColor: '#9ca3af',
+    accentColor: theme.textSecondary,
   },
   launchAtLoginError: {
     fontSize: '10px',
-    color: '#9ca3af',
+    color: theme.textSecondary,
     marginTop: '4px',
     marginLeft: '18px',
   },
   launchAtLoginLink: {
-    color: '#3b82f6',
+    color: theme.info,
     cursor: 'pointer',
     textDecoration: 'underline',
   },
-};
+});

@@ -4,7 +4,7 @@
 // =============================================================================
 
 import { useEffect, useState, useCallback } from 'react';
-import { useTheme } from '../contexts/ThemeContext';
+import { useTheme, Theme } from '../contexts/ThemeContext';
 
 type VisionModelStatus = 'downloaded' | 'downloading' | 'missing';
 
@@ -31,6 +31,8 @@ export default function VisionSettings() {
   const [modelDownloadStatus, setModelDownloadStatus] = useState<Record<string, boolean>>({});
 
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
+
+  const styles = getStyles(theme);
 
   // Fetch initial state and subscribe to changes.
   useEffect(() => {
@@ -298,7 +300,7 @@ export default function VisionSettings() {
 }
 
 // Styles for the component.
-const styles: Record<string, React.CSSProperties> = {
+const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   container: {
     padding: '24px',
     maxWidth: '600px',
@@ -308,19 +310,21 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: '16px',
     fontSize: '20px',
     fontWeight: 600,
+    color: theme.text,
   },
   subheading: {
     marginTop: 0,
     marginBottom: '12px',
     fontSize: '16px',
     fontWeight: 600,
+    color: theme.text,
   },
   notAvailable: {
-    color: '#6b7280',
+    color: theme.textSecondary,
     fontStyle: 'italic',
   },
   statusCard: {
-    backgroundColor: '#f9fafb',
+    backgroundColor: theme.isDark ? theme.surface1 : '#f9fafb',
     borderRadius: '12px',
     padding: '16px',
     marginBottom: '20px',
@@ -333,22 +337,22 @@ const styles: Record<string, React.CSSProperties> = {
   },
   statusLabel: {
     fontSize: '14px',
-    color: '#374151',
+    color: theme.text,
   },
   statusValue: {
     fontSize: '14px',
     fontWeight: 500,
   },
   errorCard: {
-    backgroundColor: '#fef2f2',
-    border: '1px solid #fecaca',
+    backgroundColor: theme.errorBg,
+    border: `1px solid ${theme.isDark ? 'rgba(248,113,113,0.3)' : '#fecaca'}`,
     borderRadius: '8px',
     padding: '12px',
     marginBottom: '20px',
   },
   errorText: {
     margin: 0,
-    color: '#dc2626',
+    color: theme.error,
     fontSize: '14px',
   },
   controlsSection: {
@@ -357,14 +361,14 @@ const styles: Record<string, React.CSSProperties> = {
   helpText: {
     marginBottom: '16px',
     fontSize: '14px',
-    color: '#6b7280',
+    color: theme.textSecondary,
   },
   downloadButtonSmall: {
     padding: '6px 12px',
     fontSize: '13px',
     fontWeight: 500,
     color: '#fff',
-    backgroundColor: '#111827',
+    backgroundColor: theme.isDark ? theme.surface3 : '#111827',
     border: 'none',
     borderRadius: '6px',
     cursor: 'pointer',
@@ -375,20 +379,20 @@ const styles: Record<string, React.CSSProperties> = {
   progressBar: {
     width: '100%',
     height: '8px',
-    backgroundColor: '#e5e7eb',
+    backgroundColor: theme.border,
     borderRadius: '4px',
     overflow: 'hidden',
     marginBottom: '8px',
   },
   progressFill: {
     height: '100%',
-    backgroundColor: '#3b82f6',
+    backgroundColor: theme.info,
     transition: 'width 0.3s ease',
   },
   progressText: {
     margin: 0,
     fontSize: '13px',
-    color: '#6b7280',
+    color: theme.textSecondary,
   },
   instructionsSection: {
     marginTop: '24px',
@@ -396,11 +400,11 @@ const styles: Record<string, React.CSSProperties> = {
   noteText: {
     marginTop: '16px',
     padding: '12px',
-    backgroundColor: '#fef3c7',
-    border: '1px solid #fde047',
+    backgroundColor: theme.warningBg,
+    border: `1px solid ${theme.isDark ? 'rgba(251,191,36,0.3)' : '#fde047'}`,
     borderRadius: '8px',
     fontSize: '13px',
-    color: '#92400e',
+    color: theme.isDark ? theme.warning : '#92400e',
   },
   modelsList: {
     marginTop: '16px',
@@ -411,8 +415,8 @@ const styles: Record<string, React.CSSProperties> = {
   modelItem: {
     padding: '16px',
     borderRadius: '8px',
-    border: '1px solid #e5e7eb',
-    backgroundColor: '#f9fafb',
+    border: `1px solid ${theme.border}`,
+    backgroundColor: theme.isDark ? theme.surface1 : '#f9fafb',
   },
   modelItemHeader: {
     display: 'flex',
@@ -423,7 +427,7 @@ const styles: Record<string, React.CSSProperties> = {
   modelItemName: {
     fontSize: '15px',
     fontWeight: 500,
-    color: '#111827',
+    color: theme.text,
     marginBottom: '4px',
     display: 'flex',
     alignItems: 'center',
@@ -431,7 +435,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   modelItemSize: {
     fontSize: '13px',
-    color: '#6b7280',
+    color: theme.textSecondary,
   },
   modelItemActions: {
     display: 'flex',
@@ -441,16 +445,16 @@ const styles: Record<string, React.CSSProperties> = {
   selectedBadge: {
     fontSize: '11px',
     fontWeight: 500,
-    color: '#3b82f6',
-    backgroundColor: '#dbeafe',
+    color: theme.info,
+    backgroundColor: theme.infoBg,
     padding: '2px 8px',
     borderRadius: '4px',
   },
   downloadedBadge: {
     fontSize: '11px',
     fontWeight: 500,
-    color: '#22c55e',
-    backgroundColor: '#dcfce7',
+    color: theme.success,
+    backgroundColor: theme.successBg,
     padding: '2px 8px',
     borderRadius: '4px',
   },
@@ -458,9 +462,9 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '6px 12px',
     fontSize: '13px',
     fontWeight: 500,
-    color: '#dc2626',
-    backgroundColor: '#fff',
-    border: '1px solid #fecaca',
+    color: theme.error,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.isDark ? 'rgba(248,113,113,0.3)' : '#fecaca'}`,
     borderRadius: '6px',
     cursor: 'pointer',
   },
@@ -468,13 +472,13 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '6px 12px',
     fontSize: '13px',
     fontWeight: 500,
-    color: '#111827',
-    backgroundColor: '#fff',
-    border: '1px solid #d1d5db',
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
   },
-};
+});
 
 
 
