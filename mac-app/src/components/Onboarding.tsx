@@ -62,6 +62,8 @@ interface PermissionsPhaseProps {
   onOpenScreenRecording: () => void;
   onRefreshPermissions: () => void;
   onContinue: () => void;
+  theme: Theme;
+  styles: Record<string, React.CSSProperties>;
 }
 
 function PermissionsPhase({
@@ -71,6 +73,8 @@ function PermissionsPhase({
   onOpenScreenRecording,
   onRefreshPermissions,
   onContinue,
+  theme,
+  styles,
 }: PermissionsPhaseProps) {
   // All three permissions are required to continue.
   const allGranted =
@@ -101,6 +105,8 @@ function PermissionsPhase({
           denied={permissions.microphone === 'denied'}
           onGrant={onRequestMicrophone}
           grantButtonText={permissions.microphone === 'denied' ? 'Open Settings' : 'Allow'}
+          theme={theme}
+          styles={styles}
         />
 
         {/* Accessibility */}
@@ -110,6 +116,8 @@ function PermissionsPhase({
           granted={permissions.accessibility}
           onGrant={onOpenAccessibility}
           grantButtonText="Open Settings"
+          theme={theme}
+          styles={styles}
         />
 
         {/* Screen Recording */}
@@ -120,6 +128,8 @@ function PermissionsPhase({
           onGrant={onOpenScreenRecording}
           grantButtonText="Open Settings"
           showRestartHint={!permissions.screenRecording}
+          theme={theme}
+          styles={styles}
         />
       </div>
 
@@ -152,9 +162,11 @@ interface PermissionRowProps {
   onGrant: () => void;
   grantButtonText?: string;
   showRestartHint?: boolean;
+  theme: Theme;
+  styles: Record<string, React.CSSProperties>;
 }
 
-function PermissionRow({ label, description, granted, denied, onGrant, grantButtonText = "Grant", showRestartHint }: PermissionRowProps) {
+function PermissionRow({ label, description, granted, denied, onGrant, grantButtonText = "Grant", showRestartHint, theme, styles }: PermissionRowProps) {
   const handleRestart = () => {
     window.electronAPI?.relaunch?.();
   };
@@ -211,6 +223,8 @@ interface ModelPhaseProps {
   onCancelDownload: () => void;
   onDeleteModel: (model: ModelSize) => void;
   onFinish: () => void;
+  theme: Theme;
+  styles: Record<string, React.CSSProperties>;
 }
 
 function ModelPhase({
@@ -223,6 +237,8 @@ function ModelPhase({
   onCancelDownload,
   onDeleteModel,
   onFinish,
+  theme,
+  styles,
 }: ModelPhaseProps) {
   const isSelectedModelDownloaded = modelDownloadStatus[selectedModel] || false;
 
@@ -246,14 +262,14 @@ function ModelPhase({
           
           // Determine border and shadow styles
           const isRecommended = info.recommended;
-          let borderColor = '#e5e7eb';
+          let borderColor = theme.border;
           let boxShadow = 'none';
 
           if (isSelected && isDownloaded) {
-            borderColor = '#14372A';
+            borderColor = theme.accent;
           } else if (isRecommended) {
             borderColor = theme.info; // Blue border for recommended
-            boxShadow = '0 2px 8px rgba(59, 130, 246, 0.15)'; // Subtle blue shadow
+            boxShadow = theme.isDark ? '0 2px 8px rgba(59, 130, 246, 0.1)' : '0 2px 8px rgba(59, 130, 246, 0.15)';
           }
 
           return (
@@ -264,7 +280,7 @@ function ModelPhase({
                 ...styles.modelCard,
                 borderColor,
                 boxShadow,
-                backgroundColor: isSelected && isDownloaded ? '#f0fdf4' : '#fff',
+                backgroundColor: isSelected && isDownloaded ? theme.successBg : (theme.isDark ? theme.surface1 : '#fff'),
                 cursor: isDownloaded ? 'pointer' : 'default',
               }}
             >
@@ -278,17 +294,17 @@ function ModelPhase({
               </div>
               <div style={styles.modelCardLeft}>
                 <div style={styles.modelCardHeader}>
-                  <span style={{ fontWeight: 500, fontSize: '12px', color: '#1a1a1a' }}>
+                  <span style={{ fontWeight: 500, fontSize: '12px', color: theme.text }}>
                     {info.name}
                   </span>
-                  <span style={{ fontSize: '11px', color: '#9ca3af' }}>
+                  <span style={{ fontSize: '11px', color: theme.textSecondary }}>
                     {info.size}
                   </span>
                   {info.recommended && (
                     <span style={styles.recommendedBadge}>Recommended</span>
                   )}
                 </div>
-                <div style={{ fontSize: '11px', color: '#6b7280' }}>
+                <div style={{ fontSize: '11px', color: theme.textSecondary }}>
                   {info.description}
                 </div>
                 {isDownloading && (
@@ -306,7 +322,7 @@ function ModelPhase({
                     {isSelected ? (
                       <span style={{ fontSize: '11px', color: theme.success, fontWeight: 500 }}>Active</span>
                     ) : (
-                      <span style={{ fontSize: '11px', color: '#9ca3af' }}>Ready</span>
+                      <span style={{ fontSize: '11px', color: theme.textSecondary }}>Ready</span>
                     )}
                     <button
                       onClick={(e) => { e.stopPropagation(); onDeleteModel(modelKey); }}
@@ -364,9 +380,11 @@ function ModelPhase({
 interface AccountPhaseProps {
   onFinish: () => void;
   onFinishReturning?: () => void; // Skip shortcuts for returning users
+  theme: Theme;
+  styles: Record<string, React.CSSProperties>;
 }
 
-function AccountPhase({ onFinish, onFinishReturning }: AccountPhaseProps) {
+function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPhaseProps) {
   const [email, setEmail] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [otpSent, setOtpSent] = useState(false);
@@ -626,6 +644,8 @@ function AccountPhase({ onFinish, onFinishReturning }: AccountPhaseProps) {
 
 interface ShortcutsPhaseProps {
   onFinish: () => void;
+  theme: Theme;
+  styles: Record<string, React.CSSProperties>;
 }
 
 interface ShortcutDef {
@@ -725,7 +745,7 @@ const DEFAULT_SHORTCUTS: ShortcutDef[] = [
   },
 ];
 
-function ShortcutsPhase({ onFinish }: ShortcutsPhaseProps) {
+function ShortcutsPhase({ onFinish, theme, styles }: ShortcutsPhaseProps) {
   const [completedCount, setCompletedCount] = useState(0);
   const [hasCompletedOnce, setHasCompletedOnce] = useState(false);
   const [shortcuts, setShortcuts] = useState<ShortcutDef[]>(DEFAULT_SHORTCUTS);
@@ -830,7 +850,7 @@ function ShortcutsPhase({ onFinish }: ShortcutsPhaseProps) {
               key={shortcut.id}
               style={{
                 ...styles.shortcutRow,
-                backgroundColor: isCompleted ? 'rgba(34, 197, 94, 0.1)' : isCurrent ? 'rgba(59, 130, 246, 0.1)' : 'transparent',
+                backgroundColor: isCompleted ? theme.successBg : isCurrent ? theme.infoBg : 'transparent',
                 borderRadius: '6px',
                 padding: '8px 10px',
                 margin: '0 -10px',
@@ -845,14 +865,14 @@ function ShortcutsPhase({ onFinish }: ShortcutsPhaseProps) {
                   alignItems: 'center',
                   justifyContent: 'center',
                   fontSize: '13px',
-                  color: isCompleted ? theme.success : isCurrent ? theme.info : '#9ca3af',
+                  color: isCompleted ? theme.success : isCurrent ? theme.info : theme.textSecondary,
                 }}>
                   {isCompleted ? '✓' : isCurrent ? '→' : '○'}
                 </span>
                 <span style={{
                   ...styles.shortcutAction,
                   fontSize: '13px',
-                  color: isCompleted ? theme.success : isCurrent ? '#111827' : '#9ca3af',
+                  color: isCompleted ? theme.success : isCurrent ? theme.text : theme.textSecondary,
                   fontWeight: isCurrent ? 600 : 400,
                 }}>
                   {shortcut.label}
@@ -866,9 +886,9 @@ function ShortcutsPhase({ onFinish }: ShortcutsPhaseProps) {
                       ...styles.kbd,
                       fontSize: '11px',
                       padding: '2px 6px',
-                      backgroundColor: isCompleted ? '#dcfce7' : isCurrent ? '#dbeafe' : '#f3f4f6',
-                      color: isCompleted ? '#16a34a' : isCurrent ? '#2563eb' : '#6b7280',
-                      borderColor: isCompleted ? '#bbf7d0' : isCurrent ? '#bfdbfe' : '#e5e7eb',
+                      backgroundColor: isCompleted ? theme.successBg : isCurrent ? theme.infoBg : (theme.isDark ? theme.surface2 : '#f3f4f6'),
+                      color: isCompleted ? theme.success : isCurrent ? theme.info : theme.textSecondary,
+                      borderColor: isCompleted ? (theme.isDark ? 'rgba(74,222,128,0.3)' : '#bbf7d0') : isCurrent ? (theme.isDark ? 'rgba(96,165,250,0.3)' : '#bfdbfe') : theme.border,
                     }}>
                       {key}
                     </kbd>
@@ -885,7 +905,7 @@ function ShortcutsPhase({ onFinish }: ShortcutsPhaseProps) {
               style={{
                 background: 'none',
                 border: 'none',
-                color: '#9ca3af',
+                color: theme.textSecondary,
                 fontSize: '10px',
                 cursor: 'pointer',
                 padding: '2px 6px',
@@ -1156,6 +1176,8 @@ export default function Onboarding() {
             onOpenScreenRecording={openScreenRecordingSettings}
             onRefreshPermissions={refreshPermissions}
             onContinue={goToModel}
+            theme={theme}
+            styles={styles}
           />
         );
 
@@ -1171,17 +1193,19 @@ export default function Onboarding() {
             onCancelDownload={cancelDownload}
             onDeleteModel={deleteModel}
             onFinish={goToAccount}
+            theme={theme}
+            styles={styles}
           />
         );
 
       case 'account':
         return (
-          <AccountPhase onFinish={goToShortcuts} onFinishReturning={finish} />
+          <AccountPhase onFinish={goToShortcuts} onFinishReturning={finish} theme={theme} styles={styles} />
         );
 
       case 'shortcuts':
         return (
-          <ShortcutsPhase onFinish={finish} />
+          <ShortcutsPhase onFinish={finish} theme={theme} styles={styles} />
         );
     }
   };
@@ -1191,7 +1215,7 @@ export default function Onboarding() {
       <div style={styles.content}>
         {renderPhase()}
       </div>
-      <PhaseIndicator current={phase} onGoToPhase={setPhase} />
+      <PhaseIndicator current={phase} onGoToPhase={setPhase} theme={theme} styles={styles} />
     </div>
   );
 }
@@ -1203,9 +1227,11 @@ export default function Onboarding() {
 interface PhaseIndicatorProps {
   current: OnboardingPhase;
   onGoToPhase: (phase: OnboardingPhase) => void;
+  theme: Theme;
+  styles: Record<string, React.CSSProperties>;
 }
 
-function PhaseIndicator({ current, onGoToPhase }: PhaseIndicatorProps) {
+function PhaseIndicator({ current, onGoToPhase, theme, styles }: PhaseIndicatorProps) {
   const allPhases: OnboardingPhase[] = ['permissions', 'model', 'account', 'shortcuts'];
   const currentIndex = allPhases.indexOf(current);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
@@ -1226,7 +1252,7 @@ function PhaseIndicator({ current, onGoToPhase }: PhaseIndicatorProps) {
             onClick={canClick ? () => onGoToPhase(p) : undefined}
             style={{
               ...styles.phaseDot,
-              backgroundColor: isFilled ? '#14372A' : '#d1d5db',
+              backgroundColor: isFilled ? theme.accent : theme.border,
               cursor: canClick ? 'pointer' : 'default',
               transition: 'background-color 0.15s ease',
             }}

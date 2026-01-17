@@ -264,6 +264,7 @@ const StackImageThumbnail = React.memo(function StackImageThumbnail({
   onHover: (id: number | null) => void;
   onPreview: (preview: { type: 'image'; data: string; width: number; height: number; itemId: number; stackId: string | null; figureLabel?: string } | null) => void;
 }) {
+  const { theme } = useTheme();
   const [loadedFullImageData, setLoadedFullImageData] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -335,7 +336,7 @@ const StackImageThumbnail = React.memo(function StackImageThumbnail({
             height: '50px',
             width: 'auto',
             borderRadius: '4px',
-            border: '1px solid #e0e0e0',
+            border: `1px solid ${theme.border}`,
             cursor: 'pointer',
           }}
         />
@@ -348,14 +349,14 @@ const StackImageThumbnail = React.memo(function StackImageThumbnail({
               ? `${Math.round(50 * (item.imageWidth / item.imageHeight))}px`
               : '66px',
             borderRadius: '4px',
-            border: '1px solid #e0e0e0',
-            backgroundColor: isLoading ? '#e8e8e8' : '#f0f0f0',
+            border: `1px solid ${theme.border}`,
+            backgroundColor: theme.isDark ? theme.surface2 : (isLoading ? '#e8e8e8' : '#f0f0f0'),
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             cursor: 'pointer',
             fontSize: '9px',
-            color: '#888',
+            color: theme.textSecondary,
           }}
         >
           {isLoading ? '...' : '📷'}
@@ -426,6 +427,7 @@ const DraggableDroppableRow = React.memo(function DraggableDroppableRow({
  * Used for displaying keyboard shortcuts with a visual key appearance.
  */
 function KeyCap({ children, small = false, style }: { children: React.ReactNode; small?: boolean; style?: React.CSSProperties }) {
+  const { theme } = useTheme();
   return (
     <span
       style={{
@@ -435,8 +437,8 @@ function KeyCap({ children, small = false, style }: { children: React.ReactNode;
         padding: small ? '1px 4px' : '2px 5px',
         fontSize: small ? '9px' : '10px',
         fontWeight: 500,
-        color: '#555',
-        backgroundColor: '#e8e8e8',
+        color: theme.isDark ? theme.text : '#555',
+        backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
         borderRadius: '3px',
         ...style,
       }}
@@ -489,7 +491,7 @@ function detectColor(text: string | null): string | null {
  * ClipboardHistory component - Alfred-style popup for clipboard history.
  */
 export default function ClipboardHistory() {
-  const { theme } = useTheme();
+  const { theme, toggleDarkMode } = useTheme();
   const [isVisible, setIsVisible] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
@@ -3144,6 +3146,7 @@ export default function ClipboardHistory() {
           height: '100%',
           boxSizing: 'border-box',
           backgroundColor: theme.bg,  // Use theme background color.
+          color: theme.text,  // Use theme text color for all descendants.
           // Native window roundedCorners handles the border radius.
           display: 'flex',
           flexDirection: 'column',
@@ -4162,12 +4165,12 @@ export default function ClipboardHistory() {
               style={{
                 width: '100%',
                 padding: `6px 10px 6px ${!searchQuery && !searchFocused ? '32px' : '10px'}`,
-                border: `1px solid ${theme.inputBorder}`,
+                border: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.08)' : theme.inputBorder}`,
                 borderRadius: '6px',
                 fontSize: '11px',
                 outline: 'none',
                 boxSizing: 'border-box',
-                backgroundColor: theme.inputBg,
+                backgroundColor: theme.isDark ? 'transparent' : theme.inputBg,
                 color: theme.text,
                 transition: 'padding-left 0.1s ease',
                 // @ts-ignore - prevent drag on input
@@ -4388,7 +4391,7 @@ export default function ClipboardHistory() {
             style={{
               padding: '40px',
               textAlign: 'center',
-              color: '#999',
+              color: theme.textSecondary,
             }}
           >
             No items found
@@ -4538,8 +4541,8 @@ export default function ClipboardHistory() {
                           : selectedIndex === index 
                             ? theme.bgSecondary 
                             : hoveredRowIndex === index
-                              ? (theme.isDark ? 'rgba(255,255,255,0.05)' : '#f9f9f9')
-                              : (theme.isDark ? 'rgba(255,255,255,0.03)' : '#ffffff'),
+                              ? (theme.isDark ? 'rgba(255,255,255,0.06)' : '#f9f9f9')
+                              : 'transparent',
                       // J/K highlight gets darker gray borders for definition
                       borderTop: selectedIndex === index ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
                       borderBottom: selectedIndex === index ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : `1px solid ${theme.border}`,
@@ -4610,7 +4613,7 @@ export default function ClipboardHistory() {
                             <div
                               style={{
                                 fontSize: '12px',
-                                fontWeight: '500',
+                                fontWeight: '400',
                                 color: theme.text,
                                 lineHeight: '1.5',
                                 marginBottom: '4px',
@@ -4622,7 +4625,7 @@ export default function ClipboardHistory() {
                             </div>
                           );
                         }
-                        
+
                         if (showSmartTruncation) {
                           // Smart truncation: show first words ... [expand] ... last words inline.
                           return (
@@ -4630,7 +4633,7 @@ export default function ClipboardHistory() {
                               <div
                                 style={{
                                   fontSize: '12px',
-                                  fontWeight: '500',
+                                  fontWeight: '400',
                                   color: theme.text,
                                   lineHeight: '1.5',
                                   display: 'inline',
@@ -4687,7 +4690,7 @@ export default function ClipboardHistory() {
                             ref={checkTextOverflow(stack.stackId)}
                             style={{
                               fontSize: '12px',
-                              fontWeight: '500',
+                              fontWeight: '400',
                               color: theme.text,
                               lineHeight: '1.5',
                               marginBottom: '4px',
@@ -4733,7 +4736,7 @@ export default function ClipboardHistory() {
                             padding: 0,
                             marginTop: '4px',
                             fontSize: '10px',
-                            color: '#888',
+                            color: theme.textSecondary,
                             cursor: 'pointer',
                           }}
                         >
@@ -5022,8 +5025,8 @@ export default function ClipboardHistory() {
                         : isRowSelected 
                           ? theme.bgSecondary 
                           : hoveredRowIndex === index
-                            ? (theme.isDark ? 'rgba(255,255,255,0.05)' : '#f9f9f9')
-                            : (theme.isDark ? 'rgba(255,255,255,0.03)' : '#ffffff'),
+                            ? (theme.isDark ? 'rgba(255,255,255,0.06)' : '#f9f9f9')
+                            : 'transparent',
                       // J/K highlight gets darker gray borders for definition
                       borderTop: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
                       borderBottom: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : `1px solid ${theme.border}`,
@@ -5106,7 +5109,7 @@ export default function ClipboardHistory() {
                               <div
                                 style={{
                                   fontSize: '12px',
-                                  fontWeight: '500',
+                                  fontWeight: '400',
                                   marginBottom: '4px',
                                   display: 'flex',
                                   alignItems: 'flex-start',
@@ -5120,7 +5123,7 @@ export default function ClipboardHistory() {
                                       height: '20px',
                                       borderRadius: '4px',
                                       backgroundColor: colorValue,
-                                      border: '1px solid #e0e0e0',
+                                      border: `1px solid ${theme.border}`,
                                       flexShrink: 0,
                                       marginTop: '1px',
                                     }}
@@ -5146,7 +5149,7 @@ export default function ClipboardHistory() {
                                       height: '20px',
                                       borderRadius: '4px',
                                       backgroundColor: colorValue,
-                                      border: '1px solid #e0e0e0',
+                                      border: `1px solid ${theme.border}`,
                                       flexShrink: 0,
                                       marginTop: '1px',
                                     }}
@@ -5156,7 +5159,7 @@ export default function ClipboardHistory() {
                                 <div
                                   style={{
                                     fontSize: '12px',
-                                    fontWeight: '500',
+                                    fontWeight: '400',
                                     color: theme.text,
                                     lineHeight: '1.5',
                                     flex: 1,
@@ -5213,7 +5216,7 @@ export default function ClipboardHistory() {
                             <div
                               style={{
                                 fontSize: '12px',
-                                fontWeight: '500',
+                                fontWeight: '400',
                                 marginBottom: '0',
                                 display: 'flex',
                                 alignItems: 'flex-start',
@@ -5227,7 +5230,7 @@ export default function ClipboardHistory() {
                                     height: '20px',
                                     borderRadius: '4px',
                                     backgroundColor: colorValue,
-                                    border: '1px solid #e0e0e0',
+                                    border: `1px solid ${theme.border}`,
                                     flexShrink: 0,
                                     marginTop: '1px',
                                   }}
@@ -5320,7 +5323,7 @@ export default function ClipboardHistory() {
                               marginTop: '4px',
                               marginBottom: '4px',
                               fontSize: '10px',
-                              color: '#888',
+                              color: theme.textSecondary,
                               cursor: 'pointer',
                             }}
                           >
@@ -5402,7 +5405,8 @@ export default function ClipboardHistory() {
                             <div
                               style={{
                                 fontSize: '12px',
-                                fontWeight: '500',
+                                fontWeight: '400',
+                                color: theme.text,
                               }}
                             >
                               Screenshot
@@ -5424,7 +5428,7 @@ export default function ClipboardHistory() {
                     <div
                       style={{
                         fontSize: '10px',
-                        color: '#666',
+                        color: theme.textSecondary,
                         display: 'flex',
                         alignItems: 'center',
                         gap: '4px',
@@ -6164,6 +6168,44 @@ export default function ClipboardHistory() {
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3" />
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            )}
+          </button>
+          {/* Dark/Light mode toggle */}
+          <button
+            onClick={toggleDarkMode}
+            title={theme.isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            style={{
+              width: '20px',
+              height: '20px',
+              padding: 0,
+              backgroundColor: 'transparent',
+              border: `1px solid ${theme.border}`,
+              borderRadius: '4px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            {theme.isDark ? (
+              // Sun icon for "switch to light"
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="5" />
+                <line x1="12" y1="1" x2="12" y2="3" />
+                <line x1="12" y1="21" x2="12" y2="23" />
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                <line x1="1" y1="12" x2="3" y2="12" />
+                <line x1="21" y1="12" x2="23" y2="12" />
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+              </svg>
+            ) : (
+              // Moon icon for "switch to dark"
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
               </svg>
             )}
           </button>
