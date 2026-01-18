@@ -59,10 +59,16 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const { theme } = useTheme();
 
   // State
+  // Path is now the identity - no numeric IDs
   const [readings, setReadings] = useState<ReadingMeta[]>([]);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedReading, setSelectedReading] = useState<Reading | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Edit mode state
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
   const [textSize, setTextSize] = useState<'small' | 'normal' | 'large'>(() => {
     const saved = localStorage.getItem('librarian-text-size');
     return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
@@ -75,8 +81,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     return saved ? parseInt(saved, 10) : 180;
   });
   const [isResizing, setIsResizing] = useState(false);
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [hoveredId, setHoveredId] = useState<number | null>(null);
+  const [hoveredPath, setHoveredPath] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Persist text size preference
@@ -137,6 +142,54 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     large: { base: '18px', h1: '32px', h2: '24px', h3: '20px' },
   };
 
+  // Check if content has been modified
+  const isDirty = isEditing && editContent !== (selectedReading?.content ?? '');
+
+  // Enter edit mode
+  const enterEditMode = useCallback(() => {
+    if (selectedReading) {
+      setEditContent(selectedReading.content);
+      setIsEditing(true);
+    }
+  }, [selectedReading]);
+
+  // Exit edit mode (discard changes)
+  const exitEditMode = useCallback(() => {
+    setIsEditing(false);
+    setEditContent('');
+  }, []);
+
+  // Save changes
+  const saveChanges = useCallback(async () => {
+    if (!selectedReading || !isDirty) return;
+
+    setIsSaving(true);
+    try {
+      const success = await window.librarianAPI?.saveReading(selectedReading.path, editContent);
+      if (success) {
+        setIsEditing(false);
+        setEditContent('');
+        // Reload the reading to get updated content
+        const updated = await window.librarianAPI?.getReading(selectedReading.path);
+        if (updated) {
+          setSelectedReading(updated);
+        }
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  }, [selectedReading, editContent, isDirty]);
+
+  // Handle navigation with unsaved changes
+  const handleSelectReading = useCallback((path: string) => {
+    if (isDirty) {
+      const confirmed = window.confirm('You have unsaved changes. Discard them?');
+      if (!confirmed) return;
+      exitEditMode();
+    }
+    setSelectedPath(path);
+  }, [isDirty, exitEditMode]);
+
   // Load readings on mount
   useEffect(() => {
     async function loadReadings() {
@@ -144,8 +197,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       if (result) {
         setReadings(result);
         // Select first reading if any
-        if (result.length > 0 && selectedId === null) {
-          setSelectedId(result[0].id);
+        if (result.length > 0 && selectedPath === null) {
+          setSelectedPath(result[0].path);
         }
       }
       setLoading(false);
@@ -156,36 +209,73 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   // Load selected reading content
   useEffect(() => {
     async function loadReading() {
-      if (selectedId === null) {
+      if (selectedPath === null) {
         setSelectedReading(null);
         return;
       }
-      const result = await window.librarianAPI?.getReading(selectedId);
+      const result = await window.librarianAPI?.getReading(selectedPath);
       setSelectedReading(result || null);
     }
     loadReading();
-  }, [selectedId]);
+  }, [selectedPath]);
 
   // Listen for new readings
   useEffect(() => {
     const unsubscribe = window.librarianAPI?.onReadingAdded((reading) => {
       setReadings((prev) => [
         {
-          id: reading.id,
+          path: reading.path,
           title: reading.title,
           context: reading.context,
           readingTime: reading.readingTime,
-          originalPath: reading.originalPath,
           createdAt: reading.createdAt,
+          mtime: reading.mtime,
         },
         ...prev,
       ]);
       // Auto-select the new reading
-      setSelectedId(reading.id);
+      setSelectedPath(reading.path);
     });
 
     return () => unsubscribe?.();
   }, []);
+
+  // Listen for reading updates (file content changed)
+  useEffect(() => {
+    const unsubscribe = window.librarianAPI?.onReadingUpdated((reading) => {
+      setReadings((prev) =>
+        prev.map((r) => (r.path === reading.path ? reading : r))
+      );
+      // Reload content if this is the selected reading
+      if (selectedPath === reading.path) {
+        window.librarianAPI?.getReading(reading.path).then((result) => {
+          setSelectedReading(result || null);
+        });
+      }
+    });
+
+    return () => unsubscribe?.();
+  }, [selectedPath]);
+
+  // Listen for reading removals (file deleted)
+  useEffect(() => {
+    const unsubscribe = window.librarianAPI?.onReadingRemoved((filePath) => {
+      setReadings((prev) => {
+        const newReadings = prev.filter((r) => r.path !== filePath);
+        // If removed reading was selected, select next one
+        if (selectedPath === filePath && newReadings.length > 0) {
+          const currentIndex = prev.findIndex((r) => r.path === filePath);
+          const newIndex = Math.min(currentIndex, newReadings.length - 1);
+          setSelectedPath(newReadings[newIndex].path);
+        } else if (selectedPath === filePath) {
+          setSelectedPath(null);
+        }
+        return newReadings;
+      });
+    });
+
+    return () => unsubscribe?.();
+  }, [selectedPath]);
 
   // Listen for fullscreen requests from URL scheme
   useEffect(() => {
@@ -199,6 +289,28 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   // Keyboard navigation
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      // Cmd+E - toggle edit mode
+      if (e.key === 'e' && e.metaKey && !e.shiftKey) {
+        e.preventDefault();
+        if (isEditing) {
+          if (isDirty) {
+            const confirmed = window.confirm('You have unsaved changes. Discard them?');
+            if (!confirmed) return;
+          }
+          exitEditMode();
+        } else if (selectedReading) {
+          enterEditMode();
+        }
+        return;
+      }
+
+      // Cmd+S - save while editing
+      if (e.key === 's' && e.metaKey && isEditing) {
+        e.preventDefault();
+        saveChanges();
+        return;
+      }
+
       // Cmd/Ctrl + = (plus) - increase text size
       if ((e.key === '=' || e.key === '+') && e.metaKey) {
         e.preventDefault();
@@ -221,23 +333,22 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
-      // Cmd + Delete/Backspace - show delete confirmation
-      if ((e.key === 'Backspace' || e.key === 'Delete') && e.metaKey && selectedId !== null) {
-        e.preventDefault();
-        setShowDeleteConfirm(true);
-        return;
-      }
-
-      // Toggle immersive/fullscreen mode with 'f'
-      if (e.key === 'f' && !e.metaKey && !e.ctrlKey) {
+      // Toggle immersive/fullscreen mode with 'f' (not in edit mode)
+      if (e.key === 'f' && !e.metaKey && !e.ctrlKey && !isEditing) {
         e.preventDefault();
         setIsFullScreen((prev) => !prev);
         return;
       }
 
-      // Escape: exit fullscreen first, then switch to clipboard
+      // Escape: exit edit mode first, then fullscreen, then switch to clipboard
       if (e.key === 'Escape') {
-        if (isFullScreen) {
+        if (isEditing) {
+          if (isDirty) {
+            const confirmed = window.confirm('You have unsaved changes. Discard them?');
+            if (!confirmed) return;
+          }
+          exitEditMode();
+        } else if (isFullScreen) {
           setIsFullScreen(false);
         } else {
           onSwitchToClipboard();
@@ -245,51 +356,42 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
+      // Don't handle navigation keys in edit mode (textarea needs them)
+      if (isEditing) return;
+
       if (readings.length === 0) return;
 
-      const currentIndex = readings.findIndex((r) => r.id === selectedId);
+      const currentIndex = readings.findIndex((r) => r.path === selectedPath);
 
       if (e.key === 'ArrowUp' || e.key === 'k') {
         e.preventDefault();
         const newIndex = Math.max(0, currentIndex - 1);
-        setSelectedId(readings[newIndex].id);
+        handleSelectReading(readings[newIndex].path);
       } else if (e.key === 'ArrowDown' || e.key === 'j') {
         e.preventDefault();
         const newIndex = Math.min(readings.length - 1, currentIndex + 1);
-        setSelectedId(readings[newIndex].id);
+        handleSelectReading(readings[newIndex].path);
       }
     }
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [readings, selectedId, isFullScreen, onSwitchToClipboard]);
+  }, [readings, selectedPath, isFullScreen, isEditing, isDirty, selectedReading, onSwitchToClipboard, enterEditMode, exitEditMode, saveChanges, handleSelectReading]);
 
   // Focus container on mount
   useEffect(() => {
     containerRef.current?.focus();
   }, []);
 
-  // Delete the selected reading
-  const handleDeleteReading = async () => {
-    if (selectedId === null) return;
+  // Listen for show reading requests (auto-show on new reading)
+  useEffect(() => {
+    const unsubscribe = window.librarianAPI?.onShowReading((readingPath) => {
+      setSelectedPath(readingPath);
+      setIsFullScreen(false);
+    });
 
-    const success = await window.librarianAPI?.deleteReading(selectedId);
-    if (success) {
-      // Remove from local state
-      const currentIndex = readings.findIndex((r) => r.id === selectedId);
-      const newReadings = readings.filter((r) => r.id !== selectedId);
-      setReadings(newReadings);
-
-      // Select next reading or previous if at end
-      if (newReadings.length > 0) {
-        const newIndex = Math.min(currentIndex, newReadings.length - 1);
-        setSelectedId(newReadings[newIndex].id);
-      } else {
-        setSelectedId(null);
-      }
-    }
-    setShowDeleteConfirm(false);
-  };
+    return () => unsubscribe?.();
+  }, []);
 
   // Group readings by date
   const groupedReadings = groupByDate(readings);
@@ -399,43 +501,62 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
         {Array.from(groupedReadings.entries()).map(([date, items]) => (
           <div key={date}>
+            {/* Date header with horizontal rule */}
             <div
               style={{
-                padding: '8px 12px 4px',
-                fontSize: '10px',
-                fontWeight: 600,
-                color: theme.textSecondary,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '12px 12px 6px',
               }}
             >
-              {date}
+              <span
+                style={{
+                  fontSize: '10px',
+                  fontWeight: 600,
+                  color: theme.textSecondary,
+                  flexShrink: 0,
+                }}
+              >
+                {date}
+              </span>
+              <div
+                style={{
+                  flex: 1,
+                  height: '1px',
+                  backgroundColor: theme.isDark
+                    ? 'rgba(255,255,255,0.08)'
+                    : 'rgba(0,0,0,0.08)',
+                }}
+              />
             </div>
+            {/* Reading items - indented under date */}
             {items.map((reading) => (
               <div
-                key={reading.id}
-                onClick={() => setSelectedId(reading.id)}
-                onMouseEnter={() => setHoveredId(reading.id)}
-                onMouseLeave={() => setHoveredId(null)}
+                key={reading.path}
+                onClick={() => handleSelectReading(reading.path)}
+                onMouseEnter={() => setHoveredPath(reading.path)}
+                onMouseLeave={() => setHoveredPath(null)}
                 style={{
-                  padding: '8px 12px',
+                  padding: '8px 8px 8px 16px',
                   cursor: 'pointer',
                   backgroundColor:
-                    reading.id === selectedId
+                    reading.path === selectedPath
                       ? theme.isDark
                         ? 'rgba(255,255,255,0.08)'
                         : 'rgba(0,0,0,0.05)'
                       : 'transparent',
                   borderLeft:
-                    reading.id === selectedId
+                    reading.path === selectedPath
                       ? `2px solid ${theme.accent}`
                       : '2px solid transparent',
-                  transition: 'all 0.1s ease',
+                  transition: 'background-color 0.1s ease',
                 }}
               >
                 <div
                   style={{
                     display: 'flex',
                     alignItems: 'flex-start',
-                    justifyContent: 'space-between',
                     gap: '4px',
                   }}
                 >
@@ -451,51 +572,51 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                   >
                     {reading.title}
                   </div>
-                  {reading.originalPath && hoveredId === reading.id && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        window.shellAPI?.showItemInFolder(reading.originalPath!);
-                      }}
-                      style={{
-                        padding: '0',
-                        width: '16px',
-                        height: '16px',
-                        fontSize: '10px',
-                        color: theme.textSecondary,
-                        backgroundColor: 'transparent',
-                        border: 'none',
-                        cursor: 'pointer',
-                        flexShrink: 0,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        borderRadius: '3px',
-                        opacity: 0.7,
-                        transition: 'opacity 0.1s ease',
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.opacity = '1';
-                        e.currentTarget.style.backgroundColor = theme.isDark
-                          ? 'rgba(255,255,255,0.1)'
-                          : 'rgba(0,0,0,0.05)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.opacity = '0.7';
-                        e.currentTarget.style.backgroundColor = 'transparent';
-                      }}
-                      title="Show in Finder"
+                  {/* Always reserve space for folder icon to prevent text shift */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      window.shellAPI?.showItemInFolder(reading.path);
+                    }}
+                    style={{
+                      padding: '0',
+                      width: '16px',
+                      height: '16px',
+                      fontSize: '10px',
+                      color: theme.textSecondary,
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      flexShrink: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderRadius: '3px',
+                      opacity: hoveredPath === reading.path ? 0.7 : 0,
+                      transition: 'opacity 0.1s ease',
+                      pointerEvents: hoveredPath === reading.path ? 'auto' : 'none',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.opacity = '1';
+                      e.currentTarget.style.backgroundColor = theme.isDark
+                        ? 'rgba(255,255,255,0.1)'
+                        : 'rgba(0,0,0,0.05)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.opacity = '0.7';
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                    title="Show in Finder"
+                  >
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 16 16"
+                      fill="currentColor"
                     >
-                      <svg
-                        width="12"
-                        height="12"
-                        viewBox="0 0 16 16"
-                        fill="currentColor"
-                      >
-                        <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9zM2.5 3a.5.5 0 0 0-.5.5V6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5zM14 7H2v5.5a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5V7z" />
-                      </svg>
-                    </button>
-                  )}
+                      <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9zM2.5 3a.5.5 0 0 0-.5.5V6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5zM14 7H2v5.5a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5V7z" />
+                    </svg>
+                  </button>
                 </div>
                 {reading.context && (
                   <div
@@ -597,8 +718,88 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               }}
             />
 
-            {/* Text size controls */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            {/* Edit mode controls */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {isEditing ? (
+                <>
+                  {/* Dirty indicator */}
+                  {isDirty && (
+                    <span
+                      style={{
+                        width: '6px',
+                        height: '6px',
+                        borderRadius: '50%',
+                        backgroundColor: theme.accent,
+                      }}
+                      title="Unsaved changes"
+                    />
+                  )}
+                  <button
+                    onClick={saveChanges}
+                    disabled={!isDirty || isSaving}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '12px',
+                      color: isDirty ? '#fff' : theme.textSecondary,
+                      backgroundColor: isDirty ? theme.accent : 'transparent',
+                      border: isDirty ? 'none' : `1px solid ${theme.border}`,
+                      borderRadius: '4px',
+                      cursor: isDirty ? 'pointer' : 'default',
+                      opacity: isSaving ? 0.6 : 1,
+                    }}
+                  >
+                    {isSaving ? 'Saving...' : 'Save'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (isDirty) {
+                        const confirmed = window.confirm('Discard changes?');
+                        if (!confirmed) return;
+                      }
+                      exitEditMode();
+                    }}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '12px',
+                      color: theme.textSecondary,
+                      backgroundColor: 'transparent',
+                      border: `1px solid ${theme.border}`,
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={enterEditMode}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: '12px',
+                    color: theme.textSecondary,
+                    backgroundColor: 'transparent',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                  }}
+                  title="Edit (⌘E)"
+                >
+                  Edit
+                </button>
+              )}
+
+              {/* Separator */}
+              <div
+                style={{
+                  width: '1px',
+                  height: '16px',
+                  backgroundColor: theme.border,
+                  margin: '0 4px',
+                }}
+              />
+
+              {/* Text size controls */}
               <button
                 onClick={() => setTextSize('small')}
                 style={{
@@ -661,8 +862,37 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
             style={{
               maxWidth: '600px',
               width: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              flex: isEditing ? 1 : 'none',
+              minHeight: isEditing ? 0 : 'auto',
             }}
           >
+            {isEditing ? (
+              /* Edit mode - textarea */
+              <textarea
+                value={editContent}
+                onChange={(e) => setEditContent(e.target.value)}
+                style={{
+                  flex: 1,
+                  minHeight: '400px',
+                  padding: '16px',
+                  fontSize: '14px',
+                  lineHeight: 1.6,
+                  fontFamily: "'SF Mono', Monaco, 'Cascadia Code', monospace",
+                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '8px',
+                  color: theme.text,
+                  resize: 'none',
+                  outline: 'none',
+                }}
+                placeholder="Write your markdown here..."
+                autoFocus
+              />
+            ) : (
+              /* View mode - markdown renderer */
+              <>
             {/* Content - markdown renders the title */}
             <div
               className="librarian-content"
@@ -869,6 +1099,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
             </div>
             {/* Spacer for scroll breathing room - allows scrolling last content up */}
             <div style={{ height: '50vh', flexShrink: 0 }} />
+              </>
+            )}
           </div>
         ) : (
           <div
@@ -886,73 +1118,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         </div>
       </div>
 
-      {/* Delete Confirmation Modal */}
-      {showDeleteConfirm && selectedReading && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.5)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-          }}
-          onClick={() => setShowDeleteConfirm(false)}
-        >
-          <div
-            style={{
-              backgroundColor: theme.bg,
-              borderRadius: '12px',
-              padding: '20px',
-              maxWidth: '360px',
-              width: '90%',
-              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
-              border: `1px solid ${theme.border}`,
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 style={{ margin: '0 0 8px 0', fontSize: '15px', fontWeight: 600, color: theme.text }}>
-              Delete Reading?
-            </h3>
-            <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: theme.textSecondary, lineHeight: 1.5 }}>
-              "{selectedReading.title}" will be permanently deleted.
-            </p>
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => setShowDeleteConfirm(false)}
-                style={{
-                  padding: '6px 12px',
-                  fontSize: '13px',
-                  fontWeight: 500,
-                  color: theme.text,
-                  backgroundColor: 'transparent',
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDeleteReading}
-                style={{
-                  padding: '6px 12px',
-                  fontSize: '13px',
-                  fontWeight: 500,
-                  color: '#fff',
-                  backgroundColor: theme.error,
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                }}
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
