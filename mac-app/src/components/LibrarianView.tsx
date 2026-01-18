@@ -76,6 +76,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   });
   const [isResizing, setIsResizing] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [hoveredId, setHoveredId] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Persist text size preference
@@ -174,6 +175,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           title: reading.title,
           context: reading.context,
           readingTime: reading.readingTime,
+          originalPath: reading.originalPath,
           createdAt: reading.createdAt,
         },
         ...prev,
@@ -411,6 +413,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               <div
                 key={reading.id}
                 onClick={() => setSelectedId(reading.id)}
+                onMouseEnter={() => setHoveredId(reading.id)}
+                onMouseLeave={() => setHoveredId(null)}
                 style={{
                   padding: '8px 12px',
                   cursor: 'pointer',
@@ -429,13 +433,69 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               >
                 <div
                   style={{
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    color: theme.text,
-                    lineHeight: 1.3,
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    justifyContent: 'space-between',
+                    gap: '4px',
                   }}
                 >
-                  {reading.title}
+                  <div
+                    style={{
+                      fontSize: '12px',
+                      fontWeight: 500,
+                      color: theme.text,
+                      lineHeight: 1.3,
+                      flex: 1,
+                      minWidth: 0,
+                    }}
+                  >
+                    {reading.title}
+                  </div>
+                  {reading.originalPath && hoveredId === reading.id && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        window.shellAPI?.showItemInFolder(reading.originalPath!);
+                      }}
+                      style={{
+                        padding: '0',
+                        width: '16px',
+                        height: '16px',
+                        fontSize: '10px',
+                        color: theme.textSecondary,
+                        backgroundColor: 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderRadius: '3px',
+                        opacity: 0.7,
+                        transition: 'opacity 0.1s ease',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.opacity = '1';
+                        e.currentTarget.style.backgroundColor = theme.isDark
+                          ? 'rgba(255,255,255,0.1)'
+                          : 'rgba(0,0,0,0.05)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.opacity = '0.7';
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                      title="Show in Finder"
+                    >
+                      <svg
+                        width="12"
+                        height="12"
+                        viewBox="0 0 16 16"
+                        fill="currentColor"
+                      >
+                        <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9zM2.5 3a.5.5 0 0 0-.5.5V6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5zM14 7H2v5.5a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5V7z" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
                 {reading.context && (
                   <div
@@ -501,7 +561,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               alignItems: 'center',
               justifyContent: 'space-between',
               gap: '8px',
-              padding: '8px 16px',
+              padding: isFullScreen ? '24px 16px 8px 16px' : '8px 16px',
               backgroundColor: theme.bg,
               flexShrink: 0,
             }}

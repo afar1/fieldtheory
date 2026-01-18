@@ -1982,6 +1982,8 @@ type QuotaAPI = typeof quotaAPI;
 const shellAPI = {
   openExternal: (url: string): Promise<void> =>
     ipcRenderer.invoke('shell:openExternal', url),
+  showItemInFolder: (fullPath: string): Promise<void> =>
+    ipcRenderer.invoke('shell:showItemInFolder', fullPath),
 };
 
 type ShellAPI = typeof shellAPI;
@@ -2199,6 +2201,9 @@ const librarianAPI = {
   // Auto-show on new reading settings
   getAutoShowEnabled: (): Promise<boolean> => ipcRenderer.invoke('librarian:getAutoShowEnabled'),
   setAutoShowEnabled: (enabled: boolean): Promise<void> => ipcRenderer.invoke('librarian:setAutoShowEnabled', enabled),
+
+  // Get Claude config file path
+  getClaudeConfigPath: (): Promise<string> => ipcRenderer.invoke('librarian:getClaudeConfigPath'),
 };
 
 type LibrarianAPI = typeof librarianAPI;
