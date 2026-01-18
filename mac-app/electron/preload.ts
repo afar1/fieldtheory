@@ -54,19 +54,6 @@ const TranscribeIPCChannels = {
   ADD_TO_STACK: 'transcribe:addToStack',
 } as const;
 
-const VisionIPCChannels = {
-  GET_MODEL_STATUS: 'vision:getModelStatus',
-  DOWNLOAD_MODEL: 'vision:downloadModel',
-  DELETE_MODEL: 'vision:deleteModel',
-  GET_AVAILABLE_MODELS: 'vision:getAvailableModels',
-  GET_MODEL_DOWNLOAD_STATUS: 'vision:getModelDownloadStatus',
-  GET_SELECTED_MODEL: 'vision:getSelectedModel',
-  SET_SELECTED_MODEL: 'vision:setSelectedModel',
-  MODEL_DOWNLOAD_PROGRESS: 'vision:modelDownloadProgress',
-  DESCRIPTION_READY: 'vision:descriptionReady',
-  ERROR: 'vision:error',
-} as const;
-
 const ClipboardIPCChannels = {
   QUERY_ITEMS: 'clipboard:queryItems',
   GET_ITEM: 'clipboard:getItem',
@@ -109,12 +96,6 @@ const ClipboardIPCChannels = {
   GET_USE_LOCAL_LLM: 'clipboard:getUseLocalLLM',
   SET_USE_LOCAL_LLM: 'clipboard:setUseLocalLLM',
 
-  // System prompt customization for Engineer feature
-  GET_SYSTEM_PROMPT: 'clipboard:getSystemPrompt',
-  SET_SYSTEM_PROMPT: 'clipboard:setSystemPrompt',
-  RESET_SYSTEM_PROMPT: 'clipboard:resetSystemPrompt',
-  GET_DEFAULT_SYSTEM_PROMPT: 'clipboard:getDefaultSystemPrompt',
-  
   // Improved content management
   SAVE_IMPROVED_CONTENT: 'clipboard:saveImprovedContent',
   CLEAR_IMPROVED_CONTENT: 'clipboard:clearImprovedContent',
@@ -226,15 +207,6 @@ type SoundOption = {
 type ModelInfo = {
   name: string;
   url: string;
-  sizeBytes: number;
-  description: string;
-};
-
-type VisionModelStatus = 'downloaded' | 'downloading' | 'missing';
-
-type VisionModelInfo = {
-  name: string;
-  repo: string;
   sizeBytes: number;
   description: string;
 };
@@ -563,19 +535,6 @@ export interface TranscribeAPI {
   onStackChanged: (callback: (count: number) => void) => () => void;
 }
 
-export interface VisionAPI {
-  getModelStatus: () => Promise<VisionModelStatus>;
-  downloadModel: (modelSize?: string) => Promise<void>;
-  deleteModel: (modelSize: string) => Promise<boolean>;
-  getAvailableModels: () => Promise<Record<string, VisionModelInfo>>;
-  getModelDownloadStatus: () => Promise<Record<string, boolean>>;
-  getSelectedModel: () => Promise<string>;
-  setSelectedModel: (modelSize: string) => Promise<void>;
-  onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
-  onDescriptionReady: (callback: (itemId: number, description: string) => void) => () => void;
-  onError: (callback: (itemId: number, error: string) => void) => () => void;
-}
-
 export interface ClipboardAPI {
   queryItems: (options?: ClipboardQueryOptions) => Promise<ClipboardItem[]>;
   getItem: (id: number) => Promise<ClipboardItem | null>;
@@ -613,10 +572,7 @@ export interface ClipboardAPI {
   getUniqueStacks: () => Promise<StackInfo[]>;
   updateStackId: (itemIds: number[], stackId: string | null) => Promise<void>;
   startDrag: (stackId: string) => Promise<void>;
-  
-  // Engineer feature - refine prompts using AI
-  engineerStack: (stackId: string) => Promise<EngineerResult>;
-  
+
   // All-time stats for footer display
   getAllTimeStats: () => Promise<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>;
   incrementImprovedCount: () => Promise<number>;
@@ -639,12 +595,6 @@ export interface ClipboardAPI {
   setUseLocalLLM: (useLocal: boolean) => Promise<{ success: boolean; error?: string }>;
   onLocalLLMDownloadProgress: (callback: (data: { model: string; downloaded: number; total: number }) => void) => () => void;
 
-  // System prompt customization for Engineer feature
-  getSystemPrompt: () => Promise<{ prompt: string; isCustom: boolean }>;
-  setSystemPrompt: (prompt: string) => Promise<{ success: boolean; error?: string }>;
-  resetSystemPrompt: () => Promise<{ success: boolean; error?: string }>;
-  getDefaultSystemPrompt: () => Promise<{ prompt: string }>;
-  
   // Improved content management - store/clear improved versions of transcriptions
   saveImprovedContent: (itemId: number, improvedContent: string) => Promise<{ success: boolean; error?: string }>;
   clearImprovedContent: (itemId: number) => Promise<{ success: boolean; error?: string }>;
@@ -1126,11 +1076,6 @@ const clipboardAPI: ClipboardAPI = {
     return ipcRenderer.invoke('clipboard:startDrag', stackId);
   },
 
-  // Engineer feature - refine prompts using AI
-  engineerStack: async (stackId: string): Promise<EngineerResult> => {
-    return ipcRenderer.invoke('clipboard:engineerStack', stackId);
-  },
-
   // All-time stats for footer display
   getAllTimeStats: async (): Promise<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }> => {
     return ipcRenderer.invoke('clipboard:getAllTimeStats');
@@ -1202,23 +1147,6 @@ const clipboardAPI: ClipboardAPI = {
     return () => {
       ipcRenderer.removeListener('local-llm:download-progress', handler);
     };
-  },
-
-  // System prompt customization for Engineer feature
-  getSystemPrompt: async (): Promise<{ prompt: string; isCustom: boolean }> => {
-    return ipcRenderer.invoke(ClipboardIPCChannels.GET_SYSTEM_PROMPT);
-  },
-
-  setSystemPrompt: async (prompt: string): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke(ClipboardIPCChannels.SET_SYSTEM_PROMPT, prompt);
-  },
-
-  resetSystemPrompt: async (): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke(ClipboardIPCChannels.RESET_SYSTEM_PROMPT);
-  },
-
-  getDefaultSystemPrompt: async (): Promise<{ prompt: string }> => {
-    return ipcRenderer.invoke(ClipboardIPCChannels.GET_DEFAULT_SYSTEM_PROMPT);
   },
 
   // Improved content management - store/clear improved versions of transcriptions
@@ -1372,72 +1300,6 @@ const clipboardAPI: ClipboardAPI = {
     ipcRenderer.on('clipboard:tasksTabToggled', handler);
     return () => {
       ipcRenderer.removeListener('clipboard:tasksTabToggled', handler);
-    };
-  },
-};
-
-const visionAPI: VisionAPI = {
-  getModelStatus: async (): Promise<VisionModelStatus> => {
-    return ipcRenderer.invoke(VisionIPCChannels.GET_MODEL_STATUS);
-  },
-
-  downloadModel: async (modelSize?: string): Promise<void> => {
-    return ipcRenderer.invoke(VisionIPCChannels.DOWNLOAD_MODEL, modelSize);
-  },
-
-  deleteModel: async (modelSize: string): Promise<boolean> => {
-    return ipcRenderer.invoke(VisionIPCChannels.DELETE_MODEL, modelSize);
-  },
-
-  getAvailableModels: async (): Promise<Record<string, VisionModelInfo>> => {
-    return ipcRenderer.invoke(VisionIPCChannels.GET_AVAILABLE_MODELS);
-  },
-
-  getModelDownloadStatus: async (): Promise<Record<string, boolean>> => {
-    return ipcRenderer.invoke(VisionIPCChannels.GET_MODEL_DOWNLOAD_STATUS);
-  },
-
-  getSelectedModel: async (): Promise<string> => {
-    return ipcRenderer.invoke(VisionIPCChannels.GET_SELECTED_MODEL);
-  },
-
-  setSelectedModel: async (modelSize: string): Promise<void> => {
-    return ipcRenderer.invoke(VisionIPCChannels.SET_SELECTED_MODEL, modelSize);
-  },
-
-  onModelDownloadProgress: (callback: (downloaded: number, total: number) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, downloaded: number, total: number) => {
-      callback(downloaded, total);
-    };
-
-    ipcRenderer.on(VisionIPCChannels.MODEL_DOWNLOAD_PROGRESS, handler);
-
-    return () => {
-      ipcRenderer.removeListener(VisionIPCChannels.MODEL_DOWNLOAD_PROGRESS, handler);
-    };
-  },
-
-  onDescriptionReady: (callback: (itemId: number, description: string) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, itemId: number, description: string) => {
-      callback(itemId, description);
-    };
-
-    ipcRenderer.on(VisionIPCChannels.DESCRIPTION_READY, handler);
-
-    return () => {
-      ipcRenderer.removeListener(VisionIPCChannels.DESCRIPTION_READY, handler);
-    };
-  },
-
-  onError: (callback: (itemId: number, error: string) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, itemId: number, error: string) => {
-      callback(itemId, error);
-    };
-
-    ipcRenderer.on(VisionIPCChannels.ERROR, handler);
-
-    return () => {
-      ipcRenderer.removeListener(VisionIPCChannels.ERROR, handler);
     };
   },
 };
@@ -2301,7 +2163,6 @@ declare global {
     audioAPI: AudioAPI;
     transcribeAPI: TranscribeAPI;
     clipboardAPI: ClipboardAPI;
-    visionAPI: VisionAPI;
     permissionsAPI: PermissionsAPI;
     onboardingAPI: OnboardingAPI;
     updaterAPI: UpdaterAPI;

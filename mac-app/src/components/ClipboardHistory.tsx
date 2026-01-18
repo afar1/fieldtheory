@@ -11,7 +11,6 @@ import SharedContextView from './SharedContextView';
 import DMsView from './DMsView';
 import HotMicView from './HotMicView';
 import PopularCommands from './PopularCommands';
-import DataPolicyNotice from './DataPolicyNotice';
 import ReleaseNotesPopup from './ReleaseNotesPopup';
 import type { SketchViewHandle } from './SketchView';
 import { FEATURE_HOT_MIC_ENABLED, FEATURE_IMPROVE_ENABLED, FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED } from '../featureFlags';
@@ -915,8 +914,8 @@ export default function ClipboardHistory() {
         // Also get the cached tier and percentage for determining what to show.
         const quotas = await window.quotaAPI?.getQuotas();
         if (quotas) {
-          // Pro users have unlimited (Infinity) limits.
-          const isPro = quotas.priorityMic.limit === Infinity;
+          // Use the tier directly from the quota API
+          const isPro = quotas.tier === 'pro';
           setCachedTier(isPro ? 'pro' : 'free');
           
           // Track max percentage for Upgrade visibility (show at >= 50%).
@@ -3690,41 +3689,6 @@ export default function ClipboardHistory() {
             </button>
           )}
           
-          {/* Commands button */}
-          <button
-            onClick={() => setViewMode('commands')}
-            tabIndex={0}
-            style={{
-              padding: '5px 6px',
-              fontSize: '9px',
-              fontWeight: 500,
-              backgroundColor: viewMode === 'commands' ? theme.accent : 'transparent',
-              color: viewMode === 'commands' ? '#fff' : theme.textSecondary,
-              border: 'none',
-              borderRadius: '3px',
-              cursor: 'pointer',
-              transition: 'all 0.15s ease',
-              outline: 'none',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '2px',
-            }}
-            onMouseEnter={(e) => {
-              if (viewMode !== 'commands') {
-                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (viewMode !== 'commands') {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }
-            }}
-            title="Popular Commands (C)"
-          >
-            <span style={{ fontWeight: 400, opacity: 0.7 }}>/</span>
-            Popular Commands
-          </button>
-          
           {/* Feedback button */}
           <button
             onClick={() => setViewMode('feedback')}
@@ -3773,6 +3737,41 @@ export default function ClipboardHistory() {
                 backgroundColor: theme.info,
               }} />
             )}
+          </button>
+
+          {/* Commands button */}
+          <button
+            onClick={() => setViewMode('commands')}
+            tabIndex={0}
+            style={{
+              padding: '5px 6px',
+              fontSize: '9px',
+              fontWeight: 500,
+              backgroundColor: viewMode === 'commands' ? theme.accent : 'transparent',
+              color: viewMode === 'commands' ? '#fff' : theme.textSecondary,
+              border: 'none',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              outline: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '2px',
+            }}
+            onMouseEnter={(e) => {
+              if (viewMode !== 'commands') {
+                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (viewMode !== 'commands') {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }
+            }}
+            title="Popular Commands (C)"
+          >
+            <span style={{ fontWeight: 400, opacity: 0.7 }}>/</span>
+            Popular Commands
           </button>
           
           </div>
@@ -4165,12 +4164,12 @@ export default function ClipboardHistory() {
               style={{
                 width: '100%',
                 padding: `6px 10px 6px ${!searchQuery && !searchFocused ? '32px' : '10px'}`,
-                border: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.08)' : theme.inputBorder}`,
+                border: `1px solid ${theme.inputBorder}`,
                 borderRadius: '6px',
                 fontSize: '11px',
                 outline: 'none',
                 boxSizing: 'border-box',
-                backgroundColor: theme.isDark ? 'transparent' : theme.inputBg,
+                backgroundColor: theme.inputBg,
                 color: theme.text,
                 transition: 'padding-left 0.1s ease',
                 // @ts-ignore - prevent drag on input
@@ -4536,13 +4535,13 @@ export default function ClipboardHistory() {
                       padding: '12px 16px',
                       backgroundColor: recentlyStackedId === stack.stackId
                         ? theme.isDark ? 'rgba(45, 212, 191, 0.2)' : 'rgba(20, 184, 166, 0.15)'
-                        : stackItems.some(item => selectedIds.has(item.id)) 
-                          ? theme.selectedBg 
-                          : selectedIndex === index 
-                            ? theme.bgSecondary 
+                        : stackItems.some(item => selectedIds.has(item.id))
+                          ? theme.selectedBg
+                          : selectedIndex === index
+                            ? theme.hoverBg
                             : hoveredRowIndex === index
-                              ? (theme.isDark ? 'rgba(255,255,255,0.06)' : '#f9f9f9')
-                              : 'transparent',
+                              ? theme.hoverBg
+                              : theme.listItemBg,
                       // J/K highlight gets darker gray borders for definition
                       borderTop: selectedIndex === index ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
                       borderBottom: selectedIndex === index ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : `1px solid ${theme.border}`,
@@ -5020,13 +5019,13 @@ export default function ClipboardHistory() {
                     onClick={(e) => handleItemClick(item, index, e)}
                     style={{
                       padding: '12px 16px',
-                      backgroundColor: isInStack 
-                        ? theme.selectedBg 
-                        : isRowSelected 
-                          ? theme.bgSecondary 
+                      backgroundColor: isInStack
+                        ? theme.selectedBg
+                        : isRowSelected
+                          ? theme.hoverBg
                           : hoveredRowIndex === index
-                            ? (theme.isDark ? 'rgba(255,255,255,0.06)' : '#f9f9f9')
-                            : 'transparent',
+                            ? theme.hoverBg
+                            : theme.listItemBg,
                       // J/K highlight gets darker gray borders for definition
                       borderTop: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : '1px solid transparent',
                       borderBottom: isRowSelected ? `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.12)'}` : `1px solid ${theme.border}`,
@@ -5267,68 +5266,99 @@ export default function ClipboardHistory() {
                           );
                         })()}
                         
-                        {/* Improved badge and toggle - shown when there's improved content */}
-                        {(item.improvedContent || improveResult?.stackId === `item-${item.id}`) && (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                            <span style={{
-                              display: 'inline-block',
-                              fontSize: '9px',
-                              fontWeight: 600,
-                              color: theme.success,
-                              backgroundColor: theme.successBg,
-                              padding: '2px 6px',
-                              borderRadius: '3px',
-                            }}>
-                              {!item.useImprovedVersion ? 'Viewing original' : 'Improved'}
-                            </span>
+                        {/* Controls row: Improved/Original toggle + Show more/less */}
+                        {(itemTextIsOverflowing || itemExpanded || item.improvedContent || improveResult?.stackId === `item-${item.id}`) && (
+                          <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            marginTop: '4px',
+                            marginBottom: '4px',
+                          }}>
+                            {/* Left: Improved/Original toggle */}
+                            {(item.improvedContent || improveResult?.stackId === `item-${item.id}`) ? (
+                              <div style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+                                borderRadius: '4px',
+                                padding: '2px',
+                              }}>
+                                <button
+                                  tabIndex={-1}
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    if (item.useImprovedVersion) {
+                                      await window.clipboardAPI?.setUseImprovedVersion?.(item.id, false);
+                                      setItems(prev => prev.map(i =>
+                                        i.id === item.id ? { ...i, useImprovedVersion: false } : i
+                                      ));
+                                    }
+                                  }}
+                                  style={{
+                                    background: !item.useImprovedVersion ? theme.success : 'transparent',
+                                    border: 'none',
+                                    padding: '3px 8px',
+                                    fontSize: '9px',
+                                    fontWeight: 500,
+                                    color: !item.useImprovedVersion ? '#fff' : theme.textSecondary,
+                                    cursor: 'pointer',
+                                    borderRadius: '3px',
+                                    transition: 'all 0.15s ease',
+                                  }}
+                                >
+                                  Original
+                                </button>
+                                <button
+                                  tabIndex={-1}
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    if (!item.useImprovedVersion) {
+                                      await window.clipboardAPI?.setUseImprovedVersion?.(item.id, true);
+                                      setItems(prev => prev.map(i =>
+                                        i.id === item.id ? { ...i, useImprovedVersion: true } : i
+                                      ));
+                                    }
+                                  }}
+                                  style={{
+                                    background: item.useImprovedVersion ? theme.success : 'transparent',
+                                    border: 'none',
+                                    padding: '3px 8px',
+                                    fontSize: '9px',
+                                    fontWeight: 500,
+                                    color: item.useImprovedVersion ? '#fff' : theme.textSecondary,
+                                    cursor: 'pointer',
+                                    borderRadius: '3px',
+                                    transition: 'all 0.15s ease',
+                                  }}
+                                >
+                                  Improved
+                                </button>
+                              </div>
+                            ) : <div />}
+
+                            {/* Right: Show more/less button */}
                             <button
                               tabIndex={-1}
                               onMouseDown={(e) => e.preventDefault()}
-                              onClick={async (e) => {
+                              onClick={(e) => {
                                 e.stopPropagation();
-                                const newValue = !item.useImprovedVersion;
-                                await window.clipboardAPI?.setUseImprovedVersion?.(item.id, newValue);
-                                setItems(prev => prev.map(i => 
-                                  i.id === item.id ? { ...i, useImprovedVersion: newValue } : i
-                                ));
+                                toggleItemExpanded(item.id);
                               }}
                               style={{
                                 background: 'none',
                                 border: 'none',
                                 padding: 0,
-                                fontSize: '9px',
-                                color: theme.info,
+                                fontSize: '10px',
+                                color: theme.textSecondary,
                                 cursor: 'pointer',
-                                textDecoration: 'underline',
                               }}
                             >
-                              {!item.useImprovedVersion ? 'Show improved' : 'Show original'}
+                              {itemExpanded ? 'Show less' : 'Show more'}
                             </button>
                           </div>
-                        )}
-                        
-                        {/* Show more/less button - only when text is actually truncated or has improved result */}
-                        {(itemTextIsOverflowing || itemExpanded || item.improvedContent || improveResult?.stackId === `item-${item.id}`) && (
-                          <button
-                            tabIndex={-1}
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleItemExpanded(item.id);
-                            }}
-                            style={{
-                              background: 'none',
-                              border: 'none',
-                              padding: 0,
-                              marginTop: '4px',
-                              marginBottom: '4px',
-                              fontSize: '10px',
-                              color: theme.textSecondary,
-                              cursor: 'pointer',
-                            }}
-                          >
-                            {itemExpanded ? 'Show less' : 'Show more'}
-                          </button>
                         )}
                       </>
                     ) : (
@@ -5869,21 +5899,59 @@ export default function ClipboardHistory() {
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         }}
       >
-        {/* Left side: Plan info (quotas or stats) */}
-        {!showSettings ? (
-            // Plan info: Dev (quotas) or Dev Plus (analytics)
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                fontSize: '9px',
-                color: theme.textSecondary,
-                userSelect: 'none',
-                flex: 1,
-              }}
-            >
-              {authSession && cachedTier === 'pro' ? (
+        {/* Left side: Dark mode toggle + Plan info (quotas or stats) */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            fontSize: '9px',
+            color: theme.textSecondary,
+            userSelect: 'none',
+            flex: 1,
+          }}
+        >
+          {/* Dark/Light mode toggle - always visible */}
+          <button
+            onClick={toggleDarkMode}
+            title={theme.isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            style={{
+              width: '18px',
+              height: '18px',
+              padding: 0,
+              backgroundColor: 'transparent',
+              border: `1px solid ${theme.border}`,
+              borderRadius: '4px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transition: 'all 0.15s ease',
+              marginRight: '4px',
+            }}
+          >
+            {theme.isDark ? (
+              // Sun icon for "switch to light" - distinct radiating design
+              <svg width="10" height="10" viewBox="0 0 24 24" fill={theme.textSecondary} stroke="none">
+                <circle cx="12" cy="12" r="4" />
+                <rect x="11" y="1" width="2" height="4" rx="1" />
+                <rect x="11" y="19" width="2" height="4" rx="1" />
+                <rect x="19" y="11" width="4" height="2" rx="1" />
+                <rect x="1" y="11" width="4" height="2" rx="1" />
+                <rect x="17.5" y="4.1" width="2" height="4" rx="1" transform="rotate(45 18.5 6.1)" />
+                <rect x="4.5" y="15.9" width="2" height="4" rx="1" transform="rotate(45 5.5 17.9)" />
+                <rect x="15.9" y="17.5" width="4" height="2" rx="1" transform="rotate(45 17.9 18.5)" />
+                <rect x="4.1" y="4.5" width="4" height="2" rx="1" transform="rotate(45 6.1 5.5)" />
+              </svg>
+            ) : (
+              // Moon icon for "switch to dark"
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+              </svg>
+            )}
+          </button>
+          {/* Plan info - always show for logged in users */}
+          {authSession && cachedTier === 'pro' ? (
                 <>
                   <span style={{ fontWeight: 500 }}>Pro Plan:</span>
                   {statItems.length > 0 ? (
@@ -5896,8 +5964,8 @@ export default function ClipboardHistory() {
                         }}
                         onClick={nextStat}
                       >
-                        {formatNumber(statItems[currentStatIndex]?.value ?? 0)} {statItems[currentStatIndex]?.value === 1 
-                          ? statItems[currentStatIndex]?.singular 
+                        {formatNumber(statItems[currentStatIndex]?.value ?? 0)} {statItems[currentStatIndex]?.value === 1
+                          ? statItems[currentStatIndex]?.singular
                           : statItems[currentStatIndex]?.plural}
                       </span>
                       <span style={{ fontSize: '10px' }}>
@@ -5908,6 +5976,9 @@ export default function ClipboardHistory() {
                     <span style={{ opacity: 0.5 }}>No activity yet</span>
                   )}
                 </>
+              ) : authSession ? (
+                // Logged in but not pro - show nothing or basic info
+                <span style={{ fontWeight: 500, opacity: 0.7 }}>Basic Plan</span>
               ) : quotaUsage ? (
                 // Usage: show quotas with info icon and hover-to-upgrade
                 <div
@@ -5981,20 +6052,8 @@ export default function ClipboardHistory() {
                   )}
                 </div>
               ) : null}
-            </div>
-        ) : (
-          <div style={{ flex: 1 }} />
-        )}
+        </div>
 
-        {/* Center: Data policy notice */}
-        <DataPolicyNotice 
-          context={
-            viewMode === 'team' ? 'shared' : 
-            viewMode === 'feedback' ? 'feedback' : 
-            viewMode === 'hotmic' ? 'dm' :
-            'local'
-          } 
-        />
 
         {/* Right side: update notification OR version + settings button */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', fontSize: '9px', flex: 1 }}>
@@ -6168,44 +6227,6 @@ export default function ClipboardHistory() {
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="3" />
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-              </svg>
-            )}
-          </button>
-          {/* Dark/Light mode toggle */}
-          <button
-            onClick={toggleDarkMode}
-            title={theme.isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-            style={{
-              width: '20px',
-              height: '20px',
-              padding: 0,
-              backgroundColor: 'transparent',
-              border: `1px solid ${theme.border}`,
-              borderRadius: '4px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              transition: 'all 0.15s ease',
-            }}
-          >
-            {theme.isDark ? (
-              // Sun icon for "switch to light"
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="5" />
-                <line x1="12" y1="1" x2="12" y2="3" />
-                <line x1="12" y1="21" x2="12" y2="23" />
-                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-                <line x1="1" y1="12" x2="3" y2="12" />
-                <line x1="21" y1="12" x2="23" y2="12" />
-                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-              </svg>
-            ) : (
-              // Moon icon for "switch to dark"
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
               </svg>
             )}
           </button>

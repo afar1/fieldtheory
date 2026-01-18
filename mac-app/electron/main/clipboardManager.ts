@@ -242,7 +242,8 @@ export class ClipboardManager extends EventEmitter {
   private activeWindowCallback: ScreenshotCallback | null = null;
   private historyCallback: HistoryCallback | null = null;
   private onItemAddedCallback: ((id: number) => void) | null = null;
-  
+  private onClipboardChangeCallback: (() => void) | null = null;
+
   // Continuous Context mode state
   private continuousContextActive: boolean = false;
   private continuousContextStackId: string | null = null;
@@ -295,6 +296,14 @@ export class ClipboardManager extends EventEmitter {
    */
   setOnItemAdded(callback: (id: number) => void): void {
     this.onItemAddedCallback = callback;
+  }
+
+  /**
+   * Set callback to be invoked on any clipboard content change.
+   * Unlike onItemAdded, this fires even for duplicate content.
+   */
+  setOnClipboardChange(callback: () => void): void {
+    this.onClipboardChangeCallback = callback;
   }
 
   /**
@@ -524,10 +533,14 @@ export class ClipboardManager extends EventEmitter {
         const hash = this.hashContent(text);
         if (hash !== this.lastContentHash) {
           this.lastContentHash = hash;
+
+          // Notify clipboard change (fires even for duplicates)
+          this.onClipboardChangeCallback?.();
+
           const existing = this.db
             .prepare('SELECT id FROM clipboard_items WHERE content_hash = ?')
             .get(hash) as { id: number } | undefined;
-          
+
           if (!existing) {
             await this.storeText(text);
           }
@@ -542,10 +555,14 @@ export class ClipboardManager extends EventEmitter {
         const hash = this.hashContent(imageBuffer.toString('base64'));
         if (hash !== this.lastContentHash) {
           this.lastContentHash = hash;
+
+          // Notify clipboard change (fires even for duplicates)
+          this.onClipboardChangeCallback?.();
+
           const existing = this.db
             .prepare('SELECT id FROM clipboard_items WHERE content_hash = ?')
             .get(hash) as { id: number } | undefined;
-          
+
           if (!existing) {
             await this.storeImage(image, imageBuffer);
           }

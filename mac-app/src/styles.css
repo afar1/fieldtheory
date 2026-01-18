@@ -18,9 +18,12 @@ body {
 
 * {
   box-sizing: border-box;
-}
-
-button {
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* Allow text selection in inputs and textareas */
+input, textarea, [contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
 }

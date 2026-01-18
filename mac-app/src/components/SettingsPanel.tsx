@@ -13,6 +13,7 @@ import CommandsSettings from './CommandsSettings';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
 import { useTheme, Theme } from '../contexts/ThemeContext';
+import { accentPresets, AccentPreset } from '../design/tokens';
 
 interface SettingsPanelProps {
   onNavigateToSignIn?: () => void;
@@ -25,7 +26,7 @@ interface SettingsPanelProps {
  * clipboard history context.
  */
 export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback }: SettingsPanelProps) {
-  const { theme, toggleDarkMode } = useTheme();
+  const { theme, toggleDarkMode, accentPreset, setAccentPreset, darkModeIntensity, setDarkModeIntensity } = useTheme();
   // Permissions state
   const [permissions, setPermissions] = useState<{ accessibilityGranted: boolean } | null>(null);
   const [showPermissionsGate, setShowPermissionsGate] = useState(false);
@@ -1214,7 +1215,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     <div style={styles.container}>
       {permissionsWarning}
 
-      {/* Appearance Section - Dark mode toggle */}
+      {/* Appearance Section - Dark mode toggle, accent colors, intensity */}
       <div style={styles.section}>
         <SectionHeader title="Appearance" />
         <div style={styles.row}>
@@ -1231,6 +1232,73 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             <span style={{ ...styles.toggleKnob, transform: theme.isDark ? 'translateX(20px)' : 'translateX(2px)' }} />
           </button>
         </div>
+
+        {/* Accent Color Presets */}
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={styles.rowLabel}>Accent Color</span>
+            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+              Personalize your interface
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            {(Object.keys(accentPresets) as AccentPreset[]).map((preset) => {
+              const isSelected = preset === accentPreset;
+              const color = theme.isDark ? accentPresets[preset].dark : accentPresets[preset].light;
+              return (
+                <button
+                  key={preset}
+                  onClick={() => setAccentPreset(preset)}
+                  title={accentPresets[preset].name}
+                  style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '50%',
+                    backgroundColor: color,
+                    border: isSelected ? `2px solid ${theme.text}` : `2px solid transparent`,
+                    cursor: 'pointer',
+                    transition: 'transform 0.1s, border-color 0.15s',
+                    transform: isSelected ? 'scale(1.1)' : 'scale(1)',
+                    boxShadow: isSelected ? `0 0 0 2px ${theme.bg}` : 'none',
+                  }}
+                />
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Dark Mode Intensity Slider - only show when dark mode is enabled */}
+        {theme.isDark && (
+          <div style={styles.row}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1 }}>
+              <span style={styles.rowLabel}>Dark Mode Intensity</span>
+              <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                Adjust background darkness
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '11px', color: theme.textSecondary, width: '50px' }}>Lighter</span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={darkModeIntensity}
+                onChange={(e) => setDarkModeIntensity(parseInt(e.target.value, 10))}
+                style={{
+                  width: '100px',
+                  height: '4px',
+                  WebkitAppearance: 'none',
+                  appearance: 'none',
+                  background: `linear-gradient(to right, ${theme.accent} 0%, ${theme.accent} ${darkModeIntensity}%, ${theme.border} ${darkModeIntensity}%, ${theme.border} 100%)`,
+                  borderRadius: '2px',
+                  outline: 'none',
+                  cursor: 'pointer',
+                }}
+              />
+              <span style={{ fontSize: '11px', color: theme.textSecondary, width: '50px', textAlign: 'right' }}>Darker</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* System Access Section - Permission status with quick links to settings */}
