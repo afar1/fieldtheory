@@ -206,7 +206,9 @@ const StackImageThumbnail = React.memo(function StackImageThumbnail({
 export default function ClipboardHistory() {
   const { theme, toggleDarkMode } = useTheme();
   const [isVisible, setIsVisible] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
+  const [showSettings, setShowSettings] = useState(() => {
+    return localStorage.getItem('fieldTheoryShowSettings') === 'true';
+  });
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     // If user started a transcription, always show Fields on next open.
     const shouldShowFields = localStorage.getItem('shouldShowFieldsOnOpen') === 'true';
@@ -1210,6 +1212,11 @@ export default function ClipboardHistory() {
     });
   }, [viewMode]);
 
+  // Persist showSettings state when it changes
+  useEffect(() => {
+    localStorage.setItem('fieldTheoryShowSettings', showSettings ? 'true' : 'false');
+  }, [showSettings]);
+
   useEffect(() => {
     if (!supabase) {
       // If supabase is not configured, still mark session as initialized (with no auth).
@@ -1347,7 +1354,10 @@ export default function ClipboardHistory() {
       setSelectedIndex(0);
       setSelectedIds(new Set());
       setIsMultiSelect(false);
-      setShowSettings(false);
+
+      // Restore showSettings from localStorage - ensures we return to settings if that was the last view
+      const savedSettings = localStorage.getItem('fieldTheoryShowSettings') === 'true';
+      setShowSettings(savedSettings);
 
       // Restore viewMode from localStorage - ensures we return to the last viewed tab
       // even if the window was recreated or state got out of sync.
@@ -2059,6 +2069,12 @@ export default function ClipboardHistory() {
       }
 
       if (key === 'Escape') {
+        // If in settings, close the window directly
+        if (showSettings) {
+          e.preventDefault();
+          window.clipboardAPI?.closeWindow();
+          return;
+        }
         // If dragging, cancel the drag first
         if (activeDragId) {
           e.preventDefault();

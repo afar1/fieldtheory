@@ -164,8 +164,8 @@ export default function LibrarianSettings() {
         style={{
           padding: '16px',
           borderRadius: '8px',
-          backgroundColor: theme.isDark ? '#1a1a1a' : '#f9fafb',
-          border: `1px solid ${theme.isDark ? '#404040' : '#e5e7eb'}`,
+          backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
+          border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
         }}
       >
         {/* Watched directories list */}
@@ -199,8 +199,8 @@ export default function LibrarianSettings() {
                     padding: '8px 12px',
                     fontSize: '12px',
                     fontFamily: 'monospace',
-                    backgroundColor: theme.isDark ? '#2d2d2d' : '#fff',
-                    border: `1px solid ${theme.isDark ? '#404040' : '#d1d5db'}`,
+                    backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                    border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
                     borderRadius: '6px',
                     color: theme.text,
                     overflow: 'hidden',
@@ -218,7 +218,7 @@ export default function LibrarianSettings() {
                     fontWeight: 500,
                     color: theme.error,
                     backgroundColor: 'transparent',
-                    border: `1px solid ${theme.isDark ? '#404040' : '#d1d5db'}`,
+                    border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
                     borderRadius: '6px',
                     cursor: 'pointer',
                   }}
@@ -255,8 +255,8 @@ export default function LibrarianSettings() {
                 flex: 1,
                 padding: '8px 12px',
                 fontSize: '13px',
-                backgroundColor: theme.isDark ? '#2d2d2d' : '#fff',
-                border: `1px solid ${theme.isDark ? '#404040' : '#d1d5db'}`,
+                backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
                 borderRadius: '6px',
                 color: theme.text,
                 outline: 'none',
@@ -271,7 +271,7 @@ export default function LibrarianSettings() {
                 fontWeight: 500,
                 color: manualPath.trim() ? '#fff' : theme.textSecondary,
                 backgroundColor: manualPath.trim() ? theme.accent : 'transparent',
-                border: manualPath.trim() ? 'none' : `1px solid ${theme.isDark ? '#404040' : '#d1d5db'}`,
+                border: manualPath.trim() ? 'none' : `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
                 borderRadius: '6px',
                 cursor: manualPath.trim() ? 'pointer' : 'default',
               }}
@@ -314,8 +314,8 @@ export default function LibrarianSettings() {
           marginTop: '24px',
           padding: '16px',
           borderRadius: '8px',
-          backgroundColor: theme.isDark ? '#1a1a1a' : '#f9fafb',
-          border: `1px solid ${theme.isDark ? '#404040' : '#e5e7eb'}`,
+          backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
+          border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
         }}
       >
         <label
@@ -349,8 +349,8 @@ export default function LibrarianSettings() {
           marginTop: '24px',
           padding: '16px',
           borderRadius: '8px',
-          backgroundColor: theme.isDark ? '#1a1a1a' : '#f9fafb',
-          border: `1px solid ${theme.isDark ? '#404040' : '#e5e7eb'}`,
+          backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
+          border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
         }}
       >
         <div style={{ marginBottom: '12px' }}>
@@ -379,7 +379,7 @@ export default function LibrarianSettings() {
                 fontWeight: autoRunFrequency === option.value ? 600 : 400,
                 color: autoRunFrequency === option.value ? '#fff' : theme.text,
                 backgroundColor: autoRunFrequency === option.value ? theme.accent : 'transparent',
-                border: `1px solid ${autoRunFrequency === option.value ? theme.accent : (theme.isDark ? '#404040' : '#d1d5db')}`,
+                border: `1px solid ${autoRunFrequency === option.value ? theme.accent : (theme.isDark ? theme.border : '#d1d5db')}`,
                 borderRadius: '6px',
                 cursor: 'pointer',
               }}
@@ -403,8 +403,8 @@ export default function LibrarianSettings() {
                 : autoRunFrequency !== 'off'
                   ? theme.success
                   : theme.textSecondary,
-              backgroundColor: theme.isDark ? '#2d2d2d' : '#fff',
-              border: `1px solid ${claudeConfigError ? theme.error : (theme.isDark ? '#404040' : '#d1d5db')}`,
+              backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+              border: `1px solid ${claudeConfigError ? theme.error : (theme.isDark ? theme.border : '#d1d5db')}`,
               borderRadius: '6px',
             }}
           >
@@ -417,8 +417,8 @@ export default function LibrarianSettings() {
               padding: '6px 12px',
               fontSize: '12px',
               color: autoRunFrequency !== 'off' ? theme.text : theme.textSecondary,
-              backgroundColor: theme.isDark ? '#2d2d2d' : '#fff',
-              border: `1px solid ${theme.isDark ? '#404040' : '#d1d5db'}`,
+              backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+              border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
               borderRadius: '6px',
               cursor: autoRunFrequency !== 'off' ? 'pointer' : 'default',
               opacity: autoRunFrequency === 'off' ? 0.5 : 1,
@@ -478,7 +478,7 @@ export default function LibrarianSettings() {
             <pre
               style={{
                 padding: '12px',
-                backgroundColor: theme.isDark ? '#1a1a1a' : '#f3f4f6',
+                backgroundColor: theme.isDark ? theme.bgSecondary : '#f3f4f6',
                 borderRadius: '8px',
                 fontSize: '12px',
                 color: theme.text,
@@ -514,7 +514,7 @@ export default function LibrarianSettings() {
                   fontSize: '13px',
                   color: theme.text,
                   backgroundColor: 'transparent',
-                  border: `1px solid ${theme.isDark ? '#404040' : '#d1d5db'}`,
+                  border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
                   borderRadius: '6px',
                   cursor: 'pointer',
                 }}
