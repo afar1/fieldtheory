@@ -130,10 +130,6 @@ interface Preferences {
   useLocalLLM?: boolean;
   selectedLocalLLM?: string;  // Model size: '1b' or '3b'
 
-  // Custom system prompt for the Engineer feature.
-  // If set, overrides the default prompt loaded from file.
-  customSystemPrompt?: string;
-  
   // Sound settings - optional sounds for recording actions.
   // If soundsEnabled is false, no sounds play.
   soundsEnabled?: boolean;

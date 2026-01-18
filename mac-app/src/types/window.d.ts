@@ -52,21 +52,6 @@ type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
 type ModelStatus = 'downloaded' | 'downloading' | 'missing';
 
 /**
- * Vision model download status.
- */
-type VisionModelStatus = 'downloaded' | 'downloading' | 'missing';
-
-/**
- * Vision model information.
- */
-interface VisionModelInfo {
-  name: string;
-  repo: string;
-  sizeBytes: number;
-  description: string;
-}
-
-/**
  * Sound configuration for recording actions.
  */
 interface SoundConfig {
@@ -129,22 +114,6 @@ interface TranscribeAPI {
   onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
   onHotkeyChanged: (callback: (hotkey: string) => void) => () => void;
   onStackChanged: (callback: (count: number) => void) => () => void;
-}
-
-/**
- * The vision API exposed by the preload script.
- */
-interface VisionAPI {
-  getModelStatus: () => Promise<VisionModelStatus>;
-  downloadModel: (modelSize?: string) => Promise<void>;
-  deleteModel: (modelSize: string) => Promise<boolean>;
-  getAvailableModels: () => Promise<Record<string, VisionModelInfo>>;
-  getModelDownloadStatus: () => Promise<Record<string, boolean>>;
-  getSelectedModel: () => Promise<string>;
-  setSelectedModel: (modelSize: string) => Promise<void>;
-  onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
-  onDescriptionReady: (callback: (itemId: number, description: string) => void) => () => void;
-  onError: (callback: (itemId: number, error: string) => void) => () => void;
 }
 
 /**
@@ -263,8 +232,7 @@ interface ClipboardAPI {
   deleteItem: (id: number) => Promise<void>;
   restoreItem?: (item: ClipboardItem) => Promise<number>;
   pasteText?: (text: string, targetBundleId?: string) => Promise<void>;
-  engineerStack?: (stackId: string) => Promise<{ success: boolean; refinedPrompt?: string; error?: string }>;
-  
+
   // All-time stats for footer display
   getAllTimeStats?: () => Promise<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>;
   incrementImprovedCount?: () => Promise<number>;
@@ -319,12 +287,6 @@ interface ClipboardAPI {
   setUseLocalLLM?: (useLocal: boolean) => Promise<{ success: boolean; error?: string }>;
   onLocalLLMDownloadProgress?: (callback: (data: { model: string; downloaded: number; total: number }) => void) => () => void;
 
-  // System prompt customization for Engineer feature
-  getSystemPrompt?: () => Promise<{ prompt: string; isCustom: boolean }>;
-  setSystemPrompt?: (prompt: string) => Promise<{ success: boolean; error?: string }>;
-  resetSystemPrompt?: () => Promise<{ success: boolean; error?: string }>;
-  getDefaultSystemPrompt?: () => Promise<{ prompt: string }>;
-  
   // Improved content management - store/clear improved versions of transcriptions
   saveImprovedContent?: (itemId: number, improvedContent: string) => Promise<{ success: boolean; error?: string }>;
   clearImprovedContent?: (itemId: number) => Promise<{ success: boolean; error?: string }>;
@@ -885,7 +847,6 @@ declare global {
     hotkeyAPI?: HotkeyAPI;
     transcribeAPI?: TranscribeAPI;
     clipboardAPI?: ClipboardAPI;
-    visionAPI?: VisionAPI;
     permissionsAPI?: PermissionsAPI;
     electronAPI?: ElectronAPI;
     updaterAPI?: UpdaterAPI;
