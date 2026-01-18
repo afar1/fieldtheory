@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo, useImperativeHandle, forwardRef } from 'react';
 import { Excalidraw, exportToBlob } from '@excalidraw/excalidraw';
+import { useTheme } from '../contexts/ThemeContext';
 import '@excalidraw/excalidraw/index.css';
 
 type TranscriptItem = {
@@ -33,6 +34,7 @@ export interface SketchViewHandle {
 }
 
 const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onClose, existingSketch, backgroundImage, hideHeader, onHasChangesChange, associatedTranscripts, onUnstackTranscript }, ref) => {
+  const { theme } = useTheme();
   const [excalidrawAPI, setExcalidrawAPI] = useState<any>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
@@ -155,7 +157,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
         elements: activeElements,
         appState: {
           ...excalidrawAPI.getAppState(),
-          exportWithDarkMode: false,
+          exportWithDarkMode: theme.isDark,
           exportBackground: true,
           exportScale,
         },
@@ -185,7 +187,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
       alert('Failed to save sketch. Please try again.');
       setIsSaving(false);
     }
-  }, [excalidrawAPI, isSaving, onSave, backgroundImage]);
+  }, [excalidrawAPI, isSaving, onSave, backgroundImage, theme.isDark]);
 
   useImperativeHandle(ref, () => ({
     save: handleSave,
@@ -534,7 +536,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           key={backgroundImage ? `with-image-${backgroundImage.dataUrl.length}` : 'no-image'}
           excalidrawAPI={(api) => setExcalidrawAPI(api)}
           onChange={handleChange}
-          theme="light"
+          theme={theme.isDark ? "dark" : "light"}
           UIOptions={{
             canvasActions: {
               changeViewBackgroundColor: true,
@@ -716,24 +718,114 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
         alignItems: 'center',
         justifyContent: 'center',
         padding: '6px',
-        backgroundColor: '#fafafa',
-        borderTop: '1px solid #e0e0e0',
+        backgroundColor: theme.isDark ? theme.bgSecondary : '#fafafa',
+        borderTop: `1px solid ${theme.isDark ? theme.border : '#e0e0e0'}`,
         gap: '12px',
         fontSize: '10px',
-        color: '#888',
+        color: theme.isDark ? theme.textSecondary : '#888',
         flexWrap: 'wrap',
       }}>
-        <span>save <kbd style={kbdStyle}>⌘s</kbd></span>
-        <span>cancel <kbd style={kbdStyle}>esc</kbd></span>
-        <span style={{ margin: '0 4px', color: '#bbb' }}>|</span>
-        <span>select <kbd style={kbdStyle}>v</kbd></span>
-        <span>rect <kbd style={kbdStyle}>r</kbd></span>
-        <span>ellipse <kbd style={kbdStyle}>o</kbd></span>
-        <span>arrow <kbd style={kbdStyle}>a</kbd></span>
-        <span>line <kbd style={kbdStyle}>l</kbd></span>
-        <span>pencil <kbd style={kbdStyle}>p</kbd></span>
-        <span>text <kbd style={kbdStyle}>t</kbd></span>
-        <span>eraser <kbd style={kbdStyle}>e</kbd></span>
+        <span>save <kbd style={{
+          display: 'inline-block',
+          padding: '2px 5px',
+          fontSize: '10px',
+          fontWeight: 500,
+          color: theme.isDark ? theme.text : '#555',
+          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
+          borderRadius: '3px',
+          marginLeft: '4px',
+        }}>⌘s</kbd></span>
+        <span>cancel <kbd style={{
+          display: 'inline-block',
+          padding: '2px 5px',
+          fontSize: '10px',
+          fontWeight: 500,
+          color: theme.isDark ? theme.text : '#555',
+          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
+          borderRadius: '3px',
+          marginLeft: '4px',
+        }}>esc</kbd></span>
+        <span style={{ margin: '0 4px', color: theme.isDark ? theme.border : '#bbb' }}>|</span>
+        <span>select <kbd style={{
+          display: 'inline-block',
+          padding: '2px 5px',
+          fontSize: '10px',
+          fontWeight: 500,
+          color: theme.isDark ? theme.text : '#555',
+          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
+          borderRadius: '3px',
+          marginLeft: '4px',
+        }}>v</kbd></span>
+        <span>rect <kbd style={{
+          display: 'inline-block',
+          padding: '2px 5px',
+          fontSize: '10px',
+          fontWeight: 500,
+          color: theme.isDark ? theme.text : '#555',
+          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
+          borderRadius: '3px',
+          marginLeft: '4px',
+        }}>r</kbd></span>
+        <span>ellipse <kbd style={{
+          display: 'inline-block',
+          padding: '2px 5px',
+          fontSize: '10px',
+          fontWeight: 500,
+          color: theme.isDark ? theme.text : '#555',
+          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
+          borderRadius: '3px',
+          marginLeft: '4px',
+        }}>o</kbd></span>
+        <span>arrow <kbd style={{
+          display: 'inline-block',
+          padding: '2px 5px',
+          fontSize: '10px',
+          fontWeight: 500,
+          color: theme.isDark ? theme.text : '#555',
+          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
+          borderRadius: '3px',
+          marginLeft: '4px',
+        }}>a</kbd></span>
+        <span>line <kbd style={{
+          display: 'inline-block',
+          padding: '2px 5px',
+          fontSize: '10px',
+          fontWeight: 500,
+          color: theme.isDark ? theme.text : '#555',
+          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
+          borderRadius: '3px',
+          marginLeft: '4px',
+        }}>l</kbd></span>
+        <span>pencil <kbd style={{
+          display: 'inline-block',
+          padding: '2px 5px',
+          fontSize: '10px',
+          fontWeight: 500,
+          color: theme.isDark ? theme.text : '#555',
+          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
+          borderRadius: '3px',
+          marginLeft: '4px',
+        }}>p</kbd></span>
+        <span>text <kbd style={{
+          display: 'inline-block',
+          padding: '2px 5px',
+          fontSize: '10px',
+          fontWeight: 500,
+          color: theme.isDark ? theme.text : '#555',
+          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
+          borderRadius: '3px',
+          marginLeft: '4px',
+        }}>t</kbd></span>
+        <span>eraser <kbd style={{
+          display: 'inline-block',
+          padding: '2px 5px',
+          fontSize: '10px',
+          fontWeight: 500,
+          color: theme.isDark ? theme.text : '#555',
+          backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
+          borderRadius: '3px',
+          marginLeft: '4px',
+        }}>e</kbd></span>
       </div>
     </div>
   );
@@ -742,14 +834,3 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
 SketchView.displayName = 'SketchView';
 
 export default SketchView;
-
-const kbdStyle: React.CSSProperties = {
-  display: 'inline-block',
-  padding: '2px 5px',
-  fontSize: '10px',
-  fontWeight: 500,
-  color: '#555',
-  backgroundColor: '#e8e8e8',
-  borderRadius: '3px',
-  marginLeft: '4px',
-};

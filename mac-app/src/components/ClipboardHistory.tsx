@@ -33,219 +33,25 @@ import {
   useDraggable,
   useDroppable,
 } from '@dnd-kit/core';
-
-type ViewMode = 'clipboard' | 'todo' | 'team' | 'hotmic' | 'feedback' | 'commands' | 'sketch' | 'librarian';
-
-const TAB_LABELS: Record<ViewMode, string> = {
-  clipboard: 'Fields',
-  librarian: 'Librarian',
-  team: 'Shared Fields',
-  hotmic: 'Hot Mic',
-  todo: 'Tasks',
-  feedback: 'Feedback',
-  commands: 'Commands',
-  sketch: 'Sketch',
-};
-
-type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
-type ClipboardSource = 'mac' | 'ios';
-
-type ClipboardItem = {
-  id: number;
-  type: ClipboardItemType;
-  content: string | null;
-  improvedContent: string | null; // Improved version from Engineer feature
-  useImprovedVersion: boolean; // Toggle between improved and original text
-  imageData: string | null;
-  imageWidth: number | null;
-  imageHeight: number | null;
-  imageSize: number | null;
-  sourceApp: string | null;
-  sourceAppName: string | null;
-  wordCount: number | null;
-  charCount: number | null;
-  createdAt: number;
-  contentHash: string;
-  stackId: string | null;
-  source: ClipboardSource;
-  figureLabel: string | null; // Figure label for screenshots in stacks (e.g., "A", "B", "C")
-  figureId: string | null; // Unique 5-char alphanumeric ID for searchability (e.g., "k7xm2")
-  thumbnailData?: string | null;
-  needsLazyLoad?: boolean;
-};
-
-type StackInfo = {
-  stackId: string;
-  itemCount: number;
-  imageCount: number;
-  textCount: number;
-  createdAt: number;
-  firstTextPreview: string | null;
-};
-
-// A row in the list can be either a single item or a grouped stack
-type ListRow = 
-  | { type: 'item'; item: ClipboardItem }
-  | { type: 'stack'; stack: StackInfo; items: ClipboardItem[]; expanded: boolean };
-
-// Undo/redo action types for standard Cmd+Z / Cmd+Shift+Z behavior
-type UndoAction = 
-  | { type: 'delete'; items: ClipboardItem[] }
-  | { type: 'stack'; itemIds: number[]; previousStackIds: (string | null)[]; newStackId: string }
-  | { type: 'unstack'; itemIds: number[]; previousStackId: string };
-
-const MAX_UNDO = 20; // Limit undo stack size to prevent memory bloat with images
-
-type FilterType = 'all' | 'transcript' | 'screenshot';
-
-// Source filter: which device's items to show
-type SourceFilterType = 'all' | 'mac' | 'ios';
-
-// Query options for clipboard API
-type ClipboardQueryOptions = {
-  type?: ClipboardItemType;
-  search?: string;
-  limit?: number;
-  offset?: number;
-  source?: ClipboardSource;
-};
-
-type RunningApp = {
-  bundleId: string;
-  name: string;
-};
-
-/**
- * Format timestamp to relative time (e.g., "2 minutes ago").
- */
-function formatRelativeTime(timestamp: number): string {
-  const now = Date.now();
-  const diff = now - timestamp;
-  const seconds = Math.floor(diff / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-
-  if (days > 0) return `${days} day${days > 1 ? 's' : ''} ago`;
-  if (hours > 0) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
-  if (minutes > 0) return `${minutes} minute${minutes > 1 ? 's' : ''} ago`;
-  return 'just now';
-}
-
-/**
- * Format file size for images.
- */
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-/**
- * Truncate text preview (legacy - simple truncation).
- */
-function truncateText(text: string, maxLength: number = 100): string {
-  if (text.length <= maxLength) return text;
-  return text.substring(0, maxLength) + '...';
-}
-
-/**
- * Measure how many words fit in N lines by creating a temporary measurement element.
- * Uses actual DOM measurement to account for variable window width.
- */
-/**
- * Estimate words per line based on container width.
- * Uses average character width (~7px for 12px font) and average word length (~5 chars + space).
- * This is called once when width changes, not per-item during render.
- */
-function estimateWordsPerLine(containerWidth: number | null): number {
-  if (!containerWidth || containerWidth <= 0) {
-    return 10; // Reasonable default
-  }
-  // Account for item padding (~60px: 8px left/right padding on item + 16px on row + some buffer)
-  const textWidth = Math.max(containerWidth - 60, 100);
-  // Average character width for 12px font is ~7px, average word is ~5 chars + 1 space
-  const avgCharWidth = 7;
-  const avgWordChars = 6; // 5 letters + 1 space
-  const charsPerLine = Math.floor(textWidth / avgCharWidth);
-  const wordsPerLine = Math.floor(charsPerLine / avgWordChars);
-  return Math.max(wordsPerLine, 5); // At least 5 words per line
-}
-
-/**
- * Smart truncation that shows beginning lines and end of text.
- * Uses estimated words-per-line based on container width (no DOM ops during render).
- */
-function smartTruncateText(
-  text: string, 
-  _targetWords: number = 15,
-  containerWidth: number | null = null
-): { 
-  firstPart: string; 
-  lastPart: string; 
-  needsTruncation: boolean;
-  fullText: string;
-} {
-  const trimmed = text.trim();
-  const words = trimmed.split(/\s+/).filter(w => w.length > 0);
-  const lastPartWords = 5; // Last few words for context
-  
-  // If text is very short, no truncation needed
-  if (words.length <= 15) {
-    return { 
-      firstPart: trimmed, 
-      lastPart: '', 
-      needsTruncation: false,
-      fullText: trimmed,
-    };
-  }
-  
-  // Calculate words per line based on container width
-  const wordsPerLine = estimateWordsPerLine(containerWidth);
-  const wordsFor1Line = wordsPerLine;
-  const wordsFor2Lines = wordsPerLine * 2;
-  const wordsFor3Lines = wordsPerLine * 3;
-  
-  // Determine how many lines we can show while leaving room for last words
-  let firstPartWords: number;
-  const totalNeeded = wordsFor3Lines + lastPartWords + 2; // Buffer for expand button
-  
-  if (words.length >= totalNeeded) {
-    // Enough for full 3 lines + last words
-    firstPartWords = wordsFor3Lines;
-  } else {
-    const totalNeeded2 = wordsFor2Lines + lastPartWords + 2;
-    if (words.length >= totalNeeded2) {
-      // Enough for full 2 lines + last words
-      firstPartWords = wordsFor2Lines;
-    } else {
-      const totalNeeded1 = wordsFor1Line + lastPartWords + 2;
-      if (words.length >= totalNeeded1) {
-        // Enough for full 1 line + last words
-        firstPartWords = wordsFor1Line;
-      } else {
-        // Not enough to truncate meaningfully
-        return {
-          firstPart: trimmed,
-          lastPart: '',
-          needsTruncation: false,
-          fullText: trimmed,
-        };
-      }
-    }
-  }
-  
-  // Get first part and last part
-  const firstWords = words.slice(0, firstPartWords);
-  const lastWords = words.slice(-lastPartWords);
-  
-  return {
-    firstPart: firstWords.join(' '),
-    lastPart: '...' + lastWords.join(' '),
-    needsTruncation: true,
-    fullText: trimmed,
-  };
-}
+import {
+  ViewMode,
+  ClipboardItem,
+  ClipboardItemType,
+  ClipboardSource,
+  StackInfo,
+  ListRow,
+  UndoAction,
+  FilterType,
+  SourceFilterType,
+  ClipboardQueryOptions,
+  RunningApp,
+  TAB_LABELS,
+  MAX_UNDO,
+} from '../types/clipboard';
+import { formatRelativeTime, formatFileSize } from '../utils/formatUtils';
+import { smartTruncateText, detectColor } from '../utils/textUtils';
+import { KeyCap } from './KeyCap';
+import { DraggableDroppableRow } from './DraggableDroppableRow';
 
 /**
  * Combine text content from stack items into a single paragraph.
@@ -393,110 +199,6 @@ const StackImageThumbnail = React.memo(function StackImageThumbnail({
     </div>
   );
 });
-
-// Memoized to prevent unnecessary re-renders during list navigation.
-const DraggableDroppableRow = React.memo(function DraggableDroppableRow({
-  id,
-  children,
-  style,
-  isOver,
-  isDragging,
-  ...props
-}: {
-  id: string;
-  children: React.ReactNode;
-  style?: React.CSSProperties;
-  isOver?: boolean;
-  isDragging?: boolean;
-} & React.HTMLAttributes<HTMLDivElement>) {
-  const { attributes, listeners, setNodeRef: setDragRef } = useDraggable({ id });
-  const { setNodeRef: setDropRef } = useDroppable({ id });
-
-  return (
-    <div
-      ref={(node) => {
-        setDragRef(node);
-        setDropRef(node);
-      }}
-      {...attributes}
-      {...listeners}
-      {...props}
-      style={{
-        ...style,
-        opacity: isDragging ? 0.5 : 1,
-        outline: isOver ? '2px solid #2dd4bf' : 'none',
-        outlineOffset: '-2px',
-      }}
-    >
-      {children}
-    </div>
-  );
-});
-
-/**
- * KeyCap component - renders a keyboard key with clean styling.
- * Used for displaying keyboard shortcuts with a visual key appearance.
- */
-function KeyCap({ children, small = false, style }: { children: React.ReactNode; small?: boolean; style?: React.CSSProperties }) {
-  const { theme } = useTheme();
-  return (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: small ? '1px 4px' : '2px 5px',
-        fontSize: small ? '9px' : '10px',
-        fontWeight: 500,
-        color: theme.isDark ? theme.text : '#555',
-        backgroundColor: theme.isDark ? theme.surface2 : '#e8e8e8',
-        borderRadius: '3px',
-        ...style,
-      }}
-    >
-      {children}
-    </span>
-  );
-}
-
-/**
- * Detect if text contains a valid color value (hex or RGB) and return the color string.
- * Returns null if no valid color is found.
- * Checks if the entire text is a color, or finds the first color value in the text.
- */
-function detectColor(text: string | null): string | null {
-  if (!text) return null;
-  
-  const trimmed = text.trim();
-  
-  // First check if the entire text is a hex color: #RGB, #RRGGBB, #RRGGBBAA
-  const hexPattern = /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
-  if (hexPattern.test(trimmed)) {
-    return trimmed;
-  }
-  
-  // Check if the entire text is RGB/RGBA: rgb(255, 87, 51) or rgba(255, 87, 51, 0.5)
-  const rgbPattern = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*[\d.]+)?\s*\)$/i;
-  if (rgbPattern.test(trimmed)) {
-    return trimmed;
-  }
-  
-  // If not the entire text, search for hex colors within the text
-  const hexInTextPattern = /#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})\b/;
-  const hexMatch = trimmed.match(hexInTextPattern);
-  if (hexMatch) {
-    return hexMatch[0];
-  }
-  
-  // Search for RGB/RGBA within the text
-  const rgbInTextPattern = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*[\d.]+)?\s*\)/i;
-  const rgbInTextMatch = trimmed.match(rgbInTextPattern);
-  if (rgbInTextMatch) {
-    return rgbInTextMatch[0];
-  }
-  
-  return null;
-}
 
 /**
  * ClipboardHistory component - Alfred-style popup for clipboard history.
@@ -4123,8 +3825,58 @@ export default function ClipboardHistory() {
           />
         )
       ) : viewMode === 'feedback' ? (
-        // Feedback view - rendered separately below to stay mounted
-        null
+        // Feedback view - rendered inline for authenticated users, sign-in prompt for others
+        sessionInitialized && authSession?.user?.email ? (
+          <DMsView feedbackOnly={true} />
+        ) : sessionInitialized ? (
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '40px',
+            textAlign: 'center',
+          }}>
+            <div style={{
+              fontSize: '32px',
+              marginBottom: '16px',
+              opacity: 0.5,
+            }}>💬</div>
+            <h3 style={{ margin: '0 0 8px 0', fontSize: '14px', color: theme.text }}>
+              Sign in to send feedback
+            </h3>
+            <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: theme.textSecondary }}>
+              Share ideas, report issues, or ask questions.
+            </p>
+            <button
+              onClick={() => setViewMode('team')}
+              style={{
+                padding: '8px 16px',
+                fontSize: '12px',
+                fontWeight: 500,
+                color: '#fff',
+                backgroundColor: theme.accent,
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+              }}
+            >
+              Sign In
+            </button>
+          </div>
+        ) : (
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: theme.textSecondary,
+            fontSize: '12px',
+          }}>
+            Loading...
+          </div>
+        )
       ) : viewMode === 'commands' ? (
         <PopularCommands />
       ) : viewMode === 'sketch' ? (
@@ -7075,67 +6827,6 @@ export default function ClipboardHistory() {
         </div>
       )}
     </div>
-
-    {/* Feedback view - always mounted when authenticated to avoid reload on navigation */}
-    {sessionInitialized && authSession?.user?.email && (
-      <div style={{
-        display: viewMode === 'feedback' ? 'flex' : 'none',
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: theme.bg,
-        flexDirection: 'column',
-      }}>
-        <DMsView feedbackOnly={true} />
-      </div>
-    )}
-
-    {/* Feedback sign-in prompt - shown when not authenticated */}
-    {sessionInitialized && !authSession?.user?.email && viewMode === 'feedback' && (
-      <div style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: theme.bg,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '40px',
-        textAlign: 'center',
-      }}>
-        <div style={{
-          fontSize: '32px',
-          marginBottom: '16px',
-          opacity: 0.5,
-        }}>💬</div>
-        <h3 style={{ margin: '0 0 8px 0', fontSize: '14px', color: theme.text }}>
-          Sign in to send feedback
-        </h3>
-        <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: theme.textSecondary }}>
-          Share ideas, report issues, or ask questions.
-        </p>
-        <button
-          onClick={() => setViewMode('team')}
-          style={{
-            padding: '8px 16px',
-            fontSize: '12px',
-            fontWeight: 500,
-            backgroundColor: theme.accent,
-            color: '#fff',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: 'pointer',
-          }}
-        >
-          Sign in
-        </button>
-      </div>
-    )}
 
     {/* Release notes popup - shows after app update, on first install, or on version hover */}
     {showReleaseNotes && (
