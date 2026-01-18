@@ -2174,6 +2174,31 @@ const librarianAPI = {
     ipcRenderer.on('librarian:readingAdded', handler);
     return () => ipcRenderer.removeListener('librarian:readingAdded', handler);
   },
+
+  // Listen for fullscreen mode requests (from URL scheme)
+  onSetFullscreen: (callback: (fullscreen: boolean) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, fullscreen: boolean) => callback(fullscreen);
+    ipcRenderer.on('librarian:setFullscreen', handler);
+    return () => ipcRenderer.removeListener('librarian:setFullscreen', handler);
+  },
+
+  // Listen for show reading requests (auto-show on new reading)
+  onShowReading: (callback: (readingId: number) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, readingId: number) => callback(readingId);
+    ipcRenderer.on('librarian:showReading', handler);
+    return () => ipcRenderer.removeListener('librarian:showReading', handler);
+  },
+
+  // Auto-run frequency settings
+  getAutoRunFrequency: (): Promise<string> => ipcRenderer.invoke('librarian:getAutoRunFrequency'),
+  setAutoRunFrequency: (frequency: string): Promise<boolean> => ipcRenderer.invoke('librarian:setAutoRunFrequency', frequency),
+
+  // Get Cursor instructions text for manual copy
+  getCursorInstructions: (): Promise<string> => ipcRenderer.invoke('librarian:getCursorInstructions'),
+
+  // Auto-show on new reading settings
+  getAutoShowEnabled: (): Promise<boolean> => ipcRenderer.invoke('librarian:getAutoShowEnabled'),
+  setAutoShowEnabled: (enabled: boolean): Promise<void> => ipcRenderer.invoke('librarian:setAutoShowEnabled', enabled),
 };
 
 type LibrarianAPI = typeof librarianAPI;
