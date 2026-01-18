@@ -682,11 +682,10 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
       if (session) {
         await window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
       } else if (event === 'SIGNED_OUT') {
-        // Only clear on explicit sign-out, not on token refresh failures.
-        console.log(`[SharedContextView] User signed out - clearing sync session`);
-        window.clipboardAPI?.clearSyncSession?.();
+        // Auth is managed by main process (AuthManager) - no need to call clearSyncSession.
+        console.log(`[SharedContextView] User signed out`);
       } else {
-        console.log(`[SharedContextView] Session became null after ${event} event - not clearing main process session`);
+        console.log(`[SharedContextView] Session became null after ${event} event`);
       }
       setSession(session);
       setCheckingAuth(false);

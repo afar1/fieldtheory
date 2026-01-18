@@ -841,6 +841,53 @@ interface ThemeAPI {
   onThemeChanged: (callback: (isDark: boolean) => void) => () => void;
 }
 
+/**
+ * Reading metadata for sidebar display.
+ */
+interface ReadingMeta {
+  id: number;
+  title: string;
+  context: string | null;
+  readingTime: string | null;
+  createdAt: number;
+}
+
+/**
+ * Full reading with content.
+ */
+interface Reading extends ReadingMeta {
+  filename: string;
+  originalPath: string | null;
+  content: string;
+  sourceDir: string | null;
+  importedAt: number;
+}
+
+/**
+ * Watched directory for Librarian.
+ */
+interface WatchedDir {
+  id: number;
+  path: string;
+  enabled: boolean;
+  addedAt: number;
+}
+
+/**
+ * Librarian API for collecting and displaying readings.
+ * Named after the AI assistant in Snow Crash.
+ */
+interface LibrarianAPI {
+  getReadings: () => Promise<ReadingMeta[]>;
+  getReading: (id: number) => Promise<Reading | null>;
+  getWatchedDirs: () => Promise<WatchedDir[]>;
+  addWatchedDir: (dirPath: string) => Promise<WatchedDir | null>;
+  removeWatchedDir: (id: number) => Promise<boolean>;
+  deleteReading: (id: number) => Promise<boolean>;
+  browseDirectory: () => Promise<string | null>;
+  onReadingAdded: (callback: (reading: Reading) => void) => () => void;
+}
+
 declare global {
   interface Window {
     audioAPI?: AudioAPI;
@@ -860,6 +907,7 @@ declare global {
     shellAPI?: ShellAPI;
     commandsAPI?: CommandsAPI;
     themeAPI?: ThemeAPI;
+    librarianAPI?: LibrarianAPI;
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;
   }

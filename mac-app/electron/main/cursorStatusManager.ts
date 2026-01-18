@@ -198,6 +198,11 @@ export class CursorStatusManager extends EventEmitter {
    * When transitioning from transcribing to idle, briefly shows 'done' state first.
    */
   setState(state: CursorStatusState): void {
+    const prevState = this.state;
+    const windowExists = this.window !== null && !this.window?.isDestroyed();
+    const windowVisible = windowExists && this.window?.isVisible();
+    console.log(`[CursorStatus] setState: ${prevState} -> ${state} | window: ${windowExists ? (windowVisible ? 'visible' : 'hidden') : 'none'} | enabled: ${this.enabled}`);
+
     // Clear any pending timeouts
     if (this.doneTimeout) {
       clearTimeout(this.doneTimeout);
@@ -207,7 +212,7 @@ export class CursorStatusManager extends EventEmitter {
       clearTimeout(this.pasteFailedTimeout);
       this.pasteFailedTimeout = null;
     }
-    
+
     const wasTranscribing = this.state === 'transcribing';
     const wasImproving = this.state === 'improving';
     const isActive = state !== 'idle';
@@ -435,15 +440,21 @@ export class CursorStatusManager extends EventEmitter {
    *                    Used by showCriticalMessage() to ensure important notifications always display.
    */
   private show(forceShow: boolean = false): void {
-    if (!this.enabled && !forceShow) return;
+    console.log(`[CursorStatus] show() called | forceShow: ${forceShow} | enabled: ${this.enabled} | state: ${this.state}`);
+    if (!this.enabled && !forceShow) {
+      console.log('[CursorStatus] show() skipped - disabled and not forced');
+      return;
+    }
 
     if (!this.window || this.window.isDestroyed()) {
+      console.log('[CursorStatus] show() creating new window');
       this.createWindow();
     }
 
     if (this.window) {
       this.window.showInactive();
       this.startTracking();
+      console.log(`[CursorStatus] show() complete - window visible: ${this.window.isVisible()}`);
     }
   }
 
@@ -451,10 +462,12 @@ export class CursorStatusManager extends EventEmitter {
    * Hide the overlay and stop tracking.
    */
   private hide(): void {
+    console.log(`[CursorStatus] hide() called | state: ${this.state} | window exists: ${this.window !== null && !this.window?.isDestroyed()}`);
     this.stopTracking();
-    
+
     if (this.window && !this.window.isDestroyed()) {
       this.window.hide();
+      console.log('[CursorStatus] hide() complete - window hidden');
     }
   }
 

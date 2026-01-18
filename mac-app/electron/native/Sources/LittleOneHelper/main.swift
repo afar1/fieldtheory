@@ -35,6 +35,7 @@ enum MessageType: String, Codable {
     case checkFocusedTextInput
     case startKeyboardMonitoring
     case stopKeyboardMonitoring
+    case getFrontmostWindowBounds
 }
 
 /// Message received from Electron.
@@ -167,9 +168,27 @@ struct KeyboardMonitoringDisabledMessage: Codable {
 
 struct MenuBarClickedMessage: Codable {
     let type = "menuBarClicked"
-    
+
     enum CodingKeys: String, CodingKey {
         case type
+    }
+}
+
+/// Response with the frontmost window bounds (on-demand request).
+struct FrontmostWindowBoundsMessage: Codable {
+    let type = "frontmostWindowBounds"
+    let windowBounds: WindowBounds?
+
+    struct WindowBounds: Codable {
+        let x: Int
+        let y: Int
+        let width: Int
+        let height: Int
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case windowBounds
     }
 }
 
@@ -1108,40 +1127,101 @@ final class AppActivationMonitor {
             sendLog(level: "debug", message: "AppActivationMonitor: No app in notification")
             return
         }
-        
-        // Check if the activated app is our parent process (Electron).
-        // This is more reliable than bundle ID matching because:
-        // - Works in dev mode, production, and any bundle ID configuration
-        // - getppid() returns the parent process ID that spawned this helper
+
         let parentPid = getppid()
         let activatedPid = app.processIdentifier
-        
-        // HTTP debug log (appears in debug.log file)
-        let debugUrl = URL(string: "http://127.0.0.1:7244/ingest/3ea40dd5-7ebe-4b7f-a951-45855cee9c03")!
-        var request = URLRequest(url: debugUrl)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let payload = """
-        {"location":"main.swift:handleAppActivation","message":"app-activated","data":{"activatedPid":\(activatedPid),"parentPid":\(parentPid),"name":"\(app.localizedName ?? "unknown")","match":\(activatedPid == parentPid)},"timestamp":\(Int(Date().timeIntervalSince1970 * 1000)),"sessionId":"debug-session","hypothesisId":"H16"}
-        """
-        request.httpBody = payload.data(using: .utf8)
-        URLSession.shared.dataTask(with: request).resume()
-        
-        sendLog(level: "debug", message: "AppActivationMonitor: activated=\(activatedPid) parent=\(parentPid) name=\(app.localizedName ?? "unknown")")
-        
+        let bundleId = app.bundleIdentifier
+        let appName = app.localizedName
+
+        sendLog(level: "debug", message: "AppActivationMonitor: activated=\(activatedPid) parent=\(parentPid) name=\(appName ?? "unknown")")
+
+        // Always send frontmost app info (for command launcher positioning).
+        // Get window bounds for the frontmost window of this app.
+        let windowBounds = getWindowBoundsForApp(pid: activatedPid)
+        let message = FrontmostAppChangedMessage(
+            bundleId: bundleId,
+            name: appName,
+            windowBounds: windowBounds
+        )
+        sendJSON(message)
+
+        // Also send the legacy message if it's our app.
         if activatedPid == parentPid {
             sendLog(level: "debug", message: "Field Theory (parent process) became frontmost app")
             sendJSON(AppBecameFrontmostMessage())
         }
+    }
+
+    /// Get the bounds of the frontmost window for a given app PID.
+    private func getWindowBoundsForApp(pid: pid_t) -> FrontmostAppChangedMessage.WindowBounds? {
+        // Get all on-screen windows, ordered front-to-back.
+        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+
+        // Find the first (frontmost) window owned by this PID.
+        for windowInfo in windowList {
+            guard let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
+                  ownerPID == pid,
+                  let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = boundsDict["X"],
+                  let y = boundsDict["Y"],
+                  let width = boundsDict["Width"],
+                  let height = boundsDict["Height"] else {
+                continue
+            }
+
+            // Skip windows with layer > 0 (menu bar, dock, etc.)
+            if let layer = windowInfo[kCGWindowLayer as String] as? Int, layer > 0 {
+                continue
+            }
+
+            // Skip very small windows (likely invisible or utility windows).
+            if width < 100 || height < 100 {
+                continue
+            }
+
+            return FrontmostAppChangedMessage.WindowBounds(
+                x: Int(x),
+                y: Int(y),
+                width: Int(width),
+                height: Int(height)
+            )
+        }
+
+        return nil
     }
 }
 
 /// Message sent when Field Theory becomes the frontmost app.
 struct AppBecameFrontmostMessage: Codable {
     let type = "appBecameFrontmost"
-    
+
     enum CodingKeys: String, CodingKey {
         case type
+    }
+}
+
+/// Message sent when the frontmost app changes (for any app, not just ours).
+/// Includes window bounds for positioning UI elements.
+struct FrontmostAppChangedMessage: Codable {
+    let type = "frontmostAppChanged"
+    let bundleId: String?
+    let name: String?
+    let windowBounds: WindowBounds?
+
+    struct WindowBounds: Codable {
+        let x: Int
+        let y: Int
+        let width: Int
+        let height: Int
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case bundleId
+        case name
+        case windowBounds
     }
 }
 
@@ -1522,7 +1602,59 @@ final class MessageHandler {
         case .stopKeyboardMonitoring:
             KeyboardMonitor.shared.stopMonitoring()
             sendLog(level: "info", message: "Keyboard monitoring stopped")
+
+        case .getFrontmostWindowBounds:
+            let bounds = getFrontmostWindowBounds()
+            let response = FrontmostWindowBoundsMessage(windowBounds: bounds)
+            sendJSON(response)
         }
+    }
+
+    /// Get the bounds of the frontmost window.
+    /// Uses CGWindowListCopyWindowInfo which is fast (~1-5ms).
+    private func getFrontmostWindowBounds() -> FrontmostWindowBoundsMessage.WindowBounds? {
+        // Get the frontmost app's PID.
+        guard let frontApp = NSWorkspace.shared.frontmostApplication else {
+            return nil
+        }
+        let pid = frontApp.processIdentifier
+
+        // Get all on-screen windows, ordered front-to-back.
+        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+
+        // Find the first (frontmost) window owned by this PID.
+        for windowInfo in windowList {
+            guard let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
+                  ownerPID == pid,
+                  let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = boundsDict["X"],
+                  let y = boundsDict["Y"],
+                  let width = boundsDict["Width"],
+                  let height = boundsDict["Height"] else {
+                continue
+            }
+
+            // Skip windows with layer > 0 (menu bar, dock, etc.)
+            if let layer = windowInfo[kCGWindowLayer as String] as? Int, layer > 0 {
+                continue
+            }
+
+            // Skip very small windows (likely invisible or utility windows).
+            if width < 100 || height < 100 {
+                continue
+            }
+
+            return FrontmostWindowBoundsMessage.WindowBounds(
+                x: Int(x),
+                y: Int(y),
+                width: Int(width),
+                height: Int(height)
+            )
+        }
+
+        return nil
     }
 }
 
