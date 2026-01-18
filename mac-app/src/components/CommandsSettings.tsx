@@ -155,8 +155,8 @@ export default function CommandsSettings() {
       <div style={{
         padding: '16px',
         borderRadius: '8px',
-        backgroundColor: theme.isDark ? '#1a1a1a' : '#f9fafb',
-        border: `1px solid ${theme.isDark ? '#404040' : '#e5e7eb'}`,
+        backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
+        border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
       }}>
         {/* Directory Configuration */}
         <div style={{ marginBottom: directoryPath ? '16px' : '0' }}>
@@ -177,8 +177,8 @@ export default function CommandsSettings() {
                 padding: '8px 12px',
                 fontSize: '12px',
                 fontFamily: 'monospace',
-                backgroundColor: theme.isDark ? '#2d2d2d' : '#fff',
-                border: `1px solid ${theme.isDark ? '#404040' : '#d1d5db'}`,
+                backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
                 borderRadius: '6px',
                 color: theme.text,
                 overflow: 'hidden',
@@ -194,8 +194,8 @@ export default function CommandsSettings() {
                   fontSize: '12px',
                   fontWeight: 500,
                   color: theme.isDark ? '#e5e5e5' : '#374151',
-                  backgroundColor: theme.isDark ? '#2d2d2d' : '#fff',
-                  border: `1px solid ${theme.isDark ? '#404040' : '#d1d5db'}`,
+                  backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                  border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
                   borderRadius: '6px',
                   cursor: 'pointer',
                 }}
@@ -210,7 +210,7 @@ export default function CommandsSettings() {
                   fontWeight: 500,
                   color: theme.error,
                   backgroundColor: 'transparent',
-                  border: `1px solid ${theme.isDark ? '#404040' : '#d1d5db'}`,
+                  border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
                   borderRadius: '6px',
                   cursor: 'pointer',
                 }}
@@ -233,8 +233,8 @@ export default function CommandsSettings() {
                     padding: '8px 12px',
                     fontSize: '13px',
                     fontFamily: 'monospace',
-                    backgroundColor: theme.isDark ? '#2d2d2d' : '#fff',
-                    border: `1px solid ${theme.isDark ? '#404040' : '#d1d5db'}`,
+                    backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                    border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
                     borderRadius: '6px',
                     color: theme.text,
                     outline: 'none',
@@ -264,7 +264,7 @@ export default function CommandsSettings() {
                       fontSize: '13px',
                       color: theme.textSecondary,
                       backgroundColor: 'transparent',
-                      border: `1px solid ${theme.isDark ? '#404040' : '#d1d5db'}`,
+                      border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
                       borderRadius: '6px',
                       cursor: 'pointer',
                     }}
@@ -351,9 +351,9 @@ export default function CommandsSettings() {
               <div style={{
                 maxHeight: '200px',
                 overflowY: 'auto',
-                border: `1px solid ${theme.isDark ? '#404040' : '#e5e7eb'}`,
+                border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
                 borderRadius: '6px',
-                backgroundColor: theme.isDark ? '#2d2d2d' : '#fff',
+                backgroundColor: theme.isDark ? theme.surface2 : '#fff',
               }}>
                 {commands.map((cmd, index) => (
                   <div
@@ -361,7 +361,7 @@ export default function CommandsSettings() {
                     style={{
                       padding: '8px 12px',
                       borderBottom: index < commands.length - 1 
-                        ? `1px solid ${theme.isDark ? '#404040' : '#e5e7eb'}` 
+                        ? `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}` 
                         : 'none',
                       display: 'flex',
                       justifyContent: 'space-between',
@@ -395,14 +395,14 @@ export default function CommandsSettings() {
         <div style={{
           marginTop: '16px',
           padding: '12px',
-          backgroundColor: theme.isDark ? '#2d3748' : '#f0f9ff',
+          backgroundColor: theme.isDark ? theme.surface2 : '#f0f9ff',
           borderRadius: '6px',
-          border: `1px solid ${theme.isDark ? '#4a5568' : '#bfdbfe'}`,
+          border: `1px solid ${theme.isDark ? theme.border : '#bfdbfe'}`,
         }}>
           <p style={{
             margin: 0,
             fontSize: '12px',
-            color: theme.isDark ? '#a0aec0' : '#1e40af',
+            color: theme.isDark ? theme.textSecondary : '#1e40af',
             lineHeight: '1.5',
           }}>
             <strong>How it works:</strong> During transcription, say something like 
