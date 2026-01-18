@@ -11,6 +11,7 @@ import { fonts } from '../design/tokens';
 interface LibrarianViewProps {
   onSwitchToClipboard: () => void;
   onSwitchToSettings?: () => void;
+  onFullScreenChange?: (isFullScreen: boolean) => void;
 }
 
 /**
@@ -54,7 +55,7 @@ function groupByDate(readings: ReadingMeta[]): Map<string, ReadingMeta[]> {
   return groups;
 }
 
-export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings }: LibrarianViewProps) {
+export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings, onFullScreenChange }: LibrarianViewProps) {
   const { theme } = useTheme();
 
   // State
@@ -69,6 +70,11 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings 
   const [isFullScreen, setIsFullScreen] = useState(() => {
     return localStorage.getItem('librarian-fullscreen') === 'true';
   });
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = localStorage.getItem('librarian-sidebar-width');
+    return saved ? parseInt(saved, 10) : 180;
+  });
+  const [isResizing, setIsResizing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Persist text size preference
@@ -80,6 +86,47 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings 
   useEffect(() => {
     localStorage.setItem('librarian-fullscreen', String(isFullScreen));
   }, [isFullScreen]);
+
+  // Persist sidebar width
+  useEffect(() => {
+    localStorage.setItem('librarian-sidebar-width', String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  // Handle resize drag
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const containerRect = containerRef.current?.getBoundingClientRect();
+      if (!containerRect) return;
+
+      const newWidth = e.clientX - containerRect.left;
+      // Clamp between 120px and 400px
+      setSidebarWidth(Math.max(120, Math.min(400, newWidth)));
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing]);
+
+  // Notify parent of full-screen state (including initial state on mount)
+  useEffect(() => {
+    onFullScreenChange?.(isFullScreen);
+  }, [isFullScreen, onFullScreenChange]);
 
   // Text size values
   const textSizes = {
@@ -137,9 +184,35 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings 
     return () => unsubscribe?.();
   }, []);
 
+  // Listen for fullscreen requests from URL scheme
+  useEffect(() => {
+    const unsubscribe = window.librarianAPI?.onSetFullscreen((fullscreen) => {
+      setIsFullScreen(fullscreen);
+    });
+
+    return () => unsubscribe?.();
+  }, []);
+
   // Keyboard navigation
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      // Toggle immersive/fullscreen mode with 'f'
+      if (e.key === 'f' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setIsFullScreen((prev) => !prev);
+        return;
+      }
+
+      // Escape: exit fullscreen first, then switch to clipboard
+      if (e.key === 'Escape') {
+        if (isFullScreen) {
+          setIsFullScreen(false);
+        } else {
+          onSwitchToClipboard();
+        }
+        return;
+      }
+
       if (readings.length === 0) return;
 
       const currentIndex = readings.findIndex((r) => r.id === selectedId);
@@ -152,14 +225,12 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings 
         e.preventDefault();
         const newIndex = Math.min(readings.length - 1, currentIndex + 1);
         setSelectedId(readings[newIndex].id);
-      } else if (e.key === 'Escape') {
-        onSwitchToClipboard();
       }
     }
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [readings, selectedId, onSwitchToClipboard]);
+  }, [readings, selectedId, isFullScreen, onSwitchToClipboard]);
 
   // Focus container on mount
   useEffect(() => {
@@ -223,20 +294,22 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings 
       tabIndex={0}
       style={{
         display: 'flex',
-        height: '100%',
+        flex: 1,
+        minHeight: 0,
         outline: 'none',
         backgroundColor: theme.bg,
       }}
     >
       {/* Sidebar - hidden in full-screen mode */}
       {!isFullScreen && (
+      <>
       <div
         style={{
-          width: '180px',
-          minWidth: '180px',
-          borderRight: `1px solid ${theme.border}`,
+          width: `${sidebarWidth}px`,
+          minWidth: `${sidebarWidth}px`,
           overflowY: 'auto',
           padding: '12px 0',
+          userSelect: isResizing ? 'none' : 'auto',
         }}
       >
         <div
@@ -307,9 +380,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings 
                     fontSize: '12px',
                     fontWeight: 500,
                     color: theme.text,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
+                    lineHeight: 1.3,
                   }}
                 >
                   {reading.title}
@@ -333,6 +404,31 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings 
           </div>
         ))}
       </div>
+      {/* Resize handle */}
+      <div
+        onMouseDown={handleResizeMouseDown}
+        style={{
+          width: '4px',
+          cursor: 'col-resize',
+          backgroundColor: isResizing ? theme.accent : 'transparent',
+          borderRight: `1px solid ${theme.border}`,
+          transition: 'background-color 0.15s ease',
+          flexShrink: 0,
+        }}
+        onMouseEnter={(e) => {
+          if (!isResizing) {
+            e.currentTarget.style.backgroundColor = theme.isDark
+              ? 'rgba(255,255,255,0.1)'
+              : 'rgba(0,0,0,0.05)';
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!isResizing) {
+            e.currentTarget.style.backgroundColor = 'transparent';
+          }
+        }}
+      />
+      </>
       )}
 
       {/* Reader pane */}
@@ -345,7 +441,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings 
           minHeight: 0, // Required for flex child to shrink below content size
         }}
       >
-        {/* Toolbar */}
+        {/* Toolbar - includes draggable region for window movement */}
         {selectedReading && (
           <div
             style={{
@@ -354,7 +450,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings 
               justifyContent: 'space-between',
               gap: '8px',
               padding: '8px 16px',
-              borderBottom: `1px solid ${theme.border}`,
               backgroundColor: theme.bg,
               flexShrink: 0,
             }}
@@ -378,6 +473,17 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings 
                 </button>
               )}
             </div>
+
+            {/* Draggable spacer for window movement */}
+            <div
+              style={{
+                flex: 1,
+                height: '24px',
+                // @ts-ignore - webkit vendor prefix for Electron draggable region
+                WebkitAppRegion: 'drag',
+                cursor: 'grab',
+              }}
+            />
 
             {/* Text size controls */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -424,7 +530,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings 
                 A
               </button>
             </div>
-
           </div>
         )}
 
@@ -434,8 +539,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings 
             flex: 1,
             minHeight: 0, // Required for flex child to shrink and enable scrolling
             overflowY: 'auto',
-            padding: '32px',
-            paddingBottom: '120px',
+            padding: isFullScreen ? '32px' : '48px 32px',
             display: 'flex',
             justifyContent: 'center',
           }}
@@ -651,6 +755,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings 
                 {selectedReading.content}
               </ReactMarkdown>
             </div>
+            {/* Spacer for scroll breathing room - allows scrolling last content up */}
+            <div style={{ height: '50vh', flexShrink: 0 }} />
           </div>
         ) : (
           <div

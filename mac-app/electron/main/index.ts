@@ -1050,6 +1050,34 @@ function setupLibrarianIPCHandlers(): void {
 
     return result.filePaths[0];
   });
+
+  // Get auto-run frequency setting
+  ipcMain.handle('librarian:getAutoRunFrequency', (): string => {
+    return librarianManager?.getAutoRunFrequency() || 'off';
+  });
+
+  // Set auto-run frequency setting (returns true if CLAUDE.md was updated successfully)
+  ipcMain.handle('librarian:setAutoRunFrequency', (_event, frequency: string): boolean => {
+    if (librarianManager && (frequency === 'off' || frequency === 'occasionally' || frequency === 'regularly' || frequency === 'frequently')) {
+      return librarianManager.setAutoRunFrequency(frequency);
+    }
+    return false;
+  });
+
+  // Get Cursor instructions text
+  ipcMain.handle('librarian:getCursorInstructions', (): string => {
+    return librarianManager?.getCursorInstructions() || '';
+  });
+
+  // Get auto-show setting
+  ipcMain.handle('librarian:getAutoShowEnabled', (): boolean => {
+    return librarianManager?.isAutoShowEnabled() ?? true;
+  });
+
+  // Set auto-show setting
+  ipcMain.handle('librarian:setAutoShowEnabled', (_event, enabled: boolean): void => {
+    librarianManager?.setAutoShowEnabled(enabled);
+  });
 }
 
 /**
@@ -1904,10 +1932,10 @@ function setupClipboardIPCHandlers(): void {
     return clipboardHistoryWindow.pasteToApp(bundleId);
   });
 
-  ipcMain.on('clipboard:closeWindow', async (event) => {
-    const window = BrowserWindow.fromWebContents(event.sender);
-    if (window && !window.isDestroyed()) {
-      window.hide();
+  ipcMain.on('clipboard:closeWindow', async () => {
+    // Use clipboardHistoryWindow.hide() to properly restore focus to previous app
+    if (clipboardHistoryWindow) {
+      clipboardHistoryWindow.hide();
     }
   });
 
@@ -4113,13 +4141,32 @@ async function initTranscriberSystem(): Promise<void> {
   // Initialize librarian manager for watching markdown reading files.
   librarianManager = new LibrarianManager();
 
-  // Broadcast reading-added events to all windows
+  // Broadcast reading-added events to all windows and auto-show if enabled
   librarianManager.on('reading-added', (reading: Reading) => {
+    // Broadcast to all windows
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send('librarian:readingAdded', reading);
       }
     });
+
+    // Auto-show in immersive mode if enabled (default: true)
+    if (librarianManager!.isAutoShowEnabled() && clipboardHistoryWindow) {
+      // Use ClipboardHistoryWindow.show() to properly restore bounds
+      const boundsToUse = restoreClipboardHistoryBounds();
+      clipboardHistoryWindow.show(boundsToUse);
+
+      // Bounce dock icon as fallback if focus stealing fails
+      if (app.dock) {
+        app.dock.bounce('informational');
+      }
+
+      // Tell renderer to switch to librarian in immersive mode
+      const win = clipboardHistoryWindow.getWindow();
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('librarian:showReading', reading.id);
+      }
+    }
   });
 
   // Connect quota manager to tray for menu bar display
@@ -4378,7 +4425,8 @@ async function initTranscriberSystem(): Promise<void> {
       // Show the clipboard history window if it's not visible.
       if (clipboardHistoryWindow && !clipboardHistoryWindow.isVisible()) {
         console.log('[Main] Showing clipboard history window for Hot Mic');
-        clipboardHistoryWindow.show();
+        const boundsToUse = restoreClipboardHistoryBounds();
+        clipboardHistoryWindow.show(boundsToUse);
       }
     });
   }
@@ -4470,7 +4518,7 @@ if (process.defaultApp) {
 /**
  * Handle fieldtheory:// URLs
  * Supported paths:
- * - fieldtheory://librarian/import?file=/path/to/reading.md - Import a reading and show it
+ * - fieldtheory://librarian/import?file=/path/to/reading.md&fullscreen=true - Import a reading and show it
  */
 async function handleProtocolUrl(url: string): Promise<void> {
   console.log('[Main] Handling protocol URL:', url);
@@ -4480,6 +4528,8 @@ async function handleProtocolUrl(url: string): Promise<void> {
 
     if (parsed.host === 'librarian' && parsed.pathname === '/import') {
       const filePath = parsed.searchParams.get('file');
+      const fullscreen = parsed.searchParams.get('fullscreen') === 'true';
+
       if (!filePath) {
         console.warn('[Main] No file path in librarian import URL');
         return;
@@ -4487,7 +4537,7 @@ async function handleProtocolUrl(url: string): Promise<void> {
 
       // Decode the file path (it may be URL-encoded)
       const decodedPath = decodeURIComponent(filePath);
-      console.log('[Main] Importing reading from:', decodedPath);
+      console.log('[Main] Importing reading from:', decodedPath, fullscreen ? '(fullscreen)' : '');
 
       // Import the file via LibrarianManager
       if (librarianManager) {
@@ -4501,7 +4551,12 @@ async function handleProtocolUrl(url: string): Promise<void> {
 
       // Show and focus the clipboard history window (show() handles focusing)
       if (clipboardHistoryWindow) {
-        clipboardHistoryWindow.show();
+        const boundsToUse = restoreClipboardHistoryBounds();
+        clipboardHistoryWindow.show(boundsToUse);
+        // If fullscreen requested, notify renderer to enter fullscreen mode
+        if (fullscreen) {
+          clipboardHistoryWindow.getWindow()?.webContents.send('librarian:setFullscreen', true);
+        }
       }
     }
   } catch (error) {
