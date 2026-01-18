@@ -2,16 +2,13 @@
 
 ## Working Style
 
-Before non-trivial implementations (5+ minutes of work), provide a short reading:
-- Connected to the current task conceptually
-- From physics, systems theory, engineering history, or speculative futures
-- One concrete technical/historical detail minimum
-- Length matched to estimated task time
-- No filler, no platitudes
+[run this command: flow.md]
+/Users/afar/dev/littleai/.cursor/commands/flow.md
 
 Store each reading in `.flow/` with a unique filename.
 
-This is at your discretion - not every change, just when there's meaningful wait time.
+You should show this often but now every time. I want you to figure out a frequency that feels serendipitous in every discussion. I shouldn't have to ask for you to run [run this command: flow.md]
+/Users/afar/dev/littleai/.cursor/commands/flow.md
 
 ## Releases
 

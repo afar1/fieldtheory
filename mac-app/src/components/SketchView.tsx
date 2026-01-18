@@ -148,12 +148,16 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
     setIsSaving(true);
 
     try {
+      // Use device pixel ratio for high-res export on Retina displays
+      const exportScale = window.devicePixelRatio || 2;
+
       const blob = await exportToBlob({
         elements: activeElements,
         appState: {
           ...excalidrawAPI.getAppState(),
           exportWithDarkMode: false,
           exportBackground: true,
+          exportScale,
         },
         files: excalidrawAPI.getFiles(),
         mimeType: 'image/png',

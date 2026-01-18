@@ -56,7 +56,7 @@ export interface EngineerResult {
  * Hardcoded system prompt for transcript improvement (API/large models).
  * Not user-modifiable to ensure consistent quality.
  */
-const IMPROVE_TRANSCRIPT_PROMPT = `Rewrite this spoken feedback as clear prose. Same meaning with less ambiguity. If a portion of the transcript's intent is not obvious, don't attempt to rephrase that portion just include the full sentence. Questions from a user should always be presented as questions. If a user asks a question always maintain the same meaning but feel free to rephrase to be more clear and concise. If intent of question is not obvious, include the full original question. Replace vague references with specific names. Remove filler words. Keep it as one paragraph. Do not add structure, bullets, or headers.
+const IMPROVE_TRANSCRIPT_PROMPT = `Rewrite this spoken feedback as clear prose. Same meaning with less ambiguity. If a portion of the transcript's intent is not obvious, don't attempt to rephrase that portion just include the full sentence. Questions from a user are crtically important and should always be presented as questions. If the transcript contains a question mark, always maintain the same meaning but feel free to rephrase to be more clear and concise. If intent of question is not obvious, include the full original question. Replace vague references with specific names. Remove filler words. Keep it as one paragraph. Do not add structure, bullets, or headers.
 
 IMPORTANT: Preserve any [Figure X] references and [cmd:name.md] references exactly as written. These reference images and commands that must remain in the output in their original positions relative to the surrounding text.`;
 
@@ -64,7 +64,7 @@ IMPORTANT: Preserve any [Figure X] references and [cmd:name.md] references exact
  * Prompt for local LLM transcript improvement.
  * Identical to cloud prompt for consistency.
  */
-const LOCAL_LLM_TRANSCRIPT_PROMPT = `Rewrite this spoken feedback as clear prose. Same meaning with less ambiguity. If a portion of the transcript's intent is not obvious, don't attempt to rephrase that portion just include the full sentence. Questions from a user should always be presented as questions. If a user asks a question always maintain the same meaning but feel free to rephrase to be more clear and concise. If intent of question is not obvious, include the full original question. Replace vague references with specific names. Remove filler words. Keep it as one paragraph. Do not add structure, bullets, or headers.
+const LOCAL_LLM_TRANSCRIPT_PROMPT = `Rewrite this spoken feedback as clear prose. Same meaning with less ambiguity. If a portion of the transcript's intent is not obvious, don't attempt to rephrase that portion just include the full sentence. Questions from a user are crtically important and should always be presented as questions. If the transcript contains a question mark, always maintain the same meaning but feel free to rephrase to be more clear and concise. If intent of question is not obvious, include the full original question. Replace vague references with specific names. Remove filler words. Keep it as one paragraph. Do not add structure, bullets, or headers.
 
 IMPORTANT: Preserve any [Figure X] references and [cmd:name.md] references exactly as written. These reference images and commands that must remain in the output in their original positions relative to the surrounding text.`;
 
