@@ -142,11 +142,14 @@ export class CommandLauncherWindow {
   
   /**
    * Hide the command launcher window.
+   * Calls app.hide() to restore focus to the previous app (Alfred behavior).
    */
   hide(): void {
     if (this.window && !this.window.isDestroyed()) {
       this.window.hide();
     }
+    // Hide entire app to restore focus to previous app
+    app.hide();
   }
   
   /**

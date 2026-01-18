@@ -170,10 +170,10 @@ export class SharedClipboardSync extends EventEmitter {
    */
   private handleSessionChanged(session: Session | null): void {
     if (session) {
-      console.log('[SharedClipboardSync] Session changed for user:', session.user?.email);
+      console.debug('[SharedClipboardSync] Session changed for user:', session.user?.email);
       this.setupRealtimeSubscription();
     } else {
-      console.log('[SharedClipboardSync] Session cleared');
+      console.debug('[SharedClipboardSync] Session cleared');
       this.teardownRealtimeSubscription();
     }
   }
@@ -227,7 +227,7 @@ export class SharedClipboardSync extends EventEmitter {
     // Teardown existing subscription first.
     this.teardownRealtimeSubscription();
 
-    console.log('[SharedClipboardSync] Setting up realtime subscription for team items');
+    console.debug('[SharedClipboardSync] Setting up realtime subscription for team items');
 
     // Subscribe to all changes on team_clipboard_items.
     // RLS ensures we only see items we're authorized to see.
@@ -241,7 +241,7 @@ export class SharedClipboardSync extends EventEmitter {
           table: 'team_clipboard_items',
         },
         async (payload) => {
-          console.log('[SharedClipboardSync] Realtime INSERT:', payload.new?.id);
+          console.debug('[SharedClipboardSync] Realtime INSERT:', payload.new?.id);
           const row = payload.new as SharedClipboardRow;
           const item = await this.rowToTeamItemAsync(row);
           this.emit('teamItemAdded', item);
@@ -255,7 +255,7 @@ export class SharedClipboardSync extends EventEmitter {
           table: 'team_clipboard_items',
         },
         async (payload) => {
-          console.log('[SharedClipboardSync] Realtime UPDATE:', payload.new?.id);
+          console.debug('[SharedClipboardSync] Realtime UPDATE:', payload.new?.id);
           const row = payload.new as SharedClipboardRow;
           const item = await this.rowToTeamItemAsync(row);
           this.emit('teamItemUpdated', item);
@@ -269,7 +269,7 @@ export class SharedClipboardSync extends EventEmitter {
           table: 'team_clipboard_items',
         },
         (payload) => {
-          console.log('[SharedClipboardSync] Realtime DELETE:', payload.old?.id);
+          console.debug('[SharedClipboardSync] Realtime DELETE:', payload.old?.id);
           const oldRow = payload.old as { id?: string };
           if (oldRow?.id) {
             this.emit('teamItemDeleted', oldRow.id);
@@ -277,14 +277,14 @@ export class SharedClipboardSync extends EventEmitter {
         }
       )
       .subscribe((status, err) => {
-        console.log('[SharedClipboardSync] Realtime subscription status:', status);
+        console.debug('[SharedClipboardSync] Realtime subscription status:', status);
         if (err) {
           console.error('[SharedClipboardSync] Realtime subscription error:', err);
         }
 
         // Handle reconnection on errors.
         if (status === 'TIMED_OUT') {
-          console.log('[SharedClipboardSync] Realtime timed out, retrying in 3 seconds...');
+          console.debug('[SharedClipboardSync] Realtime timed out, retrying in 3 seconds...');
           setTimeout(() => {
             if (this.isAuthenticated()) {
               this.setupRealtimeSubscription();
@@ -298,7 +298,7 @@ export class SharedClipboardSync extends EventEmitter {
             }
           }, 5000);
         } else if (status === 'SUBSCRIBED') {
-          console.log('[SharedClipboardSync] Realtime subscription active');
+          console.debug('[SharedClipboardSync] Realtime subscription active');
         }
       });
   }
@@ -308,7 +308,7 @@ export class SharedClipboardSync extends EventEmitter {
    */
   private teardownRealtimeSubscription(): void {
     if (this.realtimeChannel) {
-      console.log('[SharedClipboardSync] Tearing down realtime subscription');
+      console.debug('[SharedClipboardSync] Tearing down realtime subscription');
       this.supabase?.removeChannel(this.realtimeChannel);
       this.realtimeChannel = null;
     }
@@ -1306,6 +1306,6 @@ export class SharedClipboardSync extends EventEmitter {
     this.teardownRealtimeSubscription();
     this.authManager.removeListener('sessionChanged', this.boundHandleSessionChanged);
     this.removeAllListeners();
-    console.log('[SharedClipboardSync] Destroyed');
+    console.debug('[SharedClipboardSync] Destroyed');
   }
 }

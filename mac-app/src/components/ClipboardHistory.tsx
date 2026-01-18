@@ -515,7 +515,7 @@ export default function ClipboardHistory() {
     }
     
     const saved = localStorage.getItem('fieldTheoryView');
-    if (saved === 'clipboard' || saved === 'team' || saved === 'hotmic' || saved === 'todo' || saved === 'feedback' || saved === 'commands') {
+    if (saved === 'clipboard' || saved === 'team' || saved === 'hotmic' || saved === 'todo' || saved === 'feedback' || saved === 'commands' || saved === 'librarian') {
       return saved;
     }
     return 'clipboard';
@@ -560,6 +560,10 @@ export default function ClipboardHistory() {
   const [lastClickedIndex, setLastClickedIndex] = useState<number | null>(null);
   const [undoStack, setUndoStack] = useState<UndoAction[]>([]);
   const [redoStack, setRedoStack] = useState<UndoAction[]>([]);
+
+  // Librarian immersive mode - when in full-screen reading, fade the header
+  const [librarianImmersive, setLibrarianImmersive] = useState(false);
+  const [headerHovered, setHeaderHovered] = useState(false);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -591,6 +595,8 @@ export default function ClipboardHistory() {
   
   // Auth session state for showing "Signed in as..." in header.
   const [authSession, setAuthSession] = useState<Session | null>(null);
+  // Track when session initialization is complete to avoid UI flicker.
+  const [sessionInitialized, setSessionInitialized] = useState(false);
   
   // Screen recording permission banner state.
   // Shows a banner when permission is missing, unless user has dismissed it.
@@ -1503,7 +1509,11 @@ export default function ClipboardHistory() {
   }, [viewMode]);
 
   useEffect(() => {
-    if (!supabase) return;
+    if (!supabase) {
+      // If supabase is not configured, still mark session as initialized (with no auth).
+      setSessionInitialized(true);
+      return;
+    }
 
     // Initialize auth session from both Supabase client AND main process.
     // This handles the case where main process has a valid session but Supabase client doesn't.
@@ -1542,6 +1552,9 @@ export default function ClipboardHistory() {
       if (finalSession) {
         window.clipboardAPI?.setSyncSession?.(finalSession.access_token, finalSession.refresh_token);
       }
+
+      // Mark session initialization as complete to prevent UI flicker.
+      setSessionInitialized(true);
     };
 
     initializeSession();
@@ -1633,7 +1646,15 @@ export default function ClipboardHistory() {
       setSelectedIds(new Set());
       setIsMultiSelect(false);
       setShowSettings(false);
-      // Don't reset viewMode - let localStorage persistence work.
+
+      // Restore viewMode from localStorage - ensures we return to the last viewed tab
+      // even if the window was recreated or state got out of sync.
+      const savedView = localStorage.getItem('fieldTheoryView');
+      if (savedView === 'clipboard' || savedView === 'team' || savedView === 'hotmic' ||
+          savedView === 'todo' || savedView === 'feedback' || savedView === 'commands' ||
+          savedView === 'librarian') {
+        setViewMode(savedView);
+      }
     });
 
     const unsubscribeShowSettings = window.clipboardAPI.onShowSettings?.(() => {
@@ -1717,6 +1738,17 @@ export default function ClipboardHistory() {
   useEffect(() => {
     const unsubscribe = window.librarianAPI?.onReadingAdded(() => {
       setViewMode('librarian');
+    });
+
+    return () => unsubscribe?.();
+  }, []);
+
+  // Handle show reading requests (auto-show on new reading with immersive mode)
+  useEffect(() => {
+    const unsubscribe = window.librarianAPI?.onShowReading(() => {
+      // Switch to librarian view in immersive mode
+      setViewMode('librarian');
+      setLibrarianImmersive(true);
     });
 
     return () => unsubscribe?.();
@@ -3196,11 +3228,14 @@ export default function ClipboardHistory() {
         />
       )}
       
-      {/* Draggable header area */}
+      {/* Draggable header area - collapses in Librarian immersive mode */}
       <div
+        onMouseEnter={() => setHeaderHovered(true)}
+        onMouseLeave={() => setHeaderHovered(false)}
         style={{
-          height: '28px',
-          minHeight: '44px',
+          height: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '44px',
+          minHeight: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '44px',
+          overflow: 'hidden',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'flex-start',
@@ -3209,8 +3244,8 @@ export default function ClipboardHistory() {
           // @ts-ignore - webkit vendor prefix for Electron draggable region
           WebkitAppRegion: 'drag',
           cursor: 'grab',
-          // Light divider line under header when in settings.
           borderBottom: showSettings ? `1px solid ${theme.border}` : 'none',
+          transition: 'height 0.3s ease, min-height 0.3s ease',
         }}
       >
         <img
@@ -3440,16 +3475,21 @@ export default function ClipboardHistory() {
         
       </div>
       
-      {/* View mode tabs - only show when not in settings */}
+      {/* View mode tabs - only show when not in settings, collapses in Librarian immersive mode */}
       {!showSettings && viewMode !== 'sketch' && (
-        <div 
+        <div
           ref={tabsRef}
+          onMouseEnter={() => setHeaderHovered(true)}
+          onMouseLeave={() => setHeaderHovered(false)}
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: '2px',
             padding: '0 16px',
-            marginBottom: '8px',
+            marginBottom: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '8px',
+            height: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : 'auto',
+            overflow: 'hidden',
+            transition: 'height 0.3s ease, margin-bottom 0.3s ease',
           }}>
           {(['clipboard', 'librarian', ...(canShare ? ['team'] : []), ...(FEATURE_HOT_MIC_ENABLED ? ['hotmic'] : []), ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
             // Hot Mic tab has special styling and the fire toggle.
@@ -4017,12 +4057,24 @@ export default function ClipboardHistory() {
         <LibrarianView
           onSwitchToClipboard={() => setViewMode('clipboard')}
           onSwitchToSettings={() => setShowSettings(true)}
+          onFullScreenChange={setLibrarianImmersive}
         />
       ) : viewMode === 'team' ? (
         null
       ) : viewMode === 'hotmic' ? (
-        // Hot Mic requires authentication.
-        !authSession?.user?.email ? (
+        // Hot Mic requires authentication. Show loading while session initializes to prevent flicker.
+        !sessionInitialized ? (
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: theme.textSecondary,
+            fontSize: '12px',
+          }}>
+            Loading...
+          </div>
+        ) : !authSession?.user?.email ? (
           <div style={{
             flex: 1,
             display: 'flex',
@@ -4071,47 +4123,8 @@ export default function ClipboardHistory() {
           />
         )
       ) : viewMode === 'feedback' ? (
-        // Feedback requires authentication.
-        !authSession?.user?.email ? (
-          <div style={{
-            flex: 1,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '40px',
-            textAlign: 'center',
-          }}>
-            <div style={{
-              fontSize: '32px',
-              marginBottom: '16px',
-              opacity: 0.5,
-            }}>💬</div>
-            <h3 style={{ margin: '0 0 8px 0', fontSize: '14px', color: theme.text }}>
-              Sign in to send feedback
-            </h3>
-            <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: theme.textSecondary }}>
-              Share ideas, report issues, or ask questions.
-            </p>
-            <button
-              onClick={() => setViewMode('team')}
-              style={{
-                padding: '8px 16px',
-                fontSize: '12px',
-                fontWeight: 500,
-                backgroundColor: theme.accent,
-                color: '#fff',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-              }}
-            >
-              Sign in
-            </button>
-          </div>
-        ) : (
-          <DMsView feedbackOnly={true} />
-        )
+        // Feedback view - rendered separately below to stay mounted
+        null
       ) : viewMode === 'commands' ? (
         <PopularCommands />
       ) : viewMode === 'sketch' ? (
@@ -5918,10 +5931,15 @@ export default function ClipboardHistory() {
       )}
 
       {/* Footer - three-column layout: left=stats, center=recording, right=controls */}
+      {/* Collapses in Librarian immersive mode */}
       <div
+        onMouseEnter={() => setHeaderHovered(true)}
+        onMouseLeave={() => setHeaderHovered(false)}
         style={{
-          padding: '8px 16px',
-          borderTop: `1px solid ${theme.border}`,
+          padding: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0 16px' : '8px 16px',
+          height: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : 'auto',
+          overflow: 'hidden',
+          borderTop: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? 'none' : `1px solid ${theme.border}`,
           backgroundColor: theme.bgSecondary,
           backdropFilter: theme.isDark && theme.glassEnabled ? 'blur(10px)' : 'none',
           display: 'flex',
@@ -5931,6 +5949,7 @@ export default function ClipboardHistory() {
           color: theme.textSecondary,
           userSelect: 'none',
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          transition: 'height 0.3s ease, padding 0.3s ease',
         }}
       >
         {/* Left side: Dark mode toggle + Plan info (quotas or stats) */}
@@ -7056,7 +7075,68 @@ export default function ClipboardHistory() {
         </div>
       )}
     </div>
-    
+
+    {/* Feedback view - always mounted when authenticated to avoid reload on navigation */}
+    {sessionInitialized && authSession?.user?.email && (
+      <div style={{
+        display: viewMode === 'feedback' ? 'flex' : 'none',
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: theme.bg,
+        flexDirection: 'column',
+      }}>
+        <DMsView feedbackOnly={true} />
+      </div>
+    )}
+
+    {/* Feedback sign-in prompt - shown when not authenticated */}
+    {sessionInitialized && !authSession?.user?.email && viewMode === 'feedback' && (
+      <div style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: theme.bg,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '40px',
+        textAlign: 'center',
+      }}>
+        <div style={{
+          fontSize: '32px',
+          marginBottom: '16px',
+          opacity: 0.5,
+        }}>💬</div>
+        <h3 style={{ margin: '0 0 8px 0', fontSize: '14px', color: theme.text }}>
+          Sign in to send feedback
+        </h3>
+        <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: theme.textSecondary }}>
+          Share ideas, report issues, or ask questions.
+        </p>
+        <button
+          onClick={() => setViewMode('team')}
+          style={{
+            padding: '8px 16px',
+            fontSize: '12px',
+            fontWeight: 500,
+            backgroundColor: theme.accent,
+            color: '#fff',
+            border: 'none',
+            borderRadius: '6px',
+            cursor: 'pointer',
+          }}
+        >
+          Sign in
+        </button>
+      </div>
+    )}
+
     {/* Release notes popup - shows after app update, on first install, or on version hover */}
     {showReleaseNotes && (
       <ReleaseNotesPopup

@@ -431,7 +431,13 @@ export class ClipboardHistoryWindow {
       clearInterval(this.animationTimer);
       this.animationTimer = null;
     }
-    
+
+    // Save current bounds before any modifications (defensive - ensures bounds are captured).
+    // This is especially important if the resize event didn't fire properly.
+    if (!this.sketchModeActive) {
+      this.emitBoundsChanged();
+    }
+
     // Restore normal bounds if we were in expanded sketch mode.
     if (this.normalBounds && this.window && !this.window.isDestroyed()) {
       this.window.setBounds(this.normalBounds);

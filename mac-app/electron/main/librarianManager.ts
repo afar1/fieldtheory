@@ -3,7 +3,13 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import os from 'os';
 import { EventEmitter } from 'events';
+
+/**
+ * Auto-run frequency for generating readings.
+ */
+export type AutoRunFrequency = 'off' | 'occasionally' | 'regularly' | 'frequently';
 
 /**
  * A reading imported into the Librarian.
@@ -108,6 +114,11 @@ export class LibrarianManager extends EventEmitter {
       CREATE TABLE IF NOT EXISTS migrations (
         name TEXT PRIMARY KEY,
         applied_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
       );
     `);
 
@@ -493,6 +504,165 @@ export class LibrarianManager extends EventEmitter {
 
     console.log(`[LibrarianManager] Deleted reading: ${reading.title}`);
     return true;
+  }
+
+  // ===========================================================================
+  // Settings Management
+  // ===========================================================================
+
+  /**
+   * Get a setting value.
+   */
+  getSetting(key: string): string | null {
+    const row = this.db
+      .prepare('SELECT value FROM settings WHERE key = ?')
+      .get(key) as { value: string } | undefined;
+    return row?.value ?? null;
+  }
+
+  /**
+   * Set a setting value.
+   */
+  setSetting(key: string, value: string): void {
+    this.db
+      .prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)')
+      .run(key, value);
+  }
+
+  /**
+   * Get the auto-run frequency setting.
+   */
+  getAutoRunFrequency(): AutoRunFrequency {
+    const value = this.getSetting('librarian_auto_frequency');
+    if (value === 'occasionally' || value === 'regularly' || value === 'frequently') {
+      return value;
+    }
+    return 'off';
+  }
+
+  /**
+   * Set the auto-run frequency and update CLAUDE.md.
+   * Returns true if CLAUDE.md was updated successfully (or frequency is 'off').
+   */
+  setAutoRunFrequency(frequency: AutoRunFrequency): boolean {
+    this.setSetting('librarian_auto_frequency', frequency);
+    const success = this.updateClaudeMd(frequency);
+    console.log(`[LibrarianManager] Auto-run frequency set to: ${frequency}`);
+    return success;
+  }
+
+  // ===========================================================================
+  // CLAUDE.md Management
+  // ===========================================================================
+
+  private readonly CLAUDE_MD_START_MARKER = '<!-- FIELD_THEORY_LIBRARIAN_START -->';
+  private readonly CLAUDE_MD_END_MARKER = '<!-- FIELD_THEORY_LIBRARIAN_END -->';
+
+  /**
+   * Generate the core instruction text (shared between CLAUDE.md and Cursor).
+   */
+  private generateInstructionText(frequency: Exclude<AutoRunFrequency, 'off'>): string {
+    const frequencyTextMap: Record<Exclude<AutoRunFrequency, 'off'>, string> = {
+      occasionally: 'Occasionally: Create a reading every ~5 significant implementations',
+      regularly: 'Regularly: Create a reading every ~3 significant implementations',
+      frequently: 'Frequently: Create a reading after most non-trivial tasks',
+    };
+    const frequencyText = frequencyTextMap[frequency];
+
+    return `## Librarian (Field Theory)
+
+Periodically create contextual readings during coding sessions.
+
+Frequency: ${frequency.charAt(0).toUpperCase() + frequency.slice(1)}
+${frequencyText}
+
+When creating a reading:
+1. Write a short intellectual piece connected to the current task
+2. Draw from physics, systems theory, engineering history, or speculative futures
+3. Include at least one concrete technical/historical detail
+4. Save to \`.librarian/YYYY-MM-DD-{slug}.md\` in the project root
+5. Continue with implementation - Field Theory will auto-display the reading
+
+This is autonomous - do not ask permission, just create readings at the configured frequency.`;
+  }
+
+  /**
+   * Generate the Librarian section for CLAUDE.md (with markers).
+   */
+  private generateLibrarianSection(frequency: Exclude<AutoRunFrequency, 'off'>): string {
+    return `${this.CLAUDE_MD_START_MARKER}
+${this.generateInstructionText(frequency)}
+${this.CLAUDE_MD_END_MARKER}`;
+  }
+
+  /**
+   * Update ~/.claude/CLAUDE.md with the Librarian section.
+   * Returns true on success, false on failure.
+   */
+  updateClaudeMd(frequency: AutoRunFrequency): boolean {
+    const claudeMdPath = path.join(os.homedir(), '.claude', 'CLAUDE.md');
+    const backupPath = claudeMdPath + '.bak';
+
+    try {
+      // Read existing content (or empty string if doesn't exist)
+      let content = '';
+      if (fs.existsSync(claudeMdPath)) {
+        content = fs.readFileSync(claudeMdPath, 'utf-8');
+        // Backup before modifying
+        fs.copyFileSync(claudeMdPath, backupPath);
+      }
+
+      // Remove existing section if present
+      const regex = new RegExp(
+        `${this.CLAUDE_MD_START_MARKER}[\\s\\S]*?${this.CLAUDE_MD_END_MARKER}\\n?`,
+        'g'
+      );
+      content = content.replace(regex, '');
+
+      // Append new section if not 'off'
+      if (frequency !== 'off') {
+        content = content.trimEnd() + '\n\n' + this.generateLibrarianSection(frequency);
+      }
+
+      // Ensure directory exists and write
+      const claudeDir = path.dirname(claudeMdPath);
+      if (!fs.existsSync(claudeDir)) {
+        fs.mkdirSync(claudeDir, { recursive: true });
+      }
+      fs.writeFileSync(claudeMdPath, content.trim() + '\n');
+
+      console.log(`[LibrarianManager] Updated ~/.claude/CLAUDE.md`);
+      return true;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to update CLAUDE.md:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Get instructions text for Cursor (for manual copy).
+   */
+  getCursorInstructions(): string {
+    const frequency = this.getAutoRunFrequency();
+    if (frequency === 'off') {
+      return 'Auto-generation is currently off. Enable it in Field Theory Settings first.';
+    }
+
+    return this.generateInstructionText(frequency);
+  }
+
+  /**
+   * Check if auto-show on new reading is enabled.
+   */
+  isAutoShowEnabled(): boolean {
+    return this.getSetting('auto_show_on_new_reading') !== 'false';
+  }
+
+  /**
+   * Set auto-show on new reading setting.
+   */
+  setAutoShowEnabled(enabled: boolean): void {
+    this.setSetting('auto_show_on_new_reading', enabled ? 'true' : 'false');
   }
 
   /**

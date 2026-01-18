@@ -886,6 +886,13 @@ interface LibrarianAPI {
   deleteReading: (id: number) => Promise<boolean>;
   browseDirectory: () => Promise<string | null>;
   onReadingAdded: (callback: (reading: Reading) => void) => () => void;
+  onSetFullscreen: (callback: (fullscreen: boolean) => void) => () => void;
+  onShowReading: (callback: (readingId: number) => void) => () => void;
+  getAutoRunFrequency: () => Promise<string>;
+  setAutoRunFrequency: (frequency: string) => Promise<boolean>;
+  getCursorInstructions: () => Promise<string>;
+  getAutoShowEnabled: () => Promise<boolean>;
+  setAutoShowEnabled: (enabled: boolean) => Promise<void>;
 }
 
 declare global {

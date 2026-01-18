@@ -115,17 +115,17 @@ export class MobileSync extends EventEmitter {
    * Call this after construction to handle existing sessions from disk.
    */
   async init(): Promise<void> {
-    console.log('[MobileSync] Initializing...');
+    console.debug('[MobileSync] Initializing...');
 
     // If AuthManager already has a valid session (restored from disk), start sync.
     if (this.isAuthenticated()) {
-      console.log('[MobileSync] Session already active, starting sync');
+      console.debug('[MobileSync] Session already active, starting sync');
       this.startPeriodicSync();
       this.setupTodoRealtimeSubscription();
       this.setupProfileRealtimeSubscription();
       await this.fetchAndEmitCurrentTier();
     } else {
-      console.log('[MobileSync] No active session, waiting for auth');
+      console.debug('[MobileSync] No active session, waiting for auth');
     }
   }
 
@@ -134,13 +134,13 @@ export class MobileSync extends EventEmitter {
    */
   private handleSessionChanged(session: Session | null): void {
     if (session) {
-      console.log('[MobileSync] Session active, starting sync');
+      console.debug('[MobileSync] Session active, starting sync');
       this.startPeriodicSync();
       this.setupTodoRealtimeSubscription();
       this.setupProfileRealtimeSubscription();
       this.fetchAndEmitCurrentTier();
     } else {
-      console.log('[MobileSync] Session cleared, stopping sync');
+      console.debug('[MobileSync] Session cleared, stopping sync');
       this.teardownTodoRealtimeSubscription();
       this.teardownProfileRealtimeSubscription();
       this.stopPeriodicSync();
@@ -218,7 +218,7 @@ export class MobileSync extends EventEmitter {
       }
 
       if (data?.tier) {
-        console.log('[MobileSync] Fetched tier from server:', data.tier);
+        console.debug('[MobileSync] Fetched tier from server:', data.tier);
         this.emit('tierChanged', data.tier);
       }
     } catch (err) {
@@ -265,14 +265,14 @@ export class MobileSync extends EventEmitter {
       });
     }, 60000);
 
-    console.log('[MobileSync] Periodic sync started');
+    console.debug('[MobileSync] Periodic sync started');
   }
 
   private stopPeriodicSync(): void {
     if (this.syncInterval) {
       clearInterval(this.syncInterval);
       this.syncInterval = null;
-      console.log('[MobileSync] Periodic sync stopped');
+      console.debug('[MobileSync] Periodic sync stopped');
     }
   }
 
@@ -285,7 +285,7 @@ export class MobileSync extends EventEmitter {
 
     this.teardownTodoRealtimeSubscription();
 
-    console.log('[MobileSync] Setting up realtime subscription for todos');
+    console.debug('[MobileSync] Setting up realtime subscription for todos');
 
     this.todoRealtimeChannel = this.supabase
       .channel('todos-realtime')
@@ -297,7 +297,7 @@ export class MobileSync extends EventEmitter {
           table: 'todos',
         },
         (payload) => {
-          console.log('[MobileSync] Realtime INSERT todo:', payload.new?.id);
+          console.debug('[MobileSync] Realtime INSERT todo:', payload.new?.id);
           const row = payload.new as TodoRow;
           const todo: Todo = {
             id: row.id,
@@ -322,7 +322,7 @@ export class MobileSync extends EventEmitter {
           table: 'todos',
         },
         (payload) => {
-          console.log('[MobileSync] Realtime UPDATE todo:', payload.new?.id);
+          console.debug('[MobileSync] Realtime UPDATE todo:', payload.new?.id);
           const row = payload.new as TodoRow;
           const todo: Todo = {
             id: row.id,
@@ -345,7 +345,7 @@ export class MobileSync extends EventEmitter {
           table: 'todos',
         },
         (payload) => {
-          console.log('[MobileSync] Realtime DELETE todo:', payload.old?.id);
+          console.debug('[MobileSync] Realtime DELETE todo:', payload.old?.id);
           const deletedId = (payload.old as TodoRow)?.id;
           if (deletedId) {
             this.todos = this.todos.filter(t => t.id !== deletedId);
@@ -359,7 +359,10 @@ export class MobileSync extends EventEmitter {
           console.error('[MobileSync] Todo realtime subscription error:', err);
           this.todoRealtimeConnected = false;
         }
-        console.log('[MobileSync] Todo realtime subscription status:', status);
+        // Only log non-routine status changes
+        if (status !== 'SUBSCRIBED') {
+          console.debug('[MobileSync] Todo realtime subscription status:', status);
+        }
         if (status === 'SUBSCRIBED') {
           this.todoRealtimeConnected = true;
           // Fetch initial todos now that subscription is active
@@ -373,7 +376,7 @@ export class MobileSync extends EventEmitter {
             this.todoReconnectTimer = setTimeout(() => {
               this.todoReconnectTimer = null;
               if (this.session && !this.todoRealtimeConnected) {
-                console.log('[MobileSync] Attempting to reconnect todo realtime...');
+                console.debug('[MobileSync] Attempting to reconnect todo realtime...');
                 this.setupTodoRealtimeSubscription();
               }
             }, 5000);
@@ -389,7 +392,7 @@ export class MobileSync extends EventEmitter {
       this.todoReconnectTimer = null;
     }
     if (this.todoRealtimeChannel) {
-      console.log('[MobileSync] Tearing down todo realtime subscription');
+      console.debug('[MobileSync] Tearing down todo realtime subscription');
       this.supabase?.removeChannel(this.todoRealtimeChannel);
       this.todoRealtimeChannel = null;
     }
@@ -406,7 +409,7 @@ export class MobileSync extends EventEmitter {
 
     this.teardownProfileRealtimeSubscription();
 
-    console.log('[MobileSync] Setting up realtime subscription for profile tier');
+    console.debug('[MobileSync] Setting up realtime subscription for profile tier');
 
     this.profileRealtimeChannel = this.supabase
       .channel('profile-tier')
@@ -432,14 +435,14 @@ export class MobileSync extends EventEmitter {
           console.error('[MobileSync] Profile realtime subscription error:', err);
         }
         if (status === 'SUBSCRIBED') {
-          console.log('[MobileSync] Profile realtime subscription active');
+          console.debug('[MobileSync] Profile realtime subscription active');
         }
       });
   }
 
   private teardownProfileRealtimeSubscription(): void {
     if (this.profileRealtimeChannel) {
-      console.log('[MobileSync] Tearing down profile realtime subscription');
+      console.debug('[MobileSync] Tearing down profile realtime subscription');
       this.supabase?.removeChannel(this.profileRealtimeChannel);
       this.profileRealtimeChannel = null;
     }
@@ -510,7 +513,7 @@ export class MobileSync extends EventEmitter {
       }
 
       if (syncedCount > 0) {
-        console.log(`[MobileSync] Synced ${syncedCount} new transcripts from iOS`);
+        console.debug(`[MobileSync] Synced ${syncedCount} new transcripts from iOS`);
       }
 
       return syncedCount;
@@ -606,7 +609,7 @@ export class MobileSync extends EventEmitter {
       }
 
       if (syncedCount > 0) {
-        console.log(`[MobileSync] Synced ${syncedCount} new sketches from iOS`);
+        console.debug(`[MobileSync] Synced ${syncedCount} new sketches from iOS`);
       }
 
       return syncedCount;
@@ -636,7 +639,7 @@ export class MobileSync extends EventEmitter {
     }
 
     try {
-      console.log('[MobileSync] Fetching todos from Supabase...');
+      console.debug('[MobileSync] Fetching todos from Supabase...');
       const { data: rows, error } = await this.supabase
         .from('todos')
         .select('*')
@@ -648,7 +651,7 @@ export class MobileSync extends EventEmitter {
       }
 
       if (!rows) {
-        console.log('[MobileSync] No todos returned from Supabase');
+        console.debug('[MobileSync] No todos returned from Supabase');
         return this.todos;
       }
 
@@ -661,7 +664,7 @@ export class MobileSync extends EventEmitter {
         updatedAt: new Date(row.updated_at).getTime(),
       }));
 
-      console.log(`[MobileSync] Synced ${this.todos.length} todos from Supabase`);
+      console.debug(`[MobileSync] Synced ${this.todos.length} todos from Supabase`);
       this.emit('todosChanged', this.todos);
       return this.todos;
     } catch (error) {
@@ -889,6 +892,6 @@ export class MobileSync extends EventEmitter {
     this.stopPeriodicSync();
     this.authManager.removeListener('sessionChanged', this.boundHandleSessionChanged);
     this.removeAllListeners();
-    console.log('[MobileSync] Destroyed');
+    console.debug('[MobileSync] Destroyed');
   }
 }
