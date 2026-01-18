@@ -20,7 +20,10 @@
     "start": "electron .",
     "package": "npm run build:all && electron-builder",
     "package:experimental": "npm run build:all && electron-builder --config electron-builder.experimental.json",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -40,17 +43,21 @@
   },
   "devDependencies": {
     "@electron/notarize": "^2.3.2",
+    "@testing-library/react": "^16.3.1",
     "@types/node": "^20.11.19",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.0",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.3.3",
+    "@vitest/coverage-v8": "^4.0.17",
     "concurrently": "^8.2.2",
     "electron": "^31.0.2",
     "electron-builder": "^24.13.3",
     "electron-rebuild": "^3.2.9",
+    "happy-dom": "^20.3.1",
     "typescript": "^5.6.2",
     "vite": "^5.4.8",
+    "vitest": "^4.0.17",
     "wait-on": "^7.2.0"
   },
   "build": {
