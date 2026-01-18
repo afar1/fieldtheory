@@ -1000,12 +1000,20 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.getReadings();
   });
 
-  // Get a single reading with full content
-  ipcMain.handle('librarian:getReading', (_event, id: number): Reading | null => {
+  // Get a single reading with full content (by path)
+  ipcMain.handle('librarian:getReading', (_event, filePath: string): Reading | null => {
     if (!librarianManager) {
       return null;
     }
-    return librarianManager.getReading(id);
+    return librarianManager.getReading(filePath);
+  });
+
+  // Save reading content to disk
+  ipcMain.handle('librarian:saveReading', (_event, filePath: string, content: string): boolean => {
+    if (!librarianManager) {
+      return false;
+    }
+    return librarianManager.saveReading(filePath, content);
   });
 
   // Get all watched directories
@@ -1024,20 +1032,12 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.addWatchedDir(dirPath);
   });
 
-  // Remove a watched directory
-  ipcMain.handle('librarian:removeWatchedDir', (_event, id: number): boolean => {
+  // Remove a watched directory (by path)
+  ipcMain.handle('librarian:removeWatchedDir', (_event, dirPath: string): boolean => {
     if (!librarianManager) {
       return false;
     }
-    return librarianManager.removeWatchedDir(id);
-  });
-
-  // Delete a reading
-  ipcMain.handle('librarian:deleteReading', (_event, id: number): boolean => {
-    if (!librarianManager) {
-      return false;
-    }
-    return librarianManager.deleteReading(id);
+    return librarianManager.removeWatchedDir(dirPath);
   });
 
   // Browse for a directory (open folder picker)
@@ -4186,12 +4186,30 @@ async function initTranscriberSystem(): Promise<void> {
         app.dock.bounce('informational');
       }
 
-      // Tell renderer to switch to librarian in immersive mode
+      // Tell renderer to switch to librarian in immersive mode (now using path)
       const win = clipboardHistoryWindow.getWindow();
       if (win && !win.isDestroyed()) {
-        win.webContents.send('librarian:showReading', reading.id);
+        win.webContents.send('librarian:showReading', reading.path);
       }
     }
+  });
+
+  // Broadcast reading-updated events to all windows
+  librarianManager.on('reading-updated', (reading: ReadingMeta) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send('librarian:readingUpdated', reading);
+      }
+    });
+  });
+
+  // Broadcast reading-removed events to all windows
+  librarianManager.on('reading-removed', (filePath: string) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send('librarian:readingRemoved', filePath);
+      }
+    });
   });
 
   // Connect quota manager to tray for menu bar display
@@ -4562,15 +4580,17 @@ async function handleProtocolUrl(url: string): Promise<void> {
 
       // Decode the file path (it may be URL-encoded)
       const decodedPath = decodeURIComponent(filePath);
-      console.log('[Main] Importing reading from:', decodedPath, fullscreen ? '(fullscreen)' : '');
+      console.log('[Main] Opening reading from:', decodedPath, fullscreen ? '(fullscreen)' : '');
 
-      // Import the file via LibrarianManager
+      // Read the file directly - in file-only architecture, readings are on disk
       if (librarianManager) {
-        const reading = await librarianManager.importFile(decodedPath);
+        const reading = librarianManager.getReading(decodedPath);
         if (reading) {
-          console.log('[Main] Successfully imported reading:', reading.title);
-          // The reading-added event will automatically trigger tab switch
-          // Just need to show and focus the window
+          console.log('[Main] Found reading:', reading.title);
+          // Send the reading path to the renderer to display it
+          clipboardHistoryWindow?.getWindow()?.webContents.send('librarian:showReading', reading.path);
+        } else {
+          console.warn('[Main] Reading not found:', decodedPath);
         }
       }
 

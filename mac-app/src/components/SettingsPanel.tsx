@@ -1764,6 +1764,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         <div style={styles.row}>
           <span style={styles.rowLabel}>Record Transcription (Alt)</span>
           <div style={styles.rowControls}>
+            {!isCapturingSecondaryTranscriptionHotkey && secondaryTranscriptionHotkey && (
+              <button onClick={handleClearSecondaryHotkey} style={styles.btnGhost}>Clear</button>
+            )}
             <button
               onClick={() => { setIsCapturingSecondaryTranscriptionHotkey(true); setHotkeyError(null); }}
               disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingSecondaryTranscriptionHotkey}
@@ -1774,9 +1777,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             {isCapturingSecondaryTranscriptionHotkey && (
               <button onClick={() => { setIsCapturingSecondaryTranscriptionHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
             )}
-            {!isCapturingSecondaryTranscriptionHotkey && secondaryTranscriptionHotkey && (
-              <button onClick={handleClearSecondaryHotkey} style={styles.btnGhost}>Clear</button>
-            )}
           </div>
         </div>
 
@@ -1784,6 +1784,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         <div style={styles.row}>
           <span style={styles.rowLabel}>Take Screenshot</span>
           <div style={styles.rowControls}>
+            {!isCapturingScreenshotHotkey && clipboardHotkeys.screenshot && (
+              <button onClick={handleClearScreenshotHotkey} style={styles.btnGhost}>Clear</button>
+            )}
             <button
               onClick={() => { setIsCapturingScreenshotHotkey(true); setHotkeyError(null); }}
               disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingSecondaryTranscriptionHotkey}
@@ -1794,9 +1797,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             {isCapturingScreenshotHotkey && (
               <button onClick={() => { setIsCapturingScreenshotHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
             )}
-            {!isCapturingScreenshotHotkey && clipboardHotkeys.screenshot && (
-              <button onClick={handleClearScreenshotHotkey} style={styles.btnGhost}>Clear</button>
-            )}
           </div>
         </div>
 
@@ -1804,6 +1804,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         <div style={styles.row}>
           <span style={styles.rowLabel}>Take Full Screen Screenshot</span>
           <div style={styles.rowControls}>
+            {!isCapturingFullScreenHotkey && clipboardHotkeys.fullScreen && (
+              <button onClick={handleClearFullScreenHotkey} style={styles.btnGhost}>Clear</button>
+            )}
             <button
               onClick={() => { setIsCapturingFullScreenHotkey(true); setHotkeyError(null); }}
               disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingSecondaryTranscriptionHotkey}
@@ -1814,9 +1817,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             {isCapturingFullScreenHotkey && (
               <button onClick={() => { setIsCapturingFullScreenHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
             )}
-            {!isCapturingFullScreenHotkey && clipboardHotkeys.fullScreen && (
-              <button onClick={handleClearFullScreenHotkey} style={styles.btnGhost}>Clear</button>
-            )}
           </div>
         </div>
 
@@ -1824,6 +1824,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         <div style={styles.row}>
           <span style={styles.rowLabel}>Take Active Window Screenshot</span>
           <div style={styles.rowControls}>
+            {!isCapturingActiveWindowHotkey && clipboardHotkeys.activeWindow && (
+              <button onClick={handleClearActiveWindowHotkey} style={styles.btnGhost}>Clear</button>
+            )}
             <button
               onClick={() => { setIsCapturingActiveWindowHotkey(true); setHotkeyError(null); }}
               disabled={isCapturingScreenshotHotkey || isCapturingHistoryHotkey || isCapturingFullScreenHotkey || isCapturingActiveWindowHotkey || isCapturingTodoHotkey || isCapturingTranscriptionHotkey || isCapturingSecondaryTranscriptionHotkey}
@@ -1833,9 +1836,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             </button>
             {isCapturingActiveWindowHotkey && (
               <button onClick={() => { setIsCapturingActiveWindowHotkey(false); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
-            )}
-            {!isCapturingActiveWindowHotkey && clipboardHotkeys.activeWindow && (
-              <button onClick={handleClearActiveWindowHotkey} style={styles.btnGhost}>Clear</button>
             )}
           </div>
         </div>

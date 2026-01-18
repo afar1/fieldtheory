@@ -23,6 +23,8 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
 
   // Path input
   const [manualPath, setManualPath] = useState('');
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanningDots, setScanningDots] = useState('.');
 
   // Auto-run frequency
   const [autoRunFrequency, setAutoRunFrequency] = useState<string>('off');
@@ -40,6 +42,15 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [claudeConfigError, setClaudeConfigError] = useState(false);
   const [resynced, setResynced] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  // Animate scanning dots
+  useEffect(() => {
+    if (!isScanning) return;
+    const interval = setInterval(() => {
+      setScanningDots((prev) => (prev.length >= 3 ? '.' : prev + '.'));
+    }, 400);
+    return () => clearInterval(interval);
+  }, [isScanning]);
 
   // Load initial state
   useEffect(() => {
@@ -68,14 +79,14 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   }, []);
 
   // Handle remove directory
-  const handleRemove = useCallback(async (id: number) => {
+  const handleRemove = useCallback(async (dirPath: string) => {
     if (!window.librarianAPI) return;
 
     setError(null);
     try {
-      const success = await window.librarianAPI.removeWatchedDir(id);
+      const success = await window.librarianAPI.removeWatchedDir(dirPath);
       if (success) {
-        setWatchedDirs((prev) => prev.filter((d) => d.id !== id));
+        setWatchedDirs((prev) => prev.filter((d) => d.path !== dirPath));
       } else {
         setError('Failed to remove directory');
       }
@@ -86,9 +97,10 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
 
   // Handle path submission
   const handleManualPathSubmit = useCallback(async () => {
-    if (!window.librarianAPI || !manualPath.trim()) return;
+    if (!window.librarianAPI || !manualPath.trim() || isScanning) return;
 
     setError(null);
+    setIsScanning(true);
     try {
       const result = await window.librarianAPI.addWatchedDir(manualPath.trim());
       if (result) {
@@ -99,8 +111,10 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setIsScanning(false);
     }
-  }, [manualPath]);
+  }, [manualPath, isScanning]);
 
   // Handle frequency change
   const handleFrequencyChange = useCallback(async (frequency: string) => {
@@ -470,7 +484,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
 
             {watchedDirs.map((dir) => (
               <div
-                key={dir.id}
+                key={dir.path}
                 style={{
                   display: 'flex',
                   gap: '8px',
@@ -496,7 +510,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                   {formatPath(dir.path)}
                 </code>
                 <button
-                  onClick={() => handleRemove(dir.id)}
+                  onClick={() => handleRemove(dir.path)}
                   style={{
                     padding: '8px 12px',
                     fontSize: '12px',
@@ -536,6 +550,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
               onChange={(e) => setManualPath(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleManualPathSubmit()}
               placeholder="~/path/to/directory"
+              disabled={isScanning}
               style={{
                 flex: 1,
                 padding: '8px 12px',
@@ -545,24 +560,42 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                 borderRadius: '6px',
                 color: theme.text,
                 outline: 'none',
+                opacity: isScanning ? 0.5 : 1,
               }}
             />
-            <button
-              onClick={handleManualPathSubmit}
-              disabled={!manualPath.trim()}
-              style={{
-                padding: '8px 16px',
-                fontSize: '12px',
-                fontWeight: 500,
-                color: manualPath.trim() ? '#fff' : theme.textSecondary,
-                backgroundColor: manualPath.trim() ? theme.accent : 'transparent',
-                border: manualPath.trim() ? 'none' : `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
-                borderRadius: '6px',
-                cursor: manualPath.trim() ? 'pointer' : 'default',
-              }}
-            >
-              Add
-            </button>
+            {isScanning ? (
+              <span
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  color: theme.textSecondary,
+                  fontFamily: "'SF Mono', Monaco, 'Cascadia Code', monospace",
+                  display: 'flex',
+                  alignItems: 'center',
+                  minWidth: '90px',
+                }}
+              >
+                Scanning{scanningDots}
+              </span>
+            ) : (
+              <button
+                onClick={handleManualPathSubmit}
+                disabled={!manualPath.trim()}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  color: manualPath.trim() ? '#fff' : theme.textSecondary,
+                  backgroundColor: manualPath.trim() ? theme.accent : 'transparent',
+                  border: manualPath.trim() ? 'none' : `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
+                  borderRadius: '6px',
+                  cursor: manualPath.trim() ? 'pointer' : 'default',
+                }}
+              >
+                Add
+              </button>
+            )}
           </div>
         </div>
 

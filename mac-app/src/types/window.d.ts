@@ -843,61 +843,63 @@ interface ThemeAPI {
 }
 
 /**
- * Reading metadata for sidebar display.
- */
-interface ReadingMeta {
-  id: number;
-  title: string;
-  context: string | null;
-  readingTime: string | null;
-  originalPath: string | null;
-  createdAt: number;
-}
-
-/**
- * Full reading with content.
- */
-interface Reading extends ReadingMeta {
-  filename: string;
-  originalPath: string | null;
-  content: string;
-  sourceDir: string | null;
-  importedAt: number;
-}
-
-/**
- * Watched directory for Librarian.
- */
-interface WatchedDir {
-  id: number;
-  path: string;
-  enabled: boolean;
-  addedAt: number;
-}
-
-/**
  * Librarian API for collecting and displaying readings.
+ * File-only architecture: .librarian/ directories are the single source of truth.
  * Named after the AI assistant in Snow Crash.
  */
 interface LibrarianAPI {
   getReadings: () => Promise<ReadingMeta[]>;
-  getReading: (id: number) => Promise<Reading | null>;
+  getReading: (path: string) => Promise<Reading | null>;
+  saveReading: (path: string, content: string) => Promise<boolean>;
   getWatchedDirs: () => Promise<WatchedDir[]>;
   addWatchedDir: (dirPath: string) => Promise<WatchedDir | null>;
-  removeWatchedDir: (id: number) => Promise<boolean>;
-  deleteReading: (id: number) => Promise<boolean>;
+  removeWatchedDir: (path: string) => Promise<boolean>;
   browseDirectory: () => Promise<string | null>;
   onReadingAdded: (callback: (reading: Reading) => void) => () => void;
+  onReadingUpdated: (callback: (reading: ReadingMeta) => void) => () => void;
+  onReadingRemoved: (callback: (path: string) => void) => () => void;
   onSetFullscreen: (callback: (fullscreen: boolean) => void) => () => void;
-  onShowReading: (callback: (readingId: number) => void) => () => void;
+  onShowReading: (callback: (readingPath: string) => void) => () => void;
   getAutoRunFrequency: () => Promise<string>;
   setAutoRunFrequency: (frequency: string) => Promise<boolean>;
   getCursorInstructions: () => Promise<string>;
   getAutoShowEnabled: () => Promise<boolean>;
   setAutoShowEnabled: (enabled: boolean) => Promise<void>;
+  getClaudeCodeStatus: () => Promise<'installed' | 'directory-only' | 'not-installed'>;
+  getClaudeConfigPath: () => Promise<string>;
+  resyncClaudeMd: () => Promise<boolean>;
 }
 
 declare global {
+  /**
+   * Reading metadata for sidebar display.
+   * Path is the identity - no numeric IDs.
+   */
+  interface ReadingMeta {
+    path: string;
+    title: string;
+    context: string | null;
+    readingTime: string | null;
+    createdAt: number;
+    mtime: number;
+  }
+
+  /**
+   * Full reading with content (loaded on demand).
+   */
+  interface Reading extends ReadingMeta {
+    content: string;
+  }
+
+  /**
+   * Watched directory for Librarian.
+   * Path is the identity - no numeric IDs.
+   */
+  interface WatchedDir {
+    path: string;
+    enabled: boolean;
+  }
+
   interface Window {
     audioAPI?: AudioAPI;
     hotkeyAPI?: HotkeyAPI;

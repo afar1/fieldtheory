@@ -2122,38 +2122,39 @@ const themeAPI = {
 };
 
 // Reading metadata (without full content)
+// Path is the identity - no numeric IDs
 interface ReadingMeta {
-  id: number;
+  path: string;
   title: string;
   context: string | null;
   readingTime: string | null;
   createdAt: number;
+  mtime: number;
 }
 
-// Full reading with content
+// Full reading with content (loaded on demand)
 interface Reading extends ReadingMeta {
-  filename: string;
-  originalPath: string | null;
   content: string;
-  sourceDir: string | null;
-  importedAt: number;
 }
 
 // Watched directory configuration
+// Path is the identity - no numeric IDs
 interface WatchedDir {
-  id: number;
   path: string;
   enabled: boolean;
-  addedAt: number;
 }
 
 // Librarian API for reading collection
+// File-only architecture: .librarian/ directories are the single source of truth
 const librarianAPI = {
   // Get all readings (metadata only, for sidebar list)
   getReadings: (): Promise<ReadingMeta[]> => ipcRenderer.invoke('librarian:getReadings'),
 
-  // Get a single reading with full content
-  getReading: (id: number): Promise<Reading | null> => ipcRenderer.invoke('librarian:getReading', id),
+  // Get a single reading with full content (by path)
+  getReading: (filePath: string): Promise<Reading | null> => ipcRenderer.invoke('librarian:getReading', filePath),
+
+  // Save reading content to disk
+  saveReading: (filePath: string, content: string): Promise<boolean> => ipcRenderer.invoke('librarian:saveReading', filePath, content),
 
   // Get all watched directories
   getWatchedDirs: (): Promise<WatchedDir[]> => ipcRenderer.invoke('librarian:getWatchedDirs'),
@@ -2161,11 +2162,8 @@ const librarianAPI = {
   // Add a directory to watch
   addWatchedDir: (dirPath: string): Promise<WatchedDir | null> => ipcRenderer.invoke('librarian:addWatchedDir', dirPath),
 
-  // Remove a watched directory
-  removeWatchedDir: (id: number): Promise<boolean> => ipcRenderer.invoke('librarian:removeWatchedDir', id),
-
-  // Delete a reading
-  deleteReading: (id: number): Promise<boolean> => ipcRenderer.invoke('librarian:deleteReading', id),
+  // Remove a watched directory (by path)
+  removeWatchedDir: (dirPath: string): Promise<boolean> => ipcRenderer.invoke('librarian:removeWatchedDir', dirPath),
 
   // Browse for a directory (open folder picker)
   browseDirectory: (): Promise<string | null> => ipcRenderer.invoke('librarian:browseDirectory'),
@@ -2177,6 +2175,20 @@ const librarianAPI = {
     return () => ipcRenderer.removeListener('librarian:readingAdded', handler);
   },
 
+  // Listen for reading updates (content changed)
+  onReadingUpdated: (callback: (reading: ReadingMeta) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, reading: ReadingMeta) => callback(reading);
+    ipcRenderer.on('librarian:readingUpdated', handler);
+    return () => ipcRenderer.removeListener('librarian:readingUpdated', handler);
+  },
+
+  // Listen for reading removals (file deleted)
+  onReadingRemoved: (callback: (filePath: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, filePath: string) => callback(filePath);
+    ipcRenderer.on('librarian:readingRemoved', handler);
+    return () => ipcRenderer.removeListener('librarian:readingRemoved', handler);
+  },
+
   // Listen for fullscreen mode requests (from URL scheme)
   onSetFullscreen: (callback: (fullscreen: boolean) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, fullscreen: boolean) => callback(fullscreen);
@@ -2184,9 +2196,9 @@ const librarianAPI = {
     return () => ipcRenderer.removeListener('librarian:setFullscreen', handler);
   },
 
-  // Listen for show reading requests (auto-show on new reading)
-  onShowReading: (callback: (readingId: number) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, readingId: number) => callback(readingId);
+  // Listen for show reading requests (auto-show on new reading, now uses path)
+  onShowReading: (callback: (readingPath: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, readingPath: string) => callback(readingPath);
     ipcRenderer.on('librarian:showReading', handler);
     return () => ipcRenderer.removeListener('librarian:showReading', handler);
   },
