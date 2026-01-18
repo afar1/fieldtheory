@@ -2195,6 +2195,12 @@ const librarianAPI = {
   getAutoRunFrequency: (): Promise<string> => ipcRenderer.invoke('librarian:getAutoRunFrequency'),
   setAutoRunFrequency: (frequency: string): Promise<boolean> => ipcRenderer.invoke('librarian:setAutoRunFrequency', frequency),
 
+  // Force re-sync CLAUDE.md with current settings (if user deleted it manually)
+  resyncClaudeMd: (): Promise<boolean> => ipcRenderer.invoke('librarian:resyncClaudeMd'),
+
+  // Get Claude Code installation status
+  getClaudeCodeStatus: (): Promise<string> => ipcRenderer.invoke('librarian:getClaudeCodeStatus'),
+
   // Get Cursor instructions text for manual copy
   getCursorInstructions: (): Promise<string> => ipcRenderer.invoke('librarian:getCursorInstructions'),
 

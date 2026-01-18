@@ -9,7 +9,7 @@ import { EventEmitter } from 'events';
 /**
  * Auto-run frequency for generating readings.
  */
-export type AutoRunFrequency = 'off' | 'occasionally' | 'regularly' | 'frequently';
+export type AutoRunFrequency = 'off' | 'occasionally' | 'regularly' | 'frequently' | 'always';
 
 /**
  * A reading imported into the Librarian.
@@ -581,6 +581,44 @@ export class LibrarianManager extends EventEmitter {
     return success;
   }
 
+  /**
+   * Force re-sync CLAUDE.md with current settings.
+   * Useful if user accidentally deleted the section.
+   */
+  resyncClaudeMd(): boolean {
+    const frequency = this.getAutoRunFrequency();
+    const success = this.updateClaudeMd(frequency);
+    console.log(`[LibrarianManager] Re-synced CLAUDE.md`);
+    return success;
+  }
+
+  /**
+   * Check if Claude Code appears to be installed.
+   * Returns 'installed' if ~/.claude/ exists with typical files,
+   * 'directory-only' if just the directory exists (we may have created it),
+   * or 'not-installed' if nothing exists.
+   */
+  getClaudeCodeStatus(): 'installed' | 'directory-only' | 'not-installed' {
+    const claudeDir = path.join(os.homedir(), '.claude');
+
+    if (!fs.existsSync(claudeDir)) {
+      return 'not-installed';
+    }
+
+    // Check for typical Claude Code files (settings.json, projects/, etc.)
+    const typicalFiles = ['settings.json', 'projects', 'statsig'];
+    const hasTypicalFiles = typicalFiles.some(file =>
+      fs.existsSync(path.join(claudeDir, file))
+    );
+
+    if (hasTypicalFiles) {
+      return 'installed';
+    }
+
+    // Directory exists but no typical files - we may have created it
+    return 'directory-only';
+  }
+
   // ===========================================================================
   // CLAUDE.md Management
   // ===========================================================================
@@ -592,23 +630,42 @@ export class LibrarianManager extends EventEmitter {
    * Generate the core instruction text (shared between CLAUDE.md and Cursor).
    */
   private generateInstructionText(frequency: Exclude<AutoRunFrequency, 'off'>): string {
-    const frequencyTextMap: Record<Exclude<AutoRunFrequency, 'off'>, string> = {
-      occasionally: 'Occasionally: Create a reading every ~5 significant implementations',
-      regularly: 'Regularly: Create a reading every ~3 significant implementations',
-      frequently: 'Frequently: Create a reading after most non-trivial tasks',
+    const frequencyDisplayMap: Record<Exclude<AutoRunFrequency, 'off'>, string> = {
+      occasionally: 'Occasionally',
+      regularly: 'Regularly',
+      frequently: 'Frequently',
+      always: 'All the time',
     };
-    const frequencyText = frequencyTextMap[frequency];
+    const frequencyDescMap: Record<Exclude<AutoRunFrequency, 'off'>, string> = {
+      occasionally: 'Create a reading every ~5 significant implementations',
+      regularly: 'Create a reading every ~3 significant implementations',
+      frequently: 'Create a reading after most non-trivial tasks',
+      always: 'On any implementation task (not during planning or Q&A): Create a reading after most non-trivial tasks',
+    };
 
     return `## Librarian (Field Theory)
 
 Periodically create contextual readings during coding sessions.
 
-Frequency: ${frequency.charAt(0).toUpperCase() + frequency.slice(1)}
-${frequencyText}
+Frequency: ${frequencyDisplayMap[frequency]}
+${frequencyDescMap[frequency]}
 
-When creating a reading:
+### Project setup (once per project)
+Before creating your first reading, check if \`.claude/settings.json\` exists and contains \`Write(.librarian/*)\` in the allow array. If not, create or update it:
+\`\`\`json
+{
+  "permissions": {
+    "allow": [
+      "Write(.librarian/*)"
+    ]
+  }
+}
+\`\`\`
+Skip this step if the permission already exists.
+
+### Creating readings
 1. Write a short intellectual piece connected to the current task
-2. Draw from physics, systems theory, engineering history, or speculative futures
+2. Draw from physics, systems theory, engineering history, company histories, engineers, inventors, or speculative futures
 3. Include at least one concrete technical/historical detail
 4. Save to \`.librarian/YYYY-MM-DD-{slug}.md\` in the project root
 5. Continue with implementation - Field Theory will auto-display the reading
