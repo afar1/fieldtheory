@@ -2119,8 +2119,68 @@ const themeAPI = {
   },
 };
 
+// Reading metadata (without full content)
+interface ReadingMeta {
+  id: number;
+  title: string;
+  context: string | null;
+  readingTime: string | null;
+  createdAt: number;
+}
+
+// Full reading with content
+interface Reading extends ReadingMeta {
+  filename: string;
+  originalPath: string | null;
+  content: string;
+  sourceDir: string | null;
+  importedAt: number;
+}
+
+// Watched directory configuration
+interface WatchedDir {
+  id: number;
+  path: string;
+  enabled: boolean;
+  addedAt: number;
+}
+
+// Librarian API for reading collection
+const librarianAPI = {
+  // Get all readings (metadata only, for sidebar list)
+  getReadings: (): Promise<ReadingMeta[]> => ipcRenderer.invoke('librarian:getReadings'),
+
+  // Get a single reading with full content
+  getReading: (id: number): Promise<Reading | null> => ipcRenderer.invoke('librarian:getReading', id),
+
+  // Get all watched directories
+  getWatchedDirs: (): Promise<WatchedDir[]> => ipcRenderer.invoke('librarian:getWatchedDirs'),
+
+  // Add a directory to watch
+  addWatchedDir: (dirPath: string): Promise<WatchedDir | null> => ipcRenderer.invoke('librarian:addWatchedDir', dirPath),
+
+  // Remove a watched directory
+  removeWatchedDir: (id: number): Promise<boolean> => ipcRenderer.invoke('librarian:removeWatchedDir', id),
+
+  // Delete a reading
+  deleteReading: (id: number): Promise<boolean> => ipcRenderer.invoke('librarian:deleteReading', id),
+
+  // Browse for a directory (open folder picker)
+  browseDirectory: (): Promise<string | null> => ipcRenderer.invoke('librarian:browseDirectory'),
+
+  // Listen for new readings
+  onReadingAdded: (callback: (reading: Reading) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, reading: Reading) => callback(reading);
+    ipcRenderer.on('librarian:readingAdded', handler);
+    return () => ipcRenderer.removeListener('librarian:readingAdded', handler);
+  },
+};
+
+type LibrarianAPI = typeof librarianAPI;
+
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);
 contextBridge.exposeInMainWorld('themeAPI', themeAPI);
+contextBridge.exposeInMainWorld('librarianAPI', librarianAPI);
 contextBridge.exposeInMainWorld('shellAPI', shellAPI);
 contextBridge.exposeInMainWorld('diagnosticsAPI', diagnosticsAPI);
 contextBridge.exposeInMainWorld('quotaAPI', quotaAPI);
@@ -2174,6 +2234,7 @@ declare global {
     shellAPI: ShellAPI;
     diagnosticsAPI: DiagnosticsAPI;
     commandsAPI: CommandsAPI;
+    librarianAPI: LibrarianAPI;
     stripeConfig: {
       paymentLink: string;
       portalLink: string;

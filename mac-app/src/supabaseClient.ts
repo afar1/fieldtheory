@@ -9,13 +9,15 @@ const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 let supabaseInstance: SupabaseClient | null = null;
 
 if (url && anonKey) {
-  // Configure Supabase client with full auth options to match iOS app behavior.
-  // This ensures proper session handling and token persistence.
+  // IMPORTANT: Auth is managed by main process (AuthManager).
+  // Renderer Supabase client is used ONLY for realtime subscriptions.
+  // - persistSession: false - no localStorage auth caching (prevents race conditions)
+  // - autoRefreshToken: false - main process handles token refresh
+  // The main process sends session tokens via IPC when components need realtime auth.
   supabaseInstance = createClient(url, anonKey, {
     auth: {
-      storage: localStorage,
-      autoRefreshToken: true,
-      persistSession: true,
+      persistSession: false,
+      autoRefreshToken: false,
       detectSessionInUrl: false,
     },
   });

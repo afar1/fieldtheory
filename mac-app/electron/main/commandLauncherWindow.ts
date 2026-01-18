@@ -15,10 +15,7 @@
 
 import { app, BrowserWindow, screen, ipcMain } from 'electron';
 import path from 'path';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-
-const execAsync = promisify(exec);
+import type { NativeHelper, FrontmostAppInfo } from './nativeHelper';
 
 /**
  * Represents a running application with its bundle ID and display name.
@@ -53,16 +50,18 @@ function isElectronApp(bundleId: string, appName: string): boolean {
  */
 export class CommandLauncherWindow {
   private window: BrowserWindow | null = null;
-  
+  private nativeHelper: NativeHelper | null = null;
+
   // The app that was active before we showed the launcher.
   private previousApp: RunningApp | null = null;
-  
+
   // Window dimensions - starts small, expands for results.
-  private readonly WINDOW_WIDTH = 340;
-  private readonly WINDOW_HEIGHT_COLLAPSED = 42;
+  private readonly WINDOW_WIDTH = 320;
+  private readonly WINDOW_HEIGHT_COLLAPSED = 36;
   private readonly WINDOW_HEIGHT_EXPANDED = 300;
-  
-  constructor() {
+
+  constructor(nativeHelper?: NativeHelper) {
+    this.nativeHelper = nativeHelper || null;
     // Listen for resize requests from renderer.
     ipcMain.on('command-launcher:resize', (_event, height: number) => {
       if (this.window && !this.window.isDestroyed()) {
@@ -84,16 +83,10 @@ export class CommandLauncherWindow {
   
   /**
    * Show the command launcher window.
-   * Captures the previous app before showing so we know where to paste.
-   * Centers on the frontmost app's window if possible, otherwise on display.
+   * Fetches fresh window bounds at hotkey time (~1-5ms) for accurate positioning,
+   * even when switching between windows of the same app.
    */
   async show(): Promise<void> {
-    // Capture the frontmost app and window bounds before showing the launcher.
-    const [, windowBounds] = await Promise.all([
-      this.capturePreviousApp(),
-      this.getFrontmostWindowBounds(),
-    ]);
-
     // If window exists but is destroyed, reset it.
     if (this.window && this.window.isDestroyed()) {
       this.window = null;
@@ -103,16 +96,30 @@ export class CommandLauncherWindow {
       this.createWindow();
     }
 
+    // Get cached frontmost app info for previous app (bundleId/name).
+    const frontmostApp = this.nativeHelper?.getFrontmostApp();
+
+    // Store previous app for paste-back feature.
+    if (frontmostApp?.bundleId && frontmostApp?.name) {
+      this.previousApp = {
+        bundleId: frontmostApp.bundleId,
+        name: frontmostApp.name,
+      };
+    }
+
     let x: number;
     let y: number;
 
+    // Fetch fresh window bounds on-demand (~1-5ms).
+    // This handles switching between windows of the same app.
+    const windowBounds = await this.nativeHelper?.getFrontmostWindowBounds();
+
     if (windowBounds) {
-      // Center on the frontmost application's window
+      // Center on the current frontmost window.
       x = Math.round(windowBounds.x + (windowBounds.width - this.WINDOW_WIDTH) / 2);
       y = Math.round(windowBounds.y + (windowBounds.height - this.WINDOW_HEIGHT_EXPANDED) / 2 - 50);
-      console.log(`[CommandLauncher] Centering on app window at (${windowBounds.x}, ${windowBounds.y}) ${windowBounds.width}x${windowBounds.height}`);
     } else {
-      // Fallback: center on active display
+      // Fallback: center on active display.
       const cursorPoint = screen.getCursorScreenPoint();
       const display = screen.getDisplayNearestPoint(cursorPoint);
       x = Math.round(display.bounds.x + (display.bounds.width - this.WINDOW_WIDTH) / 2);
@@ -155,61 +162,7 @@ export class CommandLauncherWindow {
   getPreviousApp(): RunningApp | null {
     return this.previousApp;
   }
-  
-  /**
-   * Capture the frontmost app before showing the window.
-   */
-  private async capturePreviousApp(): Promise<void> {
-    try {
-      const script = `
-        tell application "System Events"
-          set frontApp to first application process whose frontmost is true
-          return (bundle identifier of frontApp) & "|" & (name of frontApp)
-        end tell
-      `;
-      const { stdout } = await execAsync(`osascript -e '${script}'`);
-      const [bundleId, name] = stdout.trim().split('|');
 
-      if (bundleId && name && !isElectronApp(bundleId, name)) {
-        this.previousApp = { bundleId, name };
-        console.log(`[CommandLauncher] Captured previous app: ${name} (${bundleId})`);
-      } else {
-        this.previousApp = null;
-      }
-    } catch (error) {
-      console.error('[CommandLauncher] Failed to get frontmost app:', error);
-      this.previousApp = null;
-    }
-  }
-
-  /**
-   * Get the bounds of the frontmost application's window.
-   * Returns null if unable to get bounds.
-   */
-  private async getFrontmostWindowBounds(): Promise<{ x: number; y: number; width: number; height: number } | null> {
-    try {
-      const script = `
-        tell application "System Events"
-          set frontApp to first application process whose frontmost is true
-          set frontWindow to first window of frontApp
-          set {x, y} to position of frontWindow
-          set {w, h} to size of frontWindow
-          return (x as text) & "," & (y as text) & "," & (w as text) & "," & (h as text)
-        end tell
-      `;
-      const { stdout } = await execAsync(`osascript -e '${script}'`);
-      const [x, y, width, height] = stdout.trim().split(',').map(Number);
-
-      if (!isNaN(x) && !isNaN(y) && !isNaN(width) && !isNaN(height) && width > 0 && height > 0) {
-        return { x, y, width, height };
-      }
-    } catch (error) {
-      // Many apps don't expose window bounds via AppleScript - this is expected
-      console.log('[CommandLauncher] Could not get frontmost window bounds, will center on display');
-    }
-    return null;
-  }
-  
   /**
    * Create the command launcher window.
    */

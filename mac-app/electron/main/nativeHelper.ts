@@ -20,6 +20,20 @@ const DEBOUNCE_DELAY_MS = 200;
  * 
  * All communication happens via JSON-over-stdin/stdout.
  */
+/**
+ * Cached frontmost app info for instant access at hotkey time.
+ */
+export interface FrontmostAppInfo {
+  bundleId: string | null;
+  name: string | null;
+  windowBounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null;
+}
+
 export class NativeHelper extends EventEmitter {
   private child: ChildProcessWithoutNullStreams | null = null;
   private buffer = '';
@@ -32,8 +46,56 @@ export class NativeHelper extends EventEmitter {
   private pendingDevices: AudioDevice[] | null = null;
   private pendingDefaultInput: string | null = null;
 
+  // Cached frontmost app info - updated on app switch, read instantly at hotkey time.
+  private cachedFrontmostApp: FrontmostAppInfo | null = null;
+
   constructor() {
     super();
+  }
+
+  /**
+   * Get the cached frontmost app info.
+   * Updated automatically when the user switches apps.
+   * Returns null if no app switch has occurred since helper started.
+   */
+  getFrontmostApp(): FrontmostAppInfo | null {
+    return this.cachedFrontmostApp;
+  }
+
+  /**
+   * Get the current frontmost window bounds on-demand.
+   * This is a fast call (~1-5ms) that fetches fresh bounds,
+   * useful when switching between windows of the same app.
+   */
+  async getFrontmostWindowBounds(): Promise<{ x: number; y: number; width: number; height: number } | null> {
+    return new Promise(async (resolve) => {
+      if (!this.child || !this.child.stdin.writable) {
+        resolve(null);
+        return;
+      }
+
+      await this.waitForReady();
+
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve(null);
+      }, 1000);
+
+      const onMessage = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'frontmostWindowBounds') {
+          cleanup();
+          resolve(msg.windowBounds || null);
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', onMessage);
+      };
+
+      this.on('message', onMessage);
+      this.send({ type: 'getFrontmostWindowBounds' });
+    });
   }
 
   /**
@@ -431,6 +493,20 @@ export class NativeHelper extends EventEmitter {
         // Field Theory became the frontmost app (e.g., via Cmd+Tab).
         // Emit event so we can show the clipboard window.
         this.emit('appBecameFrontmost');
+        break;
+
+      case 'frontmostAppChanged':
+        // Cache frontmost app info for instant access at hotkey time.
+        this.cachedFrontmostApp = {
+          bundleId: msg.bundleId || null,
+          name: msg.name || null,
+          windowBounds: msg.windowBounds || null,
+        };
+        break;
+
+      case 'frontmostWindowBounds':
+        // Response to getFrontmostWindowBounds - handled by promise listener.
+        this.emit('message', msg);
         break;
 
       default:
