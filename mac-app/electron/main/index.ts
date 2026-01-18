@@ -14,6 +14,7 @@ import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
 import { MobileSync } from './mobileSync';
 import { SharedClipboardSync, SharedClipboardQueryOptions } from './sharedClipboardSync';
 import { SocialSync } from './socialSync';
+import { AuthManager } from './authManager';
 import { SharedClipboardIPCChannels } from './types/clipboard';
 import { SocialIPCChannels } from './types/social';
 import {
@@ -47,6 +48,7 @@ import { CommandsManager, PortableCommand } from './commandsManager';
 import { CommandsIPCChannels } from './types/commands';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { LocalLLMManager, LLMModelSize } from './localLLMManager';
+import { LibrarianManager, Reading, ReadingMeta, WatchedDir } from './librarianManager';
 
 // Load environment variables from .env.local for Supabase credentials.
 // In development, the file is in the mac-app directory.
@@ -136,6 +138,7 @@ let transcriberManager: TranscriberManager | null = null;
 let preferencesManager: PreferencesManager | null = null;
 let clipboardManager: ClipboardManager | null = null;
 let clipboardHistoryWindow: ClipboardHistoryWindow | null = null;
+let authManager: AuthManager | null = null;
 let mobileSync: MobileSync | null = null;
 let localLLMManager: LocalLLMManager | null = null;
 let sharedClipboardSync: SharedClipboardSync | null = null;
@@ -144,6 +147,7 @@ let onboardingWindow: OnboardingWindow | null = null;
 let cursorStatusManager: CursorStatusManager | null = null;
 let quotaManager: QuotaManager | null = null;
 let diagnosticsCollector: DiagnosticsCollector | null = null;
+let librarianManager: LibrarianManager | null = null;
 let commandsManager: CommandsManager | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
 
@@ -876,6 +880,10 @@ function showSettingsInClipboardWindow(): void {
  * Called from app 'activate' event handler.
  */
 function showClipboardHistoryOnActivate(): void {
+  const cursorStatusVisible = cursorStatusManager?.isVisible() ?? false;
+  const transcriberStatus = transcriberManager?.getStatus() ?? 'idle';
+  console.log(`[CursorStatus] app activate - showing clipboard | cursorStatus visible: ${cursorStatusVisible} | transcriber: ${transcriberStatus}`);
+
   // Don't show clipboard history if onboarding is not complete.
   const prefs = preferencesManager?.get();
   if (!prefs?.onboardingComplete) {
@@ -895,6 +903,12 @@ function showClipboardHistoryOnActivate(): void {
   // Always show the clipboard window when app is activated (e.g., Dock icon click).
   const boundsToUse = restoreClipboardHistoryBounds();
   clipboardHistoryWindow.show(boundsToUse);
+
+  // Log cursor status state after clipboard window is shown.
+  setTimeout(() => {
+    const stillVisible = cursorStatusManager?.isVisible() ?? false;
+    console.log(`[CursorStatus] after clipboard show - cursorStatus visible: ${stillVisible}`);
+  }, 100);
 }
 
 /**
@@ -968,6 +982,73 @@ function setupThemeIPCHandlers(): void {
     for (const win of allWindows) {
       win.webContents.send('theme:changed', isDark);
     }
+  });
+}
+
+/**
+ * Set up IPC handlers for Librarian (reading collection) functionality.
+ */
+function setupLibrarianIPCHandlers(): void {
+  // Get all readings (metadata only, for sidebar)
+  ipcMain.handle('librarian:getReadings', (): ReadingMeta[] => {
+    if (!librarianManager) {
+      return [];
+    }
+    return librarianManager.getReadings();
+  });
+
+  // Get a single reading with full content
+  ipcMain.handle('librarian:getReading', (_event, id: number): Reading | null => {
+    if (!librarianManager) {
+      return null;
+    }
+    return librarianManager.getReading(id);
+  });
+
+  // Get all watched directories
+  ipcMain.handle('librarian:getWatchedDirs', (): WatchedDir[] => {
+    if (!librarianManager) {
+      return [];
+    }
+    return librarianManager.getWatchedDirs();
+  });
+
+  // Add a watched directory
+  ipcMain.handle('librarian:addWatchedDir', (_event, dirPath: string): WatchedDir | null => {
+    if (!librarianManager) {
+      return null;
+    }
+    return librarianManager.addWatchedDir(dirPath);
+  });
+
+  // Remove a watched directory
+  ipcMain.handle('librarian:removeWatchedDir', (_event, id: number): boolean => {
+    if (!librarianManager) {
+      return false;
+    }
+    return librarianManager.removeWatchedDir(id);
+  });
+
+  // Delete a reading
+  ipcMain.handle('librarian:deleteReading', (_event, id: number): boolean => {
+    if (!librarianManager) {
+      return false;
+    }
+    return librarianManager.deleteReading(id);
+  });
+
+  // Browse for a directory (open folder picker)
+  ipcMain.handle('librarian:browseDirectory', async (): Promise<string | null> => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory', 'createDirectory'],
+      title: 'Select a directory to watch for readings',
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+
+    return result.filePaths[0];
   });
 }
 
@@ -2245,6 +2326,9 @@ function setupClipboardIPCHandlers(): void {
     const hotkeyManager = getHotkeyManager();
     hotkeyManager.unregisterAll();
 
+    // Clean up LibrarianManager (stop file watchers, close database)
+    librarianManager?.destroy();
+
     const fs = require('fs');
     for (const tempFile of dragTempFiles) {
       try {
@@ -2262,17 +2346,17 @@ function setupClipboardIPCHandlers(): void {
   // =========================================================================
 
   ipcMain.handle(ClipboardIPCChannels.SET_SYNC_SESSION, async (_event, accessToken: string, refreshToken: string) => {
-    if (!mobileSync) {
-      console.warn('[Main] setSyncSession: mobileSync not initialized');
+    if (!authManager) {
+      console.warn('[Main] setSyncSession: authManager not initialized');
       return false;
     }
-    await mobileSync.setSession(accessToken, refreshToken);
+    await authManager.setSession(accessToken, refreshToken);
     return true;
   });
 
   ipcMain.handle(ClipboardIPCChannels.CLEAR_SYNC_SESSION, async () => {
-    if (mobileSync) {
-      mobileSync.clearSession();
+    if (authManager) {
+      authManager.clearSession();
     }
     return true;
   });
@@ -2280,10 +2364,10 @@ function setupClipboardIPCHandlers(): void {
   // Get session from main process for recovery when renderer localStorage is cleared.
   // This allows the renderer to recover auth state without re-login.
   ipcMain.handle(ClipboardIPCChannels.GET_SYNC_SESSION, async () => {
-    if (!mobileSync) {
+    if (!authManager) {
       return null;
     }
-    const session = mobileSync.getSession();
+    const session = authManager.getSession();
     if (!session) {
       return null;
     }
@@ -2340,74 +2424,74 @@ function setupClipboardIPCHandlers(): void {
   // =========================================================================
 
   ipcMain.handle('auth:signUp', async (_event, email: string, password: string) => {
-    if (!mobileSync) {
-      return { error: 'Mobile sync not initialized' };
+    if (!authManager) {
+      return { error: 'Auth manager not initialized' };
     }
-    return await mobileSync.signUp(email, password);
+    return await authManager.signUp(email, password);
   });
 
   ipcMain.handle('auth:signInWithPassword', async (_event, email: string, password: string) => {
-    if (!mobileSync) {
-      return { error: 'Mobile sync not initialized', session: null };
+    if (!authManager) {
+      return { error: 'Auth manager not initialized', session: null };
     }
-    return await mobileSync.signInWithPassword(email, password);
+    return await authManager.signInWithPassword(email, password);
   });
 
   ipcMain.handle('auth:requestOtp', async (_event, email: string) => {
-    if (!mobileSync) {
-      return { error: 'Mobile sync not initialized' };
+    if (!authManager) {
+      return { error: 'Auth manager not initialized' };
     }
-    return await mobileSync.requestOtp(email);
+    return await authManager.requestOtp(email);
   });
 
   ipcMain.handle('auth:verifyOtp', async (_event, email: string, token: string) => {
-    if (!mobileSync) {
-      return { error: 'Mobile sync not initialized', session: null };
+    if (!authManager) {
+      return { error: 'Auth manager not initialized', session: null };
     }
-    return await mobileSync.verifyOtp(email, token);
+    return await authManager.verifyOtp(email, token);
   });
 
   ipcMain.handle('auth:resetPasswordForEmail', async (_event, email: string) => {
-    if (!mobileSync) {
-      return { error: 'Mobile sync not initialized' };
+    if (!authManager) {
+      return { error: 'Auth manager not initialized' };
     }
-    return await mobileSync.resetPasswordForEmail(email);
+    return await authManager.resetPasswordForEmail(email);
   });
 
   ipcMain.handle('auth:updatePassword', async (_event, newPassword: string) => {
-    if (!mobileSync) {
-      return { error: 'Mobile sync not initialized' };
+    if (!authManager) {
+      return { error: 'Auth manager not initialized' };
     }
-    return await mobileSync.updatePassword(newPassword);
+    return await authManager.updatePassword(newPassword);
   });
 
   ipcMain.handle('auth:setSessionFromUrl', async (_event, accessToken: string, refreshToken: string) => {
-    if (!mobileSync) {
-      return { error: 'Mobile sync not initialized', session: null };
+    if (!authManager) {
+      return { error: 'Auth manager not initialized', session: null };
     }
-    return await mobileSync.setSessionFromUrl(accessToken, refreshToken);
+    return await authManager.setSessionFromUrl(accessToken, refreshToken);
   });
 
   ipcMain.handle('auth:signOut', async () => {
-    if (!mobileSync) {
-      return { error: 'Mobile sync not initialized' };
+    if (!authManager) {
+      return { error: 'Auth manager not initialized' };
     }
-    const result = await mobileSync.signOut();
-    
+    const result = await authManager.signOut();
+
     // Reset cached tier to 'free' on logout so quotas show free limits.
     if (!result.error && quotaManager) {
       await quotaManager.setCachedTier('free');
     }
-    
+
     return result;
   });
 
   ipcMain.handle('auth:deleteAccount', async () => {
-    if (!mobileSync) {
-      return { error: 'Mobile sync not initialized' };
+    if (!authManager) {
+      return { error: 'Auth manager not initialized' };
     }
-    
-    const session = mobileSync.getSession();
+
+    const session = authManager.getSession();
     if (!session?.access_token) {
       return { error: 'Not authenticated' };
     }
@@ -2418,7 +2502,7 @@ function setupClipboardIPCHandlers(): void {
     }
 
     const edgeFunctionUrl = `${envVars.supabaseUrl}/functions/v1/delete-account`;
-    
+
     try {
       const response = await fetch(edgeFunctionUrl, {
         method: 'POST',
@@ -2429,24 +2513,24 @@ function setupClipboardIPCHandlers(): void {
       });
 
       const result = await response.json() as { error?: string; success?: boolean };
-      
+
       if (!response.ok) {
         console.error('[Main] Delete account failed:', result);
         return { error: result.error || 'Failed to delete account' };
       }
 
-      await mobileSync.signOut();
+      await authManager.signOut();
       if (quotaManager) {
         await quotaManager.setCachedTier('free');
       }
-      
+
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send('session-changed', null);
           window.webContents.send('tier-changed', 'free');
         }
       });
-      
+
       return { error: null };
     } catch (err) {
       console.error('[Main] Delete account error:', err);
@@ -2455,10 +2539,10 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle('auth:getSession', async () => {
-    if (!mobileSync) {
+    if (!authManager) {
       return null;
     }
-    return mobileSync.getSession();
+    return authManager.getSession();
   });
 
   // Open external URL in default browser (for Stripe checkout, etc).
@@ -2471,10 +2555,10 @@ function setupClipboardIPCHandlers(): void {
   // =========================================================================
 
   ipcMain.handle('todo:isAuthenticated', async () => {
-    if (!mobileSync) {
+    if (!authManager) {
       return false;
     }
-    return mobileSync.isAuthenticated();
+    return authManager.isAuthenticated();
   });
 
   ipcMain.handle(TodoIPCChannels.GET_TODOS, async () => {
@@ -2912,17 +2996,17 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle('quota:refreshTier', async () => {
-    if (!mobileSync) {
+    if (!authManager) {
       return { tier: 'free', error: 'Not initialized' };
     }
-    
-    const session = mobileSync.getSession();
+
+    const session = authManager.getSession();
     if (!session) {
       return { tier: 'free', error: 'Not signed in' };
     }
-    
+
     try {
-      const supabase = mobileSync.getSupabaseClient();
+      const supabase = authManager.getSupabaseClient();
       if (!supabase) {
         return { tier: 'free', error: 'No Supabase client' };
       }
@@ -4026,6 +4110,18 @@ async function initTranscriberSystem(): Promise<void> {
   // Initialize quota manager for tracking local usage.
   quotaManager = new QuotaManager(preferencesManager);
 
+  // Initialize librarian manager for watching markdown reading files.
+  librarianManager = new LibrarianManager();
+
+  // Broadcast reading-added events to all windows
+  librarianManager.on('reading-added', (reading: Reading) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send('librarian:readingAdded', reading);
+      }
+    });
+  });
+
   // Connect quota manager to tray for menu bar display
   if (trayManager) {
     trayManager.setQuotaManager(quotaManager);
@@ -4126,7 +4222,8 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   // Initialize command launcher window for Cmd+Shift+K.
-  commandLauncherWindow = new CommandLauncherWindow();
+  // Pass nativeHelper for instant access to cached frontmost app info.
+  commandLauncherWindow = new CommandLauncherWindow(nativeHelper ?? undefined);
 
   // Set up escape key priority: dismiss clipboard history before canceling recording
   transcriberManager.setClipboardHistoryVisibilityChecker(() => {
@@ -4143,71 +4240,41 @@ async function initTranscriberSystem(): Promise<void> {
     clipboardHistoryWindow?.hide(false); // false = don't hide the app (recording continues)
   });
 
-  // Initialize mobile sync to pull iOS transcriptions into clipboard history.
+  // Initialize auth manager first - single source of truth for authentication.
   // Load Supabase credentials from .env.local file.
   const envVars = loadEnvVars();
-  mobileSync = new MobileSync(clipboardManager, preferencesManager);
-  await mobileSync.init(envVars.supabaseUrl, envVars.supabaseAnonKey);
-  
+  authManager = new AuthManager();
+  await authManager.init(envVars.supabaseUrl, envVars.supabaseAnonKey);
+
+  // Initialize mobile sync to pull iOS transcriptions into clipboard history.
+  // AuthManager is passed as dependency for session state.
+  mobileSync = new MobileSync(authManager, clipboardManager, preferencesManager);
+  await mobileSync.init();
+
   // Wire up session checker so quota manager uses free limits when not logged in.
   // This ensures auto-stack limits are enforced for logged-out users.
   if (quotaManager) {
     quotaManager.setSessionChecker(() => {
-      const session = mobileSync?.getSession();
-      if (!session?.expires_at) return false;
-      return session.expires_at > Math.floor(Date.now() / 1000);
+      return authManager?.isAuthenticated() ?? false;
     });
   }
 
-  // Initialize shared clipboard sync - shares Supabase client with mobileSync.
+  // Initialize shared clipboard sync - subscribes to AuthManager for session.
   // This enables collaborative clipboard sharing between team members.
-  sharedClipboardSync = new SharedClipboardSync(clipboardManager);
-  
+  sharedClipboardSync = new SharedClipboardSync(authManager, clipboardManager);
+
   // Initialize social sync for DMs, Feedback, and Contacts.
-  socialSync = new SocialSync(clipboardManager);
-  
-  // Check if mobileSync already has a session from stored credentials.
-  // If so, initialize sharedClipboardSync and socialSync with it.
-  let existingSession = mobileSync.getSession();
-  // @ts-ignore - Access internal supabase client.
-  const existingSupabaseClient = mobileSync['supabase'];
+  // Also subscribes to AuthManager for session.
+  socialSync = new SocialSync(authManager, clipboardManager);
 
-  // Check if we have a session (even if access token is expired).
-  // The refresh token may still be valid for days, so we should try to refresh.
-  const hasSession = existingSession && existingSession.refresh_token;
+  // Check if we have a valid session on startup.
+  // If not, ensure cached tier is 'free'.
+  const existingSession = authManager.getSession();
   const now = Math.floor(Date.now() / 1000);
-  const isAccessTokenExpired = existingSession?.expires_at && existingSession.expires_at <= now;
-
-  if (hasSession && isAccessTokenExpired) {
-    // Access token expired but we have a refresh token - try to refresh before giving up.
-    // This handles the common case where the app was closed for more than 1 hour.
-    console.log('[Main] Session found but access token expired, attempting refresh...');
-    const refreshSucceeded = await mobileSync.refreshSessionIfNeeded(true); // force refresh
-
-    if (refreshSucceeded) {
-      // Refresh succeeded - get the updated session
-      existingSession = mobileSync.getSession();
-      console.log('[Main] Session refresh succeeded on startup');
-    } else {
-      // Refresh failed - session is truly invalid
-      console.log('[Main] Session refresh failed on startup, user needs to log in again');
-      existingSession = null;
-    }
-  }
-
-  // Now check if we have a valid session (either fresh or successfully refreshed)
   const isSessionValid = existingSession && existingSession.expires_at &&
     existingSession.expires_at > now;
 
-  if (isSessionValid && existingSupabaseClient) {
-    console.log('[Main] Found valid session on startup, initializing syncs');
-    sharedClipboardSync.setSupabaseClient(existingSupabaseClient);
-    sharedClipboardSync.setSession(existingSession);
-    socialSync.setSupabaseClient(existingSupabaseClient);
-    socialSync.setSession(existingSession);
-    // Note: Tier fetch happens when ClipboardHistory forwards the session via setSyncSession,
-    // which triggers mobileSync.setSession -> fetchAndEmitCurrentTier.
-  } else {
+  if (!isSessionValid) {
     // No valid session on startup - ensure cached tier is 'free'.
     // This handles: expired refresh tokens, app crash without logout, corrupted session files.
     if (quotaManager && quotaManager.getCachedTier() === 'pro') {
@@ -4215,36 +4282,6 @@ async function initTranscriberSystem(): Promise<void> {
       await quotaManager.setCachedTier('free');
     }
   }
-  
-  // Set the Supabase client from mobileSync once a session is established.
-  // The client is shared to avoid duplicate connections.
-  // When mobileSync sets a session, we forward it to sharedClipboardSync and socialSync.
-  const originalSetSession = mobileSync.setSession.bind(mobileSync);
-  mobileSync.setSession = async (accessToken: string, refreshToken: string) => {
-    // Skip if we already have this exact session to prevent duplicate calls.
-    // Multiple UI components call setSyncSession on mount/auth change.
-    const currentSession = mobileSync!.getSession();
-    if (currentSession?.access_token === accessToken) {
-      return;
-    }
-    
-    await originalSetSession(accessToken, refreshToken);
-    // Forward session to sharedClipboardSync and socialSync.
-    const session = mobileSync!.getSession();
-    // The Supabase client is available on mobileSync after init.
-    // @ts-ignore - Access internal supabase client.
-    const supabaseClient = mobileSync!['supabase'];
-    
-    if (session && sharedClipboardSync && supabaseClient) {
-      sharedClipboardSync.setSupabaseClient(supabaseClient);
-      sharedClipboardSync.setSession(session);
-    }
-    
-    if (session && socialSync && supabaseClient) {
-      socialSync.setSupabaseClient(supabaseClient);
-      socialSync.setSession(session);
-    }
-  };
 
   // Forward todosChanged events to all renderer windows.
   mobileSync.on('todosChanged', (todos) => {
@@ -4418,10 +4455,77 @@ async function initClipboardCallbacks(): Promise<void> {
 // Prevent multiple instances of the app.
 const gotTheLock = app.requestSingleInstanceLock();
 
+// Register fieldtheory:// URL protocol for deep linking
+// Usage: open "fieldtheory://librarian/import?file=/path/to/reading.md"
+if (process.defaultApp) {
+  // Development: need to register with path to Electron
+  if (process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient('fieldtheory', process.execPath, [path.resolve(process.argv[1])]);
+  }
+} else {
+  // Production
+  app.setAsDefaultProtocolClient('fieldtheory');
+}
+
+/**
+ * Handle fieldtheory:// URLs
+ * Supported paths:
+ * - fieldtheory://librarian/import?file=/path/to/reading.md - Import a reading and show it
+ */
+async function handleProtocolUrl(url: string): Promise<void> {
+  console.log('[Main] Handling protocol URL:', url);
+
+  try {
+    const parsed = new URL(url);
+
+    if (parsed.host === 'librarian' && parsed.pathname === '/import') {
+      const filePath = parsed.searchParams.get('file');
+      if (!filePath) {
+        console.warn('[Main] No file path in librarian import URL');
+        return;
+      }
+
+      // Decode the file path (it may be URL-encoded)
+      const decodedPath = decodeURIComponent(filePath);
+      console.log('[Main] Importing reading from:', decodedPath);
+
+      // Import the file via LibrarianManager
+      if (librarianManager) {
+        const reading = await librarianManager.importFile(decodedPath);
+        if (reading) {
+          console.log('[Main] Successfully imported reading:', reading.title);
+          // The reading-added event will automatically trigger tab switch
+          // Just need to show and focus the window
+        }
+      }
+
+      // Show and focus the clipboard history window (show() handles focusing)
+      if (clipboardHistoryWindow) {
+        clipboardHistoryWindow.show();
+      }
+    }
+  } catch (error) {
+    console.error('[Main] Error handling protocol URL:', error);
+  }
+}
+
 if (!gotTheLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
+  // Handle URL on macOS when app is already running
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    handleProtocolUrl(url);
+  });
+
+  app.on('second-instance', (_event, argv) => {
+    // Handle URL from second instance (Windows/Linux)
+    const url = argv.find(arg => arg.startsWith('fieldtheory://'));
+    if (url) {
+      handleProtocolUrl(url);
+      return;
+    }
+
     // If onboarding is not complete, focus the onboarding window instead.
     const prefs = preferencesManager?.get();
     if (!prefs?.onboardingComplete && onboardingWindow?.isVisible()) {
@@ -4437,6 +4541,7 @@ if (!gotTheLock) {
 
     setupIPCHandlers();
     setupThemeIPCHandlers();
+    setupLibrarianIPCHandlers();
     setupTranscribeIPCHandlers();
     setupClipboardIPCHandlers();
     setupOnboardingIPCHandlers();
@@ -4691,7 +4796,7 @@ if (!gotTheLock) {
       : false;
 
     // Check if user is authenticated
-    const isAuthenticated = mobileSync?.isAuthenticated() ?? false;
+    const isAuthenticated = authManager?.isAuthenticated() ?? false;
 
     // All three permissions, model download, AND authentication are required for full app functionality
     const isFullyReady =
@@ -4765,7 +4870,8 @@ if (!gotTheLock) {
       const mic = systemPreferences.getMediaAccessStatus('microphone');
       const accessibility = systemPreferences.isTrustedAccessibilityClient(false);
       const screen = systemPreferences.getMediaAccessStatus('screen');
-      const authenticated = mobileSync?.isAuthenticated() ?? false;
+      const authenticated = authManager?.isAuthenticated() ?? false;
+      const hasEverAuthenticated = authManager?.hasEverBeenAuthenticated() ?? false;
 
       const hasAllPermissions = mic === 'granted' && accessibility && screen === 'granted';
 
@@ -4802,12 +4908,15 @@ if (!gotTheLock) {
       }
 
       // Check if user logged out (permissions OK but auth lost)
-      if (!authenticated) {
-        console.log('[Main] User logged out, forcing onboarding to account phase');
+      // IMPORTANT: Only force onboarding for truly new users who have never authenticated.
+      // Existing users who temporarily lose auth (network issues, token expired) should
+      // continue using local features. AuthManager will retry token refresh automatically.
+      if (!authenticated && !hasEverAuthenticated) {
+        console.log('[Main] New user needs to log in, showing onboarding account phase');
 
-        // Unregister all hotkeys - app requires login
+        // Unregister all hotkeys - app requires login for new users
         globalShortcut.unregisterAll();
-        console.log('[Main] Unregistered all hotkeys due to logout');
+        console.log('[Main] Unregistered all hotkeys for new user');
 
         // Reset onboarding state
         await preferencesManager?.save({ onboardingComplete: false });
@@ -4837,8 +4946,8 @@ if (!gotTheLock) {
       showClipboardHistoryOnActivate();
 
       // Refresh session if tokens are expiring soon to prevent auto-logout
-      if (mobileSync) {
-        mobileSync.refreshSessionIfNeeded().catch(err => {
+      if (authManager) {
+        authManager.refreshSessionIfNeeded().catch((err: Error) => {
           console.error('[Main] Failed to refresh session on activate:', err);
         });
       }

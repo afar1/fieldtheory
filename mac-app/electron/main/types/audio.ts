@@ -109,7 +109,9 @@ export type HelperOutgoingMessageType =
   | 'keyEvent'
   | 'keyboardMonitoringDisabled'
   | 'menuBarClicked'
-  | 'appBecameFrontmost';
+  | 'appBecameFrontmost'
+  | 'frontmostAppChanged'
+  | 'frontmostWindowBounds';
 
 /**
  * Message types sent FROM Electron main TO the Swift helper.
@@ -124,7 +126,8 @@ export type HelperIncomingMessageType =
   | 'cancelRecording'
   | 'checkPermissions'
   | 'startKeyboardMonitoring'
-  | 'stopKeyboardMonitoring';
+  | 'stopKeyboardMonitoring'
+  | 'getFrontmostWindowBounds';
 
 /**
  * Base interface for all messages from the native helper.
@@ -247,6 +250,37 @@ export interface AppBecameFrontmostMessage extends HelperMessage {
 }
 
 /**
+ * Frontmost app changed message.
+ * Sent when any app becomes frontmost (not just Field Theory).
+ * Includes window bounds for positioning UI elements like the command launcher.
+ */
+export interface FrontmostAppChangedMessage extends HelperMessage {
+  type: 'frontmostAppChanged';
+  bundleId: string | null;
+  name: string | null;
+  windowBounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null;
+}
+
+/**
+ * Frontmost window bounds message (on-demand response).
+ * Sent in response to getFrontmostWindowBounds command.
+ */
+export interface FrontmostWindowBoundsMessage extends HelperMessage {
+  type: 'frontmostWindowBounds';
+  windowBounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null;
+}
+
+/**
  * Union type of all possible messages from the helper.
  */
 export type HelperOutgoingMessage =
@@ -263,7 +297,9 @@ export type HelperOutgoingMessage =
   | KeyEventMessage
   | KeyboardMonitoringDisabledMessage
   | MenuBarClickedMessage
-  | AppBecameFrontmostMessage;
+  | AppBecameFrontmostMessage
+  | FrontmostAppChangedMessage
+  | FrontmostWindowBoundsMessage;
 
 /**
  * Commands sent to the helper.
@@ -313,6 +349,10 @@ export interface StopKeyboardMonitoringCommand {
   type: 'stopKeyboardMonitoring';
 }
 
+export interface GetFrontmostWindowBoundsCommand {
+  type: 'getFrontmostWindowBounds';
+}
+
 /**
  * Union type of all possible commands to the helper.
  */
@@ -327,4 +367,5 @@ export type HelperIncomingCommand =
   | CheckPermissionsCommand
   | CheckFocusedTextInputCommand
   | StartKeyboardMonitoringCommand
-  | StopKeyboardMonitoringCommand;
+  | StopKeyboardMonitoringCommand
+  | GetFrontmostWindowBoundsCommand;

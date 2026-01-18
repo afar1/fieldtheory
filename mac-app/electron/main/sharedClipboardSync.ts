@@ -14,6 +14,7 @@
 
 import { SupabaseClient, Session, RealtimeChannel } from '@supabase/supabase-js';
 import { ClipboardManager, ClipboardItem as LocalClipboardItem, ClipboardItemType } from './clipboardManager';
+import { AuthManager } from './authManager';
 import { EventEmitter } from 'events';
 import crypto from 'crypto';
 
@@ -139,38 +140,38 @@ export interface TeamMember {
 /**
  * Manages shared clipboard sync with Supabase.
  * Works alongside ClipboardManager for local storage.
+ * Subscribes to AuthManager for session state.
  */
 export class SharedClipboardSync extends EventEmitter {
   private clipboardManager: ClipboardManager;
-  private supabase: SupabaseClient | null = null;
-  private session: Session | null = null;
+  private authManager: AuthManager;
   private realtimeChannel: RealtimeChannel | null = null;
+  private boundHandleSessionChanged: (session: Session | null) => void;
 
-  constructor(clipboardManager: ClipboardManager) {
+  constructor(authManager: AuthManager, clipboardManager: ClipboardManager) {
     super();
+    this.authManager = authManager;
     this.clipboardManager = clipboardManager;
+
+    // Store bound handler reference for proper cleanup in destroy()
+    this.boundHandleSessionChanged = this.handleSessionChanged.bind(this);
+
+    // Subscribe to auth state changes.
+    this.authManager.on('sessionChanged', this.boundHandleSessionChanged);
+
+    // If already authenticated, setup realtime.
+    if (this.isAuthenticated()) {
+      this.setupRealtimeSubscription();
+    }
   }
 
   /**
-   * Set the Supabase client (shared with MobileSync).
+   * Handle session changes from AuthManager.
    */
-  setSupabaseClient(supabase: SupabaseClient): void {
-    this.supabase = supabase;
-  }
-
-  /**
-   * Set the authenticated session.
-   * Manages realtime subscription lifecycle.
-   */
-  setSession(session: Session | null): void {
-    const wasAuthenticated = this.isAuthenticated();
-    this.session = session;
-    
+  private handleSessionChanged(session: Session | null): void {
     if (session) {
-      console.log('[SharedClipboardSync] Session set for user:', session.user?.email);
-      if (!wasAuthenticated) {
-        this.setupRealtimeSubscription();
-      }
+      console.log('[SharedClipboardSync] Session changed for user:', session.user?.email);
+      this.setupRealtimeSubscription();
     } else {
       console.log('[SharedClipboardSync] Session cleared');
       this.teardownRealtimeSubscription();
@@ -178,10 +179,24 @@ export class SharedClipboardSync extends EventEmitter {
   }
 
   /**
+   * Get Supabase client from AuthManager.
+   */
+  private get supabase(): SupabaseClient | null {
+    return this.authManager.getSupabaseClient();
+  }
+
+  /**
+   * Get session from AuthManager.
+   */
+  private get session(): Session | null {
+    return this.authManager.getSession();
+  }
+
+  /**
    * Check if authenticated.
    */
   isAuthenticated(): boolean {
-    return !!(this.supabase && this.session);
+    return this.authManager.isAuthenticated();
   }
 
   /**
@@ -1289,8 +1304,7 @@ export class SharedClipboardSync extends EventEmitter {
    */
   destroy(): void {
     this.teardownRealtimeSubscription();
-    this.session = null;
-    this.supabase = null;
+    this.authManager.removeListener('sessionChanged', this.boundHandleSessionChanged);
     this.removeAllListeners();
     console.log('[SharedClipboardSync] Destroyed');
   }

@@ -630,11 +630,10 @@ export default function TeamView({ onSyncingChange }: TeamViewProps = {}) {
       if (session) {
         window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
       } else if (event === 'SIGNED_OUT') {
-        // Only clear on explicit sign-out, not on token refresh failures.
-        console.log(`[TeamView] User signed out - clearing sync session`);
-        window.clipboardAPI?.clearSyncSession?.();
+        // Auth is managed by main process (AuthManager) - no need to call clearSyncSession.
+        console.log(`[TeamView] User signed out`);
       } else {
-        console.log(`[TeamView] Session became null after ${event} event - not clearing main process session`);
+        console.log(`[TeamView] Session became null after ${event} event`);
       }
     });
 

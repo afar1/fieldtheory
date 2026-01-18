@@ -206,14 +206,14 @@ const styles = {
   inputRow: {
     display: 'flex',
     alignItems: 'center',
-    padding: '10px 12px 12px 12px',
-    gap: '8px',
+    padding: '8px 10px 10px 10px',
+    gap: '6px',
   },
   inputRowWithBorder: {
     borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
   },
   icon: {
-    width: '16px',
+    width: '14px',
     height: 'auto',
     flexShrink: 0,
   },
@@ -222,26 +222,26 @@ const styles = {
     background: 'transparent',
     border: 'none',
     outline: 'none',
-    fontSize: '13px',
+    fontSize: '11px',
     color: '#fff',
     fontFamily: 'SF Mono, Monaco, Menlo, monospace',
   },
   list: {
     listStyle: 'none',
     margin: 0,
-    padding: '4px 0',
+    padding: '3px 0',
     maxHeight: '280px',
     overflowY: 'auto' as const,
   },
   listItem: {
-    padding: '6px 14px',
+    padding: '4px 12px',
     cursor: 'pointer',
     color: '#e0e0e0',
-    fontSize: '12px',
+    fontSize: '10px',
     fontFamily: 'SF Mono, Monaco, Menlo, monospace',
     display: 'flex',
     alignItems: 'center',
-    gap: '8px',
+    gap: '6px',
   },
   listItemSelected: {
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
@@ -252,21 +252,21 @@ const styles = {
     letterSpacing: '-0.2px',
   },
   itemHotkey: {
-    fontSize: '10px',
+    fontSize: '9px',
     color: '#888',
     fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
     flexShrink: 0,
   },
   emptyState: {
-    padding: '8px 12px',
+    padding: '6px 10px',
     color: '#666',
-    fontSize: '11px',
+    fontSize: '9px',
     fontFamily: 'SF Mono, Monaco, Menlo, monospace',
     textAlign: 'center' as const,
   },
   sectionHeader: {
-    padding: '6px 14px 4px 14px',
-    fontSize: '9px',
+    padding: '5px 12px 3px 12px',
+    fontSize: '8px',
     color: '#666',
     textTransform: 'uppercase' as const,
     letterSpacing: '0.5px',
@@ -285,6 +285,8 @@ function CommandLauncher() {
   const [filtered, setFiltered] = useState<LauncherItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const hasNavigatedRef = useRef(false); // Track if user has used arrow keys
 
   // Load commands from the filesystem.
   const loadCommands = useCallback(async () => {
@@ -355,10 +357,16 @@ function CommandLauncher() {
     return [...commandItems, ...actionItems];
   }, [commands, hotkeys]);
 
+  // Check if query is a help command.
+  const isHelpQuery = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q === 'help' || q === '?';
+  }, [query]);
+
   // Filter items when query changes.
   useEffect(() => {
-    const inputHeight = 42;
-    const emptyStateHeight = 32;
+    const inputHeight = 36;
+    const emptyStateHeight = 26;
 
     if (allItems.length === 0) {
       setFiltered([]);
@@ -370,6 +378,33 @@ function CommandLauncher() {
       setFiltered([]);
       setSelectedIndex(0);
       window.commandsAPI.launcherResize(inputHeight);
+      return;
+    }
+
+    // Help mode: show all items grouped by type.
+    if (isHelpQuery) {
+      // Sort: actions first (alphabetically), then commands (alphabetically).
+      const actions = allItems
+        .filter(item => item.type === 'action')
+        .sort((a, b) => a.displayName.localeCompare(b.displayName));
+      const cmds = allItems
+        .filter(item => item.type === 'command')
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+      setFiltered([...actions, ...cmds]);
+      setSelectedIndex(0);
+
+      // Resize for all items.
+      const itemHeight = 22;
+      const sectionHeaderHeight = 20;
+      const padding = 10;
+      const numSections = (actions.length > 0 ? 1 : 0) + (cmds.length > 0 ? 1 : 0);
+      const totalItems = actions.length + cmds.length;
+      const listHeight = Math.min(
+        totalItems * itemHeight + numSections * sectionHeaderHeight + padding,
+        280
+      );
+      window.commandsAPI.launcherResize(inputHeight + listHeight);
       return;
     }
 
@@ -406,13 +441,50 @@ function CommandLauncher() {
     setSelectedIndex(0);
 
     // Resize window.
-    const itemHeight = 28;
-    const padding = 12;
+    const itemHeight = 22;
+    const padding = 10;
     const listHeight = matches.length > 0
       ? Math.min(matches.length * itemHeight + padding, 280)
       : emptyStateHeight;
     window.commandsAPI.launcherResize(inputHeight + listHeight);
-  }, [query, allItems]);
+  }, [query, allItems, isHelpQuery]);
+
+  // Reset navigation flag when filtered results change.
+  useEffect(() => {
+    hasNavigatedRef.current = false;
+    // Also reset scroll position when results change.
+    if (listRef.current) {
+      listRef.current.scrollTop = 0;
+    }
+  }, [filtered]);
+
+  // Scroll selected item into view when selection changes via keyboard.
+  // Only scroll if the item is outside the visible area of the list.
+  useEffect(() => {
+    // Only scroll if user has navigated with arrow keys.
+    if (!hasNavigatedRef.current) return;
+    if (!listRef.current || filtered.length === 0) return;
+
+    const list = listRef.current;
+    const selectedItem = list.querySelector(`[data-item-index="${selectedIndex}"]`) as HTMLElement | null;
+    if (!selectedItem) return;
+
+    // Get positions relative to the list container.
+    const listTop = list.scrollTop;
+    const listBottom = listTop + list.clientHeight;
+    const itemTop = selectedItem.offsetTop;
+    const itemBottom = itemTop + selectedItem.offsetHeight;
+
+    // Check if item is above visible area.
+    if (itemTop < listTop) {
+      list.scrollTop = itemTop;
+    }
+    // Check if item is below visible area.
+    else if (itemBottom > listBottom) {
+      list.scrollTop = itemBottom - list.clientHeight;
+    }
+    // Otherwise, item is visible - don't scroll.
+  }, [selectedIndex, filtered.length]);
 
   // Handle keyboard navigation.
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -420,9 +492,11 @@ function CommandLauncher() {
       window.commandsAPI.launcherClose();
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
+      hasNavigatedRef.current = true;
       setSelectedIndex(i => Math.min(i + 1, filtered.length - 1));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
+      hasNavigatedRef.current = true;
       setSelectedIndex(i => Math.max(i - 1, 0));
     } else if (e.key === 'Enter') {
       e.preventDefault();
@@ -472,7 +546,7 @@ function CommandLauncher() {
         <input
           ref={inputRef}
           type="text"
-          placeholder="Type a command or action"
+          placeholder="Type a command (? for help)"
           value={query}
           onChange={e => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -482,25 +556,80 @@ function CommandLauncher() {
       </div>
 
       {filtered.length > 0 && (
-        <ul style={styles.list}>
-          {filtered.map((item, i) => (
-            <li
-              key={item.id}
-              style={{
-                ...styles.listItem,
-                ...(i === selectedIndex ? styles.listItemSelected : {}),
-              }}
-              onClick={() => invokeItem(item)}
-              onMouseEnter={() => setSelectedIndex(i)}
-            >
-              <span style={styles.itemName}>
-                {item.type === 'command' ? item.name : item.displayName}
-              </span>
-              {item.hotkeyDisplay && (
-                <span style={styles.itemHotkey}>{item.hotkeyDisplay}</span>
+        <ul ref={listRef} style={styles.list}>
+          {isHelpQuery ? (
+            // Help mode: show grouped by type with section headers.
+            <>
+              {filtered.some(item => item.type === 'action') && (
+                <li style={styles.sectionHeader}>Actions</li>
               )}
-            </li>
-          ))}
+              {filtered
+                .filter(item => item.type === 'action')
+                .map((item, i) => {
+                  const globalIndex = filtered.findIndex(f => f.id === item.id);
+                  return (
+                    <li
+                      key={item.id}
+                      data-item-index={globalIndex}
+                      style={{
+                        ...styles.listItem,
+                        ...(globalIndex === selectedIndex ? styles.listItemSelected : {}),
+                      }}
+                      onClick={() => invokeItem(item)}
+                      onMouseEnter={() => setSelectedIndex(globalIndex)}
+                    >
+                      <span style={styles.itemName}>{item.displayName}</span>
+                      {item.hotkeyDisplay && (
+                        <span style={styles.itemHotkey}>{item.hotkeyDisplay}</span>
+                      )}
+                    </li>
+                  );
+                })}
+              {filtered.some(item => item.type === 'command') && (
+                <li style={styles.sectionHeader}>Commands</li>
+              )}
+              {filtered
+                .filter(item => item.type === 'command')
+                .map((item, i) => {
+                  const globalIndex = filtered.findIndex(f => f.id === item.id);
+                  return (
+                    <li
+                      key={item.id}
+                      data-item-index={globalIndex}
+                      style={{
+                        ...styles.listItem,
+                        ...(globalIndex === selectedIndex ? styles.listItemSelected : {}),
+                      }}
+                      onClick={() => invokeItem(item)}
+                      onMouseEnter={() => setSelectedIndex(globalIndex)}
+                    >
+                      <span style={styles.itemName}>{item.name}</span>
+                    </li>
+                  );
+                })}
+            </>
+          ) : (
+            // Normal mode: flat list.
+            filtered.map((item, i) => (
+              <li
+                key={item.id}
+                data-item-index={i}
+                style={{
+                  ...styles.listItem,
+                  ...(i === selectedIndex ? styles.listItemSelected : {}),
+                }}
+                onClick={() => invokeItem(item)}
+                onMouseEnter={() => setSelectedIndex(i)}
+              >
+                <span style={styles.itemName}>
+                  {item.type === 'command' ? item.name : item.displayName}
+                </span>
+                {item.hotkeyDisplay && (
+                  <span style={styles.itemHotkey}>{item.hotkeyDisplay}</span>
+                )}
+              </li>
+            ))
+          )}
         </ul>
       )}
 

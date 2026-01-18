@@ -10,6 +10,7 @@ import TranscriptionSettings from './TranscriptionSettings';
 import PromptSettings from './PromptSettings';
 import DiagnosticsModal from './DiagnosticsModal';
 import CommandsSettings from './CommandsSettings';
+import LibrarianSettings from './LibrarianSettings';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
 import { useTheme, Theme } from '../contexts/ThemeContext';
@@ -544,11 +545,10 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           session.refresh_token
         );
       } else if (event === 'SIGNED_OUT') {
-        // Only clear on explicit sign-out, not on token refresh failures.
-        console.log(`[SettingsPanel] User signed out - clearing sync session`);
-        window.clipboardAPI?.clearSyncSession?.();
+        // Auth is managed by main process (AuthManager) - no need to call clearSyncSession.
+        console.log(`[SettingsPanel] User signed out`);
       } else {
-        console.log(`[SettingsPanel] Session became null after ${event} event - not clearing main process session`);
+        console.log(`[SettingsPanel] Session became null after ${event} event`);
       }
     });
 
@@ -1880,6 +1880,12 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       <div style={styles.section}>
         <SectionHeader title="Portable Commands" />
         <CommandsSettings />
+      </div>
+
+      {/* Librarian Section */}
+      <div style={styles.section}>
+        <SectionHeader title="Librarian" />
+        <LibrarianSettings />
       </div>
 
       {/* Support Section - diagnostics and troubleshooting */}

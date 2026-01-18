@@ -10,6 +10,7 @@
 
 import { SupabaseClient, Session, RealtimeChannel } from '@supabase/supabase-js';
 import { ClipboardManager, ClipboardItem as LocalClipboardItem } from './clipboardManager';
+import { AuthManager } from './authManager';
 import { EventEmitter } from 'events';
 import crypto from 'crypto';
 
@@ -158,22 +159,35 @@ interface ActivityLogRow {
 
 export class SocialSync extends EventEmitter {
   private clipboardManager: ClipboardManager;
-  private supabase: SupabaseClient | null = null;
-  private session: Session | null = null;
+  private authManager: AuthManager;
   private realtimeChannel: RealtimeChannel | null = null;
-  
+  private boundHandleSessionChanged: (session: Session | null) => void;
+
   // Cache of user profiles for display names.
   private profileCache: Map<string, UserProfile> = new Map();
-  
+
   // Polling fallback for Hot Mic when Realtime isn't working.
   private pollingInterval: NodeJS.Timeout | null = null;
   private lastPolledAt: string | null = null;
   private realtimeConnected: boolean = false;
   private readonly POLLING_INTERVAL_MS = 3000;  // Poll every 3 seconds as fallback.
 
-  constructor(clipboardManager: ClipboardManager) {
+  constructor(authManager: AuthManager, clipboardManager: ClipboardManager) {
     super();
+    this.authManager = authManager;
     this.clipboardManager = clipboardManager;
+
+    // Store bound handler reference for proper cleanup in destroy()
+    this.boundHandleSessionChanged = this.handleSessionChanged.bind(this);
+
+    // Subscribe to auth state changes.
+    this.authManager.on('sessionChanged', this.boundHandleSessionChanged);
+
+    // If already authenticated, setup realtime.
+    if (this.isAuthenticated()) {
+      this.setupRealtimeSubscription();
+      this.startPollingFallback();
+    }
   }
 
   // ===========================================================================
@@ -181,27 +195,13 @@ export class SocialSync extends EventEmitter {
   // ===========================================================================
 
   /**
-   * Set the Supabase client.
+   * Handle session changes from AuthManager.
    */
-  setSupabaseClient(supabase: SupabaseClient): void {
-    this.supabase = supabase;
-  }
-
-  /**
-   * Set the authenticated session.
-   */
-  setSession(session: Session | null): void {
-    const wasAuthenticated = this.isAuthenticated();
-    this.session = session;
-    
+  private handleSessionChanged(session: Session | null): void {
     if (session) {
-      console.log('[SocialSync] Session set for user:', session.user?.email);
-      if (!wasAuthenticated) {
-        this.setupRealtimeSubscription();
-        // Start polling as fallback immediately.
-        // If Realtime connects successfully, polling will be stopped.
-        this.startPollingFallback();
-      }
+      console.log('[SocialSync] Session changed for user:', session.user?.email);
+      this.setupRealtimeSubscription();
+      this.startPollingFallback();
     } else {
       console.log('[SocialSync] Session cleared');
       this.teardownRealtimeSubscription();
@@ -210,10 +210,24 @@ export class SocialSync extends EventEmitter {
   }
 
   /**
+   * Get Supabase client from AuthManager.
+   */
+  private get supabase(): SupabaseClient | null {
+    return this.authManager.getSupabaseClient();
+  }
+
+  /**
+   * Get session from AuthManager.
+   */
+  private get session(): Session | null {
+    return this.authManager.getSession();
+  }
+
+  /**
    * Check if authenticated.
    */
   isAuthenticated(): boolean {
-    return !!(this.supabase && this.session);
+    return this.authManager.isAuthenticated();
   }
 
   /**
@@ -1692,8 +1706,8 @@ export class SocialSync extends EventEmitter {
    */
   destroy(): void {
     this.teardownRealtimeSubscription();
-    this.session = null;
-    this.supabase = null;
+    this.stopPollingFallback();
+    this.authManager.removeListener('sessionChanged', this.boundHandleSessionChanged);
     this.profileCache.clear();
     this.removeAllListeners();
     console.log('[SocialSync] Destroyed');

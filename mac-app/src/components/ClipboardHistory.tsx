@@ -12,6 +12,7 @@ import DMsView from './DMsView';
 import HotMicView from './HotMicView';
 import PopularCommands from './PopularCommands';
 import ReleaseNotesPopup from './ReleaseNotesPopup';
+import LibrarianView from './LibrarianView';
 import type { SketchViewHandle } from './SketchView';
 import { FEATURE_HOT_MIC_ENABLED, FEATURE_IMPROVE_ENABLED, FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED } from '../featureFlags';
 
@@ -33,7 +34,18 @@ import {
   useDroppable,
 } from '@dnd-kit/core';
 
-type ViewMode = 'clipboard' | 'todo' | 'team' | 'hotmic' | 'feedback' | 'commands' | 'sketch';
+type ViewMode = 'clipboard' | 'todo' | 'team' | 'hotmic' | 'feedback' | 'commands' | 'sketch' | 'librarian';
+
+const TAB_LABELS: Record<ViewMode, string> = {
+  clipboard: 'Fields',
+  librarian: 'Librarian',
+  team: 'Shared Fields',
+  hotmic: 'Hot Mic',
+  todo: 'Tasks',
+  feedback: 'Feedback',
+  commands: 'Commands',
+  sketch: 'Sketch',
+};
 
 type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
 type ClipboardSource = 'mac' | 'ios';
@@ -1545,18 +1557,17 @@ export default function ClipboardHistory() {
       if (session) {
         window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
       } else {
-        // Only clear the main process session on explicit sign-out.
-        // For other null-session events (token refresh failure, localStorage cleared),
-        // the main process may still have a valid session it can recover from.
+        // Session became null - just update local UI state.
+        // Auth is managed by main process (AuthManager) - we don't need to call clearSyncSession.
+        // Main process handles all session clearing and will emit events via IPC.
         if (event === 'SIGNED_OUT') {
-          console.log(`[ClipboardHistory] User signed out - clearing sync session`);
-          window.clipboardAPI?.clearSyncSession?.();
+          console.log(`[ClipboardHistory] User signed out - clearing unread indicators`);
           // Clear unread indicators when signing out.
           setHasUnreadDMs(false);
           setHasUnreadFeedback(false);
           setHasUnreadShared(false);
         } else {
-          console.log(`[ClipboardHistory] Session became null after ${event} event - not clearing main process session (may recover)`);
+          console.log(`[ClipboardHistory] Session became null after ${event} event`);
         }
       }
     });
@@ -1701,6 +1712,15 @@ export default function ClipboardHistory() {
       unsubscribeDeleted();
     };
   }, [isMacOS, loadItems]);
+
+  // Auto-switch to Librarian tab when a new reading is added
+  useEffect(() => {
+    const unsubscribe = window.librarianAPI?.onReadingAdded(() => {
+      setViewMode('librarian');
+    });
+
+    return () => unsubscribe?.();
+  }, []);
 
   // Measure container width for text truncation (updates on resize)
   useEffect(() => {
@@ -1979,72 +1999,81 @@ export default function ClipboardHistory() {
         }
       }
 
-      // When not in clipboard view, only handle global shortcuts (Tab for view switching).
-      // Let TeamView/TodoView/DMsView handle their own navigation and preview.
+      // Tab/Shift+Tab cycles through view modes (global shortcut, works from any view).
+      // But allow normal Tab navigation when focused on tab buttons or input fields.
+      if (key === 'Tab' && !hasCtrl && !hasMeta) {
+        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
+          return; // Let Tab navigate between form fields naturally.
+        }
+        // If focused on a tab button, let Tab work normally to navigate between buttons.
+        if (tabsRef.current && tabsRef.current.contains(document.activeElement)) {
+          return; // Let Tab navigate between tab buttons naturally.
+        }
+        e.preventDefault();
+
+        if (hasAlt && hasShift) {
+          // Shift+Option+Tab - cycle backwards through target apps.
+          if (targetAppInfo.runningApps.length === 0) {
+            return;
+          }
+          const prevIndex = (targetAppInfo.targetAppIndex - 1 + targetAppInfo.runningApps.length) % targetAppInfo.runningApps.length;
+          const newApp = targetAppInfo.runningApps[prevIndex];
+          setTargetAppInfo(prev => ({
+            ...prev,
+            targetApp: newApp,
+            targetAppIndex: prevIndex,
+          }));
+          window.clipboardAPI?.setTargetApp(newApp);
+        } else if (hasAlt) {
+          // Option+Tab - cycle forwards through target apps.
+          if (targetAppInfo.runningApps.length === 0) {
+            return;
+          }
+          const nextIndex = (targetAppInfo.targetAppIndex + 1) % targetAppInfo.runningApps.length;
+          const newApp = targetAppInfo.runningApps[nextIndex];
+          setTargetAppInfo(prev => ({
+            ...prev,
+            targetApp: newApp,
+            targetAppIndex: nextIndex,
+          }));
+          window.clipboardAPI?.setTargetApp(newApp);
+        } else if (hasShift) {
+          setShowSettings(false);
+          setViewMode(prev => {
+            // Build visible tabs array in order, then cycle backwards
+            const visibleTabs: ViewMode[] = ['clipboard', 'librarian'];
+            if (canShare) visibleTabs.push('team');
+            if (FEATURE_HOT_MIC_ENABLED) visibleTabs.push('hotmic');
+            if (tasksTabEnabled) visibleTabs.push('todo');
+
+            const currentIndex = visibleTabs.indexOf(prev);
+            if (currentIndex === -1) return 'clipboard';
+            const prevIndex = (currentIndex - 1 + visibleTabs.length) % visibleTabs.length;
+            return visibleTabs[prevIndex];
+          });
+        } else {
+          setShowSettings(false);
+          setViewMode(prev => {
+            // Build visible tabs array in order, then cycle forwards
+            const visibleTabs: ViewMode[] = ['clipboard', 'librarian'];
+            if (canShare) visibleTabs.push('team');
+            if (FEATURE_HOT_MIC_ENABLED) visibleTabs.push('hotmic');
+            if (tasksTabEnabled) visibleTabs.push('todo');
+
+            const currentIndex = visibleTabs.indexOf(prev);
+            if (currentIndex === -1) return 'clipboard';
+            const nextIndex = (currentIndex + 1) % visibleTabs.length;
+            return visibleTabs[nextIndex];
+          });
+        }
+        return;
+      }
+
+      // When not in clipboard view, let other views handle their own navigation.
       if (viewMode !== 'clipboard') {
         // In sketch mode, let SketchView handle Escape (returns to clipboard view).
         // Don't close the window - SketchView's handler calls handleSketchClose.
         if (viewMode === 'sketch' && key === 'Escape') {
-          return;
-        }
-        
-        // Tab/Shift+Tab cycles through view modes (global shortcut).
-        // But allow normal Tab navigation when focused on tab buttons themselves.
-        if (key === 'Tab' && !hasCtrl && !hasMeta) {
-          if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
-            return; // Let Tab navigate between form fields naturally.
-          }
-          // If focused on a tab button, let Tab work normally to navigate between buttons.
-          if (tabsRef.current && tabsRef.current.contains(document.activeElement)) {
-            return; // Let Tab navigate between tab buttons naturally.
-          }
-          e.preventDefault();
-
-          if (hasAlt && hasShift) {
-            // Shift+Option+Tab - cycle backwards through target apps.
-            if (targetAppInfo.runningApps.length === 0) {
-              return;
-            }
-            const prevIndex = (targetAppInfo.targetAppIndex - 1 + targetAppInfo.runningApps.length) % targetAppInfo.runningApps.length;
-            const newApp = targetAppInfo.runningApps[prevIndex];
-            setTargetAppInfo(prev => ({
-              ...prev,
-              targetApp: newApp,
-              targetAppIndex: prevIndex,
-            }));
-            window.clipboardAPI?.setTargetApp(newApp);
-          } else if (hasAlt) {
-            // Option+Tab - cycle forwards through target apps.
-            if (targetAppInfo.runningApps.length === 0) {
-              return;
-            }
-            const nextIndex = (targetAppInfo.targetAppIndex + 1) % targetAppInfo.runningApps.length;
-            const newApp = targetAppInfo.runningApps[nextIndex];
-            setTargetAppInfo(prev => ({
-              ...prev,
-              targetApp: newApp,
-              targetAppIndex: nextIndex,
-            }));
-            window.clipboardAPI?.setTargetApp(newApp);
-          } else if (hasShift) {
-            setShowSettings(false);
-            setViewMode(prev => {
-              // Cycle backwards: clipboard -> (hotmic if enabled) -> team -> clipboard
-              if (prev === 'clipboard') return FEATURE_HOT_MIC_ENABLED ? 'hotmic' : 'team';
-              if (prev === 'hotmic') return 'team';
-              if (prev === 'team') return 'clipboard';
-              return 'clipboard';
-            });
-          } else {
-            setShowSettings(false);
-            setViewMode(prev => {
-              // Cycle forwards: clipboard -> team -> (hotmic if enabled) -> clipboard
-              if (prev === 'clipboard') return 'team';
-              if (prev === 'team') return FEATURE_HOT_MIC_ENABLED ? 'hotmic' : 'clipboard';
-              if (prev === 'hotmic') return 'clipboard';
-              return 'clipboard';
-            });
-          }
           return;
         }
         // All other keys: let the active view handle them.
@@ -3422,7 +3451,7 @@ export default function ClipboardHistory() {
             padding: '0 16px',
             marginBottom: '8px',
           }}>
-          {(['clipboard', ...(canShare ? ['team'] : []), ...(FEATURE_HOT_MIC_ENABLED ? ['hotmic'] : []), ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
+          {(['clipboard', 'librarian', ...(canShare ? ['team'] : []), ...(FEATURE_HOT_MIC_ENABLED ? ['hotmic'] : []), ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
             // Hot Mic tab has special styling and the fire toggle.
             const isHotMic = mode === 'hotmic';
             const isSelected = viewMode === mode && !(mode === 'team' && !authSession?.user?.email);
@@ -3491,7 +3520,7 @@ export default function ClipboardHistory() {
                     🔥
                   </span>
                 )}
-                {mode === 'clipboard' ? 'Fields' : mode === 'team' ? 'Shared Fields' : mode === 'hotmic' ? 'Hot Mic' : 'Tasks'}
+                {TAB_LABELS[mode]}
                 
                 {/* Unread indicator for Hot Mic tab - only when authenticated */}
                 {isHotMic && hasUnreadDMs && viewMode !== 'hotmic' && authSession?.user?.email && (
@@ -3984,6 +4013,11 @@ export default function ClipboardHistory() {
         />
       ) : viewMode === 'todo' ? (
         <TodoView onSwitchToClipboard={() => setViewMode('clipboard')} />
+      ) : viewMode === 'librarian' ? (
+        <LibrarianView
+          onSwitchToClipboard={() => setViewMode('clipboard')}
+          onSwitchToSettings={() => setShowSettings(true)}
+        />
       ) : viewMode === 'team' ? (
         null
       ) : viewMode === 'hotmic' ? (

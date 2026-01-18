@@ -154,6 +154,7 @@ export const spacingPx = {
 
 export const fonts = {
   sans: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+  serif: "Georgia, 'Times New Roman', serif",
   mono: "'SF Mono', Monaco, 'Cascadia Code', monospace",
 } as const;
 

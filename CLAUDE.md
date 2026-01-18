@@ -2,13 +2,14 @@
 
 ## Working Style
 
-[run this command: flow.md]
-/Users/afar/dev/littleai/.cursor/commands/flow.md
+Before non-trivial implementations, provide a short reading via the Librarian:
 
-Store each reading in `.flow/` with a unique filename.
+[run this command: librarian.md]
+/Users/afar/dev/littleai/.cursor/commands/librarian.md
 
-You should show this often but now every time. I want you to figure out a frequency that feels serendipitous in every discussion. I shouldn't have to ask for you to run [run this command: flow.md]
-/Users/afar/dev/littleai/.cursor/commands/flow.md
+Store each reading in `.librarian/` with a unique filename.
+
+This should feel serendipitous—not every change, just when there's meaningful wait time. Use your discretion.
 
 ## Releases
 
