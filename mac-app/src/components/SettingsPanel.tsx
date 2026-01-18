@@ -53,6 +53,8 @@ const SECTIONS_ORDER: SettingsSection[] = [
 interface SettingsPanelProps {
   onNavigateToSignIn?: () => void;
   onNavigateToFeedback?: () => void;
+  librarianEnabled?: boolean;
+  onLibrarianEnabledChange?: (enabled: boolean) => void;
 }
 
 /**
@@ -60,7 +62,7 @@ interface SettingsPanelProps {
  * Keeps the same functionality as the original App.tsx settings, but styled for the
  * clipboard history context.
  */
-export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback }: SettingsPanelProps) {
+export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback, librarianEnabled, onLibrarianEnabledChange }: SettingsPanelProps) {
   const { theme, toggleDarkMode, accentPreset, setAccentPreset, darkModeIntensity, setDarkModeIntensity } = useTheme();
 
   // Selected section state for sidebar navigation
@@ -1970,7 +1972,10 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       {selectedSection === 'librarian' && (
       <div style={styles.section}>
         <SectionHeader title="Librarian" />
-        <LibrarianSettings />
+        <LibrarianSettings
+          librarianEnabled={librarianEnabled}
+          onLibrarianEnabledChange={onLibrarianEnabledChange}
+        />
       </div>
       )}
 

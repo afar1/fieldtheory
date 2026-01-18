@@ -267,6 +267,10 @@ export default function ClipboardHistory() {
 
   // Librarian immersive mode - when in full-screen reading, fade the header
   const [librarianImmersive, setLibrarianImmersive] = useState(false);
+  const [librarianEnabled, setLibrarianEnabled] = useState(() => {
+    const saved = localStorage.getItem('librarianEnabled');
+    return saved !== 'false'; // Default to true
+  });
   const [headerHovered, setHeaderHovered] = useState(false);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
@@ -1217,6 +1221,15 @@ export default function ClipboardHistory() {
     localStorage.setItem('fieldTheoryShowSettings', showSettings ? 'true' : 'false');
   }, [showSettings]);
 
+  // Persist librarianEnabled state when it changes
+  useEffect(() => {
+    localStorage.setItem('librarianEnabled', librarianEnabled ? 'true' : 'false');
+    // If librarian is disabled and we're on that view, switch to clipboard
+    if (!librarianEnabled && viewMode === 'librarian') {
+      setViewMode('clipboard');
+    }
+  }, [librarianEnabled, viewMode]);
+
   useEffect(() => {
     if (!supabase) {
       // If supabase is not configured, still mark session as initialized (with no auth).
@@ -1785,7 +1798,8 @@ export default function ClipboardHistory() {
           setShowSettings(false);
           setViewMode(prev => {
             // Build visible tabs array in order, then cycle backwards
-            const visibleTabs: ViewMode[] = ['clipboard', 'librarian'];
+            const visibleTabs: ViewMode[] = ['clipboard'];
+            if (librarianEnabled) visibleTabs.push('librarian');
             if (canShare) visibleTabs.push('team');
             if (FEATURE_HOT_MIC_ENABLED) visibleTabs.push('hotmic');
             if (tasksTabEnabled) visibleTabs.push('todo');
@@ -1799,7 +1813,8 @@ export default function ClipboardHistory() {
           setShowSettings(false);
           setViewMode(prev => {
             // Build visible tabs array in order, then cycle forwards
-            const visibleTabs: ViewMode[] = ['clipboard', 'librarian'];
+            const visibleTabs: ViewMode[] = ['clipboard'];
+            if (librarianEnabled) visibleTabs.push('librarian');
             if (canShare) visibleTabs.push('team');
             if (FEATURE_HOT_MIC_ENABLED) visibleTabs.push('hotmic');
             if (tasksTabEnabled) visibleTabs.push('todo');
@@ -3209,7 +3224,7 @@ export default function ClipboardHistory() {
             overflow: 'hidden',
             transition: 'height 0.3s ease, margin-bottom 0.3s ease',
           }}>
-          {(['clipboard', 'librarian', ...(canShare ? ['team'] : []), ...(FEATURE_HOT_MIC_ENABLED ? ['hotmic'] : []), ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
+          {(['clipboard', ...(librarianEnabled ? ['librarian'] : []), ...(canShare ? ['team'] : []), ...(FEATURE_HOT_MIC_ENABLED ? ['hotmic'] : []), ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
             // Hot Mic tab has special styling and the fire toggle.
             const isHotMic = mode === 'hotmic';
             const isSelected = viewMode === mode && !(mode === 'team' && !authSession?.user?.email);
@@ -3759,7 +3774,7 @@ export default function ClipboardHistory() {
 
       {/* Conditionally show Settings, Todo View, DMs View, or Clipboard History */}
       {showSettings ? (
-        <SettingsPanel 
+        <SettingsPanel
           onNavigateToSignIn={() => {
             setShowSettings(false);
             setViewMode('team');
@@ -3768,6 +3783,8 @@ export default function ClipboardHistory() {
             setShowSettings(false);
             setViewMode('feedback');
           }}
+          librarianEnabled={librarianEnabled}
+          onLibrarianEnabledChange={setLibrarianEnabled}
         />
       ) : viewMode === 'todo' ? (
         <TodoView onSwitchToClipboard={() => setViewMode('clipboard')} />
