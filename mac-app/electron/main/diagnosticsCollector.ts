@@ -4,7 +4,6 @@ import fs from 'fs/promises';
 import path from 'path';
 import { PreferencesManager } from './preferences';
 import { ModelManager, ModelSize } from './modelManager';
-import { VisionModelManager, VisionModelSize } from './visionModelManager';
 import { AudioManager } from './audioManager';
 
 /**
@@ -49,15 +48,6 @@ export interface DiagnosticsReport {
     models: ModelDiagnostics[];
     activeDownloads: string[];
   };
-  visionModels: {
-    selectedModel: string;
-    modelsDirectory: string;
-    models: {
-      size: string;
-      downloaded: boolean;
-      fileSizeMB: number | null;
-    }[];
-  };
   audio: {
     priorityMode: boolean;
     priorityDeviceId: string | null;
@@ -88,7 +78,6 @@ export interface DiagnosticsReport {
 export class DiagnosticsCollector {
   private preferencesManager: PreferencesManager;
   private modelManager: ModelManager | null = null;
-  private visionModelManager: VisionModelManager | null = null;
   private audioManager: AudioManager | null = null;
 
   constructor(preferencesManager: PreferencesManager) {
@@ -103,13 +92,6 @@ export class DiagnosticsCollector {
   }
 
   /**
-   * Set the vision model manager for vision model diagnostics.
-   */
-  setVisionModelManager(visionModelManager: VisionModelManager): void {
-    this.visionModelManager = visionModelManager;
-  }
-
-  /**
    * Set the audio manager for audio device diagnostics.
    */
   setAudioManager(audioManager: AudioManager): void {
@@ -120,17 +102,13 @@ export class DiagnosticsCollector {
    * Collect all diagnostic information.
    */
   async collect(): Promise<DiagnosticsReport> {
-    const [whisperModels, visionModels] = await Promise.all([
-      this.collectWhisperModels(),
-      this.collectVisionModels(),
-    ]);
+    const whisperModels = await this.collectWhisperModels();
 
     return {
       timestamp: new Date().toISOString(),
       system: this.collectSystemInfo(),
       app: this.collectAppInfo(),
       whisperModels,
-      visionModels,
       audio: this.collectAudioInfo(),
       preferences: this.collectPreferences(),
       support: {
@@ -175,16 +153,6 @@ export class DiagnosticsCollector {
       const selected = model.selected ? ' [SELECTED]' : '';
       const error = model.error ? ` - ERROR: ${model.error}` : '';
       lines.push(`- ${model.size}: ${status}${selected}${error}`);
-    }
-
-    lines.push('');
-    lines.push('### Vision Models');
-    lines.push(`- Selected: ${report.visionModels.selectedModel}`);
-    for (const model of report.visionModels.models) {
-      const status = model.downloaded
-        ? `downloaded (${model.fileSizeMB?.toFixed(1)} MB)`
-        : 'not downloaded';
-      lines.push(`- ${model.size}: ${status}`);
     }
 
     lines.push('');
@@ -289,43 +257,6 @@ export class DiagnosticsCollector {
       modelsDirectory: modelsDir,
       models,
       activeDownloads: downloadingModels,
-    };
-  }
-
-  private async collectVisionModels(): Promise<DiagnosticsReport['visionModels']> {
-    if (!this.visionModelManager) {
-      return {
-        selectedModel: 'unknown',
-        modelsDirectory: 'unknown',
-        models: [],
-      };
-    }
-
-    const selectedModel = this.visionModelManager.getSelectedModel();
-    const modelsDir = path.join(app.getPath('userData'), 'models', 'vision');
-
-    const models: { size: string; downloaded: boolean; fileSizeMB: number | null }[] = [];
-    // Currently only 'nano' model is available for vision.
-    for (const size of ['nano'] as VisionModelSize[]) {
-      let fileSizeMB: number | null = null;
-      let downloaded = false;
-
-      try {
-        const modelPath = this.visionModelManager.getModelPathForSize(size);
-        const stats = await fs.stat(modelPath);
-        fileSizeMB = Math.round(stats.size / 1024 / 1024 * 10) / 10;
-        downloaded = await this.visionModelManager.isModelAvailableForSize(size);
-      } catch {
-        // File doesn't exist
-      }
-
-      models.push({ size, downloaded, fileSizeMB });
-    }
-
-    return {
-      selectedModel,
-      modelsDirectory: modelsDir,
-      models,
     };
   }
 

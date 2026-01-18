@@ -224,7 +224,7 @@ export class CommandLauncherWindow {
       alwaysOnTop: true,
       show: false,
       hasShadow: true,
-      vibrancy: 'under-window',
+      vibrancy: 'hud',
       visualEffectState: 'active',
       webPreferences: {
         nodeIntegration: false,

@@ -57,6 +57,7 @@ export default function DataPolicyNotice({ context, style }: DataPolicyNoticePro
         padding: '3px 6px',
         fontSize: '9px',
         fontWeight: 400,
+        fontStyle: 'italic',
         color: getTextColor(),
         backgroundColor: 'transparent',
         borderRadius: '4px',

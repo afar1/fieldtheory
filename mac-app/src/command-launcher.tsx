@@ -198,7 +198,7 @@ const styles = {
   container: {
     display: 'flex',
     flexDirection: 'column' as const,
-    backgroundColor: 'rgba(30, 30, 30, 0.98)',
+    backgroundColor: 'transparent',
     borderRadius: '8px',
     overflow: 'hidden',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',

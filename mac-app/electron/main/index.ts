@@ -29,18 +29,10 @@ import {
   ClipboardQueryOptions,
   ContinuousContextState,
 } from './types/clipboard';
-import {
-  VisionIPCChannels,
-} from './types/vision';
 import { ClipboardItem, isTerminalApp, isIDEWithTerminal, obscureHomePath } from './clipboardManager';
 import { getHotkeyManager } from './hotkeyManager';
-import { VisionModelManager, VisionModelSize } from './visionModelManager';
 import {
-  engineerStack,
   setApiKey as setEngineerApiKey,
-  setCustomSystemPrompt,
-  getActiveSystemPrompt,
-  loadDefaultSystemPrompt,
   improveTranscript,
   setLocalLLMManager as setEngineerLocalLLMManager,
   setUseLocalLLM as setEngineerUseLocalLLM,
@@ -144,7 +136,6 @@ let transcriberManager: TranscriberManager | null = null;
 let preferencesManager: PreferencesManager | null = null;
 let clipboardManager: ClipboardManager | null = null;
 let clipboardHistoryWindow: ClipboardHistoryWindow | null = null;
-let visionModelManager: VisionModelManager | null = null;
 let mobileSync: MobileSync | null = null;
 let localLLMManager: LocalLLMManager | null = null;
 let sharedClipboardSync: SharedClipboardSync | null = null;
@@ -158,6 +149,7 @@ let commandLauncherWindow: CommandLauncherWindow | null = null;
 
 // Track pending update state so windows can query it when they open.
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
+
 
 /**
  * Register all application hotkeys.
@@ -1249,87 +1241,6 @@ function setupTranscribeIPCHandlers(): void {
 }
 
 /**
- * Set up all IPC handlers for vision model-related communication.
- */
-function setupVisionIPCHandlers(): void {
-  ipcMain.handle(VisionIPCChannels.GET_MODEL_STATUS, async () => {
-    if (!visionModelManager) {
-      return 'missing';
-    }
-    const selectedModel = visionModelManager.getSelectedModel();
-    const isAvailable = await visionModelManager.isModelAvailableForSize(selectedModel);
-    return isAvailable ? 'downloaded' : 'missing';
-  });
-
-  ipcMain.handle(VisionIPCChannels.DOWNLOAD_MODEL, async (_event, modelSize?: string) => {
-    if (!visionModelManager) {
-      throw new Error('VisionModelManager not initialized');
-    }
-    
-    const downloadFn = modelSize 
-      ? (onProgress?: (downloaded: number, total: number) => void) => 
-          visionModelManager!.downloadModelForSize(modelSize as VisionModelSize, onProgress)
-      : (onProgress?: (downloaded: number, total: number) => void) => 
-          visionModelManager!.downloadModel(onProgress);
-    
-    await downloadFn((downloaded, total) => {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(
-            VisionIPCChannels.MODEL_DOWNLOAD_PROGRESS,
-            downloaded,
-            total
-          );
-        }
-      });
-    });
-  });
-
-  ipcMain.handle(VisionIPCChannels.DELETE_MODEL, async (_event, modelSize: string) => {
-    if (!visionModelManager) {
-      throw new Error('VisionModelManager not initialized');
-    }
-    const validSizes: VisionModelSize[] = ['nano'];
-    if (!validSizes.includes(modelSize as VisionModelSize)) {
-      throw new Error(`Invalid model size: ${modelSize}`);
-    }
-    return await visionModelManager.deleteModelForSize(modelSize as VisionModelSize);
-  });
-
-  ipcMain.handle(VisionIPCChannels.GET_AVAILABLE_MODELS, () => {
-    if (!visionModelManager) {
-      throw new Error('VisionModelManager not initialized');
-    }
-    return visionModelManager.getAvailableModels();
-  });
-
-  ipcMain.handle(VisionIPCChannels.GET_MODEL_DOWNLOAD_STATUS, async () => {
-    if (!visionModelManager) {
-      throw new Error('VisionModelManager not initialized');
-    }
-    return visionModelManager.getDownloadStatus();
-  });
-
-  ipcMain.handle(VisionIPCChannels.GET_SELECTED_MODEL, () => {
-    if (!visionModelManager) {
-      return 'nano';
-    }
-    return visionModelManager.getSelectedModel();
-  });
-
-  ipcMain.handle(VisionIPCChannels.SET_SELECTED_MODEL, async (_event, modelSize: string) => {
-    if (!visionModelManager) {
-      throw new Error('VisionModelManager not initialized');
-    }
-    const validSizes: VisionModelSize[] = ['nano'];
-    if (!validSizes.includes(modelSize as VisionModelSize)) {
-      throw new Error(`Invalid model size: ${modelSize}`);
-    }
-    visionModelManager.setSelectedModel(modelSize as VisionModelSize);
-  });
-}
-
-/**
  * Set up all IPC handlers for clipboard-related communication.
  */
 function setupClipboardIPCHandlers(): void {
@@ -2067,45 +1978,6 @@ function setupClipboardIPCHandlers(): void {
     }
   });
 
-  // Engineer feature - refine prompts using AI.
-  // Takes a stack of content and returns a well-structured prompt.
-  ipcMain.handle(ClipboardIPCChannels.ENGINEER_STACK, async (_event, stackId: string) => {
-    try {
-      if (!clipboardManager) {
-        return { success: false, error: 'Clipboard manager not initialized' };
-      }
-
-      // Set API key from preferences if available (securely stored via safeStorage).
-      const apiKey = preferencesManager?.getApiKey();
-      if (apiKey) {
-        setEngineerApiKey(apiKey);
-      }
-
-      // Get all items in the stack
-      const items = clipboardManager.queryItemsByStackId(stackId);
-      if (items.length === 0) {
-        return { success: false, error: 'No items found in stack' };
-      }
-
-      // Transform to the format expected by engineerStack
-      const stackItems = items.map(item => ({
-        content: item.content,
-        type: item.type,
-        imageWidth: item.imageWidth ?? undefined,
-        imageHeight: item.imageHeight ?? undefined,
-      }));
-
-      const result = await engineerStack(stackItems);
-      return result;
-    } catch (error) {
-      console.error('[Main] engineerStack error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error occurred',
-      };
-    }
-  });
-
   // =========================================================================
   // API Key Management - Securely stored via OS keychain (safeStorage)
   // =========================================================================
@@ -2310,74 +2182,6 @@ function setupClipboardIPCHandlers(): void {
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to save setting' };
     }
-  });
-
-  // =========================================================================
-  // System Prompt Customization - User can modify how transcriptions are improved
-  // =========================================================================
-
-  // Get the currently active system prompt (custom if set, otherwise default).
-  ipcMain.handle(ClipboardIPCChannels.GET_SYSTEM_PROMPT, async () => {
-    // First load any saved custom prompt from preferences.
-    const customPrompt = preferencesManager?.getPreference('customSystemPrompt');
-    if (customPrompt) {
-      setCustomSystemPrompt(customPrompt);
-    }
-    return {
-      prompt: getActiveSystemPrompt(),
-      isCustom: !!customPrompt,
-    };
-  });
-
-  // Set a custom system prompt.
-  ipcMain.handle(ClipboardIPCChannels.SET_SYSTEM_PROMPT, async (_event, prompt: string) => {
-    try {
-      if (!preferencesManager) {
-        return { success: false, error: 'Preferences not initialized' };
-      }
-      
-      // Save to preferences for persistence.
-      await preferencesManager.save({ customSystemPrompt: prompt });
-      
-      // Update the in-memory prompt.
-      setCustomSystemPrompt(prompt);
-      
-      return { success: true };
-    } catch (error) {
-      console.error('[Main] setSystemPrompt error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to save system prompt',
-      };
-    }
-  });
-
-  // Reset to the default system prompt.
-  ipcMain.handle(ClipboardIPCChannels.RESET_SYSTEM_PROMPT, async () => {
-    try {
-      if (!preferencesManager) {
-        return { success: false, error: 'Preferences not initialized' };
-      }
-      
-      // Clear from preferences.
-      await preferencesManager.save({ customSystemPrompt: undefined });
-      
-      // Clear in-memory custom prompt.
-      setCustomSystemPrompt(null);
-      
-      return { success: true };
-    } catch (error) {
-      console.error('[Main] resetSystemPrompt error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to reset system prompt',
-      };
-    }
-  });
-
-  // Get the default system prompt (for showing in UI before user customizes).
-  ipcMain.handle(ClipboardIPCChannels.GET_DEFAULT_SYSTEM_PROMPT, async () => {
-    return { prompt: loadDefaultSystemPrompt() };
   });
 
   // =========================================================================
@@ -4175,7 +3979,15 @@ async function initTranscriberSystem(): Promise<void> {
       }
     });
   });
-  
+
+  // Bring onboarding window to front on any clipboard copy
+  // This helps users who copied the OTP code and need to get back to Field Theory
+  clipboardManager.setOnClipboardChange(() => {
+    if (onboardingWindow?.isVisible()) {
+      onboardingWindow.show();
+    }
+  });
+
   const prefs = preferencesManager.get();
   clipboardManager.loadHotkeysFromPreferences(
     prefs.clipboardScreenshotHotkey,
@@ -4273,9 +4085,6 @@ async function initTranscriberSystem(): Promise<void> {
   diagnosticsCollector = new DiagnosticsCollector(preferencesManager);
   if (transcriberManager) {
     diagnosticsCollector.setModelManager(transcriberManager.getModelManager());
-  }
-  if (visionModelManager) {
-    diagnosticsCollector.setVisionModelManager(visionModelManager);
   }
   if (audioManager) {
     diagnosticsCollector.setAudioManager(audioManager);
@@ -4629,7 +4438,6 @@ if (!gotTheLock) {
     setupIPCHandlers();
     setupThemeIPCHandlers();
     setupTranscribeIPCHandlers();
-    setupVisionIPCHandlers();
     setupClipboardIPCHandlers();
     setupOnboardingIPCHandlers();
     setupDisplayListeners();

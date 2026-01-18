@@ -480,8 +480,12 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
           result.session.access_token,
           result.session.refresh_token
         );
-        // Complete onboarding
-        onFinish();
+        // Complete onboarding - skip shortcuts for returning users
+        if (onFinishReturning) {
+          onFinishReturning();
+        } else {
+          onFinish();
+        }
       }
     } catch (err) {
       setError('Failed to verify code. Please try again.');
@@ -602,6 +606,27 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
               style={styles.secondaryButton}
             >
               Use a different email
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                setError(null);
+                const result = await window.authAPI?.requestOtp(email.trim());
+                if (result?.error) {
+                  setError(result.error);
+                }
+              }}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: theme.textSecondary,
+                fontSize: '12px',
+                cursor: 'pointer',
+                marginTop: '8px',
+                textDecoration: 'underline',
+              }}
+            >
+              Resend code
             </button>
           </form>
         )}

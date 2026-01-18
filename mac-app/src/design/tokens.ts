@@ -4,6 +4,53 @@
 // =============================================================================
 
 // -----------------------------------------------------------------------------
+// Accent Color Presets
+// User-selectable accent colors for personalization.
+// -----------------------------------------------------------------------------
+
+export type AccentPreset = 'forest' | 'ocean' | 'purple' | 'rose' | 'coral' | 'gold';
+
+export const accentPresets: Record<AccentPreset, { light: string; dark: string; name: string }> = {
+  forest: { light: '#14372A', dark: '#3d8b6a', name: 'Forest' },
+  ocean:  { light: '#1e3a5f', dark: '#4a90d9', name: 'Ocean' },
+  purple: { light: '#4a2c6a', dark: '#9b6dca', name: 'Purple' },
+  rose:   { light: '#6a2c4a', dark: '#ca6d9b', name: 'Rose' },
+  coral:  { light: '#c45844', dark: '#e8836e', name: 'Coral' },
+  gold:   { light: '#8a6914', dark: '#d4a934', name: 'Gold' },
+};
+
+// Helper to generate accent hover colors (slightly darker/lighter)
+export function getAccentHover(accent: string, isDark: boolean): string {
+  // Simple approach: adjust brightness
+  if (isDark) {
+    // Lighten for dark mode hover
+    return adjustBrightness(accent, 20);
+  } else {
+    // Darken for light mode hover
+    return adjustBrightness(accent, -15);
+  }
+}
+
+// Helper to adjust hex color brightness
+function adjustBrightness(hex: string, percent: number): string {
+  const num = parseInt(hex.replace('#', ''), 16);
+  const r = Math.min(255, Math.max(0, (num >> 16) + Math.round(255 * percent / 100)));
+  const g = Math.min(255, Math.max(0, ((num >> 8) & 0x00FF) + Math.round(255 * percent / 100)));
+  const b = Math.min(255, Math.max(0, (num & 0x0000FF) + Math.round(255 * percent / 100)));
+  return `#${(1 << 24 | r << 16 | g << 8 | b).toString(16).slice(1)}`;
+}
+
+// Helper to generate selected background from accent color
+export function getSelectedBg(accent: string, isDark: boolean): string {
+  // Parse hex and create rgba with low opacity
+  const num = parseInt(accent.replace('#', ''), 16);
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  return `rgba(${r}, ${g}, ${b}, ${isDark ? 0.15 : 0.08})`;
+}
+
+// -----------------------------------------------------------------------------
 // Color Palette
 // Warm paper/ink aesthetic inspired by sketchpad design.
 // -----------------------------------------------------------------------------
@@ -14,7 +61,7 @@ export const colors = {
     bgAlt: '#f5f4f2',        // Slightly darker for cards/boxes
     text: '#1a1a1a',         // Dark ink for primary text
     textMuted: '#6b6b6b',    // Softer text for secondary content
-    accent: '#14372A',       // Deep forest green accent
+    accent: '#14372A',       // Deep forest green accent (default)
     border: '#e0e0e0',       // Light border
     dots: '#d4d4d4',         // Dotted separator color
   },
@@ -23,7 +70,7 @@ export const colors = {
     bgAlt: '#1c1f26',        // Slightly lighter for cards
     text: '#e8e8e8',         // Light text
     textMuted: '#a8a8a8',    // Muted secondary text (brighter for contrast)
-    accent: '#3d8b6a',       // Brighter green for dark mode visibility
+    accent: '#3d8b6a',       // Brighter green for dark mode visibility (default)
     border: '#2a2d35',       // Dark border
     dots: '#3a3d45',         // Dotted separator in dark mode
   },
@@ -178,6 +225,9 @@ export interface Theme {
   surface1: string;
   surface2: string;
   surface3: string;
+  // List/item states
+  listItemBg: string;      // Background for list items (elevated from bg)
+  hoverBg: string;         // Hover state for list items
   // Selection
   selectedBg: string;
   selectedBorder: string;
@@ -220,6 +270,9 @@ export const lightTheme: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   surface1: surfaces.light[1],
   surface2: surfaces.light[2],
   surface3: surfaces.light[3],
+  // List/item states
+  listItemBg: colors.light.bgAlt,      // Slightly elevated from bg
+  hoverBg: '#eae9e7',                   // Hover state (darker than listItemBg)
   selectedBg: 'rgba(20, 55, 42, 0.08)',
   selectedBorder: colors.light.accent,
   inputBg: '#ffffff',
@@ -254,6 +307,9 @@ export const darkThemeSolid: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   surface1: surfaces.dark[1],
   surface2: surfaces.dark[2],
   surface3: surfaces.dark[3],
+  // List/item states
+  listItemBg: surfaces.dark[1],        // Elevated from bg
+  hoverBg: '#262a32',                   // Hover state (lighter than listItemBg)
   selectedBg: 'rgba(61, 139, 106, 0.15)',
   selectedBorder: colors.dark.accent,
   inputBg: surfaces.dark[2],
@@ -288,6 +344,9 @@ export const darkThemeGlass: Omit<Theme, 'isDark' | 'glassEnabled'> = {
   surface1: 'rgba(28, 31, 38, 0.9)',
   surface2: 'rgba(34, 38, 46, 0.95)',
   surface3: 'rgba(42, 46, 56, 0.95)',
+  // List/item states
+  listItemBg: 'rgba(28, 31, 38, 0.9)',  // Elevated from bg
+  hoverBg: 'rgba(38, 42, 50, 0.95)',    // Hover state
   selectedBg: 'rgba(61, 139, 106, 0.15)',
   selectedBorder: colors.dark.accent,
   inputBg: 'rgba(34, 38, 46, 0.9)',

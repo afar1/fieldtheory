@@ -30,10 +30,7 @@ export const ClipboardIPCChannels = {
   GET_UNIQUE_STACKS: 'clipboard:getUniqueStacks',
   UPDATE_STACK_ID: 'clipboard:updateStackId',
   START_DRAG: 'clipboard:startDrag',
-  
-// Engineer feature - refine prompts using AI
-  ENGINEER_STACK: 'clipboard:engineerStack',
-  
+
   // All-time stats for footer display
   GET_ALL_TIME_STATS: 'clipboard:getAllTimeStats',
   INCREMENT_IMPROVED_COUNT: 'clipboard:incrementImprovedCount',
@@ -54,13 +51,7 @@ export const ClipboardIPCChannels = {
   DELETE_LOCAL_LLM: 'clipboard:deleteLocalLLM',
   GET_USE_LOCAL_LLM: 'clipboard:getUseLocalLLM',
   SET_USE_LOCAL_LLM: 'clipboard:setUseLocalLLM',
-  
-  // System prompt customization for Engineer feature
-  GET_SYSTEM_PROMPT: 'clipboard:getSystemPrompt',
-  SET_SYSTEM_PROMPT: 'clipboard:setSystemPrompt',
-  RESET_SYSTEM_PROMPT: 'clipboard:resetSystemPrompt',
-  GET_DEFAULT_SYSTEM_PROMPT: 'clipboard:getDefaultSystemPrompt',
-  
+
   // Improved content management
   SAVE_IMPROVED_CONTENT: 'clipboard:saveImprovedContent',
   CLEAR_IMPROVED_CONTENT: 'clipboard:clearImprovedContent',
@@ -313,8 +304,5 @@ export interface ClipboardAPI {
   getUniqueStacks: () => Promise<StackInfo[]>;
   updateStackId: (itemIds: number[], stackId: string | null) => Promise<void>;
   startDrag: (stackId: string) => Promise<void>;
-  
-  // Engineer feature - refine prompts using AI
-  engineerStack: (stackId: string) => Promise<EngineerResult>;
 }
 
