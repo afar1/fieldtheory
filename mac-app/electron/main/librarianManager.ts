@@ -78,6 +78,9 @@ export class LibrarianManager extends EventEmitter {
     this.db = new Database(dbPath);
     this.initDatabase();
 
+    // Ensure default watched directories exist
+    this.ensureDefaultWatchedDirs();
+
     // Start watching configured directories
     this.startWatching();
 
@@ -123,6 +126,30 @@ export class LibrarianManager extends EventEmitter {
     `);
 
     console.log('[LibrarianManager] Database initialized');
+  }
+
+  /**
+   * Ensure default watched directories are configured.
+   * Automatically adds .librarian in the current working directory if it exists.
+   */
+  private ensureDefaultWatchedDirs(): void {
+    const cwd = process.cwd();
+    const projectLibrarianDir = path.join(cwd, '.librarian');
+
+    // Auto-add .librarian in cwd if it exists and isn't already watched
+    if (fs.existsSync(projectLibrarianDir)) {
+      const existing = this.db
+        .prepare('SELECT id FROM watched_dirs WHERE path = ?')
+        .get(projectLibrarianDir);
+
+      if (!existing) {
+        const addedAt = Date.now();
+        this.db
+          .prepare('INSERT INTO watched_dirs (path, enabled, added_at) VALUES (?, 1, ?)')
+          .run(projectLibrarianDir, addedAt);
+        console.log(`[LibrarianManager] Auto-added default watch path: ${projectLibrarianDir}`);
+      }
+    }
   }
 
   /**
