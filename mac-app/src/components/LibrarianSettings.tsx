@@ -423,10 +423,10 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         {/* Frequency options */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '16px' }}>
           {[
-            { value: 'off', label: 'Off' },
-            { value: 'occasionally', label: 'Occasionally' },
-            { value: 'regularly', label: 'Regularly' },
             { value: 'frequently', label: 'Frequently' },
+            { value: 'regularly', label: 'Regularly' },
+            { value: 'occasionally', label: 'Occasionally' },
+            { value: 'off', label: 'Off' },
           ].map((option) => (
             <button
               key={option.value}
@@ -487,8 +487,43 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         </div>
 
         {autoRunFrequency !== 'off' && !claudeConfigError && (
-          <p style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '12px' }}>
-            Claude Code instructions are automatically updated in ~/.claude/CLAUDE.md
+          <p style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span>Claude Code instructions are automatically updated in ~/.claude/CLAUDE.md</span>
+            <button
+              onClick={async () => {
+                const claudePath = await window.librarianAPI?.getClaudeConfigPath();
+                if (claudePath) {
+                  window.shellAPI?.showItemInFolder(claudePath);
+                }
+              }}
+              style={{
+                padding: '2px 4px',
+                backgroundColor: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                color: theme.textSecondary,
+                display: 'flex',
+                alignItems: 'center',
+                borderRadius: '3px',
+                opacity: 0.7,
+                transition: 'opacity 0.1s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.opacity = '1';
+                e.currentTarget.style.backgroundColor = theme.isDark
+                  ? 'rgba(255,255,255,0.1)'
+                  : 'rgba(0,0,0,0.05)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.opacity = '0.7';
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }}
+              title="Show in Finder"
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9zM2.5 3a.5.5 0 0 0-.5.5V6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5zM14 7H2v5.5a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5V7z" />
+              </svg>
+            </button>
           </p>
         )}
         {claudeConfigError && (
