@@ -21,11 +21,6 @@ Length guidelines:
    - Include a `# Title` as the first line
    - No frontmatter needed
 
-4. After saving, open it in Field Theory's Librarian in fullscreen reading mode:
-   ```bash
-   open "fieldtheory://librarian/import?file=$(pwd)/.librarian/{filename}.md&fullscreen=true"
-   ```
-
-5. **Then immediately proceed with the implementation** while I read.
+4. **Then immediately proceed with the implementation** while I read.
 
 This creates productive cognitive wandering during iteration time—named after the AI assistant in Snow Crash that provides contextual intel during missions.

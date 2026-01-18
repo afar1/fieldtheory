@@ -16,6 +16,40 @@ import type { Session } from '@supabase/supabase-js';
 import { useTheme, Theme } from '../contexts/ThemeContext';
 import { accentPresets, AccentPreset } from '../design/tokens';
 
+// Settings sections in alphabetical order
+type SettingsSection =
+  | 'account'
+  | 'appearance'
+  | 'audio'
+  | 'auto-improve'
+  | 'keyboard'
+  | 'librarian'
+  | 'commands'
+  | 'support';
+
+const SECTION_LABELS: Record<SettingsSection, string> = {
+  'account': 'Account',
+  'appearance': 'Appearance & System',
+  'audio': 'Audio & Transcription',
+  'auto-improve': 'Auto-Improve',
+  'keyboard': 'Keyboard Shortcuts',
+  'librarian': 'Librarian',
+  'commands': 'Portable Commands',
+  'support': 'Support',
+};
+
+// Alphabetically ordered sections for navigation
+const SECTIONS_ORDER: SettingsSection[] = [
+  'account',
+  'appearance',
+  'audio',
+  'auto-improve',
+  'keyboard',
+  'librarian',
+  'commands',
+  'support',
+];
+
 interface SettingsPanelProps {
   onNavigateToSignIn?: () => void;
   onNavigateToFeedback?: () => void;
@@ -28,6 +62,21 @@ interface SettingsPanelProps {
  */
 export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback }: SettingsPanelProps) {
   const { theme, toggleDarkMode, accentPreset, setAccentPreset, darkModeIntensity, setDarkModeIntensity } = useTheme();
+
+  // Selected section state for sidebar navigation
+  const [selectedSection, setSelectedSection] = useState<SettingsSection>(() => {
+    const saved = localStorage.getItem('fieldTheorySettingsSection');
+    if (saved && SECTIONS_ORDER.includes(saved as SettingsSection)) {
+      return saved as SettingsSection;
+    }
+    return 'appearance';
+  });
+
+  // Persist selected section
+  useEffect(() => {
+    localStorage.setItem('fieldTheorySettingsSection', selectedSection);
+  }, [selectedSection]);
+
   // Permissions state
   const [permissions, setPermissions] = useState<{ accessibilityGranted: boolean } | null>(null);
   const [showPermissionsGate, setShowPermissionsGate] = useState(false);
@@ -1223,10 +1272,33 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   );
 
   return (
-    <div style={styles.container}>
-      {permissionsWarning}
+    <div style={styles.settingsLayout}>
+      {/* Left Sidebar Navigation */}
+      <div style={styles.sidebar}>
+        <div style={styles.sidebarNav}>
+          {SECTIONS_ORDER.map((section) => (
+            <button
+              key={section}
+              onClick={() => setSelectedSection(section)}
+              style={{
+                ...styles.sidebarItem,
+                backgroundColor: selectedSection === section ? theme.accent : 'transparent',
+                color: selectedSection === section ? '#fff' : theme.textSecondary,
+              }}
+            >
+              {SECTION_LABELS[section]}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Right Content Area */}
+      <div style={styles.content}>
+        {permissionsWarning}
 
       {/* Appearance Section - Dark mode toggle, accent colors, intensity */}
+      {selectedSection === 'appearance' && (
+        <>
       <div style={styles.section}>
         <SectionHeader title="Appearance" />
         <div style={styles.row}>
@@ -1369,8 +1441,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </div>
         </div>
       )}
+        </>
+      )}
 
       {/* Auto-Improve Transcripts Section */}
+      {selectedSection === 'auto-improve' && (
       <div style={styles.section}>
         <SectionHeader title="Auto-Improve Transcripts" />
 
@@ -1642,8 +1717,10 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </>
         )}
       </div>
+      )}
 
       {/* Keyboard Shortcuts Section - First for easy access */}
+      {selectedSection === 'keyboard' && (
       <div style={styles.section}>
         <SectionHeader title="Keyboard Shortcuts" />
         
@@ -1846,12 +1923,15 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         
         {hotkeyError && <p style={styles.error}>{hotkeyError}</p>}
       </div>
+      )}
 
-      {/* Audio Section */}
+      {/* Audio & Transcription Section (combined) */}
+      {selectedSection === 'audio' && (
+      <>
       <div style={styles.section}>
         <SectionHeader title="Audio" />
         <AudioSettingsPanel />
-        
+
         {/* Sounds Enabled - master toggle for all sounds */}
         <div style={styles.row}>
           <span style={styles.rowLabel}>Sounds</span>
@@ -1872,23 +1952,30 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
 
       {/* Transcription Section */}
       <div style={styles.section}>
-        <SectionHeader title="Transcription" />
+        <SectionHeader title="Whisper Models" />
         <TranscriptionSettings />
       </div>
+      </>
+      )}
 
       {/* Portable Commands Section */}
+      {selectedSection === 'commands' && (
       <div style={styles.section}>
         <SectionHeader title="Portable Commands" />
         <CommandsSettings />
       </div>
+      )}
 
       {/* Librarian Section */}
+      {selectedSection === 'librarian' && (
       <div style={styles.section}>
         <SectionHeader title="Librarian" />
         <LibrarianSettings />
       </div>
+      )}
 
       {/* Support Section - diagnostics and troubleshooting */}
+      {selectedSection === 'support' && (
       <div style={styles.section}>
         <SectionHeader title="Support" />
         <div style={styles.row}>
@@ -1935,9 +2022,10 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </button>
         </div>
       </div>
-      
+      )}
+
       {/* Account Section - combines account info and subscription */}
-      {(() => {
+      {selectedSection === 'account' && (() => {
         // Only trust cached 'pro' tier if user is actually signed in.
         const displayTier = session ? userTier : 'free';
         const tierDisplayName = displayTier === 'pro' ? 'Pro Plan' : 'Basic Plan';
@@ -2086,7 +2174,10 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </div>
         );
       })()}
-      
+
+      </div>
+      {/* End of content area */}
+
       {/* Delete Account Confirmation Modal */}
       {showDeleteModal && (
         <div
@@ -2202,6 +2293,43 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
 
 // Styles consistent with ClipboardHistory styling
 const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
+  // New sidebar layout
+  settingsLayout: {
+    display: 'flex',
+    height: '100%',
+    boxSizing: 'border-box',
+  },
+  sidebar: {
+    width: '180px',
+    minWidth: '180px',
+    padding: '16px 12px',
+    borderRight: `1px solid ${theme.border}`,
+    backgroundColor: theme.bgSecondary,
+    overflowY: 'auto',
+    boxSizing: 'border-box',
+  },
+  sidebarNav: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+  },
+  sidebarItem: {
+    padding: '8px 12px',
+    fontSize: '13px',
+    fontWeight: 500,
+    textAlign: 'left',
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    transition: 'background-color 0.15s',
+  },
+  content: {
+    flex: 1,
+    padding: '16px',
+    overflowY: 'auto',
+    boxSizing: 'border-box',
+  },
+  // Legacy container (kept for compatibility)
   container: {
     padding: '16px',
     overflowY: 'auto',
