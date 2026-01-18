@@ -8,7 +8,12 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 
-export default function LibrarianSettings() {
+interface LibrarianSettingsProps {
+  librarianEnabled?: boolean;
+  onLibrarianEnabledChange?: (enabled: boolean) => void;
+}
+
+export default function LibrarianSettings({ librarianEnabled = true, onLibrarianEnabledChange }: LibrarianSettingsProps) {
   const { theme } = useTheme();
 
   // Watched directories
@@ -147,6 +152,58 @@ export default function LibrarianSettings() {
 
   return (
     <div style={{ padding: '0' }}>
+      {/* Enable/Disable Librarian toggle */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '8px 0',
+          marginBottom: '12px',
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          <span style={{ fontSize: '13px', fontWeight: 500, color: theme.text }}>
+            Show Librarian Tab
+          </span>
+          <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+            Display the Librarian tab in the header
+          </span>
+        </div>
+        <button
+          onClick={() => onLibrarianEnabledChange?.(!librarianEnabled)}
+          style={{
+            position: 'relative',
+            width: '44px',
+            minWidth: '44px',
+            height: '24px',
+            minHeight: '24px',
+            borderRadius: '12px',
+            cursor: 'pointer',
+            border: 'none',
+            padding: 0,
+            flexShrink: 0,
+            transition: 'background-color 0.2s',
+            backgroundColor: librarianEnabled ? theme.accent : '#d1d5db',
+          }}
+        >
+          <span
+            style={{
+              position: 'absolute',
+              top: '2px',
+              left: 0,
+              width: '20px',
+              height: '20px',
+              borderRadius: '10px',
+              backgroundColor: '#fff',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+              transition: 'transform 0.2s',
+              transform: librarianEnabled ? 'translateX(22px)' : 'translateX(2px)',
+            }}
+          />
+        </button>
+      </div>
+
       <p
         style={{
           fontSize: '13px',
@@ -154,6 +211,7 @@ export default function LibrarianSettings() {
           marginBottom: '16px',
           marginTop: '4px',
           lineHeight: '1.5',
+          opacity: librarianEnabled ? 1 : 0.5,
         }}
       >
         Add directories to watch for markdown readings. Field Theory will import new readings
