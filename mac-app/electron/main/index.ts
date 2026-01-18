@@ -383,7 +383,8 @@ function registerHotkeysAfterOnboarding(): void {
               clipboard.writeText(item.content || '');
               await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
               console.log('[Main] Super Paste: pasted text');
-            } else if (item.imageData) {
+            } else if (item.type === 'image' || item.type === 'screenshot' || item.imageData) {
+              if (!item.imageData) continue;
               if (isTerminal) {
                 const imagePath = await clipboardManager.exportImageToCache(item);
                 if (imagePath) {
@@ -397,7 +398,9 @@ function registerHotkeysAfterOnboarding(): void {
                   ? Buffer.from(item.imageData, 'base64')
                   : item.imageData;
                 const image = nativeImage.createFromBuffer(imageBuffer);
+                if (image.isEmpty()) continue;
                 clipboard.writeImage(image);
+                clipboardManager.syncClipboardHash();
                 await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
                 console.log('[Main] Super Paste: pasted image');
               }
@@ -1058,10 +1061,20 @@ function setupLibrarianIPCHandlers(): void {
 
   // Set auto-run frequency setting (returns true if CLAUDE.md was updated successfully)
   ipcMain.handle('librarian:setAutoRunFrequency', (_event, frequency: string): boolean => {
-    if (librarianManager && (frequency === 'off' || frequency === 'occasionally' || frequency === 'regularly' || frequency === 'frequently')) {
+    if (librarianManager && (frequency === 'off' || frequency === 'occasionally' || frequency === 'regularly' || frequency === 'frequently' || frequency === 'always')) {
       return librarianManager.setAutoRunFrequency(frequency);
     }
     return false;
+  });
+
+  // Force re-sync CLAUDE.md with current settings
+  ipcMain.handle('librarian:resyncClaudeMd', (): boolean => {
+    return librarianManager?.resyncClaudeMd() ?? false;
+  });
+
+  // Get Claude Code installation status
+  ipcMain.handle('librarian:getClaudeCodeStatus', (): string => {
+    return librarianManager?.getClaudeCodeStatus() ?? 'not-installed';
   });
 
   // Get Cursor instructions text
