@@ -196,6 +196,28 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   // Keyboard navigation
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      // Cmd/Ctrl + = (plus) - increase text size
+      if ((e.key === '=' || e.key === '+') && e.metaKey) {
+        e.preventDefault();
+        setTextSize((prev) => {
+          if (prev === 'small') return 'normal';
+          if (prev === 'normal') return 'large';
+          return 'large'; // Already at max
+        });
+        return;
+      }
+
+      // Cmd/Ctrl + - (minus) - decrease text size
+      if (e.key === '-' && e.metaKey) {
+        e.preventDefault();
+        setTextSize((prev) => {
+          if (prev === 'large') return 'normal';
+          if (prev === 'normal') return 'small';
+          return 'small'; // Already at min
+        });
+        return;
+      }
+
       // Toggle immersive/fullscreen mode with 'f'
       if (e.key === 'f' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
@@ -539,7 +561,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
             flex: 1,
             minHeight: 0, // Required for flex child to shrink and enable scrolling
             overflowY: 'auto',
-            padding: isFullScreen ? '32px' : '48px 32px',
+            padding: isFullScreen ? '16px' : '24px 20px',
             display: 'flex',
             justifyContent: 'center',
           }}
@@ -556,7 +578,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               className="librarian-content"
               style={{
                 fontSize: textSizes[textSize].base,
-                lineHeight: 1.8,
+                lineHeight: 1.5,
                 color: theme.text,
                 fontFamily: fonts.serif,
               }}
@@ -569,8 +591,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                         fontSize: textSizes[textSize].h1,
                         fontWeight: 600,
                         marginTop: 0,
-                        marginBottom: '24px',
-                        lineHeight: 1.3,
+                        marginBottom: '10px',
+                        lineHeight: 1.2,
                         color: theme.text,
                         fontFamily: fonts.serif,
                       }}
@@ -583,8 +605,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                       style={{
                         fontSize: textSizes[textSize].h2,
                         fontWeight: 600,
-                        marginTop: '28px',
-                        marginBottom: '12px',
+                        marginTop: '16px',
+                        marginBottom: '6px',
                         color: theme.text,
                       }}
                     >
@@ -596,8 +618,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                       style={{
                         fontSize: textSizes[textSize].h3,
                         fontWeight: 600,
-                        marginTop: '24px',
-                        marginBottom: '8px',
+                        marginTop: '14px',
+                        marginBottom: '4px',
                         color: theme.text,
                       }}
                     >
@@ -607,7 +629,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                   p: ({ children }) => (
                     <p
                       style={{
-                        marginBottom: '16px',
+                        marginBottom: '8px',
                       }}
                     >
                       {children}
@@ -630,10 +652,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     <blockquote
                       style={{
                         borderLeft: `3px solid ${theme.accent}`,
-                        paddingLeft: '16px',
+                        paddingLeft: '12px',
                         marginLeft: 0,
                         marginRight: 0,
-                        marginBottom: '16px',
+                        marginBottom: '8px',
                         color: theme.textSecondary,
                         fontStyle: 'italic',
                       }}
