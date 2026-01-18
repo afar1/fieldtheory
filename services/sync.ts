@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 import { StorageService } from './storage';
 import { getSession } from './auth';
 import { Observation, Todo, TranscriptEntry, TranscriptSegment } from '../types';
+import { mergeByLastWriteWins } from './syncUtils';
 
 // Remote table column adapters -------------------------------------------------
 type TodoRow = {
@@ -59,37 +60,6 @@ const toLocalTranscript = (row: TranscriptRow): TranscriptEntry => ({
 });
 
 const now = () => Date.now();
-
-const withUpdatedAt = <T extends { id: string; createdAt: number; updatedAt?: number }>(
-  record: T,
-): T => ({
-  ...record,
-  updatedAt: record.updatedAt ?? record.createdAt,
-});
-
-const mergeByLastWriteWins = <T extends { id: string; createdAt: number; updatedAt?: number }>(
-  localRecords: T[],
-  remoteRecords: T[],
-): T[] => {
-  const merged = new Map<string, T>();
-
-  localRecords.forEach((record) => {
-    merged.set(record.id, withUpdatedAt(record));
-  });
-
-  remoteRecords.forEach((record) => {
-    const normalizedRemote = withUpdatedAt(record);
-    const current = merged.get(normalizedRemote.id);
-    const remoteTimestamp = normalizedRemote.updatedAt ?? normalizedRemote.createdAt;
-    const localTimestamp = current ? current.updatedAt ?? current.createdAt : -Infinity;
-
-    if (!current || remoteTimestamp >= localTimestamp) {
-      merged.set(normalizedRemote.id, normalizedRemote);
-    }
-  });
-
-  return Array.from(merged.values());
-};
 
 const requireSession = async () => {
   const session = await getSession();
