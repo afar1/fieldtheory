@@ -36,7 +36,10 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [copied, setCopied] = useState(false);
 
   // Claude Code status
+  const [claudeCodeStatus, setClaudeCodeStatus] = useState<'installed' | 'directory-only' | 'not-installed'>('installed');
   const [claudeConfigError, setClaudeConfigError] = useState(false);
+  const [resynced, setResynced] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   // Load initial state
   useEffect(() => {
@@ -49,11 +52,13 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       window.librarianAPI.getWatchedDirs(),
       window.librarianAPI.getAutoRunFrequency(),
       window.librarianAPI.getAutoShowEnabled(),
+      window.librarianAPI.getClaudeCodeStatus(),
     ])
-      .then(([dirs, frequency, autoShow]) => {
+      .then(([dirs, frequency, autoShow, ccStatus]) => {
         setWatchedDirs(dirs);
         setAutoRunFrequency(frequency);
         setAutoShowEnabled(autoShow);
+        setClaudeCodeStatus(ccStatus as 'installed' | 'directory-only' | 'not-installed');
         setLoading(false);
       })
       .catch((err) => {
@@ -102,9 +107,13 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     if (!window.librarianAPI) return;
     setAutoRunFrequency(frequency);
     setClaudeConfigError(false);
+    setSaved(false);
     const success = await window.librarianAPI.setAutoRunFrequency(frequency);
     if (!success && frequency !== 'off') {
       setClaudeConfigError(true);
+    } else {
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
     }
   }, []);
 
@@ -204,12 +213,230 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         </button>
       </div>
 
+      {/* Auto-generate readings */}
+      <div
+        style={{
+          marginTop: '24px',
+          padding: '16px',
+          borderRadius: '8px',
+          backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
+          border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+        }}
+      >
+        <div style={{ marginBottom: '12px' }}>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: theme.text }}>
+            Auto-generate readings
+          </div>
+          <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '2px' }}>
+            Configure how often AI assistants should create readings
+          </div>
+        </div>
+
+        {/* Frequency options */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '16px' }}>
+          {[
+            { value: 'always', label: 'All the time', tooltip: 'Create a reading on every implementation task (not during planning or Q&A)' },
+            { value: 'frequently', label: 'Frequently', tooltip: 'Create a reading after most non-trivial tasks' },
+            { value: 'regularly', label: 'Regularly', tooltip: 'Create a reading every ~3 significant implementations' },
+            { value: 'occasionally', label: 'Occasionally', tooltip: 'Create a reading every ~5 significant implementations' },
+            { value: 'off', label: 'Off', tooltip: 'Disable automatic reading creation' },
+          ].map((option) => (
+            <button
+              key={option.value}
+              onClick={() => handleFrequencyChange(option.value)}
+              title={option.tooltip}
+              style={{
+                padding: '8px 16px',
+                fontSize: '12px',
+                fontWeight: autoRunFrequency === option.value ? 600 : 400,
+                color: autoRunFrequency === option.value ? '#fff' : theme.text,
+                backgroundColor: autoRunFrequency === option.value ? theme.accent : 'transparent',
+                border: `1px solid ${autoRunFrequency === option.value ? theme.accent : (theme.isDark ? theme.border : '#d1d5db')}`,
+                borderRadius: '6px',
+                cursor: 'pointer',
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Platform setup */}
+        {autoRunFrequency !== 'off' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {/* Claude Code section */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontWeight: 600, fontSize: '12px', color: theme.text }}>Claude Code</span>
+                {claudeCodeStatus === 'not-installed' ? (
+                  <span style={{ fontSize: '11px', color: theme.textSecondary }}>not detected</span>
+                ) : saved ? (
+                  <span style={{ fontSize: '11px', color: theme.success, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                      <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
+                    </svg>
+                    Claude is now aware
+                  </span>
+                ) : claudeConfigError ? (
+                  <span style={{ fontSize: '11px', color: theme.error }}>✗ Error updating</span>
+                ) : (
+                  <span style={{ fontSize: '11px', color: theme.success }}>✓</span>
+                )}
+              </div>
+              {claudeCodeStatus === 'not-installed' ? (
+                <div style={{ fontSize: '11px', color: theme.textSecondary }}>
+                  Instructions saved to ~/.claude/CLAUDE.md — will be ready when you install Claude Code
+                </div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: theme.textSecondary }}>
+                  <span>Auto-synced to ~/.claude/CLAUDE.md</span>
+                  <button
+                    onClick={async () => {
+                      const claudePath = await window.librarianAPI?.getClaudeConfigPath();
+                      if (claudePath) {
+                        window.shellAPI?.showItemInFolder(claudePath);
+                      }
+                    }}
+                    style={{
+                      padding: '2px 4px',
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: theme.textSecondary,
+                      display: 'flex',
+                      alignItems: 'center',
+                      borderRadius: '3px',
+                      opacity: 0.7,
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; }}
+                    title="Show in Finder"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                      <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9zM2.5 3a.5.5 0 0 0-.5.5V6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5zM14 7H2v5.5a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5V7z" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={async () => {
+                      const success = await window.librarianAPI?.resyncClaudeMd();
+                      if (success) {
+                        setResynced(true);
+                        setTimeout(() => setResynced(false), 2000);
+                      }
+                    }}
+                    style={{
+                      padding: '2px 4px',
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: resynced ? theme.success : theme.textSecondary,
+                      display: 'flex',
+                      alignItems: 'center',
+                      borderRadius: '3px',
+                      opacity: resynced ? 1 : 0.7,
+                    }}
+                    onMouseEnter={(e) => { if (!resynced) e.currentTarget.style.opacity = '1'; }}
+                    onMouseLeave={(e) => { if (!resynced) e.currentTarget.style.opacity = '0.7'; }}
+                    title="Re-sync instructions"
+                  >
+                    {resynced ? (
+                      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
+                      </svg>
+                    ) : (
+                      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/>
+                        <path fillRule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/>
+                      </svg>
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Cursor section */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontWeight: 600, fontSize: '12px', color: theme.text }}>Cursor</span>
+                <span style={{ fontSize: '11px', color: theme.textSecondary }}>manual setup required</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: theme.textSecondary }}>
+                <span>Copy to Settings → Rules for AI</span>
+                <button
+                  onClick={handleShowCursorInstructions}
+                  style={{
+                    padding: '2px 8px',
+                    backgroundColor: 'transparent',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    color: theme.textSecondary,
+                    fontSize: '10px',
+                    opacity: 0.8,
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.8'; }}
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {claudeConfigError && (
+          <p style={{ fontSize: '11px', color: theme.error, marginTop: '12px' }}>
+            Failed to update ~/.claude/CLAUDE.md. Check file permissions.
+          </p>
+        )}
+        {autoRunFrequency !== 'off' && (
+          <p style={{ fontSize: '10px', color: theme.textSecondary, marginTop: '12px', opacity: 0.6, textAlign: 'right' }}>
+            * Librarian will not affect your other CLAUDE.md settings
+          </p>
+        )}
+      </div>
+
+      {/* Auto-show on new reading */}
+      <div
+        style={{
+          marginTop: '24px',
+          padding: '16px',
+          borderRadius: '8px',
+          backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
+          border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+        }}
+      >
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            cursor: 'pointer',
+          }}
+        >
+          <div>
+            <div style={{ fontSize: '13px', fontWeight: 600, color: theme.text }}>
+              Auto-open on new reading
+            </div>
+            <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '2px' }}>
+              Bring Field Theory to foreground when a new reading appears
+            </div>
+          </div>
+          <input
+            type="checkbox"
+            checked={autoShowEnabled}
+            onChange={handleAutoShowToggle}
+            style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+          />
+        </label>
+      </div>
+
+      {/* Watched Directories */}
       <p
         style={{
           fontSize: '13px',
           color: theme.textSecondary,
           marginBottom: '16px',
-          marginTop: '4px',
+          marginTop: '24px',
           lineHeight: '1.5',
           opacity: librarianEnabled ? 1 : 0.5,
         }}
@@ -365,173 +592,6 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         Common directories: <code style={{ fontSize: '11px' }}>~/.librarian</code>,{' '}
         <code style={{ fontSize: '11px' }}>~/project/.librarian</code>
       </p>
-
-      {/* Auto-show on new reading */}
-      <div
-        style={{
-          marginTop: '24px',
-          padding: '16px',
-          borderRadius: '8px',
-          backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
-          border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-        }}
-      >
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            cursor: 'pointer',
-          }}
-        >
-          <div>
-            <div style={{ fontSize: '13px', fontWeight: 600, color: theme.text }}>
-              Auto-open on new reading
-            </div>
-            <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '2px' }}>
-              Bring Field Theory to foreground when a new reading appears
-            </div>
-          </div>
-          <input
-            type="checkbox"
-            checked={autoShowEnabled}
-            onChange={handleAutoShowToggle}
-            style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-          />
-        </label>
-      </div>
-
-      {/* Auto-generate readings */}
-      <div
-        style={{
-          marginTop: '24px',
-          padding: '16px',
-          borderRadius: '8px',
-          backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
-          border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-        }}
-      >
-        <div style={{ marginBottom: '12px' }}>
-          <div style={{ fontSize: '13px', fontWeight: 600, color: theme.text }}>
-            Auto-generate readings
-          </div>
-          <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '2px' }}>
-            Configure how often AI assistants should create readings
-          </div>
-        </div>
-
-        {/* Frequency options */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '16px' }}>
-          {[
-            { value: 'frequently', label: 'Frequently' },
-            { value: 'regularly', label: 'Regularly' },
-            { value: 'occasionally', label: 'Occasionally' },
-            { value: 'off', label: 'Off' },
-          ].map((option) => (
-            <button
-              key={option.value}
-              onClick={() => handleFrequencyChange(option.value)}
-              style={{
-                padding: '8px 16px',
-                fontSize: '12px',
-                fontWeight: autoRunFrequency === option.value ? 600 : 400,
-                color: autoRunFrequency === option.value ? '#fff' : theme.text,
-                backgroundColor: autoRunFrequency === option.value ? theme.accent : 'transparent',
-                border: `1px solid ${autoRunFrequency === option.value ? theme.accent : (theme.isDark ? theme.border : '#d1d5db')}`,
-                borderRadius: '6px',
-                cursor: 'pointer',
-              }}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Platform buttons */}
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '6px 12px',
-              fontSize: '12px',
-              color: claudeConfigError
-                ? theme.error
-                : autoRunFrequency !== 'off'
-                  ? theme.success
-                  : theme.textSecondary,
-              backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-              border: `1px solid ${claudeConfigError ? theme.error : (theme.isDark ? theme.border : '#d1d5db')}`,
-              borderRadius: '6px',
-            }}
-          >
-            Claude Code {claudeConfigError ? '✗' : autoRunFrequency !== 'off' ? '✓' : ''}
-          </div>
-          <button
-            onClick={handleShowCursorInstructions}
-            disabled={autoRunFrequency === 'off'}
-            style={{
-              padding: '6px 12px',
-              fontSize: '12px',
-              color: autoRunFrequency !== 'off' ? theme.text : theme.textSecondary,
-              backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-              border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
-              borderRadius: '6px',
-              cursor: autoRunFrequency !== 'off' ? 'pointer' : 'default',
-              opacity: autoRunFrequency === 'off' ? 0.5 : 1,
-            }}
-          >
-            Cursor Instructions
-          </button>
-        </div>
-
-        {autoRunFrequency !== 'off' && !claudeConfigError && (
-          <p style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span>Claude Code instructions are automatically updated in ~/.claude/CLAUDE.md</span>
-            <button
-              onClick={async () => {
-                const claudePath = await window.librarianAPI?.getClaudeConfigPath();
-                if (claudePath) {
-                  window.shellAPI?.showItemInFolder(claudePath);
-                }
-              }}
-              style={{
-                padding: '2px 4px',
-                backgroundColor: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                color: theme.textSecondary,
-                display: 'flex',
-                alignItems: 'center',
-                borderRadius: '3px',
-                opacity: 0.7,
-                transition: 'opacity 0.1s ease',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.opacity = '1';
-                e.currentTarget.style.backgroundColor = theme.isDark
-                  ? 'rgba(255,255,255,0.1)'
-                  : 'rgba(0,0,0,0.05)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.opacity = '0.7';
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }}
-              title="Show in Finder"
-            >
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9zM2.5 3a.5.5 0 0 0-.5.5V6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5zM14 7H2v5.5a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5V7z" />
-              </svg>
-            </button>
-          </p>
-        )}
-        {claudeConfigError && (
-          <p style={{ fontSize: '11px', color: theme.error, marginTop: '12px' }}>
-            Failed to update ~/.claude/CLAUDE.md. Check file permissions.
-          </p>
-        )}
-      </div>
 
       {/* Cursor Instructions Modal */}
       {showCursorModal && (
