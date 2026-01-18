@@ -342,6 +342,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings 
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
+          minHeight: 0, // Required for flex child to shrink below content size
         }}
       >
         {/* Toolbar */}
@@ -431,6 +432,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings 
         <div
           style={{
             flex: 1,
+            minHeight: 0, // Required for flex child to shrink and enable scrolling
             overflowY: 'auto',
             padding: '32px',
             paddingBottom: '120px',
