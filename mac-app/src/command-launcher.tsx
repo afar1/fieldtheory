@@ -66,6 +66,10 @@ declare global {
     todoAPI?: {
       getHotkey?: () => Promise<string>;
     };
+    themeAPI?: {
+      getTheme: () => Promise<boolean>;
+      setTheme: (isDark: boolean) => Promise<void>;
+    };
   }
 }
 
@@ -105,7 +109,7 @@ const DEFAULT_HOTKEYS = {
 // Built-in Actions
 // =============================================================================
 
-function getBuiltInActions(hotkeys: typeof DEFAULT_HOTKEYS): LauncherItem[] {
+function getBuiltInActions(hotkeys: typeof DEFAULT_HOTKEYS, isDarkMode: boolean): LauncherItem[] {
   return [
     {
       id: 'action-settings',
@@ -187,6 +191,16 @@ function getBuiltInActions(hotkeys: typeof DEFAULT_HOTKEYS): LauncherItem[] {
       hotkeyDisplay: formatHotkeyDisplay(hotkeys.history),
       actionId: 'open-history',
     },
+    {
+      id: 'action-theme',
+      type: 'action',
+      name: 'theme',
+      displayName: isDarkMode ? 'Toggle Light Mode (Field Theory)' : 'Toggle Dark Mode (Field Theory)',
+      keywords: ['theme', 'dark', 'light', 'mode', 'appearance', 'color', 'field', 'theory'],
+      hotkey: 'Shift+Command+L',
+      hotkeyDisplay: '⇧ ⌘ L',
+      actionId: 'toggle-theme',
+    },
   ];
 }
 
@@ -229,7 +243,7 @@ const styles = {
   list: {
     listStyle: 'none',
     margin: 0,
-    padding: '3px 0',
+    padding: '3px 0 6px 0',
     maxHeight: '280px',
     overflowY: 'auto' as const,
   },
@@ -282,6 +296,7 @@ function CommandLauncher() {
   const [query, setQuery] = useState('');
   const [commands, setCommands] = useState<PortableCommandInfo[]>([]);
   const [hotkeys, setHotkeys] = useState(DEFAULT_HOTKEYS);
+  const [isDarkMode, setIsDarkMode] = useState(true);
   const [filtered, setFiltered] = useState<LauncherItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -323,18 +338,29 @@ function CommandLauncher() {
 
   // Load commands and hotkeys on mount.
   useEffect(() => {
+    // Set initial height immediately to prevent layout shift
+    window.commandsAPI.launcherResize(36);
+
     loadCommands();
     loadHotkeys();
 
+    // Load current theme
+    window.themeAPI?.getTheme().then(dark => setIsDarkMode(dark));
+
     // Listen for reset events (when window is shown).
     // Reload commands each time to pick up newly added commands without restart.
-    const handleReset = () => {
+    const handleReset = async () => {
       setQuery('');
       setFiltered([]);
       setSelectedIndex(0);
       inputRef.current?.focus();
       // Reload commands to pick up any new ones added since last open.
       loadCommands();
+      // Refresh theme state
+      const dark = await window.themeAPI?.getTheme();
+      setIsDarkMode(dark ?? true);
+      // Reset height to input-only
+      window.commandsAPI.launcherResize(36);
     };
 
     const unsubscribe = window.commandsAPI.onLauncherReset(handleReset);
@@ -352,10 +378,10 @@ function CommandLauncher() {
       filePath: cmd.filePath,
     }));
 
-    const actionItems = getBuiltInActions(hotkeys);
+    const actionItems = getBuiltInActions(hotkeys, isDarkMode);
 
     return [...commandItems, ...actionItems];
-  }, [commands, hotkeys]);
+  }, [commands, hotkeys, isDarkMode]);
 
   // Check if query is a help command.
   const isHelpQuery = useMemo(() => {
@@ -370,7 +396,9 @@ function CommandLauncher() {
 
     if (allItems.length === 0) {
       setFiltered([]);
-      window.commandsAPI.launcherResize(inputHeight + emptyStateHeight);
+      // Don't show empty state height when still loading (query is empty)
+      // Only show it when user has typed but no results found
+      window.commandsAPI.launcherResize(inputHeight);
       return;
     }
 
@@ -519,6 +547,13 @@ function CommandLauncher() {
           break;
         case 'start-recording':
           window.transcribeAPI?.toggleRecording?.();
+          break;
+        case 'toggle-theme':
+          // Toggle dark/light mode
+          (async () => {
+            const currentIsDark = await window.themeAPI?.getTheme();
+            await window.themeAPI?.setTheme(!currentIsDark);
+          })();
           break;
         // Other actions are handled by closing and letting main process handle.
         default:

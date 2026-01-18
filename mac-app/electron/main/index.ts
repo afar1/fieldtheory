@@ -1078,6 +1078,13 @@ function setupLibrarianIPCHandlers(): void {
   ipcMain.handle('librarian:setAutoShowEnabled', (_event, enabled: boolean): void => {
     librarianManager?.setAutoShowEnabled(enabled);
   });
+
+  // Get Claude config file path
+  ipcMain.handle('librarian:getClaudeConfigPath', (): string => {
+    const os = require('os');
+    const path = require('path');
+    return path.join(os.homedir(), '.claude', 'CLAUDE.md');
+  });
 }
 
 /**
@@ -2576,6 +2583,11 @@ function setupClipboardIPCHandlers(): void {
   // Open external URL in default browser (for Stripe checkout, etc).
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
     await shell.openExternal(url);
+  });
+
+  // Reveal file in Finder (macOS).
+  ipcMain.handle('shell:showItemInFolder', async (_event, fullPath: string) => {
+    shell.showItemInFolder(fullPath);
   });
 
   // =========================================================================

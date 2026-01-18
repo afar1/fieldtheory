@@ -773,10 +773,11 @@ interface QuotaAPI {
 }
 
 /**
- * Shell API for opening external URLs.
+ * Shell API for opening external URLs and revealing files.
  */
 interface ShellAPI {
   openExternal: (url: string) => Promise<void>;
+  showItemInFolder: (fullPath: string) => Promise<void>;
 }
 
 /**
@@ -849,6 +850,7 @@ interface ReadingMeta {
   title: string;
   context: string | null;
   readingTime: string | null;
+  originalPath: string | null;
   createdAt: number;
 }
 

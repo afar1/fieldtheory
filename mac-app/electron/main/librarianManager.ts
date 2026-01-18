@@ -35,6 +35,7 @@ export interface ReadingMeta {
   title: string;
   context: string | null;
   readingTime: string | null;
+  originalPath: string | null;
   createdAt: number;
 }
 
@@ -462,14 +463,15 @@ export class LibrarianManager extends EventEmitter {
    */
   getReadings(): ReadingMeta[] {
     const rows = this.db
-      .prepare('SELECT id, title, context, reading_time, created_at FROM readings ORDER BY created_at DESC')
-      .all() as { id: number; title: string; context: string | null; reading_time: string | null; created_at: number }[];
+      .prepare('SELECT id, title, context, reading_time, original_path, created_at FROM readings ORDER BY created_at DESC')
+      .all() as { id: number; title: string; context: string | null; reading_time: string | null; original_path: string | null; created_at: number }[];
 
     return rows.map(row => ({
       id: row.id,
       title: row.title,
       context: row.context,
       readingTime: row.reading_time,
+      originalPath: row.original_path,
       createdAt: row.created_at,
     }));
   }
@@ -561,10 +563,11 @@ export class LibrarianManager extends EventEmitter {
    */
   getAutoRunFrequency(): AutoRunFrequency {
     const value = this.getSetting('librarian_auto_frequency');
-    if (value === 'occasionally' || value === 'regularly' || value === 'frequently') {
+    if (value === 'occasionally' || value === 'regularly' || value === 'frequently' || value === 'off') {
       return value;
     }
-    return 'off';
+    // Default to 'frequently' for new users
+    return 'frequently';
   }
 
   /**

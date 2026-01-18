@@ -860,6 +860,8 @@ export default function ClipboardHistory() {
   const [pendingStackSelection, setPendingStackSelection] = useState<string | null>(null);
   const [pendingItemSelection, setPendingItemSelection] = useState<number | null>(null);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [feedbackModalFocus, setFeedbackModalFocus] = useState<'share' | 'cancel'>('share');
 
   // DM modal state - for sending DMs to contacts.
   const [showDMModal, setShowDMModal] = useState(false);
@@ -1737,6 +1739,13 @@ export default function ClipboardHistory() {
         return;
       }
 
+      // Cmd+Shift+L to toggle light/dark mode
+      if (key === 'l' && hasMeta && hasShift && !hasCtrl && !hasAlt) {
+        e.preventDefault();
+        toggleDarkMode();
+        return;
+      }
+
       // If typing in the input, let it handle normal characters and Tab
       if (document.activeElement === inputRef.current && 
           key.length === 1 && 
@@ -1963,33 +1972,28 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // F - Submit selected item as feedback (in clipboard view), or open feedback view.
+      // F - Show feedback confirmation modal (in clipboard view), or open feedback view.
       if (key === 'f' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         // Skip if typing in input.
         if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
         e.preventDefault();
-        
-        // In clipboard view with a selected item, submit it as feedback.
+
+        // In clipboard view with a selected item, show confirmation modal.
         if (viewMode === 'clipboard' && listRows.length > 0) {
           const selectedRow = listRows[selectedIndex];
           if (selectedRow) {
-            const itemId = selectedRow.type === 'item' 
-              ? selectedRow.item.id 
+            const itemId = selectedRow.type === 'item'
+              ? selectedRow.item.id
               : selectedRow.items[0]?.id;
-            
+
             if (itemId) {
-              (async () => {
-                if (!window.socialAPI) return;
-                const result = await window.socialAPI.submitFeedback(itemId);
-                if (result) {
-                  showFeedback('sent as feedback');
-                }
-              })();
+              setFeedbackModalFocus('share');
+              setShowFeedbackModal(true);
               return;
             }
           }
         }
-        
+
         // Otherwise, open feedback view.
         setViewMode('feedback');
         return;
@@ -2083,6 +2087,41 @@ export default function ClipboardHistory() {
         return;
       }
 
+      // Feedback modal keyboard navigation
+      if (showFeedbackModal) {
+        if (key === 'ArrowLeft' || key === 'ArrowRight' || key === 'Tab') {
+          e.preventDefault();
+          setFeedbackModalFocus(prev => prev === 'share' ? 'cancel' : 'share');
+          return;
+        }
+        if (key === 'Enter') {
+          e.preventDefault();
+          if (feedbackModalFocus === 'cancel') {
+            setShowFeedbackModal(false);
+          } else {
+            // Submit feedback
+            const selectedRow = listRows[selectedIndex];
+            if (selectedRow) {
+              const itemId = selectedRow.type === 'item'
+                ? selectedRow.item.id
+                : selectedRow.items[0]?.id;
+
+              if (itemId) {
+                (async () => {
+                  if (!window.socialAPI) return;
+                  const result = await window.socialAPI.submitFeedback(itemId);
+                  if (result) {
+                    showFeedback('sent as feedback');
+                  }
+                })();
+              }
+            }
+            setShowFeedbackModal(false);
+          }
+          return;
+        }
+      }
+
       if (key === 'Escape') {
         // If in settings, close the window directly
         if (showSettings) {
@@ -2107,6 +2146,12 @@ export default function ClipboardHistory() {
         if (showShortcutsModal) {
           e.preventDefault();
           setShowShortcutsModal(false);
+          return;
+        }
+        // If feedback modal is open, close it (don't close window)
+        if (showFeedbackModal) {
+          e.preventDefault();
+          setShowFeedbackModal(false);
           return;
         }
         // If search input is focused, blur it and select first item instead of closing
@@ -2697,7 +2742,7 @@ export default function ClipboardHistory() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, sharingUnlocked, setViewMode, updatePreviewForRow, loadFullImageForPreview, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, sharingUnlocked, setViewMode, updatePreviewForRow, loadFullImageForPreview, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
   
@@ -2966,19 +3011,20 @@ export default function ClipboardHistory() {
         onMouseEnter={() => setHeaderHovered(true)}
         onMouseLeave={() => setHeaderHovered(false)}
         style={{
-          height: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '44px',
-          minHeight: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '44px',
+          height: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '52px',
+          minHeight: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '52px',
           overflow: 'hidden',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'flex-start',
+          paddingTop: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '8px',
           paddingLeft: '16px',
           paddingRight: '16px',
           // @ts-ignore - webkit vendor prefix for Electron draggable region
           WebkitAppRegion: 'drag',
           cursor: 'grab',
           borderBottom: showSettings ? `1px solid ${theme.border}` : 'none',
-          transition: 'height 0.3s ease, min-height 0.3s ease',
+          transition: 'height 0.3s ease, min-height 0.3s ease, padding-top 0.3s ease',
         }}
       >
         <img
@@ -3219,10 +3265,11 @@ export default function ClipboardHistory() {
             alignItems: 'center',
             gap: '2px',
             padding: '0 16px',
+            marginTop: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '4px',
             marginBottom: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '8px',
             height: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : 'auto',
             overflow: 'hidden',
-            transition: 'height 0.3s ease, margin-bottom 0.3s ease',
+            transition: 'height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease',
           }}>
           {(['clipboard', ...(librarianEnabled ? ['librarian'] : []), ...(canShare ? ['team'] : []), ...(FEATURE_HOT_MIC_ENABLED ? ['hotmic'] : []), ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
             // Hot Mic tab has special styling and the fire toggle.
@@ -6221,6 +6268,100 @@ export default function ClipboardHistory() {
               <span>undo <KeyCap>⌘</KeyCap><KeyCap>z</KeyCap></span>
               <span>unstack <KeyCap>u</KeyCap></span>
               <span>up <KeyCap>↑</KeyCap> <span style={{ opacity: 0.5, fontSize: '0.85em' }}>(or</span> <KeyCap>k</KeyCap><span style={{ opacity: 0.5, fontSize: '0.85em' }}>)</span></span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Feedback Confirmation Modal */}
+      {showFeedbackModal && (
+        <div
+          onClick={() => setShowFeedbackModal(false)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            backdropFilter: 'blur(4px)',
+            WebkitBackdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10001,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: theme.bg,
+              borderRadius: '12px',
+              padding: '20px',
+              maxWidth: '360px',
+              width: '90%',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+              border: `1px solid ${theme.border}`,
+            }}
+          >
+            <h3 style={{ margin: '0 0 8px 0', fontSize: '15px', fontWeight: 600, color: theme.text }}>
+              Share Feedback?
+            </h3>
+            <p style={{ margin: '0 0 12px 0', fontSize: '13px', color: theme.textSecondary, lineHeight: 1.5 }}>
+              This will share the selected item(s) with Field Theory as feedback.
+            </p>
+            <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: theme.textSecondary, opacity: 0.8, lineHeight: 1.4 }}>
+              Add context, see replies, and track progress in the Feedback tab.
+            </p>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', alignItems: 'center' }}>
+              <button
+                onClick={() => setShowFeedbackModal(false)}
+                style={{
+                  padding: '6px 12px',
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  color: feedbackModalFocus === 'cancel' ? '#fff' : theme.text,
+                  backgroundColor: feedbackModalFocus === 'cancel' ? theme.accent : 'transparent',
+                  border: `1px solid ${feedbackModalFocus === 'cancel' ? theme.accent : theme.border}`,
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const selectedRow = listRows[selectedIndex];
+                  if (selectedRow) {
+                    const itemId = selectedRow.type === 'item'
+                      ? selectedRow.item.id
+                      : selectedRow.items[0]?.id;
+
+                    if (itemId) {
+                      (async () => {
+                        if (!window.socialAPI) return;
+                        const result = await window.socialAPI.submitFeedback(itemId);
+                        if (result) {
+                          showFeedback('sent as feedback');
+                        }
+                      })();
+                    }
+                  }
+                  setShowFeedbackModal(false);
+                }}
+                style={{
+                  padding: '6px 12px',
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  color: feedbackModalFocus === 'share' ? '#fff' : theme.text,
+                  backgroundColor: feedbackModalFocus === 'share' ? theme.accent : 'transparent',
+                  border: `1px solid ${feedbackModalFocus === 'share' ? theme.accent : theme.border}`,
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                }}
+              >
+                Share
+              </button>
             </div>
           </div>
         </div>
