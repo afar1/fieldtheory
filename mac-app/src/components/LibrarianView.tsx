@@ -75,6 +75,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     return saved ? parseInt(saved, 10) : 180;
   });
   const [isResizing, setIsResizing] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Persist text size preference
@@ -218,6 +219,13 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
+      // Cmd + Delete/Backspace - show delete confirmation
+      if ((e.key === 'Backspace' || e.key === 'Delete') && e.metaKey && selectedId !== null) {
+        e.preventDefault();
+        setShowDeleteConfirm(true);
+        return;
+      }
+
       // Toggle immersive/fullscreen mode with 'f'
       if (e.key === 'f' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
@@ -258,6 +266,28 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     containerRef.current?.focus();
   }, []);
+
+  // Delete the selected reading
+  const handleDeleteReading = async () => {
+    if (selectedId === null) return;
+
+    const success = await window.librarianAPI?.deleteReading(selectedId);
+    if (success) {
+      // Remove from local state
+      const currentIndex = readings.findIndex((r) => r.id === selectedId);
+      const newReadings = readings.filter((r) => r.id !== selectedId);
+      setReadings(newReadings);
+
+      // Select next reading or previous if at end
+      if (newReadings.length > 0) {
+        const newIndex = Math.min(currentIndex, newReadings.length - 1);
+        setSelectedId(newReadings[newIndex].id);
+      } else {
+        setSelectedId(null);
+      }
+    }
+    setShowDeleteConfirm(false);
+  };
 
   // Group readings by date
   const groupedReadings = groupByDate(readings);
@@ -795,6 +825,74 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         )}
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && selectedReading && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}
+          onClick={() => setShowDeleteConfirm(false)}
+        >
+          <div
+            style={{
+              backgroundColor: theme.bg,
+              borderRadius: '12px',
+              padding: '20px',
+              maxWidth: '360px',
+              width: '90%',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+              border: `1px solid ${theme.border}`,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: '0 0 8px 0', fontSize: '15px', fontWeight: 600, color: theme.text }}>
+              Delete Reading?
+            </h3>
+            <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: theme.textSecondary, lineHeight: 1.5 }}>
+              "{selectedReading.title}" will be permanently deleted.
+            </p>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                style={{
+                  padding: '6px 12px',
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  color: theme.text,
+                  backgroundColor: 'transparent',
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteReading}
+                style={{
+                  padding: '6px 12px',
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  color: '#fff',
+                  backgroundColor: theme.error,
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
