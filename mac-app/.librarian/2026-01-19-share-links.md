@@ -1,0 +1,5 @@
+# The Permalink Problem
+
+When Tim Berners-Lee designed URLs in 1994, he later called them his biggest mistake—not the concept, but the fragility. "Cool URIs don't change," he wrote, but they do. The average lifespan of a web page is 100 days before it vanishes or moves. What we're building here is a small act of defiance against link rot: a slug that persists even when the local file moves, a soft-delete that preserves the URL for potential resurrection, and content stored redundantly in the cloud rather than depending on a single machine's filesystem.
+
+The design choice to use `source_path` as the link between local file and cloud record introduces its own fragility—rename the file and the link breaks. But this is intentional friction. The reading exists first as a local artifact, a markdown file in `.librarian/`. Sharing is secondary, an act of deliberate publication rather than automatic sync. This mirrors the distinction between a draft in your notebook and a letter you choose to mail. The permalink becomes real only when you decide it should be.

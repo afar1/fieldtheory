@@ -1,0 +1,5 @@
+# Single Source of Truth
+
+In 1970, Edgar Codd published "A Relational Model of Data for Large Shared Data Banks," which introduced normalization—the principle that each fact should be stored in exactly one place. Duplicate data creates update anomalies: change one copy, forget the other, and the system lies to itself. The two sound toggles are a UI-level normalization failure. Both claim authority over "sounds," but they speak to different APIs, creating a situation where a user could enable one and disable the other, leaving the system in an ambiguous state that neither reflects nor respects user intent.
+
+The fix follows Codd's insight: pick one authoritative location and eliminate the duplicate. The TranscriptionSettings toggle already has the superior interaction pattern—it reveals granular controls when enabled, hides them when disabled. This progressive disclosure is worth preserving. The Audio section's toggle was aspirational ("master toggle for all sounds") but never connected to the actual sound-producing code. Removing it isn't losing functionality; it's removing a false promise and consolidating control where the real work happens.

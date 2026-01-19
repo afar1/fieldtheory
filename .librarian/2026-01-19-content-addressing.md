@@ -1,0 +1,5 @@
+# The Indirection of Names
+
+When the ARPANET needed to map human-readable names to machine addresses, they created the Domain Name System in 1983—a distributed database that separated "what you call it" from "where it lives." This same pattern appears throughout computing: Git's content-addressable storage uses SHA-1 hashes rather than file paths, allowing the same content to exist at multiple locations while maintaining identity. Even URLs themselves are an indirection layer, a name pointing to a resource that may move between servers.
+
+The share link architecture follows this lineage. The slug (`reading-title-a3f2b1`) is a stable identifier stored in Supabase, while the rendering happens wherever we choose—first Supabase Edge Functions, now Vercel serverless functions, potentially somewhere else tomorrow. The content persists in the database; the presentation layer is swappable. This is why the CSP restrictions on Supabase Edge Functions weren't a crisis but merely a routing decision. When you separate naming from location, migration becomes configuration.

@@ -1,0 +1,5 @@
+# Search as Spatial Expectation
+
+In 1968, Douglas Engelbart's "Mother of All Demos" introduced not just the mouse but the concept of consistent interaction points—the idea that users build spatial memory of where functions live. When the search icon appears in the top-right of the Commands sidebar but is absent from Librarian, users experience what cognitive scientists call "negative transfer": the learned behavior from one context creates friction in another. The brain has already mapped "top-right corner = search" and must now consciously override that expectation.
+
+The size constraint matters too. Fitts's Law (1954) tells us that the time to acquire a target is a function of distance and target size, but there's a corollary: oversized controls consume visual and physical space that creates cascading layout effects. A 12px icon with appropriate padding serves the same function as a 16px one while preserving the vertical rhythm that keeps "Readings" aligned with "My Commands | Popular". The goal isn't minimal design for its own sake—it's creating enough consistency that the interface becomes invisible, letting users focus on their actual work.

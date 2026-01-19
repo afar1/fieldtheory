@@ -1,0 +1,5 @@
+# Token Metering as Observability
+
+The practice of exposing internal resource consumption to users echoes the history of utility metering. When Samuel Insull standardized electricity billing in the 1890s through the kilowatt-hour meter, he transformed an opaque service into something customers could reason about and optimize. Before metering, electricity was sold at flat rates that obscured actual usage patterns; after, users developed intuitions about which appliances drew power and when.
+
+API token tracking serves a similar function for AI-augmented workflows. By surfacing input tokens, output tokens, and derived cost estimates, we give users the same feedback loop that utility meters provided: the ability to see cause and effect between their actions (improving transcripts) and resource consumption. The cumulative stats with reset capability mirrors how utility bills show both current-period usage and historical patterns. This isn't just accounting—it's observability that shapes behavior, letting users decide when the improvement is worth the tokens.

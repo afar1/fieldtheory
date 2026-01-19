@@ -67,7 +67,10 @@ class FileStorage implements SupportedStorage {
         const data = fs.readFileSync(this.filePath, 'utf-8');
         const parsed = JSON.parse(data);
         this.storage = new Map(Object.entries(parsed));
-        console.log('[FileStorage] Loaded session from disk');
+        const keys = Array.from(this.storage.keys());
+        console.log('[FileStorage] Loaded from disk, keys present:', keys.length > 0 ? keys : '(none)');
+      } else {
+        console.log('[FileStorage] No session file exists yet');
       }
     } catch (err) {
       console.warn('[FileStorage] Failed to load session from disk:', err);
@@ -91,11 +94,14 @@ class FileStorage implements SupportedStorage {
   }
 
   async setItem(key: string, value: string): Promise<void> {
+    console.log('[FileStorage] setItem called for key:', key);
     this.storage.set(key, value);
     this.saveToDisk();
   }
 
   async removeItem(key: string): Promise<void> {
+    console.log('[FileStorage] removeItem called for key:', key);
+    console.log('[FileStorage] removeItem stack trace:', new Error().stack);
     this.storage.delete(key);
     this.saveToDisk();
   }

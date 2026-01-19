@@ -1,0 +1,5 @@
+# First Contact and Configuration Rights
+
+The Macintosh's 1984 debut included something revolutionary for its time: users could customize keyboard shortcuts from day one. Andy Hertzfeld's team understood that the first interaction with software shapes long-term behavior—what psychologists call the "primacy effect." If users learn default shortcuts during onboarding, they'll fight against those muscle memories forever if they later discover the defaults conflict with other tools. Better to configure once, correctly, than to retrain twice.
+
+The current onboarding shows shortcuts as read-only artifacts to practice, but this creates an awkward moment: users see shortcuts they might want to change, with no way to change them. The fix is to bring the Settings keyboard configuration UI into onboarding—same validation logic, same conflict detection, same recording mechanism. The principle is DRY (Don't Repeat Yourself), but applied to UX: if two screens let users do the same thing, they should behave identically. Anything less creates cognitive debt that compounds with every interaction.

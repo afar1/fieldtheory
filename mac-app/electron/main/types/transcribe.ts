@@ -27,6 +27,8 @@ export const TranscribeIPCChannels = {
   SET_AUTO_IMPROVE: 'transcribe:setAutoImprove',
   GET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:getAutoImproveMinWords',
   SET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:setAutoImproveMinWords',
+  GET_AUTO_IMPROVE_STATS: 'transcribe:getAutoImproveStats',
+  RESET_AUTO_IMPROVE_STATS: 'transcribe:resetAutoImproveStats',
 
   // Sound settings
   GET_SOUND_CONFIG: 'transcribe:getSoundConfig',
@@ -47,6 +49,16 @@ export const TranscribeIPCChannels = {
  * Transcription status.
  */
 export type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
+
+/**
+ * Auto-improve usage statistics.
+ */
+export interface AutoImproveStats {
+  wordsImproved: number;
+  apiCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+}
 
 /**
  * Sound configuration for recording actions.
@@ -114,6 +126,8 @@ export interface TranscribeAPI {
   setAutoImprove: (enabled: boolean) => Promise<void>;
   getAutoImproveMinWords: () => Promise<number>;
   setAutoImproveMinWords: (minWords: number) => Promise<void>;
+  getAutoImproveStats: () => Promise<AutoImproveStats>;
+  resetAutoImproveStats: () => Promise<void>;
   getSoundConfig: () => Promise<SoundConfig>;
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
   getAvailableSounds: () => Promise<SoundOption[]>;

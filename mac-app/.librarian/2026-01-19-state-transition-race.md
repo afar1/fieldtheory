@@ -1,0 +1,5 @@
+# State Transition Races
+
+The bug we encountered—exiting immersive mode causes the app to vanish—echoes a classic problem in concurrent systems: the state change races against its own consequences. When we set `isImmersiveMode = false` and simultaneously call `app.dock.hide()`, the dock visibility change may trigger a brief focus event. The blur handler, now seeing immersive mode as false, interprets this as "user clicked away" and hides everything. It's the same pattern that plagued early telephone switches: setting a line to "available" while the physical relay was still settling caused phantom calls.
+
+The fix follows the principle of atomic state transitions. Rather than hiding the dock the moment immersive mode ends (when the window should remain visible), we defer dock cleanup to when the window actually hides. This ensures the "is this an intentional dismissal?" check and the "should we hide the dock?" action happen together, not as separate events that can interleave badly. Leslie Lamport's work on distributed systems formalized this: operations that must appear atomic should share a single point of commitment, not scatter their effects across time.

@@ -120,7 +120,7 @@ export default function AudioSettingsPanel() {
   if (isLoading) {
     return (
       <div style={styles.container}>
-        <p style={{ fontSize: '13px', color: '#6b7280' }}>Loading devices...</p>
+        <p style={{ fontSize: '12px', color: '#6b7280' }}>Loading devices...</p>
       </div>
     );
   }
@@ -196,11 +196,11 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   notAvailable: {
     color: theme.textSecondary,
     fontStyle: 'italic',
-    fontSize: '13px',
+    fontSize: '12px',
   },
   error: {
     color: theme.error,
-    fontSize: '13px',
+    fontSize: '12px',
   },
 
   // Flat row layout.
@@ -212,12 +212,12 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     minHeight: '32px',
   },
   rowLabel: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.text,
     fontWeight: 400,
   },
   rowValue: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.text,
     fontWeight: 500,
   },
@@ -230,7 +230,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   // Button styles.
   btn: {
     padding: '6px 12px',
-    fontSize: '13px',
+    fontSize: '12px',
     fontWeight: 500,
     color: theme.text,
     backgroundColor: theme.isDark ? theme.surface1 : '#fff',
@@ -268,7 +268,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   // Select dropdown.
   select: {
     padding: '6px 12px',
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.text,
     backgroundColor: theme.isDark ? theme.surface1 : '#fff',
     border: `1px solid ${theme.border}`,
@@ -306,7 +306,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: '6px 10px',
+    padding: '6px 12px',
     marginBottom: '2px',
     borderRadius: '6px',
   },
@@ -317,13 +317,13 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     marginTop: '2px',
   },
   priorityBadge: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.success,
   },
   emptyMessage: {
     padding: '12px',
     color: theme.textSecondary,
     fontStyle: 'italic',
-    fontSize: '13px',
+    fontSize: '12px',
   },
 });

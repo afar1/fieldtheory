@@ -1,0 +1,5 @@
+# The Heisenbug Principle
+
+In 1985, Jim Gray coined the term "Heisenbug" for bugs that change behavior when you try to observe them—named after Heisenberg's uncertainty principle. But there's a corollary that's equally important: bugs that *only* manifest when you're not observing. Race conditions in authentication systems are notorious for this. The session was valid, then it wasn't, and the only evidence is an empty file where tokens should be.
+
+The instinct is to fix what you think is happening. But Werner Heisenberg's actual insight wasn't about observation changing reality—it was about the limits of simultaneous knowledge. We cannot know both the position and momentum of a particle with arbitrary precision. Similarly here: we cannot know both "what happened to the tokens" and "what will fix it" without first instrumenting the system. Adding `console.trace()` to the removeItem call is the equivalent of placing a detector in the double-slit experiment. It won't fix the bug, but it will collapse the superposition of possible causes into one observable reality. Only then can we apply a targeted fix rather than shotgunning complexity at a ghost.

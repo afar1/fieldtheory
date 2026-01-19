@@ -23,8 +23,7 @@ type SettingsSection =
   | 'auto-improve'
   | 'keyboard'
   | 'librarian'
-  | 'commands'
-  | 'support';
+  | 'commands';
 
 // Hotkey capture state - only one hotkey can be captured at a time
 type HotkeyCapture =
@@ -49,7 +48,6 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'keyboard': 'Keyboard Shortcuts',
   'librarian': 'Librarian',
   'commands': 'Portable Commands',
-  'support': 'Support',
 };
 
 // Alphabetically ordered sections for navigation
@@ -61,7 +59,6 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'commands',
   'keyboard',
   'librarian',
-  'support',
 ];
 
 interface SettingsPanelProps {
@@ -159,6 +156,13 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   // Auto-improve transcripts state
   const [autoImprove, setAutoImprove] = useState(false);
   const [autoImproveMinWords, setAutoImproveMinWords] = useState(60);
+  const [autoImproveStats, setAutoImproveStats] = useState<{
+    wordsImproved: number;
+    apiCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+  }>({ wordsImproved: 0, apiCalls: 0, inputTokens: 0, outputTokens: 0 });
+  const [isResettingStats, setIsResettingStats] = useState(false);
 
   // Local LLM state
   const [useLocalLLM, setUseLocalLLM] = useState(false);
@@ -174,8 +178,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   // Hide status labels - show only colored dots.
   const [hideStatusLabels, setHideStatusLabels] = useState(false);
   
-  // Sounds enabled - master toggle for all sounds.
-  const [soundsEnabled, setSoundsEnabled] = useState(true);
   
   // Tasks tab - experimental feature.
   const [tasksTabEnabled, setTasksTabEnabled] = useState(false);
@@ -260,6 +262,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       window.transcribeAPI?.getAutoImproveMinWords?.().then(minWords => {
         setAutoImproveMinWords(minWords);
       });
+      window.transcribeAPI?.getAutoImproveStats?.().then(stats => {
+        if (stats) setAutoImproveStats(stats);
+      });
 
       // Load local LLM settings
       window.clipboardAPI?.getLocalLLMModels?.().then(models => {
@@ -290,10 +295,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         setHideStatusLabels(hide);
       });
       
-      // Load sounds enabled setting
-      window.clipboardAPI.getSoundsEnabled?.().then(enabled => {
-        setSoundsEnabled(enabled);
-      });
       
       // Load tasks tab enabled setting
       window.clipboardAPI.getTasksTabEnabled?.().then(enabled => {
@@ -499,6 +500,21 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       await window.transcribeAPI.setAutoImproveMinWords(minWords);
     } catch (err) {
       console.error('Failed to change auto-improve min words:', err);
+    }
+  };
+
+  // Handler for resetting auto-improve stats
+  const handleResetAutoImproveStats = async () => {
+    if (!window.transcribeAPI?.resetAutoImproveStats) return;
+
+    setIsResettingStats(true);
+    try {
+      await window.transcribeAPI.resetAutoImproveStats();
+      setAutoImproveStats({ wordsImproved: 0, apiCalls: 0, inputTokens: 0, outputTokens: 0 });
+    } catch (err) {
+      console.error('Failed to reset auto-improve stats:', err);
+    } finally {
+      setIsResettingStats(false);
     }
   };
 
@@ -1495,7 +1511,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
-                <span style={{ fontSize: '13px', fontWeight: 500, color: theme.text }}>
+                <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
                   Limit reached
                 </span>
                 <span style={{ fontSize: '12px', color: theme.textSecondary, marginLeft: '8px' }}>
@@ -1554,8 +1570,8 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             {/* Minimum words slider */}
             <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: `1px solid ${theme.border}` }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                <span style={{ fontSize: '13px', color: theme.text }}>Minimum words to improve</span>
-                <span style={{ fontSize: '13px', fontWeight: 500, color: theme.text }}>{autoImproveMinWords} words</span>
+                <span style={{ fontSize: '12px', color: theme.text }}>Minimum words to improve</span>
+                <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>{autoImproveMinWords} words</span>
               </div>
               <input
                 type="range"
@@ -1582,7 +1598,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             {/* Method Selector - API vs Local */}
             <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: `1px solid ${theme.border}` }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                <span style={{ fontSize: '13px', color: theme.text }}>Method</span>
+                <span style={{ fontSize: '12px', color: theme.text }}>Method</span>
                 <div style={{
                   display: 'flex',
                   borderRadius: '6px',
@@ -1592,7 +1608,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                   <button
                     onClick={() => handleUseLocalLLMChange(false)}
                     style={{
-                      padding: '4px 12px',
+                      padding: '4px 8px',
                       fontSize: '12px',
                       fontWeight: 500,
                       border: 'none',
@@ -1607,7 +1623,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                   <button
                     onClick={() => handleUseLocalLLMChange(true)}
                     style={{
-                      padding: '4px 12px',
+                      padding: '4px 8px',
                       fontSize: '12px',
                       fontWeight: 500,
                       border: 'none',
@@ -1634,7 +1650,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                             ...styles.statusDot,
                             backgroundColor: apiKeyTestResult?.success ? theme.success : (apiKeyTestResult?.success === false ? theme.error : '#9ca3af'),
                           }} />
-                          <span style={{ fontSize: '13px', color: theme.textSecondary }}>{maskedApiKey || '•••••••'}</span>
+                          <span style={{ fontSize: '12px', color: theme.textSecondary }}>{maskedApiKey || '•••••••'}</span>
                           {detectedProvider !== 'unknown' && (
                             <span style={{
                               padding: '2px 6px',
@@ -1742,7 +1758,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                       backgroundColor: 'transparent',
                     }}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
-                        <span style={{ fontSize: '13px', fontWeight: 500, color: theme.text }}>
+                        <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
                           {model.name}
                         </span>
                         <span style={{ fontSize: '11px', color: theme.textSecondary }}>
@@ -1799,6 +1815,68 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             </div>
           </>
         )}
+
+        {/* Auto-Improve Usage Stats - always visible */}
+        <div style={{ marginTop: '16px', paddingTop: '12px', borderTop: `1px solid ${theme.border}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+            <span style={{
+              fontSize: '11px',
+              fontWeight: 600,
+              color: theme.textSecondary,
+              textTransform: 'uppercase' as const,
+              letterSpacing: '0.08em',
+              whiteSpace: 'nowrap' as const,
+            }}>Usage</span>
+            <div style={{ flex: 1, height: '1px', backgroundColor: theme.border }} />
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
+              <span style={{ fontSize: '12px', color: theme.textSecondary }}>Words improved</span>
+              <span style={{ fontSize: '12px', color: theme.text, fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
+                {autoImproveStats.wordsImproved.toLocaleString()}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
+              <span style={{ fontSize: '12px', color: theme.textSecondary }}>API calls</span>
+              <span style={{ fontSize: '12px', color: theme.text, fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
+                {autoImproveStats.apiCalls.toLocaleString()}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
+              <span style={{ fontSize: '12px', color: theme.textSecondary }}>Input tokens</span>
+              <span style={{ fontSize: '12px', color: theme.text, fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
+                {autoImproveStats.inputTokens.toLocaleString()}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
+              <span style={{ fontSize: '12px', color: theme.textSecondary }}>Output tokens</span>
+              <span style={{ fontSize: '12px', color: theme.text, fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
+                {autoImproveStats.outputTokens.toLocaleString()}
+              </span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
+              <span style={{ fontSize: '12px', color: theme.textSecondary }}>Est. cost</span>
+              <span style={{ fontSize: '12px', color: theme.text, fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
+                ${((autoImproveStats.inputTokens * 0.003 + autoImproveStats.outputTokens * 0.015) / 1000).toFixed(4)}
+              </span>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
+            <button
+              onClick={handleResetAutoImproveStats}
+              disabled={isResettingStats || autoImproveStats.apiCalls === 0}
+              style={{
+                ...styles.linkBtn,
+                color: theme.textSecondary,
+                opacity: isResettingStats || autoImproveStats.apiCalls === 0 ? 0.5 : 1,
+              }}
+            >
+              {isResettingStats ? 'Resetting...' : 'Reset Stats'}
+            </button>
+          </div>
+        </div>
       </div>
         );
       })()}
@@ -1983,8 +2061,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </div>
         </div>
 
-        {/* Sounds toggle moved to Audio section */}
-
         {/* Show in Dock - WIP feature, hidden until ready */}
         {/* Permission Reminders - removed, always show until permissions granted */}
         {/* Cursor Status Indicator - removed, always show the dot */}
@@ -2013,30 +2089,12 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       {selectedSection === 'audio' && (
       <>
       <div style={styles.section}>
-        <SectionHeader title="Audio" />
+        <SectionHeader title="Microphone" />
         <AudioSettingsPanel />
-
-        {/* Sounds Enabled - master toggle for all sounds */}
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Sounds</span>
-          <div style={styles.rowControls}>
-            <button
-              onClick={async () => {
-                const newValue = !soundsEnabled;
-                const success = await window.clipboardAPI?.setSoundsEnabled?.(newValue);
-                if (success) setSoundsEnabled(newValue);
-              }}
-              style={{ ...styles.toggle, backgroundColor: soundsEnabled ? theme.accent : '#d1d5db' }}
-            >
-              <span style={{ ...styles.toggleKnob, transform: soundsEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
-            </button>
-          </div>
-        </div>
       </div>
 
       {/* Transcription Section */}
       <div style={styles.section}>
-        <SectionHeader title="Whisper Models" />
         <TranscriptionSettings />
       </div>
       </>
@@ -2061,78 +2119,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       </div>
       )}
 
-      {/* Support Section - diagnostics and troubleshooting */}
-      {selectedSection === 'support' && (
-      <div style={styles.section}>
-        <SectionHeader title="Support" />
-        <div style={styles.row}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={styles.rowLabel}>Launch on Login</span>
-            <span style={styles.rowHint}>Start Field Theory when you log in</span>
-          </div>
-          <label style={styles.toggleContainer}>
-            <input
-              type="checkbox"
-              checked={launchAtLogin}
-              onChange={async (e) => {
-                const enabled = e.target.checked;
-                setLaunchAtLogin(enabled);
-                await window.clipboardAPI?.setLaunchAtLogin?.(enabled);
-              }}
-              style={styles.toggleInput}
-            />
-            <span style={styles.toggleSlider} />
-          </label>
-        </div>
-        <div style={styles.row}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={styles.rowLabel}>Diagnostics</span>
-            <span style={styles.rowHint}>View system info for troubleshooting</span>
-          </div>
-          <button
-            onClick={() => setShowDiagnostics(true)}
-            style={styles.linkBtn}
-          >
-            View
-          </button>
-        </div>
-        <div style={styles.row}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={styles.rowLabel}>Restart Onboarding</span>
-            <span style={styles.rowHint}>Go through the setup flow again</span>
-          </div>
-          <button
-            onClick={() => window.onboardingAPI?.reset?.()}
-            style={styles.linkBtn}
-          >
-            Start
-          </button>
-        </div>
-        <div style={{ ...styles.row, marginTop: '16px' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={styles.rowLabel}>Contact Support</span>
-            <span style={styles.rowHint}>
-              Email us at{' '}
-              <span
-                onClick={() => window.shellAPI?.openExternal('mailto:support@fieldtheory.dev')}
-                style={{ color: theme.accent, cursor: 'pointer' }}
-              >
-                support@fieldtheory.dev
-              </span>
-              {' '}or use the Feedback button
-            </span>
-          </div>
-          <button
-            onClick={onNavigateToFeedback}
-            style={styles.linkBtn}
-          >
-            Feedback
-          </button>
-        </div>
-      </div>
-      )}
-
-      {/* Account Section - combines account info and subscription */}
+      {/* Account Section - combines account info, subscription, and support */}
       {selectedSection === 'account' && (() => {
         // Only trust cached 'pro' tier if user is actually signed in.
         const displayTier = session ? userTier : 'free';
@@ -2297,19 +2284,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                   </div>
                 </div>
 
-                {/* Delete Account button - moved outside subscription row */}
-                <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
-                  <button
-                    onClick={() => setShowDeleteModal(true)}
-                    style={{
-                      ...styles.linkBtn,
-                      color: theme.error,
-                      fontSize: '12px',
-                    }}
-                  >
-                    Delete Account
-                  </button>
-                </div>
               </>
             ) : (
               <>
@@ -2321,6 +2295,91 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                   </button>
                 </div>
               </>
+            )}
+
+            {/* Support section - shown for all users */}
+            <SectionHeader title="Support" />
+            <div style={styles.row}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <span style={styles.rowLabel}>Launch on Login</span>
+                <span style={styles.rowHint}>Start Field Theory when you log in</span>
+              </div>
+              <label style={styles.toggleContainer}>
+                <input
+                  type="checkbox"
+                  checked={launchAtLogin}
+                  onChange={async (e) => {
+                    const enabled = e.target.checked;
+                    setLaunchAtLogin(enabled);
+                    await window.clipboardAPI?.setLaunchAtLogin?.(enabled);
+                  }}
+                  style={styles.toggleInput}
+                />
+                <span style={styles.toggleSlider} />
+              </label>
+            </div>
+            <div style={styles.row}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <span style={styles.rowLabel}>Diagnostics</span>
+                <span style={styles.rowHint}>View system info for troubleshooting</span>
+              </div>
+              <button
+                onClick={() => setShowDiagnostics(true)}
+                style={styles.linkBtn}
+              >
+                View
+              </button>
+            </div>
+            <div style={styles.row}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <span style={styles.rowLabel}>Restart Onboarding</span>
+                <span style={styles.rowHint}>Go through the setup flow again</span>
+              </div>
+              <button
+                onClick={() => window.onboardingAPI?.reset?.()}
+                style={styles.linkBtn}
+              >
+                Start
+              </button>
+            </div>
+            <div style={styles.row}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <span style={styles.rowLabel}>Contact Support</span>
+                <span style={styles.rowHint}>
+                  Email us at{' '}
+                  <span
+                    onClick={() => window.shellAPI?.openExternal('mailto:support@fieldtheory.dev')}
+                    style={{ color: theme.accent, cursor: 'pointer' }}
+                  >
+                    support@fieldtheory.dev
+                  </span>
+                  {' '}or use the Feedback button
+                </span>
+              </div>
+              <button
+                onClick={onNavigateToFeedback}
+                style={styles.linkBtn}
+              >
+                Feedback
+              </button>
+            </div>
+
+            {/* Delete Account button - bottom right, only for signed-in users */}
+            {session && (
+              <div style={{ marginTop: '48px', display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  onClick={() => setShowDeleteModal(true)}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = theme.error; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = theme.textSecondary; }}
+                  style={{
+                    ...styles.linkBtn,
+                    color: theme.textSecondary,
+                    fontSize: '12px',
+                  }}
+                >
+                  Delete Account
+                </button>
+              </div>
             )}
           </div>
         );
@@ -2361,10 +2420,10 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             <h3 style={{ margin: '0 0 12px 0', fontSize: '15px', fontWeight: 600, color: theme.text }}>
               Delete Account / Cancel Subscription
             </h3>
-            <p style={{ margin: '0 0 12px 0', fontSize: '13px', color: theme.textSecondary, lineHeight: 1.5 }}>
+            <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5 }}>
               This will permanently delete:
             </p>
-            <ul style={{ margin: '0 0 12px 0', paddingLeft: '20px', fontSize: '13px', color: theme.textSecondary, lineHeight: 1.6 }}>
+            <ul style={{ margin: '0 0 12px 0', paddingLeft: '20px', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5 }}>
               <li>Your account and profile</li>
               <li>All shared items</li>
               {userTier === 'pro' && <li>Any existing Pro subscription ($14/month)</li>}
@@ -2381,7 +2440,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
               style={{
                 width: '100%',
                 padding: '10px 12px',
-                fontSize: '13px',
+                fontSize: '12px',
                 border: `1px solid ${theme.border}`,
                 borderRadius: '6px',
                 backgroundColor: theme.bg,
@@ -2464,7 +2523,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   },
   sidebarItem: {
     padding: '8px 12px',
-    fontSize: '13px',
+    fontSize: '11px',
     fontWeight: 500,
     textAlign: 'left',
     border: 'none',
@@ -2494,7 +2553,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   },
   loadingText: {
     color: theme.textSecondary,
-    fontSize: '13px',
+    fontSize: '12px',
   },
 
   // ==========================================================================
@@ -2502,7 +2561,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   // ==========================================================================
 
   title: {
-    fontSize: '13px',
+    fontSize: '12px',
     fontWeight: 600,
     marginTop: 0,
     marginBottom: '24px',
@@ -2544,12 +2603,12 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     minHeight: '32px',
   },
   rowLabel: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.text,
     fontWeight: 400,
   },
   rowValue: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.text,
     fontWeight: 500,
   },
@@ -2559,7 +2618,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     gap: '8px',
   },
   rowHint: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.textSecondary,
     fontWeight: 400,
   },
@@ -2567,7 +2626,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   // Unified button styles
   btn: {
     padding: '6px 12px',
-    fontSize: '13px',
+    fontSize: '12px',
     fontWeight: 500,
     color: theme.text,
     backgroundColor: theme.isDark ? theme.bg : '#fff',
@@ -2603,7 +2662,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     backgroundColor: 'transparent',
     border: 'none',
     color: theme.textSecondary,
-    fontSize: '13px',
+    fontSize: '12px',
     padding: '4px 0',
     cursor: 'pointer',
     textDecoration: 'underline',
@@ -2639,7 +2698,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   // Select dropdown
   select: {
     padding: '6px 12px',
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.text,
     backgroundColor: theme.isDark ? theme.bg : '#fff',
     border: `1px solid ${theme.border}`,
@@ -2651,7 +2710,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   // Input field
   input: {
     padding: '6px 12px',
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.text,
     backgroundColor: theme.isDark ? theme.bg : '#fff',
     border: `1px solid ${theme.border}`,
@@ -2675,7 +2734,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
 
   // Error text
   error: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.error,
     marginTop: '4px',
   },
@@ -2689,11 +2748,11 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     borderBottom: `1px solid ${theme.border}`,
   },
   modelName: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.text,
   },
   modelSize: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.textSecondary,
     marginLeft: '8px',
   },
@@ -2712,7 +2771,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     justifyContent: 'space-between',
   },
   permissionsText: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.isDark ? theme.warning : '#92400e',
     margin: 0,
   },
@@ -2723,7 +2782,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     border: 'none',
     borderRadius: '6px',
     cursor: 'pointer',
-    fontSize: '13px',
+    fontSize: '12px',
     fontWeight: 500,
   },
 
@@ -2746,7 +2805,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     minHeight: '36px',
   },
   hotkeyLabel: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.text,
   },
   hotkeyButtonRow: {
@@ -2756,7 +2815,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   },
   hotkeyButton: {
     padding: '6px 12px',
-    fontSize: '13px',
+    fontSize: '12px',
     fontWeight: 500,
     color: theme.text,
     backgroundColor: theme.isDark ? theme.bg : '#fff',
@@ -2771,20 +2830,20 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   },
   cancelButton: {
     padding: '6px 8px',
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.textSecondary,
     backgroundColor: 'transparent',
     border: 'none',
     cursor: 'pointer',
   },
   hotkeyError: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.error,
     marginTop: '4px',
   },
   loginInput: {
     padding: '8px 12px',
-    fontSize: '13px',
+    fontSize: '12px',
     border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     outline: 'none',
@@ -2795,7 +2854,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   },
   loginButton: {
     padding: '8px 16px',
-    fontSize: '13px',
+    fontSize: '12px',
     fontWeight: 500,
     color: '#fff',
     backgroundColor: theme.accent,
@@ -2805,7 +2864,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   },
   signOutButton: {
     padding: '6px 12px',
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.textSecondary,
     backgroundColor: 'transparent',
     border: `1px solid ${theme.border}`,
@@ -2819,7 +2878,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   },
   syncButton: {
     padding: '6px 12px',
-    fontSize: '13px',
+    fontSize: '12px',
     fontWeight: 500,
     color: theme.text,
     backgroundColor: theme.isDark ? theme.bg : '#fff',
@@ -2829,7 +2888,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   },
   fixButton: {
     padding: '6px 12px',
-    fontSize: '13px',
+    fontSize: '12px',
     fontWeight: 500,
     color: theme.textSecondary,
     backgroundColor: theme.isDark ? theme.bg : '#f9fafb',
@@ -2838,7 +2897,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     cursor: 'pointer',
   },
   syncStatusText: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.textSecondary,
     marginTop: '4px',
   },
