@@ -26,8 +26,19 @@ export default async function handler(req, res) {
 
   const html = await marked(reading.content);
   const shareUrl = `https://librarian.fieldtheory.dev/${slug}`;
-  const author = reading.author_name
-    ? `<p class="attribution">Inspired by the work of <span>${esc(reading.author_name)}</span></p>`
+
+  // Format author as "First L."
+  let authorFormatted = '';
+  if (reading.author_name) {
+    const parts = reading.author_name.trim().split(/\s+/);
+    if (parts.length >= 2) {
+      authorFormatted = `${parts[0]} ${parts[parts.length - 1][0]}.`;
+    } else {
+      authorFormatted = parts[0];
+    }
+  }
+  const author = authorFormatted
+    ? ` and inspired by the work of <span>${esc(authorFormatted)}</span>`
     : '';
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -135,9 +146,8 @@ export default async function handler(req, res) {
       font-size: 0.9rem;
       color: var(--text-secondary);
     }
-    .attribution { font-style: italic; margin-bottom: 0.5rem; }
-    .attribution span { font-style: normal; }
     .made-by { margin-bottom: 1.5rem; }
+    .made-by span { font-style: italic; }
     .footer a { color: var(--text); text-decoration: none; }
     .footer a:hover { text-decoration: underline; }
     .copy-btn {
@@ -161,8 +171,7 @@ export default async function handler(req, res) {
     </header>
     <article class="content">${html}</article>
     <footer class="footer">
-      ${author}
-      <p class="made-by">Made by the librarian at <a href="https://fieldtheory.dev">fieldtheory.dev</a></p>
+      <p class="made-by">Made by The Librarian at <a href="https://fieldtheory.dev">fieldtheory.dev</a>${author}</p>
       <button class="copy-btn" id="copyBtn">Copy link</button>
     </footer>
   </div>
