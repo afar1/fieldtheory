@@ -432,7 +432,7 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
   };
 
   const openLoginItemsSettings = () => {
-    window.electronAPI?.openExternal?.('x-apple.systempreferences:com.apple.LoginItems-Settings.extension');
+    window.shellAPI?.openExternal?.('x-apple.systempreferences:com.apple.LoginItems-Settings.extension');
   };
 
   const handleRequestOtp = async (e: React.FormEvent) => {

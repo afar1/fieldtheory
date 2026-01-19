@@ -212,18 +212,6 @@ interface TargetAppInfo {
 }
 
 /**
- * Stack info for prompt stacking feature.
- */
-interface StackInfo {
-  stackId: string;
-  itemCount: number;
-  imageCount: number;
-  textCount: number;
-  createdAt: number;
-  firstTextPreview: string | null;
-}
-
-/**
  * The clipboard API exposed by the preload script.
  */
 interface ClipboardAPI {
@@ -329,6 +317,10 @@ interface ClipboardAPI {
   getShowInDock?: () => Promise<boolean>;
   setShowInDock?: (show: boolean) => Promise<boolean>;
   onTasksTabToggled?: (callback: (enabled: boolean) => void) => () => void;
+
+  // Launch at login
+  getLaunchAtLogin?: () => Promise<boolean>;
+  setLaunchAtLogin?: (enabled: boolean) => Promise<{ success: boolean; enabled: boolean }>;
 }
 
 /**
@@ -793,6 +785,14 @@ interface ShellAPI {
 }
 
 /**
+ * Diagnostics API for system diagnostics.
+ */
+interface DiagnosticsAPI {
+  getDiagnostics: () => Promise<unknown>;
+  getDiagnosticsMarkdown: () => Promise<string>;
+}
+
+/**
  * Stripe configuration - URLs switch between test and live based on environment.
  */
 interface StripeConfig {
@@ -987,6 +987,7 @@ declare global {
     commandsAPI?: CommandsAPI;
     themeAPI?: ThemeAPI;
     librarianAPI?: LibrarianAPI;
+    diagnosticsAPI?: DiagnosticsAPI;
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;
   }

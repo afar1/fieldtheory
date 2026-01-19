@@ -1,0 +1,5 @@
+# Sapir-Whorf for Machines
+
+In 1940, Benjamin Lee Whorf proposed that the structure of language shapes thought—that Hopi speakers, whose language lacks tense markers, might perceive time differently than English speakers. The hypothesis remains contested for humans, but for AI systems it's demonstrably true: the framing of an instruction determines not just what gets done, but how the system conceptualizes the task.
+
+We're about to rewrite the Librarian's instructions from "create a reading before implementing" to "understand the task through historical connection." Same action requested, radically different cognitive framing. The first treats reflection as a gate to pass through. The second treats it as a lens to see through. The difference matters because language models don't just follow instructions—they pattern-match against the conceptual structure of the request. Tell me to "create a deliverable," and I'll produce an artifact. Tell me to "understand through connection," and I'll actually think about what this echoes. The words aren't just commands; they're the shape of the thought that follows.
