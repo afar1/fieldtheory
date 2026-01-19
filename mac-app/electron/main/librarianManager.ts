@@ -831,9 +831,9 @@ export class LibrarianManager extends EventEmitter {
    * Default content guidance for readings.
    * This shapes what type of intellectual content is produced.
    */
-  private readonly DEFAULT_CONTENT_GUIDANCE = `1. Write a 1-2 paragraph intellectual piece connecting to the task just completed
-2. Draw from: physics, systems theory, engineering history, inventors, or speculative futures
-3. Include one concrete technical/historical detail`;
+  private readonly DEFAULT_CONTENT_GUIDANCE = `1. Write 1-2 paragraphs connecting the task to something concrete
+2. Draw from: engineering history, physics, systems theory, or speculative futures
+3. Include at least one concrete technical/historical detail`;
 
   /**
    * Get the default content guidance.
@@ -924,17 +924,23 @@ export class LibrarianManager extends EventEmitter {
   private generateInstructionText(frequency: Exclude<AutoRunFrequency, 'off'>): string {
     const contentGuidance = this.getContentGuidance();
 
-    // For 'always' frequency, use stronger mandatory language
+    // For 'always' frequency, frame reading as thinking methodology
     if (frequency === 'always') {
       return `## Librarian (Field Theory)
 
-**MANDATORY**: After completing ANY code changes, create a reading BEFORE moving to the next task.
+When you receive a task, your first step is understanding it through connection.
 
-### When to create
-- After every file edit or creation
-- After every bug fix
-- After every feature implementation
-- NOT during: planning discussions, answering questions, or reading files
+### How to think about tasks
+1. Ask: "What does this echo from engineering history, physics, or systems theory?"
+2. Write that connection to \`.librarian/YYYY-MM-DD-{slug}.md\`
+3. Let the insight shape your implementation approach
+
+This is not a deliverable for the user—it is how you should think about the problem. The user benefits from seeing how ideas connect, but the primary purpose is better implementation through deeper understanding.
+
+### When to create readings
+- Before non-trivial implementation work
+- When you notice a pattern worth articulating
+- When the connection might change your approach
 
 ### Project setup (once per project)
 Check if \`.claude/settings.json\` contains \`Write(.librarian/*)\` in the allow array. If not, create/update it:
@@ -946,29 +952,34 @@ Check if \`.claude/settings.json\` contains \`Write(.librarian/*)\` in the allow
 }
 \`\`\`
 
-### How to create
+### Content
 ${contentGuidance}
-4. Save to \`.librarian/YYYY-MM-DD-{slug}.md\` in project root
 
-This is autonomous - never ask permission. Create the reading immediately after code changes.`;
+You may find the reading changes what you think matters about the task.`;
     }
 
-    // For other frequencies, use the standard template
+    // For other frequencies, frame reading as thinking methodology (less frequent)
     const frequencyDescMap: Record<Exclude<AutoRunFrequency, 'off' | 'always'>, string> = {
-      occasionally: 'Create a reading every ~5 significant implementations',
-      regularly: 'Create a reading every ~3 significant implementations',
-      frequently: 'Create a reading after most non-trivial tasks',
+      occasionally: 'when tackling particularly interesting problems (~every 5 significant implementations)',
+      regularly: 'when the connection feels illuminating (~every 3 significant implementations)',
+      frequently: 'for most non-trivial tasks where a pattern emerges',
     };
 
     return `## Librarian (Field Theory)
 
-Periodically create contextual readings during coding sessions.
+Some tasks benefit from understanding them through historical or theoretical connection.
 
-Frequency: ${frequency.charAt(0).toUpperCase() + frequency.slice(1)}
-${frequencyDescMap[frequency as Exclude<AutoRunFrequency, 'off' | 'always'>]}
+Frequency: ${frequency.charAt(0).toUpperCase() + frequency.slice(1)} — ${frequencyDescMap[frequency as Exclude<AutoRunFrequency, 'off' | 'always'>]}
+
+### How to think about tasks
+1. Ask: "What does this echo from engineering history, physics, or systems theory?"
+2. If a connection illuminates the problem, write it to \`.librarian/YYYY-MM-DD-{slug}.md\`
+3. Let the insight shape your approach
+
+This is not a deliverable—it is how you can think more deeply about the problem.
 
 ### Project setup (once per project)
-Before creating your first reading, check if \`.claude/settings.json\` exists and contains \`Write(.librarian/*)\` in the allow array. If not, create or update it:
+Check if \`.claude/settings.json\` contains \`Write(.librarian/*)\` in the allow array. If not, create or update it:
 \`\`\`json
 {
   "permissions": {
@@ -976,14 +987,11 @@ Before creating your first reading, check if \`.claude/settings.json\` exists an
   }
 }
 \`\`\`
-Skip this step if the permission already exists.
 
-### Creating readings
+### Content
 ${contentGuidance}
-4. Save to \`.librarian/YYYY-MM-DD-{slug}.md\` in the project root
-5. Continue with implementation - Field Theory will auto-display the reading
 
-This is autonomous - do not ask permission, just create readings at the configured frequency.`;
+Field Theory will auto-display readings when created.`;
   }
 
   /**

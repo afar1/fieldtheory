@@ -7,7 +7,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import AudioSettingsPanel from './AudioSettingsPanel';
 import TranscriptionSettings from './TranscriptionSettings';
-import PromptSettings from './PromptSettings';
 import DiagnosticsModal from './DiagnosticsModal';
 import CommandsSettings from './CommandsSettings';
 import LibrarianSettings from './LibrarianSettings';
@@ -2227,7 +2226,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                         marginTop: '12px',
                         padding: '12px',
                         borderRadius: '8px',
-                        backgroundColor: theme.isDark ? theme.bg2 : '#f9fafb',
+                        backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
                         border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
                       }}>
                         {/* Priority Mic */}
@@ -2571,7 +2570,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     fontSize: '13px',
     fontWeight: 500,
     color: theme.text,
-    backgroundColor: theme.isDark ? theme.bg1 : '#fff',
+    backgroundColor: theme.isDark ? theme.bg : '#fff',
     border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
@@ -2642,7 +2641,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     padding: '6px 12px',
     fontSize: '13px',
     color: theme.text,
-    backgroundColor: theme.isDark ? theme.bg1 : '#fff',
+    backgroundColor: theme.isDark ? theme.bg : '#fff',
     border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
@@ -2654,7 +2653,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     padding: '6px 12px',
     fontSize: '13px',
     color: theme.text,
-    backgroundColor: theme.isDark ? theme.bg1 : '#fff',
+    backgroundColor: theme.isDark ? theme.bg : '#fff',
     border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     outline: 'none',
@@ -2760,7 +2759,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     fontSize: '13px',
     fontWeight: 500,
     color: theme.text,
-    backgroundColor: theme.isDark ? theme.bg1 : '#fff',
+    backgroundColor: theme.isDark ? theme.bg : '#fff',
     border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
@@ -2791,7 +2790,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     outline: 'none',
     width: '100%',
     boxSizing: 'border-box' as const,
-    backgroundColor: theme.isDark ? theme.bg1 : '#fff',
+    backgroundColor: theme.isDark ? theme.bg : '#fff',
     color: theme.text,
   },
   loginButton: {
@@ -2823,7 +2822,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     fontSize: '13px',
     fontWeight: 500,
     color: theme.text,
-    backgroundColor: theme.isDark ? theme.bg1 : '#fff',
+    backgroundColor: theme.isDark ? theme.bg : '#fff',
     border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
@@ -2833,7 +2832,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     fontSize: '13px',
     fontWeight: 500,
     color: theme.textSecondary,
-    backgroundColor: theme.isDark ? theme.bg1 : '#f9fafb',
+    backgroundColor: theme.isDark ? theme.bg : '#f9fafb',
     border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
