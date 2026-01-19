@@ -81,21 +81,25 @@ export default async function handler(req, res) {
     .header {
       display: flex;
       justify-content: flex-end;
+      gap: 8px;
       margin-bottom: 3rem;
       padding-bottom: 1rem;
       border-bottom: 1px solid var(--border);
     }
-    .theme-toggle {
+    .icon-btn {
       background: none;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 6px 12px;
-      font-size: 14px;
-      color: var(--text-secondary);
+      border: none;
+      padding: 8px;
       cursor: pointer;
-      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      color: var(--text-secondary);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
-    .theme-toggle:hover { border-color: var(--text); color: var(--text); }
+    .icon-btn:hover { color: var(--text); background: var(--code-bg); }
+    .icon-btn svg { width: 20px; height: 20px; }
+    .icon-btn.copied { color: var(--accent); }
     .content h1 {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       font-size: 1.875rem;
@@ -150,36 +154,52 @@ export default async function handler(req, res) {
     .made-by span { font-style: italic; }
     .footer a { color: var(--text); text-decoration: none; }
     .footer a:hover { text-decoration: underline; }
-    .copy-btn {
-      background: none;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 8px 16px;
-      font-size: 0.875rem;
-      color: var(--text-secondary);
-      cursor: pointer;
-      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-    }
-    .copy-btn:hover { border-color: var(--text); color: var(--text); }
-    .copy-btn.copied { border-color: var(--accent); color: var(--accent); }
+    .logo-link { display: block; text-align: center; margin-top: 2rem; }
+    .logo { width: 32px; height: 32px; opacity: 0.6; transition: opacity 0.2s; }
+    .logo:hover { opacity: 1; }
+    .dark-logo { display: none; }
+    .dark .light-logo { display: none; }
+    .dark .dark-logo { display: inline; }
   </style>
 </head>
 <body>
   <div class="page">
     <header class="header">
-      <button class="theme-toggle" id="themeBtn">Dark</button>
+      <button class="icon-btn" id="copyBtn" title="Copy link">
+        <svg id="copyIcon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
+        </svg>
+        <svg id="checkIcon" style="display:none" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+        </svg>
+      </button>
+      <button class="icon-btn" id="themeBtn" title="Toggle theme">
+        <svg id="sunIcon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" />
+        </svg>
+        <svg id="moonIcon" style="display:none" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" />
+        </svg>
+      </button>
     </header>
     <article class="content">${html}</article>
     <footer class="footer">
       <p class="made-by">Made by The Librarian at <a href="https://fieldtheory.dev">fieldtheory.dev</a>${author}</p>
-      <button class="copy-btn" id="copyBtn">Copy link</button>
+      <a href="https://fieldtheory.dev" class="logo-link">
+        <img src="https://fieldtheory.dev/images/fieldtheory-icon-black.png" alt="Field Theory" class="logo light-logo">
+        <img src="https://fieldtheory.dev/images/fieldtheory-icon-white.png" alt="Field Theory" class="logo dark-logo">
+      </a>
     </footer>
   </div>
   <script>
     (function() {
       var body = document.body;
       var themeBtn = document.getElementById('themeBtn');
+      var sunIcon = document.getElementById('sunIcon');
+      var moonIcon = document.getElementById('moonIcon');
       var copyBtn = document.getElementById('copyBtn');
+      var copyIcon = document.getElementById('copyIcon');
+      var checkIcon = document.getElementById('checkIcon');
 
       function getTheme() {
         var saved = localStorage.getItem('librarian-theme');
@@ -190,10 +210,12 @@ export default async function handler(req, res) {
       function setTheme(t) {
         if (t === 'dark') {
           body.classList.add('dark');
-          themeBtn.textContent = 'Light';
+          sunIcon.style.display = 'block';
+          moonIcon.style.display = 'none';
         } else {
           body.classList.remove('dark');
-          themeBtn.textContent = 'Dark';
+          sunIcon.style.display = 'none';
+          moonIcon.style.display = 'block';
         }
         localStorage.setItem('librarian-theme', t);
       }
@@ -206,10 +228,12 @@ export default async function handler(req, res) {
 
       copyBtn.onclick = function() {
         navigator.clipboard.writeText('${shareUrl}').then(function() {
-          copyBtn.textContent = 'Copied!';
+          copyIcon.style.display = 'none';
+          checkIcon.style.display = 'block';
           copyBtn.classList.add('copied');
           setTimeout(function() {
-            copyBtn.textContent = 'Copy link';
+            copyIcon.style.display = 'block';
+            checkIcon.style.display = 'none';
             copyBtn.classList.remove('copied');
           }, 2000);
         });
