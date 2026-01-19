@@ -70,6 +70,8 @@ export class ClipboardHistoryWindow {
 
   // Track if immersive/fullscreen reading mode is active - window should not auto-hide
   private isImmersiveMode: boolean = false;
+  // Timestamp when we exited immersive mode - used to debounce blur handler
+  private immersiveModeExitTime: number = 0;
 
   // Saved window bounds before sketch mode expansion (to restore on exit).
   private normalBounds: Electron.Rectangle | null = null;
@@ -226,7 +228,7 @@ export class ClipboardHistoryWindow {
       // Ensure app is visible (un-hide after app.hide() was called).
       // This is needed for Cmd+Tab to properly show windows.
       app.show();
-      
+
       this.window.show();
       // Bring window to front of window stack (important when not alwaysOnTop)
       this.window.moveTop();
@@ -246,10 +248,10 @@ export class ClipboardHistoryWindow {
     
     // Ensure app is visible (un-hide after app.hide() was called).
     app.show();
-    
+
     // Create new window.
     this.createWindow(savedBounds, showSettingsMode);
-    
+
     // Fetch app data in background (don't await).
     this.refreshAppDataInBackground();
   }
@@ -377,6 +379,11 @@ export class ClipboardHistoryWindow {
         return;
       }
 
+      // Grace period after exiting immersive mode - dock.hide() can trigger blur
+      if (this.recentlyExitedImmersiveMode()) {
+        return;
+      }
+
       console.log('[ClipboardHistoryWindow] Window lost focus, hiding');
       // Alfred-style: hide when clicking away.
       this.hide(!this.isRecordingActive);
@@ -451,7 +458,8 @@ export class ClipboardHistoryWindow {
     }
     this.normalBounds = null;
     this.sketchModeActive = false;
-    
+    this.isImmersiveMode = false;
+
     // Only play sound if window is actually visible.
     // This prevents double-play when blur event fires after direct hide() call.
     if (this.window && !this.window.isDestroyed() && this.window.isVisible()) {
@@ -471,6 +479,10 @@ export class ClipboardHistoryWindow {
     const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
     const willCallAppHide = hideApp && !showInDock;
     if (willCallAppHide) {
+      // Also hide dock if it was shown during immersive mode
+      if (process.platform === 'darwin') {
+        app.dock.hide();
+      }
       app.hide();
     }
     this.previouslyFocusedWindow = null;
@@ -605,6 +617,25 @@ export class ClipboardHistoryWindow {
     this.isImmersiveMode = immersive;
     console.log(`[ClipboardHistoryWindow] Immersive mode: ${immersive}`);
 
+    // Toggle dock visibility based on immersive mode
+    if (process.platform === 'darwin') {
+      if (immersive) {
+        app.dock.show();
+      } else {
+        // Hide dock and record exit time for blur handler debounce
+        this.immersiveModeExitTime = Date.now();
+        app.dock.hide();
+        // Re-focus window after dock hide (macOS switches focus away when dock hides)
+        if (this.window && !this.window.isDestroyed()) {
+          setTimeout(() => {
+            if (this.window && !this.window.isDestroyed()) {
+              this.window.focus();
+            }
+          }, 50);
+        }
+      }
+    }
+
     // Only adjust alwaysOnTop in panel mode (not showInDock mode)
     const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
     if (!showInDock && this.window && !this.window.isDestroyed()) {
@@ -622,6 +653,14 @@ export class ClipboardHistoryWindow {
    */
   getImmersiveMode(): boolean {
     return this.isImmersiveMode;
+  }
+
+  /**
+   * Check if we recently exited immersive mode (within grace period).
+   * Used to prevent blur handler from immediately hiding window after dock.hide().
+   */
+  recentlyExitedImmersiveMode(gracePeriodMs: number = 300): boolean {
+    return Date.now() - this.immersiveModeExitTime < gracePeriodMs;
   }
 
   setSketchModeActive(active: boolean): void {

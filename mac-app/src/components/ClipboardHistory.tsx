@@ -273,6 +273,7 @@ export default function ClipboardHistory() {
   });
   // Track if a new reading is available (shows blue dot indicator on Librarian tab)
   const [hasNewReading, setHasNewReading] = useState(false);
+  const [pendingReadingPath, setPendingReadingPath] = useState<string | null>(null);
   const [headerHovered, setHeaderHovered] = useState(false);
 
   // Layout variant - B8 is the official layout
@@ -1482,8 +1483,10 @@ export default function ClipboardHistory() {
 
   // Handle show reading requests (auto-show on new reading with immersive mode)
   useEffect(() => {
-    const unsubscribe = window.librarianAPI?.onShowReading(() => {
-      // Switch to librarian view in immersive mode
+    const unsubscribe = window.librarianAPI?.onShowReading((readingPath) => {
+      // Capture the reading path BEFORE switching views (avoids race condition)
+      setPendingReadingPath(readingPath);
+      setShowSettings(false); // Close settings if open
       setViewMode('librarian');
       setLibrarianImmersive(true);
     });
@@ -3022,11 +3025,9 @@ export default function ClipboardHistory() {
           cursor: 'default',
         }}
       >
-      {/* Thin hit-test region at very top of window to capture edge clicks (NSPanel fix) */}
+      {/* Thin draggable region at very top of window for frameless window drag (NSPanel fix) */}
       {!showInDock && librarianImmersive && viewMode === 'librarian' && (
         <div
-          onMouseEnter={() => setHeaderHovered(true)}
-          onMouseLeave={() => setHeaderHovered(false)}
           style={{
             height: '8px',
             minHeight: '8px',
@@ -3337,7 +3338,7 @@ export default function ClipboardHistory() {
                 style={{
                   position: 'relative',
                   padding: isHotMic ? '6px 8px 6px 6px' : '6px 8px',
-                  fontSize: '10px',
+                  fontSize: '11px',
                   fontWeight: 400,
                   backgroundColor: bgColor,
                   color: isSelected ? '#fff' : theme.textSecondary,
@@ -3907,6 +3908,8 @@ export default function ClipboardHistory() {
           onSwitchToSettings={() => setShowSettings(true)}
           onFullScreenChange={setLibrarianImmersive}
           externalHeaderHover={librarianImmersive && headerHovered}
+          initialReadingPath={pendingReadingPath}
+          onInitialReadingConsumed={() => setPendingReadingPath(null)}
         />
       ) : viewMode === 'team' ? (
         null
@@ -5109,7 +5112,7 @@ export default function ClipboardHistory() {
                   <div style={{
                     display: 'flex',
                     alignItems: 'flex-start',
-                    gap: '16px',
+                    gap: '10px',
                   }}>
                     {/* Content type icons in 2x2 quad grid on left - all 4 always visible, dimmed when inactive */}
                     {/* Order: transcript (top-left), image (top-right), path/URL (bottom-left), text (bottom-right) */}
@@ -5132,8 +5135,8 @@ export default function ClipboardHistory() {
                       const textColor = isPlainText ? '#f59e0b' : disabledColor; // amber for plain text
                       return (
                         <div style={{
-                          width: '36px',
-                          height: '36px',
+                          width: '30px',
+                          height: '30px',
                           flexShrink: 0,
                           display: 'grid',
                           gridTemplateColumns: '12px 12px',
