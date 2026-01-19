@@ -189,7 +189,7 @@ export default async function handler(req, res) {
       font-size: 0.9rem;
       color: var(--text-secondary);
     }
-    .attribution { font-style: italic; font-size: 0.8em; margin: 0 0 0.25rem 0; }
+    .attribution { font-style: italic; font-size: 0.8em; margin: 0.25rem 0 0 0; }
     .author-toggle { position: relative; cursor: default; }
     .author-toggle .callsign {
       font-family: ui-monospace, SFMono-Regular, 'SF Mono', monospace;
@@ -230,8 +230,8 @@ export default async function handler(req, res) {
     </header>
     <article class="content">${html}</article>
     <footer class="footer">
-      ${author}
       <p class="made-by">Made by the Librarian at <a href="https://fieldtheory.dev">fieldtheory.dev</a></p>
+      ${author}
       <div class="controls">
         <button class="icon-btn" id="copyBtn" title="Copy link">
           <svg id="copyIcon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
