@@ -41,6 +41,8 @@ const TranscribeIPCChannels = {
   SET_AUTO_IMPROVE: 'transcribe:setAutoImprove',
   GET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:getAutoImproveMinWords',
   SET_AUTO_IMPROVE_MIN_WORDS: 'transcribe:setAutoImproveMinWords',
+  GET_AUTO_IMPROVE_STATS: 'transcribe:getAutoImproveStats',
+  RESET_AUTO_IMPROVE_STATS: 'transcribe:resetAutoImproveStats',
   TOGGLE_RECORDING: 'transcribe:toggleRecording',
   GET_SOUND_CONFIG: 'transcribe:getSoundConfig',
   SET_SOUND_CONFIG: 'transcribe:setSoundConfig',
@@ -188,6 +190,14 @@ type AudioState = {
 
 type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
 type ModelStatus = 'downloaded' | 'downloading' | 'missing';
+
+// Auto-improve usage statistics.
+type AutoImproveStats = {
+  wordsImproved: number;
+  apiCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+};
 
 // Sound configuration for recording actions.
 type SoundConfig = {
@@ -520,6 +530,8 @@ export interface TranscribeAPI {
   setAutoImprove: (enabled: boolean) => Promise<void>;
   getAutoImproveMinWords: () => Promise<number>;
   setAutoImproveMinWords: (minWords: number) => Promise<void>;
+  getAutoImproveStats: () => Promise<AutoImproveStats>;
+  resetAutoImproveStats: () => Promise<void>;
   toggleRecording: () => Promise<void>;
   getSoundConfig: () => Promise<SoundConfig>;
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
@@ -795,6 +807,14 @@ const transcribeAPI: TranscribeAPI = {
 
   setAutoImproveMinWords: async (minWords: number): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_AUTO_IMPROVE_MIN_WORDS, minWords);
+  },
+
+  getAutoImproveStats: async (): Promise<AutoImproveStats> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_AUTO_IMPROVE_STATS);
+  },
+
+  resetAutoImproveStats: async (): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.RESET_AUTO_IMPROVE_STATS);
   },
 
   toggleRecording: async (): Promise<void> => {
@@ -2352,6 +2372,20 @@ const librarianAPI = {
 
   // Get edit status for debugging (returns first project's status)
   getEditStatus: (): Promise<{ edits: number; threshold: number } | null> => ipcRenderer.invoke('librarian:getEditStatus'),
+
+  // Custom threshold control (undefined means frequency-based)
+  getCustomThreshold: (): Promise<number | undefined> => ipcRenderer.invoke('librarian:getCustomThreshold'),
+  setCustomThreshold: (threshold: number | undefined): Promise<boolean> => ipcRenderer.invoke('librarian:setCustomThreshold', threshold),
+
+  // Public sharing
+  shareReading: (filePath: string): Promise<{ slug: string; url: string } | null> =>
+    ipcRenderer.invoke('librarian:shareReading', filePath),
+  unshareReading: (filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke('librarian:unshareReading', filePath),
+  getShareStatus: (filePath: string): Promise<{ shared: boolean; slug?: string; url?: string } | null> =>
+    ipcRenderer.invoke('librarian:getShareStatus', filePath),
+  updateSharedReading: (filePath: string, content: string, title: string): Promise<boolean> =>
+    ipcRenderer.invoke('librarian:updateSharedReading', filePath, content, title),
 };
 
 type LibrarianAPI = typeof librarianAPI;
