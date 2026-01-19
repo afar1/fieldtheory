@@ -1,26 +1,31 @@
 import { ImageResponse } from '@vercel/og';
-import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.SUPABASE_URL || 'https://FIELD_THEORY_SUPABASE_URL.example';
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+export const config = { runtime: 'edge' };
 
-export default async function handler(req, res) {
-  const { slug } = req.query;
+export default async function handler(req) {
+  const url = new URL(req.url);
+  const slug = url.pathname.split('/').pop();
 
   if (!slug) {
-    return res.status(404).send('Not found');
+    return new Response('Not found', { status: 404 });
   }
 
-  const supabase = createClient(supabaseUrl, supabaseAnonKey);
+  // Fetch title from Supabase using fetch (Edge-compatible)
+  const supabaseUrl = 'https://FIELD_THEORY_SUPABASE_URL.example';
+  const supabaseKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 
-  const { data } = await supabase
-    .from('shared_readings')
-    .select('title')
-    .eq('slug', slug)
-    .eq('is_public', true)
-    .single();
+  const response = await fetch(
+    `${supabaseUrl}/rest/v1/shared_readings?slug=eq.${slug}&is_public=eq.true&select=title`,
+    {
+      headers: {
+        'apikey': supabaseKey,
+        'Authorization': `Bearer ${supabaseKey}`,
+      },
+    }
+  );
 
-  const title = data?.title || 'Untitled';
+  const data = await response.json();
+  const title = data?.[0]?.title || 'Untitled';
 
   return new ImageResponse(
     (
