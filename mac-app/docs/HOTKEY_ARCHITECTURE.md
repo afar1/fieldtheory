@@ -44,7 +44,7 @@ The app currently manages hotkeys across multiple systems with no centralized ma
 ## State Storage Locations
 
 ### 1. Preferences File (persistent)
-**Location**: `~/Library/Application Support/littleai-mac/preferences.json`
+**Location**: `~/Library/Application Support/Field Theory/preferences.json`
 
 ```typescript
 interface Preferences {

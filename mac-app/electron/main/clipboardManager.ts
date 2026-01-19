@@ -60,7 +60,7 @@ export function isIDEWithTerminal(bundleId: string | null): boolean {
 
 /**
  * Replace home directory and app storage path with branded path for privacy.
- * Converts: /Users/username/Library/Application Support/littleai-mac/figures/image.png
+ * Converts: /Users/username/Library/Application Support/Field Theory/figures/image.png
  * To: ~/field-theory/image.png
  */
 export function obscureHomePath(filePath: string): string {
@@ -86,7 +86,7 @@ export function obscureHomePath(filePath: string): string {
 /**
  * Resolve branded Field Theory paths back to real filesystem paths.
  * Converts: ~/field-theory/image.png
- * To: /Users/username/Library/Application Support/littleai-mac/figures/image.png
+ * To: /Users/username/Library/Application Support/Field Theory/figures/image.png
  */
 export function resolveFieldTheoryPath(brandedPath: string): string {
   // Handle ~/field-theory/ branded paths
