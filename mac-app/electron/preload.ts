@@ -1813,9 +1813,9 @@ const socialAPI = {
     return ipcRenderer.invoke(SocialIPCChannels.SUBMIT_TEXT_FEEDBACK, text);
   },
   
-  // Submit image feedback with optional caption.
-  submitImageFeedback: async (imageBase64: string, caption?: string): Promise<SocialMessage | null> => {
-    return ipcRenderer.invoke(SocialIPCChannels.SUBMIT_IMAGE_FEEDBACK, imageBase64, caption);
+  // Submit image feedback with optional caption and source app name.
+  submitImageFeedback: async (imageBase64: string, caption?: string, sourceAppName?: string): Promise<SocialMessage | null> => {
+    return ipcRenderer.invoke(SocialIPCChannels.SUBMIT_IMAGE_FEEDBACK, imageBase64, caption, sourceAppName);
   },
   
   // Get current user's submitted feedback.
@@ -2343,6 +2343,15 @@ const librarianAPI = {
   getCustomContentGuidance: (): Promise<string | undefined> => ipcRenderer.invoke('librarian:getCustomContentGuidance'),
   setCustomContentGuidance: (guidance: string | undefined): Promise<boolean> => ipcRenderer.invoke('librarian:setCustomContentGuidance', guidance),
   resetContentGuidance: (): Promise<boolean> => ipcRenderer.invoke('librarian:resetContentGuidance'),
+
+  // Auto-discovery of existing .librarian directories
+  discoverLibrarianDirs: (): Promise<string[]> => ipcRenderer.invoke('librarian:discoverLibrarianDirs'),
+
+  // Reset edit counters for all projects (for debugging/testing)
+  resetAllCounters: (): Promise<boolean> => ipcRenderer.invoke('librarian:resetAllCounters'),
+
+  // Get edit status for debugging (returns first project's status)
+  getEditStatus: (): Promise<{ edits: number; threshold: number } | null> => ipcRenderer.invoke('librarian:getEditStatus'),
 };
 
 type LibrarianAPI = typeof librarianAPI;

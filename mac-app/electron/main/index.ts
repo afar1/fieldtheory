@@ -253,19 +253,6 @@ function registerHotkeysAfterOnboarding(): void {
   console.log('[Main] Registering all hotkeys');
   const prefs = preferencesManager.get();
 
-  // Continuous Context feature disabled for now - will be re-enabled later
-  // if (prefs.continuousContextEnabled) {
-  //   clipboardManager.registerContinuousContextHotkey(async () => {
-  //     if (!clipboardManager) return;
-  //     const state = clipboardManager.getContinuousContextState();
-  //     if (state.active) {
-  //       clipboardManager.stopContinuousContext();
-  //     } else {
-  //       await clipboardManager.startContinuousContext();
-  //     }
-  //   });
-  // }
-
   // Register clipboard hotkeys (screenshot, full screen, active window)
   clipboardManager.registerScreenshotHotkey(async () => {
     console.log('[Main] Screenshot hotkey triggered');
@@ -422,15 +409,40 @@ function registerHotkeysAfterOnboarding(): void {
         `;
         const { stdout } = await execAsync(`osascript -e '${script}'`);
         bundleId = stdout.trim();
+
+        // If frontmost app is Field Theory itself, use the previous app instead
+        // This handles cases where super paste is triggered while Field Theory UI is visible
+        const isFieldTheory = bundleId === 'com.fieldtheory.app' ||
+                              bundleId === 'com.fieldtheory.experimental';
+        if (isFieldTheory && clipboardHistoryWindow) {
+          const previousApp = clipboardHistoryWindow.getPreviousApp();
+          if (previousApp?.bundleId) {
+            console.log('[Main] Super Paste: frontmost is Field Theory, using previous app:', previousApp.bundleId);
+            bundleId = previousApp.bundleId;
+          } else {
+            console.warn('[Main] Super Paste: Field Theory is frontmost but no previous app recorded, paste may go to wrong window');
+          }
+        }
+
         const { isTerminalApp } = require('./clipboardManager');
         isTerminal = isTerminalApp(bundleId);
       } catch (e) {
         console.error('[Main] Super Paste: failed to get frontmost app:', e);
       }
 
-      console.log('[Main] Super Paste: pasting', itemsToPaste.length, 'item(s), frontmost:', bundleId, 'isTerminal:', isTerminal);
+      console.log('[Main] Super Paste: pasting', itemsToPaste.length, 'item(s), target:', bundleId, 'isTerminal:', isTerminal);
 
       try {
+        // Ensure the target app is focused before pasting
+        if (bundleId) {
+          try {
+            await execAsync(`osascript -e 'tell application id "${bundleId}" to activate'`);
+            // Small delay to let the app come to front
+            await new Promise(resolve => setTimeout(resolve, 50));
+          } catch (focusError) {
+            console.warn('[Main] Super Paste: failed to focus target app:', focusError);
+          }
+        }
         // For terminals with stacks, combine text with image paths
         if (isTerminal && itemsToPaste.length > 1) {
           // Find text/transcript items and image items
@@ -533,8 +545,6 @@ function registerHotkeysAfterOnboarding(): void {
   // Cycles between: command launcher → clipboard history → command launcher
   const commandLauncherHotkey = prefs.commandLauncherHotkey || 'Command+Shift+K';
   hotkeyManager.register('commandLauncher', commandLauncherHotkey, async () => {
-      console.log('[Main] Command launcher toggle triggered');
-      
       const clipboardVisible = clipboardHistoryWindow?.isVisible() ?? false;
       const launcherVisible = commandLauncherWindow?.isVisible() ?? false;
       
@@ -664,6 +674,7 @@ function createWindow(): void {
 
   // Load saved window state from preferences
   const savedState = preferencesManager?.get().windowState;
+  const showInDock = preferencesManager?.getPreference('showInDock') ?? false;
   const defaultWidth = 800;
   const defaultHeight = 600;
 
@@ -676,6 +687,7 @@ function createWindow(): void {
     minHeight: 400, // More compact for settings
     backgroundColor: '#f5f5f5',
     titleBarStyle: 'hiddenInset', // Modern macOS style with traffic lights in content.
+    skipTaskbar: !showInDock, // Don't show in Dock when in panel mode
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -1228,6 +1240,21 @@ function setupLibrarianIPCHandlers(): void {
   // Reset content guidance to default
   ipcMain.handle('librarian:resetContentGuidance', (): boolean => {
     return librarianManager?.resetContentGuidance() ?? false;
+  });
+
+  // Discover existing .librarian directories that are not yet watched
+  ipcMain.handle('librarian:discoverLibrarianDirs', async (): Promise<string[]> => {
+    return librarianManager?.discoverLibrarianDirs() ?? [];
+  });
+
+  // Reset edit counters for all projects (for debugging/testing)
+  ipcMain.handle('librarian:resetAllCounters', (): boolean => {
+    return librarianManager?.resetAllCounters() ?? false;
+  });
+
+  // Get edit status for debugging
+  ipcMain.handle('librarian:getEditStatus', (): { edits: number; threshold: number } | null => {
+    return librarianManager?.getEditStatus() ?? null;
   });
 }
 
@@ -3699,12 +3726,12 @@ function setupClipboardIPCHandlers(): void {
     return await socialSync.submitTextFeedback(text);
   });
 
-  // Feedback: Submit image feedback with optional caption.
-  ipcMain.handle(SocialIPCChannels.SUBMIT_IMAGE_FEEDBACK, async (_event, imageBase64: string, caption?: string) => {
+  // Feedback: Submit image feedback with optional caption and source app name.
+  ipcMain.handle(SocialIPCChannels.SUBMIT_IMAGE_FEEDBACK, async (_event, imageBase64: string, caption?: string, sourceAppName?: string) => {
     if (!socialSync) {
       return null;
     }
-    return await socialSync.submitImageFeedback(imageBase64, caption);
+    return await socialSync.submitImageFeedback(imageBase64, caption, sourceAppName);
   });
 
   // Feedback: Get current user's submitted feedback.
@@ -4219,6 +4246,34 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
       clipboardHistoryWindow.hide();
     }
   });
+
+  // Hide clipboard history when another app (like Alfred/Spotlight) becomes active.
+  // NSPanel windows don't always trigger blur events on other panels, so we use
+  // app-level blur detection with a small delay to check if any Field Theory window
+  // still has focus.
+  app.on('browser-window-blur', () => {
+    // Don't auto-hide if showInDock mode (user expects normal app behavior)
+    const showInDock = preferencesManager?.getPreference('showInDock') ?? false;
+    if (showInDock) return;
+
+    // Don't auto-hide if in immersive reading mode
+    if (clipboardHistoryWindow?.getImmersiveMode()) return;
+
+    // Don't auto-hide during recording
+    if (clipboardHistoryWindow?.getRecordingActive()) return;
+
+    // Small delay to allow focus to settle - another Field Theory window
+    // might be gaining focus (e.g., switching between our windows)
+    setTimeout(() => {
+      const focusedWindow = BrowserWindow.getFocusedWindow();
+
+      // If no Field Theory window has focus, another app is active - hide
+      if (!focusedWindow && clipboardHistoryWindow?.isVisible()) {
+        console.log('[Main] No Field Theory window focused, another app active - hiding clipboard history');
+        clipboardHistoryWindow.hide();
+      }
+    }, 50);
+  });
   
   audioManager = new AudioManager(nativeHelper);
   
@@ -4413,8 +4468,9 @@ async function initTranscriberSystem(): Promise<void> {
     if (librarianManager!.isAutoShowEnabled() && clipboardHistoryWindow) {
       const win = clipboardHistoryWindow.getWindow();
 
-      // Check if window is already visible (user actively using Field Theory)
-      if (win && !win.isDestroyed() && win.isVisible()) {
+      // Check if window is already visible AND focused (user actively using Field Theory)
+      // If visible but not focused (in background), we should still bring it to front
+      if (win && !win.isDestroyed() && win.isVisible() && win.isFocused()) {
         // Don't disrupt - just notify renderer to show indicator (blue dot)
         win.webContents.send('librarian:newReadingAvailable', reading.path);
 
@@ -4544,9 +4600,10 @@ async function initTranscriberSystem(): Promise<void> {
       // Migrate: add legacy directory as first watched directory
       console.log(`[Main] Migrating legacy commands directory to multi-directory system: ${savedCommandsDir}`);
       await commandsManager.addWatchedDir(savedCommandsDir);
+      // Only set legacy directoryPath during migration (when no watchedDirs exist yet)
+      // DO NOT call setDirectory when watchedDirs already has entries - it clears all commands!
+      await commandsManager.setDirectory(savedCommandsDir);
     }
-    // Also set the legacy directoryPath for backwards compatibility with command detection
-    await commandsManager.setDirectory(savedCommandsDir);
   }
   
   // Broadcast commands changes to all windows.
@@ -5186,6 +5243,13 @@ if (!gotTheLock) {
       }
       console.log('[Main] All requirements met, registering hotkeys');
       registerHotkeysAfterOnboarding();
+
+      // Log Librarian status at end of startup (user wants this visible without scrolling)
+      if (librarianManager) {
+        const readings = librarianManager.getReadings();
+        const watchedDirs = librarianManager.getWatchedDirs();
+        console.log(`[Librarian] Ready: ${readings.length} readings from ${watchedDirs.length} watched directories`);
+      }
     } else {
       // Missing requirements - force onboarding flow
       console.log('[Main] Missing requirements, showing onboarding wizard');

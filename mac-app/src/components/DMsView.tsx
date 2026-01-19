@@ -117,17 +117,45 @@ interface DMsViewProps {
   feedbackOnly?: boolean;
 }
 
+// Cache keys for stale-while-revalidate pattern
+const FEEDBACK_CACHE_KEY = 'fieldtheory_feedback_cache';
+const CONVERSATIONS_CACHE_KEY = 'fieldtheory_conversations_cache';
+
+function getCachedData<T>(key: string): T | null {
+  try {
+    const cached = localStorage.getItem(key);
+    if (cached) return JSON.parse(cached);
+  } catch (e) {
+    // Ignore parse errors
+  }
+  return null;
+}
+
+function setCachedData<T>(key: string, data: T): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(data));
+  } catch (e) {
+    // Ignore storage errors
+  }
+}
+
 export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps) {
   const { theme } = useTheme();
-  
+
+  // Initialize from cache for instant display (stale-while-revalidate)
+  const cachedFeedback = getCachedData<SocialMessage[]>(FEEDBACK_CACHE_KEY);
+  const cachedConversations = getCachedData<DMConversation[]>(CONVERSATIONS_CACHE_KEY);
+  const hasCache = (cachedFeedback && cachedFeedback.length > 0) || (cachedConversations && cachedConversations.length > 0);
+
   // State
-  const [conversations, setConversations] = useState<DMConversation[]>([]);
+  const [conversations, setConversations] = useState<DMConversation[]>(cachedConversations || []);
   const [selectedConversation, setSelectedConversation] = useState<string | null>(null);
   const [messages, setMessages] = useState<SocialMessage[]>([]);
-  const [feedback, setFeedback] = useState<SocialMessage[]>([]);
+  const [feedback, setFeedback] = useState<SocialMessage[]>(cachedFeedback || []);
   const [isAdmin, setIsAdmin] = useState(false);
   const [contacts, setContacts] = useState<SocialContact[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Only show loading if we have no cached data
+  const [loading, setLoading] = useState(!hasCache);
   // When feedbackOnly, always start in feedback mode.
   const [activeTab, setActiveTab] = useState<'dms' | 'feedback'>(feedbackOnly ? 'feedback' : 'dms');
   const [selectedFeedback, setSelectedFeedback] = useState<SocialMessage | null>(null);
@@ -146,6 +174,8 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
   // Transcription state for feedback input
   const [transcriptionStatus, setTranscriptionStatus] = useState<TranscriptionStatus>('idle');
   const [isOnFeedbackPage, setIsOnFeedbackPage] = useState(false);
+  // Track if recording was started via the feedback button (vs global hotkey)
+  const startedFromFeedbackButton = useRef(false);
 
   // Expanded image state for click-to-expand thumbnails
   const [expandedImage, setExpandedImage] = useState<{ url: string; alt: string } | null>(null);
@@ -166,8 +196,9 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
   const loadData = useCallback(async () => {
     if (!window.socialAPI) return;
 
-    setLoading(true);
+    // Don't show loading - we either have cached data or initial loading state handles it
     setLoadError(null);
+
     try {
       const [convos, admin, contactList] = await Promise.all([
         window.socialAPI.getConversations(),
@@ -176,6 +207,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
       ]);
 
       setConversations(convos);
+      setCachedData(CONVERSATIONS_CACHE_KEY, convos);
       setIsAdmin(admin);
       setContacts(contactList);
 
@@ -183,6 +215,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
       if (admin) {
         const allFeedback = await window.socialAPI.getAllFeedback();
         setFeedback(allFeedback);
+        setCachedData(FEEDBACK_CACHE_KEY, allFeedback);
 
         // Mark unread feedback items as read when admin views the list (batch).
         const unreadIds = allFeedback.filter(item => !item.readAt).map(item => item.id);
@@ -192,14 +225,18 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
       } else {
         const myFeedback = await window.socialAPI.getMyFeedback();
         setFeedback(myFeedback);
+        setCachedData(FEEDBACK_CACHE_KEY, myFeedback);
       }
     } catch (err) {
       console.error('[DMsView] Failed to load data:', err);
-      setLoadError('Failed to load messages. Please check your connection.');
+      // Only show error if we have no cached data to display
+      if (!hasCache) {
+        setLoadError('Failed to load messages. Please check your connection.');
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [hasCache]);
 
   // Load messages for selected conversation.
   const loadMessages = useCallback(async (otherUserId: string) => {
@@ -244,10 +281,11 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
     }
   }, []);
 
-  // Initial load.
+  // Initial load - fetch fresh data in background (cached data already displayed)
   useEffect(() => {
     loadData();
-  }, [loadData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run once on mount
 
   // Load messages when conversation is selected.
   useEffect(() => {
@@ -353,6 +391,10 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
 
     const unsubscribe = window.transcribeAPI.onStatusChanged((status) => {
       setTranscriptionStatus(status);
+      // Reset feedback button flag if recording was cancelled (went idle without transcribing)
+      if (status === 'idle') {
+        startedFromFeedbackButton.current = false;
+      }
     });
 
     return unsubscribe;
@@ -363,18 +405,22 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
     if (!window.transcribeAPI) return;
 
     const unsubscribe = window.transcribeAPI.onResult((text) => {
-      // Only auto-paste if we're on the feedback compose page and field is empty
-      setReplyText((currentText) => {
-        // Only update if we're on feedback page and field is currently empty
-        if (isOnFeedbackPage && !currentText) {
-          return text;
-        }
-        return currentText;
-      });
+      // Only auto-paste if recording was started via the feedback button
+      if (startedFromFeedbackButton.current) {
+        setReplyText((currentText) => {
+          // Only update if field is currently empty
+          if (!currentText) {
+            return text;
+          }
+          return currentText;
+        });
+        // Reset the flag after receiving the result
+        startedFromFeedbackButton.current = false;
+      }
     });
 
     return unsubscribe;
-  }, [isOnFeedbackPage]);
+  }, []);
 
   // Get current list items based on active tab.
   const listItems = activeTab === 'dms' ? conversations : feedback;
@@ -797,7 +843,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
           {loadError}
         </div>
         <button
-          onClick={loadData}
+          onClick={() => loadData()}
           style={{
             padding: '8px 16px',
             fontSize: '11px',
@@ -1211,7 +1257,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',
                     }}>
-                      {convo.lastMessage.contentText?.slice(0, 40) || '[Image]'}
+                      {convo.lastMessage.contentText?.slice(0, 40) || 'Screenshot'}
                     </div>
                   )}
                 </div>
@@ -1315,7 +1361,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
                             WebkitBoxOrient: 'vertical',
                             overflow: 'hidden',
                           }}>
-                            {item.contentType === 'image' && !item.contentText ? '🖼 Image' : item.contentText || '🖼 Image'}
+                            {item.contentText || (item.contentType === 'image' ? 'Screenshot' : '')}
                           </div>
                           <div style={{
                             fontSize: '9px',
@@ -1972,7 +2018,13 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
 
                 {/* Transcription button */}
                 <button
-                  onClick={() => window.transcribeAPI?.toggleRecording?.()}
+                  onClick={() => {
+                    // Mark that recording was started from feedback button (not global hotkey)
+                    if (transcriptionStatus === 'idle') {
+                      startedFromFeedbackButton.current = true;
+                    }
+                    window.transcribeAPI?.toggleRecording?.();
+                  }}
                   disabled={transcriptionStatus === 'transcribing'}
                   style={{
                     width: '100%',

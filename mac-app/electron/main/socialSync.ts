@@ -1112,8 +1112,9 @@ export class SocialSync extends EventEmitter {
 
   /**
    * Submit image feedback with optional caption.
+   * If no caption but sourceAppName provided, uses "[App] screenshot" as default text.
    */
-  async submitImageFeedback(imageBase64: string, caption?: string): Promise<Message | null> {
+  async submitImageFeedback(imageBase64: string, caption?: string, sourceAppName?: string): Promise<Message | null> {
     const adminUserId = await this.getAdminUserId();
     if (!adminUserId) {
       console.error('[SocialSync] No admin user found');
@@ -1143,12 +1144,15 @@ export class SocialSync extends EventEmitter {
         return null;
       }
 
+      // Use caption if provided, otherwise generate from source app name
+      const contentText = caption || (sourceAppName ? `${sourceAppName} screenshot` : null);
+
       const insertData = {
         type: 'feedback',
         sender_user_id: userId,
         recipient_user_id: adminUserId,
         content_type: 'image',
-        content_text: caption || null,
+        content_text: contentText,
         image_path: imagePath,
         feedback_status: 'open',
       };

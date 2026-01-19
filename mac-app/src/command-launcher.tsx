@@ -315,6 +315,7 @@ function CommandLauncher() {
   const loadCommands = useCallback(async () => {
     try {
       const cmds = await commandsAPI.getCommands();
+      console.log('[CommandLauncher] Loaded commands:', cmds?.length || 0, cmds?.map(c => c.name));
       setCommands(cmds || []);
     } catch (err) {
       console.error('[CommandLauncher] Failed to load commands:', err);

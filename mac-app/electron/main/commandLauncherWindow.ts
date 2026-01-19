@@ -123,6 +123,8 @@ export class CommandLauncherWindow {
       y = Math.round(display.bounds.y + (display.bounds.height - this.WINDOW_HEIGHT_EXPANDED) / 2 - 50);
     }
 
+    console.log(`[CommandLauncher] Setting bounds: x=${x}, y=${y}, w=${this.WINDOW_WIDTH}, h=${this.WINDOW_HEIGHT_COLLAPSED}`);
+
     this.window!.setBounds({
       x,
       y,
@@ -130,8 +132,10 @@ export class CommandLauncherWindow {
       height: this.WINDOW_HEIGHT_COLLAPSED,
     });
 
+    console.log('[CommandLauncher] Showing window...');
     this.window!.show();
     this.window!.focus();
+    console.log('[CommandLauncher] Window shown, isVisible:', this.window!.isVisible());
 
     // Tell renderer to reset state.
     this.window!.webContents.send('command-launcher:reset');

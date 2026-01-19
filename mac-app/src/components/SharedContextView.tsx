@@ -469,7 +469,7 @@ function InitialsBadge({ email }: { email: string | null }) {
 
 interface SharedContextViewProps {
   onOpenSketch?: (imageDataUrl: string, width: number, height: number) => void;
-  onSubmitFeedback?: (text: string, imageBase64?: string) => Promise<void>;
+  onSubmitFeedback?: (text: string, imageBase64?: string, sourceAppName?: string) => Promise<void>;
   showMembers?: boolean;
   onToggleMembers?: () => void;
 }
@@ -1573,12 +1573,13 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
           (async () => {
             const item = selectedRow.type === 'item' ? selectedRow.item : selectedRow.items[0];
             if (!item) return;
-            
-            // Build content for feedback.
+
+            // Build content for feedback with source app provenance.
             const text = item.content || '';
             const imageBase64 = item.imageData;
-            
-            await onSubmitFeedback(text, imageBase64 || undefined);
+            const sourceAppName = item.sourceAppName || undefined;
+
+            await onSubmitFeedback(text, imageBase64 || undefined, sourceAppName);
           })();
           return;
         }
@@ -2726,11 +2727,11 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
                     dismissPreview();
                   }}] : []),
                   ...(onSubmitFeedback ? [{ label: 'feedback', key: 'f', action: async () => {
-                    // Send previewed image as feedback.
+                    // Send previewed image as feedback with source app provenance.
                     const selectedRow = listRows[selectedIndex];
                     const item = selectedRow?.type === 'item' ? selectedRow.item : selectedRow?.items?.[0];
                     if (item) {
-                      await onSubmitFeedback(item.content || '', item.imageData || undefined);
+                      await onSubmitFeedback(item.content || '', item.imageData || undefined, item.sourceAppName || undefined);
                     }
                     dismissPreview();
                   }}] : []),

@@ -559,16 +559,23 @@ export class LibrarianManager extends EventEmitter {
             // New or modified file
             const meta = this.parseFileMetadata(fullPath);
             if (meta) {
-              const isNew = !this.cache.has(fullPath);
+              const cached = this.cache.get(fullPath);
+              // File is "new" if not in cache, OR if its mtime is newer than cached
+              // This catches files created while app wasn't running (loaded from stale index)
+              const isNew = !cached || meta.mtime > cached.mtime;
               this.cache.set(fullPath, meta);
               this.saveIndex();
 
               if (isNew) {
+                // Reset edit counter since a new reading was created
+                const projectPath = path.dirname(normalizedDir);
+                this.resetEditCount(projectPath);
+
                 // Emit event for new readings
                 const content = fs.readFileSync(fullPath, 'utf-8');
                 const reading: Reading = { ...meta, content };
                 this.emit('reading-added', reading);
-                console.log(`[LibrarianManager] New reading: ${meta.title}`);
+                console.log(`[LibrarianManager] New reading detected (mtime check): ${meta.title}`);
               } else {
                 // Emit event for updated readings
                 this.emit('reading-updated', meta);
@@ -781,6 +788,22 @@ export class LibrarianManager extends EventEmitter {
     this.settings.autoRunFrequency = frequency;
     this.saveSettings();
     const success = this.updateClaudeMd(frequency);
+
+    // Update threshold in all status files to match new frequency
+    for (const dirPath of this.settings.watchedDirs) {
+      const statusFile = path.join(dirPath, '.status.json');
+      if (fs.existsSync(statusFile)) {
+        try {
+          const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
+          status.nextThreshold = this.pickNextThreshold(frequency);
+          status.frequency = frequency;
+          fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
+        } catch {
+          // Ignore errors updating individual status files
+        }
+      }
+    }
+
     console.log(`[LibrarianManager] Auto-run frequency set to: ${frequency}`);
     return success;
   }
@@ -1119,35 +1142,49 @@ exit 0
 # Field Theory Librarian Hook
 # Checks if a reading is due and injects context for Claude
 
+# Debug logging
+LOG_FILE="\${HOME}/.claude/librarian-debug.log"
+
+# Log script start
+echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook START" >> "\$LOG_FILE"
+
 # Get project directory from Claude Code environment
 PROJECT_DIR="\${CLAUDE_PROJECT_DIR:-\$(pwd)}"
 STATUS_FILE="\${PROJECT_DIR}/.librarian/.status.json"
 
+echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook: PROJECT_DIR=\$PROJECT_DIR" >> "\$LOG_FILE"
+echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook: STATUS_FILE=\$STATUS_FILE" >> "\$LOG_FILE"
+
 # If no status file exists, this project doesn't have Librarian active
-if [ ! -f "$STATUS_FILE" ]; then
+if [ ! -f "\$STATUS_FILE" ]; then
+  echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook: No status file, exiting cleanly" >> "\$LOG_FILE"
   exit 0
 fi
 
-# Read status
-EDITS=$(cat "$STATUS_FILE" | grep -o '"editsSinceReading": *[0-9]*' | grep -o '[0-9]*')
-THRESHOLD=$(cat "$STATUS_FILE" | grep -o '"nextThreshold":[0-9]*' | grep -o '[0-9]*')
+# Read status (note: handle optional space after colon)
+EDITS=\$(cat "\$STATUS_FILE" | grep -o '"editsSinceReading": *[0-9]*' | grep -o '[0-9]*')
+THRESHOLD=\$(cat "\$STATUS_FILE" | grep -o '"nextThreshold": *[0-9]*' | grep -o '[0-9]*')
 
 # Default values if parsing fails
 EDITS=\${EDITS:-0}
 THRESHOLD=\${THRESHOLD:-3}
 
+echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook: edits=\$EDITS, threshold=\$THRESHOLD, project=\$(basename \$PROJECT_DIR)" >> "\$LOG_FILE"
+
 # Check if reading is due
-if [ "$EDITS" -ge "$THRESHOLD" ]; then
-  # Output context for Claude to see
-  cat << 'HOOK_OUTPUT'
-{
-  "hookSpecificOutput": {
-    "additionalContext": "📚 LIBRARIAN: A reading is due. Before implementing, create a 1-2 paragraph intellectual piece in .librarian/YYYY-MM-DD-{slug}.md connecting to your current task. Draw from physics, systems theory, engineering history, or speculative futures. Include one concrete detail. Then proceed with implementation."
-  }
-}
-HOOK_OUTPUT
+if [ "\$EDITS" -ge "\$THRESHOLD" ]; then
+  echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook: TRIGGERING - outputting JSON" >> "\$LOG_FILE"
+
+  # Output JSON - must be valid JSON, ASCII only, no trailing whitespace
+  OUTPUT='{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"[LIBRARIAN] A reading is due. Before implementing, create a 1-2 paragraph intellectual piece in .librarian/YYYY-MM-DD-{slug}.md connecting to your current task. Draw from physics, systems theory, engineering history, or speculative futures. Include one concrete detail. Then proceed with implementation."}}'
+
+  echo "\$OUTPUT"
+  echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook: JSON output sent" >> "\$LOG_FILE"
+else
+  echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook: Below threshold, no output" >> "\$LOG_FILE"
 fi
 
+echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook END (exit 0)" >> "\$LOG_FILE"
 exit 0
 `;
   }
@@ -1430,6 +1467,56 @@ exit 0
     }
   }
 
+  /**
+   * Get the current edit status for debugging.
+   * Returns the first project's status (edits and threshold).
+   */
+  getEditStatus(): { edits: number; threshold: number } | null {
+    try {
+      for (const dirPath of this.settings.watchedDirs) {
+        const statusFile = path.join(dirPath, '.status.json');
+        if (fs.existsSync(statusFile)) {
+          const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
+          return {
+            edits: status.editsSinceReading || 0,
+            threshold: status.nextThreshold || 3,
+          };
+        }
+      }
+      return null;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to get edit status:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Reset edit counters for all watched directories.
+   * Used for debugging/testing when hooks aren't triggering properly.
+   */
+  resetAllCounters(): boolean {
+    try {
+      for (const dirPath of this.settings.watchedDirs) {
+        // dirPath is the .librarian directory path
+        // Go up from .librarian to get project path
+        const projectPath = path.dirname(dirPath);
+        const statusFile = path.join(dirPath, '.status.json');
+
+        if (fs.existsSync(statusFile)) {
+          const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
+          status.editsSinceReading = 0;
+          status.nextThreshold = this.pickNextThreshold(this.settings.autoRunFrequency);
+          fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
+          console.log(`[LibrarianManager] Reset counter for: ${path.basename(projectPath)}`);
+        }
+      }
+      return true;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to reset all counters:', error);
+      return false;
+    }
+  }
+
   // ===========================================================================
   // Cleanup
   // ===========================================================================
@@ -1444,5 +1531,97 @@ exit 0
     }
     this.watchers.clear();
     console.log('[LibrarianManager] Destroyed');
+  }
+
+  // ===========================================================================
+  // Auto-Discovery of Existing Readings
+  // ===========================================================================
+
+  /**
+   * Discover existing .librarian directories that contain readings.
+   * Searches common development directories for .librarian folders with .md files.
+   * Returns paths that are not already being watched.
+   */
+  async discoverLibrarianDirs(): Promise<string[]> {
+    const discovered: string[] = [];
+    const alreadyWatched = new Set(this.settings.watchedDirs);
+
+    // Common development directories to search
+    const searchRoots = [
+      path.join(os.homedir(), 'dev'),
+      path.join(os.homedir(), 'Developer'),
+      path.join(os.homedir(), 'projects'),
+      path.join(os.homedir(), 'src'),
+      path.join(os.homedir(), 'code'),
+      path.join(os.homedir(), 'workspace'),
+      path.join(os.homedir(), 'repos'),
+      path.join(os.homedir(), 'git'),
+      path.join(os.homedir(), 'Documents', 'dev'),
+      path.join(os.homedir(), 'Documents', 'projects'),
+    ];
+
+    // Helper to check if a .librarian dir has any .md files
+    const hasReadings = (librarianDir: string): boolean => {
+      try {
+        const files = fs.readdirSync(librarianDir);
+        return files.some(f => f.endsWith('.md'));
+      } catch {
+        return false;
+      }
+    };
+
+    // Recursively search for .librarian directories (max depth 4)
+    const searchDir = (dir: string, depth: number): void => {
+      if (depth > 4) return;
+
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+
+          const fullPath = path.join(dir, entry.name);
+
+          // Skip common non-project directories
+          if (entry.name === 'node_modules' ||
+              entry.name === '.git' ||
+              entry.name === 'vendor' ||
+              entry.name === 'build' ||
+              entry.name === 'dist' ||
+              entry.name === '__pycache__' ||
+              entry.name === '.venv' ||
+              entry.name === 'venv') {
+            continue;
+          }
+
+          // Found a .librarian directory
+          if (entry.name === '.librarian') {
+            const normalizedPath = this.normalizePath(fullPath);
+            if (!alreadyWatched.has(normalizedPath) && hasReadings(fullPath)) {
+              discovered.push(normalizedPath);
+            }
+            continue;
+          }
+
+          // Recurse into subdirectories
+          searchDir(fullPath, depth + 1);
+        }
+      } catch {
+        // Ignore permission errors, etc.
+      }
+    };
+
+    // Search each root that exists
+    for (const root of searchRoots) {
+      if (fs.existsSync(root)) {
+        searchDir(root, 0);
+      }
+    }
+
+    // Deduplicate and sort by path
+    const unique = [...new Set(discovered)].sort();
+    console.log(`[LibrarianManager] Discovered ${unique.length} .librarian directories with readings`);
+
+    return unique;
   }
 }
