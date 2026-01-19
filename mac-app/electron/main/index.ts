@@ -1464,9 +1464,26 @@ function setupLibrarianIPCHandlers(): void {
     const session = authManager.getSession();
     if (!supabase || !session?.user?.id) return false;
 
+    // Get author name from profile
+    let authorName: string | null = null;
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('first_name, last_name')
+        .eq('id', session.user.id)
+        .single();
+      if (profile?.first_name && profile?.last_name) {
+        authorName = `${profile.first_name} ${profile.last_name}`;
+      } else if (profile?.first_name) {
+        authorName = profile.first_name;
+      }
+    } catch {
+      // Ignore profile fetch errors
+    }
+
     const { error } = await supabase
       .from('shared_readings')
-      .update({ content, title, updated_at: new Date().toISOString() })
+      .update({ content, title, author_name: authorName, updated_at: new Date().toISOString() })
       .eq('source_path', filePath)
       .eq('user_id', session.user.id)
       .eq('is_public', true);
