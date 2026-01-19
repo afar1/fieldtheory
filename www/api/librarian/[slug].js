@@ -45,7 +45,7 @@ export default async function handler(req, res) {
     }
   }
   const author = authorFormatted
-    ? `<p class="attribution">inspired by the work of ${esc(authorFormatted)}</p>`
+    ? `<p class="attribution">Inspired by the work of ${esc(authorFormatted)}</p>`
     : '';
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -162,8 +162,8 @@ export default async function handler(req, res) {
       font-size: 0.9rem;
       color: var(--text-secondary);
     }
-    .made-by { margin-bottom: 0.25rem; }
-    .attribution { font-style: italic; margin: 0; }
+    .attribution { font-style: italic; margin: 0 0 0.25rem 0; }
+    .made-by { margin-bottom: 0; }
     .footer a { color: var(--text); text-decoration: none; }
     .footer a:hover { text-decoration: underline; }
     .logo-link { display: flex; }
@@ -184,8 +184,8 @@ export default async function handler(req, res) {
     </header>
     <article class="content">${html}</article>
     <footer class="footer">
-      <p class="made-by">Made by the Librarian at <a href="https://fieldtheory.dev">fieldtheory.dev</a></p>
       ${author}
+      <p class="made-by">Made by the Librarian at <a href="https://fieldtheory.dev">fieldtheory.dev</a></p>
       <div class="controls">
         ${showRandom ? `<a class="icon-btn" href="/api/librarian/random?exclude=${slug}" title="Random reading">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
