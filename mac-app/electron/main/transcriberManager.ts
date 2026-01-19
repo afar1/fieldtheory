@@ -107,6 +107,7 @@ export class TranscriberManager extends EventEmitter {
   private commandsManager: CommandsManager | null = null;
   private recordingStartTime: number = 0;
   private skipNextPasteFailedNotification: boolean = false;
+  private priorityMicSkippedForQuota: boolean = false; // True when quota exhausted, skip tracking
   
   // Track which hotkey started recording for cross-hotkey improvement trigger.
   // If user starts with primary and ends with secondary (or vice versa), trigger improvement.
@@ -463,19 +464,20 @@ export class TranscriberManager extends EventEmitter {
     }
 
     // Check priority mic quota if a priority device is selected.
+    // If quota exhausted, recording still works but priority mic won't be tracked.
+    this.priorityMicSkippedForQuota = false;
     if (this.quotaManager && this.audioManager) {
       const state = this.audioManager.getState();
       if (state.priorityDeviceId) {
         const quotaCheck = this.quotaManager.checkQuota('priorityMic');
         if (!quotaCheck.allowed) {
-          console.log('[TranscriberManager] Priority mic quota exhausted');
-          const usedMinutes = Math.floor(quotaCheck.used / 60);
-          const limitMinutes = Math.floor(quotaCheck.limit / 60);
-          this.cursorStatusManager?.showCriticalMessage(
-            `Priority mic quota reached (${usedMinutes}/${limitMinutes} mins). Upgrade for unlimited.`
+          console.log('[TranscriberManager] Priority mic quota exhausted, falling back to regular mic');
+          this.priorityMicSkippedForQuota = true;
+          // Show note but don't block recording - graceful degradation
+          this.cursorStatusManager?.showRecordingNote(
+            'Priority mic limit reached — using default mic'
           );
           this.emit('quotaExhausted', quotaCheck);
-          return;
         }
       }
     }
@@ -676,11 +678,13 @@ export class TranscriberManager extends EventEmitter {
       // Check if we should improve: explicit request OR auto-improve enabled
       const autoImproveEnabled = this.getAutoImprove();
 
+      // Calculate word count for both threshold check and quota tracking (input words)
+      const wordCount = cleanedText.trim().split(/\s+/).filter(w => w.length > 0).length;
+
       // For auto-improve, check word count meets minimum threshold
       // Explicit improvement requests (shouldImprove) always run regardless of word count
       let shouldTriggerImprovement = shouldImprove;
       if (!shouldImprove && autoImproveEnabled) {
-        const wordCount = cleanedText.trim().split(/\s+/).filter(w => w.length > 0).length;
         const minWords = this.getAutoImproveMinWords();
         if (wordCount >= minWords) {
           shouldTriggerImprovement = true;
@@ -718,8 +722,8 @@ export class TranscriberManager extends EventEmitter {
               finalText = improvedText;
               console.log('[TranscriberManager] Transcript improved successfully');
 
-              // Track quota usage.
-              await this.quotaManager?.incrementTextImprove();
+              // Track quota usage (wordCount was calculated earlier for threshold check).
+              await this.quotaManager?.incrementTextImprove(wordCount);
 
               // Save improved content to the transcript item in the database.
               // The transcript item is the last one added to currentStack.
@@ -983,13 +987,20 @@ export class TranscriberManager extends EventEmitter {
   /**
    * Track priority mic usage if a priority device was selected during recording.
    * Only counts time when the user has explicitly chosen a priority device.
+   * Skips tracking if quota was exhausted at recording start (graceful degradation).
    */
   private async trackPriorityMicUsage(): Promise<void> {
     if (!this.quotaManager || !this.audioManager) return;
-    
+
+    // Skip tracking if quota was exhausted at start of recording
+    if (this.priorityMicSkippedForQuota) {
+      console.log('[TranscriberManager] Skipping priority mic tracking (quota exhausted)');
+      return;
+    }
+
     const state = this.audioManager.getState();
     if (!state.priorityDeviceId) return; // No priority device selected
-    
+
     const recordingDurationSeconds = Math.floor((Date.now() - this.recordingStartTime) / 1000);
     if (recordingDurationSeconds > 0) {
       await this.quotaManager.incrementPriorityMic(recordingDurationSeconds);
@@ -998,13 +1009,22 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
-   * Track auto-stack session usage. Called once per recording that has screenshots.
+   * Track auto-stack session usage for multi-image stacks.
+   * Only counts against quota when stacking 2+ images with transcript.
+   * Single image + transcript is always free.
    */
   private async trackAutoStackUsage(): Promise<void> {
     if (!this.quotaManager) return;
-    
+
+    // Only count as auto-stack session if there are 2+ screenshots
+    // Single image + transcript is always free
+    if (this.screenshotMetadata.length < 2) {
+      console.log('[TranscriberManager] Single image stack - free, not counting against quota');
+      return;
+    }
+
     await this.quotaManager.incrementAutoStack();
-    console.log('[TranscriberManager] Tracked 1 auto-stack session');
+    console.log(`[TranscriberManager] Tracked 1 auto-stack session (${this.screenshotMetadata.length} images)`);
   }
 
   /**

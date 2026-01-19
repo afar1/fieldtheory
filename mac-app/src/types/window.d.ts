@@ -727,7 +727,7 @@ interface CursorStatusAPI {
 // =============================================================================
 
 /**
- * Quota status for a single feature (priority mic or auto-stacking).
+ * Quota status for a single feature.
  */
 interface QuotaStatus {
   used: number;
@@ -744,14 +744,14 @@ interface QuotaCheckResult {
   allowed: boolean;
   used: number;
   limit: number;
-  feature: 'priorityMic' | 'autoStack';
+  feature: 'priorityMic' | 'autoStack' | 'textImprove';
 }
 
 /**
  * Data sent when a quota is exhausted.
  */
 interface QuotaExhaustedData {
-  feature: 'priorityMic' | 'autoStack';
+  feature: 'priorityMic' | 'autoStack' | 'textImprove';
   used: number;
   limit: number;
   featureName: string;
@@ -759,17 +759,29 @@ interface QuotaExhaustedData {
 }
 
 /**
+ * Quota limits for the current tier.
+ */
+interface QuotaLimits {
+  priorityMicMinutes: number;
+  autoStackSessions: number;
+  textImprovementWords: number;
+}
+
+/**
  * API for tracking and displaying quota usage.
- * Free users have monthly limits on priority mic and auto-stacking.
+ * Free users have monthly limits on priority mic, auto-stacking, and text improvements.
  */
 interface QuotaAPI {
-  getQuotas: () => Promise<{ priorityMic: QuotaStatus; autoStack: QuotaStatus; tier: 'free' | 'pro' } | null>;
-  checkQuota: (feature: 'priorityMic' | 'autoStack') => Promise<QuotaCheckResult>;
-  getFormattedUsage: () => Promise<{ priorityMic: string; autoStack: string }>;
+  getQuotas: () => Promise<{ priorityMic: QuotaStatus; autoStack: QuotaStatus; textImprove: QuotaStatus; tier: 'free' | 'pro' } | null>;
+  checkQuota: (feature: 'priorityMic' | 'autoStack' | 'textImprove') => Promise<QuotaCheckResult>;
+  getFormattedUsage: () => Promise<{ priorityMic: string; autoStack: string; textImprove: string }>;
   getResetDate: () => Promise<Date>;
+  getDaysUntilReset: () => Promise<number>;
+  getLimits: () => Promise<QuotaLimits>;
+  refreshTier: () => Promise<{ tier: 'free' | 'pro'; error: string | null }>;
   onTierChanged: (callback: (tier: 'free' | 'pro') => void) => () => void;
   onQuotaExhausted: (callback: (data: QuotaExhaustedData) => void) => () => void;
-  onQuotaChanged: (callback: (data: { priorityMic: string; autoStack: string }) => void) => () => void;
+  onQuotaChanged: (callback: (data: { priorityMic: string; autoStack: string; textImprove: string }) => void) => () => void;
 }
 
 /**
@@ -802,10 +814,28 @@ interface PortableCommandInfo {
 }
 
 /**
+ * Command with full content loaded.
+ */
+interface CommandWithContent extends PortableCommandInfo {
+  lastModified: number;
+  content: string;
+}
+
+/**
+ * Watched directory for commands.
+ */
+interface CommandsWatchedDir {
+  path: string;
+  enabled: boolean;
+}
+
+/**
  * Commands API for managing portable commands (markdown files).
  * Allows users to bring their commands from other tools like Claude, Cursor, etc.
+ * Now supports multiple directories and full CRUD operations.
  */
 interface CommandsAPI {
+  // Legacy single-directory support
   getDirectory: () => Promise<string | null>;
   setDirectory: (directoryPath: string | null) => Promise<{ success: boolean; error?: string }>;
   browseDirectory: () => Promise<string | null>;
@@ -814,6 +844,26 @@ interface CommandsAPI {
   getCommandContent: (commandName: string) => Promise<{ content: string; filePath: string } | null>;
   onCommandsChanged: (callback: (commands: PortableCommandInfo[]) => void) => () => void;
   onDirectoryChanged: (callback: (directoryPath: string | null) => void) => () => void;
+
+  // Multi-directory management
+  initialize: () => Promise<void>;
+  getWatchedDirs: () => Promise<CommandsWatchedDir[]>;
+  addWatchedDir: (dirPath: string) => Promise<CommandsWatchedDir | null>;
+  removeWatchedDir: (dirPath: string) => Promise<boolean>;
+  getDefaultDirectory: () => Promise<string>;
+  createDefaultDirectory: () => Promise<string | null>;
+
+  // CRUD operations
+  getCommandByPath: (filePath: string) => Promise<CommandWithContent | null>;
+  saveCommand: (filePath: string, content: string) => Promise<boolean>;
+  createCommand: (directoryPath: string, name: string, content?: string) => Promise<{ path: string; name: string } | null>;
+  deleteCommand: (filePath: string) => Promise<boolean>;
+
+  // Command launcher (Cmd+Shift+K)
+  invokeCommand?: (commandName: string) => Promise<{ success: boolean; error?: string }>;
+  launcherResize?: (height: number) => void;
+  launcherClose?: () => void;
+  onLauncherReset?: (callback: () => void) => () => void;
 }
 
 /**
@@ -868,6 +918,19 @@ interface LibrarianAPI {
   getClaudeCodeStatus: () => Promise<'installed' | 'directory-only' | 'not-installed'>;
   getClaudeConfigPath: () => Promise<string>;
   resyncClaudeMd: () => Promise<boolean>;
+  // Hook management
+  installClaudeCodeHook: () => Promise<boolean>;
+  uninstallClaudeCodeHook: () => Promise<boolean>;
+  isClaudeCodeHookInstalled: () => Promise<boolean>;
+  initializeProjectStatus: (projectPath: string) => Promise<void>;
+  onNewReadingAvailable: (callback: (readingPath: string) => void) => () => void;
+  setImmersiveMode: (immersive: boolean) => void;
+  // Content guidance customization
+  getDefaultContentGuidance: () => Promise<string>;
+  getContentGuidance: () => Promise<string>;
+  getCustomContentGuidance: () => Promise<string | undefined>;
+  setCustomContentGuidance: (guidance: string | undefined) => Promise<boolean>;
+  resetContentGuidance: () => Promise<boolean>;
 }
 
 declare global {

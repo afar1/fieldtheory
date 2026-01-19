@@ -40,38 +40,46 @@ interface LauncherItem {
   actionId?: string;
 }
 
-// Declare APIs on window (exposed by preload).
-declare global {
-  interface Window {
-    commandsAPI: {
-      getCommands: () => Promise<PortableCommandInfo[]>;
-      invokeCommand: (name: string) => Promise<{ success: boolean; error?: string }>;
-      launcherResize: (height: number) => void;
-      launcherClose: () => void;
-      onLauncherReset: (callback: () => void) => () => void;
-    };
-    clipboardAPI?: {
-      getHotkeys?: () => Promise<{
-        screenshot?: string;
-        fullScreen?: string;
-        activeWindow?: string;
-        history?: string;
-      }>;
-      captureScreenshot?: (region?: boolean) => Promise<number>;
-    };
-    transcribeAPI?: {
-      getHotkey?: () => Promise<string>;
-      toggleRecording?: () => Promise<void>;
-    };
-    todoAPI?: {
-      getHotkey?: () => Promise<string>;
-    };
-    themeAPI?: {
-      getTheme: () => Promise<boolean>;
-      setTheme: (isDark: boolean) => Promise<void>;
-    };
-  }
+// Window API types for the launcher's standalone renderer context.
+// In the launcher window, these APIs are always available (not optional).
+interface LauncherCommandsAPI {
+  getCommands: () => Promise<PortableCommandInfo[]>;
+  invokeCommand: (name: string) => Promise<{ success: boolean; error?: string }>;
+  launcherResize: (height: number) => void;
+  launcherClose: () => void;
+  onLauncherReset: (callback: () => void) => () => void;
 }
+
+interface LauncherClipboardAPI {
+  getHotkeys: () => Promise<{
+    screenshot?: string;
+    fullScreen?: string;
+    activeWindow?: string;
+    history?: string;
+  }>;
+  captureScreenshot: (region?: boolean) => Promise<number>;
+}
+
+interface LauncherTranscribeAPI {
+  getHotkey: () => Promise<string>;
+  toggleRecording: () => Promise<void>;
+}
+
+interface LauncherTodoAPI {
+  getHotkey: () => Promise<string>;
+}
+
+interface LauncherThemeAPI {
+  getTheme: () => Promise<boolean>;
+  setTheme: (isDark: boolean) => Promise<void>;
+}
+
+// Type-safe accessors for the launcher context
+const commandsAPI = window.commandsAPI as unknown as LauncherCommandsAPI;
+const clipboardAPI = window.clipboardAPI as unknown as LauncherClipboardAPI;
+const transcribeAPI = window.transcribeAPI as unknown as LauncherTranscribeAPI;
+const todoAPI = window.todoAPI as unknown as LauncherTodoAPI;
+const themeAPI = window.themeAPI as unknown as LauncherThemeAPI;
 
 // =============================================================================
 // Hotkey Formatting
@@ -306,7 +314,7 @@ function CommandLauncher() {
   // Load commands from the filesystem.
   const loadCommands = useCallback(async () => {
     try {
-      const cmds = await window.commandsAPI.getCommands();
+      const cmds = await commandsAPI.getCommands();
       setCommands(cmds || []);
     } catch (err) {
       console.error('[CommandLauncher] Failed to load commands:', err);
@@ -317,9 +325,9 @@ function CommandLauncher() {
   const loadHotkeys = useCallback(async () => {
     try {
       const [clipboardHotkeys, transcriptionHotkey, tasksHotkey] = await Promise.all([
-        window.clipboardAPI?.getHotkeys?.() ?? {},
-        window.transcribeAPI?.getHotkey?.() ?? DEFAULT_HOTKEYS.transcription,
-        window.todoAPI?.getHotkey?.() ?? DEFAULT_HOTKEYS.tasks,
+        clipboardAPI.getHotkeys?.() ?? {},
+        transcribeAPI.getHotkey?.() ?? DEFAULT_HOTKEYS.transcription,
+        todoAPI.getHotkey?.() ?? DEFAULT_HOTKEYS.tasks,
       ]);
 
       setHotkeys({
@@ -339,13 +347,13 @@ function CommandLauncher() {
   // Load commands and hotkeys on mount.
   useEffect(() => {
     // Set initial height immediately to prevent layout shift
-    window.commandsAPI.launcherResize(36);
+    commandsAPI.launcherResize(36);
 
     loadCommands();
     loadHotkeys();
 
     // Load current theme
-    window.themeAPI?.getTheme().then(dark => setIsDarkMode(dark));
+    themeAPI.getTheme().then(dark => setIsDarkMode(dark));
 
     // Listen for reset events (when window is shown).
     // Reload commands each time to pick up newly added commands without restart.
@@ -357,13 +365,13 @@ function CommandLauncher() {
       // Reload commands to pick up any new ones added since last open.
       loadCommands();
       // Refresh theme state
-      const dark = await window.themeAPI?.getTheme();
+      const dark = await themeAPI.getTheme();
       setIsDarkMode(dark ?? true);
       // Reset height to input-only
-      window.commandsAPI.launcherResize(36);
+      commandsAPI.launcherResize(36);
     };
 
-    const unsubscribe = window.commandsAPI.onLauncherReset(handleReset);
+    const unsubscribe = commandsAPI.onLauncherReset(handleReset);
     return () => unsubscribe();
   }, [loadCommands, loadHotkeys]);
 
@@ -398,14 +406,14 @@ function CommandLauncher() {
       setFiltered([]);
       // Don't show empty state height when still loading (query is empty)
       // Only show it when user has typed but no results found
-      window.commandsAPI.launcherResize(inputHeight);
+      commandsAPI.launcherResize(inputHeight);
       return;
     }
 
     if (query.trim() === '') {
       setFiltered([]);
       setSelectedIndex(0);
-      window.commandsAPI.launcherResize(inputHeight);
+      commandsAPI.launcherResize(inputHeight);
       return;
     }
 
@@ -432,7 +440,7 @@ function CommandLauncher() {
         totalItems * itemHeight + numSections * sectionHeaderHeight + padding,
         280
       );
-      window.commandsAPI.launcherResize(inputHeight + listHeight);
+      commandsAPI.launcherResize(inputHeight + listHeight);
       return;
     }
 
@@ -474,7 +482,7 @@ function CommandLauncher() {
     const listHeight = matches.length > 0
       ? Math.min(matches.length * itemHeight + padding, 280)
       : emptyStateHeight;
-    window.commandsAPI.launcherResize(inputHeight + listHeight);
+    commandsAPI.launcherResize(inputHeight + listHeight);
   }, [query, allItems, isHelpQuery]);
 
   // Reset navigation flag when filtered results change.
@@ -517,7 +525,7 @@ function CommandLauncher() {
   // Handle keyboard navigation.
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
-      window.commandsAPI.launcherClose();
+      commandsAPI.launcherClose();
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
       hasNavigatedRef.current = true;
@@ -537,22 +545,22 @@ function CommandLauncher() {
   // Invoke the selected item.
   const invokeItem = useCallback(async (item: LauncherItem) => {
     if (item.type === 'command') {
-      await window.commandsAPI.invokeCommand(item.name);
-      window.commandsAPI.launcherClose();
+      await commandsAPI.invokeCommand(item.name);
+      commandsAPI.launcherClose();
     } else if (item.type === 'action') {
       // Handle built-in actions.
       switch (item.actionId) {
         case 'take-screenshot':
-          window.clipboardAPI?.captureScreenshot?.(true);
+          clipboardAPI.captureScreenshot?.(true);
           break;
         case 'start-recording':
-          window.transcribeAPI?.toggleRecording?.();
+          transcribeAPI.toggleRecording?.();
           break;
         case 'toggle-theme':
           // Toggle dark/light mode
           (async () => {
-            const currentIsDark = await window.themeAPI?.getTheme();
-            await window.themeAPI?.setTheme(!currentIsDark);
+            const currentIsDark = await themeAPI.getTheme();
+            await themeAPI.setTheme(!currentIsDark);
           })();
           break;
         // Other actions are handled by closing and letting main process handle.
@@ -561,7 +569,7 @@ function CommandLauncher() {
           console.log(`[CommandLauncher] Action: ${item.actionId}`);
           break;
       }
-      window.commandsAPI.launcherClose();
+      commandsAPI.launcherClose();
     }
   }, []);
 

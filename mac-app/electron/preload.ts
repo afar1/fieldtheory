@@ -1923,22 +1923,32 @@ type SocialAPI = typeof socialAPI;
 // =============================================================================
 
 const quotaAPI = {
-  // Get current quota status for both features.
+  // Get current quota status for all features.
   getQuotas: () => ipcRenderer.invoke('quota:getQuotas'),
-  
+
   // Check if a specific quota is exhausted.
-  checkQuota: (feature: 'priorityMic' | 'autoStack') => 
+  checkQuota: (feature: 'priorityMic' | 'autoStack' | 'textImprove') =>
     ipcRenderer.invoke('quota:checkQuota', feature),
-  
+
   // Get formatted usage strings for display.
   getFormattedUsage: () => ipcRenderer.invoke('quota:getFormattedUsage'),
-  
+
   // Get the quota reset date (first of next month).
   getResetDate: () => ipcRenderer.invoke('quota:getResetDate'),
-  
+
+  // Get days until quota reset.
+  getDaysUntilReset: () => ipcRenderer.invoke('quota:getDaysUntilReset') as Promise<number>,
+
+  // Get quota limits for the current tier.
+  getLimits: () => ipcRenderer.invoke('quota:getLimits') as Promise<{
+    priorityMicMinutes: number;
+    autoStackSessions: number;
+    textImprovementWords: number;
+  }>,
+
   // Manually refresh tier from server (debugging and edge cases).
   refreshTier: () => ipcRenderer.invoke('quota:refreshTier') as Promise<{ tier: 'free' | 'pro'; error: string | null }>,
-  
+
   // Listen for tier changes (e.g., after Stripe checkout upgrades user to pro).
   onTierChanged: (callback: (tier: 'free' | 'pro') => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, tier: 'free' | 'pro') => {
@@ -1951,8 +1961,8 @@ const quotaAPI = {
   },
 
   // Listen for quota exhausted events.
-  onQuotaExhausted: (callback: (data: { feature: 'priorityMic' | 'autoStack'; used: number; limit: number; featureName: string; limitDisplay: string }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, data: { feature: 'priorityMic' | 'autoStack'; used: number; limit: number; featureName: string; limitDisplay: string }) => {
+  onQuotaExhausted: (callback: (data: { feature: 'priorityMic' | 'autoStack' | 'textImprove'; used: number; limit: number; featureName: string; limitDisplay: string }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { feature: 'priorityMic' | 'autoStack' | 'textImprove'; used: number; limit: number; featureName: string; limitDisplay: string }) => {
       callback(data);
     };
     ipcRenderer.on('quota:exhausted', handler);
@@ -1960,10 +1970,10 @@ const quotaAPI = {
       ipcRenderer.removeListener('quota:exhausted', handler);
     };
   },
-  
-  // Listen for quota changes (updates in real-time after auto-stack or priority mic usage).
-  onQuotaChanged: (callback: (data: { priorityMic: string; autoStack: string }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, data: { priorityMic: string; autoStack: string }) => {
+
+  // Listen for quota changes (updates in real-time after usage).
+  onQuotaChanged: (callback: (data: { priorityMic: string; autoStack: string; textImprove: string }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { priorityMic: string; autoStack: string; textImprove: string }) => {
       callback(data);
     };
     ipcRenderer.on('quota:changed', handler);
@@ -2002,6 +2012,7 @@ const diagnosticsAPI: DiagnosticsAPI = {
 // =============================================================================
 
 const CommandsIPCChannels = {
+  // Legacy single-directory support
   GET_DIRECTORY: 'commands:getDirectory',
   SET_DIRECTORY: 'commands:setDirectory',
   BROWSE_DIRECTORY: 'commands:browseDirectory',
@@ -2010,12 +2021,37 @@ const CommandsIPCChannels = {
   GET_COMMAND_CONTENT: 'commands:getCommandContent',
   COMMANDS_CHANGED: 'commands:commandsChanged',
   DIRECTORY_CHANGED: 'commands:directoryChanged',
+  // Multi-directory management
+  INITIALIZE: 'commands:initialize',
+  GET_WATCHED_DIRS: 'commands:getWatchedDirs',
+  ADD_WATCHED_DIR: 'commands:addWatchedDir',
+  REMOVE_WATCHED_DIR: 'commands:removeWatchedDir',
+  GET_DEFAULT_DIRECTORY: 'commands:getDefaultDirectory',
+  CREATE_DEFAULT_DIRECTORY: 'commands:createDefaultDirectory',
+  // CRUD operations
+  GET_COMMAND_BY_PATH: 'commands:getCommandByPath',
+  SAVE_COMMAND: 'commands:saveCommand',
+  CREATE_COMMAND: 'commands:createCommand',
+  DELETE_COMMAND: 'commands:deleteCommand',
 } as const;
 
 type PortableCommandInfo = {
   name: string;
   displayName: string;
   filePath: string;
+};
+
+type CommandsWatchedDir = {
+  path: string;
+  enabled: boolean;
+};
+
+type CommandWithContent = {
+  name: string;
+  displayName: string;
+  filePath: string;
+  lastModified: number;
+  content: string;
 };
 
 const commandsAPI = {
@@ -2071,7 +2107,67 @@ const commandsAPI = {
     };
   },
 
+  // ==========================================================================
+  // Multi-Directory Management
+  // ==========================================================================
+
+  // Initialize the commands manager (scan all watched directories).
+  initialize: async (): Promise<void> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.INITIALIZE);
+  },
+
+  // Get all watched directories.
+  getWatchedDirs: async (): Promise<CommandsWatchedDir[]> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_WATCHED_DIRS);
+  },
+
+  // Add a directory to watch.
+  addWatchedDir: async (dirPath: string): Promise<CommandsWatchedDir | null> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.ADD_WATCHED_DIR, dirPath);
+  },
+
+  // Remove a watched directory.
+  removeWatchedDir: async (dirPath: string): Promise<boolean> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.REMOVE_WATCHED_DIR, dirPath);
+  },
+
+  // Get the default commands directory path.
+  getDefaultDirectory: async (): Promise<string> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_DEFAULT_DIRECTORY);
+  },
+
+  // Create and add the default commands directory.
+  createDefaultDirectory: async (): Promise<string | null> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.CREATE_DEFAULT_DIRECTORY);
+  },
+
+  // ==========================================================================
+  // CRUD Operations
+  // ==========================================================================
+
+  // Get a command by file path with full content.
+  getCommandByPath: async (filePath: string): Promise<CommandWithContent | null> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_COMMAND_BY_PATH, filePath);
+  },
+
+  // Save/update a command's content.
+  saveCommand: async (filePath: string, content: string): Promise<boolean> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.SAVE_COMMAND, filePath, content);
+  },
+
+  // Create a new command file.
+  createCommand: async (directoryPath: string, name: string, content?: string): Promise<{ path: string; name: string } | null> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.CREATE_COMMAND, directoryPath, name, content || '');
+  },
+
+  // Delete a command file.
+  deleteCommand: async (filePath: string): Promise<boolean> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.DELETE_COMMAND, filePath);
+  },
+
+  // ==========================================================================
   // Command Launcher specific methods (Cmd+Shift+K popup)
+  // ==========================================================================
 
   // Invoke a command by name (paste file or reference to target app).
   invokeCommand: async (commandName: string): Promise<{ success: boolean; error?: string }> => {
@@ -2203,6 +2299,18 @@ const librarianAPI = {
     return () => ipcRenderer.removeListener('librarian:showReading', handler);
   },
 
+  // Listen for new reading available (when window already visible, shows indicator)
+  onNewReadingAvailable: (callback: (readingPath: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, readingPath: string) => callback(readingPath);
+    ipcRenderer.on('librarian:newReadingAvailable', handler);
+    return () => ipcRenderer.removeListener('librarian:newReadingAvailable', handler);
+  },
+
+  // Notify main process of immersive mode changes (affects blur-to-hide behavior)
+  setImmersiveMode: (immersive: boolean): void => {
+    ipcRenderer.send('clipboard-history:setImmersiveMode', immersive);
+  },
+
   // Auto-run frequency settings
   getAutoRunFrequency: (): Promise<string> => ipcRenderer.invoke('librarian:getAutoRunFrequency'),
   setAutoRunFrequency: (frequency: string): Promise<boolean> => ipcRenderer.invoke('librarian:setAutoRunFrequency', frequency),
@@ -2213,6 +2321,12 @@ const librarianAPI = {
   // Get Claude Code installation status
   getClaudeCodeStatus: (): Promise<string> => ipcRenderer.invoke('librarian:getClaudeCodeStatus'),
 
+  // Claude Code hook management
+  installClaudeCodeHook: (): Promise<boolean> => ipcRenderer.invoke('librarian:installClaudeCodeHook'),
+  uninstallClaudeCodeHook: (): Promise<boolean> => ipcRenderer.invoke('librarian:uninstallClaudeCodeHook'),
+  isClaudeCodeHookInstalled: (): Promise<boolean> => ipcRenderer.invoke('librarian:isClaudeCodeHookInstalled'),
+  initializeProjectStatus: (projectPath: string): Promise<void> => ipcRenderer.invoke('librarian:initializeProjectStatus', projectPath),
+
   // Get Cursor instructions text for manual copy
   getCursorInstructions: (): Promise<string> => ipcRenderer.invoke('librarian:getCursorInstructions'),
 
@@ -2222,6 +2336,13 @@ const librarianAPI = {
 
   // Get Claude config file path
   getClaudeConfigPath: (): Promise<string> => ipcRenderer.invoke('librarian:getClaudeConfigPath'),
+
+  // Content guidance customization
+  getDefaultContentGuidance: (): Promise<string> => ipcRenderer.invoke('librarian:getDefaultContentGuidance'),
+  getContentGuidance: (): Promise<string> => ipcRenderer.invoke('librarian:getContentGuidance'),
+  getCustomContentGuidance: (): Promise<string | undefined> => ipcRenderer.invoke('librarian:getCustomContentGuidance'),
+  setCustomContentGuidance: (guidance: string | undefined): Promise<boolean> => ipcRenderer.invoke('librarian:setCustomContentGuidance', guidance),
+  resetContentGuidance: (): Promise<boolean> => ipcRenderer.invoke('librarian:resetContentGuidance'),
 };
 
 type LibrarianAPI = typeof librarianAPI;
