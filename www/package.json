@@ -3,6 +3,7 @@
   "private": true,
   "dependencies": {
     "@supabase/supabase-js": "^2.49.2",
+    "@vercel/og": "^0.8.6",
     "marked": "^15.0.6"
   }
 }
