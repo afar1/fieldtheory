@@ -3,7 +3,7 @@
 // Named after the AI assistant in Snow Crash that provides contextual intel.
 // =============================================================================
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import ReactMarkdown from 'react-markdown';
 import { fonts } from '../design/tokens';
@@ -13,6 +13,8 @@ interface LibrarianViewProps {
   onSwitchToSettings?: () => void;
   onFullScreenChange?: (isFullScreen: boolean) => void;
   externalHeaderHover?: boolean; // Passed from parent when top edge is hovered
+  initialReadingPath?: string | null; // Auto-select this reading on mount (for auto-open)
+  onInitialReadingConsumed?: () => void; // Called after initial reading is consumed
 }
 
 /**
@@ -56,7 +58,7 @@ function groupByDate(readings: ReadingMeta[]): Map<string, ReadingMeta[]> {
   return groups;
 }
 
-export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, externalHeaderHover }: LibrarianViewProps) {
+export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, externalHeaderHover, initialReadingPath, onInitialReadingConsumed }: LibrarianViewProps) {
   const { theme } = useTheme();
 
   // State
@@ -87,6 +89,24 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [addingDir, setAddingDir] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Sharing state
+  const [shareStatus, setShareStatus] = useState<{ shared: boolean; slug?: string; url?: string } | null>(null);
+  const [isSharing, setIsSharing] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+
+  // Handle initial reading path from parent (auto-open flow)
+  useEffect(() => {
+    if (initialReadingPath) {
+      setSelectedPath(initialReadingPath);
+      onInitialReadingConsumed?.();
+    }
+  }, [initialReadingPath, onInitialReadingConsumed]);
 
   // Persist text size preference
   useEffect(() => {
@@ -178,12 +198,20 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         const updated = await window.librarianAPI?.getReading(selectedReading.path);
         if (updated) {
           setSelectedReading(updated);
+          // If shared, sync the updated content
+          if (shareStatus?.shared) {
+            await window.librarianAPI?.updateSharedReading(
+              selectedReading.path,
+              editContent,
+              updated.title
+            );
+          }
         }
       }
     } finally {
       setIsSaving(false);
     }
-  }, [selectedReading, editContent, isDirty]);
+  }, [selectedReading, editContent, isDirty, shareStatus?.shared]);
 
   // Handle navigation with unsaved changes
   const handleSelectReading = useCallback((path: string) => {
@@ -194,6 +222,38 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     }
     setSelectedPath(path);
   }, [isDirty, exitEditMode]);
+
+  // Handle share/unshare
+  const handleShare = useCallback(async () => {
+    if (!selectedPath || !selectedReading) return;
+
+    setIsSharing(true);
+    try {
+      if (shareStatus?.shared) {
+        // Unshare
+        const success = await window.librarianAPI?.unshareReading(selectedPath);
+        if (success) {
+          setShareStatus({ shared: false });
+        }
+      } else {
+        // Share
+        const result = await window.librarianAPI?.shareReading(selectedPath);
+        if (result) {
+          setShareStatus({ shared: true, slug: result.slug, url: result.url });
+        }
+      }
+    } finally {
+      setIsSharing(false);
+    }
+  }, [selectedPath, selectedReading, shareStatus?.shared]);
+
+  // Copy share link
+  const copyShareLink = useCallback(async () => {
+    if (!shareStatus?.url) return;
+    await navigator.clipboard.writeText(shareStatus.url);
+    setLinkCopied(true);
+    setTimeout(() => setLinkCopied(false), 2000);
+  }, [shareStatus?.url]);
 
   // Load readings on mount
   useEffect(() => {
@@ -222,6 +282,19 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       setSelectedReading(result || null);
     }
     loadReading();
+  }, [selectedPath]);
+
+  // Load share status when reading changes
+  useEffect(() => {
+    async function loadShareStatus() {
+      if (!selectedPath) {
+        setShareStatus(null);
+        return;
+      }
+      const status = await window.librarianAPI?.getShareStatus(selectedPath);
+      setShareStatus(status || null);
+    }
+    loadShareStatus();
   }, [selectedPath]);
 
   // Listen for new readings
@@ -399,8 +472,18 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     return () => unsubscribe?.();
   }, []);
 
+  // Filter readings by search query
+  const filteredReadings = useMemo(() => {
+    if (!searchQuery.trim()) return readings;
+    const query = searchQuery.toLowerCase();
+    return readings.filter(r =>
+      r.title.toLowerCase().includes(query) ||
+      (r.context?.toLowerCase().includes(query))
+    );
+  }, [readings, searchQuery]);
+
   // Group readings by date
-  const groupedReadings = groupByDate(readings);
+  const groupedReadings = groupByDate(filteredReadings);
 
   // Discover existing .librarian directories on empty state
   useEffect(() => {
@@ -649,7 +732,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         style={{
           width: `${sidebarWidth}px`,
           minWidth: `${sidebarWidth}px`,
-          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
           padding: '12px 0',
           userSelect: isResizing ? 'none' : 'auto',
         }}
@@ -662,11 +746,72 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
             color: theme.textSecondary,
             textTransform: 'uppercase',
             letterSpacing: '0.5px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
           }}
         >
-          Readings
+          <span>Readings</span>
+          {/* Spacer */}
+          <div style={{ flex: 1 }} />
+          {/* Search toggle */}
+          <button
+            onClick={() => {
+              setSearchOpen(!searchOpen);
+              if (!searchOpen) {
+                setTimeout(() => searchInputRef.current?.focus(), 50);
+              } else {
+                setSearchQuery('');
+              }
+            }}
+            style={{
+              padding: '2px',
+              color: searchOpen || searchQuery ? theme.text : theme.textSecondary,
+              backgroundColor: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+            }}
+            title="Search"
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/>
+            </svg>
+          </button>
         </div>
 
+        {/* Collapsible search input */}
+        {searchOpen && (
+          <div style={{ padding: '0 8px 8px' }}>
+            <input
+              ref={searchInputRef}
+              type="text"
+              placeholder="Search..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setSearchOpen(false);
+                  setSearchQuery('');
+                }
+              }}
+              style={{
+                width: '100%',
+                padding: '6px 8px',
+                fontSize: '11px',
+                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+                border: `1px solid ${theme.border}`,
+                borderRadius: '4px',
+                color: theme.text,
+                outline: 'none',
+              }}
+            />
+          </div>
+        )}
+
+        {/* Readings list */}
+        <div style={{ flex: 1, overflowY: 'auto' }}>
         {Array.from(groupedReadings.entries()).map(([date, items]) => (
           <div key={date}>
             {/* Date header with horizontal rule */}
@@ -804,6 +949,26 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
             ))}
           </div>
         ))}
+        </div>
+
+        {/* Bottom button - link to settings */}
+        <div style={{ padding: '8px 12px', borderTop: `1px solid ${theme.border}` }}>
+          <button
+            onClick={onSwitchToSettings}
+            style={{
+              width: '100%',
+              padding: '6px',
+              fontSize: '11px',
+              color: theme.textSecondary,
+              backgroundColor: 'transparent',
+              border: `1px dashed ${theme.border}`,
+              borderRadius: '4px',
+              cursor: 'pointer',
+            }}
+          >
+            Reading Directories
+          </button>
+        </div>
       </div>
       {/* Resize handle */}
       <div
@@ -931,28 +1096,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 gap: '8px',
               }}
             >
-              {/* Left side - expand/collapse toggle */}
-              <button
-                onClick={() => setIsFullScreen(!isFullScreen)}
-                style={{
-                  padding: '4px 6px',
-                  fontSize: '14px',
-                  color: theme.textSecondary,
-                  backgroundColor: 'transparent',
-                  border: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)'}`,
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  lineHeight: 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-                title={isFullScreen ? "Show sidebar" : "Focus mode"}
-              >
-                {isFullScreen ? '⤡' : '⤢'}
-              </button>
-
-              {/* Draggable spacer for window movement */}
+              {/* Draggable spacer for window movement - left side */}
               <div
                 style={{
                   flex: 1,
@@ -963,8 +1107,26 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 }}
               />
 
-              {/* Right side - Edit and text size controls */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {/* Right side - Edit, text size, and expand/collapse controls */}
+              {/* Outer container provides larger hitbox for hover in fullscreen */}
+              <div
+                style={{
+                  padding: isFullScreen ? '12px' : '0',
+                  margin: isFullScreen ? '-12px' : '0',
+                  borderRadius: '8px',
+                }}
+                onMouseEnter={() => isFullScreen && setHeaderHovered(true)}
+                onMouseLeave={() => isFullScreen && setHeaderHovered(false)}
+              >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  opacity: isFullScreen && !headerHovered ? 0.15 : 1,
+                  transition: 'opacity 0.2s ease',
+                }}
+              >
                 {isEditing ? (
                   <>
                     {isDirty && (
@@ -1016,21 +1178,17 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     </button>
                   </>
                 ) : (
-                  <button
+                  <span
                     onClick={enterEditMode}
                     style={{
-                      padding: '4px 10px',
                       fontSize: '12px',
                       color: theme.textSecondary,
-                      backgroundColor: 'transparent',
-                      border: `1px solid ${theme.border}`,
-                      borderRadius: '4px',
                       cursor: 'pointer',
                     }}
                     title="Edit (⌘E)"
                   >
                     Edit
-                  </button>
+                  </span>
                 )}
 
                 <div style={{ width: '1px', height: '16px', backgroundColor: theme.border, margin: '0 4px' }} />
@@ -1038,6 +1196,93 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 <button onClick={() => setTextSize('small')} style={{ padding: '4px 8px', fontSize: '11px', color: textSize === 'small' ? theme.accent : theme.textSecondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer', fontWeight: textSize === 'small' ? 600 : 400 }}>A</button>
                 <button onClick={() => setTextSize('normal')} style={{ padding: '4px 8px', fontSize: '13px', color: textSize === 'normal' ? theme.accent : theme.textSecondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer', fontWeight: textSize === 'normal' ? 600 : 400 }}>A</button>
                 <button onClick={() => setTextSize('large')} style={{ padding: '4px 8px', fontSize: '15px', color: textSize === 'large' ? theme.accent : theme.textSecondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer', fontWeight: textSize === 'large' ? 600 : 400 }}>A</button>
+
+                <div style={{ width: '1px', height: '16px', backgroundColor: theme.border, margin: '0 4px' }} />
+
+                {/* Expand/collapse toggle */}
+                <button
+                  onClick={() => setIsFullScreen(!isFullScreen)}
+                  style={{
+                    padding: '4px 6px',
+                    fontSize: '14px',
+                    color: theme.textSecondary,
+                    backgroundColor: 'transparent',
+                    border: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)'}`,
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    lineHeight: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                  title={isFullScreen ? "Show sidebar" : "Focus mode"}
+                >
+                  {isFullScreen ? '⤡' : '⤢'}
+                </button>
+
+                {/* Share section - separator + share controls */}
+                <div
+                  style={{
+                    width: '1px',
+                    height: '16px',
+                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.1)',
+                    margin: '0 4px',
+                  }}
+                />
+
+                {shareStatus?.shared ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <button
+                      onClick={copyShareLink}
+                      style={{
+                        padding: '4px 10px',
+                        fontSize: '12px',
+                        color: linkCopied ? theme.accent : theme.textSecondary,
+                        backgroundColor: 'transparent',
+                        border: `1px solid ${linkCopied ? theme.accent : (theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)')}`,
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        transition: 'color 0.15s, border-color 0.15s',
+                      }}
+                    >
+                      {linkCopied ? 'Copied!' : 'Copy Link'}
+                    </button>
+                    <button
+                      onClick={handleShare}
+                      disabled={isSharing}
+                      style={{
+                        padding: '4px 6px',
+                        fontSize: '12px',
+                        color: theme.textSecondary,
+                        backgroundColor: 'transparent',
+                        border: 'none',
+                        cursor: isSharing ? 'default' : 'pointer',
+                        opacity: isSharing ? 0.5 : 0.7,
+                      }}
+                      title="Unshare"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={handleShare}
+                    disabled={isSharing}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '12px',
+                      color: theme.textSecondary,
+                      backgroundColor: 'transparent',
+                      border: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)'}`,
+                      borderRadius: '4px',
+                      cursor: isSharing ? 'default' : 'pointer',
+                      opacity: isSharing ? 0.6 : 1,
+                    }}
+                  >
+                    {isSharing ? 'Sharing...' : 'Share'}
+                  </button>
+                )}
+              </div>
               </div>
             </div>
           </div>
