@@ -663,7 +663,7 @@ interface SocialAPI {
   // Feedback operations
   submitFeedback: (localItemId: number) => Promise<SocialMessage | null>;
   submitTextFeedback: (text: string) => Promise<SocialMessage | null>;
-  submitImageFeedback: (imageBase64: string, caption?: string) => Promise<SocialMessage | null>;
+  submitImageFeedback: (imageBase64: string, caption?: string, sourceAppName?: string) => Promise<SocialMessage | null>;
   getMyFeedback: () => Promise<SocialMessage[]>;
   getAllFeedback: () => Promise<SocialMessage[]>;
   getFeedbackReplies: (feedbackId: string) => Promise<SocialMessage[]>;
@@ -931,6 +931,11 @@ interface LibrarianAPI {
   getCustomContentGuidance: () => Promise<string | undefined>;
   setCustomContentGuidance: (guidance: string | undefined) => Promise<boolean>;
   resetContentGuidance: () => Promise<boolean>;
+  // Auto-discovery
+  discoverLibrarianDirs: () => Promise<string[]>;
+  // Debug/testing
+  resetAllCounters: () => Promise<boolean>;
+  getEditStatus: () => Promise<{ edits: number; threshold: number } | null>;
 }
 
 declare global {

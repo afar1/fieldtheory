@@ -380,7 +380,7 @@ export default function CursorStatus() {
       return tutorialHint;
     }
     if (state === 'recording' && showRecordingText) {
-      return 'Say anything';
+      return 'recording';
     }
     if (state === 'transcribing') {
       return 'transcribing' + '.'.repeat(dotCount);

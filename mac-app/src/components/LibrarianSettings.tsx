@@ -436,42 +436,44 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
               )}
               {/* Hook installation */}
               {claudeCodeStatus === 'installed' && (
-                <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <button
-                    onClick={async () => {
-                      setHookInstalling(true);
-                      try {
-                        if (hookInstalled) {
-                          const success = await window.librarianAPI?.uninstallClaudeCodeHook();
-                          if (success) setHookInstalled(false);
-                        } else {
-                          const success = await window.librarianAPI?.installClaudeCodeHook();
-                          if (success) setHookInstalled(true);
+                <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <button
+                      onClick={async () => {
+                        setHookInstalling(true);
+                        try {
+                          if (hookInstalled) {
+                            const success = await window.librarianAPI?.uninstallClaudeCodeHook();
+                            if (success) setHookInstalled(false);
+                          } else {
+                            const success = await window.librarianAPI?.installClaudeCodeHook();
+                            if (success) setHookInstalled(true);
+                          }
+                        } finally {
+                          setHookInstalling(false);
                         }
-                      } finally {
-                        setHookInstalling(false);
-                      }
-                    }}
-                    disabled={hookInstalling}
-                    style={{
-                      padding: '4px 10px',
-                      fontSize: '11px',
-                      fontWeight: 500,
-                      color: hookInstalled ? theme.error : theme.accent,
-                      backgroundColor: 'transparent',
-                      border: `1px solid ${hookInstalled ? theme.error : theme.accent}`,
-                      borderRadius: '4px',
-                      cursor: hookInstalling ? 'wait' : 'pointer',
-                      opacity: hookInstalling ? 0.5 : 1,
-                    }}
-                  >
-                    {hookInstalling ? '...' : hookInstalled ? 'Disable Auto-Remind' : 'Enable Auto-Remind'}
-                  </button>
-                  <span style={{ fontSize: '10px', color: theme.textSecondary }}>
-                    {hookInstalled
-                      ? '✓ Claude will be reminded to create readings'
-                      : 'Automatically remind Claude to create readings'}
-                  </span>
+                      }}
+                      disabled={hookInstalling}
+                      style={{
+                        padding: '4px 10px',
+                        fontSize: '11px',
+                        fontWeight: 500,
+                        color: hookInstalled ? theme.error : theme.accent,
+                        backgroundColor: 'transparent',
+                        border: `1px solid ${hookInstalled ? theme.error : theme.accent}`,
+                        borderRadius: '4px',
+                        cursor: hookInstalling ? 'wait' : 'pointer',
+                        opacity: hookInstalling ? 0.5 : 1,
+                      }}
+                    >
+                      {hookInstalling ? '...' : hookInstalled ? 'Disable Auto-Remind' : 'Enable Auto-Remind'}
+                    </button>
+                    <span style={{ fontSize: '10px', color: theme.textSecondary }}>
+                      {hookInstalled
+                        ? '✓ Claude will be reminded to create readings'
+                        : 'Automatically remind Claude to create readings'}
+                    </span>
+                  </div>
                 </div>
               )}
             </div>

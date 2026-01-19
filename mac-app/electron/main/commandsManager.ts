@@ -473,7 +473,8 @@ export class CommandsManager extends EventEmitter {
       textWithoutCommandRefs: text,
     };
 
-    if (!this.directoryPath || this.commands.size === 0) {
+    // If no commands are loaded (from either legacy single-dir or multi-dir), skip detection
+    if (this.commands.size === 0) {
       return result;
     }
 
