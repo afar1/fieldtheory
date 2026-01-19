@@ -89,7 +89,7 @@ export default async function handler(req, res) {
       display: flex;
       justify-content: center;
       padding-top: 0.5rem;
-      padding-bottom: 1.5rem;
+      padding-bottom: 2.5rem;
       margin-bottom: 3rem;
       border-bottom: 1px solid var(--border);
     }
