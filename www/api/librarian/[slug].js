@@ -189,11 +189,10 @@ export default async function handler(req, res) {
       font-size: 0.9rem;
       color: var(--text-secondary);
     }
-    .attribution { font-style: italic; margin: 0 0 0.25rem 0; }
+    .attribution { font-style: italic; font-size: 0.8em; margin: 0 0 0.25rem 0; }
     .author-toggle { position: relative; cursor: default; }
     .author-toggle .callsign {
       font-family: ui-monospace, SFMono-Regular, 'SF Mono', monospace;
-      font-size: 0.8em;
       letter-spacing: 0.5px;
       transition: opacity 0.2s ease;
     }
@@ -208,7 +207,6 @@ export default async function handler(req, res) {
     .author-toggle:hover .realname { opacity: 1; }
     .callsign-only {
       font-family: ui-monospace, SFMono-Regular, 'SF Mono', monospace;
-      font-size: 0.8em;
       letter-spacing: 0.5px;
     }
     .made-by { margin-bottom: 0; }
