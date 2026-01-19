@@ -142,7 +142,10 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   const [deleteConfirmEmail, setDeleteConfirmEmail] = useState('');
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  
+
+  // Callsign state
+  const [callsign, setCallsign] = useState<string | null>(null);
+
   // API key state - for Engineer feature (Anthropic API)
   const [hasApiKey, setHasApiKey] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState('');
@@ -662,7 +665,23 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
 
     return () => subscription.unsubscribe();
   }, []);
-  
+
+  // Fetch callsign when session changes
+  useEffect(() => {
+    if (!session?.user?.id || !supabase) {
+      setCallsign(null);
+      return;
+    }
+    supabase
+      .from('profiles')
+      .select('callsign')
+      .eq('id', session.user.id)
+      .single()
+      .then(({ data }) => {
+        setCallsign(data?.callsign || null);
+      });
+  }, [session?.user?.id]);
+
   // Handle sign out.
   const handleSignOut = async () => {
     setAuthLoading(true);
@@ -2147,15 +2166,30 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                       </span>
                     )}
                   </div>
-                  <button 
-                    onClick={handleSignOut} 
-                    disabled={authLoading} 
+                  <button
+                    onClick={handleSignOut}
+                    disabled={authLoading}
                     style={styles.linkBtn}
                   >
                     {authLoading ? '...' : 'Sign out'}
                   </button>
                 </div>
-                
+
+                {/* Callsign row */}
+                {callsign && (
+                  <div style={styles.row}>
+                    <span style={styles.rowLabel}>Callsign</span>
+                    <span style={{
+                      ...styles.rowValue,
+                      fontFamily: 'SF Mono, Monaco, Consolas, monospace',
+                      fontSize: '13px',
+                      letterSpacing: '0.5px',
+                    }}>
+                      {callsign}
+                    </span>
+                  </div>
+                )}
+
                 {syncStatus && <p style={styles.syncStatusText}>{syncStatus}</p>}
                 
                 {/* Subscription row */}
