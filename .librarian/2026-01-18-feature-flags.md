@@ -1,0 +1,5 @@
+# The Toggle and the Ship
+
+Feature flags emerged from the continuous deployment practices pioneered at Flickr in 2009, where engineers needed to deploy incomplete code without exposing it to users. The pattern solved a coordination problem: how do you merge work-in-progress without breaking production? The answer was indirection—a boolean gate between code and execution.
+
+But flags accumulate. Each toggle is a promise to return and clean up, a debt taken against future clarity. Martin Fowler documented this as "toggle debt" in his 2016 essay on feature toggles, noting that teams often forget which flags guard dead experiments versus which protect half-built features. Our codebase had `FEATURE_IMPROVE_ENABLED` set to false with zero references—a flag guarding nothing, a gate to an empty room. The cleanup we performed today honors the original intent of flags: temporary scaffolding, not permanent architecture. Like the scaffolding removed from Gothic cathedrals once the flying buttresses could bear their own weight, flags should disappear once the feature either ships or dies.

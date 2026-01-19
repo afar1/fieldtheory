@@ -12,6 +12,7 @@ interface LibrarianViewProps {
   onSwitchToClipboard: () => void;
   onSwitchToSettings?: () => void;
   onFullScreenChange?: (isFullScreen: boolean) => void;
+  externalHeaderHover?: boolean; // Passed from parent when top edge is hovered
 }
 
 /**
@@ -55,7 +56,7 @@ function groupByDate(readings: ReadingMeta[]): Map<string, ReadingMeta[]> {
   return groups;
 }
 
-export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings, onFullScreenChange }: LibrarianViewProps) {
+export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, externalHeaderHover }: LibrarianViewProps) {
   const { theme } = useTheme();
 
   // State
@@ -73,9 +74,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     const saved = localStorage.getItem('librarian-text-size');
     return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
   });
-  const [isFullScreen, setIsFullScreen] = useState(() => {
-    return localStorage.getItem('librarian-fullscreen') === 'true';
-  });
+  // Always start non-immersive - don't persist fullscreen across app restarts
+  const [isFullScreen, setIsFullScreen] = useState(false);
   const [headerHovered, setHeaderHovered] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem('librarian-sidebar-width');
@@ -83,6 +83,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   });
   const [isResizing, setIsResizing] = useState(false);
   const [hoveredPath, setHoveredPath] = useState<string | null>(null);
+  const [discoveredDirs, setDiscoveredDirs] = useState<string[]>([]);
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const [addingDir, setAddingDir] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Persist text size preference
@@ -90,10 +93,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     localStorage.setItem('librarian-text-size', textSize);
   }, [textSize]);
 
-  // Persist full-screen preference
-  useEffect(() => {
-    localStorage.setItem('librarian-fullscreen', String(isFullScreen));
-  }, [isFullScreen]);
 
   // Notify main process of immersive mode changes (affects blur-to-hide behavior)
   useEffect(() => {
@@ -403,6 +402,64 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   // Group readings by date
   const groupedReadings = groupByDate(readings);
 
+  // Discover existing .librarian directories on empty state
+  useEffect(() => {
+    if (!loading && readings.length === 0 && discoveredDirs.length === 0 && !isDiscovering) {
+      setIsDiscovering(true);
+      window.librarianAPI?.discoverLibrarianDirs().then((dirs) => {
+        setDiscoveredDirs(dirs);
+        setIsDiscovering(false);
+      });
+    }
+  }, [loading, readings.length, discoveredDirs.length, isDiscovering]);
+
+  // Helper to format path for display (show project name from path)
+  const formatDirPath = (dirPath: string): { projectName: string; location: string } => {
+    // Remove .librarian suffix and get parent (project) directory
+    const projectPath = dirPath.replace(/\/.librarian$/, '');
+    const parts = projectPath.split('/');
+    const projectName = parts[parts.length - 1];
+    // Show abbreviated parent path
+    const parentPath = parts.slice(0, -1).join('/').replace(/^\/Users\/[^/]+/, '~');
+    return { projectName, location: parentPath };
+  };
+
+  // Add a discovered directory
+  const handleAddDiscoveredDir = async (dirPath: string) => {
+    setAddingDir(dirPath);
+    try {
+      const result = await window.librarianAPI?.addWatchedDir(dirPath);
+      if (result) {
+        // Remove from discovered list and reload readings
+        setDiscoveredDirs((prev) => prev.filter((d) => d !== dirPath));
+        const newReadings = await window.librarianAPI?.getReadings();
+        if (newReadings) {
+          setReadings(newReadings);
+          if (newReadings.length > 0) {
+            setSelectedPath(newReadings[0].path);
+          }
+        }
+      }
+    } finally {
+      setAddingDir(null);
+    }
+  };
+
+  // Add all discovered directories
+  const handleAddAllDiscoveredDirs = async () => {
+    for (const dirPath of discoveredDirs) {
+      await window.librarianAPI?.addWatchedDir(dirPath);
+    }
+    setDiscoveredDirs([]);
+    const newReadings = await window.librarianAPI?.getReadings();
+    if (newReadings) {
+      setReadings(newReadings);
+      if (newReadings.length > 0) {
+        setSelectedPath(newReadings[0].path);
+      }
+    }
+  };
+
   // Empty state
   if (!loading && readings.length === 0) {
     return (
@@ -427,25 +484,147 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         <div style={{ fontSize: '16px', fontWeight: 500, marginBottom: '8px', color: theme.text }}>
           No readings yet
         </div>
-        <div style={{ fontSize: '13px', marginBottom: '24px', maxWidth: '280px' }}>
-          Add a watched directory in Settings to start collecting readings from your coding sessions.
-        </div>
-        {onSwitchToSettings && (
-          <button
-            onClick={onSwitchToSettings}
-            style={{
-              padding: '8px 16px',
-              fontSize: '13px',
-              fontWeight: 500,
-              color: 'white',
-              backgroundColor: theme.accent,
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-            }}
-          >
-            Open Settings
-          </button>
+
+        {/* Show discovered directories if any */}
+        {discoveredDirs.length > 0 ? (
+          <>
+            <div style={{ fontSize: '13px', marginBottom: '16px', maxWidth: '320px' }}>
+              Found {discoveredDirs.length} existing reading{discoveredDirs.length === 1 ? '' : 's'} collection{discoveredDirs.length === 1 ? '' : 's'}:
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+                marginBottom: '16px',
+                maxWidth: '400px',
+                width: '100%',
+              }}
+            >
+              {discoveredDirs.map((dirPath) => {
+                const { projectName, location } = formatDirPath(dirPath);
+                const isAdding = addingDir === dirPath;
+                return (
+                  <div
+                    key={dirPath}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      padding: '10px 14px',
+                      backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+                      borderRadius: '8px',
+                      textAlign: 'left',
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 500, color: theme.text, fontSize: '13px' }}>
+                        {projectName}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: '11px',
+                          color: theme.textSecondary,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {location}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleAddDiscoveredDir(dirPath)}
+                      disabled={isAdding}
+                      style={{
+                        padding: '4px 12px',
+                        fontSize: '12px',
+                        fontWeight: 500,
+                        color: 'white',
+                        backgroundColor: theme.accent,
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: isAdding ? 'default' : 'pointer',
+                        opacity: isAdding ? 0.6 : 1,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {isAdding ? 'Adding...' : 'Add'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            {discoveredDirs.length > 1 && (
+              <button
+                onClick={handleAddAllDiscoveredDirs}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  color: 'white',
+                  backgroundColor: theme.accent,
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  marginBottom: '16px',
+                }}
+              >
+                Add All
+              </button>
+            )}
+            <div
+              style={{
+                fontSize: '11px',
+                color: theme.textSecondary,
+                marginTop: '8px',
+              }}
+            >
+              Or{' '}
+              <button
+                onClick={onSwitchToSettings}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: theme.accent,
+                  cursor: 'pointer',
+                  fontSize: '11px',
+                  textDecoration: 'underline',
+                  padding: 0,
+                }}
+              >
+                open Settings
+              </button>{' '}
+              to add a new directory
+            </div>
+          </>
+        ) : isDiscovering ? (
+          <div style={{ fontSize: '13px', marginBottom: '24px', color: theme.textSecondary }}>
+            Searching for existing readings...
+          </div>
+        ) : (
+          <>
+            <div style={{ fontSize: '13px', marginBottom: '24px', maxWidth: '280px' }}>
+              Add a watched directory in Settings to start collecting readings from your coding sessions.
+            </div>
+            {onSwitchToSettings && (
+              <button
+                onClick={onSwitchToSettings}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  color: 'white',
+                  backgroundColor: theme.accent,
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                }}
+              >
+                Open Settings
+              </button>
+            )}
+          </>
         )}
       </div>
     );
@@ -679,29 +858,42 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
             cursor: 'grab',
           }}
         >
-          {/* Stoplight close button - fades in on header hover, only in fullscreen mode */}
+          {/* Stoplight close button - visible in fullscreen mode */}
           {isFullScreen && (
             <button
               onClick={() => window.clipboardAPI?.closeWindow()}
               style={{
                 position: 'absolute',
-                left: '12px',
+                left: '6px',
                 top: '50%',
                 transform: 'translateY(-50%)',
-                width: '12px',
-                height: '12px',
-                borderRadius: '50%',
-                backgroundColor: '#ff5f57',
+                // Larger hit area (24x24) with visual circle centered inside
+                width: '24px',
+                height: '24px',
                 border: 'none',
                 cursor: 'pointer',
                 padding: 0,
-                opacity: headerHovered ? 1 : 0,
-                transition: 'opacity 0.2s ease',
+                background: 'transparent',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
                 // @ts-ignore - make button clickable within drag region
                 WebkitAppRegion: 'no-drag',
               }}
               title="Close window"
-            />
+            >
+              {/* Visual 12px circle */}
+              <div
+                style={{
+                  width: '12px',
+                  height: '12px',
+                  borderRadius: '50%',
+                  backgroundColor: (headerHovered || externalHeaderHover) ? '#ff5f57' : 'rgba(128, 128, 128, 0.5)',
+                  transition: 'background-color 0.2s ease',
+                  pointerEvents: 'none',
+                }}
+              />
+            </button>
           )}
           {/* Drag handle indicator - only visible in immersive mode */}
           {isFullScreen && (
@@ -719,23 +911,19 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         {/* Toolbar - includes draggable region for window movement */}
         {selectedReading && (
           <div
-            onMouseEnter={() => isFullScreen && setHeaderHovered(true)}
-            onMouseLeave={() => isFullScreen && setHeaderHovered(false)}
             style={{
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              padding: isFullScreen ? '8px 16px 4px 16px' : '8px 16px',
+              padding: isFullScreen ? '8px 16px 4px 16px' : '8px 20px',
               backgroundColor: theme.bg,
               flexShrink: 0,
             }}
           >
-            {/* Inner container - matches reading content width in fullscreen */}
+            {/* Inner container - always matches reading content width (600px centered) */}
             <div
-              onMouseEnter={() => isFullScreen && setHeaderHovered(true)}
-              onMouseLeave={() => isFullScreen && setHeaderHovered(false)}
               style={{
-                maxWidth: isFullScreen ? '600px' : 'none',
+                maxWidth: '600px',
                 width: '100%',
                 display: 'flex',
                 alignItems: 'center',
@@ -747,13 +935,17 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               <button
                 onClick={() => setIsFullScreen(!isFullScreen)}
                 style={{
-                  padding: '4px',
-                  fontSize: '20px',
+                  padding: '4px 6px',
+                  fontSize: '14px',
                   color: theme.textSecondary,
                   backgroundColor: 'transparent',
-                  border: 'none',
+                  border: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)'}`,
+                  borderRadius: '4px',
                   cursor: 'pointer',
                   lineHeight: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
                 title={isFullScreen ? "Show sidebar" : "Focus mode"}
               >

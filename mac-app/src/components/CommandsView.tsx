@@ -707,8 +707,6 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
           overflowY: 'auto',
           padding: '12px 0',
           userSelect: isResizing ? 'none' : 'auto',
-          display: 'flex',
-          flexDirection: 'column',
         }}
       >
         {/* Header - Librarian style */}
@@ -725,39 +723,33 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
             gap: '6px',
           }}
         >
-          <button
+          <span
             onClick={() => setViewMode('mine')}
             style={{
-              padding: 0,
               fontSize: '11px',
               fontWeight: 600,
               color: viewMode === 'mine' ? theme.textSecondary : theme.isDark ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.25)',
-              backgroundColor: 'transparent',
-              border: 'none',
               cursor: 'pointer',
               textTransform: 'uppercase',
               letterSpacing: '0.5px',
             }}
           >
             My Commands
-          </button>
+          </span>
           <span style={{ color: theme.isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.15)' }}>|</span>
-          <button
+          <span
             onClick={() => setViewMode('popular')}
             style={{
-              padding: 0,
               fontSize: '11px',
               fontWeight: 600,
               color: viewMode === 'popular' ? theme.textSecondary : theme.isDark ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.25)',
-              backgroundColor: 'transparent',
-              border: 'none',
               cursor: 'pointer',
               textTransform: 'uppercase',
               letterSpacing: '0.5px',
             }}
           >
             Popular
-          </button>
+          </span>
           {/* Spacer */}
           <div style={{ flex: 1 }} />
           {/* Search toggle */}

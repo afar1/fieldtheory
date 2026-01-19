@@ -1,0 +1,5 @@
+# Dead Code as Entropy
+
+In thermodynamics, entropy measures the unavailable energy in a system—energy that exists but cannot do useful work. Dead code operates similarly: it consumes cognitive load, increases build times, and clutters search results, yet performs no function. The Second Law tells us entropy in a closed system never decreases; codebases follow an analogous trajectory. Features are added, requirements shift, but removal requires deliberate effort against the natural grain.
+
+Fred Brooks observed in "The Mythical Man-Month" that a system's conceptual integrity degrades as it grows. Our cleanup today—removing a commented block here, an unused feature flag there—is entropy management. The FEATURE_IMPROVE_ENABLED flag we deleted had zero references yet occupied mental space every time someone scanned that file. Like Maxwell's Demon sorting fast and slow molecules, the developer must periodically intervene to restore order, separating the living code from the dead. Without this intervention, the codebase drifts toward heat death: maximum entropy, minimum clarity.

@@ -14,7 +14,7 @@ import CommandsView from './CommandsView';
 import ReleaseNotesPopup from './ReleaseNotesPopup';
 import LibrarianView from './LibrarianView';
 import type { SketchViewHandle } from './SketchView';
-import { FEATURE_HOT_MIC_ENABLED, FEATURE_IMPROVE_ENABLED, FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED } from '../featureFlags';
+import { FEATURE_HOT_MIC_ENABLED, FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED } from '../featureFlags';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
 const SketchView = React.lazy(() => import('./SketchView'));
@@ -1201,6 +1201,10 @@ export default function ClipboardHistory() {
 
     if (viewMode !== 'sketch') {
       localStorage.setItem('fieldTheoryView', viewMode);
+    }
+    // Close settings when entering sketch mode (sketch needs full screen).
+    if (viewMode === 'sketch') {
+      setShowSettings(false);
     }
     // Clear unread indicator when entering feedback view.
     if (viewMode === 'feedback') {
@@ -3021,6 +3025,8 @@ export default function ClipboardHistory() {
       {/* Thin hit-test region at very top of window to capture edge clicks (NSPanel fix) */}
       {!showInDock && librarianImmersive && viewMode === 'librarian' && (
         <div
+          onMouseEnter={() => setHeaderHovered(true)}
+          onMouseLeave={() => setHeaderHovered(false)}
           style={{
             height: '8px',
             minHeight: '8px',
@@ -3858,11 +3864,11 @@ export default function ClipboardHistory() {
               });
               setViewMode('sketch');
             }}
-            onSubmitFeedback={async (text, imageBase64) => {
+            onSubmitFeedback={async (text, imageBase64, sourceAppName) => {
               if (!window.socialAPI) return;
               let result;
               if (imageBase64) {
-                result = await window.socialAPI.submitImageFeedback(imageBase64, text || undefined);
+                result = await window.socialAPI.submitImageFeedback(imageBase64, text || undefined, sourceAppName);
               } else if (text) {
                 result = await window.socialAPI.submitTextFeedback(text);
               }
@@ -3900,6 +3906,7 @@ export default function ClipboardHistory() {
           onSwitchToClipboard={() => setViewMode('clipboard')}
           onSwitchToSettings={() => setShowSettings(true)}
           onFullScreenChange={setLibrarianImmersive}
+          externalHeaderHover={librarianImmersive && headerHovered}
         />
       ) : viewMode === 'team' ? (
         null
@@ -5527,7 +5534,7 @@ export default function ClipboardHistory() {
                                 color: theme.text,
                               }}
                             >
-                              Screenshot
+                              {item.sourceAppName ? `${item.sourceAppName} screenshot` : 'Screenshot'}
                             </div>
                           </div>
                         </div>

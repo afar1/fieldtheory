@@ -639,7 +639,6 @@ export class MobileSync extends EventEmitter {
     }
 
     try {
-      console.debug('[MobileSync] Fetching todos from Supabase...');
       const { data: rows, error } = await this.supabase
         .from('todos')
         .select('*')
@@ -651,7 +650,6 @@ export class MobileSync extends EventEmitter {
       }
 
       if (!rows) {
-        console.debug('[MobileSync] No todos returned from Supabase');
         return this.todos;
       }
 
@@ -664,7 +662,6 @@ export class MobileSync extends EventEmitter {
         updatedAt: new Date(row.updated_at).getTime(),
       }));
 
-      console.debug(`[MobileSync] Synced ${this.todos.length} todos from Supabase`);
       this.emit('todosChanged', this.todos);
       return this.todos;
     } catch (error) {
