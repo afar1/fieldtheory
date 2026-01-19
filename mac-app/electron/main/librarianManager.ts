@@ -46,6 +46,7 @@ interface LibrarianSettings {
   autoRunFrequency: AutoRunFrequency;
   autoShowEnabled: boolean;
   customContentGuidance?: string;
+  customThreshold?: number; // If set, use this exact threshold instead of frequency-based random range
 }
 
 /**
@@ -111,53 +112,53 @@ export class LibrarianManager extends EventEmitter {
   }
 
   /**
-   * Log status for all projects that have a .status.json file (startup visibility).
-   * Also reconciles status with actual file timestamps - if a reading exists that's
-   * newer than lastReading, reset the edit counter (handles app-was-closed case).
+   * Log global status at startup and reconcile with file timestamps.
+   * If any reading in any watched dir is newer than lastReading, reset counter.
    */
   private logAllProjectStatuses(): void {
-    for (const watchedDir of this.settings.watchedDirs) {
-      const statusFile = path.join(watchedDir, '.status.json');
-      if (fs.existsSync(statusFile)) {
-        const projectPath = path.dirname(watchedDir);
+    // Reconcile global status with all watched directories
+    this.reconcileStatusWithFiles();
 
-        // Reconcile: check if there's a reading newer than lastReading
-        this.reconcileStatusWithFiles(watchedDir);
-
-        this.logStatus(projectPath, 'startup');
-      }
-    }
+    // Log the global status
+    this.logStatus('startup');
   }
 
   /**
-   * Check if any .md file in the watched dir is newer than lastReading.
-   * If so, reset the edit counter. This handles the case where readings
-   * were created while the app wasn't running.
+   * Check if any .md file in ANY watched dir is newer than global lastReading.
+   * If so, reset the global counter. Handles readings created while app wasn't running.
    */
-  private reconcileStatusWithFiles(watchedDir: string): void {
-    const statusFile = path.join(watchedDir, '.status.json');
+  private reconcileStatusWithFiles(): void {
+    this.ensureGlobalStatusExists();
+    const statusFile = this.getGlobalStatusPath();
 
     try {
       const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
       const lastReadingTime = status.lastReading ? new Date(status.lastReading).getTime() : 0;
 
-      // Find newest .md file in the directory
-      const files = fs.readdirSync(watchedDir).filter(f => f.endsWith('.md'));
+      // Find newest .md file across ALL watched directories
       let newestMtime = 0;
 
-      for (const file of files) {
-        const filePath = path.join(watchedDir, file);
-        const stats = fs.statSync(filePath);
-        if (stats.mtimeMs > newestMtime) {
-          newestMtime = stats.mtimeMs;
+      for (const watchedDir of this.settings.watchedDirs) {
+        if (!fs.existsSync(watchedDir)) continue;
+
+        const files = fs.readdirSync(watchedDir).filter(f => f.endsWith('.md'));
+        for (const file of files) {
+          const filePath = path.join(watchedDir, file);
+          try {
+            const stats = fs.statSync(filePath);
+            if (stats.mtimeMs > newestMtime) {
+              newestMtime = stats.mtimeMs;
+            }
+          } catch {
+            // Ignore errors reading individual files
+          }
         }
       }
 
-      // If there's a file newer than lastReading, reset the counter
+      // If there's a file anywhere newer than lastReading, reset the global counter
       if (newestMtime > lastReadingTime) {
-        const projectPath = path.dirname(watchedDir);
-        console.log(`[Librarian] reconcile → found newer reading, resetting counter`);
-        this.resetEditCount(projectPath);
+        console.log('[Librarian] reconcile → found newer reading, resetting global counter');
+        this.resetPromptCount();
       }
     } catch (error) {
       console.warn('[LibrarianManager] Failed to reconcile status:', error);
@@ -208,6 +209,7 @@ export class LibrarianManager extends EventEmitter {
           autoRunFrequency: data.autoRunFrequency || defaults.autoRunFrequency,
           autoShowEnabled: data.autoShowEnabled ?? defaults.autoShowEnabled,
           customContentGuidance: data.customContentGuidance || undefined,
+          customThreshold: typeof data.customThreshold === 'number' ? data.customThreshold : undefined,
         };
       }
     } catch (error) {
@@ -567,9 +569,8 @@ export class LibrarianManager extends EventEmitter {
               this.saveIndex();
 
               if (isNew) {
-                // Reset edit counter since a new reading was created
-                const projectPath = path.dirname(normalizedDir);
-                this.resetEditCount(projectPath);
+                // Reset global counter since a new reading was created
+                this.resetPromptCount();
 
                 // Emit event for new readings
                 const content = fs.readFileSync(fullPath, 'utf-8');
@@ -789,19 +790,16 @@ export class LibrarianManager extends EventEmitter {
     this.saveSettings();
     const success = this.updateClaudeMd(frequency);
 
-    // Update threshold in all status files to match new frequency
-    for (const dirPath of this.settings.watchedDirs) {
-      const statusFile = path.join(dirPath, '.status.json');
-      if (fs.existsSync(statusFile)) {
-        try {
-          const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
-          status.nextThreshold = this.pickNextThreshold(frequency);
-          status.frequency = frequency;
-          fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
-        } catch {
-          // Ignore errors updating individual status files
-        }
-      }
+    // Update threshold in global status file
+    this.ensureGlobalStatusExists();
+    const statusFile = this.getGlobalStatusPath();
+    try {
+      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
+      status.nextThreshold = this.pickNextThreshold(frequency);
+      status.frequency = frequency;
+      fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
+    } catch {
+      // Ignore errors updating status file
     }
 
     console.log(`[LibrarianManager] Auto-run frequency set to: ${frequency}`);
@@ -1061,6 +1059,35 @@ ${this.CLAUDE_MD_END_MARKER}`;
   // ===========================================================================
 
   /**
+   * Get the path to the global status file.
+   * This single file is shared by hook and Field Theory (no per-directory status).
+   */
+  private getGlobalStatusPath(): string {
+    return path.join(os.homedir(), '.claude', 'librarian-status.json');
+  }
+
+  /**
+   * Ensure the global status file exists, creating with defaults if missing.
+   */
+  private ensureGlobalStatusExists(): void {
+    const statusPath = this.getGlobalStatusPath();
+    if (!fs.existsSync(statusPath)) {
+      const defaultStatus = {
+        promptsSinceReading: 0,
+        nextThreshold: this.pickNextThreshold(this.settings.autoRunFrequency),
+        lastReading: null,
+      };
+      // Ensure ~/.claude directory exists
+      const claudeDir = path.dirname(statusPath);
+      if (!fs.existsSync(claudeDir)) {
+        fs.mkdirSync(claudeDir, { recursive: true });
+      }
+      fs.writeFileSync(statusPath, JSON.stringify(defaultStatus, null, 2));
+      console.log('[LibrarianManager] Created global status file');
+    }
+  }
+
+  /**
    * Get the threshold range for a frequency setting.
    * Returns [min, max] for random threshold selection.
    * Ranges overlap slightly to maintain serendipity.
@@ -1077,10 +1104,46 @@ ${this.CLAUDE_MD_END_MARKER}`;
 
   /**
    * Pick a random threshold within the range for a frequency.
+   * If customThreshold is set, always use that instead.
    */
   private pickNextThreshold(frequency: AutoRunFrequency): number {
+    // If custom threshold is set, use it directly
+    if (typeof this.settings.customThreshold === 'number') {
+      return this.settings.customThreshold;
+    }
     const [min, max] = this.getThresholdRange(frequency);
     return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+  /**
+   * Get the custom threshold if set (undefined means using frequency-based).
+   */
+  getCustomThreshold(): number | undefined {
+    return this.settings.customThreshold;
+  }
+
+  /**
+   * Set a custom threshold directly.
+   * Pass undefined to return to frequency-based random thresholds.
+   */
+  setCustomThreshold(threshold: number | undefined): boolean {
+    this.settings.customThreshold = threshold;
+    this.saveSettings();
+
+    // Update threshold in global status file
+    this.ensureGlobalStatusExists();
+    const statusFile = this.getGlobalStatusPath();
+    const effectiveThreshold = threshold ?? this.pickNextThreshold(this.settings.autoRunFrequency);
+    try {
+      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
+      status.nextThreshold = effectiveThreshold;
+      fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
+    } catch {
+      // Ignore errors updating status file
+    }
+
+    console.log(`[LibrarianManager] Custom threshold set to: ${threshold ?? 'auto (frequency-based)'}`);
+    return true;
   }
 
   /**
@@ -1092,14 +1155,6 @@ ${this.CLAUDE_MD_END_MARKER}`;
   }
 
   /**
-   * Get the path to Field Theory's increment hook script (runs after edits).
-   * Uses ~/.claude/ to avoid spaces in path which can cause hook errors.
-   */
-  private getIncrementScriptPath(): string {
-    return path.join(os.homedir(), '.claude', 'librarian-increment.sh');
-  }
-
-  /**
    * Get the path to Claude Code's settings.json.
    */
   private getClaudeSettingsPath(): string {
@@ -1107,101 +1162,78 @@ ${this.CLAUDE_MD_END_MARKER}`;
   }
 
   /**
-   * Generate the increment script content.
-   * This script runs after Edit/Write tools to count edits.
-   */
-  private generateIncrementScript(): string {
-    return `#!/bin/bash
-# Field Theory Librarian - Edit Counter
-# Increments edit count after code changes
-
-PROJECT_DIR="\${CLAUDE_PROJECT_DIR:-\$(pwd)}"
-STATUS_FILE="\${PROJECT_DIR}/.librarian/.status.json"
-
-# Only increment if status file exists
-if [ ! -f "$STATUS_FILE" ]; then
-  exit 0
-fi
-
-# Read current count
-EDITS=$(cat "$STATUS_FILE" | grep -o '"editsSinceReading": *[0-9]*' | grep -o '[0-9]*')
-EDITS=\${EDITS:-0}
-
-# Increment
-NEW_EDITS=$((EDITS + 1))
-
-# Update the file (simple sed replacement, handles optional space after colon)
-if [[ "$OSTYPE" == "darwin"* ]]; then
-  sed -i '' 's/"editsSinceReading": *[0-9]*/"editsSinceReading": '"$NEW_EDITS"'/' "$STATUS_FILE"
-else
-  sed -i 's/"editsSinceReading": *[0-9]*/"editsSinceReading": '"$NEW_EDITS"'/' "$STATUS_FILE"
-fi
-
-exit 0
-`;
-  }
-
-  /**
-   * Generate the check hook script content.
-   * This script is called on every user prompt and checks if a reading is due.
+   * Generate the hook script content.
+   * This script counts prompts and reminds Claude to create readings at threshold.
+   * Uses jq for robust JSON parsing and generation.
    */
   private generateHookScript(): string {
     return `#!/bin/bash
 # Field Theory Librarian Hook
-# Checks if a reading is due and injects context for Claude
+# Counts prompts and reminds Claude to create readings at threshold
+# Uses global status file (~/.claude/librarian-status.json)
 
-# Debug logging
+set -euo pipefail
+
 LOG_FILE="\${HOME}/.claude/librarian-debug.log"
+log() { echo "[\$(date '+%Y-%m-%d %H:%M:%S')] \$*" >> "\$LOG_FILE"; }
 
-# Log script start
-echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook START" >> "\$LOG_FILE"
+log "Hook START"
 
-# Get project directory from Claude Code environment
-PROJECT_DIR="\${CLAUDE_PROJECT_DIR:-\$(pwd)}"
-STATUS_FILE="\${PROJECT_DIR}/.librarian/.status.json"
+# Global status file (shared by all projects)
+STATUS_FILE="\${HOME}/.claude/librarian-status.json"
 
-echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook: PROJECT_DIR=\$PROJECT_DIR" >> "\$LOG_FILE"
-echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook: STATUS_FILE=\$STATUS_FILE" >> "\$LOG_FILE"
-
-# If no status file exists, this project doesn't have Librarian active
-if [ ! -f "\$STATUS_FILE" ]; then
-  echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook: No status file, exiting cleanly" >> "\$LOG_FILE"
-  exit 0
+# Log project dir if available (for debugging)
+if [ -n "\${CLAUDE_PROJECT_DIR:-}" ]; then
+  log "PROJECT_DIR=\$CLAUDE_PROJECT_DIR"
 fi
 
-# Read status (note: handle optional space after colon)
-EDITS=\$(cat "\$STATUS_FILE" | grep -o '"editsSinceReading": *[0-9]*' | grep -o '[0-9]*')
-THRESHOLD=\$(cat "\$STATUS_FILE" | grep -o '"nextThreshold": *[0-9]*' | grep -o '[0-9]*')
+# Create status file with defaults if it doesn't exist
+if [ ! -f "\$STATUS_FILE" ]; then
+  log "Creating status file"
+  echo '{"promptsSinceReading":0,"nextThreshold":5,"lastReading":null}' > "\$STATUS_FILE"
+fi
 
-# Default values if parsing fails
-EDITS=\${EDITS:-0}
-THRESHOLD=\${THRESHOLD:-3}
+# Read current values with jq
+PROMPTS=\$(jq -r '.promptsSinceReading // 0' "\$STATUS_FILE")
+THRESHOLD=\$(jq -r '.nextThreshold // 7' "\$STATUS_FILE")
 
-echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook: edits=\$EDITS, threshold=\$THRESHOLD, project=\$(basename \$PROJECT_DIR)" >> "\$LOG_FILE"
+# Increment prompt count
+NEW_PROMPTS=\$((PROMPTS + 1))
+
+log "prompts=\$PROMPTS -> \$NEW_PROMPTS, threshold=\$THRESHOLD"
+
+# Update the status file atomically
+tmp=\$(mktemp "\${STATUS_FILE}.XXXX")
+jq --argjson n "\$NEW_PROMPTS" '.promptsSinceReading = \$n' "\$STATUS_FILE" > "\$tmp"
+mv "\$tmp" "\$STATUS_FILE"
 
 # Check if reading is due
-if [ "\$EDITS" -ge "\$THRESHOLD" ]; then
-  echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook: TRIGGERING - outputting JSON" >> "\$LOG_FILE"
+if [ "\$NEW_PROMPTS" -ge "\$THRESHOLD" ]; then
+  log "TRIGGERING at prompt \$NEW_PROMPTS"
 
-  # Output JSON - must be valid JSON, ASCII only, no trailing whitespace
-  OUTPUT='{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"[LIBRARIAN] A reading is due. Before implementing, create a 1-2 paragraph intellectual piece in .librarian/YYYY-MM-DD-{slug}.md connecting to your current task. Draw from physics, systems theory, engineering history, or speculative futures. Include one concrete detail. Then proceed with implementation."}}'
+  # Output JSON with jq (guarantees valid JSON)
+  MSG="[LIBRARIAN] Prompt \${NEW_PROMPTS}/\${THRESHOLD}. Before continuing, write a 1-2 paragraph reading in .librarian/\$(date +%Y-%m-%d)-{slug}.md connecting this work to engineering history, physics, or systems theory. Include one concrete detail. This is how you think about the problem."
 
-  echo "\$OUTPUT"
-  echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook: JSON output sent" >> "\$LOG_FILE"
+  jq -n --arg msg "\$MSG" '{
+    hookSpecificOutput: {
+      hookEventName: "UserPromptSubmit",
+      additionalContext: \$msg
+    }
+  }'
+
+  log "JSON output sent"
 else
-  echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook: Below threshold, no output" >> "\$LOG_FILE"
+  log "Below threshold (\$NEW_PROMPTS < \$THRESHOLD)"
 fi
 
-echo "[\$(date '+%Y-%m-%d %H:%M:%S')] Hook END (exit 0)" >> "\$LOG_FILE"
+log "Hook END"
 exit 0
 `;
   }
 
   /**
-   * Install the Claude Code hooks for automatic Librarian reminders.
-   * Installs two hooks:
-   * 1. UserPromptSubmit - checks if reading is due and reminds Claude
-   * 2. PostToolUse (Edit/Write) - increments edit counter
+   * Install the Claude Code hook for automatic Librarian reminders.
+   * Single hook: UserPromptSubmit - counts prompts and reminds Claude at threshold.
    */
   installClaudeCodeHook(): boolean {
     try {
@@ -1211,15 +1243,10 @@ exit 0
         fs.mkdirSync(claudeDir, { recursive: true });
       }
 
-      // 2. Write both hook scripts
-      const checkScriptPath = this.getHookScriptPath();
-      const incrementScriptPath = this.getIncrementScriptPath();
-
-      fs.writeFileSync(checkScriptPath, this.generateHookScript(), { mode: 0o755 });
-      console.log(`[LibrarianManager] Created check script at ${checkScriptPath}`);
-
-      fs.writeFileSync(incrementScriptPath, this.generateIncrementScript(), { mode: 0o755 });
-      console.log(`[LibrarianManager] Created increment script at ${incrementScriptPath}`);
+      // 2. Write hook script
+      const scriptPath = this.getHookScriptPath();
+      fs.writeFileSync(scriptPath, this.generateHookScript(), { mode: 0o755 });
+      console.log(`[LibrarianManager] Created hook script at ${scriptPath}`);
 
       // 3. Update Claude Code settings.json
       const settingsPath = this.getClaudeSettingsPath();
@@ -1240,77 +1267,72 @@ exit 0
       const hooks = settings.hooks as Record<string, unknown>;
 
       // Helper to check if hook already exists
-      type HookEntry = { matcher?: string; hooks?: Array<{ type?: string; command?: string }> };
+      type HookEntry = { hooks?: Array<{ type?: string; command?: string }> };
 
-      const hookExists = (eventName: string, scriptPath: string, matcher?: string): boolean => {
+      const hookExists = (eventName: string, scriptPath: string): boolean => {
         if (!Array.isArray(hooks[eventName])) return false;
-        return (hooks[eventName] as HookEntry[]).some(h => {
-          const hasCommand = h.hooks?.some(hh => hh.command === scriptPath);
-          if (!hasCommand) return false;
-          // For PostToolUse, also check matcher
-          if (matcher) return h.matcher === matcher;
-          return true;
-        });
+        return (hooks[eventName] as HookEntry[]).some(h =>
+          h.hooks?.some(hh => hh.command === scriptPath)
+        );
       };
 
-      const addHook = (eventName: string, config: HookEntry) => {
-        if (!Array.isArray(hooks[eventName])) {
-          hooks[eventName] = [];
+      // Add UserPromptSubmit hook (counts prompts and reminds at threshold)
+      if (!hookExists('UserPromptSubmit', scriptPath)) {
+        if (!Array.isArray(hooks['UserPromptSubmit'])) {
+          hooks['UserPromptSubmit'] = [];
         }
-        (hooks[eventName] as HookEntry[]).push(config);
-      };
-
-      // Add UserPromptSubmit hook (checks if reading is due)
-      if (!hookExists('UserPromptSubmit', checkScriptPath)) {
-        addHook('UserPromptSubmit', {
-          hooks: [{ type: 'command', command: checkScriptPath }],
+        (hooks['UserPromptSubmit'] as HookEntry[]).push({
+          hooks: [{ type: 'command', command: scriptPath }],
         });
       }
 
-      // Add PostToolUse hook for Edit tool (increments counter)
-      if (!hookExists('PostToolUse', incrementScriptPath, 'Edit')) {
-        addHook('PostToolUse', {
-          matcher: 'Edit',
-          hooks: [{ type: 'command', command: incrementScriptPath }],
-        });
+      // Clean up old PostToolUse hooks (from previous version that counted edits)
+      const oldIncrementScript = path.join(os.homedir(), '.claude', 'librarian-increment.sh');
+      if (hooks['PostToolUse'] && Array.isArray(hooks['PostToolUse'])) {
+        hooks['PostToolUse'] = (hooks['PostToolUse'] as HookEntry[]).filter(
+          h => !h.hooks?.some(hh => hh.command === oldIncrementScript)
+        );
+        if ((hooks['PostToolUse'] as HookEntry[]).length === 0) {
+          delete hooks['PostToolUse'];
+        }
       }
 
-      // Add PostToolUse hook for Write tool (increments counter)
-      if (!hookExists('PostToolUse', incrementScriptPath, 'Write')) {
-        addHook('PostToolUse', {
-          matcher: 'Write',
-          hooks: [{ type: 'command', command: incrementScriptPath }],
-        });
+      // Remove old increment script file if it exists
+      if (fs.existsSync(oldIncrementScript)) {
+        fs.unlinkSync(oldIncrementScript);
+        console.log('[LibrarianManager] Removed old increment script');
       }
 
       fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-      console.log('[LibrarianManager] Installed Claude Code hooks');
+      console.log('[LibrarianManager] Installed Claude Code hook');
 
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to install hooks:', error);
+      console.error('[LibrarianManager] Failed to install hook:', error);
       return false;
     }
   }
 
   /**
-   * Uninstall the Claude Code hooks.
-   * Removes both the check script (UserPromptSubmit) and increment script (PostToolUse).
+   * Uninstall the Claude Code hook.
+   * Removes the UserPromptSubmit hook script.
    */
   uninstallClaudeCodeHook(): boolean {
     try {
-      const checkScriptPath = this.getHookScriptPath();
-      const incrementScriptPath = this.getIncrementScriptPath();
+      const scriptPath = this.getHookScriptPath();
       const settingsPath = this.getClaudeSettingsPath();
 
-      // Remove hook scripts
-      if (fs.existsSync(checkScriptPath)) {
-        fs.unlinkSync(checkScriptPath);
-        console.log('[LibrarianManager] Removed check script');
+      // Remove hook script
+      if (fs.existsSync(scriptPath)) {
+        fs.unlinkSync(scriptPath);
+        console.log('[LibrarianManager] Removed hook script');
       }
-      if (fs.existsSync(incrementScriptPath)) {
-        fs.unlinkSync(incrementScriptPath);
-        console.log('[LibrarianManager] Removed increment script');
+
+      // Also remove old increment script if it exists (cleanup from previous version)
+      const oldIncrementScript = path.join(os.homedir(), '.claude', 'librarian-increment.sh');
+      if (fs.existsSync(oldIncrementScript)) {
+        fs.unlinkSync(oldIncrementScript);
+        console.log('[LibrarianManager] Removed old increment script');
       }
 
       // Update settings.json
@@ -1321,18 +1343,18 @@ exit 0
         if (settings.hooks?.UserPromptSubmit) {
           settings.hooks.UserPromptSubmit = settings.hooks.UserPromptSubmit.filter(
             (h: { hooks?: Array<{ command?: string }> }) =>
-              !h.hooks?.some(hh => hh.command === checkScriptPath)
+              !h.hooks?.some(hh => hh.command === scriptPath)
           );
           if (settings.hooks.UserPromptSubmit.length === 0) {
             delete settings.hooks.UserPromptSubmit;
           }
         }
 
-        // Remove PostToolUse hooks for our increment script
+        // Also remove old PostToolUse hooks (cleanup from previous version)
         if (settings.hooks?.PostToolUse) {
           settings.hooks.PostToolUse = settings.hooks.PostToolUse.filter(
             (h: { hooks?: Array<{ command?: string }> }) =>
-              !h.hooks?.some(hh => hh.command === incrementScriptPath)
+              !h.hooks?.some(hh => hh.command?.includes('librarian-increment'))
           );
           if (settings.hooks.PostToolUse.length === 0) {
             delete settings.hooks.PostToolUse;
@@ -1347,10 +1369,10 @@ exit 0
         fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
       }
 
-      console.log('[LibrarianManager] Uninstalled Claude Code hooks');
+      console.log('[LibrarianManager] Uninstalled Claude Code hook');
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to uninstall hooks:', error);
+      console.error('[LibrarianManager] Failed to uninstall hook:', error);
       return false;
     }
   }
@@ -1387,111 +1409,63 @@ exit 0
   }
 
   /**
-   * Initialize or update the status file for a project.
-   * Called when Librarian is enabled for a project.
+   * @deprecated No longer needed - global status file is auto-created.
+   * Kept for API compatibility.
    */
-  initializeProjectStatus(projectPath: string): void {
-    const statusDir = path.join(projectPath, '.librarian');
-    const statusFile = path.join(statusDir, '.status.json');
-
-    // Create .librarian directory if needed
-    if (!fs.existsSync(statusDir)) {
-      fs.mkdirSync(statusDir, { recursive: true });
-    }
-
-    // Don't overwrite existing status
-    if (fs.existsSync(statusFile)) {
-      return;
-    }
-
-    const status = {
-      editsSinceReading: 0,
-      nextThreshold: this.pickNextThreshold(this.settings.autoRunFrequency),
-      lastReading: null,
-      frequency: this.settings.autoRunFrequency,
-    };
-
-    fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
-    console.log(`[LibrarianManager] Initialized status for ${projectPath}`);
+  initializeProjectStatus(_projectPath: string): void {
+    // Global status is now used instead of per-project status.
+    // Just ensure the global file exists.
+    this.ensureGlobalStatusExists();
   }
 
   /**
-   * Log the current status for a project (for dev visibility).
+   * Log the current global status (for dev visibility).
    */
-  private logStatus(projectPath: string, action: string): void {
-    const statusFile = path.join(projectPath, '.librarian', '.status.json');
+  private logStatus(action: string): void {
+    const statusFile = this.getGlobalStatusPath();
     if (!fs.existsSync(statusFile)) return;
 
     try {
       const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
-      const projectName = path.basename(projectPath);
-      console.log(`[Librarian] ${action} → ${projectName}: edits=${status.editsSinceReading}/${status.nextThreshold}, lastReading=${status.lastReading || 'null'}`);
+      console.log(`[Librarian] ${action}: prompts=${status.promptsSinceReading}/${status.nextThreshold}, lastReading=${status.lastReading || 'null'}`);
     } catch {
       // Ignore errors in logging
     }
   }
 
   /**
-   * Increment the edit count for a project.
-   * Called by file watcher when code files change.
+   * Reset the prompt count after a reading is created.
+   * Called when a new .md file appears in any watched .librarian/ directory.
    */
-  incrementEditCount(projectPath: string): void {
-    const statusFile = path.join(projectPath, '.librarian', '.status.json');
-
-    if (!fs.existsSync(statusFile)) {
-      return;
-    }
+  resetPromptCount(): void {
+    this.ensureGlobalStatusExists();
+    const statusFile = this.getGlobalStatusPath();
 
     try {
       const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
-      status.editsSinceReading = (status.editsSinceReading || 0) + 1;
-      fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
-      this.logStatus(projectPath, 'increment');
-    } catch (error) {
-      console.error('[LibrarianManager] Failed to increment edit count:', error);
-    }
-  }
-
-  /**
-   * Reset the edit count after a reading is created.
-   * Called when a new .md file appears in .librarian/.
-   */
-  resetEditCount(projectPath: string): void {
-    const statusFile = path.join(projectPath, '.librarian', '.status.json');
-
-    if (!fs.existsSync(statusFile)) {
-      return;
-    }
-
-    try {
-      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
-      status.editsSinceReading = 0;
+      status.promptsSinceReading = 0;
       status.nextThreshold = this.pickNextThreshold(this.settings.autoRunFrequency);
       status.lastReading = new Date().toISOString();
       fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
-      this.logStatus(projectPath, 'reset');
+      this.logStatus('reset');
     } catch (error) {
-      console.error('[LibrarianManager] Failed to reset edit count:', error);
+      console.error('[LibrarianManager] Failed to reset prompt count:', error);
     }
   }
 
   /**
-   * Get the current edit status for debugging.
-   * Returns the first project's status (edits and threshold).
+   * Get the current global status for debugging.
+   * Returns prompt count and threshold from the global status file.
    */
   getEditStatus(): { edits: number; threshold: number } | null {
     try {
-      for (const dirPath of this.settings.watchedDirs) {
-        const statusFile = path.join(dirPath, '.status.json');
-        if (fs.existsSync(statusFile)) {
-          const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
-          return {
-            edits: status.editsSinceReading || 0,
-            threshold: status.nextThreshold || 3,
-          };
-        }
-      }
-      return null;
+      this.ensureGlobalStatusExists();
+      const statusFile = this.getGlobalStatusPath();
+      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
+      return {
+        edits: status.promptsSinceReading || 0,
+        threshold: status.nextThreshold || 5,
+      };
     } catch (error) {
       console.error('[LibrarianManager] Failed to get edit status:', error);
       return null;
@@ -1499,28 +1473,21 @@ exit 0
   }
 
   /**
-   * Reset edit counters for all watched directories.
+   * Reset the global prompt counter.
    * Used for debugging/testing when hooks aren't triggering properly.
    */
   resetAllCounters(): boolean {
     try {
-      for (const dirPath of this.settings.watchedDirs) {
-        // dirPath is the .librarian directory path
-        // Go up from .librarian to get project path
-        const projectPath = path.dirname(dirPath);
-        const statusFile = path.join(dirPath, '.status.json');
-
-        if (fs.existsSync(statusFile)) {
-          const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
-          status.editsSinceReading = 0;
-          status.nextThreshold = this.pickNextThreshold(this.settings.autoRunFrequency);
-          fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
-          console.log(`[LibrarianManager] Reset counter for: ${path.basename(projectPath)}`);
-        }
-      }
+      this.ensureGlobalStatusExists();
+      const statusFile = this.getGlobalStatusPath();
+      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
+      status.promptsSinceReading = 0;
+      status.nextThreshold = this.pickNextThreshold(this.settings.autoRunFrequency);
+      fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
+      console.log('[LibrarianManager] Reset global counter');
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to reset all counters:', error);
+      console.error('[LibrarianManager] Failed to reset counter:', error);
       return false;
     }
   }

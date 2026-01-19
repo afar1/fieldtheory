@@ -131,7 +131,7 @@ export default function CommandsSettings() {
   if (loading) {
     return (
       <div style={{ padding: '16px' }}>
-        <span style={{ color: theme.textSecondary, fontSize: '13px' }}>
+        <span style={{ color: theme.textSecondary, fontSize: '12px' }}>
           Loading...
         </span>
       </div>
@@ -153,7 +153,7 @@ export default function CommandsSettings() {
   return (
     <div style={{ padding: '0' }}>
       <p style={{
-        fontSize: '13px',
+        fontSize: '12px',
         color: theme.textSecondary,
         marginBottom: '16px',
         marginTop: '4px',
@@ -174,7 +174,7 @@ export default function CommandsSettings() {
           <label style={{
             display: 'block',
             marginBottom: '8px',
-            fontSize: '13px',
+            fontSize: '12px',
             fontWeight: 600,
             color: theme.text,
           }}>
@@ -257,7 +257,7 @@ export default function CommandsSettings() {
               style={{
                 flex: 1,
                 padding: '8px 12px',
-                fontSize: '13px',
+                fontSize: '12px',
                 fontFamily: 'monospace',
                 backgroundColor: theme.isDark ? theme.surface2 : '#fff',
                 border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
@@ -271,7 +271,7 @@ export default function CommandsSettings() {
               disabled={!newPath.trim()}
               style={{
                 padding: '8px 16px',
-                fontSize: '13px',
+                fontSize: '12px',
                 fontWeight: 500,
                 color: newPath.trim() ? '#fff' : theme.textSecondary,
                 backgroundColor: newPath.trim() ? theme.info : 'transparent',
