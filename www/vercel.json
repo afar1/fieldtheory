@@ -1,0 +1,14 @@
+{
+  "rewrites": [
+    {
+      "source": "/:slug",
+      "destination": "https://cighxaroptskntwbrctl.supabase.co/functions/v1/librarian-page/:slug",
+      "has": [
+        {
+          "type": "host",
+          "value": "librarian.fieldtheory.dev"
+        }
+      ]
+    }
+  ]
+}
