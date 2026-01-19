@@ -87,16 +87,22 @@ export default async function handler(req, res) {
     .page { max-width: 600px; margin: 0 auto; padding: 4rem 1.5rem 6rem; }
     .header {
       display: flex;
-      justify-content: space-between;
-      align-items: center;
+      justify-content: center;
       margin-bottom: 3rem;
       padding-bottom: 1rem;
       border-bottom: 1px solid var(--border);
     }
-    .header-right { display: flex; gap: 8px; }
+    .controls {
+      position: fixed;
+      bottom: 1.5rem;
+      right: 1.5rem;
+      display: flex;
+      gap: 8px;
+      z-index: 100;
+    }
     .icon-btn {
-      background: none;
-      border: none;
+      background: var(--bg);
+      border: 1px solid var(--border);
       padding: 8px;
       cursor: pointer;
       color: var(--text-secondary);
@@ -105,9 +111,9 @@ export default async function handler(req, res) {
       align-items: center;
       justify-content: center;
     }
-    .icon-btn:hover { color: var(--text); background: var(--code-bg); }
+    .icon-btn:hover { color: var(--text); border-color: var(--text); }
     .icon-btn svg { width: 20px; height: 20px; }
-    .icon-btn.copied { color: var(--accent); }
+    .icon-btn.copied { color: var(--accent); border-color: var(--accent); }
     .content h1 {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       font-size: 1.875rem;
@@ -163,7 +169,7 @@ export default async function handler(req, res) {
     .footer a { color: var(--text); text-decoration: none; }
     .footer a:hover { text-decoration: underline; }
     .logo-link { display: flex; }
-    .logo { width: 24px; height: 24px; opacity: 0.6; transition: opacity 0.2s; }
+    .logo { width: 36px; height: 36px; opacity: 0.6; transition: opacity 0.2s; }
     .logo:hover { opacity: 1; }
     .dark-logo { display: none; }
     .dark .light-logo { display: none; }
@@ -177,34 +183,34 @@ export default async function handler(req, res) {
         <img src="https://fieldtheory.dev/images/fieldtheory-icon-black.png" alt="Field Theory" class="logo light-logo">
         <img src="https://fieldtheory.dev/images/fieldtheory-icon-white.png" alt="Field Theory" class="logo dark-logo">
       </a>
-      <div class="header-right">
-        ${showRandom ? `<a class="icon-btn" href="/api/librarian/random?exclude=${slug}" title="Random reading">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 00-3.7-3.7 48.678 48.678 0 00-7.324 0 4.006 4.006 0 00-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3l-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 003.7 3.7 48.656 48.656 0 007.324 0 4.006 4.006 0 003.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3l-3 3" />
-          </svg>
-        </a>` : ''}
-        <button class="icon-btn" id="copyBtn" title="Copy link">
-          <svg id="copyIcon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
-          </svg>
-          <svg id="checkIcon" style="display:none" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-          </svg>
-        </button>
-        <button class="icon-btn" id="themeBtn" title="Toggle theme">
-          <svg id="sunIcon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" />
-          </svg>
-          <svg id="moonIcon" style="display:none" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" />
-          </svg>
-        </button>
-      </div>
     </header>
     <article class="content">${html}</article>
     <footer class="footer">
       <p class="made-by">Made by The Librarian at <a href="https://fieldtheory.dev">fieldtheory.dev</a>${author}</p>
     </footer>
+  </div>
+  <div class="controls">
+    ${showRandom ? `<a class="icon-btn" href="/api/librarian/random?exclude=${slug}" title="Random reading">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 00-3.7-3.7 48.678 48.678 0 00-7.324 0 4.006 4.006 0 00-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3l-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 003.7 3.7 48.656 48.656 0 007.324 0 4.006 4.006 0 003.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3l-3 3" />
+      </svg>
+    </a>` : ''}
+    <button class="icon-btn" id="copyBtn" title="Copy link">
+      <svg id="copyIcon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
+      </svg>
+      <svg id="checkIcon" style="display:none" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+      </svg>
+    </button>
+    <button class="icon-btn" id="themeBtn" title="Toggle theme">
+      <svg id="sunIcon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" />
+      </svg>
+      <svg id="moonIcon" style="display:none" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" />
+      </svg>
+    </button>
   </div>
   <script>
     (function() {
