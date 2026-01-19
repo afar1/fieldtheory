@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/:slug",
-      "destination": "https://cighxaroptskntwbrctl.supabase.co/functions/v1/librarian-page/:slug",
+      "destination": "/api/librarian/:slug",
       "has": [
         {
           "type": "host",

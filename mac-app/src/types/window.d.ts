@@ -100,6 +100,8 @@ interface TranscribeAPI {
   setAutoImprove?: (enabled: boolean) => Promise<void>;
   getAutoImproveMinWords?: () => Promise<number>;
   setAutoImproveMinWords?: (minWords: number) => Promise<void>;
+  getAutoImproveStats?: () => Promise<{ wordsImproved: number; apiCalls: number; inputTokens: number; outputTokens: number }>;
+  resetAutoImproveStats?: () => Promise<void>;
   getDownloadingModels?: () => Promise<string[]>;
   toggleRecording?: () => Promise<void>;
   getSoundConfig?: () => Promise<SoundConfig>;
@@ -936,6 +938,14 @@ interface LibrarianAPI {
   // Debug/testing
   resetAllCounters: () => Promise<boolean>;
   getEditStatus: () => Promise<{ edits: number; threshold: number } | null>;
+  // Custom threshold
+  getCustomThreshold: () => Promise<number | undefined>;
+  setCustomThreshold: (threshold: number | undefined) => Promise<boolean>;
+  // Public sharing
+  shareReading: (filePath: string) => Promise<{ slug: string; url: string } | null>;
+  unshareReading: (filePath: string) => Promise<boolean>;
+  getShareStatus: (filePath: string) => Promise<{ shared: boolean; slug?: string; url?: string } | null>;
+  updateSharedReading: (filePath: string, content: string, title: string) => Promise<boolean>;
 }
 
 declare global {

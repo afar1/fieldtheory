@@ -3,6 +3,7 @@ import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
+import crypto from 'crypto';
 import { NativeHelper } from './nativeHelper';
 import { AudioManager } from './audioManager';
 import { TrayManager } from './trayManager';
@@ -645,6 +646,25 @@ async function handleImproveSelectedText(): Promise<void> {
     const inputWordCount = selectedText.trim().split(/\s+/).filter(w => w.length > 0).length;
     await quotaManager?.incrementTextImprove(inputWordCount);
 
+    // Track auto-improve usage stats (only for API calls with usage data)
+    if (result.usage && preferencesManager) {
+      const currentPrefs = preferencesManager.get();
+      const currentStats = currentPrefs.autoImproveStats || {
+        wordsImproved: 0,
+        apiCalls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+      };
+      await preferencesManager.save({
+        autoImproveStats: {
+          wordsImproved: currentStats.wordsImproved + (result.wordCount || inputWordCount),
+          apiCalls: currentStats.apiCalls + 1,
+          inputTokens: currentStats.inputTokens + result.usage.inputTokens,
+          outputTokens: currentStats.outputTokens + result.usage.outputTokens,
+        },
+      });
+    }
+
     console.log('[ImproveText] Text improved and pasted successfully');
   } catch (error) {
     console.error('[ImproveText] Error:', error);
@@ -1256,6 +1276,205 @@ function setupLibrarianIPCHandlers(): void {
   ipcMain.handle('librarian:getEditStatus', (): { edits: number; threshold: number } | null => {
     return librarianManager?.getEditStatus() ?? null;
   });
+
+  // Get custom threshold (undefined if using frequency-based)
+  ipcMain.handle('librarian:getCustomThreshold', (): number | undefined => {
+    return librarianManager?.getCustomThreshold();
+  });
+
+  // Set custom threshold (pass undefined to return to frequency-based)
+  ipcMain.handle('librarian:setCustomThreshold', (_event, threshold: number | undefined): boolean => {
+    return librarianManager?.setCustomThreshold(threshold) ?? false;
+  });
+
+  // ===========================================================================
+  // Public Sharing
+  // ===========================================================================
+
+  // Share a reading publicly
+  ipcMain.handle('librarian:shareReading', async (_event, filePath: string): Promise<{ slug: string; url: string } | null> => {
+    if (!authManager?.isAuthenticated()) {
+      console.log('[Librarian] Share failed: not authenticated');
+      return null;
+    }
+
+    const reading = librarianManager?.getReading(filePath);
+    if (!reading) {
+      console.log('[Librarian] Share failed: reading not found');
+      return null;
+    }
+
+    const supabase = authManager.getSupabaseClient();
+    const session = authManager.getSession();
+    if (!supabase || !session?.user?.id) {
+      console.log('[Librarian] Share failed: no supabase client or session');
+      return null;
+    }
+
+    // Get author name from profile
+    let authorName: string | null = null;
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('first_name')
+        .eq('id', session.user.id)
+        .single();
+      authorName = profile?.first_name || null;
+    } catch {
+      // Ignore profile fetch errors
+    }
+
+    // Check if this reading was previously shared (re-sharing)
+    const { data: existing } = await supabase
+      .from('shared_readings')
+      .select('slug, is_public')
+      .eq('source_path', filePath)
+      .eq('user_id', session.user.id)
+      .single();
+
+    if (existing) {
+      // Re-enable existing share
+      if (!existing.is_public) {
+        await supabase
+          .from('shared_readings')
+          .update({ is_public: true, content: reading.content, title: reading.title, author_name: authorName })
+          .eq('source_path', filePath)
+          .eq('user_id', session.user.id);
+      }
+      console.log('[Librarian] Reading re-shared:', existing.slug);
+      return {
+        slug: existing.slug,
+        url: `https://librarian.fieldtheory.dev/${existing.slug}`,
+      };
+    }
+
+    // Generate slug: title-abc123
+    const slugify = (text: string): string =>
+      text
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 50);
+
+    const baseSlug = slugify(reading.title);
+
+    // Try up to 3 times with different random suffixes
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const randomSuffix = crypto.randomBytes(3).toString('hex');
+      const slug = `${baseSlug}-${randomSuffix}`;
+
+      const { data, error } = await supabase
+        .from('shared_readings')
+        .insert({
+          user_id: session.user.id,
+          slug,
+          title: reading.title,
+          content: reading.content,
+          author_name: authorName,
+          source_path: filePath,
+          is_public: true,
+        })
+        .select('slug')
+        .single();
+
+      if (!error && data) {
+        console.log('[Librarian] Reading shared:', slug);
+        return {
+          slug: data.slug,
+          url: `https://librarian.fieldtheory.dev/${data.slug}`,
+        };
+      }
+
+      // If unique constraint violation, try again with new suffix
+      if (error?.code === '23505') {
+        console.log('[Librarian] Slug collision, retrying...');
+        continue;
+      }
+
+      console.error('[Librarian] Share failed:', error);
+      return null;
+    }
+
+    console.error('[Librarian] Share failed: max retries exceeded');
+    return null;
+  });
+
+  // Unshare a reading (soft delete)
+  ipcMain.handle('librarian:unshareReading', async (_event, filePath: string): Promise<boolean> => {
+    if (!authManager?.isAuthenticated()) return false;
+
+    const supabase = authManager.getSupabaseClient();
+    const session = authManager.getSession();
+    if (!supabase || !session?.user?.id) return false;
+
+    const { error } = await supabase
+      .from('shared_readings')
+      .update({ is_public: false })
+      .eq('source_path', filePath)
+      .eq('user_id', session.user.id);
+
+    if (error) {
+      console.error('[Librarian] Unshare failed:', error);
+      return false;
+    }
+
+    console.log('[Librarian] Reading unshared:', filePath);
+    return true;
+  });
+
+  // Check if a reading is shared
+  ipcMain.handle('librarian:getShareStatus', async (_event, filePath: string): Promise<{ shared: boolean; slug?: string; url?: string } | null> => {
+    if (!authManager?.isAuthenticated()) return null;
+
+    const supabase = authManager.getSupabaseClient();
+    const session = authManager.getSession();
+    if (!supabase || !session?.user?.id) return null;
+
+    const { data, error } = await supabase
+      .from('shared_readings')
+      .select('slug, is_public')
+      .eq('source_path', filePath)
+      .eq('user_id', session.user.id)
+      .single();
+
+    if (error || !data) {
+      return { shared: false };
+    }
+
+    if (!data.is_public) {
+      return { shared: false };
+    }
+
+    return {
+      shared: true,
+      slug: data.slug,
+      url: `https://librarian.fieldtheory.dev/${data.slug}`,
+    };
+  });
+
+  // Update a shared reading's content
+  ipcMain.handle('librarian:updateSharedReading', async (_event, filePath: string, content: string, title: string): Promise<boolean> => {
+    if (!authManager?.isAuthenticated()) return false;
+
+    const supabase = authManager.getSupabaseClient();
+    const session = authManager.getSession();
+    if (!supabase || !session?.user?.id) return false;
+
+    const { error } = await supabase
+      .from('shared_readings')
+      .update({ content, title, updated_at: new Date().toISOString() })
+      .eq('source_path', filePath)
+      .eq('user_id', session.user.id)
+      .eq('is_public', true);
+
+    if (error) {
+      console.error('[Librarian] Update shared reading failed:', error);
+      return false;
+    }
+
+    console.log('[Librarian] Shared reading updated:', filePath);
+    return true;
+  });
 }
 
 /**
@@ -1477,6 +1696,23 @@ function setupTranscribeIPCHandlers(): void {
       throw new Error('TranscriberManager not initialized');
     }
     await transcriberManager.setAutoImproveMinWords(minWords);
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_STATS, () => {
+    if (!preferencesManager) {
+      return { wordsImproved: 0, apiCalls: 0, inputTokens: 0, outputTokens: 0 };
+    }
+    const prefs = preferencesManager.get();
+    return prefs.autoImproveStats || { wordsImproved: 0, apiCalls: 0, inputTokens: 0, outputTokens: 0 };
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.RESET_AUTO_IMPROVE_STATS, async () => {
+    if (!preferencesManager) {
+      throw new Error('PreferencesManager not initialized');
+    }
+    await preferencesManager.save({
+      autoImproveStats: { wordsImproved: 0, apiCalls: 0, inputTokens: 0, outputTokens: 0 },
+    });
   });
 
   // Sound settings handlers.
@@ -4259,6 +4495,9 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
     // Don't auto-hide if in immersive reading mode
     if (clipboardHistoryWindow?.getImmersiveMode()) return;
 
+    // Don't auto-hide if we just exited immersive mode (dock.hide() can trigger blur)
+    if (clipboardHistoryWindow?.recentlyExitedImmersiveMode()) return;
+
     // Don't auto-hide during recording
     if (clipboardHistoryWindow?.getRecordingActive()) return;
 
@@ -4269,7 +4508,6 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
 
       // If no Field Theory window has focus, another app is active - hide
       if (!focusedWindow && clipboardHistoryWindow?.isVisible()) {
-        console.log('[Main] No Field Theory window focused, another app active - hiding clipboard history');
         clipboardHistoryWindow.hide();
       }
     }, 50);
@@ -4452,10 +4690,8 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Broadcast reading-added events to all windows and auto-show if enabled
   librarianManager.on('reading-added', (reading: Reading) => {
-    // Reset edit count for this project (extract project path from reading path)
-    // Reading path is like /project/.librarian/2026-01-18-slug.md, so go up 2 levels
-    const projectPath = path.dirname(path.dirname(reading.path));
-    librarianManager!.resetEditCount(projectPath);
+    // Note: resetPromptCount() is already called by the watch handler in LibrarianManager
+    // before emitting this event, so we don't need to call it again here.
 
     // Broadcast to all windows (updates reading lists)
     BrowserWindow.getAllWindows().forEach((window) => {
@@ -5025,6 +5261,11 @@ if (!gotTheLock) {
           onboardingStep: undefined,
         });
 
+        // Refresh tray menu to show onboarding-only options
+        if (trayManager) {
+          trayManager.refreshMenu();
+        }
+
         if (onboardingWindow) {
           onboardingWindow.close();
           onboardingWindow = null;
@@ -5258,6 +5499,11 @@ if (!gotTheLock) {
       if (prefs?.onboardingComplete) {
         console.log('[Main] Resetting onboarding state due to missing requirements');
         await preferencesManager?.save({ onboardingComplete: false });
+
+        // Refresh tray menu to show onboarding-only options
+        if (trayManager) {
+          trayManager.refreshMenu();
+        }
       }
 
       onboardingWindow = createOnboardingWindow();
