@@ -1,3 +1,13 @@
-# Block all crawlers until site is ready for public launch
+# Allow social sharing crawlers
+User-agent: Twitterbot
+Allow: /
+
+User-agent: facebookexternalhit
+Allow: /
+
+User-agent: LinkedInBot
+Allow: /
+
+# Block general crawlers for now
 User-agent: *
 Disallow: /
