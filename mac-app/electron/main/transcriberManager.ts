@@ -725,6 +725,25 @@ export class TranscriberManager extends EventEmitter {
               // Track quota usage (wordCount was calculated earlier for threshold check).
               await this.quotaManager?.incrementTextImprove(wordCount);
 
+              // Track auto-improve usage stats (only for API calls with usage data)
+              if (result.usage) {
+                const currentPrefs = this.preferences.get();
+                const currentStats = currentPrefs.autoImproveStats || {
+                  wordsImproved: 0,
+                  apiCalls: 0,
+                  inputTokens: 0,
+                  outputTokens: 0,
+                };
+                await this.preferences.save({
+                  autoImproveStats: {
+                    wordsImproved: currentStats.wordsImproved + (result.wordCount || wordCount),
+                    apiCalls: currentStats.apiCalls + 1,
+                    inputTokens: currentStats.inputTokens + result.usage.inputTokens,
+                    outputTokens: currentStats.outputTokens + result.usage.outputTokens,
+                  },
+                });
+              }
+
               // Save improved content to the transcript item in the database.
               // The transcript item is the last one added to currentStack.
               const transcriptItemId = this.currentStack[this.currentStack.length - 1];

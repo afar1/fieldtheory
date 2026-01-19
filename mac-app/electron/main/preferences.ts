@@ -136,6 +136,14 @@ interface Preferences {
   // Minimum word count for auto-improve - only improve transcripts with at least this many words
   autoImproveMinWords?: number;  // Default: 100, Range: 0-500, Increment: 10
 
+  // Auto-improve usage stats - cumulative all-time tracking
+  autoImproveStats?: {
+    wordsImproved: number;
+    apiCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+  };
+
   // Local LLM settings - use downloaded model instead of API for transcript improvement
   useLocalLLM?: boolean;
   selectedLocalLLM?: string;  // Model size: '1b' or '3b'

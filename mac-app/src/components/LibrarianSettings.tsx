@@ -5,7 +5,7 @@
  * markdown readings from AI coding assistants.
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 
 interface LibrarianSettingsProps {
@@ -18,8 +18,18 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
 
   // Watched directories
   const [watchedDirs, setWatchedDirs] = useState<WatchedDir[]>([]);
+  const [readings, setReadings] = useState<ReadingMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Count readings per directory
+  const readingCountsByDir = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const dir of watchedDirs) {
+      counts[dir.path] = readings.filter(r => r.path.startsWith(dir.path)).length;
+    }
+    return counts;
+  }, [watchedDirs, readings]);
 
   // Path input
   const [manualPath, setManualPath] = useState('');
@@ -28,6 +38,9 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
 
   // Auto-run frequency
   const [autoRunFrequency, setAutoRunFrequency] = useState<string>('off');
+
+  // Custom threshold (direct control via slider)
+  const [customThreshold, setCustomThreshold] = useState<number>(5);
 
   // Auto-show on new reading
   const [autoShowEnabled, setAutoShowEnabled] = useState(true);
@@ -53,6 +66,13 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [contentGuidanceSaving, setContentGuidanceSaving] = useState(false);
   const [isUsingCustomGuidance, setIsUsingCustomGuidance] = useState(false);
 
+  // Debug logs state
+  const [logsExpanded, setLogsExpanded] = useState(true); // Default open while debugging
+  const [editStatus, setEditStatus] = useState<{ edits: number; threshold: number } | null>(null);
+
+  // Debounce ref for threshold slider
+  const thresholdDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
   // Animate scanning dots
   useEffect(() => {
     if (!isScanning) return;
@@ -61,6 +81,20 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     }, 400);
     return () => clearInterval(interval);
   }, [isScanning]);
+
+  // Fetch edit status when logs expanded or periodically
+  useEffect(() => {
+    if (!logsExpanded || !window.librarianAPI?.getEditStatus) return;
+
+    const fetchStatus = async () => {
+      const status = await window.librarianAPI!.getEditStatus();
+      setEditStatus(status);
+    };
+
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 2000); // Refresh every 2s
+    return () => clearInterval(interval);
+  }, [logsExpanded]);
 
   // Load initial state
   useEffect(() => {
@@ -71,15 +105,18 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
 
     Promise.all([
       window.librarianAPI.getWatchedDirs(),
+      window.librarianAPI.getReadings(),
       window.librarianAPI.getAutoRunFrequency(),
       window.librarianAPI.getAutoShowEnabled(),
       window.librarianAPI.getClaudeCodeStatus(),
       window.librarianAPI.isClaudeCodeHookInstalled(),
       window.librarianAPI.getDefaultContentGuidance(),
       window.librarianAPI.getCustomContentGuidance(),
+      window.librarianAPI.getCustomThreshold(),
     ])
-      .then(([dirs, frequency, autoShow, ccStatus, hookStatus, defaultGuidance, customGuidance]) => {
+      .then(([dirs, readingsList, frequency, autoShow, ccStatus, hookStatus, defaultGuidance, customGuidance, threshold]) => {
         setWatchedDirs(dirs);
+        setReadings(readingsList);
         setAutoRunFrequency(frequency);
         setAutoShowEnabled(autoShow);
         setClaudeCodeStatus(ccStatus as 'installed' | 'directory-only' | 'not-installed');
@@ -88,6 +125,8 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         setCustomContentGuidance(customGuidance);
         setContentGuidanceText(customGuidance || defaultGuidance);
         setIsUsingCustomGuidance(!!customGuidance);
+        // Default to 5 if no custom threshold is set
+        setCustomThreshold(threshold ?? 5);
         setLoading(false);
       })
       .catch((err) => {
@@ -105,6 +144,9 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       const success = await window.librarianAPI.removeWatchedDir(dirPath);
       if (success) {
         setWatchedDirs((prev) => prev.filter((d) => d.path !== dirPath));
+        // Refresh readings to update counts
+        const readingsList = await window.librarianAPI.getReadings();
+        setReadings(readingsList);
       } else {
         setError('Failed to remove directory');
       }
@@ -124,6 +166,9 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       if (result) {
         setWatchedDirs((prev) => [...prev, result]);
         setManualPath('');
+        // Refresh readings to get updated counts
+        const readingsList = await window.librarianAPI.getReadings();
+        setReadings(readingsList);
       } else {
         setError('Directory already added or not found');
       }
@@ -134,7 +179,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     }
   }, [manualPath, isScanning]);
 
-  // Handle frequency change
+  // Handle frequency change (kept for backwards compatibility, but buttons are disabled)
   const handleFrequencyChange = useCallback(async (frequency: string) => {
     if (!window.librarianAPI) return;
     setAutoRunFrequency(frequency);
@@ -148,6 +193,38 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       setTimeout(() => setSaved(false), 2000);
     }
   }, []);
+
+  // Handle threshold change via slider (debounced)
+  const handleThresholdChange = useCallback((threshold: number) => {
+    // Update local state immediately for responsive UI
+    setCustomThreshold(threshold);
+    setSaved(false);
+
+    // Clear any existing debounce timeout
+    if (thresholdDebounceRef.current) {
+      clearTimeout(thresholdDebounceRef.current);
+    }
+
+    // Debounce the API call
+    thresholdDebounceRef.current = setTimeout(async () => {
+      if (!window.librarianAPI) return;
+      setClaudeConfigError(false);
+
+      // If threshold is being set (not off), also ensure frequency is set to 'always' for CLAUDE.md instructions
+      if (autoRunFrequency === 'off') {
+        await window.librarianAPI.setAutoRunFrequency('always');
+        setAutoRunFrequency('always');
+      }
+
+      const success = await window.librarianAPI.setCustomThreshold(threshold);
+      if (success) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      } else {
+        setClaudeConfigError(true);
+      }
+    }, 300);
+  }, [autoRunFrequency]);
 
   // Handle auto-show toggle
   const handleAutoShowToggle = useCallback(async () => {
@@ -236,7 +313,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   if (loading) {
     return (
       <div style={{ padding: '16px' }}>
-        <span style={{ color: theme.textSecondary, fontSize: '13px' }}>Loading...</span>
+        <span style={{ color: theme.textSecondary, fontSize: '12px' }}>Loading...</span>
       </div>
     );
   }
@@ -254,7 +331,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-          <span style={{ fontSize: '13px', fontWeight: 500, color: theme.text }}>
+          <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
             Show Librarian Tab
           </span>
           <span style={{ fontSize: '11px', color: theme.textSecondary }}>
@@ -306,7 +383,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         }}
       >
         <div style={{ marginBottom: '12px' }}>
-          <div style={{ fontSize: '13px', fontWeight: 600, color: theme.text }}>
+          <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
             Auto-generate readings
           </div>
           <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '2px' }}>
@@ -314,33 +391,58 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
           </div>
         </div>
 
-        {/* Frequency options */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '16px' }}>
-          {[
-            { value: 'always', label: 'All the time', tooltip: 'Create a reading on every implementation task (not during planning or Q&A)' },
-            { value: 'frequently', label: 'Frequently', tooltip: 'Create a reading after most non-trivial tasks' },
-            { value: 'regularly', label: 'Regularly', tooltip: 'Create a reading every ~3 significant implementations' },
-            { value: 'occasionally', label: 'Occasionally', tooltip: 'Create a reading every ~5 significant implementations' },
-            { value: 'off', label: 'Off', tooltip: 'Disable automatic reading creation' },
-          ].map((option) => (
-            <button
-              key={option.value}
-              onClick={() => handleFrequencyChange(option.value)}
-              title={option.tooltip}
-              style={{
-                padding: '8px 16px',
-                fontSize: '12px',
-                fontWeight: autoRunFrequency === option.value ? 600 : 400,
-                color: autoRunFrequency === option.value ? '#fff' : theme.text,
-                backgroundColor: autoRunFrequency === option.value ? theme.accent : 'transparent',
-                border: `1px solid ${autoRunFrequency === option.value ? theme.accent : (theme.isDark ? theme.border : '#d1d5db')}`,
-                borderRadius: '6px',
-                cursor: 'pointer',
-              }}
-            >
-              {option.label}
-            </button>
-          ))}
+        {/* Threshold slider */}
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <button
+                onClick={() => handleFrequencyChange(autoRunFrequency === 'off' ? 'always' : 'off')}
+                style={{
+                  padding: '6px 12px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  color: autoRunFrequency !== 'off' ? '#fff' : theme.text,
+                  backgroundColor: autoRunFrequency !== 'off' ? theme.accent : 'transparent',
+                  border: `1px solid ${autoRunFrequency !== 'off' ? theme.accent : (theme.isDark ? theme.border : '#d1d5db')}`,
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                }}
+              >
+                {autoRunFrequency !== 'off' ? 'Enabled' : 'Disabled'}
+              </button>
+            </div>
+            {autoRunFrequency !== 'off' && (
+              <span style={{ fontSize: '12px', color: theme.text, fontWeight: 500 }}>
+                Every <span style={{ color: theme.accent }}>{customThreshold}</span> {customThreshold === 1 ? 'prompt' : 'prompts'}
+              </span>
+            )}
+          </div>
+
+          {autoRunFrequency !== 'off' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <span style={{ fontSize: '11px', color: theme.textSecondary, minWidth: '20px' }}>1</span>
+              <input
+                type="range"
+                min="1"
+                max="15"
+                value={customThreshold}
+                onChange={(e) => handleThresholdChange(parseInt(e.target.value, 10))}
+                style={{
+                  flex: 1,
+                  height: '4px',
+                  cursor: 'pointer',
+                  accentColor: theme.accent,
+                }}
+              />
+              <span style={{ fontSize: '11px', color: theme.textSecondary, minWidth: '20px' }}>15</span>
+            </div>
+          )}
+
+          {autoRunFrequency !== 'off' && (
+            <p style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '8px' }}>
+              Claude will be reminded to create a reading after {customThreshold} {customThreshold === 1 ? 'prompt' : 'prompts'} in a session.
+            </p>
+          )}
         </div>
 
         {/* Platform setup */}
@@ -455,7 +557,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                       }}
                       disabled={hookInstalling}
                       style={{
-                        padding: '4px 10px',
+                        padding: '4px 8px',
                         fontSize: '11px',
                         fontWeight: 500,
                         color: hookInstalled ? theme.error : theme.accent,
@@ -474,6 +576,107 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                         : 'Automatically remind Claude to create readings'}
                     </span>
                   </div>
+
+                  {/* Debug logs toggle */}
+                  {hookInstalled && (
+                    <div style={{ marginTop: '8px' }}>
+                      <button
+                        onClick={() => setLogsExpanded(!logsExpanded)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          padding: '4px 0',
+                          fontSize: '10px',
+                          color: theme.textSecondary,
+                          backgroundColor: 'transparent',
+                          border: 'none',
+                          cursor: 'pointer',
+                          opacity: 0.7,
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; }}
+                      >
+                        <span style={{ fontFamily: 'monospace', fontSize: '8px' }}>
+                          {logsExpanded ? '▼' : '▶'}
+                        </span>
+                        <span>Debug logs</span>
+                      </button>
+
+                      {logsExpanded && (
+                        <div
+                          style={{
+                            marginTop: '8px',
+                            padding: '12px',
+                            backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                            border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+                            borderRadius: '6px',
+                            fontFamily: "'SF Mono', Monaco, 'Cascadia Code', monospace",
+                            fontSize: '11px',
+                          }}
+                        >
+                          {editStatus ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                <span style={{ color: theme.textSecondary }}>Prompts since reading:</span>
+                                <span style={{
+                                  color: editStatus.edits >= editStatus.threshold ? theme.success : theme.text,
+                                  fontWeight: editStatus.edits >= editStatus.threshold ? 600 : 400,
+                                }}>
+                                  {editStatus.edits}
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                <span style={{ color: theme.textSecondary }}>Threshold:</span>
+                                <span style={{ color: theme.text }}>{editStatus.threshold}</span>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                <span style={{ color: theme.textSecondary }}>Status:</span>
+                                <span style={{
+                                  color: editStatus.edits >= editStatus.threshold ? theme.success : theme.warning,
+                                }}>
+                                  {editStatus.edits >= editStatus.threshold ? '● Triggering' : '○ Waiting'}
+                                </span>
+                              </div>
+                              <div style={{
+                                marginTop: '8px',
+                                paddingTop: '8px',
+                                borderTop: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+                                fontSize: '10px',
+                                color: theme.textSecondary,
+                              }}>
+                                Hook will remind Claude when prompts ≥ threshold
+                              </div>
+                              <button
+                                onClick={async () => {
+                                  await window.librarianAPI?.resetAllCounters();
+                                  const status = await window.librarianAPI?.getEditStatus();
+                                  if (status) setEditStatus(status);
+                                }}
+                                style={{
+                                  marginTop: '4px',
+                                  padding: '4px 8px',
+                                  fontSize: '10px',
+                                  color: theme.textSecondary,
+                                  backgroundColor: 'transparent',
+                                  border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
+                                  borderRadius: '4px',
+                                  cursor: 'pointer',
+                                  alignSelf: 'flex-start',
+                                }}
+                              >
+                                Reset counter
+                              </button>
+                            </div>
+                          ) : (
+                            <span style={{ color: theme.textSecondary }}>
+                              No status file found. Add a watched directory first.
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -533,7 +736,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
           <div style={{ marginBottom: '12px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: theme.text }}>
+                <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
                   Content guidance
                 </div>
                 <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '2px' }}>
@@ -589,7 +792,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                 onClick={handleSaveContentGuidance}
                 disabled={contentGuidanceSaving || !hasUnsavedGuidanceChanges}
                 style={{
-                  padding: '6px 14px',
+                  padding: '6px 12px',
                   fontSize: '12px',
                   fontWeight: 500,
                   color: hasUnsavedGuidanceChanges ? '#fff' : theme.textSecondary,
@@ -607,7 +810,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                   onClick={handleResetContentGuidance}
                   disabled={contentGuidanceSaving}
                   style={{
-                    padding: '6px 14px',
+                    padding: '6px 12px',
                     fontSize: '12px',
                     fontWeight: 500,
                     color: theme.textSecondary,
@@ -658,7 +861,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
           }}
         >
           <div>
-            <div style={{ fontSize: '13px', fontWeight: 600, color: theme.text }}>
+            <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
               Auto-open on new reading
             </div>
             <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '2px' }}>
@@ -677,7 +880,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       {/* Watched Directories */}
       <p
         style={{
-          fontSize: '13px',
+          fontSize: '12px',
           color: theme.textSecondary,
           marginBottom: '16px',
           marginTop: '24px',
@@ -697,94 +900,97 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
           border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
         }}
       >
-        {/* Watched directories list */}
-        {watchedDirs.length > 0 && (
-          <div style={{ marginBottom: '16px' }}>
-            <label
-              style={{
-                display: 'block',
-                marginBottom: '8px',
-                fontSize: '13px',
-                fontWeight: 600,
-                color: theme.text,
-              }}
-            >
-              Watched Directories
-            </label>
-
-            {watchedDirs.map((dir) => (
-              <div
-                key={dir.path}
-                style={{
-                  display: 'flex',
-                  gap: '8px',
-                  alignItems: 'center',
-                  marginBottom: '8px',
-                }}
-              >
-                <code
-                  style={{
-                    flex: 1,
-                    padding: '8px 12px',
-                    fontSize: '12px',
-                    fontFamily: 'monospace',
-                    backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-                    border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
-                    borderRadius: '6px',
-                    color: theme.text,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {formatPath(dir.path)}
-                </code>
-                <button
-                  onClick={() => handleRemove(dir.path)}
-                  style={{
-                    padding: '8px 12px',
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    color: theme.error,
-                    backgroundColor: 'transparent',
-                    border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Remove
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Add directory section */}
+        {/* Watched Directories */}
         <div>
-          <label
-            style={{
-              display: 'block',
-              marginBottom: '8px',
-              fontSize: '13px',
-              fontWeight: 600,
-              color: theme.text,
-            }}
-          >
-            {watchedDirs.length > 0 ? 'Add Another Directory' : 'Add a Directory'}
+          <label style={{
+            display: 'block',
+            marginBottom: '8px',
+            fontSize: '12px',
+            fontWeight: 600,
+            color: theme.text,
+          }}>
+            Watched Directories
           </label>
 
+          {/* List of watched directories with reading counts */}
+          {watchedDirs.length > 0 && (
+            <div style={{
+              marginBottom: '12px',
+              border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+              borderRadius: '6px',
+              backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+              overflow: 'hidden',
+            }}>
+              {watchedDirs.map((dir, index) => {
+                const count = readingCountsByDir[dir.path] || 0;
+                return (
+                  <div
+                    key={dir.path}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 12px',
+                      borderBottom: index < watchedDirs.length - 1
+                        ? `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`
+                        : 'none',
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0, marginRight: '8px' }}>
+                      <code style={{
+                        fontSize: '12px',
+                        fontFamily: 'monospace',
+                        color: theme.text,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        display: 'block',
+                      }}>
+                        {formatPath(dir.path)}
+                      </code>
+                      <span style={{
+                        fontSize: '11px',
+                        color: theme.textSecondary,
+                      }}>
+                        {count} reading{count !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => handleRemove(dir.path)}
+                      style={{
+                        padding: '4px 8px',
+                        fontSize: '11px',
+                        fontWeight: 500,
+                        color: theme.error,
+                        backgroundColor: 'transparent',
+                        border: `1px solid ${theme.isDark ? 'rgba(248,113,113,0.3)' : '#fecaca'}`,
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Add directory input */}
           <div style={{ display: 'flex', gap: '8px' }}>
             <input
               type="text"
               value={manualPath}
               onChange={(e) => setManualPath(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleManualPathSubmit()}
-              placeholder="~/path/to/directory"
+              placeholder="Enter path (e.g., ~/.librarian)"
               disabled={isScanning}
               style={{
                 flex: 1,
                 padding: '8px 12px',
-                fontSize: '13px',
+                fontSize: '12px',
+                fontFamily: 'monospace',
                 backgroundColor: theme.isDark ? theme.surface2 : '#fff',
                 border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
                 borderRadius: '6px',
@@ -817,44 +1023,58 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                   fontSize: '12px',
                   fontWeight: 500,
                   color: manualPath.trim() ? '#fff' : theme.textSecondary,
-                  backgroundColor: manualPath.trim() ? theme.accent : 'transparent',
-                  border: manualPath.trim() ? 'none' : `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
+                  backgroundColor: manualPath.trim() ? theme.info : 'transparent',
+                  border: manualPath.trim() ? 'none' : `1px solid ${theme.border}`,
                   borderRadius: '6px',
-                  cursor: manualPath.trim() ? 'pointer' : 'default',
+                  cursor: manualPath.trim() ? 'pointer' : 'not-allowed',
+                  opacity: manualPath.trim() ? 1 : 0.5,
                 }}
               >
                 Add
               </button>
             )}
           </div>
+
+          {/* Common paths hint - only show when empty */}
+          {watchedDirs.length === 0 && (
+            <p style={{
+              fontSize: '11px',
+              color: theme.textSecondary,
+              marginTop: '8px',
+              marginBottom: '0',
+              lineHeight: '1.5',
+            }}>
+              <strong>Common locations:</strong><br />
+              • <code style={{ fontSize: '10px', backgroundColor: theme.isDark ? '#2d2d2d' : '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>~/.librarian</code> — Global readings<br />
+              • <code style={{ fontSize: '10px', backgroundColor: theme.isDark ? '#2d2d2d' : '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>~/project/.librarian</code> — Project readings
+            </p>
+          )}
         </div>
 
         {/* Error display */}
         {error && (
-          <p
-            style={{
-              marginTop: '12px',
-              fontSize: '12px',
-              color: theme.error,
-            }}
-          >
+          <p style={{
+            marginTop: '8px',
+            marginBottom: '0',
+            fontSize: '12px',
+            color: theme.error,
+          }}>
             {error}
           </p>
         )}
-      </div>
 
-      {/* Hint about common directories */}
-      <p
-        style={{
-          fontSize: '12px',
-          color: theme.textSecondary,
-          marginTop: '12px',
-          lineHeight: '1.5',
-        }}
-      >
-        Common directories: <code style={{ fontSize: '11px' }}>~/.librarian</code>,{' '}
-        <code style={{ fontSize: '11px' }}>~/project/.librarian</code>
-      </p>
+        {/* View readings note */}
+        {watchedDirs.length > 0 && (
+          <p style={{
+            marginTop: '12px',
+            marginBottom: '0',
+            fontSize: '12px',
+            color: theme.textSecondary,
+          }}>
+            View readings in the <strong>Librarian</strong> tab.
+          </p>
+        )}
+      </div>
 
       {/* Cursor Instructions Modal */}
       {showCursorModal && (
@@ -888,7 +1108,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
             <h3 style={{ margin: '0 0 16px', fontSize: '16px', color: theme.text }}>
               Cursor Instructions
             </h3>
-            <p style={{ fontSize: '13px', color: theme.textSecondary, marginBottom: '16px' }}>
+            <p style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '16px' }}>
               Copy this text and paste it into Cursor Settings → General → Rules for AI
             </p>
             <pre
@@ -911,7 +1131,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                 }}
                 style={{
                   padding: '8px 16px',
-                  fontSize: '13px',
+                  fontSize: '12px',
                   fontWeight: 500,
                   color: '#fff',
                   backgroundColor: copied ? theme.success : theme.accent,
@@ -927,7 +1147,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                 onClick={() => setShowCursorModal(false)}
                 style={{
                   padding: '8px 16px',
-                  fontSize: '13px',
+                  fontSize: '12px',
                   color: theme.text,
                   backgroundColor: 'transparent',
                   border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,

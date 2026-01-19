@@ -44,12 +44,22 @@ function getApiKey(): string | null {
 }
 
 /**
+ * Token usage from API response.
+ */
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/**
  * Result from transcript improvement operation.
  */
 export interface EngineerResult {
   success: boolean;
   refinedPrompt?: string;
   error?: string;
+  usage?: TokenUsage;
+  wordCount?: number;
 }
 
 /**
@@ -241,7 +251,10 @@ export async function improveTranscript(rawTranscript: string): Promise<Engineer
       };
     }
 
-    const data = await response.json() as { content?: Array<{ text?: string }> };
+    const data = await response.json() as {
+      content?: Array<{ text?: string }>;
+      usage?: { input_tokens?: number; output_tokens?: number };
+    };
     const content = data.content?.[0]?.text;
 
     if (!content) {
@@ -251,9 +264,17 @@ export async function improveTranscript(rawTranscript: string): Promise<Engineer
       };
     }
 
+    // Calculate word count from input
+    const wordCount = rawTranscript.trim().split(/\s+/).length;
+
     return {
       success: true,
       refinedPrompt: content.trim(),
+      usage: data.usage ? {
+        inputTokens: data.usage.input_tokens || 0,
+        outputTokens: data.usage.output_tokens || 0,
+      } : undefined,
+      wordCount,
     };
   } catch (error) {
     // Network error - try local LLM as fallback

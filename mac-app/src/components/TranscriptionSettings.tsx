@@ -315,7 +315,7 @@ export default function TranscriptionSettings() {
   
   const handlePreviewSound = useCallback(async (soundId: string) => {
     if (!window.transcribeAPI?.previewSound) return;
-    
+
     try {
       await window.transcribeAPI.previewSound(soundId);
     } catch (err) {
@@ -466,14 +466,114 @@ export default function TranscriptionSettings() {
 
   return (
     <div style={styles.container}>
-      <div style={styles.row}>
-        <span style={styles.rowLabel}>Status</span>
-        <span style={{ ...styles.rowValue, color: getStatusColor() }}>
-          <span style={{ ...styles.statusDot, backgroundColor: getStatusColor() }} />
-          {selectedModel === 'none' ? 'No model - download one below' : `${getStatusText()} • ${selectedModel} ${modelStatus === 'downloaded' ? '✓' : modelStatus === 'downloading' ? '↓' : '✗'}`}
-        </span>
+      <div style={styles.modelsSection}>
+        <div style={styles.sectionHeader}>
+          <span style={styles.sectionTitle}>LOCAL TRANSCRIPTION MODELS</span>
+          <div style={styles.sectionLine} />
+        </div>
+
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Status</span>
+          <span style={{ ...styles.rowValue, color: getStatusColor() }}>
+            <span style={{ ...styles.statusDot, backgroundColor: getStatusColor() }} />
+            {selectedModel === 'none' ? 'No model - download one below' : `${getStatusText()} • ${selectedModel} ${modelStatus === 'downloaded' ? '✓' : modelStatus === 'downloading' ? '↓' : '✗'}`}
+          </span>
+        </div>
+
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Active</span>
+          <select
+            value={selectedModel}
+            onChange={(e) => handleModelChange(e.target.value)}
+            disabled={isDownloading || downloadingModel !== null}
+            style={styles.select}
+          >
+            {!Object.values(modelDownloadStatus).some(Boolean) && (
+              <option value="none">No models downloaded</option>
+            )}
+            {Object.entries(availableModels).map(([size, info]) => {
+                const isDownloaded = modelDownloadStatus[size] || false;
+                return (
+                  <option key={size} value={size} disabled={!isDownloaded}>
+                    {info.description} {isDownloaded ? '' : '(not downloaded)'}
+                  </option>
+                );
+              })}
+          </select>
+        </div>
+
+        <div style={styles.modelsList}>
+          {Object.entries(availableModels).map(([size, info]) => {
+              const isDownloaded = modelDownloadStatus[size] || false;
+              const isSelected = size === selectedModel;
+              const isDownloadingThis = downloadingModel === size;
+              const isDeletingThis = deletingModel === size;
+              const progress = modelDownloadProgress[size];
+              const progressPercent = progress ? Math.round((progress.downloaded / progress.total) * 100) : 0;
+              const sizeMB = (info.sizeBytes / 1024 / 1024).toFixed(0);
+
+              const qualityHint = size === 'small' ? 'Good for quick tasks'
+                : size === 'medium' ? 'Balanced accuracy'
+                : size === 'large' ? 'Best accuracy'
+                : size === 'turbo' ? 'Fast + accurate'
+                : '';
+
+              return (
+                <div
+                  key={size}
+                  style={{
+                    ...styles.modelCard,
+                    borderLeft: isSelected ? `3px solid ${theme.info}` : isDownloaded ? `3px solid ${theme.success}` : `3px solid ${theme.isDark ? '#404040' : '#e5e7eb'}`,
+                    backgroundColor: isSelected
+                      ? (theme.isDark ? 'rgba(59, 130, 246, 0.15)' : '#f0f9ff')
+                      : 'transparent',
+                  }}
+                >
+                  <div style={styles.modelCardContent}>
+                    <div style={styles.modelCardHeader}>
+                      <span style={{ ...styles.rowValue, fontWeight: isSelected ? 600 : 500 }}>
+                        {info.description.split(' - ')[0]}
+                      </span>
+                      <span style={styles.modelSize}>{sizeMB}MB</span>
+                    </div>
+                    <span style={styles.modelHint}>{qualityHint}</span>
+                  </div>
+
+                  <div style={styles.rowControls}>
+                    {isDownloadingThis && progress ? (
+                      <div style={styles.progressBar}>
+                        <div style={{ ...styles.progressFill, width: `${progressPercent}%` }} />
+                        <span style={styles.progressText}>{progressPercent}%</span>
+                      </div>
+                    ) : isDownloaded ? (
+                      <>
+                        <span style={styles.downloadedBadge}>Downloaded</span>
+                        <button
+                          onClick={() => handleDeleteModel(size)}
+                          disabled={isDeletingThis}
+                          style={{ ...styles.btnGhost, color: '#9ca3af', opacity: isDeletingThis ? 0.5 : 1 }}
+                          title="Delete model"
+                        >
+                          {isDeletingThis ? '...' : '×'}
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => handleDownloadModelForSize(size)}
+                        disabled={downloadingModel !== null}
+                        style={{ ...styles.btn, opacity: downloadingModel !== null ? 0.5 : 1 }}
+                      >
+                        Download
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+        </div>
       </div>
 
+      {error && <p style={styles.error}>{error}</p>}
 
       <div style={styles.soundsSection}>
         <div style={styles.sectionHeader}>
@@ -667,107 +767,6 @@ export default function TranscriptionSettings() {
           </>
         )}
       </div>
-
-      {error && <p style={styles.error}>{error}</p>}
-
-      <div style={styles.modelsSection}>
-        <div style={styles.sectionHeader}>
-          <span style={styles.sectionTitle}>MODELS</span>
-          <div style={styles.sectionLine} />
-        </div>
-        
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Active</span>
-          <select
-            value={selectedModel}
-            onChange={(e) => handleModelChange(e.target.value)}
-            disabled={isDownloading || downloadingModel !== null}
-            style={styles.select}
-          >
-            {!Object.values(modelDownloadStatus).some(Boolean) && (
-              <option value="none">No models downloaded</option>
-            )}
-            {Object.entries(availableModels).map(([size, info]) => {
-                const isDownloaded = modelDownloadStatus[size] || false;
-                return (
-                  <option key={size} value={size} disabled={!isDownloaded}>
-                    {info.description} {isDownloaded ? '' : '(not downloaded)'}
-                  </option>
-                );
-              })}
-          </select>
-        </div>
-
-        <div style={styles.modelsList}>
-          {Object.entries(availableModels).map(([size, info]) => {
-              const isDownloaded = modelDownloadStatus[size] || false;
-              const isSelected = size === selectedModel;
-              const isDownloadingThis = downloadingModel === size;
-              const isDeletingThis = deletingModel === size;
-              const progress = modelDownloadProgress[size];
-              const progressPercent = progress ? Math.round((progress.downloaded / progress.total) * 100) : 0;
-              const sizeMB = (info.sizeBytes / 1024 / 1024).toFixed(0);
-              
-              const qualityHint = size === 'small' ? 'Good for quick tasks'
-                : size === 'medium' ? 'Balanced accuracy'
-                : size === 'large' ? 'Best accuracy'
-                : size === 'turbo' ? 'Fast + accurate'
-                : '';
-
-              return (
-                <div
-                  key={size}
-                  style={{
-                    ...styles.modelCard,
-                    borderLeft: isSelected ? `3px solid ${theme.info}` : isDownloaded ? `3px solid ${theme.success}` : `3px solid ${theme.isDark ? '#404040' : '#e5e7eb'}`,
-                    backgroundColor: isSelected
-                      ? (theme.isDark ? 'rgba(59, 130, 246, 0.15)' : '#f0f9ff')
-                      : 'transparent',
-                  }}
-                >
-                  <div style={styles.modelCardContent}>
-                    <div style={styles.modelCardHeader}>
-                      <span style={{ ...styles.rowValue, fontWeight: isSelected ? 600 : 500 }}>
-                        {info.description.split(' - ')[0]}
-                      </span>
-                      <span style={styles.modelSize}>{sizeMB}MB</span>
-                    </div>
-                    <span style={styles.modelHint}>{qualityHint}</span>
-                  </div>
-                  
-                  <div style={styles.rowControls}>
-                    {isDownloadingThis && progress ? (
-                      <div style={styles.progressBar}>
-                        <div style={{ ...styles.progressFill, width: `${progressPercent}%` }} />
-                        <span style={styles.progressText}>{progressPercent}%</span>
-                      </div>
-                    ) : isDownloaded ? (
-                      <>
-                        <span style={styles.downloadedBadge}>Downloaded</span>
-                        <button
-                          onClick={() => handleDeleteModel(size)}
-                          disabled={isDeletingThis}
-                          style={{ ...styles.btnGhost, color: '#9ca3af', opacity: isDeletingThis ? 0.5 : 1 }}
-                          title="Delete model"
-                        >
-                          {isDeletingThis ? '...' : '×'}
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        onClick={() => handleDownloadModelForSize(size)}
-                        disabled={downloadingModel !== null}
-                        style={{ ...styles.btn, opacity: downloadingModel !== null ? 0.5 : 1 }}
-                      >
-                        Download
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-        </div>
-      </div>
     </div>
   );
 }
@@ -782,7 +781,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   notAvailable: {
     color: theme.textSecondary,
     fontStyle: 'italic',
-    fontSize: '13px',
+    fontSize: '12px',
   },
 
   // Flat row layout: label left, control right.
@@ -794,12 +793,12 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     minHeight: '32px',
   },
   rowLabel: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.text,
     fontWeight: 400,
   },
   rowValue: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.text,
     fontWeight: 500,
     display: 'flex',
@@ -823,7 +822,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   // Unified button styles.
   btn: {
     padding: '6px 12px',
-    fontSize: '13px',
+    fontSize: '12px',
     fontWeight: 500,
     color: theme.text,
     backgroundColor: theme.isDark ? theme.surface1 : '#fff',
@@ -844,7 +843,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     color: theme.textSecondary,
     minWidth: 'auto',
     padding: '6px 8px',
-    fontSize: '13px',
+    fontSize: '12px',
     cursor: 'pointer',
   },
 
@@ -877,7 +876,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   // Select dropdown.
   select: {
     padding: '6px 12px',
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.text,
     backgroundColor: theme.isDark ? theme.surface1 : '#fff',
     border: `1px solid ${theme.border}`,
@@ -888,7 +887,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
 
   // Error text.
   error: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.error,
     margin: '4px 0',
   },
@@ -899,7 +898,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   },
   selectSmall: {
     padding: '4px 8px',
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.text,
     backgroundColor: theme.isDark ? theme.surface1 : '#fff',
     border: `1px solid ${theme.border}`,
@@ -958,7 +957,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     gap: '8px',
   },
   modelSize: {
-    fontSize: '13px',
+    fontSize: '12px',
     color: theme.textSecondary,
   },
   modelHint: {

@@ -664,7 +664,7 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
 }
 
 // =============================================================================
-// Phase 4: Shortcuts (final screen - practice keyboard shortcuts)
+// Phase 4: Shortcuts (final screen - configure and practice keyboard shortcuts)
 // =============================================================================
 
 interface ShortcutsPhaseProps {
@@ -673,274 +673,298 @@ interface ShortcutsPhaseProps {
   styles: Record<string, React.CSSProperties>;
 }
 
-interface ShortcutDef {
-  id: string;
-  label: string;
-  keys: string[];
-  match: (e: KeyboardEvent) => boolean;
-}
+type ShortcutCapture = 'history' | 'transcription' | 'screenshot' | null;
 
-// Parse a hotkey string like "Command+Shift+4" into display keys and a match function.
-function parseHotkey(hotkeyStr: string): { keys: string[]; match: (e: KeyboardEvent) => boolean } {
-  const parts = hotkeyStr.split('+').map(p => p.trim());
-  const displayKeys: string[] = [];
+// Helper function to build hotkey string from keyboard event (matches Settings exactly)
+function buildHotkeyString(event: KeyboardEvent): string {
+  const parts: string[] = [];
+  if (event.metaKey) parts.push('Command');
+  if (event.ctrlKey) parts.push('Control');
+  if (event.altKey) parts.push('Alt');
+  if (event.shiftKey) parts.push('Shift');
 
-  let needsMeta = false;
-  let needsAlt = false;
-  let needsShift = false;
-  let needsCtrl = false;
-  let mainKey = '';
+  let key = event.code;
 
-  for (const part of parts) {
-    const lower = part.toLowerCase();
-    if (lower === 'command' || lower === 'cmd' || lower === '⌘') {
-      needsMeta = true;
-      displayKeys.push('⌘');
-    } else if (lower === 'alt' || lower === 'option') {
-      needsAlt = true;
-      displayKeys.push('Option');
-    } else if (lower === 'shift') {
-      needsShift = true;
-      displayKeys.push('Shift');
-    } else if (lower === 'ctrl' || lower === 'control') {
-      needsCtrl = true;
-      displayKeys.push('Ctrl');
+  if (key.startsWith('Key')) {
+    key = key.substring(3).toUpperCase();
+  } else if (key.startsWith('Digit')) {
+    key = key.substring(5);
+  } else {
+    const codeMap: Record<string, string> = {
+      'Space': 'Space',
+      'Backquote': '`',
+      'Backslash': '\\',
+      'BracketLeft': '[',
+      'BracketRight': ']',
+      'Comma': ',',
+      'Equal': '=',
+      'Minus': '-',
+      'Period': '.',
+      'Quote': "'",
+      'Semicolon': ';',
+      'Slash': '/',
+      'CapsLock': 'CapsLock',
+      'Escape': 'Escape',
+      'Enter': 'Enter',
+      'Tab': 'Tab',
+      'Backspace': 'Backspace',
+      'Delete': 'Delete',
+      'ArrowUp': 'Up',
+      'ArrowDown': 'Down',
+      'ArrowLeft': 'Left',
+      'ArrowRight': 'Right',
+      'PageUp': 'PageUp',
+      'PageDown': 'PageDown',
+      'Home': 'Home',
+      'End': 'End',
+      'Insert': 'Insert',
+      'F1': 'F1', 'F2': 'F2', 'F3': 'F3', 'F4': 'F4',
+      'F5': 'F5', 'F6': 'F6', 'F7': 'F7', 'F8': 'F8',
+      'F9': 'F9', 'F10': 'F10', 'F11': 'F11', 'F12': 'F12',
+    };
+    if (codeMap[key]) {
+      key = codeMap[key];
     } else {
-      // Main key
-      mainKey = lower;
-      // Display the key nicely
-      if (lower === 'space') {
-        displayKeys.push('Space');
-      } else if (lower === 'escape' || lower === 'esc') {
-        displayKeys.push('Esc');
-      } else if (lower === '\\') {
-        displayKeys.push('\\');
+      const fallback = event.key;
+      if (fallback && fallback.length === 1 && fallback.charCodeAt(0) < 128) {
+        key = fallback.toUpperCase();
       } else {
-        displayKeys.push(part.toUpperCase());
+        return '';
       }
     }
   }
 
-  // Build match function
-  const match = (e: KeyboardEvent): boolean => {
-    if (needsMeta !== e.metaKey) return false;
-    if (needsAlt !== e.altKey) return false;
-    if (needsShift !== e.shiftKey) return false;
-    if (needsCtrl !== e.ctrlKey) return false;
+  // Filter out modifier-only key presses
+  const modifierCodes = [
+    'Meta', 'MetaLeft', 'MetaRight',
+    'Control', 'ControlLeft', 'ControlRight',
+    'Alt', 'AltLeft', 'AltRight',
+    'Shift', 'ShiftLeft', 'ShiftRight'
+  ];
+  if (modifierCodes.includes(event.code)) {
+    return '';
+  }
 
-    // Check the main key
-    if (mainKey === 'space') return e.code === 'Space';
-    if (mainKey === 'escape' || mainKey === 'esc') return e.code === 'Escape';
-    if (mainKey === '\\') return e.code === 'Backslash';
-    if (/^[0-9]$/.test(mainKey)) return e.code === `Digit${mainKey}`;
-    if (/^[a-z]$/.test(mainKey)) return e.code === `Key${mainKey.toUpperCase()}`;
-    if (/^f[0-9]+$/.test(mainKey)) return e.code === mainKey.toUpperCase();
-
-    return false;
-  };
-
-  return { keys: displayKeys, match };
+  return parts.length > 0 ? `${parts.join('+')}+${key}` : key;
 }
 
-// Default shortcuts (used as fallback).
-const DEFAULT_SHORTCUTS: ShortcutDef[] = [
-  {
-    id: 'transcription',
-    label: 'Start / End transcription',
-    keys: ['Option', 'Shift', 'Space'],
-    match: (e: KeyboardEvent) => e.altKey && e.shiftKey && e.code === 'Space',
-  },
-  {
-    id: 'screenshot',
-    label: 'Take screenshot',
-    keys: ['⌘', '4'],
-    match: (e: KeyboardEvent) => e.metaKey && !e.shiftKey && e.code === 'Digit4',
-  },
-  {
-    id: 'commandLauncher',
-    label: 'Open command launcher',
-    keys: ['⌘', 'Shift', 'K'],
-    match: (e: KeyboardEvent) => e.metaKey && e.shiftKey && e.code === 'KeyK',
-  },
-  {
-    id: 'openApp',
-    label: 'Open Field Theory',
-    keys: ['Option', 'Space'],
-    match: (e: KeyboardEvent) => e.altKey && !e.shiftKey && e.code === 'Space',
-  },
-];
+// Format hotkey for display (e.g., "Command+Shift+K" -> "⌘ Shift K")
+function formatHotkeyDisplay(hotkeyStr: string): string {
+  if (!hotkeyStr) return 'Not set';
+  return hotkeyStr
+    .replace(/Command/g, '⌘')
+    .replace(/Control/g, '⌃')
+    .replace(/Alt/g, '⌥')
+    .replace(/Shift/g, '⇧')
+    .replace(/\+/g, ' ');
+}
 
 function ShortcutsPhase({ onFinish, theme, styles }: ShortcutsPhaseProps) {
-  const [completedCount, setCompletedCount] = useState(0);
-  const [hasCompletedOnce, setHasCompletedOnce] = useState(false);
-  const [shortcuts, setShortcuts] = useState<ShortcutDef[]>(DEFAULT_SHORTCUTS);
+  // Current hotkey values
+  const [historyHotkey, setHistoryHotkey] = useState('Alt+Space');
+  const [transcriptionHotkey, setTranscriptionHotkey] = useState('\\');
+  const [screenshotHotkey, setScreenshotHotkey] = useState('Command+4');
 
-  // Load user's actual hotkey preferences on mount.
+  // Capture state
+  const [capturing, setCapturing] = useState<ShortcutCapture>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load current hotkeys on mount
   useEffect(() => {
     const loadHotkeys = async () => {
       try {
-        const [transcriptionHotkey, clipboardHotkeys] = await Promise.all([
+        const [transcription, clipboard] = await Promise.all([
           window.transcribeAPI?.getHotkey?.(),
           window.clipboardAPI?.getHotkeys?.(),
         ]);
 
-        const newShortcuts: ShortcutDef[] = [];
-
-        // Transcription hotkey
-        if (transcriptionHotkey) {
-          const parsed = parseHotkey(transcriptionHotkey);
-          newShortcuts.push({
-            id: 'transcription',
-            label: 'Start / End transcription',
-            ...parsed,
-          });
-        } else {
-          newShortcuts.push(DEFAULT_SHORTCUTS[0]);
-        }
-
-        // Screenshot hotkey
-        if (clipboardHotkeys?.screenshot) {
-          const parsed = parseHotkey(clipboardHotkeys.screenshot);
-          newShortcuts.push({
-            id: 'screenshot',
-            label: 'Take screenshot',
-            ...parsed,
-          });
-        } else {
-          newShortcuts.push(DEFAULT_SHORTCUTS[1]);
-        }
-
-        // Command launcher (hardcoded, not configurable)
-        newShortcuts.push(DEFAULT_SHORTCUTS[2]);
-
-        // Open Field Theory (clipboard history hotkey)
-        if (clipboardHotkeys?.history) {
-          const parsed = parseHotkey(clipboardHotkeys.history);
-          newShortcuts.push({
-            id: 'openApp',
-            label: 'Open Field Theory',
-            ...parsed,
-          });
-        } else {
-          newShortcuts.push(DEFAULT_SHORTCUTS[3]);
-        }
-
-        setShortcuts(newShortcuts);
+        if (transcription) setTranscriptionHotkey(transcription);
+        if (clipboard?.history) setHistoryHotkey(clipboard.history);
+        if (clipboard?.screenshot) setScreenshotHotkey(clipboard.screenshot);
       } catch (err) {
         console.error('[Onboarding] Failed to load hotkeys:', err);
-        // Keep default shortcuts on error
       }
     };
 
     loadHotkeys();
   }, []);
 
-  // Listen for keyboard shortcuts.
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (completedCount >= shortcuts.length) return;
+  // Handle hotkey capture
+  const handleSetHistoryHotkey = useCallback(async (hotkeyString: string) => {
+    setCapturing(null);
+    setError(null);
 
-      const currentShortcut = shortcuts[completedCount];
-      if (currentShortcut.match(e)) {
-        e.preventDefault();
-        e.stopPropagation();
-        const newCount = completedCount + 1;
-        setCompletedCount(newCount);
-        if (newCount >= shortcuts.length) {
-          setHasCompletedOnce(true);
+    if (!window.clipboardAPI) return;
+
+    try {
+      const success = await window.clipboardAPI.setHotkeys({ history: hotkeyString });
+      if (!success) {
+        setError('Failed to register shortcut. It may be in use.');
+      } else {
+        setHistoryHotkey(hotkeyString);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to set shortcut');
+    }
+  }, []);
+
+  const handleSetTranscriptionHotkey = useCallback(async (hotkeyString: string) => {
+    setCapturing(null);
+    setError(null);
+
+    if (!window.transcribeAPI?.setHotkey) return;
+
+    try {
+      const success = await window.transcribeAPI.setHotkey(hotkeyString);
+      if (!success) {
+        setError('Failed to register shortcut. It may be in use.');
+      } else {
+        setTranscriptionHotkey(hotkeyString);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to set shortcut');
+    }
+  }, []);
+
+  const handleSetScreenshotHotkey = useCallback(async (hotkeyString: string) => {
+    setCapturing(null);
+    setError(null);
+
+    if (!window.clipboardAPI) return;
+
+    try {
+      const success = await window.clipboardAPI.setHotkeys({ screenshot: hotkeyString });
+      if (!success) {
+        setError('Failed to register shortcut. It may be in use.');
+      } else {
+        setScreenshotHotkey(hotkeyString);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to set shortcut');
+    }
+  }, []);
+
+  // Capture keydown when recording
+  useEffect(() => {
+    if (!capturing) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const hotkeyString = buildHotkeyString(event);
+      if (hotkeyString) {
+        if (capturing === 'history') {
+          handleSetHistoryHotkey(hotkeyString);
+        } else if (capturing === 'transcription') {
+          handleSetTranscriptionHotkey(hotkeyString);
+        } else if (capturing === 'screenshot') {
+          handleSetScreenshotHotkey(hotkeyString);
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [completedCount, shortcuts]);
+  }, [capturing, handleSetHistoryHotkey, handleSetTranscriptionHotkey, handleSetScreenshotHotkey]);
 
-  const allComplete = completedCount >= shortcuts.length;
+  const shortcuts = [
+    { id: 'history', label: 'Open Field Theory', hotkey: historyHotkey },
+    { id: 'transcription', label: 'Record Transcription', hotkey: transcriptionHotkey },
+    { id: 'screenshot', label: 'Take Screenshot', hotkey: screenshotHotkey },
+  ];
+
+  const btnStyle: React.CSSProperties = {
+    padding: '6px 12px',
+    fontSize: '12px',
+    fontWeight: 500,
+    backgroundColor: theme.isDark ? theme.surface2 : '#f3f4f6',
+    border: `1px solid ${theme.border}`,
+    borderRadius: '6px',
+    color: theme.text,
+    cursor: 'pointer',
+    minWidth: '100px',
+    textAlign: 'center',
+  };
+
+  const btnActiveStyle: React.CSSProperties = {
+    ...btnStyle,
+    backgroundColor: theme.infoBg,
+    borderColor: theme.info,
+    color: theme.info,
+  };
+
+  const btnCancelStyle: React.CSSProperties = {
+    padding: '6px 10px',
+    fontSize: '11px',
+    backgroundColor: 'transparent',
+    border: 'none',
+    color: theme.textSecondary,
+    cursor: 'pointer',
+  };
 
   return (
     <div style={styles.phase}>
-      <h1 style={styles.title}>Practice these shortcuts</h1>
+      <h1 style={styles.title}>Configure your shortcuts</h1>
       <p style={styles.subtitle}>
-        Press each shortcut to continue
+        Click to customize, or keep the defaults
       </p>
 
-      <div style={{ ...styles.shortcutsList, gap: '2px' }}>
-        {shortcuts.map((shortcut, index) => {
-          const isCompleted = index < completedCount;
-          const isCurrent = index === completedCount;
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+        {shortcuts.map((shortcut) => {
+          const isCapturing = capturing === shortcut.id;
 
           return (
             <div
               key={shortcut.id}
               style={{
-                ...styles.shortcutRow,
-                backgroundColor: isCompleted ? theme.successBg : isCurrent ? theme.infoBg : 'transparent',
-                borderRadius: '6px',
-                padding: '8px 10px',
-                margin: '0 -10px',
-                transition: 'background-color 0.2s ease',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '10px 12px',
+                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+                borderRadius: '8px',
+                border: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}`,
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span style={{
-                  width: '20px',
-                  height: '20px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: '13px',
-                  color: isCompleted ? theme.success : isCurrent ? theme.info : theme.textSecondary,
-                }}>
-                  {isCompleted ? '✓' : isCurrent ? '→' : '○'}
-                </span>
-                <span style={{
-                  ...styles.shortcutAction,
-                  fontSize: '13px',
-                  color: isCompleted ? theme.success : isCurrent ? theme.text : theme.textSecondary,
-                  fontWeight: isCurrent ? 600 : 400,
-                }}>
-                  {shortcut.label}
-                </span>
-              </div>
-              <div style={styles.shortcutKeys}>
-                {shortcut.keys.map((key, keyIndex) => (
-                  <span key={keyIndex} style={{ display: 'flex', alignItems: 'center' }}>
-                    {keyIndex > 0 && <span style={{ ...styles.shortcutPlus, fontSize: '11px' }}>+</span>}
-                    <kbd style={{
-                      ...styles.kbd,
-                      fontSize: '11px',
-                      padding: '2px 6px',
-                      backgroundColor: isCompleted ? theme.successBg : isCurrent ? theme.infoBg : (theme.isDark ? theme.surface2 : '#f3f4f6'),
-                      color: isCompleted ? theme.success : isCurrent ? theme.info : theme.textSecondary,
-                      borderColor: isCompleted ? (theme.isDark ? 'rgba(74,222,128,0.3)' : '#bbf7d0') : isCurrent ? (theme.isDark ? 'rgba(96,165,250,0.3)' : '#bfdbfe') : theme.border,
-                    }}>
-                      {key}
-                    </kbd>
-                  </span>
-                ))}
+              <span style={{ fontSize: '13px', fontWeight: 500, color: theme.text }}>
+                {shortcut.label}
+              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <button
+                  onClick={() => {
+                    if (!isCapturing) {
+                      setCapturing(shortcut.id as ShortcutCapture);
+                      setError(null);
+                    }
+                  }}
+                  disabled={capturing !== null && !isCapturing}
+                  style={isCapturing ? btnActiveStyle : btnStyle}
+                >
+                  {isCapturing ? 'Press keys...' : formatHotkeyDisplay(shortcut.hotkey)}
+                </button>
+                {isCapturing && (
+                  <button
+                    onClick={() => { setCapturing(null); setError(null); }}
+                    style={btnCancelStyle}
+                  >
+                    Cancel
+                  </button>
+                )}
               </div>
             </div>
           );
         })}
-        {allComplete && (
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '2px' }}>
-            <button
-              onClick={() => setCompletedCount(0)}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: theme.textSecondary,
-                fontSize: '10px',
-                cursor: 'pointer',
-                padding: '2px 6px',
-              }}
-            >
-              practice again
-            </button>
-          </div>
-        )}
       </div>
+
+      {error && (
+        <p style={{ fontSize: '12px', color: theme.error, marginTop: '8px', textAlign: 'center' }}>
+          {error}
+        </p>
+      )}
+
+      <p style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '12px', textAlign: 'center' }}>
+        You can change these anytime in Settings → Keyboard Shortcuts
+      </p>
 
       <button
         style={{
@@ -949,7 +973,7 @@ function ShortcutsPhase({ onFinish, theme, styles }: ShortcutsPhaseProps) {
         }}
         onClick={onFinish}
       >
-        {hasCompletedOnce ? 'Get Started' : 'Skip Practice'}
+        Get Started
       </button>
     </div>
   );
