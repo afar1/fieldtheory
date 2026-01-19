@@ -1311,15 +1311,19 @@ function setupLibrarianIPCHandlers(): void {
       return null;
     }
 
-    // Get author name from profile
+    // Get author name from profile (first + last for "First L." format)
     let authorName: string | null = null;
     try {
       const { data: profile } = await supabase
         .from('profiles')
-        .select('first_name')
+        .select('first_name, last_name')
         .eq('id', session.user.id)
         .single();
-      authorName = profile?.first_name || null;
+      if (profile?.first_name && profile?.last_name) {
+        authorName = `${profile.first_name} ${profile.last_name}`;
+      } else if (profile?.first_name) {
+        authorName = profile.first_name;
+      }
     } catch {
       // Ignore profile fetch errors
     }
