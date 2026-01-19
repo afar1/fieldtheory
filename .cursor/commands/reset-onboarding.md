@@ -11,7 +11,7 @@ The app checks **both microphone AND accessibility** permissions to determine if
 Run this bash command to delete preferences and open System Settings:
 
 ```bash
-rm ~/Library/Application\ Support/littleai-mac/preferences.json && open "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone" && open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" && open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+rm ~/Library/Application\ Support/Field\ Theory/preferences.json && open "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone" && open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" && open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
 ```
 
 Then tell the user to do these steps **before restarting the app**:

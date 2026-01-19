@@ -1,4 +1,4 @@
-# Little AI Companion (Mac)
+# Field Theory (Mac)
 
 This is a minimal Electron + Vite desktop viewer for Supabase data. It shares the same OTP sign-in flow as the mobile app and lists todos, observations, and transcripts.
 

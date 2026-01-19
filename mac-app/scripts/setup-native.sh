@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # setup-native.sh - Build the native Swift helper for macOS.
-# This script compiles the LittleOneHelper CLI using Swift Package Manager.
+# This script compiles the FieldTheoryHelper CLI using Swift Package Manager.
 # =============================================================================
 
 set -e
@@ -10,16 +10,16 @@ SCRIPT_DIR="$(dirname "$0")"
 NATIVE_DIR="$SCRIPT_DIR/../electron/native"
 BUILD_DIR="$NATIVE_DIR/build"
 
-echo "🔨 Building LittleOneHelper..."
+echo "🔨 Building FieldTheoryHelper..."
 
 # Check if we're on macOS.
 if [[ "$OSTYPE" != "darwin"* ]]; then
     echo "⚠️  Native helper can only be built on macOS."
     echo "   Creating placeholder for development on other platforms."
     mkdir -p "$BUILD_DIR"
-    echo "#!/bin/bash" > "$BUILD_DIR/LittleOneHelper"
-    echo "echo '{\"type\":\"error\",\"message\":\"Native helper not available on this platform\"}'" >> "$BUILD_DIR/LittleOneHelper"
-    chmod +x "$BUILD_DIR/LittleOneHelper"
+    echo "#!/bin/bash" > "$BUILD_DIR/FieldTheoryHelper"
+    echo "echo '{\"type\":\"error\",\"message\":\"Native helper not available on this platform\"}'" >> "$BUILD_DIR/FieldTheoryHelper"
+    chmod +x "$BUILD_DIR/FieldTheoryHelper"
     exit 0
 fi
 
@@ -40,12 +40,12 @@ swift build -c release
 mkdir -p "$BUILD_DIR"
 
 # Copy the built binary.
-cp ".build/release/LittleOneHelper" "$BUILD_DIR/"
+cp ".build/release/FieldTheoryHelper" "$BUILD_DIR/"
 
-echo "✅ Built LittleOneHelper at $BUILD_DIR/LittleOneHelper"
+echo "✅ Built FieldTheoryHelper at $BUILD_DIR/FieldTheoryHelper"
 
 # Verify the binary.
-if [[ -x "$BUILD_DIR/LittleOneHelper" ]]; then
+if [[ -x "$BUILD_DIR/FieldTheoryHelper" ]]; then
     echo "   Binary is executable ✓"
 else
     echo "❌ Binary is not executable"

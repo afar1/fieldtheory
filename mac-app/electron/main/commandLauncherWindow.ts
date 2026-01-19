@@ -32,14 +32,11 @@ function isElectronApp(bundleId: string, appName: string): boolean {
   const appNameLower = appName.toLowerCase();
   const bundleIdLower = bundleId.toLowerCase();
   const currentAppName = app.getName().toLowerCase();
-  
+
   return (
-    bundleIdLower.includes('oscar') ||
-    bundleIdLower.includes('little-one') ||
-    bundleIdLower.includes('littleai') ||
+    bundleIdLower.includes('fieldtheory') ||
     bundleIdLower.includes('electron') ||
-    appNameLower.includes('oscar') ||
-    appNameLower.includes('little one') ||
+    appNameLower.includes('field theory') ||
     appNameLower === currentAppName ||
     bundleIdLower === process.execPath.toLowerCase()
   );

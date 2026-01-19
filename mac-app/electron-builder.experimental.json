@@ -1,6 +1,6 @@
 {
-  "appId": "com.oscar.app.experimental",
-  "productName": "Oscar Experimental",
+  "appId": "com.fieldtheory.experimental",
+  "productName": "Field Theory Experimental",
   "mac": {
     "category": "public.app-category.productivity",
     "minimumSystemVersion": "13.0",
@@ -13,8 +13,8 @@
     "gatekeeperAssess": false,
     "extraResources": [
       {
-        "from": "electron/native/build/LittleOneHelper",
-        "to": "LittleOneHelper"
+        "from": "electron/native/build/FieldTheoryHelper",
+        "to": "FieldTheoryHelper"
       },
       {
         "from": "electron/assets",

@@ -118,10 +118,10 @@ function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
 if (process.env.EXPERIMENTAL === 'true') {
   const experimentalUserData = path.join(
     os.homedir(),
-    'Library/Application Support/Oscar Experimental'
+    'Library/Application Support/Field Theory Experimental'
   );
   app.setPath('userData', experimentalUserData);
-  app.setName('Oscar Experimental');
+  app.setName('Field Theory Experimental');
 }
 
 // Configure autoUpdater for manual update flow.
@@ -153,6 +153,91 @@ let commandLauncherWindow: CommandLauncherWindow | null = null;
 
 // Track pending update state so windows can query it when they open.
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
+
+
+/**
+ * Migrate data from legacy app directories to the current Field Theory location.
+ * This handles users upgrading from older versions that used different names.
+ * Runs once and creates a marker file to prevent re-running.
+ */
+function migrateFromLegacyPaths(): void {
+  const newUserData = app.getPath('userData');
+  const migrationMarker = path.join(newUserData, '.migration-v1-complete');
+
+  // Skip if already migrated
+  if (fs.existsSync(migrationMarker)) {
+    return;
+  }
+
+  console.log('[Migration] Checking for legacy data to migrate...');
+
+  const homeDir = app.getPath('home');
+  const legacyPaths = [
+    path.join(homeDir, 'Library', 'Application Support', 'littleai-mac'),
+    path.join(homeDir, 'Library', 'Application Support', 'Oscar'),
+  ];
+
+  let migrated = false;
+
+  for (const legacyPath of legacyPaths) {
+    if (!fs.existsSync(legacyPath)) {
+      continue;
+    }
+
+    console.log(`[Migration] Found legacy path: ${legacyPath}`);
+
+    // Migrate figures directory
+    const legacyFigures = path.join(legacyPath, 'figures');
+    const newFigures = path.join(newUserData, 'figures');
+    if (fs.existsSync(legacyFigures) && !fs.existsSync(newFigures)) {
+      try {
+        fs.renameSync(legacyFigures, newFigures);
+        console.log(`[Migration] Moved figures from ${legacyFigures}`);
+        migrated = true;
+      } catch (err) {
+        console.error(`[Migration] Failed to move figures: ${err}`);
+      }
+    }
+
+    // Migrate clipboard.db
+    const legacyDb = path.join(legacyPath, 'clipboard.db');
+    const newDb = path.join(newUserData, 'clipboard.db');
+    if (fs.existsSync(legacyDb) && !fs.existsSync(newDb)) {
+      try {
+        fs.copyFileSync(legacyDb, newDb);
+        console.log(`[Migration] Copied clipboard.db from ${legacyDb}`);
+        migrated = true;
+      } catch (err) {
+        console.error(`[Migration] Failed to copy clipboard.db: ${err}`);
+      }
+    }
+
+    // Migrate preferences.json (for very old versions)
+    const legacyPrefs = path.join(legacyPath, 'preferences.json');
+    const newPrefs = path.join(newUserData, 'preferences.json');
+    if (fs.existsSync(legacyPrefs) && !fs.existsSync(newPrefs)) {
+      try {
+        fs.copyFileSync(legacyPrefs, newPrefs);
+        console.log(`[Migration] Copied preferences.json from ${legacyPrefs}`);
+        migrated = true;
+      } catch (err) {
+        console.error(`[Migration] Failed to copy preferences.json: ${err}`);
+      }
+    }
+  }
+
+  // Write migration marker (even if nothing was migrated, to avoid checking every launch)
+  try {
+    fs.writeFileSync(migrationMarker, `Migration completed at ${new Date().toISOString()}\n`);
+    if (migrated) {
+      console.log('[Migration] Data migration complete');
+    } else {
+      console.log('[Migration] No legacy data found to migrate');
+    }
+  } catch (err) {
+    console.error(`[Migration] Failed to write migration marker: ${err}`);
+  }
+}
 
 
 /**
@@ -4812,6 +4897,9 @@ if (!gotTheLock) {
 
   app.whenReady().then(async () => {
     console.log('[Main] App ready');
+
+    // Migrate data from legacy app directories (littleai-mac, Oscar) if needed.
+    migrateFromLegacyPaths();
 
     setupIPCHandlers();
     setupThemeIPCHandlers();

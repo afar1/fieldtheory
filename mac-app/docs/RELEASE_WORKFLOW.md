@@ -1,12 +1,12 @@
-# Oscar Release Workflow
+# Field Theory Release Workflow
 
 ## Overview
 
-Oscar releases are published to a **separate public repository** (`afar1/field-releases`) to keep the source code private while allowing public distribution via GitHub Releases.
+Field Theory releases are published to a **separate public repository** (`afar1/field-releases`) to keep the source code private while allowing public distribution via GitHub Releases.
 
 ## Repository Setup
 
-- **Source code**: `afar1/littleai` (private) or `afar1/oscar` (private)
+- **Source code**: `afar1/field-theory` (private)
 - **Releases**: `afar1/field-releases` (public) — only contains release assets, no source code
 
 ## Configuration
@@ -43,8 +43,8 @@ autoUpdater.setFeedURL({
    ```
 
 This uploads:
-- `Oscar-x.x.x-arm64-mac.zip`
-- `Oscar-x.x.x-arm64.dmg`
+- `Field.Theory-x.x.x-arm64-mac.zip`
+- `Field.Theory-x.x.x-arm64.dmg`
 - `latest-mac.yml` (used by auto-updater to detect new versions)
 
 ## Testing Auto-Updates
@@ -60,7 +60,7 @@ This uploads:
 
 3. Run the installed app from terminal to see updater logs:
    ```bash
-   /Applications/Oscar.app/Contents/MacOS/Oscar
+   /Applications/Field\ Theory.app/Contents/MacOS/Field\ Theory
    ```
 
 4. Look for `[Updater]` logs confirming update detection

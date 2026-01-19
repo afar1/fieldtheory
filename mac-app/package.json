@@ -1,5 +1,5 @@
 {
-  "name": "littleai-mac",
+  "name": "fieldtheory-mac",
   "version": "0.1.47",
   "private": true,
   "main": "electron-dist/main/index.js",
@@ -11,7 +11,7 @@
     "build": "npm run build:electron && npm run build:vite",
     "build:vite": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json",
-    "build:native": "cd electron/native && swift build -c release && mkdir -p build && cp .build/release/LittleOneHelper build/ && codesign --force --deep --sign - build/LittleOneHelper",
+    "build:native": "cd electron/native && swift build -c release && mkdir -p build && cp .build/release/FieldTheoryHelper build/ && codesign --force --deep --sign - build/FieldTheoryHelper",
     "build:whisper": "scripts/build-whisper.sh",
     "build:all": "npm run build:native && npm run build:whisper && npm run build",
     "build:experimental": "EXPERIMENTAL=true npm run build",
@@ -91,8 +91,8 @@
       },
       "extraResources": [
         {
-          "from": "electron/native/build/LittleOneHelper",
-          "to": "LittleOneHelper"
+          "from": "electron/native/build/FieldTheoryHelper",
+          "to": "FieldTheoryHelper"
         },
         {
           "from": "electron/assets",

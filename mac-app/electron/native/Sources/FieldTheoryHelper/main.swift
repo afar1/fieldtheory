@@ -1,5 +1,5 @@
 // =============================================================================
-// LittleOneHelper - Swift CLI for CoreAudio integration.
+// FieldTheoryHelper - Swift CLI for CoreAudio integration.
 // Communicates with Electron via JSON over stdin/stdout.
 // =============================================================================
 
@@ -1661,7 +1661,7 @@ final class MessageHandler {
 // MARK: - Main Entry Point
 
 func setupAndRun() {
-    sendLog(level: "info", message: "LittleOneHelper started")
+    sendLog(level: "info", message: "FieldTheoryHelper started")
     
     // Start menu bar monitoring immediately.
     // This allows us to detect when user clicks on the menu bar to hide Field Theory.

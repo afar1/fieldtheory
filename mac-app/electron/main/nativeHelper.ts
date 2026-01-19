@@ -100,7 +100,7 @@ export class NativeHelper extends EventEmitter {
 
   /**
    * Start the native helper process.
-   * On macOS, this spawns the LittleOneHelper binary.
+   * On macOS, this spawns the FieldTheoryHelper binary.
    * On other platforms, this is a no-op.
    */
   start(): void {
@@ -406,10 +406,10 @@ export class NativeHelper extends EventEmitter {
    */
   private getHelperPath(): string {
     if (app.isPackaged) {
-      return path.join(process.resourcesPath, 'LittleOneHelper');
+      return path.join(process.resourcesPath, 'FieldTheoryHelper');
     } else {
       const appPath = app.getAppPath();
-      return path.join(appPath, 'electron/native/build/LittleOneHelper');
+      return path.join(appPath, 'electron/native/build/FieldTheoryHelper');
     }
   }
 
