@@ -184,7 +184,7 @@ export default async function handler(req, res) {
     </header>
     <article class="content">${html}</article>
     <footer class="footer">
-      <p class="made-by">Made by The Librarian at <a href="https://fieldtheory.dev">fieldtheory.dev</a>${author}</p>
+      <p class="made-by">Made by the Librarian at <a href="https://fieldtheory.dev">fieldtheory.dev</a>${author}</p>
       <div class="controls">
         ${showRandom ? `<a class="icon-btn" href="/api/librarian/random?exclude=${slug}" title="Random reading">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
