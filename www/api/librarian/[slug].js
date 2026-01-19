@@ -193,7 +193,6 @@ export default async function handler(req, res) {
     .author-toggle { position: relative; cursor: default; }
     .author-toggle .callsign {
       font-family: ui-monospace, SFMono-Regular, 'SF Mono', monospace;
-      font-style: normal;
       letter-spacing: 0.5px;
       transition: opacity 0.2s ease;
     }
@@ -208,7 +207,6 @@ export default async function handler(req, res) {
     .author-toggle:hover .realname { opacity: 1; }
     .callsign-only {
       font-family: ui-monospace, SFMono-Regular, 'SF Mono', monospace;
-      font-style: normal;
       letter-spacing: 0.5px;
     }
     .made-by { margin-bottom: 0; }
