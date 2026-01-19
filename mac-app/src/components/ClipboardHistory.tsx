@@ -312,6 +312,8 @@ export default function ClipboardHistory() {
   const [authSession, setAuthSession] = useState<Session | null>(null);
   // Track when session initialization is complete to avoid UI flicker.
   const [sessionInitialized, setSessionInitialized] = useState(false);
+  // User's callsign from profile
+  const [userCallsign, setUserCallsign] = useState<string | null>(null);
   
   // Screen recording permission banner state.
   // Shows a banner when permission is missing, unless user has dismissed it.
@@ -1322,6 +1324,22 @@ export default function ClipboardHistory() {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  // Fetch user's callsign when auth session changes
+  useEffect(() => {
+    if (!authSession?.user?.id || !supabase) {
+      setUserCallsign(null);
+      return;
+    }
+    supabase
+      .from('profiles')
+      .select('callsign')
+      .eq('id', authSession.user.id)
+      .single()
+      .then(({ data }) => {
+        setUserCallsign(data?.callsign || null);
+      });
+  }, [authSession?.user?.id]);
 
   // Check screen recording permission on mount and window focus.
   // Shows banner if permission is missing and user hasn't dismissed it.
@@ -6293,9 +6311,16 @@ export default function ClipboardHistory() {
                   )}
                 </>
               ) : (
-                <span style={{ color: updateStatus === 'uptodate' ? theme.success : theme.textSecondary, fontSize: '9px' }}>
-                  {updateStatus === 'uptodate' ? 'Up to date ✓' : `v${appVersion}`}
-                </span>
+                <>
+                  {userCallsign && (
+                    <span style={{ color: theme.textSecondary, fontSize: '9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', letterSpacing: '0.5px' }}>
+                      {userCallsign}
+                    </span>
+                  )}
+                  <span style={{ color: updateStatus === 'uptodate' ? theme.success : theme.textSecondary, fontSize: '9px' }}>
+                    {updateStatus === 'uptodate' ? 'Up to date ✓' : `v${appVersion}`}
+                  </span>
+                </>
               )}
             </div>
           )}

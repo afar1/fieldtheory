@@ -15,13 +15,24 @@ export default async function handler(req, res) {
 
   const { data: reading, error } = await supabase
     .from('shared_readings')
-    .select('title, content, author_name')
+    .select('title, content, author_name, user_id')
     .eq('slug', slug)
     .eq('is_public', true)
     .single();
 
   if (error || !reading) {
     return res.status(404).send(errorPage("This reading doesn't exist or has been unshared."));
+  }
+
+  // Fetch callsign from profiles (separate query since no direct FK)
+  let callsignData = null;
+  if (reading.user_id) {
+    const { data } = await supabase
+      .from('profiles')
+      .select('callsign')
+      .eq('id', reading.user_id)
+      .single();
+    callsignData = data;
   }
 
   // Check total count for random button
@@ -44,9 +55,24 @@ export default async function handler(req, res) {
       authorFormatted = parts[0];
     }
   }
-  const author = authorFormatted
-    ? `<p class="attribution">Inspired by the work of ${esc(authorFormatted)}</p>`
-    : '';
+
+  // Get callsign from profiles query
+  const callsign = callsignData?.callsign;
+
+  // Build attribution: callsign with hover to reveal real name
+  let author = '';
+  if (callsign || authorFormatted) {
+    if (callsign && authorFormatted) {
+      // Both: show callsign, hover reveals name
+      author = `<p class="attribution">Inspired by the work of <span class="author-toggle"><span class="callsign">${esc(callsign)}</span><span class="realname">${esc(authorFormatted)}</span></span></p>`;
+    } else if (callsign) {
+      // Only callsign
+      author = `<p class="attribution">Inspired by the work of <span class="callsign-only">${esc(callsign)}</span></p>`;
+    } else {
+      // Only name (legacy)
+      author = `<p class="attribution">Inspired by the work of ${esc(authorFormatted)}</p>`;
+    }
+  }
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.status(200).send(`<!DOCTYPE html>
@@ -164,6 +190,27 @@ export default async function handler(req, res) {
       color: var(--text-secondary);
     }
     .attribution { font-style: italic; margin: 0 0 0.25rem 0; }
+    .author-toggle { position: relative; cursor: default; }
+    .author-toggle .callsign {
+      font-family: ui-monospace, SFMono-Regular, 'SF Mono', monospace;
+      font-style: normal;
+      letter-spacing: 0.5px;
+      transition: opacity 0.2s ease;
+    }
+    .author-toggle .realname {
+      position: absolute;
+      left: 0;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+      white-space: nowrap;
+    }
+    .author-toggle:hover .callsign { opacity: 0; }
+    .author-toggle:hover .realname { opacity: 1; }
+    .callsign-only {
+      font-family: ui-monospace, SFMono-Regular, 'SF Mono', monospace;
+      font-style: normal;
+      letter-spacing: 0.5px;
+    }
     .made-by { margin-bottom: 0; }
     .footer a { color: var(--text); text-decoration: none; }
     .footer a:hover { text-decoration: underline; }

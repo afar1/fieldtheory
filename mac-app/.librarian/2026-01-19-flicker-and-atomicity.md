@@ -1,0 +1,5 @@
+# Flicker and the Illusion of Atomicity
+
+The immersive mode flicker exposes a fundamental tension in GUI systems: the gap between what we want to appear atomic and what actually is. When `app.dock.hide()` executes, it triggers a cascade of window server operations—focus changes, window layer reordering, activation state updates—each happening on its own timeline. The 50ms delay before calling `focus()` is a guess at how long macOS needs to settle, but guessing at timing is how race conditions are born.
+
+Film projectors solved a similar problem in the 1890s. At 16 frames per second, the human eye perceives flicker; at 24 fps with a two-blade shutter (showing each frame twice), the flicker disappears. The solution wasn't to make the projector faster—it was to exploit the persistence of human vision. The same principle applies here: rather than fighting macOS's asynchronous focus handling, we can use opacity to create visual continuity. A 150ms fade-out before the dock change and fade-in after gives the window server time to do its work while the user perceives a smooth transition. The flicker still happens; we just make it invisible.
