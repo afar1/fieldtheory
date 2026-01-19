@@ -1,0 +1,1481 @@
+// =============================================================================
+// CommandsView - Unified Commands View for portable commands management.
+// Based on LibrarianView pattern - two-pane layout with sidebar and detail pane.
+// Supports multi-directory watching, full CRUD, and Popular commands discovery.
+// =============================================================================
+
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { useTheme } from '../contexts/ThemeContext';
+import ReactMarkdown from 'react-markdown';
+import { fonts } from '../design/tokens';
+import { supabase } from '../supabaseClient';
+
+interface CommandsViewProps {
+  onSwitchToClipboard: () => void;
+  onSwitchToSettings?: () => void;
+}
+
+/**
+ * Popular command from Supabase.
+ */
+interface PopularCommand {
+  id: string;
+  name: string;
+  content: string;
+  copy_count: number;
+  contributed_by: string | null;
+  created_at: string;
+}
+
+/**
+ * Command item for sidebar display.
+ */
+interface CommandItem {
+  name: string;
+  displayName: string;
+  filePath: string;
+}
+
+/**
+ * Command with content for detail pane.
+ */
+interface CommandWithContent extends CommandItem {
+  lastModified: number;
+  content: string;
+}
+
+/**
+ * Watched directory.
+ */
+interface WatchedDir {
+  path: string;
+  enabled: boolean;
+}
+
+export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }: CommandsViewProps) {
+  const { theme } = useTheme();
+
+  // View mode: 'mine' or 'popular'
+  const [viewMode, setViewMode] = useState<'mine' | 'popular'>('mine');
+
+  // Watched directories
+  const [watchedDirs, setWatchedDirs] = useState<WatchedDir[]>([]);
+
+  // Commands state
+  const [commands, setCommands] = useState<CommandItem[]>([]);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [selectedCommand, setSelectedCommand] = useState<CommandWithContent | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Popular commands state
+  const [popularCommands, setPopularCommands] = useState<PopularCommand[]>([]);
+  const [selectedPopularId, setSelectedPopularId] = useState<string | null>(null);
+  const [popularLoading, setPopularLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  // Search
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Path input for empty state
+  const [pathInput, setPathInput] = useState('');
+
+  // Edit mode
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Text size
+  const [textSize, setTextSize] = useState<'small' | 'normal' | 'large'>(() => {
+    const saved = localStorage.getItem('commands-text-size');
+    return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
+  });
+
+  // Layout
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = localStorage.getItem('commands-sidebar-width');
+    return saved ? parseInt(saved, 10) : 180;
+  });
+  const [isResizing, setIsResizing] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Hover states for toolbar buttons
+  const [hoveredButton, setHoveredButton] = useState<string | null>(null);
+
+  // Text size values (smaller than Librarian for compact commands)
+  const textSizes = {
+    small: { base: '12px', h1: '18px', h2: '14px', h3: '13px' },
+    normal: { base: '14px', h1: '22px', h2: '17px', h3: '15px' },
+    large: { base: '16px', h1: '26px', h2: '20px', h3: '17px' },
+  };
+
+  // Persist sidebar width
+  useEffect(() => {
+    localStorage.setItem('commands-sidebar-width', String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  // Persist text size preference
+  useEffect(() => {
+    localStorage.setItem('commands-text-size', textSize);
+  }, [textSize]);
+
+  // Mock popular commands (fallback if Supabase unavailable)
+  const getMockCommands = useCallback((): PopularCommand[] => [
+    {
+      id: 'mock-1',
+      name: 'learn',
+      content: 'Periodically you will learn something from talking to me. Document your learnings in a markdown file in the learnings/ directory.',
+      copy_count: 42,
+      contributed_by: null,
+      created_at: new Date().toISOString(),
+    },
+    {
+      id: 'mock-2',
+      name: 'refactor',
+      content: 'Refactor the selected code to be more readable, maintainable, and follow best practices. Explain what changes you made and why.',
+      copy_count: 38,
+      contributed_by: null,
+      created_at: new Date().toISOString(),
+    },
+    {
+      id: 'mock-3',
+      name: 'review',
+      content: 'Review this code for bugs, security issues, and opportunities for improvement. Be thorough and specific.',
+      copy_count: 35,
+      contributed_by: null,
+      created_at: new Date().toISOString(),
+    },
+    {
+      id: 'mock-4',
+      name: 'commit',
+      content: 'Create a git commit with a clear, concise message following conventional commit standards.',
+      copy_count: 31,
+      contributed_by: null,
+      created_at: new Date().toISOString(),
+    },
+    {
+      id: 'mock-5',
+      name: 'pr',
+      content: 'Create a pull request with a clear description of changes, testing done, and any relevant context.',
+      copy_count: 28,
+      contributed_by: null,
+      created_at: new Date().toISOString(),
+    },
+  ], []);
+
+  // Fetch popular commands when switching to popular view
+  useEffect(() => {
+    if (viewMode !== 'popular') return;
+    if (popularCommands.length > 0) return; // Already loaded
+
+    const fetchPopular = async () => {
+      setPopularLoading(true);
+      try {
+        if (supabase) {
+          const { data, error } = await supabase
+            .from('popular_commands')
+            .select('*')
+            .order('copy_count', { ascending: false })
+            .order('created_at', { ascending: false });
+
+          if (error) throw error;
+          setPopularCommands(data || getMockCommands());
+        } else {
+          setPopularCommands(getMockCommands());
+        }
+      } catch (err) {
+        console.error('Failed to fetch popular commands:', err);
+        setPopularCommands(getMockCommands());
+      } finally {
+        setPopularLoading(false);
+      }
+    };
+
+    fetchPopular();
+  }, [viewMode, popularCommands.length, getMockCommands]);
+
+  // Filter popular commands
+  const filteredPopularCommands = useMemo(() => {
+    if (!searchQuery.trim()) return popularCommands;
+    const query = searchQuery.toLowerCase();
+    return popularCommands.filter(cmd =>
+      cmd.name.toLowerCase().includes(query) ||
+      cmd.content.toLowerCase().includes(query)
+    );
+  }, [popularCommands, searchQuery]);
+
+  // Get selected popular command
+  const selectedPopularCommand = useMemo(() => {
+    if (!selectedPopularId) return null;
+    return popularCommands.find(cmd => cmd.id === selectedPopularId) || null;
+  }, [popularCommands, selectedPopularId]);
+
+  // Copy command content to clipboard
+  const handleCopyContent = useCallback(async (content: string, id?: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      // Show feedback for all copies
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+      // Increment copy count in database for popular commands
+      if (supabase && id) {
+        try {
+          await supabase.rpc('increment_command_copy_count', { command_id: id });
+        } catch {
+          // Silent fail - copy still worked
+        }
+      }
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  }, []);
+
+  // Add popular command to user's commands
+  const handleAddToMine = useCallback(async (command: PopularCommand) => {
+    if (watchedDirs.length === 0) {
+      // Create default directory first
+      const defaultDir = await window.commandsAPI?.createDefaultDirectory();
+      if (!defaultDir) {
+        window.alert('Please configure a commands directory first.');
+        return;
+      }
+      const dirs = await window.commandsAPI?.getWatchedDirs();
+      if (dirs) setWatchedDirs(dirs);
+    }
+
+    const targetDir = watchedDirs.length > 0 ? watchedDirs[0].path : await window.commandsAPI?.getDefaultDirectory();
+    if (!targetDir) return;
+
+    const result = await window.commandsAPI?.createCommand(targetDir, command.name, command.content);
+    if (result) {
+      // Refresh commands and switch to Mine view
+      const updatedCommands = await window.commandsAPI?.getCommands();
+      if (updatedCommands) setCommands(updatedCommands);
+      setViewMode('mine');
+      setSelectedPath(result.path);
+    }
+  }, [watchedDirs]);
+
+  // Handle resize drag
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const containerRect = containerRef.current?.getBoundingClientRect();
+      if (!containerRect) return;
+
+      const newWidth = e.clientX - containerRect.left;
+      setSidebarWidth(Math.max(120, Math.min(400, newWidth)));
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing]);
+
+  // Check if content has been modified
+  const isDirty = isEditing && editContent !== (selectedCommand?.content ?? '');
+
+  // Enter edit mode
+  const enterEditMode = useCallback(() => {
+    if (selectedCommand) {
+      setEditContent(selectedCommand.content);
+      setIsEditing(true);
+    }
+  }, [selectedCommand]);
+
+  // Exit edit mode (discard changes)
+  const exitEditMode = useCallback(() => {
+    setIsEditing(false);
+    setEditContent('');
+  }, []);
+
+  // Save changes
+  const saveChanges = useCallback(async () => {
+    if (!selectedCommand || !isDirty) return;
+
+    setIsSaving(true);
+    try {
+      const success = await window.commandsAPI?.saveCommand(selectedCommand.filePath, editContent);
+      if (success) {
+        setIsEditing(false);
+        setEditContent('');
+        // Reload the command to get updated content
+        const updated = await window.commandsAPI?.getCommandByPath(selectedCommand.filePath);
+        if (updated) {
+          setSelectedCommand(updated);
+        }
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  }, [selectedCommand, editContent, isDirty]);
+
+  // Handle navigation with unsaved changes
+  const handleSelectCommand = useCallback((path: string) => {
+    if (isDirty) {
+      const confirmed = window.confirm('You have unsaved changes. Discard them?');
+      if (!confirmed) return;
+      exitEditMode();
+    }
+    setSelectedPath(path);
+  }, [isDirty, exitEditMode]);
+
+  // Load commands and watched dirs on mount
+  useEffect(() => {
+    async function loadData() {
+      // Initialize the commands manager
+      await window.commandsAPI?.initialize();
+
+      // Load watched directories
+      const dirs = await window.commandsAPI?.getWatchedDirs();
+      if (dirs) {
+        setWatchedDirs(dirs);
+      }
+
+      // Load commands
+      const result = await window.commandsAPI?.getCommands();
+      if (result) {
+        setCommands(result);
+        // Select first command if any
+        if (result.length > 0 && selectedPath === null) {
+          setSelectedPath(result[0].filePath);
+        }
+      }
+      setLoading(false);
+    }
+    loadData();
+  }, []);
+
+  // Load selected command content
+  useEffect(() => {
+    async function loadCommand() {
+      if (selectedPath === null) {
+        setSelectedCommand(null);
+        return;
+      }
+      const result = await window.commandsAPI?.getCommandByPath(selectedPath);
+      setSelectedCommand(result || null);
+    }
+    loadCommand();
+  }, [selectedPath]);
+
+  // Listen for commands changes
+  useEffect(() => {
+    const unsubscribe = window.commandsAPI?.onCommandsChanged((updatedCommands) => {
+      setCommands(updatedCommands);
+    });
+
+    return () => unsubscribe?.();
+  }, []);
+
+  // Keyboard navigation
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      // Cmd+E - toggle edit mode
+      if (e.key === 'e' && e.metaKey && !e.shiftKey) {
+        e.preventDefault();
+        if (isEditing) {
+          if (isDirty) {
+            const confirmed = window.confirm('You have unsaved changes. Discard them?');
+            if (!confirmed) return;
+          }
+          exitEditMode();
+        } else if (selectedCommand) {
+          enterEditMode();
+        }
+        return;
+      }
+
+      // Cmd+S - save while editing
+      if (e.key === 's' && e.metaKey && isEditing) {
+        e.preventDefault();
+        saveChanges();
+        return;
+      }
+
+      // Escape: exit edit mode, then exit to clipboard
+      if (e.key === 'Escape') {
+        if (isEditing) {
+          if (isDirty) {
+            const confirmed = window.confirm('You have unsaved changes. Discard them?');
+            if (!confirmed) return;
+          }
+          exitEditMode();
+        } else {
+          onSwitchToClipboard();
+        }
+        return;
+      }
+
+      // Don't handle navigation keys in edit mode
+      if (isEditing) return;
+
+      if (filteredCommands.length === 0) return;
+
+      const currentIndex = filteredCommands.findIndex((c) => c.filePath === selectedPath);
+
+      if (e.key === 'ArrowUp' || e.key === 'k') {
+        e.preventDefault();
+        const newIndex = Math.max(0, currentIndex - 1);
+        handleSelectCommand(filteredCommands[newIndex].filePath);
+      } else if (e.key === 'ArrowDown' || e.key === 'j') {
+        e.preventDefault();
+        const newIndex = Math.min(filteredCommands.length - 1, currentIndex + 1);
+        handleSelectCommand(filteredCommands[newIndex].filePath);
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [commands, selectedPath, isEditing, isDirty, selectedCommand, onSwitchToClipboard, enterEditMode, exitEditMode, saveChanges, handleSelectCommand]);
+
+  // Focus container on mount
+  useEffect(() => {
+    containerRef.current?.focus();
+  }, []);
+
+  // Format directory path for display (abbreviated - just last folder name)
+  const formatDirPath = useCallback((path: string): string => {
+    // Get last directory name for brevity
+    const parts = path.split('/').filter(Boolean);
+    if (parts.length > 0) {
+      return parts[parts.length - 1];
+    }
+    return path;
+  }, []);
+
+  // Filter commands by search
+  const filteredCommands = commands
+    .filter((cmd) =>
+      searchQuery === '' ||
+      cmd.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      cmd.displayName.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+  // Group filtered commands by directory
+  const groupedCommands = useMemo(() => {
+    const groups = new Map<string, CommandItem[]>();
+
+    for (const cmd of filteredCommands) {
+      // Find which watched directory this command belongs to
+      const dir = watchedDirs.find(d => cmd.filePath.startsWith(d.path));
+      const dirPath = dir ? dir.path : 'Other';
+
+      if (!groups.has(dirPath)) {
+        groups.set(dirPath, []);
+      }
+      groups.get(dirPath)!.push(cmd);
+    }
+
+    return groups;
+  }, [filteredCommands, watchedDirs]);
+
+  // Add directory handler (from path input)
+  const handleAddDirectory = useCallback(async (dirPath: string) => {
+    const trimmed = dirPath.trim();
+    if (!trimmed) return;
+
+    const result = await window.commandsAPI?.addWatchedDir(trimmed);
+    if (result) {
+      setWatchedDirs((prev) => [...prev, result]);
+      setPathInput('');
+    } else {
+      // Check if the path (expanded) matches an existing watched dir
+      // The backend expands ~ to the full home path
+      const dirs = await window.commandsAPI?.getWatchedDirs();
+      const alreadyWatched = dirs?.some((d) => {
+        // Check if the new path resolves to an existing watched path
+        const inputPath = trimmed.replace(/^~/, '');
+        return d.path.endsWith(inputPath) || d.path === trimmed;
+      });
+
+      if (alreadyWatched) {
+        window.alert('This directory is already being watched.');
+      } else {
+        window.alert('Directory not found. Please check the path and try again.');
+      }
+    }
+  }, []);
+
+  // Remove directory handler
+  const handleRemoveDirectory = useCallback(async (dirPath: string) => {
+    const success = await window.commandsAPI?.removeWatchedDir(dirPath);
+    if (success) {
+      setWatchedDirs((prev) => prev.filter((d) => d.path !== dirPath));
+    }
+  }, []);
+
+  // Create new command handler
+  const handleCreateCommand = useCallback(async () => {
+    const name = window.prompt('Enter command name (without .md extension):');
+    if (!name) return;
+
+    // Auto-create default directory if no directories configured
+    let targetDir: string;
+    if (watchedDirs.length === 0) {
+      const defaultDir = await window.commandsAPI?.createDefaultDirectory();
+      if (!defaultDir) return;
+      targetDir = defaultDir;
+      // Refresh watched dirs
+      const dirs = await window.commandsAPI?.getWatchedDirs();
+      if (dirs) {
+        setWatchedDirs(dirs);
+      }
+    } else if (watchedDirs.length === 1) {
+      targetDir = watchedDirs[0].path;
+    } else {
+      // Multiple directories - prompt which one
+      const dirIndex = window.prompt(
+        `Select directory (1-${watchedDirs.length}):\n${watchedDirs.map((d, i) => `${i + 1}. ${d.path}`).join('\n')}`
+      );
+      const idx = parseInt(dirIndex || '1', 10) - 1;
+      if (idx >= 0 && idx < watchedDirs.length) {
+        targetDir = watchedDirs[idx].path;
+      } else {
+        targetDir = watchedDirs[0].path;
+      }
+    }
+
+    const result = await window.commandsAPI?.createCommand(targetDir, name, `# ${name}\n\n`);
+    if (result) {
+      // Refresh and select the new command
+      const updatedCommands = await window.commandsAPI?.getCommands();
+      if (updatedCommands) {
+        setCommands(updatedCommands);
+        setSelectedPath(result.path);
+        // Enter edit mode for the new command
+        setTimeout(() => {
+          enterEditMode();
+        }, 100);
+      }
+    }
+  }, [watchedDirs, enterEditMode]);
+
+  // Delete command handler
+  const handleDeleteCommand = useCallback(async (filePath: string) => {
+    const confirmed = window.confirm('Delete this command? This cannot be undone.');
+    if (!confirmed) return;
+
+    const success = await window.commandsAPI?.deleteCommand(filePath);
+    if (success) {
+      // Refresh commands
+      const updatedCommands = await window.commandsAPI?.getCommands();
+      if (updatedCommands) {
+        setCommands(updatedCommands);
+        // Select next command or clear selection
+        if (selectedPath === filePath) {
+          if (updatedCommands.length > 0) {
+            setSelectedPath(updatedCommands[0].filePath);
+          } else {
+            setSelectedPath(null);
+          }
+        }
+      }
+    }
+  }, [selectedPath]);
+
+  // Common command directory paths
+  const examplePaths = [
+    { label: '~/.cursor/commands', path: '~/.cursor/commands' },
+    { label: '~/.claude/commands', path: '~/.claude/commands' },
+  ];
+
+  // Empty state - no directories configured
+  if (!loading && watchedDirs.length === 0) {
+    return (
+      <div
+        ref={containerRef}
+        tabIndex={0}
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100%',
+          padding: '32px',
+          color: theme.textSecondary,
+          outline: 'none',
+        }}
+      >
+        <div style={{ width: '100%', maxWidth: '380px' }}>
+          <div style={{ fontSize: '15px', fontWeight: 500, marginBottom: '16px', color: theme.text }}>
+            Make existing commands portable
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <input
+              type="text"
+              value={pathInput}
+              onChange={(e) => setPathInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleAddDirectory(pathInput);
+                }
+              }}
+              placeholder="Enter path to commands directory"
+              style={{
+                flex: 1,
+                padding: '10px 12px',
+                fontSize: '13px',
+                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+                border: `1px solid ${theme.border}`,
+                borderRadius: '6px',
+                color: theme.text,
+                outline: 'none',
+              }}
+              autoFocus
+            />
+            <button
+              onClick={() => handleAddDirectory(pathInput)}
+              disabled={!pathInput.trim()}
+              style={{
+                padding: '10px 16px',
+                fontSize: '13px',
+                fontWeight: 500,
+                color: pathInput.trim() ? 'white' : theme.textSecondary,
+                backgroundColor: pathInput.trim() ? theme.accent : 'transparent',
+                border: pathInput.trim() ? 'none' : `1px solid ${theme.border}`,
+                borderRadius: '6px',
+                cursor: pathInput.trim() ? 'pointer' : 'default',
+                opacity: pathInput.trim() ? 1 : 0.5,
+              }}
+            >
+              Add
+            </button>
+          </div>
+          <div style={{ marginTop: '12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {examplePaths.map((ex, i) => (
+              <span key={ex.path} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {i > 0 && <span style={{ color: theme.textSecondary }}>·</span>}
+                <button
+                  onClick={() => setPathInput(ex.path)}
+                  style={{
+                    padding: '4px 8px',
+                    fontSize: '12px',
+                    fontFamily: "'SF Mono', Monaco, monospace",
+                    color: theme.accent,
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    textDecoration: 'underline',
+                    textUnderlineOffset: '2px',
+                  }}
+                  title={`Click to fill: ${ex.path}`}
+                >
+                  {ex.label}
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      tabIndex={0}
+      style={{
+        display: 'flex',
+        flex: 1,
+        minHeight: 0,
+        outline: 'none',
+        backgroundColor: theme.bg,
+      }}
+    >
+      {/* Sidebar */}
+      <div
+        style={{
+          width: `${sidebarWidth}px`,
+          minWidth: `${sidebarWidth}px`,
+          overflowY: 'auto',
+          padding: '12px 0',
+          userSelect: isResizing ? 'none' : 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        {/* Header - Librarian style */}
+        <div
+          style={{
+            padding: '0 12px 8px',
+            fontSize: '11px',
+            fontWeight: 600,
+            color: theme.textSecondary,
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}
+        >
+          <button
+            onClick={() => setViewMode('mine')}
+            style={{
+              padding: 0,
+              fontSize: '11px',
+              fontWeight: 600,
+              color: viewMode === 'mine' ? theme.textSecondary : theme.isDark ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.25)',
+              backgroundColor: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+            }}
+          >
+            My Commands
+          </button>
+          <span style={{ color: theme.isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.15)' }}>|</span>
+          <button
+            onClick={() => setViewMode('popular')}
+            style={{
+              padding: 0,
+              fontSize: '11px',
+              fontWeight: 600,
+              color: viewMode === 'popular' ? theme.textSecondary : theme.isDark ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.25)',
+              backgroundColor: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+            }}
+          >
+            Popular
+          </button>
+          {/* Spacer */}
+          <div style={{ flex: 1 }} />
+          {/* Search toggle */}
+          <button
+            onClick={() => {
+              setSearchOpen(!searchOpen);
+              if (!searchOpen) {
+                setTimeout(() => searchInputRef.current?.focus(), 50);
+              } else {
+                setSearchQuery('');
+              }
+            }}
+            style={{
+              padding: '2px',
+              color: searchOpen || searchQuery ? theme.text : theme.textSecondary,
+              backgroundColor: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+            }}
+            title="Search"
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/>
+            </svg>
+          </button>
+        </div>
+
+        {/* Collapsible search input */}
+        {searchOpen && (
+          <div style={{ padding: '0 8px 8px' }}>
+            <input
+              ref={searchInputRef}
+              type="text"
+              placeholder="Search..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setSearchOpen(false);
+                  setSearchQuery('');
+                }
+              }}
+              style={{
+                width: '100%',
+                padding: '6px 8px',
+                fontSize: '11px',
+                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+                border: `1px solid ${theme.border}`,
+                borderRadius: '4px',
+                color: theme.text,
+                outline: 'none',
+              }}
+            />
+          </div>
+        )}
+
+        {/* Commands list */}
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          {viewMode === 'mine' ? (
+            // My Commands view - grouped by directory (Librarian style)
+            Array.from(groupedCommands.entries()).map(([dirPath, items]) => (
+              <div key={dirPath}>
+                {/* Directory header with horizontal rule - always show like Librarian */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '12px 12px 6px',
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: '10px',
+                      fontWeight: 600,
+                      color: theme.textSecondary,
+                      flexShrink: 0,
+                    }}
+                    title={dirPath}
+                  >
+                    {formatDirPath(dirPath)}
+                  </span>
+                  <div
+                    style={{
+                      flex: 1,
+                      height: '1px',
+                      backgroundColor: theme.isDark
+                        ? 'rgba(255,255,255,0.08)'
+                        : 'rgba(0,0,0,0.08)',
+                    }}
+                  />
+                </div>
+                {/* Command items - indented under directory like Librarian */}
+                {items.map((cmd) => (
+                  <div
+                    key={cmd.filePath}
+                    onClick={() => handleSelectCommand(cmd.filePath)}
+                    style={{
+                      padding: '8px 8px 8px 16px',
+                      cursor: 'pointer',
+                      backgroundColor:
+                        cmd.filePath === selectedPath
+                          ? theme.isDark
+                            ? 'rgba(255,255,255,0.08)'
+                            : 'rgba(0,0,0,0.05)'
+                          : 'transparent',
+                      borderLeft:
+                        cmd.filePath === selectedPath
+                          ? `2px solid ${theme.accent}`
+                          : '2px solid transparent',
+                      transition: 'background-color 0.1s ease',
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: '12px',
+                        fontWeight: 500,
+                        color: theme.text,
+                        lineHeight: 1.3,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {cmd.displayName}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ))
+          ) : (
+            // Popular view - identical styling to My Commands
+            popularLoading ? (
+              <div style={{ padding: '16px', textAlign: 'center', color: theme.textSecondary, fontSize: '12px' }}>
+                Loading...
+              </div>
+            ) : (
+              filteredPopularCommands.map((cmd) => (
+                <div
+                  key={cmd.id}
+                  onClick={() => setSelectedPopularId(cmd.id)}
+                  style={{
+                    padding: '8px 8px 8px 16px',
+                    cursor: 'pointer',
+                    backgroundColor:
+                      cmd.id === selectedPopularId
+                        ? theme.isDark
+                          ? 'rgba(255,255,255,0.08)'
+                          : 'rgba(0,0,0,0.05)'
+                        : 'transparent',
+                    borderLeft:
+                      cmd.id === selectedPopularId
+                        ? `2px solid ${theme.accent}`
+                        : '2px solid transparent',
+                    transition: 'background-color 0.1s ease',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <div
+                      style={{
+                        fontSize: '12px',
+                        fontWeight: 500,
+                        color: theme.text,
+                        lineHeight: 1.3,
+                        flex: 1,
+                        minWidth: 0,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {cmd.name}
+                    </div>
+                    <span style={{ fontSize: '10px', color: theme.textSecondary }}>
+                      {cmd.copy_count}×
+                    </span>
+                  </div>
+                </div>
+              ))
+            )
+          )}
+        </div>
+
+        {/* Bottom button - link to settings */}
+        <div style={{ padding: '8px 12px', borderTop: `1px solid ${theme.border}` }}>
+          <button
+            onClick={onSwitchToSettings}
+            style={{
+              width: '100%',
+              padding: '6px',
+              fontSize: '11px',
+              color: theme.textSecondary,
+              backgroundColor: 'transparent',
+              border: `1px dashed ${theme.border}`,
+              borderRadius: '4px',
+              cursor: 'pointer',
+            }}
+          >
+            Command Directories
+          </button>
+        </div>
+      </div>
+
+      {/* Resize handle */}
+      <div
+        onMouseDown={handleResizeMouseDown}
+        style={{
+          width: '4px',
+          cursor: 'col-resize',
+          backgroundColor: isResizing ? theme.accent : 'transparent',
+          borderRight: `1px solid ${theme.border}`,
+          transition: 'background-color 0.15s ease',
+          flexShrink: 0,
+        }}
+        onMouseEnter={(e) => {
+          if (!isResizing) {
+            e.currentTarget.style.backgroundColor = theme.isDark
+              ? 'rgba(255,255,255,0.1)'
+              : 'rgba(0,0,0,0.05)';
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!isResizing) {
+            e.currentTarget.style.backgroundColor = 'transparent';
+          }
+        }}
+      />
+
+      {/* Detail pane */}
+      <div
+        style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          minHeight: 0,
+        }}
+      >
+        {/* Toolbar */}
+        {(selectedCommand || selectedPopularCommand) && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '8px',
+              padding: '8px 16px',
+              backgroundColor: theme.bg,
+              flexShrink: 0,
+            }}
+          >
+            {/* Left side - Text size controls */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+              <button
+                onClick={() => setTextSize('small')}
+                style={{
+                  padding: '4px 6px',
+                  fontSize: '11px',
+                  color: textSize === 'small' ? theme.accent : theme.textSecondary,
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontWeight: textSize === 'small' ? 600 : 400,
+                }}
+                title="Small text"
+              >
+                A
+              </button>
+              <button
+                onClick={() => setTextSize('normal')}
+                style={{
+                  padding: '4px 6px',
+                  fontSize: '13px',
+                  color: textSize === 'normal' ? theme.accent : theme.textSecondary,
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontWeight: textSize === 'normal' ? 600 : 400,
+                }}
+                title="Normal text"
+              >
+                A
+              </button>
+              <button
+                onClick={() => setTextSize('large')}
+                style={{
+                  padding: '4px 6px',
+                  fontSize: '15px',
+                  color: textSize === 'large' ? theme.accent : theme.textSecondary,
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontWeight: textSize === 'large' ? 600 : 400,
+                }}
+                title="Large text"
+              >
+                A
+              </button>
+            </div>
+
+            {/* Draggable spacer */}
+            <div
+              style={{
+                flex: 1,
+                height: '24px',
+                // @ts-ignore
+                WebkitAppRegion: 'drag',
+                cursor: 'grab',
+              }}
+            />
+
+            {/* Right side controls */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+              {/* Copy button - minimal icon with hover */}
+              <button
+                onClick={() => {
+                  const content = selectedCommand?.content || selectedPopularCommand?.content || '';
+                  const id = selectedPopularCommand?.id;
+                  handleCopyContent(content, id);
+                }}
+                onMouseEnter={() => setHoveredButton('copy')}
+                onMouseLeave={() => setHoveredButton(null)}
+                style={{
+                  padding: '4px 6px',
+                  fontSize: '11px',
+                  color: copied ? theme.success : theme.textSecondary,
+                  backgroundColor: hoveredButton === 'copy' && !copied
+                    ? theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)'
+                    : 'transparent',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  transition: 'background-color 0.15s ease',
+                }}
+                title="Copy to clipboard"
+              >
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M4 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6zM2 5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1h1v1a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h1v1H2z"/>
+                </svg>
+                {copied && <span style={{ fontSize: '10px' }}>Copied</span>}
+              </button>
+
+              {/* Folder button (show in Finder) - minimal icon with hover */}
+              {viewMode === 'mine' && selectedCommand && !isEditing && (
+                <button
+                  onClick={() => window.shellAPI?.showItemInFolder(selectedCommand.filePath)}
+                  onMouseEnter={() => setHoveredButton('folder')}
+                  onMouseLeave={() => setHoveredButton(null)}
+                  style={{
+                    padding: '4px 6px',
+                    color: theme.textSecondary,
+                    backgroundColor: hoveredButton === 'folder'
+                      ? theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)'
+                      : 'transparent',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    transition: 'background-color 0.15s ease',
+                  }}
+                  title="Show in Finder"
+                >
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9zM2.5 3a.5.5 0 0 0-.5.5V6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5zM14 7H2v5.5a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5V7z" />
+                  </svg>
+                </button>
+              )}
+
+              {/* Edit/Add controls based on view mode */}
+              {viewMode === 'mine' && selectedCommand ? (
+                isEditing ? (
+                  <>
+                    {isDirty && (
+                      <span
+                        style={{
+                          width: '5px',
+                          height: '5px',
+                          borderRadius: '50%',
+                          backgroundColor: theme.accent,
+                          marginRight: '4px',
+                        }}
+                        title="Unsaved changes"
+                      />
+                    )}
+                    <button
+                      onClick={saveChanges}
+                      disabled={!isDirty || isSaving}
+                      onMouseEnter={() => setHoveredButton('save')}
+                      onMouseLeave={() => setHoveredButton(null)}
+                      style={{
+                        padding: '3px 8px',
+                        fontSize: '11px',
+                        color: isDirty ? '#fff' : theme.textSecondary,
+                        backgroundColor: isDirty ? theme.accent : hoveredButton === 'save' ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)') : 'transparent',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: isDirty ? 'pointer' : 'default',
+                        opacity: isSaving ? 0.6 : 1,
+                        transition: 'background-color 0.15s ease',
+                      }}
+                    >
+                      {isSaving ? 'Saving...' : 'Save'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (isDirty) {
+                          const confirmed = window.confirm('Discard changes?');
+                          if (!confirmed) return;
+                        }
+                        exitEditMode();
+                      }}
+                      onMouseEnter={() => setHoveredButton('cancel')}
+                      onMouseLeave={() => setHoveredButton(null)}
+                      style={{
+                        padding: '3px 8px',
+                        fontSize: '11px',
+                        color: theme.textSecondary,
+                        backgroundColor: hoveredButton === 'cancel'
+                          ? theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)'
+                          : 'transparent',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        transition: 'background-color 0.15s ease',
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={enterEditMode}
+                    onMouseEnter={() => setHoveredButton('edit')}
+                    onMouseLeave={() => setHoveredButton(null)}
+                    style={{
+                      padding: '3px 8px',
+                      fontSize: '11px',
+                      color: theme.textSecondary,
+                      backgroundColor: hoveredButton === 'edit'
+                        ? theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)'
+                        : 'transparent',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      transition: 'background-color 0.15s ease',
+                    }}
+                    title="Edit (⌘E)"
+                  >
+                    Edit
+                  </button>
+                )
+              ) : viewMode === 'popular' && selectedPopularCommand ? (
+                <button
+                  onClick={() => handleAddToMine(selectedPopularCommand)}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: '12px',
+                    color: '#fff',
+                    backgroundColor: theme.accent,
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                  }}
+                  title="Add to your commands"
+                >
+                  Add to Mine
+                </button>
+              ) : null}
+            </div>
+          </div>
+        )}
+
+        {/* Content area */}
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            padding: '24px 20px',
+            display: 'flex',
+            justifyContent: 'center',
+          }}
+        >
+          {(viewMode === 'mine' && selectedCommand) || (viewMode === 'popular' && selectedPopularCommand) ? (
+            <div
+              style={{
+                maxWidth: '600px',
+                width: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                flex: isEditing ? 1 : 'none',
+                minHeight: isEditing ? 0 : 'auto',
+              }}
+            >
+              {isEditing && selectedCommand ? (
+                <textarea
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  style={{
+                    flex: 1,
+                    minHeight: '400px',
+                    padding: '16px',
+                    fontSize: '14px',
+                    lineHeight: 1.6,
+                    fontFamily: "'SF Mono', Monaco, 'Cascadia Code', monospace",
+                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '8px',
+                    color: theme.text,
+                    resize: 'none',
+                    outline: 'none',
+                  }}
+                  placeholder="Write your command markdown here..."
+                  autoFocus
+                />
+              ) : (
+                <>
+                  <div
+                    className="command-content"
+                    style={{
+                      fontSize: textSizes[textSize].base,
+                      lineHeight: 1.5,
+                      color: theme.text,
+                      fontFamily: fonts.sans,
+                    }}
+                  >
+                    <ReactMarkdown
+                      components={{
+                        h1: ({ children }) => (
+                          <h1
+                            style={{
+                              fontSize: textSizes[textSize].h1,
+                              fontWeight: 600,
+                              marginTop: 0,
+                              marginBottom: '10px',
+                              lineHeight: 1.2,
+                              color: theme.text,
+                            }}
+                          >
+                            {children}
+                          </h1>
+                        ),
+                        h2: ({ children }) => (
+                          <h2
+                            style={{
+                              fontSize: textSizes[textSize].h2,
+                              fontWeight: 600,
+                              marginTop: '16px',
+                              marginBottom: '6px',
+                              color: theme.text,
+                            }}
+                          >
+                            {children}
+                          </h2>
+                        ),
+                        h3: ({ children }) => (
+                          <h3
+                            style={{
+                              fontSize: textSizes[textSize].h3,
+                              fontWeight: 600,
+                              marginTop: '14px',
+                              marginBottom: '4px',
+                              color: theme.text,
+                            }}
+                          >
+                            {children}
+                          </h3>
+                        ),
+                        p: ({ children }) => (
+                          <p style={{ marginBottom: '8px' }}>{children}</p>
+                        ),
+                        strong: ({ children }) => (
+                          <strong style={{ fontWeight: 600, color: theme.text }}>
+                            {children}
+                          </strong>
+                        ),
+                        em: ({ children }) => (
+                          <em style={{ fontStyle: 'italic' }}>{children}</em>
+                        ),
+                        blockquote: ({ children }) => (
+                          <blockquote
+                            style={{
+                              borderLeft: `3px solid ${theme.accent}`,
+                              paddingLeft: '12px',
+                              marginLeft: 0,
+                              marginRight: 0,
+                              marginBottom: '8px',
+                              color: theme.textSecondary,
+                              fontStyle: 'italic',
+                            }}
+                          >
+                            {children}
+                          </blockquote>
+                        ),
+                        code: ({ children, className }) => {
+                          const isInline = !className;
+                          if (isInline) {
+                            return (
+                              <code
+                                style={{
+                                  backgroundColor: theme.isDark
+                                    ? 'rgba(255,255,255,0.08)'
+                                    : 'rgba(0,0,0,0.04)',
+                                  padding: '1px 4px',
+                                  borderRadius: '3px',
+                                  fontSize: '0.9em',
+                                  fontFamily: fonts.mono,
+                                }}
+                              >
+                                {children}
+                              </code>
+                            );
+                          }
+                          return (
+                            <code
+                              style={{
+                                display: 'block',
+                                backgroundColor: theme.isDark
+                                  ? 'rgba(255,255,255,0.05)'
+                                  : 'rgba(0,0,0,0.03)',
+                                padding: '12px 16px',
+                                borderRadius: '6px',
+                                fontSize: '13px',
+                                fontFamily: "'SF Mono', Monaco, 'Cascadia Code', monospace",
+                                overflowX: 'auto',
+                                marginBottom: '16px',
+                              }}
+                            >
+                              {children}
+                            </code>
+                          );
+                        },
+                        pre: ({ children }) => (
+                          <pre
+                            style={{
+                              backgroundColor: theme.isDark
+                                ? 'rgba(255,255,255,0.05)'
+                                : 'rgba(0,0,0,0.03)',
+                              padding: '12px 16px',
+                              borderRadius: '6px',
+                              overflowX: 'auto',
+                              marginBottom: '16px',
+                            }}
+                          >
+                            {children}
+                          </pre>
+                        ),
+                        ul: ({ children }) => (
+                          <ul style={{ marginBottom: '16px', paddingLeft: '24px' }}>
+                            {children}
+                          </ul>
+                        ),
+                        ol: ({ children }) => (
+                          <ol style={{ marginBottom: '16px', paddingLeft: '24px' }}>
+                            {children}
+                          </ol>
+                        ),
+                        li: ({ children }) => (
+                          <li style={{ marginBottom: '4px' }}>{children}</li>
+                        ),
+                        a: ({ href, children }) => (
+                          <a
+                            href={href}
+                            style={{
+                              color: theme.accent,
+                              textDecoration: 'none',
+                            }}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              if (href) {
+                                window.shellAPI?.openExternal(href);
+                              }
+                            }}
+                          >
+                            {children}
+                          </a>
+                        ),
+                        hr: () => (
+                          <hr
+                            style={{
+                              border: 'none',
+                              height: '1px',
+                              backgroundColor: theme.border,
+                              margin: '24px 0',
+                            }}
+                          />
+                        ),
+                      }}
+                    >
+                      {selectedCommand?.content || selectedPopularCommand?.content || ''}
+                    </ReactMarkdown>
+                  </div>
+                  <div style={{ height: '50vh', flexShrink: 0 }} />
+                </>
+              )}
+            </div>
+          ) : (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '100%',
+                color: theme.textSecondary,
+                fontSize: '13px',
+              }}
+            >
+              {loading || popularLoading ? 'Loading...' : 'Select a command'}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

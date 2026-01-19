@@ -183,10 +183,21 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
 
   // Subscription tier state - 'free' or 'pro'.
   const [userTier, setUserTier] = useState<'free' | 'pro'>('free');
-  
-  // Quota usage for free users (formatted strings like "10/500 min").
-  const [quotaUsage, setQuotaUsage] = useState<{ priorityMic: string; autoStack: string } | null>(null);
-  
+
+  // Quota usage for free users (formatted strings).
+  const [quotaUsage, setQuotaUsage] = useState<{ priorityMic: string; autoStack: string; textImprove: string } | null>(null);
+
+  // Full quota status for progress bars and exhaustion checks.
+  const [quotaStatus, setQuotaStatus] = useState<{
+    priorityMic: { used: number; limit: number; remaining: number; allowed: boolean; percentUsed: number };
+    autoStack: { used: number; limit: number; remaining: number; allowed: boolean; percentUsed: number };
+    textImprove: { used: number; limit: number; remaining: number; allowed: boolean; percentUsed: number };
+  } | null>(null);
+
+  // Days until quota reset and limits for display.
+  const [daysUntilReset, setDaysUntilReset] = useState<number>(0);
+  const [quotaLimits, setQuotaLimits] = useState<{ priorityMicMinutes: number; autoStackSessions: number; textImprovementWords: number } | null>(null);
+
   // Diagnostics modal visibility.
   const [showDiagnostics, setShowDiagnostics] = useState(false);
 
@@ -339,6 +350,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       window.quotaAPI.getQuotas().then(quotas => {
         if (quotas) {
           setUserTier(quotas.tier);
+          setQuotaStatus({
+            priorityMic: quotas.priorityMic,
+            autoStack: quotas.autoStack,
+            textImprove: quotas.textImprove,
+          });
         }
       });
     }
@@ -347,7 +363,17 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         if (formatted) setQuotaUsage(formatted);
       });
     }
-    
+    if (window.quotaAPI?.getDaysUntilReset) {
+      window.quotaAPI.getDaysUntilReset().then(days => {
+        setDaysUntilReset(days);
+      });
+    }
+    if (window.quotaAPI?.getLimits) {
+      window.quotaAPI.getLimits().then(limits => {
+        setQuotaLimits(limits);
+      });
+    }
+
     // Listen for tier changes (e.g., after Stripe checkout).
     let unsubscribeTier: (() => void) | undefined;
     if (window.quotaAPI?.onTierChanged) {
@@ -355,12 +381,22 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         setUserTier(tier);
       });
     }
-    
+
     // Listen for quota changes to update usage in real-time.
     let unsubscribeQuota: (() => void) | undefined;
     if (window.quotaAPI?.onQuotaChanged) {
       unsubscribeQuota = window.quotaAPI.onQuotaChanged((formatted) => {
         setQuotaUsage(formatted);
+        // Also refresh the full status for progress bars
+        window.quotaAPI?.getQuotas?.().then(quotas => {
+          if (quotas) {
+            setQuotaStatus({
+              priorityMic: quotas.priorityMic,
+              autoStack: quotas.autoStack,
+              textImprove: quotas.textImprove,
+            });
+          }
+        });
       });
     }
     
@@ -1447,25 +1483,77 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       )}
 
       {/* Auto-Improve Transcripts Section */}
-      {selectedSection === 'auto-improve' && (
+      {selectedSection === 'auto-improve' && (() => {
+        // Check if text improvement quota is exhausted (free tier only)
+        const textImproveExhausted = userTier === 'free' && quotaStatus?.textImprove && !quotaStatus.textImprove.allowed;
+
+        return (
       <div style={styles.section}>
         <SectionHeader title="Auto-Improve Transcripts" />
 
-        {/* Auto-Improve Toggle */}
-        <div style={styles.row}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            <span style={styles.rowLabel}>Auto-Improve</span>
-            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-              Automatically enhance transcripts with AI
-            </span>
+        {/* Quota exhausted notice for free tier */}
+        {textImproveExhausted && quotaLimits && (
+          <div style={{
+            padding: '12px',
+            marginBottom: '12px',
+            borderRadius: '8px',
+            backgroundColor: theme.isDark ? 'rgba(239, 68, 68, 0.1)' : '#fef2f2',
+            border: `1px solid ${theme.isDark ? 'rgba(239, 68, 68, 0.3)' : '#fecaca'}`,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <span style={{ fontSize: '13px', fontWeight: 500, color: theme.text }}>
+                  Limit reached
+                </span>
+                <span style={{ fontSize: '12px', color: theme.textSecondary, marginLeft: '8px' }}>
+                  Resets in {daysUntilReset} day{daysUntilReset !== 1 ? 's' : ''} to {quotaLimits.textImprovementWords.toLocaleString()} words
+                </span>
+              </div>
+              <button
+                onClick={() => {
+                  const paymentLink = window.stripeConfig?.paymentLink || '';
+                  const userId = session?.user?.id;
+                  const url = userId ? `${paymentLink}?client_reference_id=${userId}` : paymentLink;
+                  window.shellAPI?.openExternal(url);
+                }}
+                style={{
+                  ...styles.linkBtn,
+                  color: theme.accent,
+                  fontWeight: 500,
+                }}
+              >
+                Upgrade →
+              </button>
+            </div>
           </div>
-          <button
-            onClick={() => handleAutoImproveChange(!autoImprove)}
-            style={{ ...styles.toggle, backgroundColor: autoImprove ? theme.success : '#d1d5db' }}
-          >
-            <span style={{ ...styles.toggleKnob, transform: autoImprove ? 'translateX(20px)' : 'translateX(2px)' }} />
-          </button>
-        </div>
+        )}
+
+        {/* Auto-Improve Toggle */}
+        {/* Allow turning OFF even when exhausted, but block turning ON */}
+        {(() => {
+          const canToggle = !textImproveExhausted || autoImprove;
+          return (
+            <div style={{ ...styles.row, opacity: canToggle ? 1 : 0.5 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span style={styles.rowLabel}>Auto-Improve</span>
+                <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                  Automatically enhance transcripts with AI
+                </span>
+              </div>
+              <button
+                onClick={() => canToggle && handleAutoImproveChange(!autoImprove)}
+                disabled={!canToggle}
+                style={{
+                  ...styles.toggle,
+                  backgroundColor: autoImprove ? theme.success : '#d1d5db',
+                  cursor: canToggle ? 'pointer' : 'not-allowed',
+                }}
+              >
+                <span style={{ ...styles.toggleKnob, transform: autoImprove ? 'translateX(20px)' : 'translateX(2px)' }} />
+              </button>
+            </div>
+          );
+        })()}
 
         {/* Settings shown when auto-improve is enabled */}
         {autoImprove && (
@@ -1719,7 +1807,8 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </>
         )}
       </div>
-      )}
+        );
+      })()}
 
       {/* Keyboard Shortcuts Section - First for easy access */}
       {selectedSection === 'keyboard' && (
@@ -2026,6 +2115,27 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             Start
           </button>
         </div>
+        <div style={{ ...styles.row, marginTop: '16px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={styles.rowLabel}>Contact Support</span>
+            <span style={styles.rowHint}>
+              Email us at{' '}
+              <span
+                onClick={() => window.shellAPI?.openExternal('mailto:support@fieldtheory.dev')}
+                style={{ color: theme.accent, cursor: 'pointer' }}
+              >
+                support@fieldtheory.dev
+              </span>
+              {' '}or use the Feedback button
+            </span>
+          </div>
+          <button
+            onClick={onNavigateToFeedback}
+            style={styles.linkBtn}
+          >
+            Feedback
+          </button>
+        </div>
       </div>
       )}
 
@@ -2070,69 +2180,134 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                 
                 {/* Subscription row */}
                 <div style={styles.row}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={styles.rowLabel}>Current Plan</span>
-                      <span style={{
-                        padding: '2px 8px',
-                        borderRadius: '4px',
-                        fontSize: '10px',
-                        fontWeight: 600,
-                        backgroundColor: displayTier === 'pro' ? theme.accent : theme.bgSecondary,
-                        color: displayTier === 'pro' ? '#fff' : theme.textSecondary,
-                      }}>
-                        {tierDisplayName}
-                      </span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={styles.rowLabel}>Current Plan</span>
+                        <span style={{
+                          padding: '2px 8px',
+                          borderRadius: '4px',
+                          fontSize: '10px',
+                          fontWeight: 600,
+                          backgroundColor: displayTier === 'pro' ? theme.accent : theme.bgSecondary,
+                          color: displayTier === 'pro' ? '#fff' : theme.textSecondary,
+                        }}>
+                          {tierDisplayName}
+                        </span>
+                      </div>
+                      {displayTier === 'free' ? (
+                        <button
+                          onClick={() => {
+                            const userId = session.user.id;
+                            const paymentLink = window.stripeConfig?.paymentLink || '';
+                            window.shellAPI?.openExternal(
+                              `${paymentLink}?client_reference_id=${userId}`
+                            );
+                          }}
+                          style={{
+                            ...styles.btn,
+                            backgroundColor: theme.accent,
+                            color: '#fff',
+                            border: 'none',
+                          }}
+                        >
+                          Upgrade
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            const portalLink = window.stripeConfig?.portalLink || '';
+                            window.shellAPI?.openExternal(portalLink);
+                          }}
+                          style={styles.linkBtn}
+                        >
+                          Manage
+                        </button>
+                      )}
                     </div>
-                    <p style={styles.rowHint}>
-                      {displayTier === 'pro'
-                        ? 'Unlimited priority mic and auto-stacking.'
-                        : quotaUsage
-                          ? `${quotaUsage.priorityMic} · ${quotaUsage.autoStack}`
-                          : 'Upgrade for unlimited priority mic and auto-stacking.'}
-                    </p>
-                  </div>
-                  <div style={styles.rowControls}>
-                    {displayTier === 'free' ? (
-                      <button 
-                        onClick={() => {
-                          const userId = session.user.id;
-                          const paymentLink = window.stripeConfig?.paymentLink || '';
-                          window.shellAPI?.openExternal(
-                            `${paymentLink}?client_reference_id=${userId}`
-                          );
-                        }}
-                        style={{
-                          ...styles.btn,
-                          backgroundColor: theme.accent,
-                          color: '#fff',
-                          border: 'none',
-                        }}
-                      >
-                        Upgrade
-                      </button>
+
+                    {displayTier === 'pro' ? (
+                      <p style={styles.rowHint}>Unlimited priority mic, auto-stacking, and text improvements.</p>
+                    ) : quotaStatus && quotaLimits ? (
+                      <div style={{
+                        marginTop: '12px',
+                        padding: '12px',
+                        borderRadius: '8px',
+                        backgroundColor: theme.isDark ? theme.bg2 : '#f9fafb',
+                        border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+                      }}>
+                        {/* Priority Mic */}
+                        <div style={{ marginBottom: '12px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                            <span style={{ fontSize: '12px', color: theme.text }}>Priority Mic</span>
+                            <span style={{ fontSize: '11px', color: quotaStatus.priorityMic.allowed ? theme.textSecondary : theme.error }}>
+                              {Math.floor(quotaStatus.priorityMic.used / 60)} of {quotaLimits.priorityMicMinutes} mins
+                            </span>
+                          </div>
+                          <div style={{ height: '4px', backgroundColor: theme.isDark ? theme.border : '#e5e7eb', borderRadius: '2px', overflow: 'hidden' }}>
+                            <div style={{
+                              height: '100%',
+                              width: `${Math.min(100, quotaStatus.priorityMic.percentUsed)}%`,
+                              backgroundColor: quotaStatus.priorityMic.allowed ? theme.accent : theme.error,
+                              borderRadius: '2px',
+                              transition: 'width 0.3s ease',
+                            }} />
+                          </div>
+                        </div>
+
+                        {/* Auto-Stack */}
+                        <div style={{ marginBottom: '12px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                            <span style={{ fontSize: '12px', color: theme.text }}>Auto-Stack</span>
+                            <span style={{ fontSize: '11px', color: quotaStatus.autoStack.allowed ? theme.textSecondary : theme.error }}>
+                              {quotaStatus.autoStack.used} of {quotaLimits.autoStackSessions} sessions
+                            </span>
+                          </div>
+                          <div style={{ height: '4px', backgroundColor: theme.isDark ? theme.border : '#e5e7eb', borderRadius: '2px', overflow: 'hidden' }}>
+                            <div style={{
+                              height: '100%',
+                              width: `${Math.min(100, quotaStatus.autoStack.percentUsed)}%`,
+                              backgroundColor: quotaStatus.autoStack.allowed ? theme.accent : theme.error,
+                              borderRadius: '2px',
+                              transition: 'width 0.3s ease',
+                            }} />
+                          </div>
+                        </div>
+
+                        {/* Text Improvements */}
+                        <div style={{ marginBottom: '12px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                            <span style={{ fontSize: '12px', color: theme.text }}>Text Improvements</span>
+                            <span style={{ fontSize: '11px', color: quotaStatus.textImprove.allowed ? theme.textSecondary : theme.error }}>
+                              {quotaStatus.textImprove.used.toLocaleString()} of {quotaLimits.textImprovementWords.toLocaleString()} words
+                            </span>
+                          </div>
+                          <div style={{ height: '4px', backgroundColor: theme.isDark ? theme.border : '#e5e7eb', borderRadius: '2px', overflow: 'hidden' }}>
+                            <div style={{
+                              height: '100%',
+                              width: `${Math.min(100, quotaStatus.textImprove.percentUsed)}%`,
+                              backgroundColor: quotaStatus.textImprove.allowed ? theme.accent : theme.error,
+                              borderRadius: '2px',
+                              transition: 'width 0.3s ease',
+                            }} />
+                          </div>
+                        </div>
+
+                        {/* Reset info */}
+                        <div style={{ fontSize: '11px', color: theme.textSecondary, textAlign: 'center', paddingTop: '4px', borderTop: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}` }}>
+                          Resets in {daysUntilReset} day{daysUntilReset !== 1 ? 's' : ''}
+                        </div>
+                      </div>
                     ) : (
-                      <button
-                        onClick={() => {
-                          const portalLink = window.stripeConfig?.portalLink || '';
-                          window.shellAPI?.openExternal(portalLink);
-                        }}
-                        style={styles.btn}
-                      >
-                        Manage Subscription
-                      </button>
+                      <p style={styles.rowHint}>Loading quota info...</p>
                     )}
                   </div>
                 </div>
-                
-                {/* Delete account link */}
-                <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: `1px solid ${theme.border}` }}>
+
+                {/* Delete Account button - moved outside subscription row */}
+                <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
                   <button
-                    onClick={() => {
-                      setShowDeleteModal(true);
-                      setDeleteConfirmEmail('');
-                      setDeleteError(null);
-                    }}
+                    onClick={() => setShowDeleteModal(true)}
                     style={{
                       ...styles.linkBtn,
                       color: theme.error,
@@ -2144,37 +2319,15 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                 </div>
               </>
             ) : (
-              // Not signed in - show sign in button.
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <>
+                {/* Not signed in state */}
                 <div style={styles.row}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span style={styles.rowLabel}>Current Plan</span>
-                      <span style={{
-                        padding: '2px 8px',
-                        borderRadius: '4px',
-                        fontSize: '10px',
-                        fontWeight: 600,
-                        backgroundColor: theme.bgSecondary,
-                        color: theme.textSecondary,
-                      }}>
-                        Basic Plan
-                      </span>
-                    </div>
-                    <p style={styles.rowHint}>
-                      {quotaUsage
-                        ? `${quotaUsage.priorityMic} · ${quotaUsage.autoStack}`
-                        : 'Limited priority mic and auto-stacking.'}
-                    </p>
-                  </div>
-                  <button
-                    onClick={onNavigateToSignIn}
-                    style={styles.linkBtn}
-                  >
+                  <span style={styles.rowValue}>Not signed in</span>
+                  <button onClick={onNavigateToSignIn} style={styles.linkBtn}>
                     Sign in
                   </button>
                 </div>
-              </div>
+              </>
             )}
           </div>
         );
@@ -2195,16 +2348,20 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             justifyContent: 'center',
             zIndex: 1000,
           }}
-          onClick={() => !deleteLoading && setShowDeleteModal(false)}
+          onClick={() => {
+            setShowDeleteModal(false);
+            setDeleteConfirmEmail('');
+            setDeleteError(null);
+          }}
         >
           <div
             style={{
               backgroundColor: theme.bg,
-              borderRadius: '8px',
+              borderRadius: '12px',
               padding: '20px',
-              maxWidth: '400px',
-              width: '90%',
-              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+              width: '400px',
+              maxWidth: '90%',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
             }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -2220,50 +2377,42 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
               {userTier === 'pro' && <li>Any existing Pro subscription ($14/month)</li>}
             </ul>
             <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5 }}>
-              <strong>Important:</strong> You may continue to use the Basic plan without an account. 
-              All local screenshots, transcripts, and drawings will remain on your machine.
+              <strong>Important:</strong> You may continue to use the Basic plan without an account.
+              Sign in again anytime to access Pro features.
             </p>
-            <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: theme.error, fontWeight: 500 }}>
-              This cannot be undone.
-            </p>
-            
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', fontSize: '12px', color: theme.textSecondary, marginBottom: '6px' }}>
-                Type your email to confirm:
-              </label>
-              <input
-                type="email"
-                value={deleteConfirmEmail}
-                onChange={(e) => setDeleteConfirmEmail(e.target.value)}
-                placeholder={session?.user?.email || ''}
-                disabled={deleteLoading}
-                style={{
-                  width: '100%',
-                  padding: '8px 10px',
-                  fontSize: '13px',
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '4px',
-                  backgroundColor: theme.bgSecondary,
-                  color: theme.text,
-                  boxSizing: 'border-box',
-                }}
-              />
-            </div>
-            
+            <input
+              type="email"
+              placeholder="Type your email to confirm"
+              value={deleteConfirmEmail}
+              onChange={(e) => setDeleteConfirmEmail(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '10px 12px',
+                fontSize: '13px',
+                border: `1px solid ${theme.border}`,
+                borderRadius: '6px',
+                backgroundColor: theme.bg,
+                color: theme.text,
+                marginBottom: '12px',
+                boxSizing: 'border-box',
+              }}
+            />
             {deleteError && (
               <p style={{ margin: '0 0 12px 0', fontSize: '12px', color: theme.error }}>
                 {deleteError}
               </p>
             )}
-            
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
               <button
-                onClick={() => setShowDeleteModal(false)}
-                disabled={deleteLoading}
+                onClick={() => {
+                  setShowDeleteModal(false);
+                  setDeleteConfirmEmail('');
+                  setDeleteError(null);
+                }}
                 style={{
                   ...styles.btn,
                   backgroundColor: 'transparent',
-                  border: `1px solid ${theme.border}`,
+                  color: theme.textSecondary,
                 }}
               >
                 Cancel
@@ -2285,7 +2434,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </div>
         </div>
       )}
-      
+
       {/* Diagnostics Modal */}
       <DiagnosticsModal 
         isOpen={showDiagnostics} 
@@ -2303,11 +2452,12 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     display: 'flex',
     height: '100%',
     boxSizing: 'border-box',
+    borderTop: `1px solid ${theme.border}`,
   },
   sidebar: {
     width: '180px',
     minWidth: '180px',
-    padding: '16px 12px',
+    padding: '8px 12px 16px 12px',
     borderRight: `1px solid ${theme.border}`,
     backgroundColor: theme.bgSecondary,
     overflowY: 'auto',
@@ -2330,7 +2480,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   },
   content: {
     flex: 1,
-    padding: '16px',
+    padding: '16px 16px 16px 16px',
     overflowY: 'auto',
     boxSizing: 'border-box',
   },
@@ -2425,7 +2575,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     fontSize: '13px',
     fontWeight: 500,
     color: theme.text,
-    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    backgroundColor: theme.isDark ? theme.bg1 : '#fff',
     border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
@@ -2496,7 +2646,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     padding: '6px 12px',
     fontSize: '13px',
     color: theme.text,
-    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    backgroundColor: theme.isDark ? theme.bg1 : '#fff',
     border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
@@ -2508,7 +2658,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     padding: '6px 12px',
     fontSize: '13px',
     color: theme.text,
-    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    backgroundColor: theme.isDark ? theme.bg1 : '#fff',
     border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     outline: 'none',
@@ -2614,7 +2764,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     fontSize: '13px',
     fontWeight: 500,
     color: theme.text,
-    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    backgroundColor: theme.isDark ? theme.bg1 : '#fff',
     border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
@@ -2645,7 +2795,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     outline: 'none',
     width: '100%',
     boxSizing: 'border-box' as const,
-    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    backgroundColor: theme.isDark ? theme.bg1 : '#fff',
     color: theme.text,
   },
   loginButton: {
@@ -2677,7 +2827,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     fontSize: '13px',
     fontWeight: 500,
     color: theme.text,
-    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    backgroundColor: theme.isDark ? theme.bg1 : '#fff',
     border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
@@ -2687,7 +2837,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     fontSize: '13px',
     fontWeight: 500,
     color: theme.textSecondary,
-    backgroundColor: theme.isDark ? theme.surface1 : '#f9fafb',
+    backgroundColor: theme.isDark ? theme.bg1 : '#f9fafb',
     border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',

@@ -123,3 +123,6 @@ npm-debug.*
 mac-app/electron-dist/
 mac-app/release/
 mac-app/assets/
+
+# Librarian status files (local edit tracking)
+.librarian/.status.json

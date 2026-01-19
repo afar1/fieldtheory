@@ -42,6 +42,16 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [claudeConfigError, setClaudeConfigError] = useState(false);
   const [resynced, setResynced] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [hookInstalled, setHookInstalled] = useState(false);
+  const [hookInstalling, setHookInstalling] = useState(false);
+
+  // Content guidance customization
+  const [defaultContentGuidance, setDefaultContentGuidance] = useState('');
+  const [customContentGuidance, setCustomContentGuidance] = useState<string | undefined>(undefined);
+  const [contentGuidanceText, setContentGuidanceText] = useState('');
+  const [contentGuidanceSaved, setContentGuidanceSaved] = useState(false);
+  const [contentGuidanceSaving, setContentGuidanceSaving] = useState(false);
+  const [isUsingCustomGuidance, setIsUsingCustomGuidance] = useState(false);
 
   // Animate scanning dots
   useEffect(() => {
@@ -64,12 +74,20 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       window.librarianAPI.getAutoRunFrequency(),
       window.librarianAPI.getAutoShowEnabled(),
       window.librarianAPI.getClaudeCodeStatus(),
+      window.librarianAPI.isClaudeCodeHookInstalled(),
+      window.librarianAPI.getDefaultContentGuidance(),
+      window.librarianAPI.getCustomContentGuidance(),
     ])
-      .then(([dirs, frequency, autoShow, ccStatus]) => {
+      .then(([dirs, frequency, autoShow, ccStatus, hookStatus, defaultGuidance, customGuidance]) => {
         setWatchedDirs(dirs);
         setAutoRunFrequency(frequency);
         setAutoShowEnabled(autoShow);
         setClaudeCodeStatus(ccStatus as 'installed' | 'directory-only' | 'not-installed');
+        setHookInstalled(hookStatus);
+        setDefaultContentGuidance(defaultGuidance);
+        setCustomContentGuidance(customGuidance);
+        setContentGuidanceText(customGuidance || defaultGuidance);
+        setIsUsingCustomGuidance(!!customGuidance);
         setLoading(false);
       })
       .catch((err) => {
@@ -153,6 +171,56 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, []);
+
+  // Handle saving custom content guidance
+  const handleSaveContentGuidance = useCallback(async () => {
+    if (!window.librarianAPI) return;
+
+    setContentGuidanceSaving(true);
+    setContentGuidanceSaved(false);
+
+    try {
+      // If text matches default, clear custom guidance
+      const trimmedText = contentGuidanceText.trim();
+      const guidanceToSave = trimmedText === defaultContentGuidance.trim() ? undefined : trimmedText;
+
+      const success = await window.librarianAPI.setCustomContentGuidance(guidanceToSave);
+      if (success) {
+        setCustomContentGuidance(guidanceToSave);
+        setIsUsingCustomGuidance(!!guidanceToSave);
+        setContentGuidanceSaved(true);
+        setTimeout(() => setContentGuidanceSaved(false), 3000);
+      }
+    } finally {
+      setContentGuidanceSaving(false);
+    }
+  }, [contentGuidanceText, defaultContentGuidance]);
+
+  // Handle resetting content guidance to default
+  const handleResetContentGuidance = useCallback(async () => {
+    if (!window.librarianAPI) return;
+
+    setContentGuidanceSaving(true);
+    setContentGuidanceSaved(false);
+
+    try {
+      const success = await window.librarianAPI.resetContentGuidance();
+      if (success) {
+        setContentGuidanceText(defaultContentGuidance);
+        setCustomContentGuidance(undefined);
+        setIsUsingCustomGuidance(false);
+        setContentGuidanceSaved(true);
+        setTimeout(() => setContentGuidanceSaved(false), 3000);
+      }
+    } finally {
+      setContentGuidanceSaving(false);
+    }
+  }, [defaultContentGuidance]);
+
+  // Check if content guidance has unsaved changes
+  const hasUnsavedGuidanceChanges = customContentGuidance
+    ? contentGuidanceText.trim() !== customContentGuidance.trim()
+    : contentGuidanceText.trim() !== defaultContentGuidance.trim();
 
   // Format path for display
   const formatPath = (path: string): string => {
@@ -366,6 +434,46 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                   </button>
                 </div>
               )}
+              {/* Hook installation */}
+              {claudeCodeStatus === 'installed' && (
+                <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <button
+                    onClick={async () => {
+                      setHookInstalling(true);
+                      try {
+                        if (hookInstalled) {
+                          const success = await window.librarianAPI?.uninstallClaudeCodeHook();
+                          if (success) setHookInstalled(false);
+                        } else {
+                          const success = await window.librarianAPI?.installClaudeCodeHook();
+                          if (success) setHookInstalled(true);
+                        }
+                      } finally {
+                        setHookInstalling(false);
+                      }
+                    }}
+                    disabled={hookInstalling}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      color: hookInstalled ? theme.error : theme.accent,
+                      backgroundColor: 'transparent',
+                      border: `1px solid ${hookInstalled ? theme.error : theme.accent}`,
+                      borderRadius: '4px',
+                      cursor: hookInstalling ? 'wait' : 'pointer',
+                      opacity: hookInstalling ? 0.5 : 1,
+                    }}
+                  >
+                    {hookInstalling ? '...' : hookInstalled ? 'Disable Auto-Remind' : 'Enable Auto-Remind'}
+                  </button>
+                  <span style={{ fontSize: '10px', color: theme.textSecondary }}>
+                    {hookInstalled
+                      ? '✓ Claude will be reminded to create readings'
+                      : 'Automatically remind Claude to create readings'}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Cursor section */}
@@ -408,6 +516,126 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
           </p>
         )}
       </div>
+
+      {/* Content guidance customization */}
+      {autoRunFrequency !== 'off' && (
+        <div
+          style={{
+            marginTop: '24px',
+            padding: '16px',
+            borderRadius: '8px',
+            backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
+            border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+          }}
+        >
+          <div style={{ marginBottom: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: theme.text }}>
+                  Content guidance
+                </div>
+                <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '2px' }}>
+                  Customize what type of content is produced in readings
+                </div>
+              </div>
+              {isUsingCustomGuidance && (
+                <span
+                  style={{
+                    fontSize: '10px',
+                    color: theme.accent,
+                    backgroundColor: theme.isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.1)',
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    fontWeight: 500,
+                  }}
+                >
+                  Customized
+                </span>
+              )}
+            </div>
+          </div>
+
+          <textarea
+            value={contentGuidanceText}
+            onChange={(e) => setContentGuidanceText(e.target.value)}
+            placeholder={defaultContentGuidance}
+            style={{
+              width: '100%',
+              minHeight: '120px',
+              padding: '12px',
+              fontSize: '12px',
+              fontFamily: "'SF Mono', Monaco, 'Cascadia Code', monospace",
+              lineHeight: '1.5',
+              backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+              border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
+              borderRadius: '6px',
+              color: theme.text,
+              resize: 'vertical',
+              outline: 'none',
+            }}
+            onFocus={(e) => {
+              e.currentTarget.style.borderColor = theme.accent;
+            }}
+            onBlur={(e) => {
+              e.currentTarget.style.borderColor = theme.isDark ? theme.border : '#d1d5db';
+            }}
+          />
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                onClick={handleSaveContentGuidance}
+                disabled={contentGuidanceSaving || !hasUnsavedGuidanceChanges}
+                style={{
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  color: hasUnsavedGuidanceChanges ? '#fff' : theme.textSecondary,
+                  backgroundColor: hasUnsavedGuidanceChanges ? theme.accent : 'transparent',
+                  border: hasUnsavedGuidanceChanges ? 'none' : `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
+                  borderRadius: '6px',
+                  cursor: hasUnsavedGuidanceChanges && !contentGuidanceSaving ? 'pointer' : 'default',
+                  opacity: contentGuidanceSaving ? 0.5 : 1,
+                }}
+              >
+                {contentGuidanceSaving ? 'Saving...' : 'Save'}
+              </button>
+              {isUsingCustomGuidance && (
+                <button
+                  onClick={handleResetContentGuidance}
+                  disabled={contentGuidanceSaving}
+                  style={{
+                    padding: '6px 14px',
+                    fontSize: '12px',
+                    fontWeight: 500,
+                    color: theme.textSecondary,
+                    backgroundColor: 'transparent',
+                    border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
+                    borderRadius: '6px',
+                    cursor: contentGuidanceSaving ? 'default' : 'pointer',
+                    opacity: contentGuidanceSaving ? 0.5 : 1,
+                  }}
+                >
+                  Reset to Default
+                </button>
+              )}
+            </div>
+            {contentGuidanceSaved && (
+              <span style={{ fontSize: '11px', color: theme.success, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
+                </svg>
+                Saved to CLAUDE.md — Claude is now aware
+              </span>
+            )}
+          </div>
+
+          <p style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '12px', lineHeight: '1.5' }}>
+            This shapes the intellectual content produced in each reading. Technical users might prefer
+            deeper technical content, while others might enjoy broader cultural connections.
+          </p>
+        </div>
+      )}
 
       {/* Auto-show on new reading */}
       <div

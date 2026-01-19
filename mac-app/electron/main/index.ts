@@ -546,8 +546,9 @@ async function handleImproveSelectedText(): Promise<void> {
     // Show done state briefly.
     cursorStatusManager?.setState('done');
 
-    // Track quota usage.
-    await quotaManager?.incrementTextImprove();
+    // Track quota usage (count input words).
+    const inputWordCount = selectedText.trim().split(/\s+/).filter(w => w.length > 0).length;
+    await quotaManager?.incrementTextImprove(inputWordCount);
 
     console.log('[ImproveText] Text improved and pasted successfully');
   } catch (error) {
@@ -1077,6 +1078,26 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager?.getClaudeCodeStatus() ?? 'not-installed';
   });
 
+  // Install Claude Code hook for automatic Librarian reminders
+  ipcMain.handle('librarian:installClaudeCodeHook', (): boolean => {
+    return librarianManager?.installClaudeCodeHook() ?? false;
+  });
+
+  // Uninstall Claude Code hook
+  ipcMain.handle('librarian:uninstallClaudeCodeHook', (): boolean => {
+    return librarianManager?.uninstallClaudeCodeHook() ?? false;
+  });
+
+  // Check if Claude Code hook is installed
+  ipcMain.handle('librarian:isClaudeCodeHookInstalled', (): boolean => {
+    return librarianManager?.isClaudeCodeHookInstalled() ?? false;
+  });
+
+  // Initialize project status for hook system
+  ipcMain.handle('librarian:initializeProjectStatus', (_event, projectPath: string): void => {
+    librarianManager?.initializeProjectStatus(projectPath);
+  });
+
   // Get Cursor instructions text
   ipcMain.handle('librarian:getCursorInstructions', (): string => {
     return librarianManager?.getCursorInstructions() || '';
@@ -1097,6 +1118,31 @@ function setupLibrarianIPCHandlers(): void {
     const os = require('os');
     const path = require('path');
     return path.join(os.homedir(), '.claude', 'CLAUDE.md');
+  });
+
+  // Get default content guidance
+  ipcMain.handle('librarian:getDefaultContentGuidance', (): string => {
+    return librarianManager?.getDefaultContentGuidance() || '';
+  });
+
+  // Get current content guidance (custom or default)
+  ipcMain.handle('librarian:getContentGuidance', (): string => {
+    return librarianManager?.getContentGuidance() || '';
+  });
+
+  // Get custom content guidance (undefined if using default)
+  ipcMain.handle('librarian:getCustomContentGuidance', (): string | undefined => {
+    return librarianManager?.getCustomContentGuidance();
+  });
+
+  // Set custom content guidance (pass empty string or undefined to reset to default)
+  ipcMain.handle('librarian:setCustomContentGuidance', (_event, guidance: string | undefined): boolean => {
+    return librarianManager?.setCustomContentGuidance(guidance) ?? false;
+  });
+
+  // Reset content guidance to default
+  ipcMain.handle('librarian:resetContentGuidance', (): boolean => {
+    return librarianManager?.resetContentGuidance() ?? false;
   });
 }
 
@@ -1989,6 +2035,11 @@ function setupClipboardIPCHandlers(): void {
   
   ipcMain.on('clipboard:setSketchMode', async (_event, active: boolean) => {
     clipboardHistoryWindow?.setSketchModeActive(active);
+  });
+
+  // Immersive mode for Librarian - when active, window should not auto-hide on blur
+  ipcMain.on('clipboard-history:setImmersiveMode', async (_event, immersive: boolean) => {
+    clipboardHistoryWindow?.setImmersiveMode(immersive);
   });
 
   // Stack operations for prompt stacking feature
@@ -3033,11 +3084,12 @@ function setupClipboardIPCHandlers(): void {
 
   ipcMain.handle('quota:getFormattedUsage', async () => {
     if (!quotaManager) {
-      return { priorityMic: 'Unlimited', autoStack: 'Unlimited' };
+      return { priorityMic: 'Unlimited', autoStack: 'Unlimited', textImprove: 'Unlimited' };
     }
     return {
       priorityMic: quotaManager.formatPriorityMicUsage(),
       autoStack: quotaManager.formatAutoStackUsage(),
+      textImprove: quotaManager.formatTextImproveUsage(),
     };
   });
 
@@ -3046,6 +3098,20 @@ function setupClipboardIPCHandlers(): void {
       return new Date();
     }
     return quotaManager.getResetDate();
+  });
+
+  ipcMain.handle('quota:getDaysUntilReset', async () => {
+    if (!quotaManager) {
+      return 0;
+    }
+    return quotaManager.getDaysUntilReset();
+  });
+
+  ipcMain.handle('quota:getLimits', async () => {
+    if (!quotaManager) {
+      return { priorityMicMinutes: Infinity, autoStackSessions: Infinity, textImprovementWords: Infinity };
+    }
+    return quotaManager.getLimits();
   });
 
   ipcMain.handle('quota:refreshTier', async () => {
@@ -3195,6 +3261,84 @@ function setupClipboardIPCHandlers(): void {
       return null;
     }
     return { content: loaded.content, filePath: loaded.filePath };
+  });
+
+  // =========================================================================
+  // Multi-Directory Management
+  // =========================================================================
+
+  ipcMain.handle(CommandsIPCChannels.INITIALIZE, async () => {
+    if (!commandsManager) {
+      return;
+    }
+    await commandsManager.initialize();
+  });
+
+  ipcMain.handle(CommandsIPCChannels.GET_WATCHED_DIRS, async () => {
+    if (!commandsManager) {
+      return [];
+    }
+    return commandsManager.getWatchedDirs();
+  });
+
+  ipcMain.handle(CommandsIPCChannels.ADD_WATCHED_DIR, async (_event, dirPath: string) => {
+    if (!commandsManager) {
+      return null;
+    }
+    return await commandsManager.addWatchedDir(dirPath);
+  });
+
+  ipcMain.handle(CommandsIPCChannels.REMOVE_WATCHED_DIR, async (_event, dirPath: string) => {
+    if (!commandsManager) {
+      return false;
+    }
+    return commandsManager.removeWatchedDir(dirPath);
+  });
+
+  ipcMain.handle(CommandsIPCChannels.GET_DEFAULT_DIRECTORY, async () => {
+    if (!commandsManager) {
+      return '';
+    }
+    return commandsManager.getDefaultDirectory();
+  });
+
+  ipcMain.handle(CommandsIPCChannels.CREATE_DEFAULT_DIRECTORY, async () => {
+    if (!commandsManager) {
+      return null;
+    }
+    return await commandsManager.createDefaultDirectory();
+  });
+
+  // =========================================================================
+  // CRUD Operations
+  // =========================================================================
+
+  ipcMain.handle(CommandsIPCChannels.GET_COMMAND_BY_PATH, async (_event, filePath: string) => {
+    if (!commandsManager) {
+      return null;
+    }
+    return await commandsManager.getCommandByPath(filePath);
+  });
+
+  ipcMain.handle(CommandsIPCChannels.SAVE_COMMAND, async (_event, filePath: string, content: string) => {
+    if (!commandsManager) {
+      return false;
+    }
+    return commandsManager.saveCommand(filePath, content);
+  });
+
+  ipcMain.handle(CommandsIPCChannels.CREATE_COMMAND, async (_event, directoryPath: string, name: string, content: string) => {
+    if (!commandsManager) {
+      return null;
+    }
+    return commandsManager.createCommand(directoryPath, name, content);
+  });
+
+  ipcMain.handle(CommandsIPCChannels.DELETE_COMMAND, async (_event, filePath: string) => {
+    if (!commandsManager) {
+      return false;
+    }
+    return commandsManager.deleteCommand(filePath);
   });
 
   // Handle direct command invocation from command launcher (Cmd+Shift+K).
@@ -4168,7 +4312,12 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Broadcast reading-added events to all windows and auto-show if enabled
   librarianManager.on('reading-added', (reading: Reading) => {
-    // Broadcast to all windows
+    // Reset edit count for this project (extract project path from reading path)
+    // Reading path is like /project/.librarian/2026-01-18-slug.md, so go up 2 levels
+    const projectPath = path.dirname(path.dirname(reading.path));
+    librarianManager!.resetEditCount(projectPath);
+
+    // Broadcast to all windows (updates reading lists)
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send('librarian:readingAdded', reading);
@@ -4177,19 +4326,32 @@ async function initTranscriberSystem(): Promise<void> {
 
     // Auto-show in immersive mode if enabled (default: true)
     if (librarianManager!.isAutoShowEnabled() && clipboardHistoryWindow) {
-      // Use ClipboardHistoryWindow.show() to properly restore bounds
-      const boundsToUse = restoreClipboardHistoryBounds();
-      clipboardHistoryWindow.show(boundsToUse);
-
-      // Bounce dock icon as fallback if focus stealing fails
-      if (app.dock) {
-        app.dock.bounce('informational');
-      }
-
-      // Tell renderer to switch to librarian in immersive mode (now using path)
       const win = clipboardHistoryWindow.getWindow();
-      if (win && !win.isDestroyed()) {
-        win.webContents.send('librarian:showReading', reading.path);
+
+      // Check if window is already visible (user actively using Field Theory)
+      if (win && !win.isDestroyed() && win.isVisible()) {
+        // Don't disrupt - just notify renderer to show indicator (blue dot)
+        win.webContents.send('librarian:newReadingAvailable', reading.path);
+
+        // Bounce dock icon to get attention
+        if (app.dock) {
+          app.dock.bounce('informational');
+        }
+      } else {
+        // Window not visible - open in immersive mode
+        const boundsToUse = restoreClipboardHistoryBounds();
+        clipboardHistoryWindow.show(boundsToUse);
+
+        // Bounce dock icon as fallback if focus stealing fails
+        if (app.dock) {
+          app.dock.bounce('informational');
+        }
+
+        // Tell renderer to switch to librarian, show reading, and enter immersive mode
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('librarian:showReading', reading.path);
+          win.webContents.send('librarian:setFullscreen', true);
+        }
       }
     }
   });
@@ -4222,6 +4384,7 @@ async function initTranscriberSystem(): Promise<void> {
     const formatted = {
       priorityMic: quotaManager!.formatPriorityMicUsage(),
       autoStack: quotaManager!.formatAutoStackUsage(),
+      textImprove: quotaManager!.formatTextImproveUsage(),
     };
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
@@ -4284,9 +4447,20 @@ async function initTranscriberSystem(): Promise<void> {
     transcriberManager.setCommandsManager(commandsManager);
   }
 
-  // Load saved commands directory from preferences.
+  // Initialize multi-directory watching from settings file.
+  await commandsManager.initialize();
+
+  // Migrate legacy single-directory setting to multi-directory system.
+  // If user has a commandsDirectory set but watchedDirs is empty, add it to watchedDirs.
   const savedCommandsDir = preferencesManager.getPreference('commandsDirectory');
   if (savedCommandsDir) {
+    const watchedDirs = commandsManager.getWatchedDirs();
+    if (watchedDirs.length === 0) {
+      // Migrate: add legacy directory as first watched directory
+      console.log(`[Main] Migrating legacy commands directory to multi-directory system: ${savedCommandsDir}`);
+      await commandsManager.addWatchedDir(savedCommandsDir);
+    }
+    // Also set the legacy directoryPath for backwards compatibility with command detection
     await commandsManager.setDirectory(savedCommandsDir);
   }
   

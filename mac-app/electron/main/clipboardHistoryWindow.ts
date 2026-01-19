@@ -67,9 +67,12 @@ export class ClipboardHistoryWindow {
   
   // Track if recording is active - used to keep overlay visible when dismissing clipboard history
   private isRecordingActive: boolean = false;
-  
+
   // Track if sketch/draw mode is active - used to skip auto-paste into Excalidraw
   private sketchModeActive: boolean = false;
+
+  // Track if immersive/fullscreen reading mode is active - window should not auto-hide
+  private isImmersiveMode: boolean = false;
 
   // Saved window bounds before sketch mode expansion (to restore on exit).
   private normalBounds: Electron.Rectangle | null = null;
@@ -361,15 +364,22 @@ export class ClipboardHistoryWindow {
 
     // Dismiss when window loses focus (Alfred behavior).
     // When showInDock is enabled, skip this entirely - user expects normal app behavior.
+    // When immersive mode is active, also skip - user positioned window intentionally.
     this.window.on('blur', () => {
       const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
-      
+
       // When showInDock is enabled, don't auto-hide on blur.
       // User expects normal app behavior where windows stay visible.
       if (showInDock) {
         return;
       }
-      
+
+      // When in immersive/fullscreen reading mode, don't auto-hide.
+      // User may have positioned window to read while working.
+      if (this.isImmersiveMode) {
+        return;
+      }
+
       console.log('[ClipboardHistoryWindow] Window lost focus, hiding');
       // Alfred-style: hide when clicking away.
       this.hide(!this.isRecordingActive);
@@ -588,6 +598,33 @@ export class ClipboardHistoryWindow {
    */
   getRecordingActive(): boolean {
     return this.isRecordingActive;
+  }
+
+  /**
+   * Set immersive/fullscreen reading mode state.
+   * When active, window will not auto-hide on blur and behaves like a normal window.
+   */
+  setImmersiveMode(immersive: boolean): void {
+    this.isImmersiveMode = immersive;
+    console.log(`[ClipboardHistoryWindow] Immersive mode: ${immersive}`);
+
+    // Only adjust alwaysOnTop in panel mode (not showInDock mode)
+    const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+    if (!showInDock && this.window && !this.window.isDestroyed()) {
+      if (immersive) {
+        // In immersive mode, disable alwaysOnTop so window behaves normally
+        this.window.setAlwaysOnTop(false);
+        this.window.setVisibleOnAllWorkspaces(false);
+      }
+      // Don't restore alwaysOnTop when exiting - let window stay normal until hidden
+    }
+  }
+
+  /**
+   * Check if immersive mode is active.
+   */
+  getImmersiveMode(): boolean {
+    return this.isImmersiveMode;
   }
 
   setSketchModeActive(active: boolean): void {
