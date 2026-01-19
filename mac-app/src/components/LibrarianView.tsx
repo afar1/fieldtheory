@@ -725,14 +725,12 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         backgroundColor: theme.bg,
       }}
     >
-      {/* Sidebar - hidden in full-screen mode */}
-      {!isFullScreen && (
-      <>
+      {/* Sidebar - hidden in full-screen mode but kept in DOM for instant collapse */}
       <div
         style={{
           width: `${sidebarWidth}px`,
           minWidth: `${sidebarWidth}px`,
-          display: 'flex',
+          display: isFullScreen ? 'none' : 'flex',
           flexDirection: 'column',
           padding: '12px 0',
           userSelect: isResizing ? 'none' : 'auto',
@@ -970,7 +968,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           </button>
         </div>
       </div>
-      {/* Resize handle */}
+      {/* Resize handle - hidden in full-screen mode but kept in DOM */}
       <div
         onMouseDown={handleResizeMouseDown}
         style={{
@@ -980,6 +978,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           borderRight: `1px solid ${theme.border}`,
           transition: 'background-color 0.15s ease',
           flexShrink: 0,
+          display: isFullScreen ? 'none' : 'block',
         }}
         onMouseEnter={(e) => {
           if (!isResizing) {
@@ -994,8 +993,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           }
         }}
       />
-      </>
-      )}
 
       {/* Reader pane */}
       <div
