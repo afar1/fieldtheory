@@ -2,6 +2,16 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
     {
+      "source": "/og/:slug",
+      "destination": "/api/og/:slug",
+      "has": [
+        {
+          "type": "host",
+          "value": "librarian.fieldtheory.dev"
+        }
+      ]
+    },
+    {
       "source": "/:slug",
       "destination": "/api/librarian/:slug",
       "has": [

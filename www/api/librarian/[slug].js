@@ -81,7 +81,16 @@ export default async function handler(req, res) {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${esc(reading.title)} – Field Theory</title>
-  <meta name="description" content="A reading from the Field Theory Librarian">
+  <meta name="description" content="An artifact from the Field Theory Librarian">
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="${esc(reading.title)}">
+  <meta property="og:description" content="An artifact from the Field Theory Librarian">
+  <meta property="og:image" content="https://librarian.fieldtheory.dev/og/${slug}">
+  <meta property="og:url" content="${shareUrl}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="${esc(reading.title)}">
+  <meta name="twitter:description" content="An artifact from the Field Theory Librarian">
+  <meta name="twitter:image" content="https://librarian.fieldtheory.dev/og/${slug}">
   <link rel="icon" href="https://fieldtheory.dev/images/fieldtheory-icon-black.png">
   <style>
     :root {
