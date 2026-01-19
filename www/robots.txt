@@ -1,13 +1,3 @@
-# Allow social sharing crawlers
-User-agent: Twitterbot
-Allow: /
-
-User-agent: facebookexternalhit
-Allow: /
-
-User-agent: LinkedInBot
-Allow: /
-
-# Block general crawlers for now
+# Allow all crawlers
 User-agent: *
-Disallow: /
+Allow: /
