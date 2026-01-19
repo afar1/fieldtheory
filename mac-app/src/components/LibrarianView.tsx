@@ -76,6 +76,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const [isFullScreen, setIsFullScreen] = useState(() => {
     return localStorage.getItem('librarian-fullscreen') === 'true';
   });
+  const [headerHovered, setHeaderHovered] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem('librarian-sidebar-width');
     return saved ? parseInt(saved, 10) : 180;
@@ -92,6 +93,11 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   // Persist full-screen preference
   useEffect(() => {
     localStorage.setItem('librarian-fullscreen', String(isFullScreen));
+  }, [isFullScreen]);
+
+  // Notify main process of immersive mode changes (affects blur-to-hide behavior)
+  useEffect(() => {
+    window.librarianAPI?.setImmersiveMode(isFullScreen);
   }, [isFullScreen]);
 
   // Persist sidebar width
@@ -340,7 +346,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
-      // Escape: exit edit mode first, then fullscreen, then switch to clipboard
+      // Escape: exit edit mode first, then fullscreen, then close window
       if (e.key === 'Escape') {
         if (isEditing) {
           if (isDirty) {
@@ -351,7 +357,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         } else if (isFullScreen) {
           setIsFullScreen(false);
         } else {
-          onSwitchToClipboard();
+          // Close the window instead of just switching views
+          window.clipboardAPI?.closeWindow();
         }
         return;
       }
@@ -384,10 +391,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   }, []);
 
   // Listen for show reading requests (auto-show on new reading)
+  // Note: fullscreen state is controlled separately by onSetFullscreen, not here
   useEffect(() => {
     const unsubscribe = window.librarianAPI?.onShowReading((readingPath) => {
       setSelectedPath(readingPath);
-      setIsFullScreen(false);
     });
 
     return () => unsubscribe?.();
@@ -476,27 +483,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
             color: theme.textSecondary,
             textTransform: 'uppercase',
             letterSpacing: '0.5px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
           }}
         >
-          <button
-            onClick={() => setIsFullScreen(true)}
-            style={{
-              padding: '2px 4px',
-              fontSize: '12px',
-              color: theme.textSecondary,
-              backgroundColor: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              lineHeight: 1,
-            }}
-            title="Collapse sidebar"
-          >
-            ☰
-          </button>
-          <span>Readings</span>
+          Readings
         </div>
 
         {Array.from(groupedReadings.entries()).map(([date, items]) => (
@@ -674,90 +663,169 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           minHeight: 0, // Required for flex child to shrink below content size
         }}
       >
+        {/* Top draggable region - captures clicks at very top of frameless window */}
+        <div
+          onMouseEnter={() => isFullScreen && setHeaderHovered(true)}
+          onMouseLeave={() => isFullScreen && setHeaderHovered(false)}
+          style={{
+            height: isFullScreen ? '28px' : '8px',
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            position: 'relative',
+            // @ts-ignore - webkit vendor prefix for Electron draggable region
+            WebkitAppRegion: 'drag',
+            cursor: 'grab',
+          }}
+        >
+          {/* Stoplight close button - fades in on header hover, only in fullscreen mode */}
+          {isFullScreen && (
+            <button
+              onClick={() => window.clipboardAPI?.closeWindow()}
+              style={{
+                position: 'absolute',
+                left: '12px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                width: '12px',
+                height: '12px',
+                borderRadius: '50%',
+                backgroundColor: '#ff5f57',
+                border: 'none',
+                cursor: 'pointer',
+                padding: 0,
+                opacity: headerHovered ? 1 : 0,
+                transition: 'opacity 0.2s ease',
+                // @ts-ignore - make button clickable within drag region
+                WebkitAppRegion: 'no-drag',
+              }}
+              title="Close window"
+            />
+          )}
+          {/* Drag handle indicator - only visible in immersive mode */}
+          {isFullScreen && (
+            <div
+              style={{
+                width: '36px',
+                height: '4px',
+                borderRadius: '2px',
+                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.1)',
+              }}
+            />
+          )}
+        </div>
+
         {/* Toolbar - includes draggable region for window movement */}
         {selectedReading && (
           <div
+            onMouseEnter={() => isFullScreen && setHeaderHovered(true)}
+            onMouseLeave={() => isFullScreen && setHeaderHovered(false)}
             style={{
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '8px',
-              padding: isFullScreen ? '24px 16px 8px 16px' : '8px 16px',
+              justifyContent: 'center',
+              padding: isFullScreen ? '8px 16px 4px 16px' : '8px 16px',
               backgroundColor: theme.bg,
               flexShrink: 0,
             }}
           >
-            {/* Left side - hamburger when in fullscreen */}
-            <div style={{ display: 'flex', alignItems: 'center' }}>
-              {isFullScreen && (
-                <button
-                  onClick={() => setIsFullScreen(false)}
-                  style={{
-                    padding: '4px 8px',
-                    fontSize: '12px',
-                    color: theme.textSecondary,
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    cursor: 'pointer',
-                  }}
-                  title="Show sidebar"
-                >
-                  ☰
-                </button>
-              )}
-            </div>
-
-            {/* Draggable spacer for window movement */}
+            {/* Inner container - matches reading content width in fullscreen */}
             <div
+              onMouseEnter={() => isFullScreen && setHeaderHovered(true)}
+              onMouseLeave={() => isFullScreen && setHeaderHovered(false)}
               style={{
-                flex: 1,
-                height: '24px',
-                // @ts-ignore - webkit vendor prefix for Electron draggable region
-                WebkitAppRegion: 'drag',
-                cursor: 'grab',
+                maxWidth: isFullScreen ? '600px' : 'none',
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '8px',
               }}
-            />
+            >
+              {/* Left side - expand/collapse toggle */}
+              <button
+                onClick={() => setIsFullScreen(!isFullScreen)}
+                style={{
+                  padding: '4px',
+                  fontSize: '20px',
+                  color: theme.textSecondary,
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  lineHeight: 1,
+                }}
+                title={isFullScreen ? "Show sidebar" : "Focus mode"}
+              >
+                {isFullScreen ? '⤡' : '⤢'}
+              </button>
 
-            {/* Edit mode controls */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              {isEditing ? (
-                <>
-                  {/* Dirty indicator */}
-                  {isDirty && (
-                    <span
+              {/* Draggable spacer for window movement */}
+              <div
+                style={{
+                  flex: 1,
+                  height: '24px',
+                  // @ts-ignore - webkit vendor prefix for Electron draggable region
+                  WebkitAppRegion: 'drag',
+                  cursor: 'grab',
+                }}
+              />
+
+              {/* Right side - Edit and text size controls */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {isEditing ? (
+                  <>
+                    {isDirty && (
+                      <span
+                        style={{
+                          width: '6px',
+                          height: '6px',
+                          borderRadius: '50%',
+                          backgroundColor: theme.accent,
+                        }}
+                        title="Unsaved changes"
+                      />
+                    )}
+                    <button
+                      onClick={saveChanges}
+                      disabled={!isDirty || isSaving}
                       style={{
-                        width: '6px',
-                        height: '6px',
-                        borderRadius: '50%',
-                        backgroundColor: theme.accent,
+                        padding: '4px 10px',
+                        fontSize: '12px',
+                        color: isDirty ? '#fff' : theme.textSecondary,
+                        backgroundColor: isDirty ? theme.accent : 'transparent',
+                        border: isDirty ? 'none' : `1px solid ${theme.border}`,
+                        borderRadius: '4px',
+                        cursor: isDirty ? 'pointer' : 'default',
+                        opacity: isSaving ? 0.6 : 1,
                       }}
-                      title="Unsaved changes"
-                    />
-                  )}
+                    >
+                      {isSaving ? 'Saving...' : 'Save'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (isDirty) {
+                          const confirmed = window.confirm('Discard changes?');
+                          if (!confirmed) return;
+                        }
+                        exitEditMode();
+                      }}
+                      style={{
+                        padding: '4px 10px',
+                        fontSize: '12px',
+                        color: theme.textSecondary,
+                        backgroundColor: 'transparent',
+                        border: `1px solid ${theme.border}`,
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
                   <button
-                    onClick={saveChanges}
-                    disabled={!isDirty || isSaving}
-                    style={{
-                      padding: '4px 10px',
-                      fontSize: '12px',
-                      color: isDirty ? '#fff' : theme.textSecondary,
-                      backgroundColor: isDirty ? theme.accent : 'transparent',
-                      border: isDirty ? 'none' : `1px solid ${theme.border}`,
-                      borderRadius: '4px',
-                      cursor: isDirty ? 'pointer' : 'default',
-                      opacity: isSaving ? 0.6 : 1,
-                    }}
-                  >
-                    {isSaving ? 'Saving...' : 'Save'}
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (isDirty) {
-                        const confirmed = window.confirm('Discard changes?');
-                        if (!confirmed) return;
-                      }
-                      exitEditMode();
-                    }}
+                    onClick={enterEditMode}
                     style={{
                       padding: '4px 10px',
                       fontSize: '12px',
@@ -767,81 +835,18 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                       borderRadius: '4px',
                       cursor: 'pointer',
                     }}
+                    title="Edit (⌘E)"
                   >
-                    Cancel
+                    Edit
                   </button>
-                </>
-              ) : (
-                <button
-                  onClick={enterEditMode}
-                  style={{
-                    padding: '4px 10px',
-                    fontSize: '12px',
-                    color: theme.textSecondary,
-                    backgroundColor: 'transparent',
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                  }}
-                  title="Edit (⌘E)"
-                >
-                  Edit
-                </button>
-              )}
+                )}
 
-              {/* Separator */}
-              <div
-                style={{
-                  width: '1px',
-                  height: '16px',
-                  backgroundColor: theme.border,
-                  margin: '0 4px',
-                }}
-              />
+                <div style={{ width: '1px', height: '16px', backgroundColor: theme.border, margin: '0 4px' }} />
 
-              {/* Text size controls */}
-              <button
-                onClick={() => setTextSize('small')}
-                style={{
-                  padding: '4px 8px',
-                  fontSize: '11px',
-                  color: textSize === 'small' ? theme.accent : theme.textSecondary,
-                  backgroundColor: 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                  fontWeight: textSize === 'small' ? 600 : 400,
-                }}
-              >
-                A
-              </button>
-              <button
-                onClick={() => setTextSize('normal')}
-                style={{
-                  padding: '4px 8px',
-                  fontSize: '13px',
-                  color: textSize === 'normal' ? theme.accent : theme.textSecondary,
-                  backgroundColor: 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                  fontWeight: textSize === 'normal' ? 600 : 400,
-                }}
-              >
-                A
-              </button>
-              <button
-                onClick={() => setTextSize('large')}
-                style={{
-                  padding: '4px 8px',
-                  fontSize: '15px',
-                  color: textSize === 'large' ? theme.accent : theme.textSecondary,
-                  backgroundColor: 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                  fontWeight: textSize === 'large' ? 600 : 400,
-                }}
-              >
-                A
-              </button>
+                <button onClick={() => setTextSize('small')} style={{ padding: '4px 8px', fontSize: '11px', color: textSize === 'small' ? theme.accent : theme.textSecondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer', fontWeight: textSize === 'small' ? 600 : 400 }}>A</button>
+                <button onClick={() => setTextSize('normal')} style={{ padding: '4px 8px', fontSize: '13px', color: textSize === 'normal' ? theme.accent : theme.textSecondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer', fontWeight: textSize === 'normal' ? 600 : 400 }}>A</button>
+                <button onClick={() => setTextSize('large')} style={{ padding: '4px 8px', fontSize: '15px', color: textSize === 'large' ? theme.accent : theme.textSecondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer', fontWeight: textSize === 'large' ? 600 : 400 }}>A</button>
+              </div>
             </div>
           </div>
         )}
@@ -994,7 +999,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                               : 'rgba(0,0,0,0.05)',
                             padding: '2px 6px',
                             borderRadius: '4px',
-                            fontSize: '14px',
+                            fontSize: '0.875em', // Slightly smaller than body text since monospace appears larger
                             fontFamily: fonts.mono,
                           }}
                         >
@@ -1097,8 +1102,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 {selectedReading.content}
               </ReactMarkdown>
             </div>
-            {/* Spacer for scroll breathing room - allows scrolling last content up */}
-            <div style={{ height: '50vh', flexShrink: 0 }} />
               </>
             )}
           </div>

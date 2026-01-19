@@ -2,29 +2,25 @@ import { EventEmitter } from 'events';
 import { PreferencesManager, LocalQuotas } from './preferences';
 
 // =============================================================================
-// QuotaManager - Local quota tracking for anonymous and free users.
-// Tracks priority mic minutes and auto-stack sessions per calendar month.
+// QuotaManager - Local quota tracking for free users.
+// Tracks priority mic minutes, auto-stack sessions, and text improvement words
+// per calendar month.
 // =============================================================================
 
-// User tier type. 'anonymous' is for users not logged in, determined at runtime.
-type UserTier = 'anonymous' | 'free' | 'pro';
+// User tier type. All users have accounts (no anonymous tier).
+type UserTier = 'free' | 'pro';
 
 // Feature limits by tier.
 const TIER_LIMITS = {
-  anonymous: {
-    priorityMicMinutes: 30,
-    autoStackSessions: 10,
-    textImprovements: 5,
-  },
   free: {
-    priorityMicMinutes: 100,
-    autoStackSessions: 30,
-    textImprovements: 15,
+    priorityMicMinutes: 500,      // ~8 hours per month
+    autoStackSessions: 50,        // Only counts 2+ image sessions
+    textImprovementWords: 5000,   // Word-based (input words)
   },
   pro: {
     priorityMicMinutes: Infinity,
     autoStackSessions: Infinity,
-    textImprovements: Infinity,
+    textImprovementWords: Infinity,
   },
 } as const;
 
@@ -78,7 +74,7 @@ export class QuotaManager extends EventEmitter {
   
   /**
    * Get the effective tier based on login state:
-   * - Not logged in → 'anonymous' (strictest limits)
+   * - Not logged in → 'free' (all users must have accounts)
    * - Logged in + free → 'free'
    * - Logged in + pro → 'pro' (unlimited)
    */
@@ -87,11 +83,11 @@ export class QuotaManager extends EventEmitter {
     if (!this.sessionChecker) {
       return this.quotas.cachedTier;
     }
-    
-    // If not logged in, use anonymous tier (strictest limits).
+
+    // If not logged in, use free tier (all users have accounts via onboarding).
     const hasValidSession = this.sessionChecker();
     if (!hasValidSession) {
-      return 'anonymous';
+      return 'free';
     }
 
     // User is logged in - check if tier has been fetched from server yet.
@@ -129,17 +125,19 @@ export class QuotaManager extends EventEmitter {
         period: currentPeriod,
         priorityMicSecondsUsed: 0,
         autoStackSessionsUsed: 0,
-        textImprovementsUsed: 0,
+        textImprovementWordsUsed: 0,
         cachedTier: stored?.cachedTier || 'free',
         cachedTierUpdatedAt: stored?.cachedTierUpdatedAt || new Date().toISOString(),
       };
       this.saveQuotas(fresh);
       return fresh;
     }
-    
-    // Handle migration from older quota format without textImprovementsUsed.
-    if (stored.textImprovementsUsed === undefined) {
-      stored.textImprovementsUsed = 0;
+
+    // Handle migration from older quota format (count-based to word-based).
+    // If old textImprovementsUsed exists but new textImprovementWordsUsed doesn't,
+    // reset to 0 (don't try to convert counts to words).
+    if (stored.textImprovementWordsUsed === undefined) {
+      stored.textImprovementWordsUsed = 0;
     }
 
     return stored;
@@ -271,14 +269,15 @@ export class QuotaManager extends EventEmitter {
   }
 
   // ---------------------------------------------------------------------------
-  // Text improvement quota
+  // Text improvement quota (word-based)
   // ---------------------------------------------------------------------------
 
   /**
-   * Increment text improvement count.
-   * Call once per AI text improvement.
+   * Increment text improvement word count.
+   * Call with the number of input words being improved.
+   * Uses "grace" logic: if user has any quota remaining, allow the full request.
    */
-  async incrementTextImprove(): Promise<void> {
+  async incrementTextImprove(wordCount: number): Promise<void> {
     // Pro users don't consume quota.
     if (this.getEffectiveTier() === 'pro') return;
 
@@ -287,19 +286,19 @@ export class QuotaManager extends EventEmitter {
 
     await this.saveQuotas({
       ...this.quotas,
-      textImprovementsUsed: this.quotas.textImprovementsUsed + 1,
+      textImprovementWordsUsed: (this.quotas.textImprovementWordsUsed || 0) + wordCount,
     });
 
     this.emit('quotaChanged', this.getQuotas());
   }
 
   /**
-   * Get text improvement quota status.
+   * Get text improvement quota status (word-based).
    */
   getTextImproveStatus(): QuotaStatus {
     const tier = this.getEffectiveTier();
-    const limit = TIER_LIMITS[tier].textImprovements;
-    const used = this.quotas.textImprovementsUsed;
+    const limit = TIER_LIMITS[tier].textImprovementWords;
+    const used = this.quotas.textImprovementWordsUsed || 0;
     const remaining = isUnlimited(limit) ? Infinity : Math.max(0, limit - used);
 
     return {
@@ -359,7 +358,7 @@ export class QuotaManager extends EventEmitter {
         period: currentPeriod,
         priorityMicSecondsUsed: 0,
         autoStackSessionsUsed: 0,
-        textImprovementsUsed: 0,
+        textImprovementWordsUsed: 0,
       };
     }
   }
@@ -400,16 +399,16 @@ export class QuotaManager extends EventEmitter {
 
   /**
    * Format text improvement usage for display.
-   * Returns "3 of 15 improvements" or "3 of ∞ improvements".
-   * Caps displayed usage at limit (shows "15 of 15" not "18 of 15").
+   * Returns "2,340 of 5,000 words" or "2,340 of ∞ words".
+   * Caps displayed usage at limit (shows "5,000 of 5,000" not "5,500 of 5,000").
    */
   formatTextImproveUsage(): string {
     const status = this.getTextImproveStatus();
     if (isUnlimited(status.limit)) {
-      return `${status.used} of ∞ improvements`;
+      return `${status.used.toLocaleString()} of ∞ words`;
     }
     const displayedUsed = Math.min(status.used, status.limit);
-    return `${displayedUsed} of ${status.limit} improvements`;
+    return `${displayedUsed.toLocaleString()} of ${status.limit.toLocaleString()} words`;
   }
 
   /**
@@ -418,5 +417,28 @@ export class QuotaManager extends EventEmitter {
   getResetDate(): Date {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  }
+
+  /**
+   * Get days until quota reset (first of next month).
+   */
+  getDaysUntilReset(): number {
+    const now = new Date();
+    const resetDate = this.getResetDate();
+    const diffMs = resetDate.getTime() - now.getTime();
+    return Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+  }
+
+  /**
+   * Get the quota limits for the current tier.
+   * Used to display "resets to X" in UI.
+   */
+  getLimits(): { priorityMicMinutes: number; autoStackSessions: number; textImprovementWords: number } {
+    const tier = this.getEffectiveTier();
+    return {
+      priorityMicMinutes: TIER_LIMITS[tier].priorityMicMinutes,
+      autoStackSessions: TIER_LIMITS[tier].autoStackSessions,
+      textImprovementWords: TIER_LIMITS[tier].textImprovementWords,
+    };
   }
 }

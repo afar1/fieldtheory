@@ -10,7 +10,7 @@ import TodoView from './TodoView';
 import SharedContextView from './SharedContextView';
 import DMsView from './DMsView';
 import HotMicView from './HotMicView';
-import PopularCommands from './PopularCommands';
+import CommandsView from './CommandsView';
 import ReleaseNotesPopup from './ReleaseNotesPopup';
 import LibrarianView from './LibrarianView';
 import type { SketchViewHandle } from './SketchView';
@@ -48,7 +48,7 @@ import {
   TAB_LABELS,
   MAX_UNDO,
 } from '../types/clipboard';
-import { formatRelativeTime, formatFileSize } from '../utils/formatUtils';
+import { formatRelativeTime, formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
 import { smartTruncateText, detectColor } from '../utils/textUtils';
 import { KeyCap } from './KeyCap';
 import { DraggableDroppableRow } from './DraggableDroppableRow';
@@ -271,7 +271,13 @@ export default function ClipboardHistory() {
     const saved = localStorage.getItem('librarianEnabled');
     return saved !== 'false'; // Default to true
   });
+  // Track if a new reading is available (shows blue dot indicator on Librarian tab)
+  const [hasNewReading, setHasNewReading] = useState(false);
   const [headerHovered, setHeaderHovered] = useState(false);
+
+  // Layout variant - B8 is the official layout
+  const layoutVariant = 'B8' as const;
+
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -1481,6 +1487,23 @@ export default function ClipboardHistory() {
     return () => unsubscribe?.();
   }, []);
 
+  // Handle new reading available (when window already visible, shows indicator)
+  useEffect(() => {
+    const unsubscribe = window.librarianAPI?.onNewReadingAvailable(() => {
+      // Don't switch views - just show indicator
+      setHasNewReading(true);
+    });
+
+    return () => unsubscribe?.();
+  }, []);
+
+  // Clear new reading indicator when user switches to Librarian tab
+  useEffect(() => {
+    if (viewMode === 'librarian') {
+      setHasNewReading(false);
+    }
+  }, [viewMode]);
+
   // Measure container width for text truncation (updates on resize)
   useEffect(() => {
     if (!listRef.current) return;
@@ -1809,6 +1832,7 @@ export default function ClipboardHistory() {
             // Build visible tabs array in order, then cycle backwards
             const visibleTabs: ViewMode[] = ['clipboard'];
             if (librarianEnabled) visibleTabs.push('librarian');
+            visibleTabs.push('commands');
             if (canShare) visibleTabs.push('team');
             if (FEATURE_HOT_MIC_ENABLED) visibleTabs.push('hotmic');
             if (tasksTabEnabled) visibleTabs.push('todo');
@@ -1824,6 +1848,7 @@ export default function ClipboardHistory() {
             // Build visible tabs array in order, then cycle forwards
             const visibleTabs: ViewMode[] = ['clipboard'];
             if (librarianEnabled) visibleTabs.push('librarian');
+            visibleTabs.push('commands');
             if (canShare) visibleTabs.push('team');
             if (FEATURE_HOT_MIC_ENABLED) visibleTabs.push('hotmic');
             if (tasksTabEnabled) visibleTabs.push('todo');
@@ -2993,6 +3018,19 @@ export default function ClipboardHistory() {
           cursor: 'default',
         }}
       >
+      {/* Thin hit-test region at very top of window to capture edge clicks (NSPanel fix) */}
+      {!showInDock && librarianImmersive && viewMode === 'librarian' && (
+        <div
+          style={{
+            height: '8px',
+            minHeight: '8px',
+            // @ts-ignore - webkit vendor prefix for Electron draggable region
+            WebkitAppRegion: 'drag',
+            cursor: 'grab',
+            flexShrink: 0,
+          }}
+        />
+      )}
       {/* Titlebar area for stoplight buttons when in Dock mode */}
       {showInDock && (
         <div
@@ -3254,8 +3292,8 @@ export default function ClipboardHistory() {
         
       </div>
       
-      {/* View mode tabs - only show when not in settings, collapses in Librarian immersive mode */}
-      {!showSettings && viewMode !== 'sketch' && (
+      {/* View mode tabs - collapses in Librarian immersive mode */}
+      {viewMode !== 'sketch' && (
         <div
           ref={tabsRef}
           onMouseEnter={() => setHeaderHovered(true)}
@@ -3268,14 +3306,15 @@ export default function ClipboardHistory() {
             marginTop: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '4px',
             marginBottom: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '8px',
             height: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : 'auto',
+            minHeight: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '28px',
             overflow: 'hidden',
-            transition: 'height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease',
+            transition: 'height 0.3s ease, min-height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease',
           }}>
-          {(['clipboard', ...(librarianEnabled ? ['librarian'] : []), ...(canShare ? ['team'] : []), ...(FEATURE_HOT_MIC_ENABLED ? ['hotmic'] : []), ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
+          {(['clipboard', ...(librarianEnabled ? ['librarian'] : []), 'commands', ...(canShare ? ['team'] : []), ...(FEATURE_HOT_MIC_ENABLED ? ['hotmic'] : []), ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
             // Hot Mic tab has special styling and the fire toggle.
             const isHotMic = mode === 'hotmic';
-            const isSelected = viewMode === mode && !(mode === 'team' && !authSession?.user?.email);
-            
+            const isSelected = viewMode === mode && !(mode === 'team' && !authSession?.user?.email) && !showSettings;
+
             // Hot Mic: red when selected AND enabled, otherwise normal accent.
             const bgColor = isSelected
               ? (isHotMic && hotMicEnabled ? theme.error : (mode === 'team' ? (theme.isDark ? '#8b5cf6' : '#7c3aed') : theme.accent))
@@ -3284,7 +3323,10 @@ export default function ClipboardHistory() {
             return (
               <button
                 key={mode}
-                onClick={() => setViewMode(mode)}
+                onClick={() => {
+                  setViewMode(mode);
+                  setShowSettings(false);
+                }}
                 tabIndex={0}
                 style={{
                   position: 'relative',
@@ -3356,6 +3398,18 @@ export default function ClipboardHistory() {
                 )}
                 {/* Unread indicator for Shared Fields tab - only when authenticated */}
                 {mode === 'team' && hasUnreadShared && viewMode !== 'team' && authSession?.user?.email && (
+                  <span style={{
+                    position: 'absolute',
+                    top: '-2px',
+                    right: '-2px',
+                    width: '6px',
+                    height: '6px',
+                    borderRadius: '50%',
+                    backgroundColor: theme.info,
+                  }} />
+                )}
+                {/* New reading indicator for Librarian tab */}
+                {mode === 'librarian' && hasNewReading && viewMode !== 'librarian' && (
                   <span style={{
                     position: 'absolute',
                     top: '-2px',
@@ -3540,14 +3594,17 @@ export default function ClipboardHistory() {
           
           {/* Feedback button */}
           <button
-            onClick={() => setViewMode('feedback')}
+            onClick={() => {
+              setViewMode('feedback');
+              setShowSettings(false);
+            }}
             tabIndex={0}
             style={{
               padding: '5px 6px',
               fontSize: '9px',
               fontWeight: 500,
-              backgroundColor: viewMode === 'feedback' ? theme.accent : 'transparent',
-              color: viewMode === 'feedback' ? '#fff' : theme.textSecondary,
+              backgroundColor: viewMode === 'feedback' && !showSettings ? theme.accent : 'transparent',
+              color: viewMode === 'feedback' && !showSettings ? '#fff' : theme.textSecondary,
               border: 'none',
               borderRadius: '3px',
               cursor: 'pointer',
@@ -3559,12 +3616,12 @@ export default function ClipboardHistory() {
               position: 'relative',
             }}
             onMouseEnter={(e) => {
-              if (viewMode !== 'feedback') {
+              if (viewMode !== 'feedback' || showSettings) {
                 e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
               }
             }}
             onMouseLeave={(e) => {
-              if (viewMode !== 'feedback') {
+              if (viewMode !== 'feedback' || showSettings) {
                 e.currentTarget.style.backgroundColor = 'transparent';
               }
             }}
@@ -3588,16 +3645,16 @@ export default function ClipboardHistory() {
             )}
           </button>
 
-          {/* Commands button */}
+          {/* Settings button */}
           <button
-            onClick={() => setViewMode('commands')}
+            onClick={() => setShowSettings(!showSettings)}
             tabIndex={0}
             style={{
               padding: '5px 6px',
               fontSize: '9px',
               fontWeight: 500,
-              backgroundColor: viewMode === 'commands' ? theme.accent : 'transparent',
-              color: viewMode === 'commands' ? '#fff' : theme.textSecondary,
+              backgroundColor: showSettings ? theme.accent : 'transparent',
+              color: showSettings ? '#fff' : theme.textSecondary,
               border: 'none',
               borderRadius: '3px',
               cursor: 'pointer',
@@ -3605,24 +3662,27 @@ export default function ClipboardHistory() {
               outline: 'none',
               display: 'flex',
               alignItems: 'center',
-              gap: '2px',
+              gap: '3px',
             }}
             onMouseEnter={(e) => {
-              if (viewMode !== 'commands') {
+              if (!showSettings) {
                 e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
               }
             }}
             onMouseLeave={(e) => {
-              if (viewMode !== 'commands') {
+              if (!showSettings) {
                 e.currentTarget.style.backgroundColor = 'transparent';
               }
             }}
-            title="Popular Commands (C)"
+            title="Settings"
           >
-            <span style={{ fontWeight: 400, opacity: 0.7 }}>/</span>
-            Popular Commands
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+            Settings
           </button>
-          
+
           </div>
         </div>
       )}
@@ -3958,7 +4018,10 @@ export default function ClipboardHistory() {
           </div>
         )
       ) : viewMode === 'commands' ? (
-        <PopularCommands />
+        <CommandsView
+          onSwitchToClipboard={() => setViewMode('clipboard')}
+          onSwitchToSettings={() => setShowSettings(true)}
+        />
       ) : viewMode === 'sketch' ? (
         <Suspense fallback={<div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>}>
           <SketchView
@@ -4411,7 +4474,7 @@ export default function ClipboardHistory() {
                       }
                     }}
                     style={{
-                      padding: '12px 16px',
+                      padding: '10px 16px 6px 16px',
                       backgroundColor: recentlyStackedId === stack.stackId
                         ? theme.isDark ? 'rgba(45, 212, 191, 0.2)' : 'rgba(20, 184, 166, 0.15)'
                         : stackItems.some(item => selectedIds.has(item.id))
@@ -4455,17 +4518,82 @@ export default function ClipboardHistory() {
                         transition: 'width 0.1s ease, background-color 0.1s ease',
                       }} />
                     )}
-                    {/* Content section - full width */}
-                    <div>
-                      {/* Inline image thumbnails - horizontal row */}
+                    {/* Content section with icon column */}
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '16px',
+                    }}>
+                      {/* Content type icons in 2x2 quad grid on left - all 4 always visible, dimmed when inactive */}
+                      {/* Order: transcript (top-left), image (top-right), path/URL (bottom-left), text (bottom-right) */}
+                      {(() => {
+                        const hasTranscripts = stackItems.some(i => i.type === 'transcript');
+                        const hasImages = stackItems.some(i => i.type === 'image' || i.type === 'screenshot');
+                        const hasPathsOrUrls = stackItems.some(i => (i.type === 'text') && i.content && (
+                          i.content.startsWith('/') || i.content.startsWith('~') || i.content.startsWith('file://') ||
+                          i.content.startsWith('http://') || i.content.startsWith('https://')
+                        ));
+                        const hasPlainText = stackItems.some(i => (i.type === 'text') && i.content && !(
+                          i.content.startsWith('/') || i.content.startsWith('~') || i.content.startsWith('file://') ||
+                          i.content.startsWith('http://') || i.content.startsWith('https://')
+                        ));
+                        // Colors for each content type (gray when disabled)
+                        const disabledColor = theme.isDark ? '#4b5563' : '#d1d5db'; // gray
+                        const transcriptColor = hasTranscripts ? '#8b5cf6' : disabledColor; // violet
+                        const imageColor = hasImages ? '#10b981' : disabledColor; // emerald
+                        const pathUrlColor = hasPathsOrUrls ? '#3b82f6' : disabledColor; // blue for paths/URLs
+                        const textColor = hasPlainText ? '#f59e0b' : disabledColor; // amber for plain text
+                        return (
+                          <div style={{
+                            width: '36px',
+                            height: '36px',
+                            flexShrink: 0,
+                            display: 'grid',
+                            gridTemplateColumns: '12px 12px',
+                            gridTemplateRows: '12px 12px',
+                            gap: '6px',
+                            alignContent: 'center',
+                            justifyContent: 'center',
+                          }}>
+                            {/* Transcript - violet (top-left) */}
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={transcriptColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+                              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                              <line x1="12" x2="12" y1="19" y2="22"/>
+                            </svg>
+                            {/* Image - emerald (top-right) */}
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={imageColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
+                              <circle cx="9" cy="9" r="2"/>
+                              <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
+                            </svg>
+                            {/* Path/URL - blue (bottom-left) - folder with link */}
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={pathUrlColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
+                              <path d="M10 14a2 2 0 0 0 3 .2l1-1a2 2 0 0 0-2.8-2.8l-.6.6"/>
+                              <path d="M14 12a2 2 0 0 0-3-.2l-1 1a2 2 0 0 0 2.8 2.8l.6-.6"/>
+                            </svg>
+                            {/* Plain text - amber (bottom-right) - T icon */}
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={textColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="4 7 4 4 20 4 20 7"/>
+                              <line x1="12" x2="12" y1="4" y2="20"/>
+                              <line x1="8" x2="16" y1="20" y2="20"/>
+                            </svg>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Main content area */}
+                      <div style={{ flex: 1 }}>
+                      {/* Inline image thumbnails - horizontal row (oldest first) */}
                       {stackImages.length > 0 && (
-                        <div style={{ 
-                          display: 'flex', 
-                          gap: '8px', 
-                          marginBottom: combinedText ? '8px' : '4px',
+                        <div style={{
+                          display: 'flex',
+                          gap: '8px',
+                          marginBottom: combinedText ? '4px' : '0px',
                           flexWrap: 'wrap',
                         }}>
-                          {stackImages.map((item) => (
+                          {[...stackImages].reverse().map((item) => (
                             <StackImageThumbnail
                               key={item.id}
                               item={item}
@@ -4494,7 +4622,7 @@ export default function ClipboardHistory() {
                                 fontWeight: '400',
                                 color: theme.text,
                                 lineHeight: '1.5',
-                                marginBottom: '4px',
+                                marginBottom: '0px',
                                 whiteSpace: 'pre-wrap',
                                 overflow: 'visible',
                               }}
@@ -4507,7 +4635,7 @@ export default function ClipboardHistory() {
                         if (showSmartTruncation) {
                           // Smart truncation: show first words ... [expand] ... last words inline.
                           return (
-                            <div style={{ marginBottom: '4px' }}>
+                            <div style={{ marginBottom: '0px' }}>
                               <div
                                 style={{
                                   fontSize: '12px',
@@ -4593,12 +4721,12 @@ export default function ClipboardHistory() {
                           backgroundColor: theme.successBg,
                           padding: '2px 6px',
                           borderRadius: '3px',
-                          marginBottom: '4px',
+                          marginBottom: '0px',
                         }}>
                           Improved version available
                         </span>
                       )}
-                      
+
                       {/* Show less button - only when expanded */}
                       {combinedText && expanded && (
                         <button
@@ -4612,7 +4740,7 @@ export default function ClipboardHistory() {
                             background: 'none',
                             border: 'none',
                             padding: 0,
-                            marginTop: '4px',
+                            marginTop: '2px',
                             fontSize: '10px',
                             color: theme.textSecondary,
                             cursor: 'pointer',
@@ -4621,32 +4749,35 @@ export default function ClipboardHistory() {
                           Show less
                         </button>
                       )}
+                      </div>
                     </div>
 
                     {/* Footer row - metadata left, buttons right (buttons always reserve space) */}
-                    <div style={{ 
-                      display: 'flex', 
+                    <div style={{
+                      display: 'flex',
                       justifyContent: 'space-between',
                       alignItems: 'center',
-                      marginTop: '4px',
+                      marginTop: '2px',
+                      // B8: indent to align with content after icon grid (36px grid + 16px gap)
+                      marginLeft: '52px',
                     }}>
-                      {/* Metadata - left side with stack icon */}
+                      {/* Metadata - left side */}
                       <div style={{ fontSize: '10px', color: improveResult?.stackId === stack.stackId ? theme.success : theme.textSecondary, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        {/* Stack icon - layered rectangles */}
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={improveResult?.stackId === stack.stackId ? theme.success : theme.warning} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="4" y="4" width="16" height="6" rx="1" />
-                          <rect x="4" y="14" width="16" height="6" rx="1" />
-                        </svg>
-                        <span>{stackItems.length} items • {formatRelativeTime(stack.createdAt)}{improveResult?.stackId === stack.stackId ? ' • ✨ improved' : ''}</span>
+                        <span>
+                          {stackItems.length} items stacked {formatTimeAgo(stack.createdAt)}
+                          {improveResult?.stackId === stack.stackId && ' • ✨ improved'}
+                        </span>
                       </div>
 
-                      {/* Buttons - right side (show on J/K focus or mouse hover) */}
-                      <div style={{ 
-                        display: 'flex', 
-                        gap: '2px',
-                        flexWrap: 'nowrap',
-                        visibility: selectedIndex === index || hoveredRowIndex === index ? 'visible' : 'hidden',
-                      }}>
+                      {/* Right side: buttons + optional time for B3 variant */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {/* Buttons - show on J/K focus or mouse hover */}
+                        <div style={{
+                          display: 'flex',
+                          gap: '2px',
+                          flexWrap: 'nowrap',
+                          visibility: selectedIndex === index || hoveredRowIndex === index ? 'visible' : 'hidden',
+                        }}>
                         {/* Unstack button - leftmost, only for multi-item stacks */}
                         {stackItems.length > 1 && (
                           <button
@@ -4818,10 +4949,11 @@ export default function ClipboardHistory() {
                         >
                           paste ({displayAppName}) <KeyCap>↵</KeyCap>
                         </button>
+                        </div>
                       </div>
                     </div>
                   </DraggableDroppableRow>
-                  
+
                   {/* New items separator - show below last seen item if there are newer items above */}
                   {lastSeenItemId === stack.stackId && index > 0 && (
                     <div
@@ -4897,7 +5029,7 @@ export default function ClipboardHistory() {
                     onMouseLeave={() => setHoveredRowIndex(null)}
                     onClick={(e) => handleItemClick(item, index, e)}
                     style={{
-                      padding: '12px 16px',
+                      padding: '10px 16px 6px 16px',
                       backgroundColor: isInStack
                         ? theme.selectedBg
                         : isRowSelected
@@ -4966,8 +5098,73 @@ export default function ClipboardHistory() {
                   >
                     {copiedItemId === `item-${item.id}` ? 'copied' : '⧉'}
                   </button>
-                  {/* Content section - full width */}
-                  <div>
+                  {/* Content section - structure varies by layout variant */}
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '16px',
+                  }}>
+                    {/* Content type icons in 2x2 quad grid on left - all 4 always visible, dimmed when inactive */}
+                    {/* Order: transcript (top-left), image (top-right), path/URL (bottom-left), text (bottom-right) */}
+                    {(() => {
+                      const isTranscript = item.type === 'transcript';
+                      const isImage = item.type === 'image' || item.type === 'screenshot';
+                      const isPathOrUrl = (item.type === 'text') && item.content && (
+                        item.content.startsWith('/') || item.content.startsWith('~') || item.content.startsWith('file://') ||
+                        item.content.startsWith('http://') || item.content.startsWith('https://')
+                      );
+                      const isPlainText = (item.type === 'text') && item.content && !(
+                        item.content.startsWith('/') || item.content.startsWith('~') || item.content.startsWith('file://') ||
+                        item.content.startsWith('http://') || item.content.startsWith('https://')
+                      );
+                      // Colors for each content type (gray when disabled)
+                      const disabledColor = theme.isDark ? '#4b5563' : '#d1d5db'; // gray
+                      const transcriptColor = isTranscript ? '#8b5cf6' : disabledColor; // violet
+                      const imageColor = isImage ? '#10b981' : disabledColor; // emerald
+                      const pathUrlColor = isPathOrUrl ? '#3b82f6' : disabledColor; // blue for paths/URLs
+                      const textColor = isPlainText ? '#f59e0b' : disabledColor; // amber for plain text
+                      return (
+                        <div style={{
+                          width: '36px',
+                          height: '36px',
+                          flexShrink: 0,
+                          display: 'grid',
+                          gridTemplateColumns: '12px 12px',
+                          gridTemplateRows: '12px 12px',
+                          gap: '6px',
+                          alignContent: 'center',
+                          justifyContent: 'center',
+                        }}>
+                          {/* Transcript - violet (top-left) */}
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={transcriptColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                            <line x1="12" x2="12" y1="19" y2="22"/>
+                          </svg>
+                          {/* Image - emerald (top-right) */}
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={imageColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
+                            <circle cx="9" cy="9" r="2"/>
+                            <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
+                          </svg>
+                          {/* Path/URL - blue (bottom-left) - folder with link */}
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={pathUrlColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>
+                            <path d="M10 14a2 2 0 0 0 3 .2l1-1a2 2 0 0 0-2.8-2.8l-.6.6"/>
+                            <path d="M14 12a2 2 0 0 0-3-.2l-1 1a2 2 0 0 0 2.8 2.8l.6-.6"/>
+                          </svg>
+                          {/* Plain text - amber (bottom-right) - T icon */}
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={textColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="4 7 4 4 20 4 20 7"/>
+                            <line x1="12" x2="12" y1="4" y2="20"/>
+                            <line x1="8" x2="16" y1="20" y2="20"/>
+                          </svg>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Main content area */}
+                    <div style={{ flex: 1 }}>
                     {item.type === 'text' || item.type === 'transcript' ? (
                       <>
                         {(() => {
@@ -4980,6 +5177,9 @@ export default function ClipboardHistory() {
                           const truncated = smartTruncateText(displayText, 8, containerWidth);
                           const showSmartTruncation = !itemExpanded && truncated.needsTruncation;
                           const colorValue = detectColor(item.content);
+                          // Detect if content is a path or URL for type indicators
+                          const isPath = displayText.startsWith('/') || displayText.startsWith('~');
+                          const isUrl = displayText.startsWith('http');
                           
                           if (itemExpanded) {
                             // Expanded state: show full text with color preview.
@@ -4988,7 +5188,7 @@ export default function ClipboardHistory() {
                                 style={{
                                   fontSize: '12px',
                                   fontWeight: '400',
-                                  marginBottom: '4px',
+                                  marginBottom: '0px',
                                   display: 'flex',
                                   alignItems: 'flex-start',
                                   gap: '8px',
@@ -5008,7 +5208,12 @@ export default function ClipboardHistory() {
                                     title={colorValue}
                                   />
                                 )}
-                                <span style={{ flex: 1, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>
+                                <span style={{
+                                  flex: 1,
+                                  wordBreak: 'break-word',
+                                  whiteSpace: 'pre-wrap',
+                                  fontSize: '12px',
+                                }}>
                                   {displayText}
                                 </span>
                               </div>
@@ -5018,7 +5223,7 @@ export default function ClipboardHistory() {
                           if (showSmartTruncation) {
                             // Smart truncation: show first words ... [expand] ... last words inline.
                             return (
-                              <div style={{ marginBottom: '4px', display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                              <div style={{ marginBottom: '0px', display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
                                 {/* Color swatch if present */}
                                 {colorValue && (
                                   <div
@@ -5145,80 +5350,84 @@ export default function ClipboardHistory() {
                           );
                         })()}
                         
-                        {/* Controls row: Improved/Original toggle + Show more/less */}
-                        {(itemTextIsOverflowing || itemExpanded || item.improvedContent || improveResult?.stackId === `item-${item.id}`) && (
+                        {/* Controls row: Improved/Original toggle OR Show more/less (not both) */}
+                        {(item.improvedContent || improveResult?.stackId === `item-${item.id}`) ? (
                           <div style={{
                             display: 'flex',
                             alignItems: 'center',
-                            justifyContent: 'space-between',
+                            justifyContent: 'flex-end',
+                            marginTop: '2px',
+                            marginBottom: '0px',
+                          }}>
+                            <div style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+                              borderRadius: '4px',
+                              padding: '2px',
+                            }}>
+                              <button
+                                tabIndex={-1}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (item.useImprovedVersion) {
+                                    await window.clipboardAPI?.setUseImprovedVersion?.(item.id, false);
+                                    setItems(prev => prev.map(i =>
+                                      i.id === item.id ? { ...i, useImprovedVersion: false } : i
+                                    ));
+                                  }
+                                }}
+                                style={{
+                                  background: !item.useImprovedVersion ? theme.accent : 'transparent',
+                                  border: 'none',
+                                  padding: '3px 8px',
+                                  fontSize: '9px',
+                                  fontWeight: 500,
+                                  color: !item.useImprovedVersion ? '#fff' : theme.textSecondary,
+                                  cursor: 'pointer',
+                                  borderRadius: '3px',
+                                  transition: 'all 0.15s ease',
+                                }}
+                              >
+                                Original
+                              </button>
+                              <button
+                                tabIndex={-1}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (!item.useImprovedVersion) {
+                                    await window.clipboardAPI?.setUseImprovedVersion?.(item.id, true);
+                                    setItems(prev => prev.map(i =>
+                                      i.id === item.id ? { ...i, useImprovedVersion: true } : i
+                                    ));
+                                  }
+                                }}
+                                style={{
+                                  background: item.useImprovedVersion ? theme.accent : 'transparent',
+                                  border: 'none',
+                                  padding: '3px 8px',
+                                  fontSize: '9px',
+                                  fontWeight: 500,
+                                  color: item.useImprovedVersion ? '#fff' : theme.textSecondary,
+                                  cursor: 'pointer',
+                                  borderRadius: '3px',
+                                  transition: 'all 0.15s ease',
+                                }}
+                              >
+                                Improved
+                              </button>
+                            </div>
+                          </div>
+                        ) : (itemTextIsOverflowing || itemExpanded) && (
+                          <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'flex-end',
                             marginTop: '4px',
                             marginBottom: '4px',
                           }}>
-                            {/* Left: Improved/Original toggle */}
-                            {(item.improvedContent || improveResult?.stackId === `item-${item.id}`) ? (
-                              <div style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
-                                borderRadius: '4px',
-                                padding: '2px',
-                              }}>
-                                <button
-                                  tabIndex={-1}
-                                  onMouseDown={(e) => e.preventDefault()}
-                                  onClick={async (e) => {
-                                    e.stopPropagation();
-                                    if (item.useImprovedVersion) {
-                                      await window.clipboardAPI?.setUseImprovedVersion?.(item.id, false);
-                                      setItems(prev => prev.map(i =>
-                                        i.id === item.id ? { ...i, useImprovedVersion: false } : i
-                                      ));
-                                    }
-                                  }}
-                                  style={{
-                                    background: !item.useImprovedVersion ? theme.success : 'transparent',
-                                    border: 'none',
-                                    padding: '3px 8px',
-                                    fontSize: '9px',
-                                    fontWeight: 500,
-                                    color: !item.useImprovedVersion ? '#fff' : theme.textSecondary,
-                                    cursor: 'pointer',
-                                    borderRadius: '3px',
-                                    transition: 'all 0.15s ease',
-                                  }}
-                                >
-                                  Original
-                                </button>
-                                <button
-                                  tabIndex={-1}
-                                  onMouseDown={(e) => e.preventDefault()}
-                                  onClick={async (e) => {
-                                    e.stopPropagation();
-                                    if (!item.useImprovedVersion) {
-                                      await window.clipboardAPI?.setUseImprovedVersion?.(item.id, true);
-                                      setItems(prev => prev.map(i =>
-                                        i.id === item.id ? { ...i, useImprovedVersion: true } : i
-                                      ));
-                                    }
-                                  }}
-                                  style={{
-                                    background: item.useImprovedVersion ? theme.success : 'transparent',
-                                    border: 'none',
-                                    padding: '3px 8px',
-                                    fontSize: '9px',
-                                    fontWeight: 500,
-                                    color: item.useImprovedVersion ? '#fff' : theme.textSecondary,
-                                    cursor: 'pointer',
-                                    borderRadius: '3px',
-                                    transition: 'all 0.15s ease',
-                                  }}
-                                >
-                                  Improved
-                                </button>
-                              </div>
-                            ) : <div />}
-
-                            {/* Right: Show more/less button */}
                             <button
                               tabIndex={-1}
                               onMouseDown={(e) => e.preventDefault()}
@@ -5324,14 +5533,16 @@ export default function ClipboardHistory() {
                         </div>
                       </>
                     )}
+                    </div>
                   </div>
 
-                  {/* Footer row - metadata left, buttons right (buttons always reserve space) */}
-                  <div style={{ 
-                    display: 'flex', 
+                  {/* Footer row - metadata left, buttons right */}
+                  <div style={{
+                    display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
-                    marginTop: '4px',
+                    marginTop: '2px',
+                    marginLeft: '52px',
                   }}>
                     {/* Metadata - left side */}
                     <div
@@ -5361,37 +5572,29 @@ export default function ClipboardHistory() {
                       <span>
                         {item.type === 'text' || item.type === 'transcript' ? (
                           <>
-                            {item.wordCount
-                              ? `${item.wordCount} words`
-                              : ''}
-                            {item.sourceAppName && ` • ${item.sourceAppName}`}
-                            {' • '}
-                            {formatRelativeTime(item.createdAt)}
+                            {item.wordCount ? `${item.wordCount} words ` : ''}
+                            {item.type === 'transcript' || (item.wordCount && item.wordCount >= 20) ? 'transcribed' : 'created'}{item.sourceAppName ? ` in ${item.sourceAppName}` : ''} {formatTimeAgo(item.createdAt)}
                             {improveResult?.stackId === `item-${item.id}` && (
                               <span style={{ color: theme.success, marginLeft: '4px' }}>• ✨ improved</span>
                             )}
                           </>
                         ) : (
                           <>
-                            {item.imageWidth && item.imageHeight
-                              ? `${item.imageWidth}×${item.imageHeight}`
-                              : ''}
-                            {item.imageSize && ` • ${formatFileSize(item.imageSize)}`}
-                            {item.sourceAppName && ` • ${item.sourceAppName}`}
-                            {' • '}
-                            {formatRelativeTime(item.createdAt)}
+                            {item.sourceAppName ? `${item.sourceAppName} screenshot` : 'Screenshot'}{item.imageWidth && item.imageHeight ? ` (${item.imageWidth}×${item.imageHeight})` : ''} taken {formatTimeAgo(item.createdAt)}
                           </>
                         )}
                       </span>
                     </div>
 
-                    {/* Buttons - right side (show on J/K focus or mouse hover) */}
-                    <div style={{ 
-                      display: 'flex', 
-                      gap: '2px',
-                      flexWrap: 'nowrap',
-                      visibility: isRowSelected || hoveredRowIndex === index ? 'visible' : 'hidden',
-                    }}>
+                    {/* Right side: buttons + optional time for B3 variant */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {/* Buttons - show on J/K focus or mouse hover */}
+                      <div style={{
+                        display: 'flex',
+                        gap: '2px',
+                        flexWrap: 'nowrap',
+                        visibility: isRowSelected || hoveredRowIndex === index ? 'visible' : 'hidden',
+                      }}>
                       {/* Edit Sketch button - only for sketch items */}
                       {item.sourceApp === 'com.fieldtheory.sketch' && (
                         <button
@@ -5614,6 +5817,7 @@ export default function ClipboardHistory() {
                       >
                         paste ({optionHeld ? (targetAppInfo.targetApp?.name || targetAppInfo.previousApp?.name || 'most recent app') : (targetAppInfo.previousApp?.name || 'most recent app')}) <KeyCap>↵</KeyCap>
                       </button>
+                      </div>
                     </div>
                   </div>
                   </DraggableDroppableRow>
@@ -6085,36 +6289,6 @@ export default function ClipboardHistory() {
               )}
             </div>
           )}
-          {/* Settings toggle button */}
-          <button
-            onClick={() => setShowSettings(!showSettings)}
-            title={showSettings ? 'Back to Clipboard' : 'Settings'}
-            style={{
-              width: '20px',
-              height: '20px',
-              padding: 0,
-              backgroundColor: showSettings ? theme.accent : 'transparent',
-              border: showSettings ? 'none' : `1px solid ${theme.border}`,
-              borderRadius: '4px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              transition: 'all 0.15s ease',
-            }}
-          >
-            {showSettings ? (
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round">
-                <path d="M18 6L6 18" />
-                <path d="M6 6l12 12" />
-              </svg>
-            ) : (
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-              </svg>
-            )}
-          </button>
         </div>
       </div>
       

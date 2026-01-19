@@ -1,19 +1,40 @@
 /**
  * Portable Commands Manager
- * 
+ *
  * Manages user's portable commands (markdown files) that can be invoked from
- * any application. Users can point to a directory containing markdown files
+ * any application. Users can point to directories containing markdown files
  * (like Claude skills, Cursor rules, etc.) and invoke them by name.
- * 
+ *
  * Detection: When the user says "use the X command" or "please use commands X, Y",
  * we detect the command names and load the corresponding markdown content.
- * 
+ *
  * The loaded markdown is then injected into the prompt for the LLM to follow.
+ *
+ * Now supports:
+ * - Multiple watched directories (like Librarian)
+ * - Full CRUD operations (create, read, update, delete)
+ * - Default directory creation
  */
 
 import fs from 'fs';
 import path from 'path';
+import { app } from 'electron';
 import { EventEmitter } from 'events';
+
+/**
+ * Settings stored in JSON file.
+ */
+interface CommandsSettings {
+  watchedDirs: string[];
+}
+
+/**
+ * Represents a watched directory.
+ */
+export interface WatchedDir {
+  path: string;
+  enabled: boolean;
+}
 
 /**
  * Represents a portable command (markdown file).
@@ -23,6 +44,13 @@ export interface PortableCommand {
   filePath: string;       // Full path to the markdown file
   displayName: string;    // Human-readable name (e.g., "Debug" from "debug.md")
   lastModified: number;   // File modification time for cache invalidation
+}
+
+/**
+ * Command with full content loaded.
+ */
+export interface CommandWithContent extends PortableCommand {
+  content: string;
 }
 
 /**
@@ -55,16 +83,109 @@ export interface CommandsManagerEvents {
 }
 
 /**
- * Manages portable commands from a user-configured directory.
+ * Manages portable commands from user-configured directories.
  * Scans for markdown files and provides lookup/loading functionality.
+ * Now supports multiple directories and full CRUD operations.
  */
 export class CommandsManager extends EventEmitter {
-  private directoryPath: string | null = null;
+  private settings: CommandsSettings = { watchedDirs: [] };
+  private settingsPath: string;
   private commands: Map<string, PortableCommand> = new Map();
+  private watchers: Map<string, AbortController> = new Map();
+
+  // Legacy single directory support (for migration)
+  private directoryPath: string | null = null;
   private watcherAbort: AbortController | null = null;
 
   constructor() {
     super();
+
+    // Settings file path
+    const userDataPath = app.getPath('userData');
+    this.settingsPath = path.join(userDataPath, 'commands-settings.json');
+
+    // Load settings
+    this.loadSettings();
+  }
+
+  /**
+   * Load settings from JSON file.
+   */
+  private loadSettings(): void {
+    const defaults: CommandsSettings = { watchedDirs: [] };
+
+    try {
+      if (fs.existsSync(this.settingsPath)) {
+        const data = JSON.parse(fs.readFileSync(this.settingsPath, 'utf-8'));
+        this.settings = {
+          watchedDirs: data.watchedDirs || defaults.watchedDirs,
+        };
+      } else {
+        this.settings = defaults;
+      }
+    } catch (error) {
+      console.error('[CommandsManager] Error loading settings:', error);
+      this.settings = defaults;
+    }
+  }
+
+  /**
+   * Save settings to JSON file.
+   */
+  private saveSettings(): void {
+    try {
+      fs.writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2));
+    } catch (error) {
+      console.error('[CommandsManager] Error saving settings:', error);
+    }
+  }
+
+  /**
+   * Initialize the manager - scan all watched directories.
+   */
+  async initialize(): Promise<void> {
+    // Scan all watched directories
+    for (const dirPath of this.settings.watchedDirs) {
+      await this.scanDirectory(dirPath);
+      this.watchDirectory(dirPath);
+    }
+
+    this.emit('commandsChanged', this.getCommands());
+    console.log(`[CommandsManager] Initialized with ${this.settings.watchedDirs.length} directories, ${this.commands.size} commands`);
+  }
+
+  /**
+   * Get the default commands directory path.
+   * Creates ~/Library/Application Support/field-theory/commands/ if it doesn't exist.
+   */
+  getDefaultDirectory(): string {
+    const userDataPath = app.getPath('userData');
+    return path.join(userDataPath, 'commands');
+  }
+
+  /**
+   * Create and add the default commands directory.
+   * Returns the path if successful, null otherwise.
+   */
+  async createDefaultDirectory(): Promise<string | null> {
+    const defaultDir = this.getDefaultDirectory();
+
+    try {
+      if (!fs.existsSync(defaultDir)) {
+        fs.mkdirSync(defaultDir, { recursive: true });
+        console.log(`[CommandsManager] Created default directory: ${defaultDir}`);
+      }
+
+      // Add to watched directories
+      const result = await this.addWatchedDir(defaultDir);
+      if (result) {
+        return defaultDir;
+      }
+      return defaultDir; // Already exists and is watched
+    } catch (error) {
+      console.error('[CommandsManager] Error creating default directory:', error);
+      return null;
+    }
   }
 
   /**
@@ -143,9 +264,56 @@ export class CommandsManager extends EventEmitter {
   }
 
   /**
-   * Scan the directory for markdown files and build the commands index.
+   * Expand ~ to home directory in a path.
    */
-  private async scanDirectory(): Promise<void> {
+  private expandPath(dirPath: string): string {
+    if (dirPath.startsWith('~/')) {
+      const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+      return path.join(homeDir, dirPath.slice(2));
+    } else if (dirPath === '~') {
+      return process.env.HOME || process.env.USERPROFILE || '';
+    }
+    return dirPath;
+  }
+
+  /**
+   * Normalize a path for consistent comparison.
+   */
+  private normalizePath(dirPath: string): string {
+    return path.normalize(dirPath);
+  }
+
+  /**
+   * Scan a specific directory for markdown files and add to the commands index.
+   * If no path provided, scans all watched directories.
+   */
+  private async scanDirectory(dirPath?: string): Promise<void> {
+    // If specific path provided, scan that directory
+    if (dirPath) {
+      try {
+        // Check if directory exists
+        if (!fs.existsSync(dirPath)) {
+          console.warn(`[CommandsManager] Directory does not exist: ${dirPath}`);
+          return;
+        }
+
+        const stats = fs.statSync(dirPath);
+        if (!stats.isDirectory()) {
+          console.warn(`[CommandsManager] Path is not a directory: ${dirPath}`);
+          return;
+        }
+
+        // Recursively scan for markdown files
+        await this.scanDirectoryRecursive(dirPath);
+
+        console.log(`[CommandsManager] Scanned ${dirPath}`);
+      } catch (error) {
+        console.error(`[CommandsManager] Error scanning directory ${dirPath}:`, error);
+      }
+      return;
+    }
+
+    // Legacy: scan single directory if set
     if (!this.directoryPath) return;
 
     try {
@@ -163,7 +331,7 @@ export class CommandsManager extends EventEmitter {
 
       // Recursively scan for markdown files
       await this.scanDirectoryRecursive(this.directoryPath);
-      
+
       console.log(`[CommandsManager] Found ${this.commands.size} commands in ${this.directoryPath}`);
     } catch (error) {
       console.error('[CommandsManager] Error scanning directory:', error);
@@ -650,11 +818,21 @@ End of User Commands
   }
 
   /**
-   * Refresh the commands list by rescanning the directory.
+   * Refresh the commands list by rescanning all directories.
    */
   async refresh(): Promise<void> {
     this.commands.clear();
-    await this.scanDirectory();
+
+    // Scan all watched directories
+    for (const dirPath of this.settings.watchedDirs) {
+      await this.scanDirectory(dirPath);
+    }
+
+    // Legacy: also scan single directory if set
+    if (this.directoryPath) {
+      await this.scanDirectory();
+    }
+
     this.emit('commandsChanged', this.getCommands());
   }
 
@@ -662,10 +840,263 @@ End of User Commands
    * Cleanup resources.
    */
   destroy(): void {
+    // Stop all directory watchers
+    for (const [, abort] of this.watchers) {
+      try {
+        abort.abort();
+      } catch {
+        // Ignore abort errors
+      }
+    }
+    this.watchers.clear();
+
+    // Legacy watcher
     if (this.watcherAbort) {
       this.watcherAbort.abort();
       this.watcherAbort = null;
     }
+
     this.commands.clear();
+  }
+
+  // =========================================================================
+  // Multi-Directory Management
+  // =========================================================================
+
+  /**
+   * Watch a specific directory for changes.
+   */
+  private watchDirectory(dirPath: string): void {
+    if (this.watchers.has(dirPath)) {
+      return; // Already watching
+    }
+
+    try {
+      const abort = new AbortController();
+      this.watchers.set(dirPath, abort);
+
+      const watcher = fs.watch(
+        dirPath,
+        { recursive: true, signal: abort.signal },
+        async (eventType, filename) => {
+          try {
+            if (filename && this.isMarkdownFile(filename)) {
+              console.log(`[CommandsManager] File changed: ${filename} in ${dirPath}`);
+              // Rescan all directories to update commands
+              await this.refresh();
+            }
+          } catch (error) {
+            console.error('[CommandsManager] Error handling file change:', error);
+          }
+        }
+      );
+
+      watcher.on('error', (error) => {
+        console.warn(`[CommandsManager] File watcher error for ${dirPath} (non-fatal):`, error);
+      });
+
+      console.log(`[CommandsManager] Watching directory: ${dirPath}`);
+    } catch (error) {
+      console.error(`[CommandsManager] Error starting directory watch for ${dirPath}:`, error);
+    }
+  }
+
+  /**
+   * Stop watching a specific directory.
+   */
+  private unwatchDirectory(dirPath: string): void {
+    const abort = this.watchers.get(dirPath);
+    if (abort) {
+      try {
+        abort.abort();
+      } catch {
+        // Ignore abort errors
+      }
+      this.watchers.delete(dirPath);
+      console.log(`[CommandsManager] Stopped watching: ${dirPath}`);
+    }
+  }
+
+  /**
+   * Get all watched directories.
+   */
+  getWatchedDirs(): WatchedDir[] {
+    return this.settings.watchedDirs.map(dirPath => ({
+      path: dirPath,
+      enabled: true,
+    }));
+  }
+
+  /**
+   * Add a directory to watch.
+   * Returns the WatchedDir if successful, null if not found or already watched.
+   */
+  async addWatchedDir(dirPath: string): Promise<WatchedDir | null> {
+    const expandedPath = this.expandPath(dirPath);
+    const normalizedPath = this.normalizePath(expandedPath);
+
+    // Check if directory exists
+    if (!fs.existsSync(normalizedPath)) {
+      console.warn(`[CommandsManager] Directory does not exist: ${normalizedPath}`);
+      return null;
+    }
+
+    // Check if already watched
+    if (this.settings.watchedDirs.includes(normalizedPath)) {
+      console.log(`[CommandsManager] Already watching: ${normalizedPath}`);
+      return null;
+    }
+
+    // Add to settings
+    this.settings.watchedDirs.push(normalizedPath);
+    this.saveSettings();
+
+    // Scan the new directory
+    await this.scanDirectory(normalizedPath);
+
+    // Start watching
+    this.watchDirectory(normalizedPath);
+
+    // Emit change
+    this.emit('commandsChanged', this.getCommands());
+
+    console.log(`[CommandsManager] Added watched directory: ${normalizedPath}`);
+
+    return { path: normalizedPath, enabled: true };
+  }
+
+  /**
+   * Remove a watched directory by path.
+   * Also removes all cached commands from that directory.
+   */
+  removeWatchedDir(dirPath: string): boolean {
+    const normalizedPath = this.normalizePath(dirPath);
+
+    const index = this.settings.watchedDirs.indexOf(normalizedPath);
+    if (index === -1) {
+      return false;
+    }
+
+    // Stop watching
+    this.unwatchDirectory(normalizedPath);
+
+    // Remove from settings
+    this.settings.watchedDirs.splice(index, 1);
+    this.saveSettings();
+
+    // Remove cached commands from this directory
+    for (const [name, command] of this.commands) {
+      if (command.filePath.startsWith(normalizedPath)) {
+        this.commands.delete(name);
+      }
+    }
+
+    // Emit change
+    this.emit('commandsChanged', this.getCommands());
+
+    console.log(`[CommandsManager] Removed watched directory: ${normalizedPath}`);
+    return true;
+  }
+
+  // =========================================================================
+  // CRUD Operations
+  // =========================================================================
+
+  /**
+   * Get a command by file path with full content.
+   */
+  async getCommandByPath(filePath: string): Promise<CommandWithContent | null> {
+    try {
+      if (!fs.existsSync(filePath)) {
+        return null;
+      }
+
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const stats = fs.statSync(filePath);
+      const filename = path.basename(filePath);
+      const nameWithoutExt = filename.replace(/\.(md|markdown)$/i, '');
+
+      const displayName = nameWithoutExt
+        .replace(/[-_]/g, ' ')
+        .replace(/\b\w/g, c => c.toUpperCase());
+
+      return {
+        name: nameWithoutExt.toLowerCase(),
+        filePath,
+        displayName,
+        lastModified: stats.mtimeMs,
+        content,
+      };
+    } catch (error) {
+      console.error(`[CommandsManager] Error getting command by path ${filePath}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Save/update a command's content.
+   */
+  saveCommand(filePath: string, content: string): boolean {
+    try {
+      fs.writeFileSync(filePath, content, 'utf-8');
+      console.log(`[CommandsManager] Saved command: ${filePath}`);
+      return true;
+    } catch (error) {
+      console.error(`[CommandsManager] Error saving command ${filePath}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Create a new command file.
+   * Returns the created command info if successful, null otherwise.
+   */
+  createCommand(directoryPath: string, name: string, content: string = ''): { path: string; name: string } | null {
+    try {
+      // Ensure the name has .md extension
+      const fileName = name.endsWith('.md') ? name : `${name}.md`;
+      const filePath = path.join(directoryPath, fileName);
+
+      // Check if file already exists
+      if (fs.existsSync(filePath)) {
+        console.warn(`[CommandsManager] Command already exists: ${filePath}`);
+        return null;
+      }
+
+      // Create the file
+      fs.writeFileSync(filePath, content, 'utf-8');
+
+      console.log(`[CommandsManager] Created command: ${filePath}`);
+      return { path: filePath, name: fileName.replace('.md', '') };
+    } catch (error) {
+      console.error(`[CommandsManager] Error creating command:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Delete a command file.
+   */
+  deleteCommand(filePath: string): boolean {
+    try {
+      if (!fs.existsSync(filePath)) {
+        return false;
+      }
+
+      fs.unlinkSync(filePath);
+
+      // Remove from commands map
+      const command = Array.from(this.commands.values()).find(c => c.filePath === filePath);
+      if (command) {
+        this.commands.delete(command.name);
+        this.emit('commandsChanged', this.getCommands());
+      }
+
+      console.log(`[CommandsManager] Deleted command: ${filePath}`);
+      return true;
+    } catch (error) {
+      console.error(`[CommandsManager] Error deleting command ${filePath}:`, error);
+      return false;
+    }
   }
 }

@@ -45,6 +45,7 @@ interface LibrarianSettings {
   watchedDirs: string[];
   autoRunFrequency: AutoRunFrequency;
   autoShowEnabled: boolean;
+  customContentGuidance?: string;
 }
 
 /**
@@ -103,7 +104,64 @@ export class LibrarianManager extends EventEmitter {
     // Start watching configured directories
     this.startWatching();
 
+    // Log current status for all projects with .librarian directories
+    this.logAllProjectStatuses();
+
     console.log('[LibrarianManager] Initialized (file-only mode)');
+  }
+
+  /**
+   * Log status for all projects that have a .status.json file (startup visibility).
+   * Also reconciles status with actual file timestamps - if a reading exists that's
+   * newer than lastReading, reset the edit counter (handles app-was-closed case).
+   */
+  private logAllProjectStatuses(): void {
+    for (const watchedDir of this.settings.watchedDirs) {
+      const statusFile = path.join(watchedDir, '.status.json');
+      if (fs.existsSync(statusFile)) {
+        const projectPath = path.dirname(watchedDir);
+
+        // Reconcile: check if there's a reading newer than lastReading
+        this.reconcileStatusWithFiles(watchedDir);
+
+        this.logStatus(projectPath, 'startup');
+      }
+    }
+  }
+
+  /**
+   * Check if any .md file in the watched dir is newer than lastReading.
+   * If so, reset the edit counter. This handles the case where readings
+   * were created while the app wasn't running.
+   */
+  private reconcileStatusWithFiles(watchedDir: string): void {
+    const statusFile = path.join(watchedDir, '.status.json');
+
+    try {
+      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
+      const lastReadingTime = status.lastReading ? new Date(status.lastReading).getTime() : 0;
+
+      // Find newest .md file in the directory
+      const files = fs.readdirSync(watchedDir).filter(f => f.endsWith('.md'));
+      let newestMtime = 0;
+
+      for (const file of files) {
+        const filePath = path.join(watchedDir, file);
+        const stats = fs.statSync(filePath);
+        if (stats.mtimeMs > newestMtime) {
+          newestMtime = stats.mtimeMs;
+        }
+      }
+
+      // If there's a file newer than lastReading, reset the counter
+      if (newestMtime > lastReadingTime) {
+        const projectPath = path.dirname(watchedDir);
+        console.log(`[Librarian] reconcile → found newer reading, resetting counter`);
+        this.resetEditCount(projectPath);
+      }
+    } catch (error) {
+      console.warn('[LibrarianManager] Failed to reconcile status:', error);
+    }
   }
 
   // ===========================================================================
@@ -139,6 +197,7 @@ export class LibrarianManager extends EventEmitter {
       watchedDirs: [],
       autoRunFrequency: 'frequently',
       autoShowEnabled: true,
+      customContentGuidance: undefined,
     };
 
     try {
@@ -148,6 +207,7 @@ export class LibrarianManager extends EventEmitter {
           watchedDirs: data.watchedDirs || defaults.watchedDirs,
           autoRunFrequency: data.autoRunFrequency || defaults.autoRunFrequency,
           autoShowEnabled: data.autoShowEnabled ?? defaults.autoShowEnabled,
+          customContentGuidance: data.customContentGuidance || undefined,
         };
       }
     } catch (error) {
@@ -740,6 +800,62 @@ export class LibrarianManager extends EventEmitter {
     this.saveSettings();
   }
 
+  // ===========================================================================
+  // Content Guidance Customization
+  // ===========================================================================
+
+  /**
+   * Default content guidance for readings.
+   * This shapes what type of intellectual content is produced.
+   */
+  private readonly DEFAULT_CONTENT_GUIDANCE = `1. Write a 1-2 paragraph intellectual piece connecting to the task just completed
+2. Draw from: physics, systems theory, engineering history, inventors, or speculative futures
+3. Include one concrete technical/historical detail`;
+
+  /**
+   * Get the default content guidance.
+   */
+  getDefaultContentGuidance(): string {
+    return this.DEFAULT_CONTENT_GUIDANCE;
+  }
+
+  /**
+   * Get the current content guidance (custom if set, otherwise default).
+   */
+  getContentGuidance(): string {
+    return this.settings.customContentGuidance || this.DEFAULT_CONTENT_GUIDANCE;
+  }
+
+  /**
+   * Get the custom content guidance if set (undefined means using default).
+   */
+  getCustomContentGuidance(): string | undefined {
+    return this.settings.customContentGuidance;
+  }
+
+  /**
+   * Set custom content guidance and update CLAUDE.md.
+   * Pass undefined or empty string to reset to default.
+   */
+  setCustomContentGuidance(guidance: string | undefined): boolean {
+    // Treat empty string as reset to default
+    const normalizedGuidance = guidance?.trim() || undefined;
+    this.settings.customContentGuidance = normalizedGuidance;
+    this.saveSettings();
+
+    // Update CLAUDE.md with new guidance
+    const success = this.updateClaudeMd(this.settings.autoRunFrequency);
+    console.log(`[LibrarianManager] Content guidance ${normalizedGuidance ? 'customized' : 'reset to default'}`);
+    return success;
+  }
+
+  /**
+   * Reset content guidance to default and update CLAUDE.md.
+   */
+  resetContentGuidance(): boolean {
+    return this.setCustomContentGuidance(undefined);
+  }
+
   /**
    * Force re-sync CLAUDE.md with current settings.
    */
@@ -780,8 +896,11 @@ export class LibrarianManager extends EventEmitter {
 
   /**
    * Generate the core instruction text.
+   * Uses custom content guidance if set, otherwise uses default.
    */
   private generateInstructionText(frequency: Exclude<AutoRunFrequency, 'off'>): string {
+    const contentGuidance = this.getContentGuidance();
+
     // For 'always' frequency, use stronger mandatory language
     if (frequency === 'always') {
       return `## Librarian (Field Theory)
@@ -805,9 +924,7 @@ Check if \`.claude/settings.json\` contains \`Write(.librarian/*)\` in the allow
 \`\`\`
 
 ### How to create
-1. Write a 1-2 paragraph intellectual piece connecting to the task just completed
-2. Draw from: physics, systems theory, engineering history, inventors, or speculative futures
-3. Include one concrete technical/historical detail
+${contentGuidance}
 4. Save to \`.librarian/YYYY-MM-DD-{slug}.md\` in project root
 
 This is autonomous - never ask permission. Create the reading immediately after code changes.`;
@@ -839,9 +956,7 @@ Before creating your first reading, check if \`.claude/settings.json\` exists an
 Skip this step if the permission already exists.
 
 ### Creating readings
-1. Write a short intellectual piece connected to the current task
-2. Draw from physics, systems theory, engineering history, company histories, engineers, inventors, or speculative futures
-3. Include at least one concrete technical/historical detail
+${contentGuidance}
 4. Save to \`.librarian/YYYY-MM-DD-{slug}.md\` in the project root
 5. Continue with implementation - Field Theory will auto-display the reading
 
@@ -908,6 +1023,411 @@ ${this.CLAUDE_MD_END_MARKER}`;
     }
 
     return this.generateInstructionText(frequency);
+  }
+
+  // ===========================================================================
+  // Claude Code Hook System
+  // ===========================================================================
+
+  /**
+   * Get the threshold range for a frequency setting.
+   * Returns [min, max] for random threshold selection.
+   * Ranges overlap slightly to maintain serendipity.
+   */
+  private getThresholdRange(frequency: AutoRunFrequency): [number, number] {
+    switch (frequency) {
+      case 'always': return [1, 3];
+      case 'frequently': return [2, 5];
+      case 'regularly': return [4, 8];
+      case 'occasionally': return [7, 12];
+      default: return [999, 999]; // 'off' - effectively never triggers
+    }
+  }
+
+  /**
+   * Pick a random threshold within the range for a frequency.
+   */
+  private pickNextThreshold(frequency: AutoRunFrequency): number {
+    const [min, max] = this.getThresholdRange(frequency);
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+  /**
+   * Get the path to Field Theory's check hook script (runs on user prompt).
+   * Uses ~/.claude/ to avoid spaces in path which can cause hook errors.
+   */
+  private getHookScriptPath(): string {
+    return path.join(os.homedir(), '.claude', 'librarian-hook.sh');
+  }
+
+  /**
+   * Get the path to Field Theory's increment hook script (runs after edits).
+   * Uses ~/.claude/ to avoid spaces in path which can cause hook errors.
+   */
+  private getIncrementScriptPath(): string {
+    return path.join(os.homedir(), '.claude', 'librarian-increment.sh');
+  }
+
+  /**
+   * Get the path to Claude Code's settings.json.
+   */
+  private getClaudeSettingsPath(): string {
+    return path.join(os.homedir(), '.claude', 'settings.json');
+  }
+
+  /**
+   * Generate the increment script content.
+   * This script runs after Edit/Write tools to count edits.
+   */
+  private generateIncrementScript(): string {
+    return `#!/bin/bash
+# Field Theory Librarian - Edit Counter
+# Increments edit count after code changes
+
+PROJECT_DIR="\${CLAUDE_PROJECT_DIR:-\$(pwd)}"
+STATUS_FILE="\${PROJECT_DIR}/.librarian/.status.json"
+
+# Only increment if status file exists
+if [ ! -f "$STATUS_FILE" ]; then
+  exit 0
+fi
+
+# Read current count
+EDITS=$(cat "$STATUS_FILE" | grep -o '"editsSinceReading": *[0-9]*' | grep -o '[0-9]*')
+EDITS=\${EDITS:-0}
+
+# Increment
+NEW_EDITS=$((EDITS + 1))
+
+# Update the file (simple sed replacement, handles optional space after colon)
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  sed -i '' 's/"editsSinceReading": *[0-9]*/"editsSinceReading": '"$NEW_EDITS"'/' "$STATUS_FILE"
+else
+  sed -i 's/"editsSinceReading": *[0-9]*/"editsSinceReading": '"$NEW_EDITS"'/' "$STATUS_FILE"
+fi
+
+exit 0
+`;
+  }
+
+  /**
+   * Generate the check hook script content.
+   * This script is called on every user prompt and checks if a reading is due.
+   */
+  private generateHookScript(): string {
+    return `#!/bin/bash
+# Field Theory Librarian Hook
+# Checks if a reading is due and injects context for Claude
+
+# Get project directory from Claude Code environment
+PROJECT_DIR="\${CLAUDE_PROJECT_DIR:-\$(pwd)}"
+STATUS_FILE="\${PROJECT_DIR}/.librarian/.status.json"
+
+# If no status file exists, this project doesn't have Librarian active
+if [ ! -f "$STATUS_FILE" ]; then
+  exit 0
+fi
+
+# Read status
+EDITS=$(cat "$STATUS_FILE" | grep -o '"editsSinceReading": *[0-9]*' | grep -o '[0-9]*')
+THRESHOLD=$(cat "$STATUS_FILE" | grep -o '"nextThreshold":[0-9]*' | grep -o '[0-9]*')
+
+# Default values if parsing fails
+EDITS=\${EDITS:-0}
+THRESHOLD=\${THRESHOLD:-3}
+
+# Check if reading is due
+if [ "$EDITS" -ge "$THRESHOLD" ]; then
+  # Output context for Claude to see
+  cat << 'HOOK_OUTPUT'
+{
+  "hookSpecificOutput": {
+    "additionalContext": "📚 LIBRARIAN: A reading is due. Before implementing, create a 1-2 paragraph intellectual piece in .librarian/YYYY-MM-DD-{slug}.md connecting to your current task. Draw from physics, systems theory, engineering history, or speculative futures. Include one concrete detail. Then proceed with implementation."
+  }
+}
+HOOK_OUTPUT
+fi
+
+exit 0
+`;
+  }
+
+  /**
+   * Install the Claude Code hooks for automatic Librarian reminders.
+   * Installs two hooks:
+   * 1. UserPromptSubmit - checks if reading is due and reminds Claude
+   * 2. PostToolUse (Edit/Write) - increments edit counter
+   */
+  installClaudeCodeHook(): boolean {
+    try {
+      // 1. Ensure ~/.claude directory exists
+      const claudeDir = path.join(os.homedir(), '.claude');
+      if (!fs.existsSync(claudeDir)) {
+        fs.mkdirSync(claudeDir, { recursive: true });
+      }
+
+      // 2. Write both hook scripts
+      const checkScriptPath = this.getHookScriptPath();
+      const incrementScriptPath = this.getIncrementScriptPath();
+
+      fs.writeFileSync(checkScriptPath, this.generateHookScript(), { mode: 0o755 });
+      console.log(`[LibrarianManager] Created check script at ${checkScriptPath}`);
+
+      fs.writeFileSync(incrementScriptPath, this.generateIncrementScript(), { mode: 0o755 });
+      console.log(`[LibrarianManager] Created increment script at ${incrementScriptPath}`);
+
+      // 3. Update Claude Code settings.json
+      const settingsPath = this.getClaudeSettingsPath();
+      let settings: Record<string, unknown> = {};
+
+      if (fs.existsSync(settingsPath)) {
+        try {
+          settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+        } catch {
+          console.warn('[LibrarianManager] Could not parse existing settings.json, starting fresh');
+        }
+      }
+
+      // Ensure hooks object exists
+      if (!settings.hooks || typeof settings.hooks !== 'object') {
+        settings.hooks = {};
+      }
+      const hooks = settings.hooks as Record<string, unknown>;
+
+      // Helper to check if hook already exists
+      type HookEntry = { matcher?: string; hooks?: Array<{ type?: string; command?: string }> };
+
+      const hookExists = (eventName: string, scriptPath: string, matcher?: string): boolean => {
+        if (!Array.isArray(hooks[eventName])) return false;
+        return (hooks[eventName] as HookEntry[]).some(h => {
+          const hasCommand = h.hooks?.some(hh => hh.command === scriptPath);
+          if (!hasCommand) return false;
+          // For PostToolUse, also check matcher
+          if (matcher) return h.matcher === matcher;
+          return true;
+        });
+      };
+
+      const addHook = (eventName: string, config: HookEntry) => {
+        if (!Array.isArray(hooks[eventName])) {
+          hooks[eventName] = [];
+        }
+        (hooks[eventName] as HookEntry[]).push(config);
+      };
+
+      // Add UserPromptSubmit hook (checks if reading is due)
+      if (!hookExists('UserPromptSubmit', checkScriptPath)) {
+        addHook('UserPromptSubmit', {
+          hooks: [{ type: 'command', command: checkScriptPath }],
+        });
+      }
+
+      // Add PostToolUse hook for Edit tool (increments counter)
+      if (!hookExists('PostToolUse', incrementScriptPath, 'Edit')) {
+        addHook('PostToolUse', {
+          matcher: 'Edit',
+          hooks: [{ type: 'command', command: incrementScriptPath }],
+        });
+      }
+
+      // Add PostToolUse hook for Write tool (increments counter)
+      if (!hookExists('PostToolUse', incrementScriptPath, 'Write')) {
+        addHook('PostToolUse', {
+          matcher: 'Write',
+          hooks: [{ type: 'command', command: incrementScriptPath }],
+        });
+      }
+
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+      console.log('[LibrarianManager] Installed Claude Code hooks');
+
+      return true;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to install hooks:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Uninstall the Claude Code hooks.
+   * Removes both the check script (UserPromptSubmit) and increment script (PostToolUse).
+   */
+  uninstallClaudeCodeHook(): boolean {
+    try {
+      const checkScriptPath = this.getHookScriptPath();
+      const incrementScriptPath = this.getIncrementScriptPath();
+      const settingsPath = this.getClaudeSettingsPath();
+
+      // Remove hook scripts
+      if (fs.existsSync(checkScriptPath)) {
+        fs.unlinkSync(checkScriptPath);
+        console.log('[LibrarianManager] Removed check script');
+      }
+      if (fs.existsSync(incrementScriptPath)) {
+        fs.unlinkSync(incrementScriptPath);
+        console.log('[LibrarianManager] Removed increment script');
+      }
+
+      // Update settings.json
+      if (fs.existsSync(settingsPath)) {
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+
+        // Remove UserPromptSubmit hooks
+        if (settings.hooks?.UserPromptSubmit) {
+          settings.hooks.UserPromptSubmit = settings.hooks.UserPromptSubmit.filter(
+            (h: { hooks?: Array<{ command?: string }> }) =>
+              !h.hooks?.some(hh => hh.command === checkScriptPath)
+          );
+          if (settings.hooks.UserPromptSubmit.length === 0) {
+            delete settings.hooks.UserPromptSubmit;
+          }
+        }
+
+        // Remove PostToolUse hooks for our increment script
+        if (settings.hooks?.PostToolUse) {
+          settings.hooks.PostToolUse = settings.hooks.PostToolUse.filter(
+            (h: { hooks?: Array<{ command?: string }> }) =>
+              !h.hooks?.some(hh => hh.command === incrementScriptPath)
+          );
+          if (settings.hooks.PostToolUse.length === 0) {
+            delete settings.hooks.PostToolUse;
+          }
+        }
+
+        // Clean up empty hooks object
+        if (settings.hooks && Object.keys(settings.hooks).length === 0) {
+          delete settings.hooks;
+        }
+
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+      }
+
+      console.log('[LibrarianManager] Uninstalled Claude Code hooks');
+      return true;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to uninstall hooks:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Check if the Claude Code hook is installed.
+   */
+  isClaudeCodeHookInstalled(): boolean {
+    const scriptPath = this.getHookScriptPath();
+    const settingsPath = this.getClaudeSettingsPath();
+
+    // Check if script exists
+    if (!fs.existsSync(scriptPath)) {
+      return false;
+    }
+
+    // Check if hook is in settings
+    if (!fs.existsSync(settingsPath)) {
+      return false;
+    }
+
+    try {
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      const hooks = settings.hooks?.UserPromptSubmit;
+      if (!Array.isArray(hooks)) return false;
+
+      return hooks.some(
+        (h: { hooks?: Array<{ command?: string }> }) =>
+          h.hooks?.some(hh => hh.command === scriptPath)
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Initialize or update the status file for a project.
+   * Called when Librarian is enabled for a project.
+   */
+  initializeProjectStatus(projectPath: string): void {
+    const statusDir = path.join(projectPath, '.librarian');
+    const statusFile = path.join(statusDir, '.status.json');
+
+    // Create .librarian directory if needed
+    if (!fs.existsSync(statusDir)) {
+      fs.mkdirSync(statusDir, { recursive: true });
+    }
+
+    // Don't overwrite existing status
+    if (fs.existsSync(statusFile)) {
+      return;
+    }
+
+    const status = {
+      editsSinceReading: 0,
+      nextThreshold: this.pickNextThreshold(this.settings.autoRunFrequency),
+      lastReading: null,
+      frequency: this.settings.autoRunFrequency,
+    };
+
+    fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
+    console.log(`[LibrarianManager] Initialized status for ${projectPath}`);
+  }
+
+  /**
+   * Log the current status for a project (for dev visibility).
+   */
+  private logStatus(projectPath: string, action: string): void {
+    const statusFile = path.join(projectPath, '.librarian', '.status.json');
+    if (!fs.existsSync(statusFile)) return;
+
+    try {
+      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
+      const projectName = path.basename(projectPath);
+      console.log(`[Librarian] ${action} → ${projectName}: edits=${status.editsSinceReading}/${status.nextThreshold}, lastReading=${status.lastReading || 'null'}`);
+    } catch {
+      // Ignore errors in logging
+    }
+  }
+
+  /**
+   * Increment the edit count for a project.
+   * Called by file watcher when code files change.
+   */
+  incrementEditCount(projectPath: string): void {
+    const statusFile = path.join(projectPath, '.librarian', '.status.json');
+
+    if (!fs.existsSync(statusFile)) {
+      return;
+    }
+
+    try {
+      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
+      status.editsSinceReading = (status.editsSinceReading || 0) + 1;
+      fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
+      this.logStatus(projectPath, 'increment');
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to increment edit count:', error);
+    }
+  }
+
+  /**
+   * Reset the edit count after a reading is created.
+   * Called when a new .md file appears in .librarian/.
+   */
+  resetEditCount(projectPath: string): void {
+    const statusFile = path.join(projectPath, '.librarian', '.status.json');
+
+    if (!fs.existsSync(statusFile)) {
+      return;
+    }
+
+    try {
+      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
+      status.editsSinceReading = 0;
+      status.nextThreshold = this.pickNextThreshold(this.settings.autoRunFrequency);
+      status.lastReading = new Date().toISOString();
+      fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
+      this.logStatus(projectPath, 'reset');
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to reset edit count:', error);
+    }
   }
 
   // ===========================================================================

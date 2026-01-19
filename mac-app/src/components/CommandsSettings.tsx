@@ -1,12 +1,12 @@
 /**
- * CommandsSettings - Configure portable commands directory.
- * 
- * Allows users to point to a folder containing markdown files
+ * CommandsSettings - Configure portable commands directories.
+ *
+ * Allows users to point to multiple folders containing markdown files
  * (like Claude skills, Cursor rules, etc.) that can be invoked
  * by name during transcription.
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 
 type PortableCommandInfo = {
@@ -15,22 +15,35 @@ type PortableCommandInfo = {
   filePath: string;
 };
 
+type WatchedDir = {
+  path: string;
+  enabled: boolean;
+};
+
 export default function CommandsSettings() {
   const { theme } = useTheme();
-  
-  // Commands directory path.
-  const [directoryPath, setDirectoryPath] = useState<string | null>(null);
+
+  // Watched directories (multi-directory support).
+  const [watchedDirs, setWatchedDirs] = useState<WatchedDir[]>([]);
   const [loading, setLoading] = useState(true);
-  
-  // Available commands.
+
+  // Available commands from all directories (for counting).
   const [commands, setCommands] = useState<PortableCommandInfo[]>([]);
-  
+
   // Error state.
   const [error, setError] = useState<string | null>(null);
 
-  // Manual path input mode.
-  const [showManualInput, setShowManualInput] = useState(false);
-  const [manualPath, setManualPath] = useState('');
+  // Path input for adding new directories.
+  const [newPath, setNewPath] = useState('');
+
+  // Count commands per directory.
+  const commandCountsByDir = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const dir of watchedDirs) {
+      counts[dir.path] = commands.filter(cmd => cmd.filePath.startsWith(dir.path)).length;
+    }
+    return counts;
+  }, [watchedDirs, commands]);
 
   // Load initial state.
   useEffect(() => {
@@ -40,10 +53,10 @@ export default function CommandsSettings() {
     }
 
     Promise.all([
-      window.commandsAPI.getDirectory(),
+      window.commandsAPI.getWatchedDirs(),
       window.commandsAPI.getCommands(),
-    ]).then(([dir, cmds]) => {
-      setDirectoryPath(dir);
+    ]).then(([dirs, cmds]) => {
+      setWatchedDirs(dirs || []);
       setCommands(cmds);
       setLoading(false);
     }).catch((err) => {
@@ -55,67 +68,65 @@ export default function CommandsSettings() {
     const unsubCommands = window.commandsAPI.onCommandsChanged((cmds) => {
       setCommands(cmds);
     });
-    const unsubDir = window.commandsAPI.onDirectoryChanged((dir) => {
-      setDirectoryPath(dir);
-    });
 
     return () => {
       unsubCommands();
-      unsubDir();
     };
   }, []);
 
-  // Handle clear button click.
-  const handleClear = useCallback(async () => {
-    if (!window.commandsAPI) return;
+  // Handle adding a new directory.
+  const handleAddDirectory = useCallback(async () => {
+    if (!window.commandsAPI || !newPath.trim()) return;
 
     setError(null);
+    const trimmed = newPath.trim();
+
     try {
-      const result = await window.commandsAPI.setDirectory(null);
-      if (!result.success) {
-        setError(result.error || 'Failed to clear directory');
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    }
-  }, []);
-
-  // Handle refresh button click.
-  const handleRefresh = useCallback(async () => {
-    if (!window.commandsAPI) return;
-
-    setError(null);
-    try {
-      await window.commandsAPI.refreshCommands();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    }
-  }, []);
-
-  // Handle manual path submission.
-  const handleManualPathSubmit = useCallback(async () => {
-    if (!window.commandsAPI || !manualPath.trim()) return;
-
-    setError(null);
-    try {
-      // Expand ~ to home directory
-      let expandedPath = manualPath.trim();
-      if (expandedPath.startsWith('~/')) {
-        // The backend will handle the expansion, but we can show it nicely
-        expandedPath = manualPath.trim();
-      }
-
-      const result = await window.commandsAPI.setDirectory(expandedPath);
-      if (result.success) {
-        setShowManualInput(false);
-        setManualPath('');
+      const result = await window.commandsAPI.addWatchedDir(trimmed);
+      if (result) {
+        setWatchedDirs((prev) => [...prev, result]);
+        setNewPath('');
+        // Refresh commands to get updated counts
+        const cmds = await window.commandsAPI.getCommands();
+        setCommands(cmds);
       } else {
-        setError(result.error || 'Failed to set directory');
+        // Check if already watched
+        const dirs = await window.commandsAPI.getWatchedDirs();
+        const alreadyWatched = dirs?.some((d) => {
+          const inputPath = trimmed.replace(/^~/, '');
+          return d.path.endsWith(inputPath) || d.path === trimmed;
+        });
+
+        if (alreadyWatched) {
+          setError('This directory is already being watched.');
+        } else {
+          setError('Directory not found. Please check the path and try again.');
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     }
-  }, [manualPath]);
+  }, [newPath]);
+
+  // Handle removing a directory.
+  const handleRemoveDirectory = useCallback(async (dirPath: string) => {
+    if (!window.commandsAPI) return;
+
+    setError(null);
+    try {
+      const success = await window.commandsAPI.removeWatchedDir(dirPath);
+      if (success) {
+        setWatchedDirs((prev) => prev.filter((d) => d.path !== dirPath));
+        // Refresh commands
+        const cmds = await window.commandsAPI.getCommands();
+        setCommands(cmds);
+      } else {
+        setError('Failed to remove directory');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error');
+    }
+  }, []);
 
   if (loading) {
     return (
@@ -148,8 +159,8 @@ export default function CommandsSettings() {
         marginTop: '4px',
         lineHeight: '1.5',
       }}>
-        Point to a folder containing your command markdown files. 
-        Say "use the [name] command" during transcription to invoke them.
+        Point to folders containing your command markdown files.
+        Use <strong>⌘⇧K</strong> to invoke a command in any application, or say "use the [name] command" during transcription.
       </p>
 
       <div style={{
@@ -158,8 +169,8 @@ export default function CommandsSettings() {
         backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
         border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
       }}>
-        {/* Directory Configuration */}
-        <div style={{ marginBottom: directoryPath ? '16px' : '0' }}>
+        {/* Watched Directories */}
+        <div>
           <label style={{
             display: 'block',
             marginBottom: '8px',
@@ -167,132 +178,126 @@ export default function CommandsSettings() {
             fontWeight: 600,
             color: theme.text,
           }}>
-            Commands Directory
+            Watched Directories
           </label>
 
-          {directoryPath && !showManualInput ? (
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-              <code style={{
+          {/* List of watched directories with command counts */}
+          {watchedDirs.length > 0 && (
+            <div style={{
+              marginBottom: '12px',
+              border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+              borderRadius: '6px',
+              backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+              overflow: 'hidden',
+            }}>
+              {watchedDirs.map((dir, index) => {
+                const count = commandCountsByDir[dir.path] || 0;
+                return (
+                  <div
+                    key={dir.path}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 12px',
+                      borderBottom: index < watchedDirs.length - 1
+                        ? `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`
+                        : 'none',
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0, marginRight: '8px' }}>
+                      <code style={{
+                        fontSize: '12px',
+                        fontFamily: 'monospace',
+                        color: theme.text,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        display: 'block',
+                      }}>
+                        {formatPath(dir.path)}
+                      </code>
+                      <span style={{
+                        fontSize: '11px',
+                        color: theme.textSecondary,
+                      }}>
+                        {count} command{count !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => handleRemoveDirectory(dir.path)}
+                      style={{
+                        padding: '4px 8px',
+                        fontSize: '11px',
+                        fontWeight: 500,
+                        color: theme.error,
+                        backgroundColor: 'transparent',
+                        border: `1px solid ${theme.isDark ? 'rgba(248,113,113,0.3)' : '#fecaca'}`,
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Add directory input */}
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <input
+              type="text"
+              value={newPath}
+              onChange={(e) => setNewPath(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAddDirectory()}
+              placeholder="Enter path (e.g., ~/.cursor/commands)"
+              style={{
                 flex: 1,
                 padding: '8px 12px',
-                fontSize: '12px',
+                fontSize: '13px',
                 fontFamily: 'monospace',
                 backgroundColor: theme.isDark ? theme.surface2 : '#fff',
                 border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
                 borderRadius: '6px',
                 color: theme.text,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}>
-                {formatPath(directoryPath)}
-              </code>
-              <button
-                onClick={() => { setShowManualInput(true); setManualPath(directoryPath || ''); }}
-                style={{
-                  padding: '8px 12px',
-                  fontSize: '12px',
-                  fontWeight: 500,
-                  color: theme.isDark ? '#e5e5e5' : '#374151',
-                  backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-                  border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                }}
-              >
-                Change
-              </button>
-              <button
-                onClick={handleClear}
-                style={{
-                  padding: '8px 12px',
-                  fontSize: '12px',
-                  fontWeight: 500,
-                  color: theme.error,
-                  backgroundColor: 'transparent',
-                  border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                }}
-              >
-                Clear
-              </button>
-            </div>
-          ) : (
-            /* Path input */
-            <div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <input
-                  type="text"
-                  value={manualPath}
-                  onChange={(e) => setManualPath(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleManualPathSubmit()}
-                  placeholder="Enter path (e.g., ~/.cursor/rules)"
-                  style={{
-                    flex: 1,
-                    padding: '8px 12px',
-                    fontSize: '13px',
-                    fontFamily: 'monospace',
-                    backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-                    border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
-                    borderRadius: '6px',
-                    color: theme.text,
-                    outline: 'none',
-                  }}
-                />
-                <button
-                  onClick={handleManualPathSubmit}
-                  disabled={!manualPath.trim()}
-                  style={{
-                    padding: '8px 16px',
-                    fontSize: '13px',
-                    fontWeight: 500,
-                    color: '#fff',
-                    backgroundColor: manualPath.trim() ? theme.info : '#9ca3af',
-                    border: 'none',
-                    borderRadius: '6px',
-                    cursor: manualPath.trim() ? 'pointer' : 'not-allowed',
-                  }}
-                >
-                  Set
-                </button>
-                {directoryPath && (
-                  <button
-                    onClick={() => { setShowManualInput(false); setManualPath(''); }}
-                    style={{
-                      padding: '8px 12px',
-                      fontSize: '13px',
-                      color: theme.textSecondary,
-                      backgroundColor: 'transparent',
-                      border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
-                      borderRadius: '6px',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Cancel
-                  </button>
-                )}
-              </div>
+                outline: 'none',
+              }}
+            />
+            <button
+              onClick={handleAddDirectory}
+              disabled={!newPath.trim()}
+              style={{
+                padding: '8px 16px',
+                fontSize: '13px',
+                fontWeight: 500,
+                color: newPath.trim() ? '#fff' : theme.textSecondary,
+                backgroundColor: newPath.trim() ? theme.info : 'transparent',
+                border: newPath.trim() ? 'none' : `1px solid ${theme.border}`,
+                borderRadius: '6px',
+                cursor: newPath.trim() ? 'pointer' : 'not-allowed',
+                opacity: newPath.trim() ? 1 : 0.5,
+              }}
+            >
+              Add
+            </button>
+          </div>
 
-              {/* Hint text */}
-              <p style={{
-                fontSize: '11px',
-                color: theme.textSecondary,
-                marginTop: '8px',
-                marginBottom: '0',
-                lineHeight: '1.5',
-              }}>
-                {directoryPath ? (
-                  'Supports ~ for home directory'
-                ) : (
-                  <>
-                    <strong>Common locations:</strong><br />
-                    • <code style={{ fontSize: '10px', backgroundColor: theme.isDark ? '#2d2d2d' : '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>~/.cursor/rules</code> — Cursor rules<br />
-                    • <code style={{ fontSize: '10px', backgroundColor: theme.isDark ? '#2d2d2d' : '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>~/Documents/commands</code> — Custom commands
-                  </>
-                )}
-              </p>
-            </div>
+          {/* Common paths hint */}
+          {watchedDirs.length === 0 && (
+            <p style={{
+              fontSize: '11px',
+              color: theme.textSecondary,
+              marginTop: '8px',
+              marginBottom: '0',
+              lineHeight: '1.5',
+            }}>
+              <strong>Common locations:</strong><br />
+              • <code style={{ fontSize: '10px', backgroundColor: theme.isDark ? '#2d2d2d' : '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>~/.cursor/commands</code> — Cursor commands<br />
+              • <code style={{ fontSize: '10px', backgroundColor: theme.isDark ? '#2d2d2d' : '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>~/.claude/commands</code> — Claude commands
+            </p>
           )}
         </div>
 
@@ -300,6 +305,7 @@ export default function CommandsSettings() {
         {error && (
           <p style={{
             marginTop: '8px',
+            marginBottom: '0',
             fontSize: '12px',
             color: theme.error,
           }}>
@@ -307,88 +313,16 @@ export default function CommandsSettings() {
           </p>
         )}
 
-        {/* Commands list */}
-        {directoryPath && (
-          <div style={{ marginTop: '16px' }}>
-            <div style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '8px',
-            }}>
-              <label style={{
-                fontSize: '13px',
-                fontWeight: 600,
-                color: theme.text,
-              }}>
-                Available Commands ({commands.length})
-              </label>
-              <button
-                onClick={handleRefresh}
-                style={{
-                  padding: '4px 8px',
-                  fontSize: '11px',
-                  color: theme.textSecondary,
-                  backgroundColor: 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                }}
-                title="Refresh command list"
-              >
-                ↻ Refresh
-              </button>
-            </div>
-
-            {commands.length === 0 ? (
-              <p style={{
-                fontSize: '12px',
-                color: theme.textSecondary,
-                fontStyle: 'italic',
-              }}>
-                No markdown files found in directory.
-              </p>
-            ) : (
-              <div style={{
-                maxHeight: '200px',
-                overflowY: 'auto',
-                border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-                borderRadius: '6px',
-                backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-              }}>
-                {commands.map((cmd, index) => (
-                  <div
-                    key={cmd.name}
-                    style={{
-                      padding: '8px 12px',
-                      borderBottom: index < commands.length - 1 
-                        ? `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}` 
-                        : 'none',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                    }}
-                  >
-                    <div>
-                      <span style={{
-                        fontSize: '13px',
-                        fontWeight: 500,
-                        color: theme.text,
-                      }}>
-                        {cmd.displayName}
-                      </span>
-                      <span style={{
-                        fontSize: '11px',
-                        color: theme.textSecondary,
-                        marginLeft: '8px',
-                      }}>
-                        (use the "{cmd.name}" command)
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+        {/* View commands note */}
+        {watchedDirs.length > 0 && (
+          <p style={{
+            marginTop: '12px',
+            marginBottom: '0',
+            fontSize: '12px',
+            color: theme.textSecondary,
+          }}>
+            View and edit commands in the <strong>Commands</strong> tab.
+          </p>
         )}
 
         {/* Usage instructions */}
@@ -405,8 +339,8 @@ export default function CommandsSettings() {
             color: theme.isDark ? theme.textSecondary : '#1e40af',
             lineHeight: '1.5',
           }}>
-            <strong>How it works:</strong> During transcription, say something like 
-            "please use the debug command" or "use the review command". 
+            <strong>How it works:</strong> During transcription, say something like
+            "please use the debug command" or "use the review command".
             The markdown content will be injected into your prompt.
           </p>
         </div>
