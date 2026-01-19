@@ -414,7 +414,8 @@ function registerHotkeysAfterOnboarding(): void {
         // If frontmost app is Field Theory itself, use the previous app instead
         // This handles cases where super paste is triggered while Field Theory UI is visible
         const isFieldTheory = bundleId === 'com.fieldtheory.app' ||
-                              bundleId === 'com.fieldtheory.experimental';
+                              bundleId === 'com.fieldtheory.experimental' ||
+                              bundleId === 'com.github.Electron'; // Dev mode
         if (isFieldTheory && clipboardHistoryWindow) {
           const previousApp = clipboardHistoryWindow.getPreviousApp();
           if (previousApp?.bundleId) {
@@ -434,15 +435,13 @@ function registerHotkeysAfterOnboarding(): void {
       console.log('[Main] Super Paste: pasting', itemsToPaste.length, 'item(s), target:', bundleId, 'isTerminal:', isTerminal);
 
       try {
-        // Ensure the target app is focused before pasting
-        if (bundleId) {
-          try {
-            await execAsync(`osascript -e 'tell application id "${bundleId}" to activate'`);
-            // Small delay to let the app come to front
-            await new Promise(resolve => setTimeout(resolve, 50));
-          } catch (focusError) {
-            console.warn('[Main] Super Paste: failed to focus target app:', focusError);
-          }
+        // If Field Theory is visible, hide it to restore previous focus state
+        // Don't use activate - it brings ALL windows of the target app to front
+        // Instead, hiding our window lets macOS naturally restore the previously focused window
+        if (clipboardHistoryWindow?.isVisible()) {
+          clipboardHistoryWindow.hide();
+          // Wait for macOS to restore focus to the previous window
+          await new Promise(resolve => setTimeout(resolve, 100));
         }
         // For terminals with stacks, combine text with image paths
         if (isTerminal && itemsToPaste.length > 1) {
@@ -4515,9 +4514,6 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
 
     // Don't auto-hide if in immersive reading mode
     if (clipboardHistoryWindow?.getImmersiveMode()) return;
-
-    // Don't auto-hide if we just exited immersive mode (dock.hide() can trigger blur)
-    if (clipboardHistoryWindow?.recentlyExitedImmersiveMode()) return;
 
     // Don't auto-hide during recording
     if (clipboardHistoryWindow?.getRecordingActive()) return;

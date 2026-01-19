@@ -70,8 +70,6 @@ export class ClipboardHistoryWindow {
 
   // Track if immersive/fullscreen reading mode is active - window should not auto-hide
   private isImmersiveMode: boolean = false;
-  // Timestamp when we exited immersive mode - used to debounce blur handler
-  private immersiveModeExitTime: number = 0;
 
   // Saved window bounds before sketch mode expansion (to restore on exit).
   private normalBounds: Electron.Rectangle | null = null;
@@ -379,11 +377,6 @@ export class ClipboardHistoryWindow {
         return;
       }
 
-      // Grace period after exiting immersive mode - dock.hide() can trigger blur
-      if (this.recentlyExitedImmersiveMode()) {
-        return;
-      }
-
       console.log('[ClipboardHistoryWindow] Window lost focus, hiding');
       // Alfred-style: hide when clicking away.
       this.hide(!this.isRecordingActive);
@@ -614,26 +607,19 @@ export class ClipboardHistoryWindow {
    * When active, window will not auto-hide on blur and behaves like a normal window.
    */
   setImmersiveMode(immersive: boolean): void {
+    const wasImmersive = this.isImmersiveMode;
     this.isImmersiveMode = immersive;
-    console.log(`[ClipboardHistoryWindow] Immersive mode: ${immersive}`);
+    console.log(`[ClipboardHistoryWindow] Immersive mode: ${wasImmersive} → ${immersive}`);
 
     // Toggle dock visibility based on immersive mode
     if (process.platform === 'darwin') {
       if (immersive) {
         app.dock.show();
-      } else {
-        // Hide dock and record exit time for blur handler debounce
-        this.immersiveModeExitTime = Date.now();
-        app.dock.hide();
-        // Re-focus window after dock hide (macOS switches focus away when dock hides)
-        if (this.window && !this.window.isDestroyed()) {
-          setTimeout(() => {
-            if (this.window && !this.window.isDestroyed()) {
-              this.window.focus();
-            }
-          }, 50);
-        }
       }
+      // When exiting immersive mode, don't hide dock here - let it stay visible
+      // until window actually hides. This avoids window reordering issues.
+      // The dock will be hidden in the hide() method when window is dismissed.
+      // If !immersive && !wasImmersive, do nothing - dock is already hidden
     }
 
     // Only adjust alwaysOnTop in panel mode (not showInDock mode)
@@ -653,14 +639,6 @@ export class ClipboardHistoryWindow {
    */
   getImmersiveMode(): boolean {
     return this.isImmersiveMode;
-  }
-
-  /**
-   * Check if we recently exited immersive mode (within grace period).
-   * Used to prevent blur handler from immediately hiding window after dock.hide().
-   */
-  recentlyExitedImmersiveMode(gracePeriodMs: number = 300): boolean {
-    return Date.now() - this.immersiveModeExitTime < gracePeriodMs;
   }
 
   setSketchModeActive(active: boolean): void {

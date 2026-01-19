@@ -1,0 +1,5 @@
+# Loading State, Not Animation
+
+The instinct to solve visual glitches with animation is often a bandage over a sequencing problem. The immersive mode collapse flicker isn't caused by an abrupt transition—it's caused by revealing a view that hasn't finished loading. Fades and easing functions can mask this, but they're compensating for the wrong thing. The real fix is ensuring the destination state is ready before the transition begins.
+
+This echoes the principle behind double buffering in graphics programming, first implemented in systems like the Xerox Alto in the 1970s. Rather than drawing directly to the screen (which causes flicker as pixels update mid-frame), you draw to an off-screen buffer and flip it to the display only when complete. The user never sees partial state. Similarly, the collapse button shouldn't trigger until Field Theory's main view is fully rendered. The transition becomes instant because there's nothing left to load—we're just flipping between two complete buffers.
