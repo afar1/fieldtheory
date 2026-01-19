@@ -15,15 +15,12 @@ function isElectronApp(bundleId: string, appName: string): boolean {
   const appNameLower = appName.toLowerCase();
   const bundleIdLower = bundleId.toLowerCase();
   const currentAppName = app.getName().toLowerCase();
-  
+
   // Check if bundle ID or name matches our app
   return (
-    bundleIdLower.includes('oscar') ||
-    bundleIdLower.includes('little-one') ||
-    bundleIdLower.includes('littleai') ||
+    bundleIdLower.includes('fieldtheory') ||
     bundleIdLower.includes('electron') ||
-    appNameLower.includes('oscar') ||
-    appNameLower.includes('little one') ||
+    appNameLower.includes('field theory') ||
     appNameLower === currentAppName ||
     bundleIdLower === process.execPath.toLowerCase()
   );
@@ -721,7 +718,7 @@ export class ClipboardHistoryWindow {
 
   /**
    * Capture the frontmost app BEFORE showing the window.
-   * Must be called before show() because once the window takes focus, Oscar becomes frontmost.
+   * Must be called before show() because once the window takes focus, Field Theory becomes frontmost.
    * Always resets selectedTargetApp since this is a fresh window open.
    */
   async capturePreviousAppBeforeShow(): Promise<void> {
@@ -784,7 +781,7 @@ export class ClipboardHistoryWindow {
   /**
    * Refresh app data in background after window is shown.
    * Only refreshes running apps list - previousApp is captured before show() via
-   * capturePreviousAppBeforeShow() to avoid race condition where Oscar becomes frontmost.
+   * capturePreviousAppBeforeShow() to avoid race condition where Field Theory becomes frontmost.
    */
   private async refreshAppDataInBackground(): Promise<void> {
     // Only refresh running apps - previousApp was captured before show().

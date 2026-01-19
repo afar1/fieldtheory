@@ -1615,7 +1615,7 @@ export class TranscriberManager extends EventEmitter {
     // Skip paste if Field Theory itself is frontmost - user may have clicked in our UI.
     // Content is still in clipboard, user can Cmd+V manually in their target app.
     const frontmostBundleId = await this.getFrontmostAppBundleId();
-    if (frontmostBundleId === 'com.fieldtheory.app' || frontmostBundleId === 'com.oscar.app.experimental') {
+    if (frontmostBundleId === 'com.fieldtheory.app' || frontmostBundleId === 'com.fieldtheory.experimental') {
       console.log('[TranscriberManager] Field Theory is frontmost, skipping auto-paste (text in clipboard)');
       this.emit('paste-failed', 'Field Theory has focus - press Cmd+V in your target app', this.lastTranscription);
       if (clearAfter) {

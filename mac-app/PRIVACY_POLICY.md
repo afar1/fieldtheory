@@ -1,14 +1,14 @@
-# Oscar Privacy Policy
+# Field Theory Privacy Policy
 
 **Last Updated:** December 5, 2025
 
-Oscar is a privacy-first voice transcription and clipboard management application. This policy explains how your data is handled.
+Field Theory is a privacy-first voice transcription and clipboard management application. This policy explains how your data is handled.
 
 ---
 
 ## Our Core Principle
 
-**Your data stays on your device by default.** We built Oscar to be useful without requiring cloud accounts, internet connectivity, or data collection.
+**Your data stays on your device by default.** We built Field Theory to be useful without requiring cloud accounts, internet connectivity, or data collection.
 
 ---
 
@@ -91,7 +91,7 @@ You have full control over your data:
 
 ## Children's Privacy
 
-Oscar is not directed at children under 13. We do not knowingly collect data from children.
+Field Theory is not directed at children under 13. We do not knowingly collect data from children.
 
 ---
 
@@ -106,9 +106,9 @@ We'll update this policy if our data practices change. The "Last Updated" date a
 Questions about this privacy policy?
 
 - **Email**: [your-email@example.com]
-- **GitHub**: [github.com/afar1/littleai](https://github.com/afar1/littleai)
+- **GitHub**: [github.com/afar1/field-theory](https://github.com/afar1/field-theory)
 
 ---
 
-*Oscar is open source. You can audit our code to verify these privacy claims.*
+*Field Theory is open source. You can audit our code to verify these privacy claims.*
 
