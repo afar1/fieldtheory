@@ -24,6 +24,13 @@ export default async function handler(req, res) {
     return res.status(404).send(errorPage("This reading doesn't exist or has been unshared."));
   }
 
+  // Check total count for random button
+  const { count } = await supabase
+    .from('shared_readings')
+    .select('*', { count: 'exact', head: true })
+    .eq('is_public', true);
+
+  const showRandom = count > 10;
   const html = await marked(reading.content);
   const shareUrl = `https://librarian.fieldtheory.dev/${slug}`;
 
@@ -165,6 +172,11 @@ export default async function handler(req, res) {
 <body>
   <div class="page">
     <header class="header">
+      ${showRandom ? `<a class="icon-btn" href="/api/librarian/random?exclude=${slug}" title="Random reading">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 12c0-1.232-.046-2.453-.138-3.662a4.006 4.006 0 00-3.7-3.7 48.678 48.678 0 00-7.324 0 4.006 4.006 0 00-3.7 3.7c-.017.22-.032.441-.046.662M19.5 12l3-3m-3 3l-3-3m-12 3c0 1.232.046 2.453.138 3.662a4.006 4.006 0 003.7 3.7 48.656 48.656 0 007.324 0 4.006 4.006 0 003.7-3.7c.017-.22.032-.441.046-.662M4.5 12l3 3m-3-3l-3 3" />
+        </svg>
+      </a>` : ''}
       <button class="icon-btn" id="copyBtn" title="Copy link">
         <svg id="copyIcon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
