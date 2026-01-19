@@ -90,7 +90,7 @@ export default async function handler(req, res) {
       justify-content: center;
       padding-top: 0.5rem;
       padding-bottom: 2.5rem;
-      margin-bottom: 3rem;
+      margin-bottom: 2.25rem;
       border-bottom: 1px solid var(--border);
     }
     .controls {
@@ -155,8 +155,8 @@ export default async function handler(req, res) {
     .content ul, .content ol { margin-bottom: 1.25rem; padding-left: 1.5rem; }
     .content li { margin-bottom: 0.5rem; }
     .footer {
-      margin-top: 4rem;
-      padding-top: 2rem;
+      margin-top: 3rem;
+      padding-top: 1.5rem;
       border-top: 1px solid var(--border);
       font-family: -apple-system, BlinkMacSystemFont, sans-serif;
       font-size: 0.9rem;
