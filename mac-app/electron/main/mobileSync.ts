@@ -134,13 +134,11 @@ export class MobileSync extends EventEmitter {
    */
   private handleSessionChanged(session: Session | null): void {
     if (session) {
-      console.debug('[MobileSync] Session active, starting sync');
       this.startPeriodicSync();
       this.setupTodoRealtimeSubscription();
       this.setupProfileRealtimeSubscription();
       this.fetchAndEmitCurrentTier();
     } else {
-      console.debug('[MobileSync] Session cleared, stopping sync');
       this.teardownTodoRealtimeSubscription();
       this.teardownProfileRealtimeSubscription();
       this.stopPeriodicSync();
@@ -218,7 +216,6 @@ export class MobileSync extends EventEmitter {
       }
 
       if (data?.tier) {
-        console.debug('[MobileSync] Fetched tier from server:', data.tier);
         this.emit('tierChanged', data.tier);
       }
     } catch (err) {
@@ -285,8 +282,6 @@ export class MobileSync extends EventEmitter {
 
     this.teardownTodoRealtimeSubscription();
 
-    console.debug('[MobileSync] Setting up realtime subscription for todos');
-
     this.todoRealtimeChannel = this.supabase
       .channel('todos-realtime')
       .on(
@@ -297,7 +292,6 @@ export class MobileSync extends EventEmitter {
           table: 'todos',
         },
         (payload) => {
-          console.debug('[MobileSync] Realtime INSERT todo:', payload.new?.id);
           const row = payload.new as TodoRow;
           const todo: Todo = {
             id: row.id,
@@ -322,7 +316,6 @@ export class MobileSync extends EventEmitter {
           table: 'todos',
         },
         (payload) => {
-          console.debug('[MobileSync] Realtime UPDATE todo:', payload.new?.id);
           const row = payload.new as TodoRow;
           const todo: Todo = {
             id: row.id,
@@ -345,7 +338,6 @@ export class MobileSync extends EventEmitter {
           table: 'todos',
         },
         (payload) => {
-          console.debug('[MobileSync] Realtime DELETE todo:', payload.old?.id);
           const deletedId = (payload.old as TodoRow)?.id;
           if (deletedId) {
             this.todos = this.todos.filter(t => t.id !== deletedId);
@@ -358,10 +350,6 @@ export class MobileSync extends EventEmitter {
         if (err) {
           console.error('[MobileSync] Todo realtime subscription error:', err);
           this.todoRealtimeConnected = false;
-        }
-        // Only log non-routine status changes
-        if (status !== 'SUBSCRIBED') {
-          console.debug('[MobileSync] Todo realtime subscription status:', status);
         }
         if (status === 'SUBSCRIBED') {
           this.todoRealtimeConnected = true;
@@ -376,7 +364,6 @@ export class MobileSync extends EventEmitter {
             this.todoReconnectTimer = setTimeout(() => {
               this.todoReconnectTimer = null;
               if (this.session && !this.todoRealtimeConnected) {
-                console.debug('[MobileSync] Attempting to reconnect todo realtime...');
                 this.setupTodoRealtimeSubscription();
               }
             }, 5000);
@@ -392,7 +379,6 @@ export class MobileSync extends EventEmitter {
       this.todoReconnectTimer = null;
     }
     if (this.todoRealtimeChannel) {
-      console.debug('[MobileSync] Tearing down todo realtime subscription');
       this.supabase?.removeChannel(this.todoRealtimeChannel);
       this.todoRealtimeChannel = null;
     }
@@ -408,8 +394,6 @@ export class MobileSync extends EventEmitter {
     if (!this.supabase || !userId) return;
 
     this.teardownProfileRealtimeSubscription();
-
-    console.debug('[MobileSync] Setting up realtime subscription for profile tier');
 
     this.profileRealtimeChannel = this.supabase
       .channel('profile-tier')
@@ -434,15 +418,11 @@ export class MobileSync extends EventEmitter {
         if (err) {
           console.error('[MobileSync] Profile realtime subscription error:', err);
         }
-        if (status === 'SUBSCRIBED') {
-          console.debug('[MobileSync] Profile realtime subscription active');
-        }
       });
   }
 
   private teardownProfileRealtimeSubscription(): void {
     if (this.profileRealtimeChannel) {
-      console.debug('[MobileSync] Tearing down profile realtime subscription');
       this.supabase?.removeChannel(this.profileRealtimeChannel);
       this.profileRealtimeChannel = null;
     }

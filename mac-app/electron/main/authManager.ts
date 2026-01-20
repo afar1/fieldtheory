@@ -94,14 +94,11 @@ class FileStorage implements SupportedStorage {
   }
 
   async setItem(key: string, value: string): Promise<void> {
-    console.log('[FileStorage] setItem called for key:', key);
     this.storage.set(key, value);
     this.saveToDisk();
   }
 
   async removeItem(key: string): Promise<void> {
-    console.log('[FileStorage] removeItem called for key:', key);
-    console.log('[FileStorage] removeItem stack trace:', new Error().stack);
     this.storage.delete(key);
     this.saveToDisk();
   }

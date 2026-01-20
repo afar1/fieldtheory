@@ -2272,6 +2272,9 @@ const librarianAPI = {
   // Save reading content to disk
   saveReading: (filePath: string, content: string): Promise<boolean> => ipcRenderer.invoke('librarian:saveReading', filePath, content),
 
+  // Delete a reading file
+  deleteReading: (filePath: string): Promise<boolean> => ipcRenderer.invoke('librarian:deleteReading', filePath),
+
   // Get all watched directories
   getWatchedDirs: (): Promise<WatchedDir[]> => ipcRenderer.invoke('librarian:getWatchedDirs'),
 
@@ -2318,6 +2321,15 @@ const librarianAPI = {
     ipcRenderer.on('librarian:showReading', handler);
     return () => ipcRenderer.removeListener('librarian:showReading', handler);
   },
+
+  // Poll for pending reading AND counter state (single source of truth for resets)
+  // Returns pending path, current counter, and whether a reset just happened
+  pollStatus: (): Promise<{
+    pendingPath: string | null;
+    edits: number;
+    threshold: number;
+    didReset: boolean;
+  }> => ipcRenderer.invoke('librarian:pollStatus'),
 
   // Listen for new reading available (when window already visible, shows indicator)
   onNewReadingAvailable: (callback: (readingPath: string) => void): (() => void) => {

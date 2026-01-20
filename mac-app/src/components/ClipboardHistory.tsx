@@ -1499,17 +1499,32 @@ export default function ClipboardHistory() {
     return () => unsubscribe?.();
   }, []);
 
-  // Handle show reading requests (auto-show on new reading with immersive mode)
+  // Poll for pending reading AND counter state (single source of truth for resets)
+  // This poll is the ONLY place counter resets happen during active use.
+  // Also handles showing new readings in immersive mode.
   useEffect(() => {
-    const unsubscribe = window.librarianAPI?.onShowReading((readingPath) => {
-      // Capture the reading path BEFORE switching views (avoids race condition)
-      setPendingReadingPath(readingPath);
-      setShowSettings(false); // Close settings if open
-      setViewMode('librarian');
-      setLibrarianImmersive(true);
-    });
+    const pollLibrarianStatus = async () => {
+      const status = await window.librarianAPI?.pollStatus();
+      if (!status) return;
 
-    return () => unsubscribe?.();
+      // If there's a pending reading, show it in immersive mode
+      if (status.pendingPath) {
+        setPendingReadingPath(status.pendingPath);
+        setShowSettings(false);
+        setViewMode('librarian');
+        setLibrarianImmersive(true);
+      }
+
+      // Counter state (edits, threshold, didReset) is available if UI wants to display it
+      // For now we just let the poll handle the reset logic in main process
+    };
+
+    // Check immediately on mount
+    pollLibrarianStatus();
+
+    // Then poll every 500ms while component is mounted
+    const interval = setInterval(pollLibrarianStatus, 500);
+    return () => clearInterval(interval);
   }, []);
 
   // Handle new reading available (when window already visible, shows indicator)
@@ -3086,7 +3101,7 @@ export default function ClipboardHistory() {
           // @ts-ignore - webkit vendor prefix for Electron draggable region
           WebkitAppRegion: 'drag',
           cursor: 'grab',
-          borderBottom: showSettings ? `1px solid ${theme.border}` : 'none',
+          borderBottom: 'none',
           transition: 'height 0.3s ease, min-height 0.3s ease, padding-top 0.3s ease',
         }}
       >
@@ -3927,6 +3942,7 @@ export default function ClipboardHistory() {
           onFullScreenChange={setLibrarianImmersive}
           externalHeaderHover={librarianImmersive && headerHovered}
           initialReadingPath={pendingReadingPath}
+          initialFullScreen={librarianImmersive}
           onInitialReadingConsumed={() => setPendingReadingPath(null)}
         />
       ) : viewMode === 'team' ? (
@@ -6317,7 +6333,7 @@ export default function ClipboardHistory() {
                       {userCallsign}
                     </span>
                   )}
-                  <span style={{ color: updateStatus === 'uptodate' ? theme.success : theme.textSecondary, fontSize: '9px' }}>
+                  <span style={{ color: updateStatus === 'uptodate' ? theme.success : theme.textSecondary, fontSize: '9px', fontStyle: 'italic' }}>
                     {updateStatus === 'uptodate' ? 'Up to date ✓' : `v${appVersion}`}
                   </span>
                 </>
