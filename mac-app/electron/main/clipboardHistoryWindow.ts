@@ -504,6 +504,14 @@ export class ClipboardHistoryWindow {
   }
 
   /**
+   * Play the artifact discovery sound.
+   * Called when a new reading/artifact is created.
+   */
+  playArtifactDiscoverySound(): void {
+    this.soundManager.play('artifactDiscovery');
+  }
+
+  /**
    * Send target app info to renderer.
    * Includes current target, list of running apps, and index for Tab cycling.
    */

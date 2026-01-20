@@ -1,0 +1,209 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="400" viewBox="0 0 500 400">
+  <defs>
+    <!-- Cross-hatch patterns for engraving style -->
+    <pattern id="hatch-light" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="4" height="4" fill="white"/>
+      <line x1="0" y1="0" x2="0" y2="4" stroke="black" stroke-width="0.5"/>
+    </pattern>
+    <pattern id="hatch-med" width="3" height="3" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="3" height="3" fill="white"/>
+      <line x1="0" y1="0" x2="0" y2="3" stroke="black" stroke-width="0.7"/>
+    </pattern>
+    <pattern id="hatch-dark" width="2" height="2" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="2" height="2" fill="white"/>
+      <line x1="0" y1="0" x2="0" y2="2" stroke="black" stroke-width="0.8"/>
+    </pattern>
+    <pattern id="crosshatch-light" width="4" height="4" patternUnits="userSpaceOnUse">
+      <rect width="4" height="4" fill="white"/>
+      <line x1="0" y1="0" x2="4" y2="4" stroke="black" stroke-width="0.3"/>
+      <line x1="4" y1="0" x2="0" y2="4" stroke="black" stroke-width="0.3"/>
+    </pattern>
+    <pattern id="crosshatch-med" width="3" height="3" patternUnits="userSpaceOnUse">
+      <rect width="3" height="3" fill="white"/>
+      <line x1="0" y1="0" x2="3" y2="3" stroke="black" stroke-width="0.4"/>
+      <line x1="3" y1="0" x2="0" y2="3" stroke="black" stroke-width="0.4"/>
+    </pattern>
+    <pattern id="crosshatch-dark" width="2" height="2" patternUnits="userSpaceOnUse">
+      <rect width="2" height="2" fill="white"/>
+      <line x1="0" y1="0" x2="2" y2="2" stroke="black" stroke-width="0.5"/>
+      <line x1="2" y1="0" x2="0" y2="2" stroke="black" stroke-width="0.5"/>
+    </pattern>
+    <pattern id="stipple" width="6" height="6" patternUnits="userSpaceOnUse">
+      <rect width="6" height="6" fill="white"/>
+      <circle cx="1" cy="1" r="0.4" fill="black"/>
+      <circle cx="4" cy="3" r="0.3" fill="black"/>
+      <circle cx="2" cy="5" r="0.4" fill="black"/>
+      <circle cx="5" cy="1" r="0.3" fill="black"/>
+    </pattern>
+    <pattern id="wave-hatch" width="8" height="4" patternUnits="userSpaceOnUse">
+      <rect width="8" height="4" fill="white"/>
+      <path d="M0 2 Q2 0 4 2 Q6 4 8 2" stroke="black" stroke-width="0.5" fill="none"/>
+    </pattern>
+    <pattern id="dense-hatch" width="1.5" height="1.5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="1.5" height="1.5" fill="white"/>
+      <line x1="0" y1="0" x2="0" y2="1.5" stroke="black" stroke-width="0.6"/>
+    </pattern>
+  </defs>
+
+  <!-- Background -->
+  <rect width="500" height="400" fill="white"/>
+
+  <!-- Sky with atmospheric perspective - lighter hatching -->
+  <rect y="0" width="500" height="240" fill="url(#stipple)" opacity="0.4"/>
+
+  <!-- Distant clouds -->
+  <ellipse cx="80" cy="60" rx="45" ry="20" fill="url(#hatch-light)" opacity="0.5"/>
+  <ellipse cx="120" cy="55" rx="35" ry="18" fill="white"/>
+  <ellipse cx="380" cy="80" rx="55" ry="22" fill="url(#hatch-light)" opacity="0.4"/>
+  <ellipse cx="420" cy="75" rx="40" ry="18" fill="white"/>
+
+  <!-- Sea - horizontal wave hatching -->
+  <rect y="240" width="500" height="160" fill="url(#wave-hatch)"/>
+
+  <!-- Foreground waves - darker, more detail -->
+  <path d="M0 340 Q30 330 60 340 Q90 350 120 340 Q150 330 180 340 Q210 350 240 340 Q270 330 300 340 Q330 350 360 340 Q390 330 420 340 Q450 350 480 340 L500 340 L500 400 L0 400 Z"
+        fill="url(#crosshatch-med)"/>
+  <path d="M0 360 Q40 350 80 360 Q120 370 160 360 Q200 350 240 360 Q280 370 320 360 Q360 350 400 360 Q440 370 480 360 L500 360 L500 400 L0 400 Z"
+        fill="url(#crosshatch-dark)"/>
+
+  <!-- Ship Hull - main body with dimensional shading -->
+  <path d="M120 280
+           C130 320 150 340 180 345
+           L340 345
+           C370 340 390 320 400 280
+           L380 260
+           L140 260 Z"
+        fill="white" stroke="black" stroke-width="1.5"/>
+
+  <!-- Hull shadow side - cross hatched for depth -->
+  <path d="M120 280
+           C130 320 150 340 180 345
+           L260 345
+           L260 260
+           L140 260 Z"
+        fill="url(#crosshatch-med)"/>
+
+  <!-- Hull dark underside -->
+  <path d="M180 345 L340 345 C355 343 365 338 375 330 L145 330 C155 338 165 343 180 345 Z"
+        fill="url(#dense-hatch)"/>
+
+  <!-- Hull planking lines -->
+  <line x1="135" y1="275" x2="385" y2="275" stroke="black" stroke-width="0.5"/>
+  <line x1="130" y1="290" x2="390" y2="290" stroke="black" stroke-width="0.5"/>
+  <line x1="135" y1="305" x2="385" y2="305" stroke="black" stroke-width="0.5"/>
+  <line x1="150" y1="320" x2="370" y2="320" stroke="black" stroke-width="0.5"/>
+  <line x1="170" y1="335" x2="350" y2="335" stroke="black" stroke-width="0.5"/>
+
+  <!-- Deck -->
+  <rect x="140" y="255" width="240" height="8" fill="url(#hatch-light)" stroke="black" stroke-width="1"/>
+
+  <!-- Main mast -->
+  <rect x="255" y="80" width="10" height="180" fill="url(#hatch-med)" stroke="black" stroke-width="1"/>
+  <rect x="257" y="85" width="3" height="170" fill="white"/>
+
+  <!-- Fore mast -->
+  <rect x="175" y="120" width="8" height="140" fill="url(#hatch-med)" stroke="black" stroke-width="1"/>
+  <rect x="177" y="125" width="2" height="130" fill="white"/>
+
+  <!-- Mizzen mast -->
+  <rect x="335" y="140" width="7" height="120" fill="url(#hatch-med)" stroke="black" stroke-width="1"/>
+
+  <!-- Main sail - billowing with dimensional shading -->
+  <path d="M265 90
+           Q320 100 350 140
+           Q360 180 355 220
+           L265 220 Z"
+        fill="white" stroke="black" stroke-width="1"/>
+  <path d="M265 95
+           Q300 102 330 130
+           Q345 165 342 210
+           L265 210 Z"
+        fill="url(#hatch-light)"/>
+
+  <!-- Main sail shadow fold -->
+  <path d="M290 100 Q310 140 315 200 L265 200 L265 100 Z"
+        fill="url(#crosshatch-light)" opacity="0.6"/>
+
+  <!-- Fore sail -->
+  <path d="M183 130
+           Q230 140 255 180
+           Q258 210 255 240
+           L183 240 Z"
+        fill="white" stroke="black" stroke-width="1"/>
+  <path d="M183 135 Q215 143 240 175 Q245 205 242 235 L183 235 Z"
+        fill="url(#hatch-light)"/>
+
+  <!-- Jib sail - triangular -->
+  <path d="M178 125 L100 200 L178 240 Z"
+        fill="white" stroke="black" stroke-width="1"/>
+  <path d="M175 135 L115 195 L175 230 Z"
+        fill="url(#crosshatch-light)"/>
+
+  <!-- Mizzen sail -->
+  <path d="M342 150
+           Q375 160 390 200
+           L342 240 Z"
+        fill="white" stroke="black" stroke-width="1"/>
+  <path d="M342 155 Q365 163 378 195 L342 230 Z"
+        fill="url(#hatch-light)"/>
+
+  <!-- Rigging - detailed lines -->
+  <g stroke="black" stroke-width="0.5" fill="none">
+    <!-- Shrouds main mast -->
+    <line x1="260" y1="85" x2="200" y2="255"/>
+    <line x1="260" y1="85" x2="220" y2="255"/>
+    <line x1="260" y1="85" x2="240" y2="255"/>
+    <line x1="260" y1="85" x2="320" y2="255"/>
+    <line x1="260" y1="85" x2="300" y2="255"/>
+    <line x1="260" y1="85" x2="280" y2="255"/>
+
+    <!-- Shrouds fore mast -->
+    <line x1="179" y1="125" x2="150" y2="255"/>
+    <line x1="179" y1="125" x2="165" y2="255"/>
+    <line x1="179" y1="125" x2="210" y2="255"/>
+
+    <!-- Stays -->
+    <line x1="260" y1="85" x2="100" y2="200"/>
+    <line x1="179" y1="125" x2="100" y2="200"/>
+    <line x1="260" y1="85" x2="340" y2="145"/>
+
+    <!-- Ratlines (horizontal) -->
+    <line x1="202" y1="180" x2="238" y2="180"/>
+    <line x1="205" y1="200" x2="235" y2="200"/>
+    <line x1="208" y1="220" x2="232" y2="220"/>
+    <line x1="211" y1="240" x2="229" y2="240"/>
+  </g>
+
+  <!-- Crow's nest -->
+  <rect x="250" y="78" width="20" height="6" fill="url(#hatch-dark)" stroke="black" stroke-width="0.8"/>
+  <rect x="248" y="75" width="24" height="4" fill="white" stroke="black" stroke-width="0.5"/>
+
+  <!-- Cabin/Quarterdeck structure -->
+  <path d="M300 235 L300 255 L380 255 L380 245 L310 245 L310 235 Z"
+        fill="url(#hatch-med)" stroke="black" stroke-width="1"/>
+  <rect x="320" y="248" width="8" height="5" fill="black"/>
+  <rect x="340" y="248" width="8" height="5" fill="url(#dense-hatch)"/>
+  <rect x="360" y="248" width="8" height="5" fill="black"/>
+
+  <!-- Bow decoration -->
+  <path d="M100 200 L120 280 L130 275 L115 205 Z" fill="url(#crosshatch-dark)" stroke="black" stroke-width="1"/>
+  <path d="M100 200 Q90 210 95 225 L105 220 Q108 210 100 200 Z" fill="black"/>
+
+  <!-- Stern decoration -->
+  <path d="M400 280 L405 265 L390 260 L380 260 L395 275 Z" fill="url(#hatch-dark)" stroke="black" stroke-width="1"/>
+
+  <!-- Flag -->
+  <path d="M258 75 L258 90 L290 82 Z" fill="url(#hatch-med)" stroke="black" stroke-width="0.8"/>
+
+  <!-- Pennant on fore mast -->
+  <path d="M177 118 Q195 115 200 120 Q190 122 177 120 Z" fill="black"/>
+
+  <!-- Water reflection of hull -->
+  <path d="M140 350 Q180 355 260 355 Q340 355 380 350"
+        stroke="black" stroke-width="0.8" fill="none" stroke-dasharray="4,3"/>
+  <path d="M150 365 Q200 370 260 370 Q320 370 370 365"
+        stroke="black" stroke-width="0.5" fill="none" stroke-dasharray="3,4"/>
+
+  <!-- Signature style -->
+  <text x="440" y="385" font-family="serif" font-size="10" font-style="italic" fill="black">after Dürer</text>
+</svg>

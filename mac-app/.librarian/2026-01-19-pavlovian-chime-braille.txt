@@ -1,0 +1,58 @@
+The Pavlovian Chime - Braille Halftone
+
+Using Unicode braille (⠀-⣿) where each character is a 2×4 dot matrix:
+
+                                    ⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+                                ⠀⠀⠀⠀⠀⠀⠀⣀⣤⣶⣿⣿⣿⣿⣿⣿⣶⣤⣀⠀⠀⠀⠀⠀⠀⠀
+                              ⠀⠀⠀⠀⠀⣠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣄⠀⠀⠀⠀⠀
+                            ⠀⠀⠀⠀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣦⠀⠀⠀⠀
+                          ⠀⠀⠀⢀⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⡀⠀⠀⠀
+                         ⠀⠀⠀⣾⣿⣿⣿⣿⣿⡿⠋⠉⠉⠉⠉⠉⠉⠋⢿⣿⣿⣿⣿⣿⣷⠀⠀⠀
+                        ⠀⠀⢸⣿⣿⣿⣿⣿⠏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠹⣿⣿⣿⣿⣿⡇⠀⠀
+                       ⠀⠀⣿⣿⣿⣿⣿⡟⠀⠀⠀⠀⣀⣀⣀⣀⠀⠀⠀⠀⢻⣿⣿⣿⣿⣿⠀⠀
+                      ⠀⠀⣿⣿⣿⣿⣿⡇⠀⠀⠀⣾⣿⣿⣿⣿⣷⠀⠀⠀⢸⣿⣿⣿⣿⣿⠀⠀
+                     ⠀⠀⣿⣿⣿⣿⣿⡇⠀⠀⠀⣿⣿████⣿⣿⠀⠀⠀⢸⣿⣿⣿⣿⣿⠀⠀
+                     ⠀⠀⣿⣿⣿⣿⣿⡇⠀⠀⠀⣿⣿████⣿⣿⠀⠀⠀⢸⣿⣿⣿⣿⣿⠀⠀
+                    ⠀⠀⢸⣿⣿⣿⣿⣿⡇⠀⠀⠀⣿⣿███⣿⣿⠀⠀⠀⢸⣿⣿⣿⣿⣿⡇⠀⠀
+                    ⠀⠀⢸⣿⣿⣿⣿⣿⣿⠀⠀⠀⢻⣿⣿⣿⣿⡟⠀⠀⠀⣿⣿⣿⣿⣿⣿⡇⠀⠀
+                   ⠀⠀⠀⣿⣿⣿⣿⣿⣿⣇⠀⠀⠀⠈⠛⠛⠋⠀⠀⠀⣸⣿⣿⣿⣿⣿⣿⠀⠀⠀
+                   ⠀⠀⠀⢿⣿⣿⣿⣿⣿⣿⣆⠀⠀⠀⠀⠀⠀⠀⠀⣰⣿⣿⣿⣿⣿⣿⡿⠀⠀⠀
+                  ⠀⠀⠀⠸⣿⣿⣿⣿⣿⣿⣿⣷⣄⡀⠀⠀⢀⣠⣾⣿⣿⣿⣿⣿⣿⣿⠇⠀⠀⠀
+                  ⠀⠀⠀⠀⢻⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡟⠀⠀⠀⠀
+                 ⠀⠀⠀⠀⠀⠻⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⠀⠀⠀⠀⠀
+                 ⠀⠀⠀⠀⠀⠀⠈⠛⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠛⠁⠀⠀⠀⠀⠀⠀
+                ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠙⠛⠛⠿⠿⠛⠛⠋⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+                              ⠀⠀⠀⠀⠀⠀⣿⣿⠀⠀⠀⠀⠀⠀
+                              ⠀⠀⠀⠀⠀⠀⣿⣿⠀⠀⠀⠀⠀⠀
+                              ⠀⠀⠀⠀⠀⠀⣿⣿⠀⠀⠀⠀⠀⠀
+                              ⠀⠀⠀⠀⠀⠀⣿⣿⠀⠀⠀⠀⠀⠀
+                               ⠀⠀⠀⠀⠀⢸⣿⡇⠀⠀⠀⠀⠀
+                               ⠀⠀⠀⠀⠀⢸⣿⡇⠀⠀⠀⠀⠀
+                                ⠀⠀⠀⠀⠘⣿⠃⠀⠀⠀⠀
+                                 ⠀⠀⠀⠀⠈⠁⠀⠀⠀⠀
+
+
+The techniques for high-detail text art:
+
+1. BRAILLE PATTERNS (⠀-⣿)
+   - 256 characters, each a 2×4 dot grid
+   - Effectively 4× horizontal, 2× vertical resolution
+   - Can represent any 8-pixel pattern per character cell
+
+2. BLOCK ELEMENTS (░▒▓█)
+   - Built-in density levels: 25%, 50%, 75%, 100%
+   - Plus half-blocks: ▀▄▌▐
+   - Quarter blocks: ▖▗▘▙▚▛▜▝▞▟
+
+3. BOX DRAWING (─│┌┐└┘├┤┬┴┼)
+   - Clean geometric lines
+   - Double lines: ═║╔╗╚╝
+
+4. DENSITY RAMP (dark to light):
+   $@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\|()1{}[]?-_+~<>i!lI;:,"^`'.
+
+   Each character has a different "visual weight" when rendered
+
+5. COMBINING CHARACTERS
+   - Diacritical marks can add texture: ä ë ï ö ü
+   - Combining overlays: a̷ b̸ c̶

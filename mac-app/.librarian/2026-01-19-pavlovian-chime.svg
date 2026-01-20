@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
+  <rect width="400" height="300" fill="#f5f3eb"/>
+
+  <!-- Halftone pattern definitions -->
+  <defs>
+    <pattern id="halftone-dense" width="4" height="4" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.5" fill="#1a1a1a"/>
+    </pattern>
+    <pattern id="halftone-med" width="5" height="5" patternUnits="userSpaceOnUse">
+      <circle cx="2.5" cy="2.5" r="1.2" fill="#1a1a1a"/>
+    </pattern>
+    <pattern id="halftone-light" width="6" height="6" patternUnits="userSpaceOnUse">
+      <circle cx="3" cy="3" r="0.8" fill="#1a1a1a"/>
+    </pattern>
+    <pattern id="halftone-xlight" width="8" height="8" patternUnits="userSpaceOnUse">
+      <circle cx="4" cy="4" r="0.6" fill="#1a1a1a"/>
+    </pattern>
+  </defs>
+
+  <!-- Sound waves - outermost -->
+  <ellipse cx="200" cy="160" rx="160" ry="120" fill="none" stroke="url(#halftone-xlight)" stroke-width="15"/>
+  <ellipse cx="200" cy="160" rx="130" ry="95" fill="none" stroke="url(#halftone-light)" stroke-width="12"/>
+  <ellipse cx="200" cy="160" rx="100" ry="70" fill="none" stroke="url(#halftone-med)" stroke-width="10"/>
+
+  <!-- Bell body -->
+  <path d="M150 220 Q150 150 170 120 Q185 100 200 95 Q215 100 230 95 Q245 100 250 120 Q270 150 270 220 Z"
+        fill="url(#halftone-med)" stroke="#1a1a1a" stroke-width="2"/>
+
+  <!-- Bell highlight -->
+  <path d="M165 210 Q165 160 180 135 Q190 115 200 110 L200 210 Z"
+        fill="#f5f3eb" opacity="0.6"/>
+
+  <!-- Bell shadow side -->
+  <path d="M200 95 Q230 100 245 120 Q265 150 265 220 L200 220 Z"
+        fill="url(#halftone-dense)"/>
+
+  <!-- Bell rim -->
+  <ellipse cx="210" cy="220" rx="65" ry="12" fill="url(#halftone-dense)" stroke="#1a1a1a" stroke-width="2"/>
+
+  <!-- Bell top -->
+  <ellipse cx="200" cy="95" rx="20" ry="8" fill="url(#halftone-dense)" stroke="#1a1a1a" stroke-width="1.5"/>
+
+  <!-- Bell hanger -->
+  <rect x="195" y="65" width="10" height="30" fill="url(#halftone-dense)" stroke="#1a1a1a" stroke-width="1.5"/>
+  <circle cx="200" cy="55" r="10" fill="url(#halftone-med)" stroke="#1a1a1a" stroke-width="1.5"/>
+
+  <!-- Clapper -->
+  <line x1="200" y1="170" x2="225" y2="240" stroke="#1a1a1a" stroke-width="3"/>
+  <circle cx="228" cy="245" r="8" fill="url(#halftone-dense)" stroke="#1a1a1a" stroke-width="1.5"/>
+
+  <!-- Motion lines -->
+  <path d="M240 255 Q260 265 250 275" stroke="#1a1a1a" stroke-width="1.5" fill="none"/>
+  <path d="M250 250 Q275 260 260 275" stroke="#1a1a1a" stroke-width="1.5" fill="none"/>
+
+  <!-- Sparkles -->
+  <g fill="#1a1a1a">
+    <path d="M0 -5 L1.5 0 0 5 -1.5 0 Z" transform="translate(300,80)"/>
+    <path d="M0 -4 L1 0 0 4 -1 0 Z" transform="translate(320,60) scale(1.5)"/>
+    <path d="M0 -4 L1 0 0 4 -1 0 Z" transform="translate(80,90) scale(1.2)"/>
+    <path d="M0 -3 L1 0 0 3 -1 0 Z" transform="translate(100,70)"/>
+    <path d="M0 -3 L1 0 0 3 -1 0 Z" transform="translate(340,110)"/>
+  </g>
+</svg>

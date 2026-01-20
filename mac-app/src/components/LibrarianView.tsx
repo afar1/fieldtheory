@@ -1120,7 +1120,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                   display: 'flex',
                   alignItems: 'center',
                   gap: '8px',
-                  opacity: isFullScreen && !headerHovered ? 0.15 : 1,
+                  opacity: isFullScreen && !headerHovered ? 0 : 1,
                   transition: 'opacity 0.2s ease',
                 }}
               >
@@ -1340,6 +1340,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 lineHeight: 1.5,
                 color: theme.text,
                 fontFamily: fonts.serif,
+                userSelect: 'text',
               }}
             >
               <ReactMarkdown
