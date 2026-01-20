@@ -1,6 +1,6 @@
 # Field Theory Privacy Policy
 
-**Last Updated:** December 5, 2025
+**Last Updated:** January 19, 2026
 
 Field Theory is a privacy-first voice transcription and clipboard management application. This policy explains how your data is handled.
 
@@ -50,12 +50,36 @@ If you use the "Engineer" feature to refine prompts:
 
 ---
 
+## Usage Metrics (Visible to You)
+
+If you have an account, we collect feature usage counts to understand which features provide value. **The metrics you can see in Settings are the only metrics we collect.** Nothing is hidden.
+
+### What We Track
+
+- **Counts only** — Number of transcriptions, pastes, screenshots, etc.
+- **No content** — We never see your clipboard text, transcription audio, or screenshot images
+- **Your Stats** — View your own metrics anytime in Settings → Your Stats
+
+### What We Don't Track
+
+| Never Collected | Stays On Your Device |
+|-----------------|---------------------|
+| Clipboard content | Stored locally only |
+| Transcription text/audio | Processed and stored locally |
+| Screenshot images | Local database only |
+| Auto-improved text | Uses your API key, we never see it |
+| Session timing or patterns | Not tracked |
+| What you do in other apps | Not visible to us |
+
+---
+
 ## What We Don't Do
 
-- **No analytics or telemetry** — We don't track how you use the app
+- **No content collection** — We only see counts, never the actual content
 - **No advertising** — No ads, no ad tracking, no selling data
 - **No account required** — Full functionality without signing up
 - **No background data collection** — The app only processes data when you actively use it
+- **No third-party analytics** — No Mixpanel, Amplitude, or similar services
 
 ---
 

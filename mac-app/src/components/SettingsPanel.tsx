@@ -10,6 +10,7 @@ import TranscriptionSettings from './TranscriptionSettings';
 import DiagnosticsModal from './DiagnosticsModal';
 import CommandsSettings from './CommandsSettings';
 import LibrarianSettings from './LibrarianSettings';
+import UserStatsPanel from './UserStatsPanel';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
 import { useTheme, Theme } from '../contexts/ThemeContext';
@@ -23,7 +24,8 @@ type SettingsSection =
   | 'auto-improve'
   | 'keyboard'
   | 'librarian'
-  | 'commands';
+  | 'commands'
+  | 'stats';
 
 // Hotkey capture state - only one hotkey can be captured at a time
 type HotkeyCapture =
@@ -48,6 +50,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'keyboard': 'Keyboard Shortcuts',
   'librarian': 'Librarian',
   'commands': 'Portable Commands',
+  'stats': 'Your Stats',
 };
 
 // Alphabetically ordered sections for navigation
@@ -59,6 +62,7 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'commands',
   'keyboard',
   'librarian',
+  'stats',
 ];
 
 interface SettingsPanelProps {
@@ -2135,6 +2139,13 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           librarianEnabled={librarianEnabled}
           onLibrarianEnabledChange={onLibrarianEnabledChange}
         />
+      </div>
+      )}
+
+      {/* Your Stats Section - user-visible usage metrics */}
+      {selectedSection === 'stats' && (
+      <div style={styles.section}>
+        <UserStatsPanel />
       </div>
       )}
 
