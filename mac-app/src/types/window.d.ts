@@ -913,9 +913,25 @@ interface LibrarianAPI {
   onReadingRemoved: (callback: (path: string) => void) => () => void;
   onSetFullscreen: (callback: (fullscreen: boolean) => void) => () => void;
   onShowReading: (callback: (readingPath: string) => void) => () => void;
+  // New Settings API (v2)
+  isEnabled: () => Promise<boolean>;
+  setEnabled: (enabled: boolean) => Promise<boolean>;
+  getTriggerMode: () => Promise<string>;
+  setTriggerMode: (mode: string) => Promise<boolean>;
+  getPromptThreshold: () => Promise<number>;
+  setPromptThreshold: (threshold: number) => Promise<boolean>;
+  isSetupComplete: () => Promise<boolean>;
+  setSetupComplete: (complete: boolean) => Promise<void>;
+  createWelcomeArtifact: (dirPath: string) => Promise<boolean>;
+  // Legacy Settings API (deprecated)
   getAutoRunFrequency: () => Promise<string>;
   setAutoRunFrequency: (frequency: string) => Promise<boolean>;
   getCursorInstructions: () => Promise<string>;
+  // Configuration file management
+  getConfigPaths: () => Promise<{ claudeMd: string; librarianCommand: string }>;
+  openInEditor: (filePath: string) => Promise<boolean>;
+  readConfigFile: (filePath: string) => Promise<string | null>;
+  writeConfigFile: (filePath: string, content: string) => Promise<boolean>;
   getAutoShowEnabled: () => Promise<boolean>;
   setAutoShowEnabled: (enabled: boolean) => Promise<void>;
   getClaudeCodeStatus: () => Promise<'installed' | 'directory-only' | 'not-installed'>;

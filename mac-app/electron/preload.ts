@@ -2343,7 +2343,32 @@ const librarianAPI = {
     ipcRenderer.send('clipboard-history:setImmersiveMode', immersive);
   },
 
-  // Auto-run frequency settings
+  // ===========================================================================
+  // New Settings API (v2)
+  // ===========================================================================
+
+  // Master enable/disable toggle
+  isEnabled: (): Promise<boolean> => ipcRenderer.invoke('librarian:isEnabled'),
+  setEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('librarian:setEnabled', enabled),
+
+  // Trigger mode (prompt count vs AI judgment)
+  getTriggerMode: (): Promise<string> => ipcRenderer.invoke('librarian:getTriggerMode'),
+  setTriggerMode: (mode: string): Promise<boolean> => ipcRenderer.invoke('librarian:setTriggerMode', mode),
+
+  // Prompt threshold (for prompt count mode)
+  getPromptThreshold: (): Promise<number> => ipcRenderer.invoke('librarian:getPromptThreshold'),
+  setPromptThreshold: (threshold: number): Promise<boolean> => ipcRenderer.invoke('librarian:setPromptThreshold', threshold),
+
+  // Setup wizard completion
+  isSetupComplete: (): Promise<boolean> => ipcRenderer.invoke('librarian:isSetupComplete'),
+  setSetupComplete: (complete: boolean): Promise<void> => ipcRenderer.invoke('librarian:setSetupComplete', complete),
+  createWelcomeArtifact: (dirPath: string): Promise<boolean> => ipcRenderer.invoke('librarian:createWelcomeArtifact', dirPath),
+
+  // ===========================================================================
+  // Legacy Settings API (kept for backward compatibility)
+  // ===========================================================================
+
+  // Auto-run frequency settings (deprecated - use isEnabled/setEnabled + triggerMode)
   getAutoRunFrequency: (): Promise<string> => ipcRenderer.invoke('librarian:getAutoRunFrequency'),
   setAutoRunFrequency: (frequency: string): Promise<boolean> => ipcRenderer.invoke('librarian:setAutoRunFrequency', frequency),
 
@@ -2361,6 +2386,12 @@ const librarianAPI = {
 
   // Get Cursor instructions text for manual copy
   getCursorInstructions: (): Promise<string> => ipcRenderer.invoke('librarian:getCursorInstructions'),
+
+  // Configuration file management
+  getConfigPaths: (): Promise<{ claudeMd: string; librarianCommand: string }> => ipcRenderer.invoke('librarian:getConfigPaths'),
+  openInEditor: (filePath: string): Promise<boolean> => ipcRenderer.invoke('librarian:openInEditor', filePath),
+  readConfigFile: (filePath: string): Promise<string | null> => ipcRenderer.invoke('librarian:readConfigFile', filePath),
+  writeConfigFile: (filePath: string, content: string): Promise<boolean> => ipcRenderer.invoke('librarian:writeConfigFile', filePath, content),
 
   // Auto-show on new reading settings
   getAutoShowEnabled: (): Promise<boolean> => ipcRenderer.invoke('librarian:getAutoShowEnabled'),
