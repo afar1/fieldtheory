@@ -113,57 +113,12 @@ export class LibrarianManager extends EventEmitter {
   }
 
   /**
-   * Log global status at startup and reconcile with file timestamps.
-   * If any reading in any watched dir is newer than lastReading, reset counter.
+   * Log global status at startup.
+   * Resets for offline-created artifacts are handled by scanForNewReadings()
+   * which emits reading-added events for files not in cache.
    */
   private logAllProjectStatuses(): void {
-    // Reconcile global status with all watched directories
-    this.reconcileStatusWithFiles();
-
-    // Log the global status
     this.logStatus('startup');
-  }
-
-  /**
-   * Check if any .md file in ANY watched dir is newer than global lastReading.
-   * If so, reset the global counter. Handles readings created while app wasn't running.
-   */
-  private reconcileStatusWithFiles(): void {
-    this.ensureGlobalStatusExists();
-    const statusFile = this.getGlobalStatusPath();
-
-    try {
-      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
-      const lastReadingTime = status.lastReading ? new Date(status.lastReading).getTime() : 0;
-
-      // Find newest .md file across ALL watched directories
-      let newestMtime = 0;
-
-      for (const watchedDir of this.settings.watchedDirs) {
-        if (!fs.existsSync(watchedDir)) continue;
-
-        const files = fs.readdirSync(watchedDir).filter(f => f.endsWith('.md'));
-        for (const file of files) {
-          const filePath = path.join(watchedDir, file);
-          try {
-            const stats = fs.statSync(filePath);
-            if (stats.mtimeMs > newestMtime) {
-              newestMtime = stats.mtimeMs;
-            }
-          } catch {
-            // Ignore errors reading individual files
-          }
-        }
-      }
-
-      // If there's a file anywhere newer than lastReading, reset the global counter
-      if (newestMtime > lastReadingTime) {
-        console.log('[Librarian] reconcile → found newer reading, resetting global counter');
-        this.resetPromptCount();
-      }
-    } catch (error) {
-      console.warn('[LibrarianManager] Failed to reconcile status:', error);
-    }
   }
 
   // ===========================================================================
@@ -602,12 +557,11 @@ export class LibrarianManager extends EventEmitter {
     this.saveIndex();
 
     if (isActuallyNew) {
-      // Note: Counter reset is handled by polling mechanism (checkAndResetIfNeeded)
-      // This keeps reset logic in ONE place - the poll is the single source of truth
+      // Emit event - coordinator in index.ts handles counter reset
       const content = fs.readFileSync(normalizedPath, 'utf-8');
       const reading: Reading = { ...meta, content };
       this.emit('reading-added', reading);
-      console.log(`[LibrarianManager] New reading: ${meta.title}`);
+      console.log(`[LibrarianManager] New artifact: ${meta.title}`);
     } else {
       this.emit('reading-updated', meta);
       console.log(`[LibrarianManager] Updated reading: ${meta.title}`);
@@ -650,12 +604,11 @@ export class LibrarianManager extends EventEmitter {
         this.cache.set(fullPath, meta);
         foundNew = true;
 
-        // Emit event as if watcher caught it
-        // Note: Counter reset is handled by polling mechanism (checkAndResetIfNeeded)
+        // Emit event - coordinator in index.ts handles counter reset
         const content = fs.readFileSync(fullPath, 'utf-8');
         const reading: Reading = { ...meta, content };
         this.emit('reading-added', reading);
-        console.log(`[LibrarianManager] Reconciliation found: ${meta.title}`);
+        console.log(`[LibrarianManager] Reconciliation found artifact: ${meta.title}`);
       }
     }
 
@@ -1582,48 +1535,63 @@ exit 0
   }
 
   /**
-   * Check if any readings are newer than lastReading and reset counter if so.
-   * This is the SINGLE SOURCE OF TRUTH for counter resets during active use.
-   * Returns the current counter state.
+   * Get current counter state for UI display.
+   * Reset is handled by reading-added event, not here.
    */
-  checkAndResetIfNeeded(): { edits: number; threshold: number; didReset: boolean } {
+  getCounterStatus(): { edits: number; threshold: number } {
     try {
       this.ensureGlobalStatusExists();
       const statusFile = this.getGlobalStatusPath();
       const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
-      const lastReadingTime = status.lastReading ? new Date(status.lastReading).getTime() : 0;
-
-      // Check if any cached reading is newer than lastReading
-      let newestMtime = 0;
-      for (const [, meta] of this.cache) {
-        if (meta.mtime > newestMtime) {
-          newestMtime = meta.mtime;
-        }
-      }
-
-      // If we have a reading newer than lastReading, reset the counter
-      if (newestMtime > lastReadingTime) {
-        console.log('[Librarian] Poll detected newer reading, resetting counter');
-        status.promptsSinceReading = 0;
-        status.nextThreshold = this.pickNextThreshold(this.settings.autoRunFrequency);
-        status.lastReading = new Date().toISOString();
-        fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
-        this.logStatus('reset');
-        return {
-          edits: 0,
-          threshold: status.nextThreshold,
-          didReset: true,
-        };
-      }
-
       return {
         edits: status.promptsSinceReading || 0,
         threshold: status.nextThreshold || 5,
-        didReset: false,
       };
     } catch (error) {
-      console.error('[LibrarianManager] Failed to check/reset:', error);
-      return { edits: 0, threshold: 5, didReset: false };
+      console.error('[LibrarianManager] Failed to get counter status:', error);
+      return { edits: 0, threshold: 5 };
+    }
+  }
+
+  /**
+   * @deprecated Use getCounterStatus() instead. Kept for backward compatibility.
+   */
+  checkAndResetIfNeeded(): { edits: number; threshold: number; didReset: boolean } {
+    const status = this.getCounterStatus();
+    return { ...status, didReset: false };
+  }
+
+  /**
+   * Simple check: is count >= threshold?
+   * No side effects, just returns the comparison result.
+   */
+  isOverThreshold(): boolean {
+    try {
+      this.ensureGlobalStatusExists();
+      const statusFile = this.getGlobalStatusPath();
+      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
+      return (status.promptsSinceReading || 0) >= (status.nextThreshold || 5);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Reset the counter. Called when a reading is created.
+   * Simple and direct - no timestamp comparisons.
+   */
+  resetCounter(): void {
+    try {
+      this.ensureGlobalStatusExists();
+      const statusFile = this.getGlobalStatusPath();
+      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
+      status.promptsSinceReading = 0;
+      status.nextThreshold = this.pickNextThreshold(this.settings.autoRunFrequency);
+      status.lastReading = new Date().toISOString();
+      fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
+      this.logStatus('reset');
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to reset counter:', error);
     }
   }
 
