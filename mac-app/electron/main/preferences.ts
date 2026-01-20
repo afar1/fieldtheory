@@ -158,6 +158,7 @@ interface Preferences {
   windowCloseSound?: string;     // Sound file name to play when window closes
   pasteSound?: string;           // Sound file name to play when pasting
   transcribingSound?: string;    // Sound file name to play when transcribing starts
+  artifactDiscoverySound?: string; // Sound file name to play when artifact/reading is created
   
   // Permission banner settings - hide banner prompting for Screen Recording permission.
   hideScreenRecordingBanner?: boolean;

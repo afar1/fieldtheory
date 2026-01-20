@@ -4710,6 +4710,9 @@ async function initTranscriberSystem(): Promise<void> {
     // Note: resetPromptCount() is already called by the watch handler in LibrarianManager
     // before emitting this event, so we don't need to call it again here.
 
+    // Play artifact discovery sound
+    clipboardHistoryWindow?.playArtifactDiscoverySound();
+
     // Broadcast to all windows (updates reading lists)
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
