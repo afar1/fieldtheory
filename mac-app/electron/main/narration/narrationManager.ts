@@ -404,7 +404,7 @@ export class NarrationManager extends EventEmitter {
   private loadNarrationPrefs(): NarrationPreferences {
     const stored = this.preferences.getPreference('narrationPrefs' as never);
     if (stored && typeof stored === 'object') {
-      return { ...DEFAULT_NARRATION_PREFS, ...stored };
+      return { ...DEFAULT_NARRATION_PREFS, ...(stored as Partial<NarrationPreferences>) };
     }
     return { ...DEFAULT_NARRATION_PREFS };
   }
