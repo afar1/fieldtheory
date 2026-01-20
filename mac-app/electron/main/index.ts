@@ -155,6 +155,9 @@ let commandLauncherWindow: CommandLauncherWindow | null = null;
 // Track pending update state so windows can query it when they open.
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
 
+// Track pending reading to show in immersive mode. Renderer polls for this.
+let pendingImmersiveReading: string | null = null;
+
 
 /**
  * Migrate data from legacy app directories to the current Field Theory location.
@@ -251,12 +254,10 @@ function registerHotkeysAfterOnboarding(): void {
     return;
   }
 
-  console.log('[Main] Registering all hotkeys');
   const prefs = preferencesManager.get();
 
   // Register clipboard hotkeys (screenshot, full screen, active window)
   clipboardManager.registerScreenshotHotkey(async () => {
-    console.log('[Main] Screenshot hotkey triggered');
     const id = await clipboardManager!.captureScreenshot({ region: true });
     if (id > 0) {
       if (transcriberManager) {
@@ -342,8 +343,6 @@ function registerHotkeysAfterOnboarding(): void {
     if (clipboardHistoryWindow) {
       clipboardHistoryWindow.getWindow()?.webContents.send('clipboard:tasksTabToggled', newValue);
     }
-
-    console.log(`[Main] Tasks tab toggled: ${newValue ? 'enabled' : 'disabled'}`);
   });
 
   // Register Super Paste hotkey - now customizable via HotkeyManager
@@ -361,8 +360,6 @@ function registerHotkeysAfterOnboarding(): void {
       }
       lastSuperPasteTime = now;
 
-      console.log('[Main] Super Paste triggered');
-
       if (!clipboardManager) {
         console.error('[Main] Super Paste: clipboardManager not available');
         return;
@@ -372,16 +369,10 @@ function registerHotkeysAfterOnboarding(): void {
       const stmt = clipboardManager['db'].prepare('SELECT id FROM clipboard_items ORDER BY created_at DESC LIMIT 1');
       const row = stmt.get() as { id: number } | undefined;
 
-      if (!row) {
-        console.log('[Main] Super Paste: no items in clipboard history');
-        return;
-      }
+      if (!row) return;
 
       const mostRecentItem = clipboardManager.getItem(row.id);
-      if (!mostRecentItem) {
-        console.log('[Main] Super Paste: failed to get most recent item');
-        return;
-      }
+      if (!mostRecentItem) return;
 
       // Check if this item belongs to a stack - if so, paste the whole stack
       let itemsToPaste: typeof mostRecentItem[] = [mostRecentItem];
@@ -390,7 +381,6 @@ function registerHotkeysAfterOnboarding(): void {
         const stackItems = clipboardManager.queryItemsByStackId(mostRecentItem.stackId);
         if (stackItems.length > 1) {
           itemsToPaste = stackItems;
-          console.log('[Main] Super Paste: found stack with', stackItems.length, 'items');
         }
       }
 
@@ -419,10 +409,7 @@ function registerHotkeysAfterOnboarding(): void {
         if (isFieldTheory && clipboardHistoryWindow) {
           const previousApp = clipboardHistoryWindow.getPreviousApp();
           if (previousApp?.bundleId) {
-            console.log('[Main] Super Paste: frontmost is Field Theory, using previous app:', previousApp.bundleId);
             bundleId = previousApp.bundleId;
-          } else {
-            console.warn('[Main] Super Paste: Field Theory is frontmost but no previous app recorded, paste may go to wrong window');
           }
         }
 
@@ -431,8 +418,6 @@ function registerHotkeysAfterOnboarding(): void {
       } catch (e) {
         console.error('[Main] Super Paste: failed to get frontmost app:', e);
       }
-
-      console.log('[Main] Super Paste: pasting', itemsToPaste.length, 'item(s), target:', bundleId, 'isTerminal:', isTerminal);
 
       try {
         // If Field Theory is visible, hide it to restore previous focus state
@@ -471,7 +456,6 @@ function registerHotkeysAfterOnboarding(): void {
 
           clipboard.writeText(combinedText.trim());
           await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-          console.log('[Main] Super Paste: pasted combined text + image paths to terminal');
 
         } else {
           // Paste items sequentially
@@ -479,7 +463,6 @@ function registerHotkeysAfterOnboarding(): void {
             if (item.type === 'text' || item.type === 'transcript') {
               clipboard.writeText(item.content || '');
               await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-              console.log('[Main] Super Paste: pasted text');
             } else if (item.type === 'image' || item.type === 'screenshot' || item.imageData) {
               if (!item.imageData) continue;
               if (isTerminal) {
@@ -487,7 +470,6 @@ function registerHotkeysAfterOnboarding(): void {
                 if (imagePath) {
                   clipboard.writeText(imagePath);
                   await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-                  console.log('[Main] Super Paste: pasted image path to terminal');
                 }
               } else {
                 const { nativeImage } = require('electron');
@@ -499,7 +481,6 @@ function registerHotkeysAfterOnboarding(): void {
                 clipboard.writeImage(image);
                 clipboardManager.syncClipboardHash();
                 await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-                console.log('[Main] Super Paste: pasted image');
               }
             }
             // Small delay between items
@@ -515,8 +496,6 @@ function registerHotkeysAfterOnboarding(): void {
   // Register Auto-improve toggle hotkey - now customizable via HotkeyManager
   const autoImproveHotkey = prefs.autoImproveHotkey || 'Command+Shift+\\';
   hotkeyManager.register('autoImprove', autoImproveHotkey, async () => {
-    console.log('[Main] Auto-improve toggle triggered');
-
     if (!transcriberManager) {
       console.error('[Main] Auto-improve toggle: transcriberManager not available');
       return;
@@ -525,8 +504,6 @@ function registerHotkeysAfterOnboarding(): void {
     const currentState = transcriberManager.getAutoImprove();
     const newState = !currentState;
     await transcriberManager.setAutoImprove(newState);
-
-    console.log(`[Main] Auto-improve toggled: ${currentState} → ${newState}`);
 
     // Refresh tray menu to show updated state
     if (trayManager) {
@@ -573,11 +550,8 @@ function registerHotkeysAfterOnboarding(): void {
   // Register Improve Text hotkey - now customizable via HotkeyManager
   const improveTextHotkey = prefs.improveTextHotkey || 'Command+Shift+I';
   hotkeyManager.register('improveText', improveTextHotkey, async () => {
-    console.log('[Main] Improve text triggered');
     await handleImproveSelectedText();
   });
-
-  console.log('[Main] Hotkeys registered successfully');
 }
 
 /**
@@ -809,7 +783,6 @@ function handleDisplayRemoved(_event: Electron.Event, removedDisplay: Electron.D
   // Check if the removed display matches the saved display ID.
   const removedDisplayId = ClipboardHistoryWindow.getDisplayId(removedDisplay);
   if (removedDisplayId === savedBounds.displayId) {
-    console.log('[ClipboardHistoryWindow] Display removed, moving window to primary display');
     
     // Move window to primary display (absolute coordinates).
     const primaryDisplay = screen.getPrimaryDisplay();
@@ -867,8 +840,7 @@ function handleDisplayMetricsChanged(_event: Electron.Event, _changedDisplay: El
   displayMetricsDebounceTimer = setTimeout(() => {
     displayMetricsDebounceTimer = null;
     if (!clipboardHistoryWindow || !clipboardHistoryWindow.isVisible()) return;
-    
-    console.log('[ClipboardHistoryWindow] Display metrics changed, repositioning window');
+
     const boundsToUse = restoreClipboardHistoryBounds();
     if (boundsToUse) {
       clipboardHistoryWindow.reposition(boundsToUse);
@@ -882,7 +854,6 @@ function handleDisplayMetricsChanged(_event: Electron.Event, _changedDisplay: El
 function setupDisplayListeners(): void {
   screen.on('display-removed', handleDisplayRemoved);
   screen.on('display-metrics-changed', handleDisplayMetricsChanged);
-  console.log('[Main] Display change listeners registered');
 }
 
 /**
@@ -1000,9 +971,6 @@ function showSettingsInClipboardWindow(): void {
  * Called from app 'activate' event handler.
  */
 function showClipboardHistoryOnActivate(): void {
-  const cursorStatusVisible = cursorStatusManager?.isVisible() ?? false;
-  const transcriberStatus = transcriberManager?.getStatus() ?? 'idle';
-  console.log(`[CursorStatus] app activate - showing clipboard | cursorStatus visible: ${cursorStatusVisible} | transcriber: ${transcriberStatus}`);
 
   // Don't show clipboard history if onboarding is not complete.
   const prefs = preferencesManager?.get();
@@ -1023,12 +991,6 @@ function showClipboardHistoryOnActivate(): void {
   // Always show the clipboard window when app is activated (e.g., Dock icon click).
   const boundsToUse = restoreClipboardHistoryBounds();
   clipboardHistoryWindow.show(boundsToUse);
-
-  // Log cursor status state after clipboard window is shown.
-  setTimeout(() => {
-    const stillVisible = cursorStatusManager?.isVisible() ?? false;
-    console.log(`[CursorStatus] after clipboard show - cursorStatus visible: ${stillVisible}`);
-  }, 100);
 }
 
 /**
@@ -1131,6 +1093,14 @@ function setupLibrarianIPCHandlers(): void {
       return false;
     }
     return librarianManager.saveReading(filePath, content);
+  });
+
+  // Delete a reading file
+  ipcMain.handle('librarian:deleteReading', (_event, filePath: string): boolean => {
+    if (!librarianManager) {
+      return false;
+    }
+    return librarianManager.deleteReading(filePath);
   });
 
   // Get all watched directories
@@ -1284,6 +1254,33 @@ function setupLibrarianIPCHandlers(): void {
   // Set custom threshold (pass undefined to return to frequency-based)
   ipcMain.handle('librarian:setCustomThreshold', (_event, threshold: number | undefined): boolean => {
     return librarianManager?.setCustomThreshold(threshold) ?? false;
+  });
+
+  // Poll for pending reading AND counter state (single source of truth for resets)
+  // Renderer calls this on mount/interval. Checks if any readings are newer than
+  // lastReading and resets counter if so. Returns pending path and counter state.
+  ipcMain.handle('librarian:pollStatus', (): {
+    pendingPath: string | null;
+    edits: number;
+    threshold: number;
+    didReset: boolean;
+  } => {
+    // Check for newer readings and reset if needed
+    const status = librarianManager?.checkAndResetIfNeeded() ?? { edits: 0, threshold: 5, didReset: false };
+
+    // Get and clear pending immersive reading
+    const p = pendingImmersiveReading;
+    if (p) {
+      console.log(`[Librarian] pollStatus returning pending: ${p}`);
+    }
+    pendingImmersiveReading = null;
+
+    return {
+      pendingPath: p,
+      edits: status.edits,
+      threshold: status.threshold,
+      didReset: status.didReset,
+    };
   });
 
   // ===========================================================================
@@ -4707,8 +4704,7 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Broadcast reading-added events to all windows and auto-show if enabled
   librarianManager.on('reading-added', (reading: Reading) => {
-    // Note: resetPromptCount() is already called by the watch handler in LibrarianManager
-    // before emitting this event, so we don't need to call it again here.
+    console.log(`[Librarian] reading-added event: ${reading.title}`);
 
     // Play artifact discovery sound
     clipboardHistoryWindow?.playArtifactDiscoverySound();
@@ -4720,35 +4716,21 @@ async function initTranscriberSystem(): Promise<void> {
       }
     });
 
-    // Auto-show in immersive mode if enabled (default: true)
-    if (librarianManager!.isAutoShowEnabled() && clipboardHistoryWindow) {
-      const win = clipboardHistoryWindow.getWindow();
+    // Store pending reading for renderer to pull (polling approach)
+    // This avoids IPC timing issues - renderer asks when it's ready
+    if (librarianManager!.isAutoShowEnabled()) {
+      console.log(`[Librarian] Setting pending immersive reading: ${reading.path}`);
+      pendingImmersiveReading = reading.path;
 
-      // Check if window is already visible AND focused (user actively using Field Theory)
-      // If visible but not focused (in background), we should still bring it to front
-      if (win && !win.isDestroyed() && win.isVisible() && win.isFocused()) {
-        // Don't disrupt - just notify renderer to show indicator (blue dot)
-        win.webContents.send('librarian:newReadingAvailable', reading.path);
+      // Ensure window exists and is visible so renderer can poll
+      if (!clipboardHistoryWindow) {
+        clipboardHistoryWindow = initClipboardHistoryWindow();
+      }
+      const boundsToUse = restoreClipboardHistoryBounds();
+      clipboardHistoryWindow.show(boundsToUse);
 
-        // Bounce dock icon to get attention
-        if (app.dock) {
-          app.dock.bounce('informational');
-        }
-      } else {
-        // Window not visible - open in immersive mode
-        const boundsToUse = restoreClipboardHistoryBounds();
-        clipboardHistoryWindow.show(boundsToUse);
-
-        // Bounce dock icon as fallback if focus stealing fails
-        if (app.dock) {
-          app.dock.bounce('informational');
-        }
-
-        // Tell renderer to switch to librarian, show reading, and enter immersive mode
-        if (win && !win.isDestroyed()) {
-          win.webContents.send('librarian:showReading', reading.path);
-          win.webContents.send('librarian:setFullscreen', true);
-        }
+      if (app.dock) {
+        app.dock.bounce('informational');
       }
     }
   });
@@ -4985,8 +4967,6 @@ async function initTranscriberSystem(): Promise<void> {
   // Forward tier changes to quota manager and all renderer windows.
   // This fires when Stripe webhook updates the user's tier in Supabase.
   mobileSync.on('tierChanged', async (tier: 'free' | 'pro') => {
-    console.log('[Main] Realtime: tier changed to:', tier);
-    
     // Update the cached tier in quota manager.
     if (quotaManager) {
       await quotaManager.setCachedTier(tier);

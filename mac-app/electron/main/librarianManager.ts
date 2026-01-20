@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { EventEmitter } from 'events';
+import * as chokidar from 'chokidar';
 
 /**
  * Auto-run frequency for generating readings.
@@ -79,7 +80,7 @@ export class LibrarianManager extends EventEmitter {
   private oldDbPath: string;
   private oldLibrarianDir: string;
   private cache: Map<string, ReadingMeta> = new Map();
-  private watchers: Map<string, fs.FSWatcher> = new Map();
+  private watchers: Map<string, chokidar.FSWatcher> = new Map();
   private settings: LibrarianSettings;
   private scanningDirs: Set<string> = new Set();
 
@@ -527,78 +528,139 @@ export class LibrarianManager extends EventEmitter {
   // ===========================================================================
 
   /**
-   * Watch a directory for file changes.
+   * Watch a directory for file changes using chokidar for reliability.
    */
   private watchDirectory(dirPath: string): void {
     const normalizedDir = this.normalizePath(dirPath);
 
-    // Skip if already watching
     if (this.watchers.has(normalizedDir)) {
       return;
     }
 
-    // Check if directory exists
     if (!fs.existsSync(normalizedDir)) {
       console.warn(`[LibrarianManager] Directory not found: ${normalizedDir}`);
       return;
     }
 
     console.log(`[LibrarianManager] Watching: ${normalizedDir}`);
-
-    // Scan existing files first
     this.scanDirectory(normalizedDir);
 
-    // Start watching for changes
-    try {
-      const watcher = fs.watch(normalizedDir, (eventType, filename) => {
-        if (!filename?.endsWith('.md')) return;
+    // Watch for .md files in the directory using chokidar
+    const watcher = chokidar.watch(`${normalizedDir}/*.md`, {
+      ignoreInitial: true,           // Don't fire for existing files
+      awaitWriteFinish: {            // Wait for file to be fully written
+        stabilityThreshold: 100,
+        pollInterval: 50,
+      },
+      ignorePermissionErrors: true,
+      depth: 0,                      // Only watch immediate directory, not subdirs
+    });
 
-        const fullPath = this.normalizePath(path.join(normalizedDir, filename));
+    watcher.on('ready', () => {
+      console.log(`[LibrarianManager] Watcher ready: ${normalizedDir}`);
+      // Reconciliation scan to catch files created during initialization
+      this.scanForNewReadings(normalizedDir);
+    });
 
-        // Debounce to ensure file is fully written
-        setTimeout(() => {
-          if (fs.existsSync(fullPath)) {
-            // New or modified file
-            const meta = this.parseFileMetadata(fullPath);
-            if (meta) {
-              const cached = this.cache.get(fullPath);
-              // File is "new" if not in cache, OR if its mtime is newer than cached
-              // This catches files created while app wasn't running (loaded from stale index)
-              const isNew = !cached || meta.mtime > cached.mtime;
-              this.cache.set(fullPath, meta);
-              this.saveIndex();
+    watcher.on('add', (filePath) => {
+      console.log(`[LibrarianManager] File added: ${filePath}`);
+      this.handleFileChange(filePath, true);
+    });
 
-              if (isNew) {
-                // Reset global counter since a new reading was created
-                this.resetPromptCount();
+    watcher.on('change', (filePath) => {
+      console.log(`[LibrarianManager] File changed: ${filePath}`);
+      this.handleFileChange(filePath, false);
+    });
 
-                // Emit event for new readings
-                const content = fs.readFileSync(fullPath, 'utf-8');
-                const reading: Reading = { ...meta, content };
-                this.emit('reading-added', reading);
-                console.log(`[LibrarianManager] New reading detected (mtime check): ${meta.title}`);
-              } else {
-                // Emit event for updated readings
-                this.emit('reading-updated', meta);
-                console.log(`[LibrarianManager] Updated reading: ${meta.title}`);
-              }
-            }
-          } else {
-            // File deleted
-            if (this.cache.has(fullPath)) {
-              const meta = this.cache.get(fullPath);
-              this.cache.delete(fullPath);
-              this.saveIndex();
-              this.emit('reading-removed', fullPath);
-              console.log(`[LibrarianManager] Removed reading: ${meta?.title || fullPath}`);
-            }
-          }
-        }, 100);
-      });
+    watcher.on('unlink', (filePath) => {
+      console.log(`[LibrarianManager] File removed: ${filePath}`);
+      this.handleFileDelete(filePath);
+    });
 
-      this.watchers.set(normalizedDir, watcher);
-    } catch (error) {
-      console.error(`[LibrarianManager] Error watching directory:`, error);
+    watcher.on('error', (error) => {
+      console.error(`[LibrarianManager] Watcher error:`, error);
+    });
+
+    this.watchers.set(normalizedDir, watcher);
+  }
+
+  /**
+   * Handle file add or change events.
+   */
+  private handleFileChange(filePath: string, _isNewFile: boolean): void {
+    const normalizedPath = this.normalizePath(filePath);
+    const meta = this.parseFileMetadata(normalizedPath);
+
+    if (!meta) return;
+
+    // Check cache to determine if this is truly new or just an update.
+    // Don't trust chokidar's isNewFile hint - reconciliation scan may have processed it first.
+    const cached = this.cache.get(normalizedPath);
+    const isActuallyNew = !cached || meta.mtime > cached.mtime;
+
+    this.cache.set(normalizedPath, meta);
+    this.saveIndex();
+
+    if (isActuallyNew) {
+      // Note: Counter reset is handled by polling mechanism (checkAndResetIfNeeded)
+      // This keeps reset logic in ONE place - the poll is the single source of truth
+      const content = fs.readFileSync(normalizedPath, 'utf-8');
+      const reading: Reading = { ...meta, content };
+      this.emit('reading-added', reading);
+      console.log(`[LibrarianManager] New reading: ${meta.title}`);
+    } else {
+      this.emit('reading-updated', meta);
+      console.log(`[LibrarianManager] Updated reading: ${meta.title}`);
+    }
+  }
+
+  /**
+   * Handle file delete events.
+   */
+  private handleFileDelete(filePath: string): void {
+    const normalizedPath = this.normalizePath(filePath);
+    if (this.cache.has(normalizedPath)) {
+      const meta = this.cache.get(normalizedPath);
+      this.cache.delete(normalizedPath);
+      this.saveIndex();
+      this.emit('reading-removed', normalizedPath);
+      console.log(`[LibrarianManager] Removed reading: ${meta?.title || normalizedPath}`);
+    }
+  }
+
+  /**
+   * Scan a directory for files not in cache, emit events for any found.
+   * Used after watcher ready to catch files created during initialization.
+   */
+  private scanForNewReadings(dirPath: string): void {
+    const normalizedDir = this.normalizePath(dirPath);
+    if (!fs.existsSync(normalizedDir)) return;
+
+    const files = fs.readdirSync(normalizedDir).filter(f => f.endsWith('.md'));
+    let foundNew = false;
+
+    for (const file of files) {
+      const fullPath = this.normalizePath(path.join(normalizedDir, file));
+
+      // Skip if already in cache
+      if (this.cache.has(fullPath)) continue;
+
+      const meta = this.parseFileMetadata(fullPath);
+      if (meta) {
+        this.cache.set(fullPath, meta);
+        foundNew = true;
+
+        // Emit event as if watcher caught it
+        // Note: Counter reset is handled by polling mechanism (checkAndResetIfNeeded)
+        const content = fs.readFileSync(fullPath, 'utf-8');
+        const reading: Reading = { ...meta, content };
+        this.emit('reading-added', reading);
+        console.log(`[LibrarianManager] Reconciliation found: ${meta.title}`);
+      }
+    }
+
+    if (foundNew) {
+      this.saveIndex();
     }
   }
 
@@ -687,6 +749,38 @@ export class LibrarianManager extends EventEmitter {
       return true;
     } catch (error) {
       console.error(`[LibrarianManager] Error saving file ${normalizedPath}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Delete a reading file from disk.
+   * Removes the file and updates the cache.
+   */
+  deleteReading(filePath: string): boolean {
+    const normalizedPath = this.normalizePath(filePath);
+
+    try {
+      // Check if file exists
+      if (!fs.existsSync(normalizedPath)) {
+        console.warn(`[LibrarianManager] File not found for deletion: ${normalizedPath}`);
+        return false;
+      }
+
+      // Delete the file
+      fs.unlinkSync(normalizedPath);
+      console.log(`[LibrarianManager] Deleted reading: ${normalizedPath}`);
+
+      // Remove from cache
+      this.cache.delete(normalizedPath);
+      this.saveIndex();
+
+      // Emit removal event so UI can refresh
+      this.emit('reading-removed', normalizedPath);
+
+      return true;
+    } catch (error) {
+      console.error(`[LibrarianManager] Error deleting file ${normalizedPath}:`, error);
       return false;
     }
   }
@@ -829,9 +923,24 @@ export class LibrarianManager extends EventEmitter {
    * Default content guidance for readings.
    * This shapes what type of intellectual content is produced.
    */
-  private readonly DEFAULT_CONTENT_GUIDANCE = `1. Write 1-2 paragraphs connecting the task to something concrete
-2. Draw from: engineering history, physics, systems theory, or speculative futures
-3. Include at least one concrete technical/historical detail`;
+  private readonly DEFAULT_CONTENT_GUIDANCE = `Structure:
+1. Title (# heading)
+2. Braille halftone illustration (immediately after title, NOT in a code block)
+3. 1-2 paragraphs connecting the task to engineering history, physics, systems theory, or speculative futures
+4. Include at least one concrete technical/historical detail
+
+### Braille Halftone Art Requirements
+
+Place art directly after the title as plain text (no code fence—this lets it inherit the page background).
+
+Canvas: exactly 56 characters wide × 15 lines tall
+- Every line must be exactly 56 characters (pad with braille blank ⠀ U+2800)
+- Center the subject using ⠀ padding on both sides
+- Light source: top-left (sparse dots = highlight, dense dots = shadow)
+- Subject: single object that metaphorically connects to the reading
+
+Tone mapping (light → dark):
+⠀ (empty) → ⠁⠈ (12%) → ⠃⠉ (25%) → ⠇⠋ (37%) → ⠏⠛ (50%) → ⠟⠻ (62%) → ⠿⡿ (75%) → ⣷⣾ (87%) → ⣿ (black)`;
 
   /**
    * Get the default content guidance.
@@ -1212,7 +1321,7 @@ if [ "\$NEW_PROMPTS" -ge "\$THRESHOLD" ]; then
   log "TRIGGERING at prompt \$NEW_PROMPTS"
 
   # Output JSON with jq (guarantees valid JSON)
-  MSG="[LIBRARIAN] Prompt \${NEW_PROMPTS}/\${THRESHOLD}. Before continuing, write a 1-2 paragraph reading in .librarian/\$(date +%Y-%m-%d)-{slug}.md connecting this work to engineering history, physics, or systems theory. Include one concrete detail. This is how you think about the problem."
+  MSG="[LIBRARIAN] Prompt \${NEW_PROMPTS}/\${THRESHOLD}. Create .librarian/\$(date +%Y-%m-%d)-{slug}.md with: title, then braille halftone art (56×15 chars, no code fence, ⠀-padded lines), then 1-2 paragraphs on engineering history/physics/systems theory."
 
   jq -n --arg msg "\$MSG" '{
     hookSpecificOutput: {
@@ -1469,6 +1578,52 @@ exit 0
     } catch (error) {
       console.error('[LibrarianManager] Failed to get edit status:', error);
       return null;
+    }
+  }
+
+  /**
+   * Check if any readings are newer than lastReading and reset counter if so.
+   * This is the SINGLE SOURCE OF TRUTH for counter resets during active use.
+   * Returns the current counter state.
+   */
+  checkAndResetIfNeeded(): { edits: number; threshold: number; didReset: boolean } {
+    try {
+      this.ensureGlobalStatusExists();
+      const statusFile = this.getGlobalStatusPath();
+      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
+      const lastReadingTime = status.lastReading ? new Date(status.lastReading).getTime() : 0;
+
+      // Check if any cached reading is newer than lastReading
+      let newestMtime = 0;
+      for (const [, meta] of this.cache) {
+        if (meta.mtime > newestMtime) {
+          newestMtime = meta.mtime;
+        }
+      }
+
+      // If we have a reading newer than lastReading, reset the counter
+      if (newestMtime > lastReadingTime) {
+        console.log('[Librarian] Poll detected newer reading, resetting counter');
+        status.promptsSinceReading = 0;
+        status.nextThreshold = this.pickNextThreshold(this.settings.autoRunFrequency);
+        status.lastReading = new Date().toISOString();
+        fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
+        this.logStatus('reset');
+        return {
+          edits: 0,
+          threshold: status.nextThreshold,
+          didReset: true,
+        };
+      }
+
+      return {
+        edits: status.promptsSinceReading || 0,
+        threshold: status.nextThreshold || 5,
+        didReset: false,
+      };
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to check/reset:', error);
+      return { edits: 0, threshold: 5, didReset: false };
     }
   }
 
