@@ -2402,6 +2402,52 @@ const librarianAPI = {
 
 type LibrarianAPI = typeof librarianAPI;
 
+// =============================================================================
+// Metrics API - User-visible usage stats
+// "The metrics you see are the metrics we see."
+// =============================================================================
+
+interface UserMetrics {
+  transcriptions: number;
+  words_transcribed: number;
+  priority_mic_minutes: number;
+  verbal_commands: number;
+  command_launcher_uses: number;
+  clipboard_items: number;
+  pastes_used: number;
+  stacks_created: number;
+  autostacks_created: number;
+  stacks_pasted: number;
+  items_added_to_context: number;
+  sketches_created: number;
+  screenshots_taken: number;
+  librarian_artifacts_created: number;
+  librarian_artifacts_shared: number;
+  commands_executed: number;
+  commands_contributed: number;
+  feedback_given: number;
+}
+
+const metricsAPI = {
+  // Get current metrics for display in Settings
+  getMetrics: (): Promise<UserMetrics> => ipcRenderer.invoke('metrics:getMetrics'),
+
+  // Get metrics with sync status
+  getMetricsWithStatus: (): Promise<{
+    metrics: UserMetrics;
+    lastSyncedAt: string | null;
+    pendingSync: boolean;
+  }> => ipcRenderer.invoke('metrics:getMetricsWithStatus'),
+
+  // Force sync to Supabase
+  syncToSupabase: (): Promise<boolean> => ipcRenderer.invoke('metrics:syncToSupabase'),
+
+  // Fetch from Supabase (merge with local)
+  fetchFromSupabase: (): Promise<boolean> => ipcRenderer.invoke('metrics:fetchFromSupabase'),
+};
+
+type MetricsAPI = typeof metricsAPI;
+
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);
 contextBridge.exposeInMainWorld('themeAPI', themeAPI);
 contextBridge.exposeInMainWorld('librarianAPI', librarianAPI);
@@ -2420,6 +2466,7 @@ contextBridge.exposeInMainWorld('authAPI', authAPI);
 contextBridge.exposeInMainWorld('sharedClipboardAPI', sharedClipboardAPI);
 contextBridge.exposeInMainWorld('socialAPI', socialAPI);
 contextBridge.exposeInMainWorld('commandsAPI', commandsAPI);
+contextBridge.exposeInMainWorld('metricsAPI', metricsAPI);
 
 contextBridge.exposeInMainWorld('platform', {
   isMacOS: process.platform === 'darwin',
@@ -2459,6 +2506,7 @@ declare global {
     diagnosticsAPI: DiagnosticsAPI;
     commandsAPI: CommandsAPI;
     librarianAPI: LibrarianAPI;
+    metricsAPI: MetricsAPI;
     stripeConfig: {
       paymentLink: string;
       portalLink: string;

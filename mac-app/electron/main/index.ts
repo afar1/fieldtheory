@@ -50,6 +50,7 @@ import { CommandsIPCChannels } from './types/commands';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { LocalLLMManager, LLMModelSize } from './localLLMManager';
 import { LibrarianManager, Reading, ReadingMeta, WatchedDir } from './librarianManager';
+import { MetricsManager, UserMetrics } from './metricsManager';
 
 // Load environment variables from .env.local for Supabase credentials.
 // In development, the file is in the mac-app directory.
@@ -151,6 +152,7 @@ let diagnosticsCollector: DiagnosticsCollector | null = null;
 let librarianManager: LibrarianManager | null = null;
 let commandsManager: CommandsManager | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
+let metricsManager: MetricsManager | null = null;
 
 // Track pending update state so windows can query it when they open.
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
@@ -268,6 +270,7 @@ function registerHotkeysAfterOnboarding(): void {
           window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
         }
       });
+      metricsManager?.recordScreenshot();
     }
   });
 
@@ -282,6 +285,7 @@ function registerHotkeysAfterOnboarding(): void {
           window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
         }
       });
+      metricsManager?.recordScreenshot();
     }
   });
 
@@ -296,6 +300,7 @@ function registerHotkeysAfterOnboarding(): void {
           window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
         }
       });
+      metricsManager?.recordScreenshot();
     }
   });
 
@@ -524,12 +529,13 @@ function registerHotkeysAfterOnboarding(): void {
   hotkeyManager.register('commandLauncher', commandLauncherHotkey, async () => {
       const clipboardVisible = clipboardHistoryWindow?.isVisible() ?? false;
       const launcherVisible = commandLauncherWindow?.isVisible() ?? false;
-      
+
       if (clipboardVisible) {
         // Clipboard history is visible → close it, open command launcher
         clipboardHistoryWindow?.hide();
         if (commandLauncherWindow) {
           await commandLauncherWindow.show();
+          metricsManager?.recordCommandLauncherUse();
         }
       } else if (launcherVisible) {
         // Command launcher is visible → close it, open clipboard history
@@ -543,6 +549,7 @@ function registerHotkeysAfterOnboarding(): void {
         // Neither visible → open command launcher
         if (commandLauncherWindow) {
           await commandLauncherWindow.show();
+          metricsManager?.recordCommandLauncherUse();
         }
       }
   });
@@ -1256,16 +1263,16 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager?.setCustomThreshold(threshold) ?? false;
   });
 
-  // Poll for pending reading AND counter state (single source of truth for resets)
-  // Renderer calls this on mount/interval. Checks if any readings are newer than
-  // lastReading and resets counter if so. Returns pending path and counter state.
+  // Poll for pending artifact and counter state.
+  // Renderer calls this on mount/interval for UI display.
+  // Counter resets are handled by reading-added event, not here.
   ipcMain.handle('librarian:pollStatus', (): {
     pendingPath: string | null;
     edits: number;
     threshold: number;
     didReset: boolean;
   } => {
-    // Check for newer readings and reset if needed
+    // Get current counter state (no reset logic here)
     const status = librarianManager?.checkAndResetIfNeeded() ?? { edits: 0, threshold: 5, didReset: false };
 
     // Get and clear pending immersive reading
@@ -1379,6 +1386,7 @@ function setupLibrarianIPCHandlers(): void {
 
       if (!error && data) {
         console.log('[Librarian] Reading shared:', slug);
+        metricsManager?.recordLibrarianArtifactShared();
         return {
           slug: data.slug,
           url: `https://librarian.fieldtheory.dev/${data.slug}`,
@@ -1491,6 +1499,73 @@ function setupLibrarianIPCHandlers(): void {
 
     console.log('[Librarian] Shared reading updated:', filePath);
     return true;
+  });
+
+  // ===========================================================================
+  // Metrics IPC handlers - User-visible usage stats
+  // "The metrics you see are the metrics we see."
+  // ===========================================================================
+
+  // Get current metrics for display in Settings
+  ipcMain.handle('metrics:getMetrics', (): UserMetrics => {
+    return metricsManager?.getMetrics() ?? {
+      transcriptions: 0,
+      words_transcribed: 0,
+      priority_mic_minutes: 0,
+      verbal_commands: 0,
+      command_launcher_uses: 0,
+      clipboard_items: 0,
+      pastes_used: 0,
+      stacks_created: 0,
+      autostacks_created: 0,
+      stacks_pasted: 0,
+      items_added_to_context: 0,
+      sketches_created: 0,
+      screenshots_taken: 0,
+      librarian_artifacts_created: 0,
+      librarian_artifacts_shared: 0,
+      commands_executed: 0,
+      commands_contributed: 0,
+      feedback_given: 0,
+    };
+  });
+
+  // Get metrics with sync status
+  ipcMain.handle('metrics:getMetricsWithStatus', (): { metrics: UserMetrics; lastSyncedAt: string | null; pendingSync: boolean } => {
+    return metricsManager?.getMetricsWithStatus() ?? {
+      metrics: {
+        transcriptions: 0,
+        words_transcribed: 0,
+        priority_mic_minutes: 0,
+        verbal_commands: 0,
+        command_launcher_uses: 0,
+        clipboard_items: 0,
+        pastes_used: 0,
+        stacks_created: 0,
+        autostacks_created: 0,
+        stacks_pasted: 0,
+        items_added_to_context: 0,
+        sketches_created: 0,
+        screenshots_taken: 0,
+        librarian_artifacts_created: 0,
+        librarian_artifacts_shared: 0,
+        commands_executed: 0,
+        commands_contributed: 0,
+        feedback_given: 0,
+      },
+      lastSyncedAt: null,
+      pendingSync: false,
+    };
+  });
+
+  // Force sync to Supabase
+  ipcMain.handle('metrics:syncToSupabase', async (): Promise<boolean> => {
+    return metricsManager?.syncToSupabase() ?? false;
+  });
+
+  // Fetch from Supabase (merge with local)
+  ipcMain.handle('metrics:fetchFromSupabase', async (): Promise<boolean> => {
+    return metricsManager?.fetchFromSupabase() ?? false;
   });
 }
 
@@ -2087,6 +2162,9 @@ function setupClipboardIPCHandlers(): void {
         // Default behavior: paste to previous app (focus restored by hide()).
         await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
       }
+
+      // Record paste metric
+      metricsManager?.recordPaste();
     } catch (error) {
       console.error('[Main] pasteItem error:', error);
     }
@@ -2258,6 +2336,9 @@ function setupClipboardIPCHandlers(): void {
           // Continue with next item even if this one fails
         }
       }
+
+      // Record stack paste metrics
+      metricsManager?.recordStackPasted(items.length);
     } catch (error) {
       console.error('[Main] pasteStack error:', error);
     }
@@ -3753,6 +3834,7 @@ function setupClipboardIPCHandlers(): void {
       await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
 
       console.log(`[CommandLauncher] Invoked command: ${command.name} (terminal: ${isTerminal}, ide: ${isIDE})`);
+      metricsManager?.recordCommandExecuted();
       return { success: true };
     } catch (error) {
       console.error('[CommandLauncher] Error invoking command:', error);
@@ -3968,7 +4050,9 @@ function setupClipboardIPCHandlers(): void {
     if (!socialSync) {
       return null;
     }
-    return await socialSync.submitFeedback(localItemId);
+    const result = await socialSync.submitFeedback(localItemId);
+    if (result) metricsManager?.recordFeedbackGiven();
+    return result;
   });
 
   // Feedback: Submit text feedback (for diagnostics, etc.).
@@ -3976,7 +4060,9 @@ function setupClipboardIPCHandlers(): void {
     if (!socialSync) {
       return null;
     }
-    return await socialSync.submitTextFeedback(text);
+    const result = await socialSync.submitTextFeedback(text);
+    if (result) metricsManager?.recordFeedbackGiven();
+    return result;
   });
 
   // Feedback: Submit image feedback with optional caption and source app name.
@@ -3984,7 +4070,9 @@ function setupClipboardIPCHandlers(): void {
     if (!socialSync) {
       return null;
     }
-    return await socialSync.submitImageFeedback(imageBase64, caption, sourceAppName);
+    const result = await socialSync.submitImageFeedback(imageBase64, caption, sourceAppName);
+    if (result) metricsManager?.recordFeedbackGiven();
+    return result;
   });
 
   // Feedback: Get current user's submitted feedback.
@@ -4345,6 +4433,10 @@ function broadcastTranscribeEvents(): void {
     });
     // Store transcription for cursor status done state display
     cursorStatusManager?.setLastTranscription(text);
+
+    // Record transcription metrics
+    const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
+    metricsManager?.recordTranscription(wordCount);
   });
 
   transcriberManager.on('error', (error) => {
@@ -4702,12 +4794,15 @@ async function initTranscriberSystem(): Promise<void> {
   // Initialize librarian manager for watching markdown reading files.
   librarianManager = new LibrarianManager();
 
-  // Broadcast reading-added events to all windows and auto-show if enabled
+  // Broadcast artifact-added events to all windows and auto-show if enabled
   librarianManager.on('reading-added', (reading: Reading) => {
-    console.log(`[Librarian] reading-added event: ${reading.title}`);
+    console.log(`[Librarian] artifact-added event: ${reading.title}`);
 
-    // Play artifact discovery sound
-    clipboardHistoryWindow?.playArtifactDiscoverySound();
+    // Record librarian artifact created metric
+    metricsManager?.recordLibrarianArtifactCreated();
+
+    // Reset prompt counter - new artifact means fresh start
+    librarianManager!.resetCounter();
 
     // Broadcast to all windows (updates reading lists)
     BrowserWindow.getAllWindows().forEach((window) => {
@@ -4727,12 +4822,17 @@ async function initTranscriberSystem(): Promise<void> {
         clipboardHistoryWindow = initClipboardHistoryWindow();
       }
       const boundsToUse = restoreClipboardHistoryBounds();
-      clipboardHistoryWindow.show(boundsToUse);
+      // Use skipSound=true to prevent windowOpen sound, we'll play artifact sound instead
+      clipboardHistoryWindow.show(boundsToUse, false, true);
 
       if (app.dock) {
         app.dock.bounce('informational');
       }
     }
+
+    // Play artifact discovery sound AFTER ensuring window exists
+    // This plays the coin sound instead of the window open sound
+    clipboardHistoryWindow?.playArtifactDiscoverySound();
   });
 
   // Broadcast reading-updated events to all windows
@@ -4910,6 +5010,11 @@ async function initTranscriberSystem(): Promise<void> {
   // Initialize social sync for DMs, Feedback, and Contacts.
   // Also subscribes to AuthManager for session.
   socialSync = new SocialSync(authManager, clipboardManager);
+
+  // Initialize metrics manager for user-visible usage stats.
+  // "The metrics you see are the metrics we see."
+  metricsManager = new MetricsManager(authManager);
+  await metricsManager.init();
 
   // Check if we have a valid session on startup.
   // If not, ensure cached tier is 'free'.
@@ -5661,6 +5766,11 @@ if (!gotTheLock) {
 
     if (clipboardHistoryWindow) {
       clipboardHistoryWindow.destroy();
+    }
+
+    // Sync metrics before quitting (fire-and-forget, don't block quit)
+    if (metricsManager) {
+      metricsManager.shutdown().catch(() => {});
     }
   });
 }
