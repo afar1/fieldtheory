@@ -2403,6 +2403,135 @@ const librarianAPI = {
 type LibrarianAPI = typeof librarianAPI;
 
 // =============================================================================
+// Narration API - Local, offline TTS for the Librarian
+// Reads auto-opened readings aloud with a canonical, restrained voice.
+// =============================================================================
+
+// IPC channel names for narration (must match main process)
+const NarrationIPCChannels = {
+  INSTALL: 'narration:install',
+  GET_STATUS: 'narration:getStatus',
+  PLAY_READING: 'narration:playReading',
+  STOP: 'narration:stop',
+  GET_OUTPUT_DEVICE: 'narration:getOutputDevice',
+  REFRESH_DEVICES: 'narration:refreshDevices',
+  GET_PREFS: 'narration:getPrefs',
+  SET_SPEAK_ON_OPEN: 'narration:setSpeakOnOpen',
+  ADD_BLOCKED_DEVICE: 'narration:addBlockedDevice',
+  REMOVE_BLOCKED_DEVICE: 'narration:removeBlockedDevice',
+  CLEAR_CACHE: 'narration:clearCache',
+  // Events
+  PLAYBACK_STARTED: 'narration:playbackStarted',
+  PLAYBACK_STOPPED: 'narration:playbackStopped',
+  PLAYBACK_ERROR: 'narration:playbackError',
+  INSTALL_PROGRESS: 'narration:installProgress',
+} as const;
+
+// Types for narration
+type NarrationInstallStatus = 'not_installed' | 'installing' | 'installed' | 'install_failed';
+type NarrationPlaybackStatus = 'idle' | 'generating' | 'playing' | 'paused' | 'stopped';
+type NarrationEngine = 'chatterbox' | 'macos_say';
+
+interface NarrationStatus {
+  installStatus: NarrationInstallStatus;
+  playbackStatus: NarrationPlaybackStatus;
+  engine: NarrationEngine | null;
+  currentReadingPath: string | null;
+  cacheSizeBytes: number;
+  cachedItemCount: number;
+}
+
+interface OutputDevice {
+  name: string;
+  uid: string;
+  isDefault: boolean;
+  transportType?: string;
+}
+
+interface NarrationPreferences {
+  installed: boolean;
+  installedVersion?: string;
+  speakOnOpen: boolean;
+  blockedDevices: string[];
+  cacheSizeLimitBytes: number;
+}
+
+const narrationAPI = {
+  // Get narration status (installation, playback, cache)
+  getStatus: (): Promise<NarrationStatus | null> =>
+    ipcRenderer.invoke(NarrationIPCChannels.GET_STATUS),
+
+  // Install narration capability
+  install: (): Promise<boolean> =>
+    ipcRenderer.invoke(NarrationIPCChannels.INSTALL),
+
+  // Play a reading aloud
+  playReading: (readingPath: string): Promise<boolean> =>
+    ipcRenderer.invoke(NarrationIPCChannels.PLAY_READING, readingPath),
+
+  // Stop playback
+  stop: (): Promise<void> =>
+    ipcRenderer.invoke(NarrationIPCChannels.STOP),
+
+  // Get current output device
+  getOutputDevice: (): Promise<OutputDevice | null> =>
+    ipcRenderer.invoke(NarrationIPCChannels.GET_OUTPUT_DEVICE),
+
+  // Refresh device detection
+  refreshDevices: (): Promise<OutputDevice | null> =>
+    ipcRenderer.invoke(NarrationIPCChannels.REFRESH_DEVICES),
+
+  // Get narration preferences
+  getPrefs: (): Promise<NarrationPreferences | null> =>
+    ipcRenderer.invoke(NarrationIPCChannels.GET_PREFS),
+
+  // Set speak-on-open preference
+  setSpeakOnOpen: (enabled: boolean): Promise<void> =>
+    ipcRenderer.invoke(NarrationIPCChannels.SET_SPEAK_ON_OPEN, enabled),
+
+  // Add blocked device pattern
+  addBlockedDevice: (pattern: string): Promise<void> =>
+    ipcRenderer.invoke(NarrationIPCChannels.ADD_BLOCKED_DEVICE, pattern),
+
+  // Remove blocked device pattern
+  removeBlockedDevice: (pattern: string): Promise<void> =>
+    ipcRenderer.invoke(NarrationIPCChannels.REMOVE_BLOCKED_DEVICE, pattern),
+
+  // Clear narration cache
+  clearCache: (): Promise<void> =>
+    ipcRenderer.invoke(NarrationIPCChannels.CLEAR_CACHE),
+
+  // Event listeners
+  onPlaybackStarted: (callback: (readingPath: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, readingPath: string) => callback(readingPath);
+    ipcRenderer.on(NarrationIPCChannels.PLAYBACK_STARTED, handler);
+    return () => ipcRenderer.removeListener(NarrationIPCChannels.PLAYBACK_STARTED, handler);
+  },
+
+  onPlaybackStopped: (callback: (readingPath: string | null) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, readingPath: string | null) => callback(readingPath);
+    ipcRenderer.on(NarrationIPCChannels.PLAYBACK_STOPPED, handler);
+    return () => ipcRenderer.removeListener(NarrationIPCChannels.PLAYBACK_STOPPED, handler);
+  },
+
+  onPlaybackError: (callback: (error: string, readingPath: string | null) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, error: string, readingPath: string | null) =>
+      callback(error, readingPath);
+    ipcRenderer.on(NarrationIPCChannels.PLAYBACK_ERROR, handler);
+    return () => ipcRenderer.removeListener(NarrationIPCChannels.PLAYBACK_ERROR, handler);
+  },
+
+  onInstallProgress: (callback: (progress: number, message: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: number, message: string) =>
+      callback(progress, message);
+    ipcRenderer.on(NarrationIPCChannels.INSTALL_PROGRESS, handler);
+    return () => ipcRenderer.removeListener(NarrationIPCChannels.INSTALL_PROGRESS, handler);
+  },
+};
+
+type NarrationAPI = typeof narrationAPI;
+
+// =============================================================================
 // Metrics API - User-visible usage stats
 // "The metrics you see are the metrics we see."
 // =============================================================================
@@ -2467,6 +2596,7 @@ contextBridge.exposeInMainWorld('sharedClipboardAPI', sharedClipboardAPI);
 contextBridge.exposeInMainWorld('socialAPI', socialAPI);
 contextBridge.exposeInMainWorld('commandsAPI', commandsAPI);
 contextBridge.exposeInMainWorld('metricsAPI', metricsAPI);
+contextBridge.exposeInMainWorld('narrationAPI', narrationAPI);
 
 contextBridge.exposeInMainWorld('platform', {
   isMacOS: process.platform === 'darwin',
@@ -2507,6 +2637,7 @@ declare global {
     commandsAPI: CommandsAPI;
     librarianAPI: LibrarianAPI;
     metricsAPI: MetricsAPI;
+    narrationAPI: NarrationAPI;
     stripeConfig: {
       paymentLink: string;
       portalLink: string;
