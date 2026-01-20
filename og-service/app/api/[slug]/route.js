@@ -54,11 +54,11 @@ export async function GET(request, { params }) {
       .replace(/\n/g, ' ') // Single newlines to space
       .trim();
 
-    // Get first ~200 chars, ending at word boundary
-    if (text.length > 200) {
-      text = text.substring(0, 200);
+    // Get first ~450 chars, ending at word boundary
+    if (text.length > 450) {
+      text = text.substring(0, 450);
       const lastSpace = text.lastIndexOf(' ');
-      if (lastSpace > 150) {
+      if (lastSpace > 350) {
         text = text.substring(0, lastSpace);
       }
       text += '...';
@@ -103,12 +103,15 @@ export async function GET(request, { params }) {
             marginBottom: '32px',
           }}
         >
-          {/* Logo icon */}
-          <img
-            src="https://fieldtheory.dev/images/fieldtheory-icon-white.png"
-            width={32}
-            height={32}
-            style={{ opacity: 0.6 }}
+          {/* Logo icon - simple circle to match Field Theory aesthetic */}
+          <div
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: '50%',
+              border: '2px solid #666',
+              opacity: 0.7,
+            }}
           />
           {/* Brand name */}
           <div
@@ -157,11 +160,11 @@ export async function GET(request, { params }) {
           >
             <div
               style={{
-                fontSize: 24,
-                color: '#888',
-                lineHeight: 1.5,
+                fontSize: 22,
+                color: '#999',
+                lineHeight: 1.55,
                 fontFamily: 'Georgia, serif',
-                maxWidth: '1000px',
+                maxWidth: '1050px',
               }}
             >
               {contentPreview}
@@ -170,7 +173,7 @@ export async function GET(request, { params }) {
         )}
 
         {/* Bottom spacer to avoid Twitter's overlay area */}
-        <div style={{ height: '80px' }} />
+        <div style={{ height: '48px' }} />
       </div>
     ),
     {
