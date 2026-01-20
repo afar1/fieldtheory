@@ -1148,12 +1148,68 @@ function setupLibrarianIPCHandlers(): void {
     return result.filePaths[0];
   });
 
-  // Get auto-run frequency setting
+  // ===========================================================================
+  // New Settings API (v2)
+  // ===========================================================================
+
+  // Check if Librarian is enabled
+  ipcMain.handle('librarian:isEnabled', (): boolean => {
+    return librarianManager?.isEnabled() ?? false;
+  });
+
+  // Enable or disable Librarian
+  ipcMain.handle('librarian:setEnabled', (_event, enabled: boolean): boolean => {
+    return librarianManager?.setEnabled(enabled) ?? false;
+  });
+
+  // Get trigger mode
+  ipcMain.handle('librarian:getTriggerMode', (): string => {
+    return librarianManager?.getTriggerMode() || 'prompt';
+  });
+
+  // Set trigger mode
+  ipcMain.handle('librarian:setTriggerMode', (_event, mode: string): boolean => {
+    if (librarianManager && (mode === 'prompt' || mode === 'judgment')) {
+      return librarianManager.setTriggerMode(mode);
+    }
+    return false;
+  });
+
+  // Get prompt threshold
+  ipcMain.handle('librarian:getPromptThreshold', (): number => {
+    return librarianManager?.getPromptThreshold() ?? 5;
+  });
+
+  // Set prompt threshold
+  ipcMain.handle('librarian:setPromptThreshold', (_event, threshold: number): boolean => {
+    return librarianManager?.setPromptThreshold(threshold) ?? false;
+  });
+
+  // Check if setup wizard is complete
+  ipcMain.handle('librarian:isSetupComplete', (): boolean => {
+    return librarianManager?.isSetupComplete() ?? false;
+  });
+
+  // Mark setup wizard as complete
+  ipcMain.handle('librarian:setSetupComplete', (_event, complete: boolean): void => {
+    librarianManager?.setSetupComplete(complete);
+  });
+
+  // Create welcome artifact for setup wizard
+  ipcMain.handle('librarian:createWelcomeArtifact', (_event, dirPath: string): boolean => {
+    return librarianManager?.createWelcomeArtifact(dirPath) ?? false;
+  });
+
+  // ===========================================================================
+  // Legacy Settings API (kept for backward compatibility)
+  // ===========================================================================
+
+  // Get auto-run frequency setting (deprecated)
   ipcMain.handle('librarian:getAutoRunFrequency', (): string => {
     return librarianManager?.getAutoRunFrequency() || 'off';
   });
 
-  // Set auto-run frequency setting (returns true if CLAUDE.md was updated successfully)
+  // Set auto-run frequency setting (deprecated)
   ipcMain.handle('librarian:setAutoRunFrequency', (_event, frequency: string): boolean => {
     if (librarianManager && (frequency === 'off' || frequency === 'occasionally' || frequency === 'regularly' || frequency === 'frequently' || frequency === 'always')) {
       return librarianManager.setAutoRunFrequency(frequency);
@@ -1194,6 +1250,55 @@ function setupLibrarianIPCHandlers(): void {
   // Get Cursor instructions text
   ipcMain.handle('librarian:getCursorInstructions', (): string => {
     return librarianManager?.getCursorInstructions() || '';
+  });
+
+  // Get configuration file paths
+  ipcMain.handle('librarian:getConfigPaths', (): { claudeMd: string; librarianCommand: string } => {
+    return {
+      claudeMd: path.join(os.homedir(), '.claude', 'CLAUDE.md'),
+      librarianCommand: path.join(os.homedir(), '.fieldtheory', 'commands', 'librarian.md'),
+    };
+  });
+
+  // Open a file in the default editor
+  ipcMain.handle('librarian:openInEditor', async (_event, filePath: string): Promise<boolean> => {
+    try {
+      await shell.openPath(filePath);
+      return true;
+    } catch (error) {
+      console.error('[Librarian] Failed to open file:', error);
+      return false;
+    }
+  });
+
+  // Read a config file's contents
+  ipcMain.handle('librarian:readConfigFile', (_event, filePath: string): string | null => {
+    try {
+      if (fs.existsSync(filePath)) {
+        return fs.readFileSync(filePath, 'utf-8');
+      }
+      return null;
+    } catch (error) {
+      console.error('[Librarian] Failed to read file:', error);
+      return null;
+    }
+  });
+
+  // Write a config file's contents
+  ipcMain.handle('librarian:writeConfigFile', (_event, filePath: string, content: string): boolean => {
+    try {
+      // Ensure directory exists
+      const dir = path.dirname(filePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(filePath, content);
+      console.log(`[Librarian] Wrote config file: ${filePath}`);
+      return true;
+    } catch (error) {
+      console.error('[Librarian] Failed to write file:', error);
+      return false;
+    }
   });
 
   // Get auto-show setting
@@ -5615,17 +5720,22 @@ if (!gotTheLock) {
 
       // Determine the correct starting step based on what's missing
       // If only auth is missing (all permissions + model OK), start at account phase (step 2)
-      const hasAllPermissionsAndModel =
+      const hasAllPermissions =
         micStatus === 'granted' &&
         accessibilityStatus &&
-        screenStatus === 'granted' &&
-        modelDownloaded;
+        screenStatus === 'granted';
+
+      const hasAllPermissionsAndModel = hasAllPermissions && modelDownloaded;
 
       let startStep: number;
       if (hasAllPermissionsAndModel && !isAuthenticated) {
         // Only auth is missing - go straight to account phase
         startStep = 2; // account phase
         console.log('[Main] Only auth missing, starting at account phase');
+      } else if (hasAllPermissions && !modelDownloaded) {
+        // Only model is missing - go straight to model download phase
+        startStep = OnboardingStep.MODEL_DOWNLOAD;
+        console.log('[Main] Only model missing, starting at model download phase');
       } else {
         // Other requirements missing - use saved step or start from beginning
         startStep = prefs?.onboardingStep ?? OnboardingStep.WELCOME;

@@ -36,11 +36,11 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [isScanning, setIsScanning] = useState(false);
   const [scanningDots, setScanningDots] = useState('.');
 
-  // Auto-run frequency
-  const [autoRunFrequency, setAutoRunFrequency] = useState<string>('off');
+  // New v2 settings
+  const [enabled, setEnabled] = useState(true);
+  const [triggerMode, setTriggerMode] = useState<'prompt' | 'judgment'>('prompt');
+  const [promptThreshold, setPromptThreshold] = useState<number>(5);
 
-  // Custom threshold (direct control via slider)
-  const [customThreshold, setCustomThreshold] = useState<number>(5);
 
   // Auto-show on new reading
   const [autoShowEnabled, setAutoShowEnabled] = useState(true);
@@ -66,9 +66,18 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [contentGuidanceSaving, setContentGuidanceSaving] = useState(false);
   const [isUsingCustomGuidance, setIsUsingCustomGuidance] = useState(false);
 
-  // Debug logs state
-  const [logsExpanded, setLogsExpanded] = useState(true); // Default open while debugging
+  // Edit status for prompt count mode
   const [editStatus, setEditStatus] = useState<{ edits: number; threshold: number } | null>(null);
+
+  // Configuration file paths and preview/edit
+  const [configPaths, setConfigPaths] = useState<{ claudeMd: string; librarianCommand: string } | null>(null);
+  const [expandedConfigFile, setExpandedConfigFile] = useState<'claudeMd' | 'librarianCommand' | null>(null);
+  const [configFileContent, setConfigFileContent] = useState<string | null>(null);
+  const [configFileEditContent, setConfigFileEditContent] = useState<string>('');
+  const [configFileLoading, setConfigFileLoading] = useState(false);
+  const [configFileSaving, setConfigFileSaving] = useState(false);
+  const [configFileSaved, setConfigFileSaved] = useState(false);
+  const [configFileHasChanges, setConfigFileHasChanges] = useState(false);
 
   // Debounce ref for threshold slider
   const thresholdDebounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -82,9 +91,9 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     return () => clearInterval(interval);
   }, [isScanning]);
 
-  // Fetch edit status when logs expanded or periodically
+  // Fetch edit status for status banner (prompt count mode)
   useEffect(() => {
-    if (!logsExpanded || !window.librarianAPI?.getEditStatus) return;
+    if (!enabled || triggerMode !== 'prompt' || !window.librarianAPI?.getEditStatus) return;
 
     const fetchStatus = async () => {
       const status = await window.librarianAPI!.getEditStatus();
@@ -94,7 +103,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     fetchStatus();
     const interval = setInterval(fetchStatus, 2000); // Refresh every 2s
     return () => clearInterval(interval);
-  }, [logsExpanded]);
+  }, [enabled, triggerMode]);
 
   // Load initial state
   useEffect(() => {
@@ -106,18 +115,26 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     Promise.all([
       window.librarianAPI.getWatchedDirs(),
       window.librarianAPI.getReadings(),
-      window.librarianAPI.getAutoRunFrequency(),
+      // New v2 APIs
+      window.librarianAPI.isEnabled(),
+      window.librarianAPI.getTriggerMode(),
+      window.librarianAPI.getPromptThreshold(),
+      // Other settings
       window.librarianAPI.getAutoShowEnabled(),
       window.librarianAPI.getClaudeCodeStatus(),
       window.librarianAPI.isClaudeCodeHookInstalled(),
       window.librarianAPI.getDefaultContentGuidance(),
       window.librarianAPI.getCustomContentGuidance(),
-      window.librarianAPI.getCustomThreshold(),
+      window.librarianAPI.getConfigPaths(),
     ])
-      .then(([dirs, readingsList, frequency, autoShow, ccStatus, hookStatus, defaultGuidance, customGuidance, threshold]) => {
+      .then(([dirs, readingsList, isEnabled, mode, threshold, autoShow, ccStatus, hookStatus, defaultGuidance, customGuidance, paths]) => {
         setWatchedDirs(dirs);
         setReadings(readingsList);
-        setAutoRunFrequency(frequency);
+        // New v2 settings
+        setEnabled(isEnabled);
+        setTriggerMode(mode as 'prompt' | 'judgment');
+        setPromptThreshold(threshold);
+        // Other settings
         setAutoShowEnabled(autoShow);
         setClaudeCodeStatus(ccStatus as 'installed' | 'directory-only' | 'not-installed');
         setHookInstalled(hookStatus);
@@ -125,8 +142,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         setCustomContentGuidance(customGuidance);
         setContentGuidanceText(customGuidance || defaultGuidance);
         setIsUsingCustomGuidance(!!customGuidance);
-        // Default to 5 if no custom threshold is set
-        setCustomThreshold(threshold ?? 5);
+        setConfigPaths(paths);
         setLoading(false);
       })
       .catch((err) => {
@@ -179,14 +195,31 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     }
   }, [manualPath, isScanning]);
 
-  // Handle frequency change (kept for backwards compatibility, but buttons are disabled)
-  const handleFrequencyChange = useCallback(async (frequency: string) => {
+  // Handle enable toggle
+  const handleEnabledToggle = useCallback(async () => {
     if (!window.librarianAPI) return;
-    setAutoRunFrequency(frequency);
+    const newValue = !enabled;
+    setEnabled(newValue);
     setClaudeConfigError(false);
     setSaved(false);
-    const success = await window.librarianAPI.setAutoRunFrequency(frequency);
-    if (!success && frequency !== 'off') {
+    const success = await window.librarianAPI.setEnabled(newValue);
+    if (!success) {
+      setClaudeConfigError(true);
+      setEnabled(!newValue); // Revert on failure
+    } else {
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    }
+  }, [enabled]);
+
+  // Handle trigger mode change
+  const handleTriggerModeChange = useCallback(async (mode: 'prompt' | 'judgment') => {
+    if (!window.librarianAPI) return;
+    setTriggerMode(mode);
+    setClaudeConfigError(false);
+    setSaved(false);
+    const success = await window.librarianAPI.setTriggerMode(mode);
+    if (!success) {
       setClaudeConfigError(true);
     } else {
       setSaved(true);
@@ -197,7 +230,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   // Handle threshold change via slider (debounced)
   const handleThresholdChange = useCallback((threshold: number) => {
     // Update local state immediately for responsive UI
-    setCustomThreshold(threshold);
+    setPromptThreshold(threshold);
     setSaved(false);
 
     // Clear any existing debounce timeout
@@ -210,13 +243,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       if (!window.librarianAPI) return;
       setClaudeConfigError(false);
 
-      // If threshold is being set (not off), also ensure frequency is set to 'always' for CLAUDE.md instructions
-      if (autoRunFrequency === 'off') {
-        await window.librarianAPI.setAutoRunFrequency('always');
-        setAutoRunFrequency('always');
-      }
-
-      const success = await window.librarianAPI.setCustomThreshold(threshold);
+      const success = await window.librarianAPI.setPromptThreshold(threshold);
       if (success) {
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
@@ -224,7 +251,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         setClaudeConfigError(true);
       }
     }, 300);
-  }, [autoRunFrequency]);
+  }, []);
 
   // Handle auto-show toggle
   const handleAutoShowToggle = useCallback(async () => {
@@ -248,6 +275,73 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, []);
+
+  // Handle toggling config file preview/edit
+  const handleToggleConfigFile = useCallback(async (file: 'claudeMd' | 'librarianCommand') => {
+    if (!window.librarianAPI || !configPaths) return;
+
+    // If already expanded, collapse it
+    if (expandedConfigFile === file) {
+      setExpandedConfigFile(null);
+      setConfigFileContent(null);
+      setConfigFileEditContent('');
+      setConfigFileHasChanges(false);
+      setConfigFileSaved(false);
+      return;
+    }
+
+    // Load and expand the file
+    setConfigFileLoading(true);
+    setExpandedConfigFile(file);
+    setConfigFileSaved(false);
+    try {
+      const filePath = file === 'claudeMd' ? configPaths.claudeMd : configPaths.librarianCommand;
+      const content = await window.librarianAPI.readConfigFile(filePath);
+      setConfigFileContent(content);
+      setConfigFileEditContent(content || '');
+      setConfigFileHasChanges(false);
+    } catch (error) {
+      console.error('Failed to load config file:', error);
+      setConfigFileContent(null);
+      setConfigFileEditContent('');
+    } finally {
+      setConfigFileLoading(false);
+    }
+  }, [configPaths, expandedConfigFile]);
+
+  // Handle config file content change
+  const handleConfigFileChange = useCallback((newContent: string) => {
+    setConfigFileEditContent(newContent);
+    setConfigFileHasChanges(newContent !== configFileContent);
+    setConfigFileSaved(false);
+  }, [configFileContent]);
+
+  // Handle saving config file
+  const handleSaveConfigFile = useCallback(async () => {
+    if (!window.librarianAPI || !configPaths || !expandedConfigFile) return;
+
+    setConfigFileSaving(true);
+    try {
+      const filePath = expandedConfigFile === 'claudeMd' ? configPaths.claudeMd : configPaths.librarianCommand;
+      const success = await window.librarianAPI.writeConfigFile(filePath, configFileEditContent);
+      if (success) {
+        setConfigFileContent(configFileEditContent);
+        setConfigFileHasChanges(false);
+        setConfigFileSaved(true);
+        setTimeout(() => setConfigFileSaved(false), 2000);
+      }
+    } catch (error) {
+      console.error('Failed to save config file:', error);
+    } finally {
+      setConfigFileSaving(false);
+    }
+  }, [configPaths, expandedConfigFile, configFileEditContent]);
+
+  // Handle resetting config file changes
+  const handleResetConfigFile = useCallback(() => {
+    setConfigFileEditContent(configFileContent || '');
+    setConfigFileHasChanges(false);
+  }, [configFileContent]);
 
   // Handle saving custom content guidance
   const handleSaveContentGuidance = useCallback(async () => {
@@ -372,358 +466,349 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         </button>
       </div>
 
-      {/* Auto-generate readings */}
+      {/* Status Banner */}
       <div
         style={{
           marginTop: '24px',
+          padding: '12px 16px',
+          borderRadius: '8px',
+          backgroundColor: enabled
+            ? (theme.isDark ? 'rgba(34, 197, 94, 0.1)' : 'rgba(34, 197, 94, 0.08)')
+            : (theme.isDark ? theme.bgSecondary : '#f9fafb'),
+          border: `1px solid ${enabled
+            ? (theme.isDark ? 'rgba(34, 197, 94, 0.3)' : 'rgba(34, 197, 94, 0.2)')
+            : (theme.isDark ? theme.border : '#e5e7eb')}`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span
+            style={{
+              width: '8px',
+              height: '8px',
+              borderRadius: '50%',
+              backgroundColor: enabled ? '#22c55e' : theme.textSecondary,
+            }}
+          />
+          <span style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
+            {enabled ? 'ACTIVE' : 'OFF'}
+          </span>
+          {enabled && triggerMode === 'prompt' && editStatus && (
+            <>
+              <span style={{ fontSize: '12px', color: theme.textSecondary }}>
+                {editStatus.edits}/{editStatus.threshold} prompts
+              </span>
+            </>
+          )}
+          {enabled && triggerMode === 'judgment' && (
+            <span style={{ fontSize: '12px', color: theme.textSecondary }}>
+              AI judgment mode
+            </span>
+          )}
+        </div>
+        {enabled && triggerMode === 'prompt' && editStatus && (
+          <button
+            onClick={async () => {
+              await window.librarianAPI?.resetAllCounters();
+              const status = await window.librarianAPI?.getEditStatus();
+              if (status) setEditStatus(status);
+            }}
+            style={{
+              padding: '4px 8px',
+              fontSize: '10px',
+              color: theme.textSecondary,
+              backgroundColor: 'transparent',
+              border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
+              borderRadius: '4px',
+              cursor: 'pointer',
+            }}
+          >
+            Reset
+          </button>
+        )}
+      </div>
+
+      {/* Librarian Settings */}
+      <div
+        style={{
+          marginTop: '16px',
           padding: '16px',
           borderRadius: '8px',
           backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
           border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
         }}
       >
-        <div style={{ marginBottom: '12px' }}>
+        {/* Enable toggle */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
           <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
-            Auto-generate readings
+            Librarian
           </div>
-          <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '2px' }}>
-            Configure how often AI assistants should create readings
-          </div>
+          <button
+            onClick={handleEnabledToggle}
+            style={{
+              position: 'relative',
+              width: '44px',
+              minWidth: '44px',
+              height: '24px',
+              minHeight: '24px',
+              borderRadius: '12px',
+              cursor: 'pointer',
+              border: 'none',
+              padding: 0,
+              flexShrink: 0,
+              transition: 'background-color 0.2s',
+              backgroundColor: enabled ? theme.accent : '#d1d5db',
+            }}
+          >
+            <span
+              style={{
+                position: 'absolute',
+                top: '2px',
+                left: 0,
+                width: '20px',
+                height: '20px',
+                borderRadius: '10px',
+                backgroundColor: '#fff',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                transition: 'transform 0.2s',
+                transform: enabled ? 'translateX(22px)' : 'translateX(2px)',
+              }}
+            />
+          </button>
         </div>
 
-        {/* Threshold slider */}
-        <div style={{ marginBottom: '16px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <button
-                onClick={() => handleFrequencyChange(autoRunFrequency === 'off' ? 'always' : 'off')}
+        {/* Trigger mode selection */}
+        {enabled && (
+          <>
+            <div style={{ marginBottom: '12px' }}>
+              <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '8px' }}>
+                Trigger mode
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    cursor: 'pointer',
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    backgroundColor: triggerMode === 'prompt'
+                      ? (theme.isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.08)')
+                      : 'transparent',
+                    border: `1px solid ${triggerMode === 'prompt' ? theme.accent : 'transparent'}`,
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="triggerMode"
+                    value="prompt"
+                    checked={triggerMode === 'prompt'}
+                    onChange={() => handleTriggerModeChange('prompt')}
+                    style={{ accentColor: theme.accent }}
+                  />
+                  <div>
+                    <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
+                      Prompt count
+                    </div>
+                    <div style={{ fontSize: '11px', color: theme.textSecondary }}>
+                      Remind after a set number of prompts
+                    </div>
+                  </div>
+                </label>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    cursor: 'pointer',
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    backgroundColor: triggerMode === 'judgment'
+                      ? (theme.isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.08)')
+                      : 'transparent',
+                    border: `1px solid ${triggerMode === 'judgment' ? theme.accent : 'transparent'}`,
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="triggerMode"
+                    value="judgment"
+                    checked={triggerMode === 'judgment'}
+                    onChange={() => handleTriggerModeChange('judgment')}
+                    style={{ accentColor: theme.accent }}
+                  />
+                  <div>
+                    <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
+                      AI judgment
+                    </div>
+                    <div style={{ fontSize: '11px', color: theme.textSecondary }}>
+                      Let AI decide based on work volume (~50K tokens)
+                    </div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            {/* Prompt threshold slider (only for prompt mode) */}
+            {triggerMode === 'prompt' && (
+              <div
                 style={{
-                  padding: '6px 12px',
-                  fontSize: '12px',
-                  fontWeight: 500,
-                  color: autoRunFrequency !== 'off' ? '#fff' : theme.text,
-                  backgroundColor: autoRunFrequency !== 'off' ? theme.accent : 'transparent',
-                  border: `1px solid ${autoRunFrequency !== 'off' ? theme.accent : (theme.isDark ? theme.border : '#d1d5db')}`,
+                  padding: '12px',
+                  marginBottom: '16px',
                   borderRadius: '6px',
-                  cursor: 'pointer',
+                  backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                  border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
                 }}
               >
-                {autoRunFrequency !== 'off' ? 'Enabled' : 'Disabled'}
-              </button>
-            </div>
-            {autoRunFrequency !== 'off' && (
-              <span style={{ fontSize: '12px', color: theme.text, fontWeight: 500 }}>
-                Every <span style={{ color: theme.accent }}>{customThreshold}</span> {customThreshold === 1 ? 'prompt' : 'prompts'}
-              </span>
-            )}
-          </div>
-
-          {autoRunFrequency !== 'off' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <span style={{ fontSize: '11px', color: theme.textSecondary, minWidth: '20px' }}>1</span>
-              <input
-                type="range"
-                min="1"
-                max="15"
-                value={customThreshold}
-                onChange={(e) => handleThresholdChange(parseInt(e.target.value, 10))}
-                style={{
-                  flex: 1,
-                  height: '4px',
-                  cursor: 'pointer',
-                  accentColor: theme.accent,
-                }}
-              />
-              <span style={{ fontSize: '11px', color: theme.textSecondary, minWidth: '20px' }}>15</span>
-            </div>
-          )}
-
-          {autoRunFrequency !== 'off' && (
-            <p style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '8px' }}>
-              Claude will be reminded to create a reading after {customThreshold} {customThreshold === 1 ? 'prompt' : 'prompts'} in a session.
-            </p>
-          )}
-        </div>
-
-        {/* Platform setup */}
-        {autoRunFrequency !== 'off' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {/* Claude Code section */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontWeight: 600, fontSize: '12px', color: theme.text }}>Claude Code</span>
-                {claudeCodeStatus === 'not-installed' ? (
-                  <span style={{ fontSize: '11px', color: theme.textSecondary }}>not detected</span>
-                ) : saved ? (
-                  <span style={{ fontSize: '11px', color: theme.success, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                      <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
-                    </svg>
-                    Claude is now aware
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                    Prompts between readings
                   </span>
-                ) : claudeConfigError ? (
-                  <span style={{ fontSize: '11px', color: theme.error }}>✗ Error updating</span>
-                ) : (
-                  <span style={{ fontSize: '11px', color: theme.success }}>✓</span>
-                )}
+                  <span style={{ fontSize: '12px', color: theme.text, fontWeight: 500 }}>
+                    {promptThreshold}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <span style={{ fontSize: '11px', color: theme.textSecondary, minWidth: '16px' }}>1</span>
+                  <input
+                    type="range"
+                    min="1"
+                    max="15"
+                    value={promptThreshold}
+                    onChange={(e) => handleThresholdChange(parseInt(e.target.value, 10))}
+                    style={{
+                      flex: 1,
+                      height: '4px',
+                      cursor: 'pointer',
+                      accentColor: theme.accent,
+                    }}
+                  />
+                  <span style={{ fontSize: '11px', color: theme.textSecondary, minWidth: '16px' }}>15</span>
+                </div>
               </div>
-              {claudeCodeStatus === 'not-installed' ? (
-                <div style={{ fontSize: '11px', color: theme.textSecondary }}>
-                  Instructions saved to ~/.claude/CLAUDE.md — will be ready when you install Claude Code
-                </div>
-              ) : (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: theme.textSecondary }}>
-                  <span>Auto-synced to ~/.claude/CLAUDE.md</span>
-                  <button
-                    onClick={async () => {
-                      const claudePath = await window.librarianAPI?.getClaudeConfigPath();
-                      if (claudePath) {
-                        window.shellAPI?.showItemInFolder(claudePath);
-                      }
-                    }}
-                    style={{
-                      padding: '2px 4px',
-                      backgroundColor: 'transparent',
-                      border: 'none',
-                      cursor: 'pointer',
-                      color: theme.textSecondary,
-                      display: 'flex',
-                      alignItems: 'center',
-                      borderRadius: '3px',
-                      opacity: 0.7,
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; }}
-                    title="Show in Finder"
-                  >
-                    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                      <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9zM2.5 3a.5.5 0 0 0-.5.5V6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5zM14 7H2v5.5a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5V7z" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={async () => {
-                      const success = await window.librarianAPI?.resyncClaudeMd();
-                      if (success) {
-                        setResynced(true);
-                        setTimeout(() => setResynced(false), 2000);
-                      }
-                    }}
-                    style={{
-                      padding: '2px 4px',
-                      backgroundColor: 'transparent',
-                      border: 'none',
-                      cursor: 'pointer',
-                      color: resynced ? theme.success : theme.textSecondary,
-                      display: 'flex',
-                      alignItems: 'center',
-                      borderRadius: '3px',
-                      opacity: resynced ? 1 : 0.7,
-                    }}
-                    onMouseEnter={(e) => { if (!resynced) e.currentTarget.style.opacity = '1'; }}
-                    onMouseLeave={(e) => { if (!resynced) e.currentTarget.style.opacity = '0.7'; }}
-                    title="Re-sync instructions"
-                  >
-                    {resynced ? (
-                      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                        <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
-                      </svg>
-                    ) : (
-                      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                        <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/>
-                        <path fillRule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/>
-                      </svg>
-                    )}
-                  </button>
-                </div>
-              )}
-              {/* Hook installation */}
-              {claudeCodeStatus === 'installed' && (
-                <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <button
-                      onClick={async () => {
-                        setHookInstalling(true);
-                        try {
-                          if (hookInstalled) {
-                            const success = await window.librarianAPI?.uninstallClaudeCodeHook();
-                            if (success) setHookInstalled(false);
-                          } else {
-                            const success = await window.librarianAPI?.installClaudeCodeHook();
-                            if (success) setHookInstalled(true);
-                          }
-                        } finally {
-                          setHookInstalling(false);
-                        }
-                      }}
-                      disabled={hookInstalling}
-                      style={{
-                        padding: '4px 8px',
-                        fontSize: '11px',
-                        fontWeight: 500,
-                        color: hookInstalled ? theme.error : theme.accent,
-                        backgroundColor: 'transparent',
-                        border: `1px solid ${hookInstalled ? theme.error : theme.accent}`,
-                        borderRadius: '4px',
-                        cursor: hookInstalling ? 'wait' : 'pointer',
-                        opacity: hookInstalling ? 0.5 : 1,
-                      }}
-                    >
-                      {hookInstalling ? '...' : hookInstalled ? 'Disable Auto-Remind' : 'Enable Auto-Remind'}
-                    </button>
-                    <span style={{ fontSize: '10px', color: theme.textSecondary }}>
-                      {hookInstalled
-                        ? '✓ Claude will be reminded to create readings'
-                        : 'Automatically remind Claude to create readings'}
+            )}
+          </>
+        )}
+
+        {/* Platforms section */}
+        {enabled && (
+          <div style={{ marginTop: '4px' }}>
+            <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '8px' }}>
+              Platforms
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {/* Claude Code */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '8px 12px',
+                  borderRadius: '6px',
+                  backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                  border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>Claude Code</span>
+                  {claudeCodeStatus === 'not-installed' ? (
+                    <span style={{ fontSize: '10px', color: theme.textSecondary, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)', borderRadius: '4px' }}>
+                      Not detected
                     </span>
-                  </div>
-
-                  {/* Debug logs toggle */}
-                  {hookInstalled && (
-                    <div style={{ marginTop: '8px' }}>
-                      <button
-                        onClick={() => setLogsExpanded(!logsExpanded)}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '4px',
-                          padding: '4px 0',
-                          fontSize: '10px',
-                          color: theme.textSecondary,
-                          backgroundColor: 'transparent',
-                          border: 'none',
-                          cursor: 'pointer',
-                          opacity: 0.7,
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; }}
-                      >
-                        <span style={{ fontFamily: 'monospace', fontSize: '8px' }}>
-                          {logsExpanded ? '▼' : '▶'}
-                        </span>
-                        <span>Debug logs</span>
-                      </button>
-
-                      {logsExpanded && (
-                        <div
-                          style={{
-                            marginTop: '8px',
-                            padding: '12px',
-                            backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-                            border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-                            borderRadius: '6px',
-                            fontFamily: "'SF Mono', Monaco, 'Cascadia Code', monospace",
-                            fontSize: '11px',
-                          }}
-                        >
-                          {editStatus ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                <span style={{ color: theme.textSecondary }}>Prompts since reading:</span>
-                                <span style={{
-                                  color: editStatus.edits >= editStatus.threshold ? theme.success : theme.text,
-                                  fontWeight: editStatus.edits >= editStatus.threshold ? 600 : 400,
-                                }}>
-                                  {editStatus.edits}
-                                </span>
-                              </div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                <span style={{ color: theme.textSecondary }}>Threshold:</span>
-                                <span style={{ color: theme.text }}>{editStatus.threshold}</span>
-                              </div>
-                              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                <span style={{ color: theme.textSecondary }}>Status:</span>
-                                <span style={{
-                                  color: editStatus.edits >= editStatus.threshold ? theme.success : theme.warning,
-                                }}>
-                                  {editStatus.edits >= editStatus.threshold ? '● Triggering' : '○ Waiting'}
-                                </span>
-                              </div>
-                              <div style={{
-                                marginTop: '8px',
-                                paddingTop: '8px',
-                                borderTop: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-                                fontSize: '10px',
-                                color: theme.textSecondary,
-                              }}>
-                                Hook will remind Claude when prompts ≥ threshold
-                              </div>
-                              <button
-                                onClick={async () => {
-                                  await window.librarianAPI?.resetAllCounters();
-                                  const status = await window.librarianAPI?.getEditStatus();
-                                  if (status) setEditStatus(status);
-                                }}
-                                style={{
-                                  marginTop: '4px',
-                                  padding: '4px 8px',
-                                  fontSize: '10px',
-                                  color: theme.textSecondary,
-                                  backgroundColor: 'transparent',
-                                  border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
-                                  borderRadius: '4px',
-                                  cursor: 'pointer',
-                                  alignSelf: 'flex-start',
-                                }}
-                              >
-                                Reset counter
-                              </button>
-                            </div>
-                          ) : (
-                            <span style={{ color: theme.textSecondary }}>
-                              No status file found. Add a watched directory first.
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </div>
+                  ) : hookInstalled || triggerMode === 'judgment' ? (
+                    <span style={{ fontSize: '10px', color: theme.success, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)', borderRadius: '4px' }}>
+                      Connected
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: '10px', color: theme.warning, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(234, 179, 8, 0.15)' : 'rgba(234, 179, 8, 0.1)', borderRadius: '4px' }}>
+                      Setup needed
+                    </span>
                   )}
                 </div>
-              )}
-            </div>
-
-            {/* Cursor section */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontWeight: 600, fontSize: '12px', color: theme.text }}>Cursor</span>
-                <span style={{ fontSize: '11px', color: theme.textSecondary }}>manual setup required</span>
+                {claudeCodeStatus !== 'not-installed' && triggerMode === 'prompt' && (
+                  <button
+                    onClick={async () => {
+                      setHookInstalling(true);
+                      try {
+                        if (hookInstalled) {
+                          const success = await window.librarianAPI?.uninstallClaudeCodeHook();
+                          if (success) setHookInstalled(false);
+                        } else {
+                          const success = await window.librarianAPI?.installClaudeCodeHook();
+                          if (success) setHookInstalled(true);
+                        }
+                      } finally {
+                        setHookInstalling(false);
+                      }
+                    }}
+                    disabled={hookInstalling}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      color: hookInstalled ? theme.textSecondary : '#fff',
+                      backgroundColor: hookInstalled ? 'transparent' : theme.accent,
+                      border: hookInstalled ? `1px solid ${theme.border}` : 'none',
+                      borderRadius: '4px',
+                      cursor: hookInstalling ? 'wait' : 'pointer',
+                      opacity: hookInstalling ? 0.5 : 1,
+                    }}
+                  >
+                    {hookInstalling ? '...' : hookInstalled ? 'Disconnect' : 'Connect'}
+                  </button>
+                )}
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: theme.textSecondary }}>
-                <span>Copy to Settings → Rules for AI</span>
+
+              {/* Cursor */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '8px 12px',
+                  borderRadius: '6px',
+                  backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                  border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>Cursor</span>
+                  <span style={{ fontSize: '10px', color: theme.textSecondary, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)', borderRadius: '4px' }}>
+                    Manual
+                  </span>
+                </div>
                 <button
                   onClick={handleShowCursorInstructions}
                   style={{
-                    padding: '2px 8px',
+                    padding: '4px 10px',
+                    fontSize: '11px',
+                    fontWeight: 500,
+                    color: theme.textSecondary,
                     backgroundColor: 'transparent',
                     border: `1px solid ${theme.border}`,
                     borderRadius: '4px',
                     cursor: 'pointer',
-                    color: theme.textSecondary,
-                    fontSize: '10px',
-                    opacity: 0.8,
                   }}
-                  onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.8'; }}
                 >
-                  Copy
+                  Setup...
                 </button>
               </div>
             </div>
           </div>
         )}
+
         {claudeConfigError && (
           <p style={{ fontSize: '11px', color: theme.error, marginTop: '12px' }}>
             Failed to update ~/.claude/CLAUDE.md. Check file permissions.
           </p>
         )}
-        {autoRunFrequency !== 'off' && (
-          <p style={{ fontSize: '10px', color: theme.textSecondary, marginTop: '12px', opacity: 0.6, textAlign: 'right' }}>
-            * Librarian will not affect your other CLAUDE.md settings
-          </p>
-        )}
       </div>
 
       {/* Content guidance customization */}
-      {autoRunFrequency !== 'off' && (
+      {enabled && (
         <div
           style={{
             marginTop: '24px',
@@ -830,7 +915,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                 <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
                   <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
                 </svg>
-                Saved to CLAUDE.md — Claude is now aware
+                Saved — instructions updated
               </span>
             )}
           </div>
@@ -838,6 +923,269 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
           <p style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '12px', lineHeight: '1.5' }}>
             This shapes the intellectual content produced in each reading. Technical users might prefer
             deeper technical content, while others might enjoy broader cultural connections.
+          </p>
+        </div>
+      )}
+
+      {/* Configuration Files */}
+      {configPaths && (
+        <div
+          style={{
+            marginTop: '24px',
+            padding: '16px',
+            borderRadius: '8px',
+            backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
+            border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+          }}
+        >
+          <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text, marginBottom: '12px' }}>
+            Configuration Files
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {/* CLAUDE.md */}
+            <div>
+              <button
+                onClick={() => handleToggleConfigFile('claudeMd')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  width: '100%',
+                  padding: '10px 12px',
+                  backgroundColor: expandedConfigFile === 'claudeMd'
+                    ? (theme.isDark ? 'rgba(99, 102, 241, 0.1)' : 'rgba(99, 102, 241, 0.05)')
+                    : 'transparent',
+                  border: `1px solid ${expandedConfigFile === 'claudeMd' ? theme.accent : (theme.isDark ? theme.border : '#d1d5db')}`,
+                  borderRadius: expandedConfigFile === 'claudeMd' ? '6px 6px 0 0' : '6px',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
+                    CLAUDE.md
+                  </div>
+                  <div style={{ fontSize: '10px', color: theme.textSecondary, fontFamily: 'monospace' }}>
+                    ~/.claude/CLAUDE.md
+                  </div>
+                </div>
+                <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                  {expandedConfigFile === 'claudeMd' ? '▼' : '▶'}
+                </span>
+              </button>
+              {expandedConfigFile === 'claudeMd' && (
+                <div
+                  style={{
+                    backgroundColor: theme.isDark ? 'rgba(0,0,0,0.2)' : '#fff',
+                    border: `1px solid ${theme.accent}`,
+                    borderTop: 'none',
+                    borderRadius: '0 0 6px 6px',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {configFileLoading ? (
+                    <div style={{ padding: '12px', fontSize: '11px', color: theme.textSecondary }}>Loading...</div>
+                  ) : configFileContent !== null ? (
+                    <>
+                      <textarea
+                        value={configFileEditContent}
+                        onChange={(e) => handleConfigFileChange(e.target.value)}
+                        style={{
+                          width: '100%',
+                          minHeight: '150px',
+                          maxHeight: '500px',
+                          padding: '12px',
+                          fontSize: '11px',
+                          fontFamily: 'monospace',
+                          color: theme.text,
+                          backgroundColor: 'transparent',
+                          border: 'none',
+                          outline: 'none',
+                          resize: 'vertical',
+                          lineHeight: '1.5',
+                        }}
+                      />
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '8px 12px',
+                        borderTop: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
+                        backgroundColor: theme.isDark ? 'rgba(0,0,0,0.1)' : 'rgba(0,0,0,0.02)',
+                      }}>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button
+                            onClick={handleSaveConfigFile}
+                            disabled={!configFileHasChanges || configFileSaving}
+                            style={{
+                              padding: '4px 12px',
+                              fontSize: '11px',
+                              fontWeight: 500,
+                              color: configFileHasChanges ? '#fff' : theme.textSecondary,
+                              backgroundColor: configFileHasChanges ? theme.accent : 'transparent',
+                              border: `1px solid ${configFileHasChanges ? theme.accent : theme.border}`,
+                              borderRadius: '4px',
+                              cursor: configFileHasChanges && !configFileSaving ? 'pointer' : 'default',
+                              opacity: configFileSaving ? 0.6 : 1,
+                            }}
+                          >
+                            {configFileSaving ? 'Saving...' : 'Save'}
+                          </button>
+                          {configFileHasChanges && (
+                            <button
+                              onClick={handleResetConfigFile}
+                              style={{
+                                padding: '4px 12px',
+                                fontSize: '11px',
+                                color: theme.textSecondary,
+                                backgroundColor: 'transparent',
+                                border: `1px solid ${theme.border}`,
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Reset
+                            </button>
+                          )}
+                        </div>
+                        {configFileSaved && (
+                          <span style={{ fontSize: '10px', color: theme.success }}>Saved</span>
+                        )}
+                        {configFileHasChanges && !configFileSaved && (
+                          <span style={{ fontSize: '10px', color: theme.textSecondary }}>Unsaved changes</span>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ padding: '12px', fontSize: '11px', color: theme.textSecondary }}>File not found</div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Librarian Instructions */}
+            <div>
+              <button
+                onClick={() => handleToggleConfigFile('librarianCommand')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  width: '100%',
+                  padding: '10px 12px',
+                  backgroundColor: expandedConfigFile === 'librarianCommand'
+                    ? (theme.isDark ? 'rgba(99, 102, 241, 0.1)' : 'rgba(99, 102, 241, 0.05)')
+                    : 'transparent',
+                  border: `1px solid ${expandedConfigFile === 'librarianCommand' ? theme.accent : (theme.isDark ? theme.border : '#d1d5db')}`,
+                  borderRadius: expandedConfigFile === 'librarianCommand' ? '6px 6px 0 0' : '6px',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
+                    Librarian Instructions
+                  </div>
+                  <div style={{ fontSize: '10px', color: theme.textSecondary, fontFamily: 'monospace' }}>
+                    ~/.fieldtheory/commands/librarian.md
+                  </div>
+                </div>
+                <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                  {expandedConfigFile === 'librarianCommand' ? '▼' : '▶'}
+                </span>
+              </button>
+              {expandedConfigFile === 'librarianCommand' && (
+                <div
+                  style={{
+                    backgroundColor: theme.isDark ? 'rgba(0,0,0,0.2)' : '#fff',
+                    border: `1px solid ${theme.accent}`,
+                    borderTop: 'none',
+                    borderRadius: '0 0 6px 6px',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {configFileLoading ? (
+                    <div style={{ padding: '12px', fontSize: '11px', color: theme.textSecondary }}>Loading...</div>
+                  ) : configFileContent !== null ? (
+                    <>
+                      <textarea
+                        value={configFileEditContent}
+                        onChange={(e) => handleConfigFileChange(e.target.value)}
+                        style={{
+                          width: '100%',
+                          minHeight: '150px',
+                          maxHeight: '500px',
+                          padding: '12px',
+                          fontSize: '11px',
+                          fontFamily: 'monospace',
+                          color: theme.text,
+                          backgroundColor: 'transparent',
+                          border: 'none',
+                          outline: 'none',
+                          resize: 'vertical',
+                          lineHeight: '1.5',
+                        }}
+                      />
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '8px 12px',
+                        borderTop: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
+                        backgroundColor: theme.isDark ? 'rgba(0,0,0,0.1)' : 'rgba(0,0,0,0.02)',
+                      }}>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button
+                            onClick={handleSaveConfigFile}
+                            disabled={!configFileHasChanges || configFileSaving}
+                            style={{
+                              padding: '4px 12px',
+                              fontSize: '11px',
+                              fontWeight: 500,
+                              color: configFileHasChanges ? '#fff' : theme.textSecondary,
+                              backgroundColor: configFileHasChanges ? theme.accent : 'transparent',
+                              border: `1px solid ${configFileHasChanges ? theme.accent : theme.border}`,
+                              borderRadius: '4px',
+                              cursor: configFileHasChanges && !configFileSaving ? 'pointer' : 'default',
+                              opacity: configFileSaving ? 0.6 : 1,
+                            }}
+                          >
+                            {configFileSaving ? 'Saving...' : 'Save'}
+                          </button>
+                          {configFileHasChanges && (
+                            <button
+                              onClick={handleResetConfigFile}
+                              style={{
+                                padding: '4px 12px',
+                                fontSize: '11px',
+                                color: theme.textSecondary,
+                                backgroundColor: 'transparent',
+                                border: `1px solid ${theme.border}`,
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Reset
+                            </button>
+                          )}
+                        </div>
+                        {configFileSaved && (
+                          <span style={{ fontSize: '10px', color: theme.success }}>Saved</span>
+                        )}
+                        {configFileHasChanges && !configFileSaved && (
+                          <span style={{ fontSize: '10px', color: theme.textSecondary }}>Unsaved changes</span>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ padding: '12px', fontSize: '11px', color: theme.textSecondary }}>File not found</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+          <p style={{ fontSize: '10px', color: theme.textSecondary, marginTop: '10px', lineHeight: '1.4' }}>
+            CLAUDE.md references the Librarian instructions file. Changes you make in Settings automatically update both files.
           </p>
         </div>
       )}
