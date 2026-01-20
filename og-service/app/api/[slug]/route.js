@@ -13,20 +13,32 @@ export async function GET(request, { params }) {
     return new Response('Not found', { status: 404 });
   }
 
-  // Fetch reading from Supabase
-  const supabase = createClient(supabaseUrl, supabaseAnonKey);
-  const { data: reading } = await supabase
-    .from('shared_readings')
-    .select('title, content')
-    .eq('slug', slug)
-    .eq('is_public', true)
-    .single();
+  let title = 'Untitled';
+  let reading = null;
 
-  const title = reading?.title || 'Untitled';
+  // Only fetch from Supabase if we have the key
+  if (supabaseAnonKey) {
+    try {
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+      const { data, error } = await supabase
+        .from('shared_readings')
+        .select('title, content')
+        .eq('slug', slug)
+        .eq('is_public', true)
+        .single();
+
+      if (!error && data) {
+        reading = data;
+        title = data.title || 'Untitled';
+      }
+    } catch (e) {
+      // Supabase fetch failed, continue with defaults
+    }
+  }
 
   // Strip markdown and get plain text preview
   let contentPreview = '';
-  if (reading?.content) {
+  if (reading && reading.content) {
     // Remove markdown syntax
     let text = reading.content
       .replace(/^#{1,6}\s+.*$/gm, '') // Remove headers
