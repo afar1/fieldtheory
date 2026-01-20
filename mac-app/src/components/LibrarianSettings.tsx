@@ -862,10 +862,10 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         >
           <div>
             <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
-              Auto-open on new reading
+              Auto-open on new artifact
             </div>
             <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '2px' }}>
-              Bring Field Theory to foreground when a new reading appears
+              Bring Field Theory to foreground when a new artifact appears
             </div>
           </div>
           <input
@@ -888,7 +888,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
           opacity: librarianEnabled ? 1 : 0.5,
         }}
       >
-        Add directories to watch for markdown readings. Field Theory will import new readings
+        Add directories to watch for markdown artifacts. Field Theory will import new artifacts
         automatically and display them in the Librarian tab.
       </p>
 
@@ -952,7 +952,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                         fontSize: '11px',
                         color: theme.textSecondary,
                       }}>
-                        {count} reading{count !== 1 ? 's' : ''}
+                        {count} artifact{count !== 1 ? 's' : ''}
                       </span>
                     </div>
                     <button
@@ -1071,7 +1071,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
             fontSize: '12px',
             color: theme.textSecondary,
           }}>
-            View readings in the <strong>Librarian</strong> tab.
+            View artifacts in the <strong>Librarian</strong> tab.
           </p>
         )}
       </div>

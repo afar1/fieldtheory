@@ -9,6 +9,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import ReactMarkdown from 'react-markdown';
 import { fonts } from '../design/tokens';
 import { supabase } from '../supabaseClient';
+import ContentToolbar from './ContentToolbar';
 
 interface CommandsViewProps {
   onSwitchToClipboard: () => void;
@@ -102,6 +103,14 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
 
   // Hover states for toolbar buttons
   const [hoveredButton, setHoveredButton] = useState<string | null>(null);
+
+  // Sharing state
+  const [shareStatus, setShareStatus] = useState<{ shared: boolean; id?: string } | null>(null);
+  const [isSharing, setIsSharing] = useState(false);
+
+  // Fullscreen/focus mode
+  const [isFullScreen, setIsFullScreen] = useState(false);
+  const [headerHovered, setHeaderHovered] = useState(true);
 
   // Text size values (smaller than Librarian for compact commands)
   const textSizes = {
@@ -382,6 +391,82 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
 
     return () => unsubscribe?.();
   }, []);
+
+  // Check if selected command is already shared
+  useEffect(() => {
+    async function checkShareStatus() {
+      if (!selectedCommand || !supabase) {
+        setShareStatus(null);
+        return;
+      }
+
+      try {
+        // Check if command with same name exists in popular_commands
+        const { data, error } = await supabase
+          .from('popular_commands')
+          .select('id, name')
+          .eq('name', selectedCommand.name)
+          .limit(1);
+
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          setShareStatus({ shared: true, id: data[0].id });
+        } else {
+          setShareStatus({ shared: false });
+        }
+      } catch (err) {
+        console.error('Failed to check share status:', err);
+        setShareStatus({ shared: false });
+      }
+    }
+
+    checkShareStatus();
+  }, [selectedCommand]);
+
+  // Toggle share status
+  const handleShareToggle = useCallback(async () => {
+    if (!selectedCommand || !supabase || isSharing) return;
+
+    setIsSharing(true);
+    try {
+      if (shareStatus?.shared && shareStatus.id) {
+        // Unshare - delete from popular_commands
+        const { error } = await supabase
+          .from('popular_commands')
+          .delete()
+          .eq('id', shareStatus.id);
+
+        if (error) throw error;
+        setShareStatus({ shared: false });
+
+        // Also refresh popular commands list
+        setPopularCommands(prev => prev.filter(cmd => cmd.id !== shareStatus.id));
+      } else {
+        // Share - insert into popular_commands
+        const { data, error } = await supabase
+          .from('popular_commands')
+          .insert({
+            name: selectedCommand.name,
+            content: selectedCommand.content,
+            copy_count: 0,
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        setShareStatus({ shared: true, id: data.id });
+
+        // Add to popular commands list
+        setPopularCommands(prev => [data, ...prev]);
+      }
+    } catch (err) {
+      console.error('Failed to toggle share:', err);
+    } finally {
+      setIsSharing(false);
+    }
+  }, [selectedCommand, shareStatus, isSharing]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -707,6 +792,8 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
           overflowY: 'auto',
           padding: '12px 0',
           userSelect: isResizing ? 'none' : 'auto',
+          display: isFullScreen ? 'none' : 'flex',
+          flexDirection: 'column',
         }}
       >
         {/* Header - Librarian style */}
@@ -965,6 +1052,7 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
           borderRight: `1px solid ${theme.border}`,
           transition: 'background-color 0.15s ease',
           flexShrink: 0,
+          display: isFullScreen ? 'none' : 'block',
         }}
         onMouseEnter={(e) => {
           if (!isResizing) {
@@ -990,224 +1078,84 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
           minHeight: 0,
         }}
       >
-        {/* Toolbar */}
+        {/* Top draggable region - matches Librarian structure */}
+        <div
+          onMouseEnter={() => isFullScreen && setHeaderHovered(true)}
+          onMouseLeave={() => isFullScreen && setHeaderHovered(false)}
+          style={{
+            height: isFullScreen ? '20px' : '0px',
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            // @ts-ignore - webkit vendor prefix for Electron draggable region
+            WebkitAppRegion: 'drag',
+            cursor: 'grab',
+          }}
+        />
+
+        {/* Toolbar - matches Librarian structure */}
         {(selectedCommand || selectedPopularCommand) && (
           <div
+            onMouseEnter={() => isFullScreen && setHeaderHovered(true)}
+            onMouseLeave={() => isFullScreen && setHeaderHovered(false)}
             style={{
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '8px',
-              padding: '8px 16px',
+              justifyContent: 'center',
+              padding: '8px 20px',
               backgroundColor: theme.bg,
               flexShrink: 0,
             }}
           >
-            {/* Left side - Text size controls */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-              <button
-                onClick={() => setTextSize('small')}
-                style={{
-                  padding: '4px 6px',
-                  fontSize: '11px',
-                  color: textSize === 'small' ? theme.accent : theme.textSecondary,
-                  backgroundColor: 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                  fontWeight: textSize === 'small' ? 600 : 400,
-                }}
-                title="Small text"
-              >
-                A
-              </button>
-              <button
-                onClick={() => setTextSize('normal')}
-                style={{
-                  padding: '4px 6px',
-                  fontSize: '13px',
-                  color: textSize === 'normal' ? theme.accent : theme.textSecondary,
-                  backgroundColor: 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                  fontWeight: textSize === 'normal' ? 600 : 400,
-                }}
-                title="Normal text"
-              >
-                A
-              </button>
-              <button
-                onClick={() => setTextSize('large')}
-                style={{
-                  padding: '4px 6px',
-                  fontSize: '15px',
-                  color: textSize === 'large' ? theme.accent : theme.textSecondary,
-                  backgroundColor: 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                  fontWeight: textSize === 'large' ? 600 : 400,
-                }}
-                title="Large text"
-              >
-                A
-              </button>
-            </div>
-
-            {/* Draggable spacer */}
+            {/* Inner container - matches content width (600px centered) */}
             <div
               style={{
-                flex: 1,
-                height: '24px',
-                // @ts-ignore
-                WebkitAppRegion: 'drag',
-                cursor: 'grab',
+                maxWidth: '600px',
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
               }}
-            />
-
-            {/* Right side controls */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-              {/* Copy button - minimal icon with hover */}
-              <button
-                onClick={() => {
+            >
+              <ContentToolbar
+                filePath={selectedCommand?.filePath}
+                isFullScreen={isFullScreen}
+                onToggleFullScreen={() => setIsFullScreen(!isFullScreen)}
+                textSize={textSize}
+                onTextSizeChange={setTextSize}
+                showTextSize={true}
+                isEditing={isEditing}
+                isDirty={isDirty}
+                isSaving={isSaving}
+                onEdit={viewMode === 'mine' && selectedCommand ? enterEditMode : undefined}
+                onSave={saveChanges}
+                onCancel={() => {
+                  if (isDirty) {
+                    const confirmed = window.confirm('Discard changes?');
+                    if (!confirmed) return;
+                  }
+                  exitEditMode();
+                }}
+                onDelete={viewMode === 'mine' && selectedCommand && selectedPath ? () => handleDeleteCommand(selectedPath) : undefined}
+                showDelete={viewMode === 'mine' && !!selectedCommand}
+                onShowInFolder={viewMode === 'mine' && selectedCommand ? () => window.shellAPI?.showItemInFolder(selectedCommand.filePath) : undefined}
+                showFolder={viewMode === 'mine' && !!selectedCommand}
+                onCopy={() => {
                   const content = selectedCommand?.content || selectedPopularCommand?.content || '';
                   const id = selectedPopularCommand?.id;
                   handleCopyContent(content, id);
                 }}
-                onMouseEnter={() => setHoveredButton('copy')}
-                onMouseLeave={() => setHoveredButton(null)}
-                style={{
-                  padding: '4px 6px',
-                  fontSize: '11px',
-                  color: copied ? theme.success : theme.textSecondary,
-                  backgroundColor: hoveredButton === 'copy' && !copied
-                    ? theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)'
-                    : 'transparent',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                  transition: 'background-color 0.15s ease',
-                }}
-                title="Copy to clipboard"
-              >
-                <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
-                  <path d="M4 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6zM2 5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1h1v1a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h1v1H2z"/>
-                </svg>
-                {copied && <span style={{ fontSize: '10px' }}>Copied</span>}
-              </button>
+                showCopy={true}
+                shareStatus={viewMode === 'mine' ? shareStatus : null}
+                isSharing={isSharing}
+                onToggleShare={viewMode === 'mine' ? handleShareToggle : undefined}
+                showShare={viewMode === 'mine' && !!selectedCommand}
+                headerHovered={headerHovered}
+              />
 
-              {/* Folder button (show in Finder) - minimal icon with hover */}
-              {viewMode === 'mine' && selectedCommand && !isEditing && (
-                <button
-                  onClick={() => window.shellAPI?.showItemInFolder(selectedCommand.filePath)}
-                  onMouseEnter={() => setHoveredButton('folder')}
-                  onMouseLeave={() => setHoveredButton(null)}
-                  style={{
-                    padding: '4px 6px',
-                    color: theme.textSecondary,
-                    backgroundColor: hoveredButton === 'folder'
-                      ? theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)'
-                      : 'transparent',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    transition: 'background-color 0.15s ease',
-                  }}
-                  title="Show in Finder"
-                >
-                  <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9zM2.5 3a.5.5 0 0 0-.5.5V6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5zM14 7H2v5.5a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5V7z" />
-                  </svg>
-                </button>
-              )}
-
-              {/* Edit/Add controls based on view mode */}
-              {viewMode === 'mine' && selectedCommand ? (
-                isEditing ? (
-                  <>
-                    {isDirty && (
-                      <span
-                        style={{
-                          width: '5px',
-                          height: '5px',
-                          borderRadius: '50%',
-                          backgroundColor: theme.accent,
-                          marginRight: '4px',
-                        }}
-                        title="Unsaved changes"
-                      />
-                    )}
-                    <button
-                      onClick={saveChanges}
-                      disabled={!isDirty || isSaving}
-                      onMouseEnter={() => setHoveredButton('save')}
-                      onMouseLeave={() => setHoveredButton(null)}
-                      style={{
-                        padding: '3px 8px',
-                        fontSize: '11px',
-                        color: isDirty ? '#fff' : theme.textSecondary,
-                        backgroundColor: isDirty ? theme.accent : hoveredButton === 'save' ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)') : 'transparent',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: isDirty ? 'pointer' : 'default',
-                        opacity: isSaving ? 0.6 : 1,
-                        transition: 'background-color 0.15s ease',
-                      }}
-                    >
-                      {isSaving ? 'Saving...' : 'Save'}
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (isDirty) {
-                          const confirmed = window.confirm('Discard changes?');
-                          if (!confirmed) return;
-                        }
-                        exitEditMode();
-                      }}
-                      onMouseEnter={() => setHoveredButton('cancel')}
-                      onMouseLeave={() => setHoveredButton(null)}
-                      style={{
-                        padding: '3px 8px',
-                        fontSize: '11px',
-                        color: theme.textSecondary,
-                        backgroundColor: hoveredButton === 'cancel'
-                          ? theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)'
-                          : 'transparent',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        transition: 'background-color 0.15s ease',
-                      }}
-                    >
-                      Cancel
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    onClick={enterEditMode}
-                    onMouseEnter={() => setHoveredButton('edit')}
-                    onMouseLeave={() => setHoveredButton(null)}
-                    style={{
-                      padding: '3px 8px',
-                      fontSize: '11px',
-                      color: theme.textSecondary,
-                      backgroundColor: hoveredButton === 'edit'
-                        ? theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)'
-                        : 'transparent',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      transition: 'background-color 0.15s ease',
-                    }}
-                    title="Edit (⌘E)"
-                  >
-                    Edit
-                  </button>
-                )
-              ) : viewMode === 'popular' && selectedPopularCommand ? (
+              {/* Add to Mine button for popular commands */}
+              {viewMode === 'popular' && selectedPopularCommand && (
                 <button
                   onClick={() => handleAddToMine(selectedPopularCommand)}
                   style={{
@@ -1223,7 +1171,7 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
                 >
                   Add to Mine
                 </button>
-              ) : null}
+              )}
             </div>
           </div>
         )}

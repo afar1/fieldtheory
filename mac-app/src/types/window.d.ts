@@ -903,6 +903,7 @@ interface LibrarianAPI {
   getReadings: () => Promise<ReadingMeta[]>;
   getReading: (path: string) => Promise<Reading | null>;
   saveReading: (path: string, content: string) => Promise<boolean>;
+  deleteReading: (path: string) => Promise<boolean>;
   getWatchedDirs: () => Promise<WatchedDir[]>;
   addWatchedDir: (dirPath: string) => Promise<WatchedDir | null>;
   removeWatchedDir: (path: string) => Promise<boolean>;

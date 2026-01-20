@@ -1,4 +1,4 @@
-import { app, BrowserWindow, BrowserWindowConstructorOptions, screen } from 'electron';
+import { app, BrowserWindow, BrowserWindowConstructorOptions, screen, Menu } from 'electron';
 import path from 'path';
 import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
@@ -392,6 +392,43 @@ export class ClipboardHistoryWindow {
 
     this.window.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
       console.error('[ClipboardHistoryWindow] Load failed:', errorCode, errorDescription);
+    });
+
+    // Enable native context menu for text selection (Copy, Look Up, etc.)
+    this.window.webContents.on('context-menu', (event, params) => {
+      const { selectionText, isEditable, editFlags } = params;
+
+      const menuItems: Electron.MenuItemConstructorOptions[] = [];
+
+      if (selectionText) {
+        menuItems.push(
+          { label: 'Copy', role: 'copy', enabled: editFlags.canCopy },
+          { type: 'separator' },
+          { label: 'Look Up "%s"'.replace('%s', selectionText.slice(0, 20) + (selectionText.length > 20 ? '...' : '')), click: () => {
+            // Use macOS dictionary lookup
+            this.window?.webContents.executeJavaScript(`window.getSelection()?.toString()`).then((text) => {
+              if (text) {
+                require('child_process').exec(`open dict://${encodeURIComponent(text)}`);
+              }
+            });
+          }},
+        );
+      }
+
+      if (isEditable) {
+        menuItems.push(
+          { label: 'Cut', role: 'cut', enabled: editFlags.canCut },
+          { label: 'Copy', role: 'copy', enabled: editFlags.canCopy },
+          { label: 'Paste', role: 'paste', enabled: editFlags.canPaste },
+          { type: 'separator' },
+          { label: 'Select All', role: 'selectAll', enabled: editFlags.canSelectAll },
+        );
+      }
+
+      if (menuItems.length > 0) {
+        const menu = Menu.buildFromTemplate(menuItems);
+        menu.popup({ window: this.window! });
+      }
     });
 
     // Show window only after content loads to avoid blank screen.

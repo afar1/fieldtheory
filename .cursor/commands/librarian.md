@@ -10,6 +10,13 @@ The reading should:
 - Include at least one concrete technical or historical detail.
 - Avoid motivational, generic, or filler content.
 
+Structure: title → braille art → prose (art goes BEFORE text, not after)
+
+Braille halftone art requirements:
+- Place immediately after title as plain text (NO code fence—inherits page background)
+- Canvas: exactly 56 chars × 15 lines, every line padded to 56 chars with ⠀ (U+2800)
+- Center subject, light from top-left, density ⠀→⣿
+
 Length guidelines:
 
 - Under 5 minutes task → ~1–2 minute read

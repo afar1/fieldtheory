@@ -199,11 +199,9 @@ export class SocialSync extends EventEmitter {
    */
   private handleSessionChanged(session: Session | null): void {
     if (session) {
-      console.log('[SocialSync] Session changed for user:', session.user?.email);
       this.setupRealtimeSubscription();
       this.startPollingFallback();
     } else {
-      console.log('[SocialSync] Session cleared');
       this.teardownRealtimeSubscription();
       this.stopPollingFallback();
     }
@@ -260,8 +258,6 @@ export class SocialSync extends EventEmitter {
     // Teardown existing subscription first.
     this.teardownRealtimeSubscription();
 
-    console.log('[SocialSync] Setting up realtime subscription for messages, userId:', userId);
-
     // Subscribe to messages where current user is the recipient.
     this.realtimeChannel = this.supabase
       .channel('messages-realtime')
@@ -274,21 +270,18 @@ export class SocialSync extends EventEmitter {
           filter: `recipient_user_id=eq.${userId}`,
         },
         async (payload) => {
-          console.log('[SocialSync] New message received via Realtime:', payload);
           const row = payload.new as MessageRow;
           const message = await this.rowToMessage(row);
           this.emit('messageReceived', message);
         }
       )
       .subscribe((status, err) => {
-        console.log('[SocialSync] Realtime subscription status:', status);
         if (err) {
           console.error('[SocialSync] Realtime subscription error:', err);
         }
-        
+
         // Handle different states.
         if (status === 'TIMED_OUT') {
-          console.log('[SocialSync] Realtime timed out, retrying in 3 seconds...');
           setTimeout(() => {
             if (this.isAuthenticated()) {
               this.setupRealtimeSubscription();
@@ -302,7 +295,6 @@ export class SocialSync extends EventEmitter {
             }
           }, 5000);
         } else if (status === 'SUBSCRIBED') {
-          console.log('[SocialSync] Realtime subscription active - Hot Mic ready!');
           this.realtimeConnected = true;
           // Stop polling fallback since Realtime is working.
           this.stopPollingFallback();
@@ -315,7 +307,6 @@ export class SocialSync extends EventEmitter {
    */
   private teardownRealtimeSubscription(): void {
     if (this.realtimeChannel) {
-      console.log('[SocialSync] Tearing down realtime subscription');
       this.supabase?.removeChannel(this.realtimeChannel);
       this.realtimeChannel = null;
     }
@@ -331,9 +322,7 @@ export class SocialSync extends EventEmitter {
    */
   private startPollingFallback(): void {
     if (this.pollingInterval) return;  // Already polling.
-    
-    console.log('[SocialSync] Starting polling fallback for Hot Mic');
-    
+
     // Set initial timestamp to now to avoid fetching old messages.
     this.lastPolledAt = new Date().toISOString();
     
@@ -350,7 +339,6 @@ export class SocialSync extends EventEmitter {
    */
   private stopPollingFallback(): void {
     if (this.pollingInterval) {
-      console.log('[SocialSync] Stopping polling fallback');
       clearInterval(this.pollingInterval);
       this.pollingInterval = null;
     }
