@@ -13,11 +13,6 @@ export async function GET(request, { params }) {
     return new Response('Not found', { status: 404 });
   }
 
-  // Fetch logo image
-  const logoData = await fetch('https://fieldtheory.dev/images/fieldtheory-icon-white.png')
-    .then(res => res.arrayBuffer())
-    .catch(() => null);
-
   let title = 'Untitled';
   let reading = null;
 
@@ -98,36 +93,14 @@ export async function GET(request, { params }) {
           }}
         />
 
-        {/* Top: Logo left, "Field Theory" right */}
+        {/* Brand name top-left */}
         <div
           style={{
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
             padding: '0 24px',
             marginBottom: '32px',
           }}
         >
-          {/* Logo icon */}
-          {logoData ? (
-            <img
-              src={logoData}
-              width={32}
-              height={32}
-              style={{ opacity: 0.7 }}
-            />
-          ) : (
-            <div
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: '50%',
-                border: '2px solid #666',
-                opacity: 0.7,
-              }}
-            />
-          )}
-          {/* Brand name */}
           <div
             style={{
               fontSize: 18,
@@ -136,7 +109,7 @@ export async function GET(request, { params }) {
               fontWeight: 500,
             }}
           >
-            Field Theory
+            fieldtheory.dev
           </div>
         </div>
 
