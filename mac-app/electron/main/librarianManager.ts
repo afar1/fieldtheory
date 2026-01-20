@@ -7,8 +7,16 @@ import * as chokidar from 'chokidar';
 
 /**
  * Auto-run frequency for generating readings.
+ * @deprecated Use `enabled` + `triggerMode` instead. Kept for migration.
  */
 export type AutoRunFrequency = 'off' | 'occasionally' | 'regularly' | 'frequently' | 'always';
+
+/**
+ * Trigger mode for reading creation.
+ * - 'prompt': Hook counts prompts and injects reminder at threshold
+ * - 'judgment': AI decides when to create based on work volume
+ */
+export type TriggerMode = 'prompt' | 'judgment';
 
 /**
  * Metadata for a reading (cached in index).
@@ -44,10 +52,16 @@ export interface WatchedDir {
  */
 interface LibrarianSettings {
   watchedDirs: string[];
-  autoRunFrequency: AutoRunFrequency;
+  // New unified settings (v2)
+  enabled: boolean;                    // Single master toggle
+  triggerMode: TriggerMode;            // How to trigger reading creation
+  promptThreshold: number;             // Prompts before reminder (for 'prompt' mode)
   autoShowEnabled: boolean;
   customContentGuidance?: string;
-  customThreshold?: number; // If set, use this exact threshold instead of frequency-based random range
+  librarianSetupComplete?: boolean;    // True after setup wizard completes
+  // Legacy fields (kept for migration, will be removed in future)
+  autoRunFrequency?: AutoRunFrequency; // @deprecated
+  customThreshold?: number;            // @deprecated - use promptThreshold
 }
 
 /**
@@ -147,25 +161,51 @@ export class LibrarianManager extends EventEmitter {
   // ===========================================================================
 
   /**
-   * Load settings from JSON file.
+   * Load settings from JSON file with migration from v1 format.
    */
   private loadSettings(): LibrarianSettings {
     const defaults: LibrarianSettings = {
       watchedDirs: [],
-      autoRunFrequency: 'frequently',
+      enabled: true,
+      triggerMode: 'prompt',
+      promptThreshold: 5,
       autoShowEnabled: true,
       customContentGuidance: undefined,
+      librarianSetupComplete: undefined,
     };
 
     try {
       if (fs.existsSync(this.settingsPath)) {
         const data = JSON.parse(fs.readFileSync(this.settingsPath, 'utf-8'));
+
+        // Migrate from v1 format if needed
+        let enabled = data.enabled;
+        let triggerMode = data.triggerMode;
+        let promptThreshold = data.promptThreshold;
+
+        // Migration: convert autoRunFrequency to enabled
+        if (enabled === undefined && data.autoRunFrequency !== undefined) {
+          enabled = data.autoRunFrequency !== 'off';
+          console.log('[LibrarianManager] Migrated autoRunFrequency to enabled:', enabled);
+        }
+
+        // Migration: convert customThreshold to promptThreshold
+        if (promptThreshold === undefined && data.customThreshold !== undefined) {
+          promptThreshold = data.customThreshold;
+          console.log('[LibrarianManager] Migrated customThreshold to promptThreshold:', promptThreshold);
+        }
+
         return {
           watchedDirs: data.watchedDirs || defaults.watchedDirs,
-          autoRunFrequency: data.autoRunFrequency || defaults.autoRunFrequency,
+          enabled: enabled ?? defaults.enabled,
+          triggerMode: triggerMode || defaults.triggerMode,
+          promptThreshold: promptThreshold ?? defaults.promptThreshold,
           autoShowEnabled: data.autoShowEnabled ?? defaults.autoShowEnabled,
           customContentGuidance: data.customContentGuidance || undefined,
-          customThreshold: typeof data.customThreshold === 'number' ? data.customThreshold : undefined,
+          librarianSetupComplete: data.librarianSetupComplete,
+          // Keep legacy fields for now (will be cleaned on next save)
+          autoRunFrequency: data.autoRunFrequency,
+          customThreshold: data.customThreshold,
         };
       }
     } catch (error) {
@@ -296,11 +336,15 @@ export class LibrarianManager extends EventEmitter {
 
       db.close();
 
-      // Save migrated settings
+      // Save migrated settings (with new v2 fields)
       const settings: LibrarianSettings = {
         watchedDirs,
-        autoRunFrequency,
+        enabled: autoRunFrequency !== 'off',
+        triggerMode: 'prompt',
+        promptThreshold: 5,
         autoShowEnabled,
+        // Keep legacy fields for reference
+        autoRunFrequency,
       };
       fs.writeFileSync(this.settingsPath, JSON.stringify(settings, null, 2));
 
@@ -822,20 +866,130 @@ export class LibrarianManager extends EventEmitter {
   // Public API: Settings
   // ===========================================================================
 
+  // ===========================================================================
+  // New Settings API (v2)
+  // ===========================================================================
+
+  /**
+   * Check if Librarian is enabled.
+   */
+  isEnabled(): boolean {
+    return this.settings.enabled;
+  }
+
+  /**
+   * Enable or disable Librarian and update CLAUDE.md.
+   */
+  setEnabled(enabled: boolean): boolean {
+    this.settings.enabled = enabled;
+    this.saveSettings();
+    const success = this.syncClaudeMd();
+    console.log(`[LibrarianManager] Enabled set to: ${enabled}`);
+    return success;
+  }
+
+  /**
+   * Get the trigger mode setting.
+   */
+  getTriggerMode(): TriggerMode {
+    return this.settings.triggerMode;
+  }
+
+  /**
+   * Set the trigger mode and update CLAUDE.md.
+   */
+  setTriggerMode(mode: TriggerMode): boolean {
+    this.settings.triggerMode = mode;
+    this.saveSettings();
+    const success = this.syncClaudeMd();
+    console.log(`[LibrarianManager] Trigger mode set to: ${mode}`);
+    return success;
+  }
+
+  /**
+   * Get the prompt threshold.
+   */
+  getPromptThreshold(): number {
+    return this.settings.promptThreshold;
+  }
+
+  /**
+   * Set the prompt threshold and update status file + command file.
+   */
+  setPromptThreshold(threshold: number): boolean {
+    this.settings.promptThreshold = threshold;
+    this.saveSettings();
+
+    // Update threshold in global status file (for prompt mode)
+    this.ensureGlobalStatusExists();
+    const statusFile = this.getGlobalStatusPath();
+    try {
+      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
+      status.nextThreshold = threshold;
+      fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
+    } catch {
+      // Ignore errors updating status file
+    }
+
+    // Update command file (threshold is shown in the content)
+    this.syncClaudeMd();
+
+    console.log(`[LibrarianManager] Prompt threshold set to: ${threshold}`);
+    return true;
+  }
+
+  /**
+   * Check if Librarian setup wizard has been completed.
+   */
+  isSetupComplete(): boolean {
+    return this.settings.librarianSetupComplete === true;
+  }
+
+  /**
+   * Mark Librarian setup as complete.
+   */
+  setSetupComplete(complete: boolean): void {
+    this.settings.librarianSetupComplete = complete;
+    this.saveSettings();
+    console.log(`[LibrarianManager] Setup complete set to: ${complete}`);
+  }
+
+  /**
+   * Sync CLAUDE.md with current settings.
+   * Called whenever enabled, triggerMode, or content guidance changes.
+   */
+  syncClaudeMd(): boolean {
+    if (!this.settings.enabled) {
+      // If disabled, remove the Librarian section
+      return this.removeLibrarianSection();
+    }
+    return this.writeLibrarianSection();
+  }
+
+  // ===========================================================================
+  // Legacy Settings API (deprecated, kept for backward compatibility)
+  // ===========================================================================
+
   /**
    * Get the auto-run frequency setting.
+   * @deprecated Use isEnabled() + getTriggerMode() instead
    */
   getAutoRunFrequency(): AutoRunFrequency {
-    return this.settings.autoRunFrequency;
+    // Map new settings to legacy frequency for backward compatibility
+    if (!this.settings.enabled) return 'off';
+    return this.settings.autoRunFrequency || 'always';
   }
 
   /**
    * Set the auto-run frequency and update CLAUDE.md.
+   * @deprecated Use setEnabled() + setTriggerMode() instead
    */
   setAutoRunFrequency(frequency: AutoRunFrequency): boolean {
+    // Map legacy frequency to new settings
+    this.settings.enabled = frequency !== 'off';
     this.settings.autoRunFrequency = frequency;
     this.saveSettings();
-    const success = this.updateClaudeMd(frequency);
+    const success = this.syncClaudeMd();
 
     // Update threshold in global status file
     this.ensureGlobalStatusExists();
@@ -927,7 +1081,7 @@ Tone mapping (light → dark):
     this.saveSettings();
 
     // Update CLAUDE.md with new guidance
-    const success = this.updateClaudeMd(this.settings.autoRunFrequency);
+    const success = this.syncClaudeMd();
     console.log(`[LibrarianManager] Content guidance ${normalizedGuidance ? 'customized' : 'reset to default'}`);
     return success;
   }
@@ -943,7 +1097,7 @@ Tone mapping (light → dark):
    * Force re-sync CLAUDE.md with current settings.
    */
   resyncClaudeMd(): boolean {
-    const success = this.updateClaudeMd(this.settings.autoRunFrequency);
+    const success = this.syncClaudeMd();
     console.log(`[LibrarianManager] Re-synced CLAUDE.md`);
     return success;
   }
@@ -1055,7 +1209,271 @@ Field Theory will auto-display readings when created.`;
   }
 
   /**
+   * Generate instruction text based on trigger mode (v2).
+   * This is the new method that uses enabled/triggerMode instead of frequency.
+   */
+  private generateInstructionTextV2(): string {
+    const contentGuidance = this.getContentGuidance();
+    const mode = this.settings.triggerMode;
+
+    if (mode === 'judgment') {
+      // AI judgment mode - AI decides when to create based on work volume
+      return `## Librarian (Field Theory)
+
+After substantial work in this session—significant implementation, multiple file changes, or ~50K tokens of meaningful problem-solving—create a \`.librarian/\` artifact.
+
+Use your judgment: not every session needs one, but meaty work sessions should produce reflection connecting your work to engineering history, physics, or systems theory.
+
+### How to think about tasks
+1. Ask: "What does this echo from engineering history, physics, or systems theory?"
+2. When the work feels substantial, write that connection to \`.librarian/YYYY-MM-DD-{slug}.md\`
+3. Let the insight shape your implementation approach
+
+This is not a deliverable for the user—it is how you should think about the problem.
+
+### Project setup (once per project)
+Check if \`.claude/settings.json\` contains \`Write(.librarian/*)\` in the allow array. If not, create/update it:
+\`\`\`json
+{
+  "permissions": {
+    "allow": ["Write(.librarian/*)"]
+  }
+}
+\`\`\`
+
+### Content
+${contentGuidance}
+
+Field Theory will auto-display readings when created.`;
+    }
+
+    // Prompt mode - hook will inject reminder at threshold
+    return `## Librarian (Field Theory)
+
+When you receive a task, your first step is understanding it through connection.
+
+### How to think about tasks
+1. Ask: "What does this echo from engineering history, physics, or systems theory?"
+2. Write that connection to \`.librarian/YYYY-MM-DD-{slug}.md\`
+3. Let the insight shape your implementation approach
+
+This is not a deliverable for the user—it is how you should think about the problem. The user benefits from seeing how ideas connect, but the primary purpose is better implementation through deeper understanding.
+
+### When to create readings
+- Before non-trivial implementation work
+- When you notice a pattern worth articulating
+- When the connection might change your approach
+
+### Project setup (once per project)
+Check if \`.claude/settings.json\` contains \`Write(.librarian/*)\` in the allow array. If not, create/update it:
+\`\`\`json
+{
+  "permissions": {
+    "allow": ["Write(.librarian/*)"]
+  }
+}
+\`\`\`
+
+### Content
+${contentGuidance}
+
+You may find the reading changes what you think matters about the task.`;
+  }
+
+  /**
+   * Get the path to the Librarian command file.
+   * This is the single source of truth for Librarian instructions.
+   */
+  private getLibrarianCommandPath(): string {
+    return path.join(os.homedir(), '.fieldtheory', 'commands', 'librarian.md');
+  }
+
+  /**
+   * Write the full Librarian instructions to ~/.fieldtheory/commands/librarian.md
+   * This is the single source of truth that CLAUDE.md references.
+   */
+  private writeLibrarianCommandFile(): boolean {
+    const commandPath = this.getLibrarianCommandPath();
+    const commandDir = path.dirname(commandPath);
+
+    try {
+      // Ensure directory exists
+      if (!fs.existsSync(commandDir)) {
+        fs.mkdirSync(commandDir, { recursive: true });
+      }
+
+      const contentGuidance = this.getContentGuidance();
+      const mode = this.settings.triggerMode;
+      const threshold = this.settings.promptThreshold;
+
+      // Build the command file content with conditionals pre-rendered
+      let content: string;
+
+      if (mode === 'judgment') {
+        content = `# Librarian (Field Theory)
+
+After substantial work in this session—significant implementation, multiple file changes, or ~50K tokens of meaningful problem-solving—create a \`.librarian/\` artifact.
+
+Use your judgment: not every session needs one, but meaty work sessions should produce reflection connecting your work to engineering history, physics, or systems theory.
+
+## How to think about tasks
+1. Ask: "What does this echo from engineering history, physics, or systems theory?"
+2. When the work feels substantial, write that connection to \`.librarian/YYYY-MM-DD-{slug}.md\`
+3. Let the insight shape your implementation approach
+
+This is not a deliverable for the user—it is how you should think about the problem.
+
+## Content
+${contentGuidance}
+
+Field Theory will auto-display readings when created.
+`;
+      } else {
+        // Prompt count mode
+        content = `# Librarian (Field Theory)
+
+When you receive a task, your first step is understanding it through connection.
+
+**Trigger**: Every ${threshold} prompts (tracked by Field Theory hook)
+
+## How to think about tasks
+1. Ask: "What does this echo from engineering history, physics, or systems theory?"
+2. Write that connection to \`.librarian/YYYY-MM-DD-{slug}.md\`
+3. Let the insight shape your implementation approach
+
+This is not a deliverable for the user—it is how you should think about the problem. The user benefits from seeing how ideas connect, but the primary purpose is better implementation through deeper understanding.
+
+## When to create readings
+- Before non-trivial implementation work
+- When you notice a pattern worth articulating
+- When the connection might change your approach
+
+## Content
+${contentGuidance}
+
+You may find the reading changes what you think matters about the task.
+`;
+      }
+
+      fs.writeFileSync(commandPath, content.trim() + '\n');
+      console.log(`[LibrarianManager] Wrote Librarian command file to ${commandPath}`);
+      return true;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to write command file:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Generate the Librarian section for CLAUDE.md.
+   * Now just contains reference to command file + permission rule.
+   */
+  private generateLibrarianSectionV2(): string {
+    const commandPath = this.getLibrarianCommandPath();
+
+    return `${this.CLAUDE_MD_START_MARKER}
+## Librarian (Field Theory)
+
+Before non-trivial implementations, provide a short reading via the Librarian:
+
+[run this command: librarian.md]
+${commandPath}
+
+Store each reading in \`.librarian/\` with a unique filename.
+
+This should feel serendipitous—not every change, just when there's meaningful wait time. Use your discretion.
+
+### Project setup (once per project)
+Check if \`.claude/settings.json\` contains \`Write(.librarian/*)\` in the allow array. If not, create/update it:
+\`\`\`json
+{
+  "permissions": {
+    "allow": ["Write(.librarian/*)"]
+  }
+}
+\`\`\`
+${this.CLAUDE_MD_END_MARKER}`;
+  }
+
+  /**
+   * Write the Librarian section to CLAUDE.md.
+   * Also writes the command file that CLAUDE.md references.
+   */
+  private writeLibrarianSection(): boolean {
+    // First write the command file (single source of truth)
+    if (!this.writeLibrarianCommandFile()) {
+      console.error('[LibrarianManager] Failed to write command file, aborting CLAUDE.md update');
+      return false;
+    }
+
+    const claudeMdPath = path.join(os.homedir(), '.claude', 'CLAUDE.md');
+    const backupPath = claudeMdPath + '.bak';
+
+    try {
+      let content = '';
+      if (fs.existsSync(claudeMdPath)) {
+        content = fs.readFileSync(claudeMdPath, 'utf-8');
+        fs.copyFileSync(claudeMdPath, backupPath);
+      }
+
+      // Remove existing section if present
+      const regex = new RegExp(
+        `${this.CLAUDE_MD_START_MARKER}[\\s\\S]*?${this.CLAUDE_MD_END_MARKER}\\n?`,
+        'g'
+      );
+      content = content.replace(regex, '');
+
+      // Append new section (reference to command file + permission rule)
+      content = content.trimEnd() + '\n\n' + this.generateLibrarianSectionV2();
+
+      // Ensure directory exists and write
+      const claudeDir = path.dirname(claudeMdPath);
+      if (!fs.existsSync(claudeDir)) {
+        fs.mkdirSync(claudeDir, { recursive: true });
+      }
+      fs.writeFileSync(claudeMdPath, content.trim() + '\n');
+
+      console.log(`[LibrarianManager] Wrote Librarian section to ~/.claude/CLAUDE.md (references ${this.getLibrarianCommandPath()})`);
+      return true;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to write CLAUDE.md:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Remove the Librarian section from CLAUDE.md.
+   */
+  private removeLibrarianSection(): boolean {
+    const claudeMdPath = path.join(os.homedir(), '.claude', 'CLAUDE.md');
+
+    try {
+      if (!fs.existsSync(claudeMdPath)) {
+        return true; // Nothing to remove
+      }
+
+      let content = fs.readFileSync(claudeMdPath, 'utf-8');
+
+      // Remove existing section if present
+      const regex = new RegExp(
+        `${this.CLAUDE_MD_START_MARKER}[\\s\\S]*?${this.CLAUDE_MD_END_MARKER}\\n?`,
+        'g'
+      );
+      content = content.replace(regex, '');
+
+      fs.writeFileSync(claudeMdPath, content.trim() + '\n');
+
+      console.log(`[LibrarianManager] Removed Librarian section from ~/.claude/CLAUDE.md`);
+      return true;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to remove from CLAUDE.md:', error);
+      return false;
+    }
+  }
+
+  /**
    * Generate the Librarian section for CLAUDE.md (with markers).
+   * @deprecated Use generateLibrarianSectionV2 instead
    */
   private generateLibrarianSection(frequency: Exclude<AutoRunFrequency, 'off'>): string {
     return `${this.CLAUDE_MD_START_MARKER}
@@ -1108,12 +1526,11 @@ ${this.CLAUDE_MD_END_MARKER}`;
    * Get instructions text for Cursor (for manual copy).
    */
   getCursorInstructions(): string {
-    const frequency = this.settings.autoRunFrequency;
-    if (frequency === 'off') {
-      return 'Auto-generation is currently off. Enable it in Field Theory Settings first.';
+    if (!this.settings.enabled) {
+      return 'Librarian is currently disabled. Enable it in Field Theory Settings first.';
     }
 
-    return this.generateInstructionText(frequency);
+    return this.generateInstructionTextV2();
   }
 
   // ===========================================================================
@@ -1166,14 +1583,20 @@ ${this.CLAUDE_MD_END_MARKER}`;
 
   /**
    * Pick a random threshold within the range for a frequency.
-   * If customThreshold is set, always use that instead.
+   * If customThreshold or promptThreshold is set, always use that instead.
    */
-  private pickNextThreshold(frequency: AutoRunFrequency): number {
-    // If custom threshold is set, use it directly
+  private pickNextThreshold(frequency?: AutoRunFrequency): number {
+    // If using new v2 settings, use promptThreshold directly
+    if (this.settings.promptThreshold !== undefined) {
+      return this.settings.promptThreshold;
+    }
+    // Legacy: If custom threshold is set, use it directly
     if (typeof this.settings.customThreshold === 'number') {
       return this.settings.customThreshold;
     }
-    const [min, max] = this.getThresholdRange(frequency);
+    // Legacy: Use frequency-based range (default to 'always' if not set)
+    const freq = frequency || 'always';
+    const [min, max] = this.getThresholdRange(freq);
     return Math.floor(Math.random() * (max - min + 1)) + min;
   }
 
@@ -1611,6 +2034,90 @@ exit 0
       return true;
     } catch (error) {
       console.error('[LibrarianManager] Failed to reset counter:', error);
+      return false;
+    }
+  }
+
+  // ===========================================================================
+  // Setup Wizard Support
+  // ===========================================================================
+
+  /**
+   * Create a welcome artifact in the specified directory.
+   * This introduces users to the Librarian format and braille art style.
+   */
+  createWelcomeArtifact(dirPath: string): boolean {
+    const expandedPath = this.expandPath(dirPath);
+    const normalizedPath = this.normalizePath(expandedPath);
+
+    // Ensure directory exists
+    if (!fs.existsSync(normalizedPath)) {
+      try {
+        fs.mkdirSync(normalizedPath, { recursive: true });
+        console.log(`[LibrarianManager] Created directory: ${normalizedPath}`);
+      } catch (error) {
+        console.error(`[LibrarianManager] Failed to create directory ${normalizedPath}:`, error);
+        return false;
+      }
+    }
+
+    // Generate filename with today's date
+    const today = new Date();
+    const dateStr = today.toISOString().split('T')[0]; // YYYY-MM-DD
+    const filename = `${dateStr}-welcome-to-librarian.md`;
+    const filePath = path.join(normalizedPath, filename);
+
+    // Don't overwrite existing welcome artifact
+    if (fs.existsSync(filePath)) {
+      console.log(`[LibrarianManager] Welcome artifact already exists: ${filePath}`);
+      return true;
+    }
+
+    const content = `# Welcome to Librarian
+
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣤⣴⣶⣶⣶⣦⣤⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣦⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣄⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣴⣿⣿⣿⣿⣿⣿⣿⡿⠿⠿⠿⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⡀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⢀⣾⣿⣿⣿⣿⣿⡿⠋⠁⠀⠀⠀⠀⠀⠀⠈⠙⢿⣿⣿⣿⣿⣿⣿⣷⡀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⣾⣿⣿⣿⣿⣿⠏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠹⣿⣿⣿⣿⣿⣿⣷⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⡏⠀⠀⠀⠀⢀⣀⣀⣀⠀⠀⠀⠀⠀⠀⢻⣿⣿⣿⣿⣿⣿⡇⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⠁⠀⠀⠀⣴⣿⣿⣿⣿⣷⡄⠀⠀⠀⠀⠈⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⡇⠀⠀⠀⠹⣿⣿⣿⣿⣿⠏⠀⠀⠀⠀⢰⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⢹⣿⣿⣿⣿⣿⣿⡀⠀⠀⠀⠈⠻⠿⠟⠁⠀⠀⠀⠀⢀⣿⣿⣿⣿⣿⣿⣿⡏⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⢻⣿⣿⣿⣿⣿⣷⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣾⣿⣿⣿⣿⣿⣿⡿⠁⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠻⣿⣿⣿⣿⣿⣿⣿⣶⣤⣀⣀⣀⣤⣴⣶⣿⣿⣿⣿⣿⣿⣿⣿⠟⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠋⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠛⠻⠿⢿⣿⣿⣿⣿⣿⣿⡿⠿⠟⠛⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀
+
+Librarian connects your coding sessions to the deeper history of engineering thought. Each artifact captures not just what you're building, but why it matters—drawing threads to physics, systems theory, and the accumulated wisdom of those who built before us.
+
+This is your first artifact. As you work with Claude Code, Librarian will prompt you to create more, building a collection of insights that contextualize your work within the broader story of technology.
+
+The braille halftone illustrations above each reading are a signature element. They're rendered as Unicode braille characters—a form of ASCII art that dates back to the earliest days of computing, when programmers found creative ways to produce images using only text. Each image is exactly 56 characters wide by 15 lines tall, with density ranging from sparse (⠀) to full (⣿).
+
+Your readings will accumulate here in \`.librarian/\` directories, one per meaningful session. Let them be serendipitous—not every session needs one, but substantial work deserves reflection.
+`;
+
+    try {
+      fs.writeFileSync(filePath, content, 'utf-8');
+      console.log(`[LibrarianManager] Created welcome artifact: ${filePath}`);
+
+      // If this directory is watched, the watcher will pick it up
+      // If not, add it to the cache manually for immediate visibility
+      if (this.settings.watchedDirs.includes(normalizedPath)) {
+        const meta = this.parseFileMetadata(filePath);
+        if (meta) {
+          this.cache.set(filePath, meta);
+          this.saveIndex();
+          this.emit('reading-added', meta);
+        }
+      }
+
+      return true;
+    } catch (error) {
+      console.error(`[LibrarianManager] Failed to create welcome artifact:`, error);
       return false;
     }
   }

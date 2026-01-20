@@ -8,6 +8,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import ReactMarkdown from 'react-markdown';
 import { fonts } from '../design/tokens';
 import ContentToolbar from './ContentToolbar';
+import LibrarianSetupWizard from './LibrarianSetupWizard';
 
 interface LibrarianViewProps {
   onSwitchToClipboard: () => void;
@@ -69,6 +70,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedReading, setSelectedReading] = useState<Reading | null>(null);
   const [loading, setLoading] = useState(true);
+  const [setupComplete, setSetupComplete] = useState<boolean | null>(null); // null = loading
 
   // Edit mode state
   const [isEditing, setIsEditing] = useState(false);
@@ -279,9 +281,14 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     }
   }, [selectedPath, selectedReading, shareStatus?.shared]);
 
-  // Load readings on mount
+  // Load readings on mount and check setup completion
   useEffect(() => {
     async function loadReadings() {
+      // Check if setup wizard is complete
+      const isComplete = await window.librarianAPI?.isSetupComplete();
+      setSetupComplete(isComplete ?? true); // Default to true for backwards compatibility
+
+      // Load readings
       const result = await window.librarianAPI?.getReadings();
       if (result) {
         setReadings(result);
@@ -293,6 +300,19 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       setLoading(false);
     }
     loadReadings();
+  }, []);
+
+  // Handle setup wizard completion
+  const handleSetupComplete = useCallback(async () => {
+    setSetupComplete(true);
+    // Reload readings to show the new welcome artifact
+    const result = await window.librarianAPI?.getReadings();
+    if (result) {
+      setReadings(result);
+      if (result.length > 0) {
+        setSelectedPath(result[0].path);
+      }
+    }
   }, []);
 
   // Load selected reading content
@@ -566,6 +586,11 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       }
     }
   };
+
+  // Setup wizard - shown on first visit
+  if (!loading && setupComplete === false) {
+    return <LibrarianSetupWizard onComplete={handleSetupComplete} />;
+  }
 
   // Empty state
   if (!loading && readings.length === 0) {
