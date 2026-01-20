@@ -27,3 +27,9 @@ input, textarea, [contenteditable="true"] {
   user-select: text;
   -webkit-user-select: text;
 }
+
+/* Allow text selection in librarian reading content */
+.librarian-content, .librarian-content * {
+  user-select: text;
+  -webkit-user-select: text;
+}

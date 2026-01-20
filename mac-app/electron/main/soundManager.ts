@@ -41,6 +41,11 @@ export const AVAILABLE_SOUNDS = {
   success: [
     { id: 'EmailMailSent.mp3', name: 'Mail Sent' },
   ],
+
+  // Discovery sounds - for artifacts/readings
+  discovery: [
+    { id: 'ArtifactDiscovery.wav', name: 'Artifact Discovery' },
+  ],
 } as const;
 
 /**
@@ -61,7 +66,7 @@ export function getAllSounds(): Array<{ id: string; name: string; category: stri
 /**
  * Sound event types that the app can trigger.
  */
-export type SoundEvent = 'recordingStart' | 'recordingStop' | 'recordingCancel' | 'windowOpen' | 'windowClose' | 'paste' | 'transcribing';
+export type SoundEvent = 'recordingStart' | 'recordingStop' | 'recordingCancel' | 'windowOpen' | 'windowClose' | 'paste' | 'transcribing' | 'artifactDiscovery';
 
 /**
  * SoundManager handles playing UI sounds based on user preferences.
@@ -124,8 +129,11 @@ export class SoundManager {
       case 'transcribing':
         soundFile = this.preferences.getPreference('transcribingSound');
         break;
+      case 'artifactDiscovery':
+        soundFile = this.preferences.getPreference('artifactDiscoverySound') ?? 'ArtifactDiscovery.wav';
+        break;
     }
-    
+
     if (soundFile) {
       this.playFile(soundFile);
     }
