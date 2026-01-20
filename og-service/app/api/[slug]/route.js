@@ -13,6 +13,11 @@ export async function GET(request, { params }) {
     return new Response('Not found', { status: 404 });
   }
 
+  // Fetch logo image
+  const logoData = await fetch('https://fieldtheory.dev/images/fieldtheory-icon-white.png')
+    .then(res => res.arrayBuffer())
+    .catch(() => null);
+
   let title = 'Untitled';
   let reading = null;
 
@@ -103,16 +108,25 @@ export async function GET(request, { params }) {
             marginBottom: '32px',
           }}
         >
-          {/* Logo icon - simple circle to match Field Theory aesthetic */}
-          <div
-            style={{
-              width: 28,
-              height: 28,
-              borderRadius: '50%',
-              border: '2px solid #666',
-              opacity: 0.7,
-            }}
-          />
+          {/* Logo icon */}
+          {logoData ? (
+            <img
+              src={logoData}
+              width={32}
+              height={32}
+              style={{ opacity: 0.7 }}
+            />
+          ) : (
+            <div
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: '50%',
+                border: '2px solid #666',
+                opacity: 0.7,
+              }}
+            />
+          )}
           {/* Brand name */}
           <div
             style={{
