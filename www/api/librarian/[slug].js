@@ -85,12 +85,12 @@ export default async function handler(req, res) {
   <meta property="og:type" content="article">
   <meta property="og:title" content="${esc(reading.title)}">
   <meta property="og:description" content="An artifact from the Field Theory Librarian">
-  <meta property="og:image" content="https://fieldtheory-og.vercel.app/api/${encodeURIComponent(reading.title)}">
+  <meta property="og:image" content="https://fieldtheory-og.vercel.app/api/${slug}">
   <meta property="og:url" content="${shareUrl}">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="${esc(reading.title)}">
   <meta name="twitter:description" content="An artifact from the Field Theory Librarian">
-  <meta name="twitter:image" content="https://fieldtheory-og.vercel.app/api/${encodeURIComponent(reading.title)}">
+  <meta name="twitter:image" content="https://fieldtheory-og.vercel.app/api/${slug}">
   <link rel="icon" href="https://fieldtheory.dev/images/fieldtheory-icon-black.png">
   <style>
     :root {
