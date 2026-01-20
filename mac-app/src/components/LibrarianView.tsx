@@ -104,6 +104,16 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const [isSharing, setIsSharing] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
 
+  // Narration state
+  const [narrationStatus, setNarrationStatus] = useState<{
+    playbackStatus: 'idle' | 'generating' | 'playing' | 'paused' | 'stopped';
+    currentReadingPath: string | null;
+  }>({ playbackStatus: 'idle', currentReadingPath: null });
+  const [narrationPrefs, setNarrationPrefs] = useState<{
+    speakOnOpen: boolean;
+    blockedDevices: string[];
+  } | null>(null);
+
   // Handle initial reading path and fullscreen from parent (auto-open flow)
   useEffect(() => {
     if (initialReadingPath) {
@@ -166,6 +176,48 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     onFullScreenChange?.(isFullScreen);
   }, [isFullScreen, onFullScreenChange]);
+
+  // Initialize narration state and subscribe to events
+  useEffect(() => {
+    // Load initial narration status
+    window.narrationAPI?.getStatus().then((status) => {
+      if (status) {
+        setNarrationStatus({
+          playbackStatus: status.playbackStatus,
+          currentReadingPath: status.currentReadingPath,
+        });
+      }
+    });
+
+    // Load narration preferences
+    window.narrationAPI?.getPrefs().then((prefs) => {
+      if (prefs) {
+        setNarrationPrefs({
+          speakOnOpen: prefs.speakOnOpen,
+          blockedDevices: prefs.blockedDevices,
+        });
+      }
+    });
+
+    // Subscribe to playback events
+    const unsubStarted = window.narrationAPI?.onPlaybackStarted((readingPath) => {
+      setNarrationStatus({ playbackStatus: 'playing', currentReadingPath: readingPath });
+    });
+
+    const unsubStopped = window.narrationAPI?.onPlaybackStopped(() => {
+      setNarrationStatus({ playbackStatus: 'idle', currentReadingPath: null });
+    });
+
+    const unsubError = window.narrationAPI?.onPlaybackError(() => {
+      setNarrationStatus({ playbackStatus: 'idle', currentReadingPath: null });
+    });
+
+    return () => {
+      unsubStarted?.();
+      unsubStopped?.();
+      unsubError?.();
+    };
+  }, []);
 
   // Text size values
   const textSizes = {
@@ -280,6 +332,22 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       // The onReadingRemoved listener will handle updating state and selecting next item
     }
   }, [selectedPath, selectedReading, shareStatus?.shared]);
+
+  // Play narration for current reading
+  const handlePlayNarration = useCallback(async () => {
+    if (!selectedPath) return;
+    await window.narrationAPI?.playReading(selectedPath);
+  }, [selectedPath]);
+
+  // Stop narration
+  const handleStopNarration = useCallback(async () => {
+    await window.narrationAPI?.stop();
+  }, []);
+
+  // Check if current reading is being narrated
+  const isNarrating = selectedPath && narrationStatus.currentReadingPath === selectedPath;
+  const isGenerating = narrationStatus.playbackStatus === 'generating' && isNarrating;
+  const isPlaying = narrationStatus.playbackStatus === 'playing' && isNarrating;
 
   // Load readings on mount and check setup completion
   useEffect(() => {
@@ -1175,6 +1243,62 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 showShare={true}
                 headerHovered={headerHovered}
               />
+
+              {/* Narration Play/Stop button */}
+              {selectedReading && !isEditing && (
+                <button
+                  onClick={isPlaying || isGenerating ? handleStopNarration : handlePlayNarration}
+                  disabled={isGenerating}
+                  style={{
+                    padding: '4px 8px',
+                    fontSize: '13px',
+                    color: isPlaying ? '#8b5cf6' : theme.textSecondary,
+                    backgroundColor: isPlaying
+                      ? (theme.isDark ? 'rgba(139, 92, 246, 0.15)' : 'rgba(139, 92, 246, 0.1)')
+                      : 'transparent',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: isGenerating ? 'wait' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    transition: 'background-color 0.15s ease, color 0.15s ease',
+                    opacity: isFullScreen && !headerHovered ? 0 : 1,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isPlaying && !isGenerating) {
+                      e.currentTarget.style.backgroundColor = theme.isDark
+                        ? 'rgba(255,255,255,0.08)'
+                        : 'rgba(0,0,0,0.05)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isPlaying) {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }
+                  }}
+                  title={isPlaying ? 'Stop narration' : isGenerating ? 'Generating...' : 'Listen to reading'}
+                >
+                  {/* Speaker icon or stop icon */}
+                  {isPlaying ? (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                      <rect x="6" y="6" width="12" height="12" rx="1" />
+                    </svg>
+                  ) : isGenerating ? (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style={{ animation: 'pulse 1s infinite' }}>
+                      <circle cx="12" cy="12" r="3" />
+                      <circle cx="12" cy="12" r="8" fillOpacity="0.3" />
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" />
+                    </svg>
+                  )}
+                  <span style={{ fontSize: '12px' }}>
+                    {isPlaying ? 'Stop' : isGenerating ? '...' : 'Listen'}
+                  </span>
+                </button>
+              )}
             </div>
           </div>
         )}

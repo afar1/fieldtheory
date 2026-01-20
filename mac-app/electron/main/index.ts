@@ -51,6 +51,7 @@ import { CommandLauncherWindow } from './commandLauncherWindow';
 import { LocalLLMManager, LLMModelSize } from './localLLMManager';
 import { LibrarianManager, Reading, ReadingMeta, WatchedDir } from './librarianManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
+import { NarrationManager, getNarrationManager, NarrationStatus, NarrationIPCChannels, OutputDevice, NarrationPreferences } from './narration';
 
 // Load environment variables from .env.local for Supabase credentials.
 // In development, the file is in the mac-app directory.
@@ -150,6 +151,7 @@ let cursorStatusManager: CursorStatusManager | null = null;
 let quotaManager: QuotaManager | null = null;
 let diagnosticsCollector: DiagnosticsCollector | null = null;
 let librarianManager: LibrarianManager | null = null;
+let narrationManager: NarrationManager | null = null;
 let commandsManager: CommandsManager | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
 let metricsManager: MetricsManager | null = null;
@@ -1604,6 +1606,79 @@ function setupLibrarianIPCHandlers(): void {
 
     console.log('[Librarian] Shared reading updated:', filePath);
     return true;
+  });
+
+  // ===========================================================================
+  // Narration IPC handlers - Local, offline TTS for the Librarian
+  // ===========================================================================
+
+  // Get narration status (installation, playback, cache)
+  ipcMain.handle(NarrationIPCChannels.GET_STATUS, (): NarrationStatus | null => {
+    return narrationManager?.getStatus() ?? null;
+  });
+
+  // Install narration capability (verifies macOS say is available)
+  ipcMain.handle(NarrationIPCChannels.INSTALL, async (): Promise<boolean> => {
+    return narrationManager?.install() ?? false;
+  });
+
+  // Play a reading aloud
+  ipcMain.handle(NarrationIPCChannels.PLAY_READING, async (_event, readingPath: string): Promise<boolean> => {
+    if (!narrationManager || !librarianManager) return false;
+
+    try {
+      const reading = librarianManager.getReading(readingPath);
+      if (!reading) {
+        console.warn(`[Narration] Reading not found: ${readingPath}`);
+        return false;
+      }
+
+      await narrationManager.playReading(readingPath, reading.content);
+      return true;
+    } catch (error) {
+      console.error('[Narration] Play reading failed:', error);
+      return false;
+    }
+  });
+
+  // Stop playback
+  ipcMain.handle(NarrationIPCChannels.STOP, (): void => {
+    narrationManager?.stop();
+  });
+
+  // Get current output device
+  ipcMain.handle(NarrationIPCChannels.GET_OUTPUT_DEVICE, async (): Promise<OutputDevice | null> => {
+    return narrationManager?.getCurrentOutputDevice() ?? null;
+  });
+
+  // Refresh device detection
+  ipcMain.handle(NarrationIPCChannels.REFRESH_DEVICES, async (): Promise<OutputDevice | null> => {
+    return narrationManager?.refreshDevices() ?? null;
+  });
+
+  // Get narration preferences
+  ipcMain.handle(NarrationIPCChannels.GET_PREFS, (): NarrationPreferences | null => {
+    return narrationManager?.getPrefs() ?? null;
+  });
+
+  // Set speak-on-open preference
+  ipcMain.handle(NarrationIPCChannels.SET_SPEAK_ON_OPEN, async (_event, enabled: boolean): Promise<void> => {
+    await narrationManager?.setSpeakOnOpen(enabled);
+  });
+
+  // Add blocked device pattern
+  ipcMain.handle(NarrationIPCChannels.ADD_BLOCKED_DEVICE, async (_event, pattern: string): Promise<void> => {
+    await narrationManager?.addBlockedDevice(pattern);
+  });
+
+  // Remove blocked device pattern
+  ipcMain.handle(NarrationIPCChannels.REMOVE_BLOCKED_DEVICE, async (_event, pattern: string): Promise<void> => {
+    await narrationManager?.removeBlockedDevice(pattern);
+  });
+
+  // Clear narration cache
+  ipcMain.handle(NarrationIPCChannels.CLEAR_CACHE, async (): Promise<void> => {
+    await narrationManager?.clearCache();
   });
 
   // ===========================================================================
@@ -4899,6 +4974,42 @@ async function initTranscriberSystem(): Promise<void> {
   // Initialize librarian manager for watching markdown reading files.
   librarianManager = new LibrarianManager();
 
+  // Initialize narration manager for TTS capability.
+  // Local, offline text-to-speech for the Librarian voice.
+  narrationManager = getNarrationManager(preferencesManager);
+  narrationManager.init().then(() => {
+    console.log('[Main] Narration manager initialized');
+  }).catch((error) => {
+    console.error('[Main] Narration manager init failed:', error);
+  });
+
+  // Forward narration events to renderer
+  narrationManager.on('playbackStarted', (readingPath: string) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(NarrationIPCChannels.PLAYBACK_STARTED, readingPath);
+      }
+    });
+  });
+
+  narrationManager.on('playbackStopped', (readingPath: string | null) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(NarrationIPCChannels.PLAYBACK_STOPPED, readingPath);
+      }
+    });
+  });
+
+  narrationManager.on('playbackError', (error: string, readingPath: string | null) => {
+    // Only log, don't show modal - silent failure rule
+    console.warn(`[Narration] Playback error: ${error}`);
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(NarrationIPCChannels.PLAYBACK_ERROR, error, readingPath);
+      }
+    });
+  });
+
   // Broadcast artifact-added events to all windows and auto-show if enabled
   librarianManager.on('reading-added', (reading: Reading) => {
     console.log(`[Librarian] artifact-added event: ${reading.title}`);
@@ -4938,6 +5049,24 @@ async function initTranscriberSystem(): Promise<void> {
     // Play artifact discovery sound AFTER ensuring window exists
     // This plays the coin sound instead of the window open sound
     clipboardHistoryWindow?.playArtifactDiscoverySound();
+
+    // Speak-on-open: Auto-narrate the reading if enabled and device allowed
+    // Silent failure rule: if narration fails, reading still opens
+    if (narrationManager) {
+      narrationManager.shouldSpeakNow().then(async ({ shouldSpeak }) => {
+        if (shouldSpeak) {
+          console.log(`[Narration] Auto-speaking reading: ${reading.title}`);
+          try {
+            await narrationManager!.playReading(reading.path, reading.content);
+          } catch (error) {
+            // Silent failure - reading already opened, just log
+            console.warn(`[Narration] Auto-speak failed:`, error);
+          }
+        }
+      }).catch((error) => {
+        console.warn(`[Narration] shouldSpeakNow check failed:`, error);
+      });
+    }
   });
 
   // Broadcast reading-updated events to all windows

@@ -192,6 +192,16 @@ interface Preferences {
 
   // Dark mode preference - synced across all windows.
   darkMode?: boolean;
+
+  // Narration capability settings.
+  // Local, offline text-to-speech for the Librarian.
+  narrationPrefs?: {
+    installed: boolean;
+    installedVersion?: string;
+    speakOnOpen: boolean;
+    blockedDevices: string[];
+    cacheSizeLimitBytes: number;
+  };
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
