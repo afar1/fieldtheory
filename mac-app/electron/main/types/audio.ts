@@ -111,7 +111,8 @@ export type HelperOutgoingMessageType =
   | 'menuBarClicked'
   | 'appBecameFrontmost'
   | 'frontmostAppChanged'
-  | 'frontmostWindowBounds';
+  | 'frontmostWindowBounds'
+  | 'soundsPreloaded';
 
 /**
  * Message types sent FROM Electron main TO the Swift helper.
@@ -127,7 +128,10 @@ export type HelperIncomingMessageType =
   | 'checkPermissions'
   | 'startKeyboardMonitoring'
   | 'stopKeyboardMonitoring'
-  | 'getFrontmostWindowBounds';
+  | 'getFrontmostWindowBounds'
+  | 'preloadSounds'
+  | 'playSound'
+  | 'stopSounds';
 
 /**
  * Base interface for all messages from the native helper.
@@ -281,6 +285,15 @@ export interface FrontmostWindowBoundsMessage extends HelperMessage {
 }
 
 /**
+ * Sounds preloaded message.
+ * Sent after preloadSounds command completes.
+ */
+export interface SoundsPreloadedMessage extends HelperMessage {
+  type: 'soundsPreloaded';
+  count: number;
+}
+
+/**
  * Union type of all possible messages from the helper.
  */
 export type HelperOutgoingMessage =
@@ -299,7 +312,8 @@ export type HelperOutgoingMessage =
   | MenuBarClickedMessage
   | AppBecameFrontmostMessage
   | FrontmostAppChangedMessage
-  | FrontmostWindowBoundsMessage;
+  | FrontmostWindowBoundsMessage
+  | SoundsPreloadedMessage;
 
 /**
  * Commands sent to the helper.
@@ -353,6 +367,20 @@ export interface GetFrontmostWindowBoundsCommand {
   type: 'getFrontmostWindowBounds';
 }
 
+export interface PreloadSoundsCommand {
+  type: 'preloadSounds';
+  soundPaths: string[];
+}
+
+export interface PlaySoundCommand {
+  type: 'playSound';
+  soundPath: string;
+}
+
+export interface StopSoundsCommand {
+  type: 'stopSounds';
+}
+
 /**
  * Union type of all possible commands to the helper.
  */
@@ -368,4 +396,7 @@ export type HelperIncomingCommand =
   | CheckFocusedTextInputCommand
   | StartKeyboardMonitoringCommand
   | StopKeyboardMonitoringCommand
-  | GetFrontmostWindowBoundsCommand;
+  | GetFrontmostWindowBoundsCommand
+  | PreloadSoundsCommand
+  | PlaySoundCommand
+  | StopSoundsCommand;

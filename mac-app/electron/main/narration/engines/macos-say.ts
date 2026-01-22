@@ -219,6 +219,18 @@ export class MacOSSayEngine {
   }
 
   /**
+   * Test voice synthesis with a short phrase.
+   */
+  async testVoice(): Promise<NarrateResult> {
+    await this.init();
+
+    const testText = 'The archive remembers what others forget.';
+    const testOutputPath = '/tmp/fieldtheory-macos-say-test.aiff';
+
+    return this.synthesize(testText, testOutputPath, 'librarian_v1');
+  }
+
+  /**
    * Check if the engine is available.
    */
   async isAvailable(): Promise<boolean> {
