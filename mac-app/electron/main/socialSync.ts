@@ -924,6 +924,35 @@ export class SocialSync extends EventEmitter {
   }
 
   /**
+   * Mark all unread feedback messages as read for the current user.
+   * Called when user views the feedback tab.
+   */
+  async markAllFeedbackAsRead(): Promise<boolean> {
+    if (!this.supabase) return false;
+    const userId = this.getUserId();
+    if (!userId) return false;
+
+    try {
+      const { error } = await this.supabase
+        .from('messages')
+        .update({ read_at: new Date().toISOString() })
+        .eq('type', 'feedback')
+        .eq('recipient_user_id', userId)
+        .is('read_at', null);
+
+      if (error) {
+        console.error('[SocialSync] Mark all feedback as read failed:', error);
+        return false;
+      }
+
+      return true;
+    } catch (err) {
+      console.error('[SocialSync] Failed to mark all feedback as read:', err);
+      return false;
+    }
+  }
+
+  /**
    * Check if there are any unread messages.
    */
   async hasUnreadMessages(): Promise<boolean> {

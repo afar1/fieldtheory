@@ -1020,6 +1020,16 @@ declare global {
     currentReadingPath: string | null;
     cacheSizeBytes: number;
     cachedItemCount: number;
+    chatterboxInstalled?: boolean;
+    chatterboxInstalling?: boolean;
+    preferredEngine?: NarrationEngine;
+  }
+
+  interface ChatterboxInstallStatus {
+    installed: boolean;
+    installing: boolean;
+    version?: string;
+    error?: string;
   }
 
   interface NarrationOutputDevice {
@@ -1046,6 +1056,13 @@ declare global {
     addBlockedDevice: (pattern: string) => Promise<void>;
     removeBlockedDevice: (pattern: string) => Promise<void>;
     clearCache: () => Promise<void>;
+    // Chatterbox-specific methods
+    installChatterbox: () => Promise<boolean>;
+    getChatterboxStatus: () => Promise<ChatterboxInstallStatus | null>;
+    testChatterboxVoice: () => Promise<boolean>;
+    testMacOSVoice: () => Promise<boolean>;
+    setPreferredEngine: (engine: NarrationEngine) => Promise<boolean>;
+    // Event listeners
     onPlaybackStarted: (callback: (readingPath: string) => void) => () => void;
     onPlaybackStopped: (callback: (readingPath: string | null) => void) => () => void;
     onPlaybackError: (callback: (error: string, readingPath: string | null) => void) => () => void;

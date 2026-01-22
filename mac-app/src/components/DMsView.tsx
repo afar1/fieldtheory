@@ -226,6 +226,10 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
         const myFeedback = await window.socialAPI.getMyFeedback();
         setFeedback(myFeedback);
         setCachedData(FEEDBACK_CACHE_KEY, myFeedback);
+
+        // Mark all feedback messages as read when user views the list.
+        // This clears the notification badge for replies from admin.
+        window.socialAPI.markAllFeedbackAsRead(); // Fire and forget
       }
     } catch (err) {
       console.error('[DMsView] Failed to load data:', err);

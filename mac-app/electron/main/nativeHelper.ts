@@ -402,6 +402,67 @@ export class NativeHelper extends EventEmitter {
   }
 
   /**
+   * Preload sound files for instant playback.
+   * Call once at startup with all sound file paths.
+   * Returns the number of sounds successfully preloaded.
+   */
+  async preloadSounds(soundPaths: string[]): Promise<number> {
+    if (!this.child || !this.child.stdin.writable) {
+      console.warn('[NativeHelper] Cannot preload sounds - helper not running');
+      return 0;
+    }
+
+    await this.waitForReady();
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        console.warn('[NativeHelper] preloadSounds timed out');
+        resolve(0);
+      }, 5000);
+
+      const onMessage = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'soundsPreloaded') {
+          cleanup();
+          resolve(msg.count);
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', onMessage);
+      };
+
+      this.on('message', onMessage);
+      this.send({ type: 'preloadSounds', soundPaths });
+    });
+  }
+
+  /**
+   * Play a sound file. Fire-and-forget - returns immediately.
+   * Sound should be preloaded for instant (~1-5ms) playback.
+   */
+  playSound(soundPath: string): void {
+    if (!this.child || !this.child.stdin.writable) {
+      console.warn('[NativeHelper] Cannot play sound - helper not running');
+      return;
+    }
+
+    // Fire-and-forget for minimal latency - don't await ready
+    this.send({ type: 'playSound', soundPath });
+  }
+
+  /**
+   * Stop all currently playing sounds.
+   */
+  stopSounds(): void {
+    if (!this.child || !this.child.stdin.writable) {
+      return;
+    }
+    this.send({ type: 'stopSounds' });
+  }
+
+  /**
    * Determine the path to the helper binary based on the environment.
    */
   private getHelperPath(): string {
@@ -506,6 +567,11 @@ export class NativeHelper extends EventEmitter {
 
       case 'frontmostWindowBounds':
         // Response to getFrontmostWindowBounds - handled by promise listener.
+        this.emit('message', msg);
+        break;
+
+      case 'soundsPreloaded':
+        // Response to preloadSounds - handled by promise listener.
         this.emit('message', msg);
         break;
 
