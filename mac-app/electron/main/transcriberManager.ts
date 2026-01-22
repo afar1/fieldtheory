@@ -711,6 +711,10 @@ export class TranscriberManager extends EventEmitter {
           }
 
           if (useLocalLLM || apiKey) {
+            // Bail silently if no text to improve
+            if (!cleanedText || cleanedText.trim().length === 0) {
+              console.log('[TranscriberManager] No text to improve, skipping silently');
+            } else {
             // Show improving state.
             this.cursorStatusManager?.setState('improving');
 
@@ -752,8 +756,8 @@ export class TranscriberManager extends EventEmitter {
               }
             } else {
               console.error('[TranscriberManager] Improvement failed:', result.error);
-              this.cursorStatusManager?.showCriticalMessage('Improvement failed');
-              // Fall back to original transcript - don't block paste.
+              // Fail silently - don't show error message, just fall back to original transcript
+            }
             }
           } else {
             console.log('[TranscriberManager] No improvement method available (no API key, no local model)');

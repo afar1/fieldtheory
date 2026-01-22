@@ -764,6 +764,16 @@ export default function TranscriptionSettings() {
                 </button>
               </div>
             </div>
+
+            {/* Note about restart for window sounds */}
+            <p style={{
+              fontSize: '11px',
+              color: theme.textSecondary,
+              marginTop: '8px',
+              lineHeight: 1.4,
+            }}>
+              Window open/close sounds require restart to take effect.
+            </p>
           </>
         )}
       </div>

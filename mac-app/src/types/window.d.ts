@@ -244,6 +244,7 @@ interface ClipboardAPI {
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
   onShowSettings?: (callback: () => void) => () => void;
+  onCollapseImmersive?: (callback: () => void) => () => void;
   onDialogPosition: (callback: (position: { left: number; top: number }) => void) => () => void;
   onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number; overlayWidth: number; overlayHeight: number }) => void) => () => void;
   onTargetAppInfo: (callback: (info: TargetAppInfo) => void) => () => void;
@@ -914,13 +915,9 @@ interface LibrarianAPI {
   onReadingRemoved: (callback: (path: string) => void) => () => void;
   onSetFullscreen: (callback: (fullscreen: boolean) => void) => () => void;
   onShowReading: (callback: (readingPath: string) => void) => () => void;
-  // New Settings API (v2)
+  // Settings API
   isEnabled: () => Promise<boolean>;
   setEnabled: (enabled: boolean) => Promise<boolean>;
-  getTriggerMode: () => Promise<string>;
-  setTriggerMode: (mode: string) => Promise<boolean>;
-  getPromptThreshold: () => Promise<number>;
-  setPromptThreshold: (threshold: number) => Promise<boolean>;
   isSetupComplete: () => Promise<boolean>;
   setSetupComplete: (complete: boolean) => Promise<void>;
   createWelcomeArtifact: (dirPath: string) => Promise<boolean>;
@@ -1011,7 +1008,15 @@ declare global {
    */
   type NarrationInstallStatus = 'not_installed' | 'installing' | 'installed' | 'install_failed';
   type NarrationPlaybackStatus = 'idle' | 'generating' | 'playing' | 'paused' | 'stopped';
-  type NarrationEngine = 'chatterbox' | 'macos_say';
+  type NarrationEngine = 'chatterbox' | 'macos_say' | 'elevenlabs';
+
+  interface ElevenLabsVoiceInfo {
+    voice_id: string;
+    name: string;
+    category?: string;
+    description?: string;
+    labels?: Record<string, string>;
+  }
 
   interface NarrationStatus {
     installStatus: NarrationInstallStatus;
@@ -1023,6 +1028,8 @@ declare global {
     chatterboxInstalled?: boolean;
     chatterboxInstalling?: boolean;
     preferredEngine?: NarrationEngine;
+    elevenlabsConfigured?: boolean;
+    elevenlabsVoiceId?: string;
   }
 
   interface ChatterboxInstallStatus {
@@ -1049,6 +1056,10 @@ declare global {
     install: () => Promise<boolean>;
     playReading: (readingPath: string) => Promise<boolean>;
     stop: () => Promise<void>;
+    pause?: () => Promise<boolean>;
+    resume?: () => Promise<boolean>;
+    togglePause?: () => Promise<boolean>;
+    getPlaybackProgress?: () => Promise<{ position: number; duration: number; percentage: number } | null>;
     getOutputDevice: () => Promise<NarrationOutputDevice | null>;
     refreshDevices: () => Promise<NarrationOutputDevice | null>;
     getPrefs: () => Promise<NarrationPreferences | null>;
@@ -1062,11 +1073,56 @@ declare global {
     testChatterboxVoice: () => Promise<boolean>;
     testMacOSVoice: () => Promise<boolean>;
     setPreferredEngine: (engine: NarrationEngine) => Promise<boolean>;
+    // ElevenLabs-specific methods
+    setElevenlabsApiKey: (apiKey: string) => Promise<boolean>;
+    setElevenlabsVoice: (voiceId: string) => Promise<boolean>;
+    testElevenlabsVoice: () => Promise<boolean>;
+    getElevenlabsVoices: () => Promise<ElevenLabsVoiceInfo[]>;
+    checkElevenlabsConnection: () => Promise<{ connected: boolean; error?: string }>;
+    getLibrarianVoices?: () => Promise<{ voiceId: string; name: string; speed?: number }[]>;
+    getCurrentVoiceId?: () => Promise<string | null>;
     // Event listeners
-    onPlaybackStarted: (callback: (readingPath: string) => void) => () => void;
+    onGenerationStarted?: (callback: (readingPath: string) => void) => () => void;
+    onPlaybackStarted: (callback: (readingPath: string, duration: number) => void) => () => void;
+    onPlaybackPaused?: (callback: (readingPath: string | null) => void) => () => void;
+    onPlaybackResumed?: (callback: (readingPath: string | null) => void) => () => void;
     onPlaybackStopped: (callback: (readingPath: string | null) => void) => () => void;
     onPlaybackError: (callback: (error: string, readingPath: string | null) => void) => () => void;
     onInstallProgress: (callback: (progress: number, message: string) => void) => () => void;
+  }
+
+  /**
+   * Permission profile info
+   */
+  interface PermissionProfile {
+    id: string;
+    name: string;
+    description: string;
+    permissionCount: number;
+    permissions: string[];
+  }
+
+  /**
+   * Permission status info
+   */
+  interface PermissionStatus {
+    currentProfile: string | null;
+    managedPermissions: string[];
+    allClaudePermissions: string[];
+  }
+
+  /**
+   * Claude API - Claude Code integration settings
+   */
+  interface ClaudeAPI {
+    isScreenshotPermissionEnabled: () => Promise<boolean>;
+    enableScreenshotPermission: () => Promise<boolean>;
+    getAvailableProfiles: () => Promise<PermissionProfile[]>;
+    getPermissionStatus: () => Promise<PermissionStatus>;
+    applyPermissionProfile: (profileId: string) => Promise<boolean>;
+    addPermissions: (permissions: string[]) => Promise<boolean>;
+    removePermissions: (permissions: string[]) => Promise<boolean>;
+    clearManagedPermissions: () => Promise<boolean>;
   }
 
   interface Window {
@@ -1089,6 +1145,7 @@ declare global {
     themeAPI?: ThemeAPI;
     librarianAPI?: LibrarianAPI;
     narrationAPI?: NarrationAPI;
+    claudeAPI?: ClaudeAPI;
     diagnosticsAPI?: DiagnosticsAPI;
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;

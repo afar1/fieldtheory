@@ -212,24 +212,36 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
       setContacts(contactList);
 
       // Load feedback based on admin status.
+      console.log('[DMsView] loadData: admin =', admin);
       if (admin) {
+        console.log('[DMsView] Loading as admin');
         const allFeedback = await window.socialAPI.getAllFeedback();
         setFeedback(allFeedback);
         setCachedData(FEEDBACK_CACHE_KEY, allFeedback);
 
         // Mark unread feedback items as read when admin views the list (batch).
         const unreadIds = allFeedback.filter(item => !item.readAt).map(item => item.id);
+        console.log('[DMsView] Admin unread feedback count:', unreadIds.length);
         if (unreadIds.length > 0) {
           window.socialAPI.markAsReadBatch(unreadIds); // Fire and forget
         }
       } else {
+        console.log('[DMsView] Loading as regular user');
         const myFeedback = await window.socialAPI.getMyFeedback();
         setFeedback(myFeedback);
         setCachedData(FEEDBACK_CACHE_KEY, myFeedback);
 
         // Mark all feedback messages as read when user views the list.
         // This clears the notification badge for replies from admin.
-        window.socialAPI.markAllFeedbackAsRead(); // Fire and forget
+        console.log('[DMsView] Calling markAllFeedbackAsRead...');
+        window.socialAPI.markAllFeedbackAsRead().then(success => {
+          console.log('[DMsView] markAllFeedbackAsRead result:', success);
+          if (!success) {
+            console.warn('[DMsView] markAllFeedbackAsRead returned false');
+          }
+        }).catch(err => {
+          console.error('[DMsView] markAllFeedbackAsRead failed:', err);
+        });
       }
     } catch (err) {
       console.error('[DMsView] Failed to load data:', err);

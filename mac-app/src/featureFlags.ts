@@ -20,3 +20,9 @@ export const FEATURE_MESSAGE_SHORTCUT_ENABLED = false;
  * Disabled by default. Users can unlock via Cmd+Shift+S.
  */
 export const FEATURE_SHARING_ENABLED = false;
+
+/**
+ * Narration feature - text-to-speech for Librarian readings.
+ * Disabled by default. Uses ElevenLabs API.
+ */
+export const FEATURE_NARRATION_ENABLED = false;
