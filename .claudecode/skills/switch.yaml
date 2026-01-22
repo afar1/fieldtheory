@@ -1,6 +1,0 @@
-name: switch
-description: Pull down a branch, merge main, summarize and review
-instructions: |
-  Make sure all uncommited changes have been pushed first to origin. Then pull down this branch I just pasted in, pull main into it and clear up and merge conflicts, briefly summarize this specific branch for me, and tell me what you think about it. I'm curious if you were wearing your creative hat what you think. The branch's contents should dictate the name of our Agent discussion.
-
-  As a general rule never commit to a remote branch without asking me first. I always test locally before pushing.

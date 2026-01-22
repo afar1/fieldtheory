@@ -1,4 +1,0 @@
-name: include
-description: Pull a branch into the current branch and merge features
-instructions: |
-  I'd like you to go pull this branch into the current branch that we're working on and I realize that the branch I'm asking you to pull in is probably unrelated to the changes that we've made in the branch currently, but I'd like you to update the current branch name to include some mention or nod to the branch that we're pulling in. Make sure to clear up any merge conflicts because what my plan is is to essentially pull in the features from the branch that I just shared with you into the branch we're currently on and working on and then ultimately commit that to origin and then ultimately merge into main. So this is sort of my way of stacking features before we move them into the primary application.

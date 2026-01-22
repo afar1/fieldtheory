@@ -327,9 +327,9 @@ function registerHotkeysAfterOnboarding(): void {
       clipboardHistoryWindow.show(boundsToUse, false, true);
       clipboardHistoryWindow.capturePreviousAppBeforeShow();
     } else if (!showInDock) {
-      // If in immersive mode, collapse instead of hiding
+      // If in immersive mode, exit fullscreen instead of hiding (like pressing ESC)
       if (clipboardHistoryWindow.getImmersiveMode()) {
-        clipboardHistoryWindow.sendCollapseImmersive();
+        clipboardHistoryWindow.sendExitFullscreen();
       } else {
         const overlayVisible = transcriberManager?.isRecordingOverlayVisible() ?? false;
         clipboardHistoryWindow.hide(!overlayVisible);

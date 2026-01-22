@@ -1,4 +1,0 @@
-name: review
-description: Review proposal against engineering principles as second set of eyes
-instructions: |
-  Review what you've just proposed against our engineering principles. And as a second set of eyes. Are there any minor changes, major changes, logical flaws, or are we good to go?

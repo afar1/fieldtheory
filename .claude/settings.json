@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Write(.librarian/*)",
-      "Edit(.librarian/*)"
+      "Edit(.librarian/*)",
+      "Read(.cursor/commands/*)",
+      "Bash(git diff *)"
     ]
   }
 }

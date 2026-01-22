@@ -1,4 +1,0 @@
-name: better
-description: Improve or rewrite the prompt as an expert prompt engineer
-instructions: |
-  Take the prompt that I just gave you and improve or rewrite it as if you were an expert prompt engineer. Know your audience and write for them.

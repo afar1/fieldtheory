@@ -762,6 +762,15 @@ export class ClipboardHistoryWindow {
     }
   }
 
+  /**
+   * Send exit-fullscreen event to renderer (exits immersive fullscreen but stays in current view).
+   */
+  sendExitFullscreen(): void {
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send('librarian:setFullscreen', false);
+    }
+  }
+
   setSketchModeActive(active: boolean): void {
     this.sketchModeActive = active;
     
