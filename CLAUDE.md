@@ -1,15 +1,75 @@
-# Claude Code Instructions
+# CLAUDE.md
 
-## Working Style
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Before non-trivial implementations, provide a short reading via the Librarian:
+## Commands
 
-[run this command: librarian.md]
-/Users/afar/dev/fieldtheory/.cursor/commands/librarian.md
+All commands run from `mac-app/` directory:
 
-Store each reading in `.librarian/` with a unique filename.
+```bash
+# Development
+npm run dev              # Start Vite + Electron concurrently
+npm run build            # Build both Electron and Vite
+npm run typecheck        # TypeScript check (both configs)
 
-This should feel serendipitous—not every change, just when there's meaningful wait time. Use your discretion.
+# Testing
+npm run test             # Run vitest once
+npm run test:watch       # Watch mode
+
+# Native builds (required for full functionality)
+npm run build:native     # Build Swift helper (audio/permissions)
+npm run build:whisper    # Build whisper-cli for transcription
+npm run build:all        # Build everything (native + whisper + app)
+
+# Packaging
+npm run package          # Full build + electron-builder → release/
+```
+
+## Architecture
+
+### Electron Main Process (`electron/main/`)
+
+Manager pattern with EventEmitter for inter-component communication:
+
+| Manager | Purpose |
+|---------|---------|
+| `ClipboardManager` | SQLite clipboard history, screenshot capture |
+| `TranscriberManager` | Whisper transcription, audio recording |
+| `AudioManager` | Audio devices, priority mic enforcement |
+| `LibrarianManager` | `.librarian/` file watching, reading metadata |
+| `NarrationManager` | TTS orchestration (multiple engines) |
+| `AuthManager` | Supabase authentication |
+| `PreferencesManager` | JSON settings persistence |
+
+Entry point: `index.ts` initializes all managers and sets up IPC handlers.
+
+### IPC Communication
+
+- **Preload bridge** (`preload.ts`) exposes typed APIs via `contextBridge`
+- **Channel naming**: `domain:action` (e.g., `clipboard:queryItems`, `transcribe:toggle`)
+- **Type definitions**: `window.d.ts` declares all `window.*API` interfaces
+
+Example flow:
+```
+React → window.clipboardAPI.queryItems() → ipcRenderer.invoke('clipboard:queryItems')
+     → ipcMain.handle() → ClipboardManager.queryItems() → SQLite → response
+```
+
+### React Renderer (`src/`)
+
+- **`ClipboardHistory.tsx`** (~7000 lines): Main popup UI, search, multi-select, tabs
+- **`SettingsPanel.tsx`**: Settings navigation and section rendering
+- **`App.tsx`**: Settings window root (separate from clipboard popup)
+- **Feature flags**: `featureFlags.ts` controls experimental features
+
+### Data Storage
+
+```
+~/Library/Application Support/Field Theory/
+├── clipboard.db          # SQLite: clipboard items
+├── preferences.json      # User settings
+└── .librarian-index.json # Cached reading metadata
+```
 
 ## Releases
 
@@ -22,7 +82,7 @@ When releasing:
 4. Upload to **field-releases**: `gh release create vX.X.X --repo afar1/field-releases ...`
 5. Rename files to use periods not spaces: `Field.Theory-X.X.X-arm64.dmg`
 
-## Codebase Structure
+## Key Files Reference
 
 ### ClipboardHistory Component
 **File**: `mac-app/src/components/ClipboardHistory.tsx` (~7000+ lines)
@@ -41,10 +101,8 @@ Icon colors:
 - Plain text (T): amber `#f59e0b`
 - Disabled: gray `#4b5563` (dark) / `#d1d5db` (light)
 
-The component fills `width: 100%` - actual width is controlled by the Electron BrowserWindow.
-
 ### Electron Window Management
 **File**: `mac-app/electron/main/index.ts` - Main process, window creation
 **File**: `mac-app/electron/main/librarianManager.ts` - Librarian window management
 
-Window sizing is typically configured in main process when creating BrowserWindows.
+Window sizing is configured in main process when creating BrowserWindows.
