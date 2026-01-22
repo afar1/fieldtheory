@@ -14,7 +14,7 @@ export type NarrationProfile = 'librarian_v1';
 /**
  * Current narration engine being used.
  */
-export type NarrationEngine = 'chatterbox' | 'macos_say';
+export type NarrationEngine = 'chatterbox' | 'macos_say' | 'elevenlabs';
 
 /**
  * Installation status for the narration capability.
@@ -58,6 +58,14 @@ export const LIBRARIAN_V1_PARAMS: SynthesisParameters = {
   cfgWeight: 0.45,     // Higher for consistent authority
   temperature: 0.75,
 };
+
+/**
+ * Text chunking constants for long content.
+ * Chunking prevents memory issues and enables continuous playback.
+ */
+export const CHUNK_MIN_LENGTH = 100;   // Min chars per chunk (avoid tiny chunks)
+export const CHUNK_MAX_LENGTH = 1000;  // Max chars per chunk (~150 words, memory safe)
+export const CHUNK_THRESHOLD = 500;    // Only chunk texts longer than this
 
 /**
  * macOS say voice configuration for fallback.
@@ -120,6 +128,10 @@ export interface NarrationStatus {
   chatterboxInstalling?: boolean;
   /** User's preferred engine. */
   preferredEngine?: NarrationEngine;
+  /** Whether ElevenLabs is configured (has API key). */
+  elevenlabsConfigured?: boolean;
+  /** Currently selected ElevenLabs voice ID. */
+  elevenlabsVoiceId?: string;
 }
 
 /**
@@ -137,6 +149,27 @@ export interface OutputDevice {
 }
 
 /**
+ * ElevenLabs voice configuration.
+ */
+export interface ElevenLabsVoice {
+  /** Voice ID from ElevenLabs. */
+  voiceId: string;
+  /** Display name. */
+  name: string;
+  /** Speed multiplier (1.0 = normal, 1.18 = 18% faster). */
+  speed?: number;
+}
+
+/**
+ * Default ElevenLabs voices for the Librarian character.
+ * Custom voices with optimized speed settings.
+ */
+export const ELEVENLABS_LIBRARIAN_VOICES: ElevenLabsVoice[] = [
+  { voiceId: 'PIGsltMj3gFMR34aFDI3', name: 'Male', speed: 1.0 },
+  { voiceId: 'bD9maNcCuQQS75DGuteM', name: 'Female', speed: 1.10 },
+];
+
+/**
  * Narration settings stored in preferences.
  */
 export interface NarrationPreferences {
@@ -152,6 +185,12 @@ export interface NarrationPreferences {
   cacheSizeLimitBytes: number;
   /** Preferred narration engine. */
   preferredEngine?: NarrationEngine;
+  /** ElevenLabs API key (stored securely). */
+  elevenlabsApiKey?: string;
+  /** ElevenLabs voice ID to use. */
+  elevenlabsVoiceId?: string;
+  /** ElevenLabs model ID (defaults to eleven_multilingual_v2). */
+  elevenlabsModelId?: string;
 }
 
 /**
@@ -210,6 +249,10 @@ export const NarrationIPCChannels = {
   GET_STATUS: 'narration:getStatus',
   PLAY_READING: 'narration:playReading',
   STOP: 'narration:stop',
+  PAUSE: 'narration:pause',
+  RESUME: 'narration:resume',
+  TOGGLE_PAUSE: 'narration:togglePause',
+  GET_PLAYBACK_PROGRESS: 'narration:getPlaybackProgress',
   GET_OUTPUT_DEVICE: 'narration:getOutputDevice',
   REFRESH_DEVICES: 'narration:refreshDevices',
   GET_PREFS: 'narration:getPrefs',
@@ -224,8 +267,19 @@ export const NarrationIPCChannels = {
   TEST_CHATTERBOX_VOICE: 'narration:testChatterboxVoice',
   TEST_MACOS_VOICE: 'narration:testMacOSVoice',
   SET_PREFERRED_ENGINE: 'narration:setPreferredEngine',
+  // ElevenLabs-specific
+  SET_ELEVENLABS_API_KEY: 'narration:setElevenlabsApiKey',
+  SET_ELEVENLABS_VOICE: 'narration:setElevenlabsVoice',
+  TEST_ELEVENLABS_VOICE: 'narration:testElevenlabsVoice',
+  GET_ELEVENLABS_VOICES: 'narration:getElevenlabsVoices',
+  CHECK_ELEVENLABS_CONNECTION: 'narration:checkElevenlabsConnection',
+  GET_LIBRARIAN_VOICES: 'narration:getLibrarianVoices',
+  GET_CURRENT_VOICE_ID: 'narration:getCurrentVoiceId',
   // Events (renderer listens)
+  GENERATION_STARTED: 'narration:generationStarted',
   PLAYBACK_STARTED: 'narration:playbackStarted',
+  PLAYBACK_PAUSED: 'narration:playbackPaused',
+  PLAYBACK_RESUMED: 'narration:playbackResumed',
   PLAYBACK_STOPPED: 'narration:playbackStopped',
   PLAYBACK_ERROR: 'narration:playbackError',
   INSTALL_PROGRESS: 'narration:installProgress',

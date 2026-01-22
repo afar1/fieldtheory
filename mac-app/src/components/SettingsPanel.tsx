@@ -9,6 +9,7 @@ import AudioSettingsPanel from './AudioSettingsPanel';
 import TranscriptionSettings from './TranscriptionSettings';
 import DiagnosticsModal from './DiagnosticsModal';
 import CommandsSettings from './CommandsSettings';
+import ClaudeSettings from './ClaudeSettings';
 import LibrarianSettings from './LibrarianSettings';
 import UserStatsPanel from './UserStatsPanel';
 import { supabase } from '../supabaseClient';
@@ -23,7 +24,7 @@ type SettingsSection =
   | 'audio'
   | 'auto-improve'
   | 'keyboard'
-  | 'librarian'
+  | 'librarian-claude'
   | 'commands'
   | 'stats';
 
@@ -48,9 +49,9 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'audio': 'Audio & Transcription',
   'auto-improve': 'Auto-Improve',
   'keyboard': 'Keyboard Shortcuts',
-  'librarian': 'Librarian',
+  'librarian-claude': 'Librarian & Claude',
   'commands': 'Portable Commands',
-  'stats': 'Your Stats',
+  'stats': 'Stats',
 };
 
 // Alphabetically ordered sections for navigation
@@ -61,7 +62,7 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'auto-improve',
   'commands',
   'keyboard',
-  'librarian',
+  'librarian-claude',
   'stats',
 ];
 
@@ -2131,14 +2132,18 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       </div>
       )}
 
-      {/* Librarian Section */}
-      {selectedSection === 'librarian' && (
+      {/* Librarian & Claude Section - Combined */}
+      {selectedSection === 'librarian-claude' && (
       <div style={styles.section}>
         <SectionHeader title="Librarian" />
         <LibrarianSettings
           librarianEnabled={librarianEnabled}
           onLibrarianEnabledChange={onLibrarianEnabledChange}
         />
+        <div style={{ marginTop: '24px' }}>
+          <SectionHeader title="Claude Code" />
+          <ClaudeSettings />
+        </div>
       </div>
       )}
 

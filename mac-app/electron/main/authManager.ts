@@ -120,6 +120,7 @@ export class AuthManager extends EventEmitter {
   private lastFailedToken: string | null = null;
   private refreshRetryTimeout: NodeJS.Timeout | null = null;
   private hasEverAuthenticated: boolean = false;
+  private pendingRefreshDueToNetwork: boolean = false;
 
   constructor() {
     super();
@@ -207,6 +208,7 @@ export class AuthManager extends EventEmitter {
             // Don't emit sessionChanged here - they weren't logged in yet
           } else {
             console.log('[AuthManager] Network error during restore, will retry later:', refreshError.message);
+            this.pendingRefreshDueToNetwork = true;
             this.scheduleRefreshRetry();
           }
           return;
@@ -214,6 +216,7 @@ export class AuthManager extends EventEmitter {
 
         if (refreshData.session) {
           this.session = refreshData.session;
+          this.pendingRefreshDueToNetwork = false;
           console.log('[AuthManager] Manual refresh succeeded for user:', refreshData.session.user?.email);
           this.emit('sessionChanged', this.session);
           return;
@@ -314,6 +317,7 @@ export class AuthManager extends EventEmitter {
       }
 
       this.session = data.session;
+      this.pendingRefreshDueToNetwork = false;
       console.log('[AuthManager] Session refreshed, new expiry:',
         new Date((data.session.expires_at || 0) * 1000).toISOString());
       this.emit('sessionChanged', this.session);
@@ -334,6 +338,10 @@ export class AuthManager extends EventEmitter {
       this.refreshRetryTimeout = null;
       if (this.session) {
         await this.refreshSessionIfNeeded(true);
+      } else {
+        // No session yet (startup case) - try restoring again
+        console.log('[AuthManager] Retrying session restore...');
+        await this.restoreSessionFromStorage();
       }
     }, 30000);
   }
@@ -404,6 +412,15 @@ export class AuthManager extends EventEmitter {
    */
   hasEverBeenAuthenticated(): boolean {
     return this.hasEverAuthenticated;
+  }
+
+  /**
+   * Check if there's a pending refresh due to network error.
+   * When true, we have a stored refresh token that may still be valid but
+   * couldn't be verified due to network issues.
+   */
+  hasPendingRefreshDueToNetwork(): boolean {
+    return this.pendingRefreshDueToNetwork;
   }
 
   // ===========================================================================

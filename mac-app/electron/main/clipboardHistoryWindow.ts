@@ -753,6 +753,15 @@ export class ClipboardHistoryWindow {
     return this.isImmersiveMode;
   }
 
+  /**
+   * Send collapse-immersive event to renderer.
+   */
+  sendCollapseImmersive(): void {
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send('collapse-immersive');
+    }
+  }
+
   setSketchModeActive(active: boolean): void {
     this.sketchModeActive = active;
     
@@ -1048,6 +1057,15 @@ export class ClipboardHistoryWindow {
     } catch (error) {
       console.error('[ClipboardHistoryWindow] Failed to paste to app:', error);
       return false;
+    }
+  }
+
+  /**
+   * Open the developer tools inspector for this window.
+   */
+  openDevTools(): void {
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.openDevTools({ mode: 'detach' });
     }
   }
 }

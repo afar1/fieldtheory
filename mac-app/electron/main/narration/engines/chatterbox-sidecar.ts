@@ -33,6 +33,11 @@ import {
 type SidecarState = 'stopped' | 'starting' | 'ready' | 'busy' | 'error';
 
 /**
+ * Reference voice file name.
+ */
+const REFERENCE_VOICE_FILE = 'reference-voice.wav';
+
+/**
  * Installation status for Chatterbox.
  */
 export interface ChatterboxInstallStatus {
@@ -439,6 +444,9 @@ export class ChatterboxSidecarEngine extends EventEmitter {
 
     console.log(`[ChatterboxSidecar] Synthesizing ${text.length} chars...`);
 
+    // Get reference voice path for voice cloning
+    const voiceRef = await this.getReferenceVoicePath();
+
     const response = await this.httpPost<SynthesisResponse>('/synthesize', {
       text,
       output_path: outputPath,
@@ -446,6 +454,7 @@ export class ChatterboxSidecarEngine extends EventEmitter {
         exaggeration: params.exaggeration,
         cfg_weight: params.cfgWeight,
       },
+      voice_ref: voiceRef,
     });
 
     console.log(
@@ -458,6 +467,35 @@ export class ChatterboxSidecarEngine extends EventEmitter {
       durationMs: response.duration_ms,
       engine: 'chatterbox' as NarrationEngine,
     };
+  }
+
+  /**
+   * Get the path to the reference voice file for voice cloning.
+   * Returns null if no reference voice is available.
+   */
+  private async getReferenceVoicePath(): Promise<string | null> {
+    // Check possible locations for reference voice
+    const possiblePaths = [
+      // Production: extraResources
+      path.join(process.resourcesPath, 'chatterbox', REFERENCE_VOICE_FILE),
+      // Development: relative to electron main
+      path.join(__dirname, '..', '..', '..', '..', 'resources', 'chatterbox', REFERENCE_VOICE_FILE),
+      // Alternative dev path
+      path.join(app.getAppPath(), 'resources', 'chatterbox', REFERENCE_VOICE_FILE),
+    ];
+
+    for (const p of possiblePaths) {
+      try {
+        await fs.access(p);
+        console.log(`[ChatterboxSidecar] Using reference voice: ${p}`);
+        return p;
+      } catch {
+        // Try next
+      }
+    }
+
+    console.log('[ChatterboxSidecar] No reference voice found, using default');
+    return null;
   }
 
   /**

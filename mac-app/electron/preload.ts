@@ -572,6 +572,7 @@ export interface ClipboardAPI {
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
   onShowSettings: (callback: () => void) => () => void;
+  onCollapseImmersive: (callback: () => void) => () => void;
   onPlaySound: (callback: (soundId: 'windowOpen' | 'windowClose' | 'artifactDiscovery') => void) => () => void;
   onDialogPosition: (callback: (position: { left: number; top: number }) => void) => () => void;
   onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number }) => void) => () => void;
@@ -1031,6 +1032,16 @@ const clipboardAPI: ClipboardAPI = {
     ipcRenderer.on('clipboard:showSettings', handler);
     return () => {
       ipcRenderer.removeListener('clipboard:showSettings', handler);
+    };
+  },
+
+  onCollapseImmersive: (callback: () => void): (() => void) => {
+    const handler = () => {
+      callback();
+    };
+    ipcRenderer.on('collapse-immersive', handler);
+    return () => {
+      ipcRenderer.removeListener('collapse-immersive', handler);
     };
   },
 
@@ -2368,14 +2379,6 @@ const librarianAPI = {
   isEnabled: (): Promise<boolean> => ipcRenderer.invoke('librarian:isEnabled'),
   setEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('librarian:setEnabled', enabled),
 
-  // Trigger mode (prompt count vs AI judgment)
-  getTriggerMode: (): Promise<string> => ipcRenderer.invoke('librarian:getTriggerMode'),
-  setTriggerMode: (mode: string): Promise<boolean> => ipcRenderer.invoke('librarian:setTriggerMode', mode),
-
-  // Prompt threshold (for prompt count mode)
-  getPromptThreshold: (): Promise<number> => ipcRenderer.invoke('librarian:getPromptThreshold'),
-  setPromptThreshold: (threshold: number): Promise<boolean> => ipcRenderer.invoke('librarian:setPromptThreshold', threshold),
-
   // Setup wizard completion
   isSetupComplete: (): Promise<boolean> => ipcRenderer.invoke('librarian:isSetupComplete'),
   setSetupComplete: (complete: boolean): Promise<void> => ipcRenderer.invoke('librarian:setSetupComplete', complete),
@@ -2482,6 +2485,10 @@ const NarrationIPCChannels = {
   GET_STATUS: 'narration:getStatus',
   PLAY_READING: 'narration:playReading',
   STOP: 'narration:stop',
+  PAUSE: 'narration:pause',
+  RESUME: 'narration:resume',
+  TOGGLE_PAUSE: 'narration:togglePause',
+  GET_PLAYBACK_PROGRESS: 'narration:getPlaybackProgress',
   GET_OUTPUT_DEVICE: 'narration:getOutputDevice',
   REFRESH_DEVICES: 'narration:refreshDevices',
   GET_PREFS: 'narration:getPrefs',
@@ -2495,8 +2502,19 @@ const NarrationIPCChannels = {
   TEST_CHATTERBOX_VOICE: 'narration:testChatterboxVoice',
   TEST_MACOS_VOICE: 'narration:testMacOSVoice',
   SET_PREFERRED_ENGINE: 'narration:setPreferredEngine',
+  // ElevenLabs-specific
+  SET_ELEVENLABS_API_KEY: 'narration:setElevenlabsApiKey',
+  SET_ELEVENLABS_VOICE: 'narration:setElevenlabsVoice',
+  TEST_ELEVENLABS_VOICE: 'narration:testElevenlabsVoice',
+  GET_ELEVENLABS_VOICES: 'narration:getElevenlabsVoices',
+  CHECK_ELEVENLABS_CONNECTION: 'narration:checkElevenlabsConnection',
+  GET_LIBRARIAN_VOICES: 'narration:getLibrarianVoices',
+  GET_CURRENT_VOICE_ID: 'narration:getCurrentVoiceId',
   // Events
+  GENERATION_STARTED: 'narration:generationStarted',
   PLAYBACK_STARTED: 'narration:playbackStarted',
+  PLAYBACK_PAUSED: 'narration:playbackPaused',
+  PLAYBACK_RESUMED: 'narration:playbackResumed',
   PLAYBACK_STOPPED: 'narration:playbackStopped',
   PLAYBACK_ERROR: 'narration:playbackError',
   INSTALL_PROGRESS: 'narration:installProgress',
@@ -2505,7 +2523,15 @@ const NarrationIPCChannels = {
 // Types for narration
 type NarrationInstallStatus = 'not_installed' | 'installing' | 'installed' | 'install_failed';
 type NarrationPlaybackStatus = 'idle' | 'generating' | 'playing' | 'paused' | 'stopped';
-type NarrationEngine = 'chatterbox' | 'macos_say';
+type NarrationEngine = 'chatterbox' | 'macos_say' | 'elevenlabs';
+
+interface ElevenLabsVoiceInfo {
+  voice_id: string;
+  name: string;
+  category?: string;
+  description?: string;
+  labels?: Record<string, string>;
+}
 
 interface NarrationStatus {
   installStatus: NarrationInstallStatus;
@@ -2547,6 +2573,22 @@ const narrationAPI = {
   // Stop playback
   stop: (): Promise<void> =>
     ipcRenderer.invoke(NarrationIPCChannels.STOP),
+
+  // Pause playback
+  pause: (): Promise<boolean> =>
+    ipcRenderer.invoke(NarrationIPCChannels.PAUSE),
+
+  // Resume playback
+  resume: (): Promise<boolean> =>
+    ipcRenderer.invoke(NarrationIPCChannels.RESUME),
+
+  // Toggle pause/play
+  togglePause: (): Promise<boolean> =>
+    ipcRenderer.invoke(NarrationIPCChannels.TOGGLE_PAUSE),
+
+  // Get playback progress
+  getPlaybackProgress: (): Promise<{ position: number; duration: number; percentage: number } | null> =>
+    ipcRenderer.invoke(NarrationIPCChannels.GET_PLAYBACK_PROGRESS),
 
   // Get current output device
   getOutputDevice: (): Promise<OutputDevice | null> =>
@@ -2593,14 +2635,54 @@ const narrationAPI = {
     ipcRenderer.invoke(NarrationIPCChannels.TEST_MACOS_VOICE),
 
   // Set preferred narration engine
-  setPreferredEngine: (engine: 'chatterbox' | 'macos_say'): Promise<boolean> =>
+  setPreferredEngine: (engine: 'chatterbox' | 'macos_say' | 'elevenlabs'): Promise<boolean> =>
     ipcRenderer.invoke(NarrationIPCChannels.SET_PREFERRED_ENGINE, engine),
 
+  // ElevenLabs methods
+  setElevenlabsApiKey: (apiKey: string): Promise<boolean> =>
+    ipcRenderer.invoke(NarrationIPCChannels.SET_ELEVENLABS_API_KEY, apiKey),
+
+  setElevenlabsVoice: (voiceId: string): Promise<boolean> =>
+    ipcRenderer.invoke(NarrationIPCChannels.SET_ELEVENLABS_VOICE, voiceId),
+
+  testElevenlabsVoice: (): Promise<boolean> =>
+    ipcRenderer.invoke(NarrationIPCChannels.TEST_ELEVENLABS_VOICE),
+
+  getElevenlabsVoices: (): Promise<ElevenLabsVoiceInfo[]> =>
+    ipcRenderer.invoke(NarrationIPCChannels.GET_ELEVENLABS_VOICES),
+
+  checkElevenlabsConnection: (): Promise<{ connected: boolean; error?: string }> =>
+    ipcRenderer.invoke(NarrationIPCChannels.CHECK_ELEVENLABS_CONNECTION),
+
+  getLibrarianVoices: (): Promise<{ voiceId: string; name: string; speed?: number }[]> =>
+    ipcRenderer.invoke(NarrationIPCChannels.GET_LIBRARIAN_VOICES),
+
+  getCurrentVoiceId: (): Promise<string | null> =>
+    ipcRenderer.invoke(NarrationIPCChannels.GET_CURRENT_VOICE_ID),
+
   // Event listeners
-  onPlaybackStarted: (callback: (readingPath: string) => void): (() => void) => {
+  onGenerationStarted: (callback: (readingPath: string) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, readingPath: string) => callback(readingPath);
+    ipcRenderer.on(NarrationIPCChannels.GENERATION_STARTED, handler);
+    return () => ipcRenderer.removeListener(NarrationIPCChannels.GENERATION_STARTED, handler);
+  },
+
+  onPlaybackStarted: (callback: (readingPath: string, duration: number) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, readingPath: string, duration: number) => callback(readingPath, duration);
     ipcRenderer.on(NarrationIPCChannels.PLAYBACK_STARTED, handler);
     return () => ipcRenderer.removeListener(NarrationIPCChannels.PLAYBACK_STARTED, handler);
+  },
+
+  onPlaybackPaused: (callback: (readingPath: string | null) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, readingPath: string | null) => callback(readingPath);
+    ipcRenderer.on(NarrationIPCChannels.PLAYBACK_PAUSED, handler);
+    return () => ipcRenderer.removeListener(NarrationIPCChannels.PLAYBACK_PAUSED, handler);
+  },
+
+  onPlaybackResumed: (callback: (readingPath: string | null) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, readingPath: string | null) => callback(readingPath);
+    ipcRenderer.on(NarrationIPCChannels.PLAYBACK_RESUMED, handler);
+    return () => ipcRenderer.removeListener(NarrationIPCChannels.PLAYBACK_RESUMED, handler);
   },
 
   onPlaybackStopped: (callback: (readingPath: string | null) => void): (() => void) => {
@@ -2672,6 +2754,46 @@ const metricsAPI = {
 
 type MetricsAPI = typeof metricsAPI;
 
+// =============================================================================
+// Claude API - Claude Code integration settings
+// =============================================================================
+
+const claudeAPI = {
+  // Check if screenshot permission is enabled
+  isScreenshotPermissionEnabled: (): Promise<boolean> =>
+    ipcRenderer.invoke('claude:isScreenshotPermissionEnabled'),
+
+  // Enable screenshot permission
+  enableScreenshotPermission: (): Promise<boolean> =>
+    ipcRenderer.invoke('claude:enableScreenshotPermission'),
+
+  // Get available permission profiles
+  getAvailableProfiles: (): Promise<Array<{ id: string; name: string; description: string; permissionCount: number }>> =>
+    ipcRenderer.invoke('claude:getAvailableProfiles'),
+
+  // Get current permission status
+  getPermissionStatus: (): Promise<{ currentProfile: string | null; managedPermissions: string[]; allClaudePermissions: string[] }> =>
+    ipcRenderer.invoke('claude:getPermissionStatus'),
+
+  // Apply a permission profile
+  applyPermissionProfile: (profileId: string): Promise<boolean> =>
+    ipcRenderer.invoke('claude:applyPermissionProfile', profileId),
+
+  // Add individual permissions
+  addPermissions: (permissions: string[]): Promise<boolean> =>
+    ipcRenderer.invoke('claude:addPermissions', permissions),
+
+  // Remove individual permissions
+  removePermissions: (permissions: string[]): Promise<boolean> =>
+    ipcRenderer.invoke('claude:removePermissions', permissions),
+
+  // Clear all managed permissions
+  clearManagedPermissions: (): Promise<boolean> =>
+    ipcRenderer.invoke('claude:clearManagedPermissions'),
+};
+
+type ClaudeAPI = typeof claudeAPI;
+
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);
 contextBridge.exposeInMainWorld('themeAPI', themeAPI);
 contextBridge.exposeInMainWorld('librarianAPI', librarianAPI);
@@ -2691,6 +2813,7 @@ contextBridge.exposeInMainWorld('sharedClipboardAPI', sharedClipboardAPI);
 contextBridge.exposeInMainWorld('socialAPI', socialAPI);
 contextBridge.exposeInMainWorld('commandsAPI', commandsAPI);
 contextBridge.exposeInMainWorld('metricsAPI', metricsAPI);
+contextBridge.exposeInMainWorld('claudeAPI', claudeAPI);
 contextBridge.exposeInMainWorld('narrationAPI', narrationAPI);
 
 contextBridge.exposeInMainWorld('platform', {

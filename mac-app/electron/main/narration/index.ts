@@ -24,3 +24,4 @@ export * from './cache';
 export * from './narrationManager';
 export * from './deviceDetector';
 export * from './engines/macos-say';
+export * from './engines/elevenlabs';

@@ -9,6 +9,7 @@ import ReactMarkdown from 'react-markdown';
 import { fonts } from '../design/tokens';
 import ContentToolbar from './ContentToolbar';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
+import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
 
 interface LibrarianViewProps {
   onSwitchToClipboard: () => void;
@@ -177,8 +178,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     onFullScreenChange?.(isFullScreen);
   }, [isFullScreen, onFullScreenChange]);
 
-  // Initialize narration state and subscribe to events
+  // Initialize narration state and subscribe to events (feature flagged)
   useEffect(() => {
+    if (!FEATURE_NARRATION_ENABLED) return;
+
     // Load initial narration status
     window.narrationAPI?.getStatus().then((status) => {
       if (status) {
@@ -200,6 +203,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     });
 
     // Subscribe to playback events
+    const unsubGenerating = window.narrationAPI?.onGenerationStarted?.((readingPath) => {
+      setNarrationStatus({ playbackStatus: 'generating', currentReadingPath: readingPath });
+    });
+
     const unsubStarted = window.narrationAPI?.onPlaybackStarted((readingPath) => {
       setNarrationStatus({ playbackStatus: 'playing', currentReadingPath: readingPath });
     });
@@ -213,6 +220,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     });
 
     return () => {
+      unsubGenerating?.();
       unsubStarted?.();
       unsubStopped?.();
       unsubError?.();
@@ -1257,8 +1265,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 headerHovered={headerHovered}
               />
 
-              {/* Narration Play/Stop button */}
-              {selectedReading && !isEditing && (
+              {/* Narration Play/Stop button (feature flagged) */}
+              {FEATURE_NARRATION_ENABLED && selectedReading && !isEditing && (
                 <button
                   onClick={isPlaying || isGenerating ? handleStopNarration : handlePlayNarration}
                   disabled={isGenerating}

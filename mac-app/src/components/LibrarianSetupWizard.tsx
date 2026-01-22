@@ -25,7 +25,6 @@ export default function LibrarianSetupWizard({ onComplete }: LibrarianSetupWizar
 
   // Platform setup state
   const [claudeCodeStatus, setClaudeCodeStatus] = useState<'installed' | 'directory-only' | 'not-installed'>('installed');
-  const [triggerMode, setTriggerMode] = useState<'prompt' | 'judgment'>('judgment'); // Default to judgment
   const [hookInstalled, setHookInstalled] = useState(false);
   const [hookInstalling, setHookInstalling] = useState(false);
 
@@ -34,23 +33,13 @@ export default function LibrarianSetupWizard({ onComplete }: LibrarianSetupWizar
     if (phase === 'platform') {
       Promise.all([
         window.librarianAPI?.getClaudeCodeStatus(),
-        window.librarianAPI?.getTriggerMode(),
         window.librarianAPI?.isClaudeCodeHookInstalled(),
-      ]).then(([status, mode, hook]) => {
+      ]).then(([status, hook]) => {
         if (status) setClaudeCodeStatus(status as 'installed' | 'directory-only' | 'not-installed');
-        if (mode) setTriggerMode(mode as 'prompt' | 'judgment');
         setHookInstalled(hook ?? false);
       });
     }
   }, [phase]);
-
-  // Handle trigger mode change
-  const handleTriggerModeChange = useCallback(async (mode: 'prompt' | 'judgment') => {
-    setTriggerMode(mode);
-    await window.librarianAPI?.setTriggerMode(mode);
-    // Also enable Librarian
-    await window.librarianAPI?.setEnabled(true);
-  }, []);
 
   // Handle hook installation
   const handleInstallHook = useCallback(async () => {
@@ -175,137 +164,48 @@ export default function LibrarianSetupWizard({ onComplete }: LibrarianSetupWizar
         marginBottom: '8px',
         textAlign: 'center',
       }}>
-        Platform Setup
+        Ready to Go
       </h2>
       <p style={{
         fontSize: '13px',
         color: theme.textSecondary,
         marginBottom: '24px',
         textAlign: 'center',
+        lineHeight: '1.6',
       }}>
-        Choose how Librarian should remind your AI to create artifacts
+        The Librarian works with your AI coding assistant to create contextual artifacts
+        that connect your work to engineering history and systems theory.
       </p>
 
-      {/* Trigger mode selection */}
-      <div style={{ marginBottom: '24px' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <label
-            style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: '12px',
-              cursor: 'pointer',
-              padding: '16px',
-              borderRadius: '8px',
-              backgroundColor: triggerMode === 'judgment'
-                ? (theme.isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.08)')
-                : (theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)'),
-              border: `1px solid ${triggerMode === 'judgment' ? theme.accent : 'transparent'}`,
-            }}
-          >
-            <input
-              type="radio"
-              name="triggerMode"
-              value="judgment"
-              checked={triggerMode === 'judgment'}
-              onChange={() => handleTriggerModeChange('judgment')}
-              style={{ marginTop: '4px', accentColor: theme.accent }}
-            />
-            <div>
-              <div style={{ fontSize: '14px', fontWeight: 500, color: theme.text, marginBottom: '4px' }}>
-                AI judgment (Recommended)
-              </div>
-              <div style={{ fontSize: '12px', color: theme.textSecondary, lineHeight: '1.5' }}>
-                Let your AI decide when to create artifacts based on work volume.
-                Works with Claude Code and Cursor with no extra setup.
-              </div>
-            </div>
-          </label>
-
-          <label
-            style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: '12px',
-              cursor: 'pointer',
-              padding: '16px',
-              borderRadius: '8px',
-              backgroundColor: triggerMode === 'prompt'
-                ? (theme.isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.08)')
-                : (theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)'),
-              border: `1px solid ${triggerMode === 'prompt' ? theme.accent : 'transparent'}`,
-            }}
-          >
-            <input
-              type="radio"
-              name="triggerMode"
-              value="prompt"
-              checked={triggerMode === 'prompt'}
-              onChange={() => handleTriggerModeChange('prompt')}
-              style={{ marginTop: '4px', accentColor: theme.accent }}
-            />
-            <div>
-              <div style={{ fontSize: '14px', fontWeight: 500, color: theme.text, marginBottom: '4px' }}>
-                Prompt count
-              </div>
-              <div style={{ fontSize: '12px', color: theme.textSecondary, lineHeight: '1.5' }}>
-                Remind after a set number of prompts. Requires Claude Code hook installation.
-              </div>
-            </div>
-          </label>
+      {/* Status info */}
+      <div
+        style={{
+          padding: '16px',
+          borderRadius: '8px',
+          backgroundColor: theme.isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.08)',
+          border: `1px solid ${theme.accent}`,
+          marginBottom: '24px',
+        }}
+      >
+        <div style={{ fontSize: '13px', color: theme.text, lineHeight: '1.6' }}>
+          {claudeCodeStatus === 'installed' ? (
+            <>
+              <strong>Claude Code detected.</strong> The Librarian will automatically
+              integrate with your coding sessions.
+            </>
+          ) : claudeCodeStatus === 'directory-only' ? (
+            <>
+              <strong>Claude config found.</strong> Add a watched directory to start
+              collecting artifacts.
+            </>
+          ) : (
+            <>
+              Works with <strong>Claude Code</strong> and <strong>Cursor</strong>.
+              Add a watched directory to get started.
+            </>
+          )}
         </div>
       </div>
-
-      {/* Hook installation for prompt mode */}
-      {triggerMode === 'prompt' && claudeCodeStatus !== 'not-installed' && (
-        <div
-          style={{
-            padding: '16px',
-            borderRadius: '8px',
-            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
-            marginBottom: '24px',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div>
-              <div style={{ fontSize: '13px', fontWeight: 500, color: theme.text }}>
-                Claude Code Hook
-              </div>
-              <div style={{ fontSize: '12px', color: theme.textSecondary }}>
-                {hookInstalled ? 'Connected and tracking prompts' : 'Required for prompt counting'}
-              </div>
-            </div>
-            {!hookInstalled && (
-              <button
-                onClick={handleInstallHook}
-                disabled={hookInstalling}
-                style={{
-                  ...primaryButtonStyle,
-                  padding: '8px 16px',
-                  fontSize: '12px',
-                  opacity: hookInstalling ? 0.6 : 1,
-                }}
-              >
-                {hookInstalling ? 'Installing...' : 'Install'}
-              </button>
-            )}
-            {hookInstalled && (
-              <span style={{
-                fontSize: '12px',
-                color: theme.success,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-              }}>
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                  <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
-                </svg>
-                Connected
-              </span>
-            )}
-          </div>
-        </div>
-      )}
 
       <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
         <button
@@ -316,11 +216,11 @@ export default function LibrarianSetupWizard({ onComplete }: LibrarianSetupWizar
         </button>
         <button
           onClick={handleComplete}
-          disabled={isProcessing || (triggerMode === 'prompt' && !hookInstalled && claudeCodeStatus !== 'not-installed')}
+          disabled={isProcessing}
           style={{
             ...primaryButtonStyle,
-            opacity: (isProcessing || (triggerMode === 'prompt' && !hookInstalled && claudeCodeStatus !== 'not-installed')) ? 0.5 : 1,
-            cursor: (isProcessing || (triggerMode === 'prompt' && !hookInstalled && claudeCodeStatus !== 'not-installed')) ? 'not-allowed' : 'pointer',
+            opacity: isProcessing ? 0.5 : 1,
+            cursor: isProcessing ? 'not-allowed' : 'pointer',
           }}
         >
           {isProcessing ? 'Setting up...' : 'Complete Setup'}

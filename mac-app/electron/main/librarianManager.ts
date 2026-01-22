@@ -7,17 +7,9 @@ import * as chokidar from 'chokidar';
 
 /**
  * Auto-run frequency for generating readings.
- * @deprecated Use `enabled` + `triggerMode` instead. Kept for migration.
+ * @deprecated Kept only for migration. State-enforced mode is now the only option.
  */
 export type AutoRunFrequency = 'off' | 'occasionally' | 'regularly' | 'frequently' | 'always';
-
-/**
- * Trigger mode for reading creation.
- * - 'prompt': Hook counts prompts and injects reminder at threshold
- * - 'judgment': AI decides when to create based on work volume
- * - 'state-enforced': Hook creates job files, Claude fulfills via Opinion C
- */
-export type TriggerMode = 'prompt' | 'judgment' | 'state-enforced';
 
 /**
  * Metadata for a reading (cached in index).
@@ -53,19 +45,18 @@ export interface WatchedDir {
  */
 interface LibrarianSettings {
   watchedDirs: string[];
-  // New unified settings (v2)
   enabled: boolean;                    // Single master toggle
-  triggerMode: TriggerMode;            // How to trigger reading creation
-  promptThreshold: number;             // Prompts before reminder (for 'prompt' mode)
   autoShowEnabled: boolean;
-  customContentGuidance?: string;
   librarianSetupComplete?: boolean;    // True after setup wizard completes
-  // State-enforced mode settings (when triggerMode === 'state-enforced')
+  // State-enforced mode settings (the only mode now)
   stateEnforcedThreshold?: number;     // Prompts before job creation (default: 3)
   stateEnforcedRuleContent?: string;   // Custom rule content (the "job language")
-  // Legacy fields (kept for migration, will be removed in future)
+  // Legacy fields (kept for migration only)
   autoRunFrequency?: AutoRunFrequency; // @deprecated
-  customThreshold?: number;            // @deprecated - use promptThreshold
+  triggerMode?: string;                // @deprecated - always state-enforced now
+  promptThreshold?: number;            // @deprecated
+  customThreshold?: number;            // @deprecated
+  customContentGuidance?: string;      // @deprecated
 }
 
 /**
@@ -174,10 +165,7 @@ export class LibrarianManager extends EventEmitter {
     const defaults: LibrarianSettings = {
       watchedDirs: [],
       enabled: true,
-      triggerMode: 'prompt',
-      promptThreshold: 5,
       autoShowEnabled: true,
-      customContentGuidance: undefined,
       librarianSetupComplete: undefined,
       stateEnforcedThreshold: 3,
       stateEnforcedRuleContent: undefined,
@@ -189,8 +177,6 @@ export class LibrarianManager extends EventEmitter {
 
         // Migrate from v1 format if needed
         let enabled = data.enabled;
-        let triggerMode = data.triggerMode;
-        let promptThreshold = data.promptThreshold;
 
         // Migration: convert autoRunFrequency to enabled
         if (enabled === undefined && data.autoRunFrequency !== undefined) {
@@ -198,26 +184,14 @@ export class LibrarianManager extends EventEmitter {
           console.log('[LibrarianManager] Migrated autoRunFrequency to enabled:', enabled);
         }
 
-        // Migration: convert customThreshold to promptThreshold
-        if (promptThreshold === undefined && data.customThreshold !== undefined) {
-          promptThreshold = data.customThreshold;
-          console.log('[LibrarianManager] Migrated customThreshold to promptThreshold:', promptThreshold);
-        }
-
         return {
           watchedDirs: data.watchedDirs || defaults.watchedDirs,
           enabled: enabled ?? defaults.enabled,
-          triggerMode: triggerMode || defaults.triggerMode,
-          promptThreshold: promptThreshold ?? defaults.promptThreshold,
           autoShowEnabled: data.autoShowEnabled ?? defaults.autoShowEnabled,
-          customContentGuidance: data.customContentGuidance || undefined,
           librarianSetupComplete: data.librarianSetupComplete,
-          // State-enforced mode settings
+          // State-enforced mode settings (the only mode now)
           stateEnforcedThreshold: data.stateEnforcedThreshold ?? defaults.stateEnforcedThreshold,
           stateEnforcedRuleContent: data.stateEnforcedRuleContent || undefined,
-          // Keep legacy fields for now (will be cleaned on next save)
-          autoRunFrequency: data.autoRunFrequency,
-          customThreshold: data.customThreshold,
         };
       }
     } catch (error) {
@@ -940,56 +914,6 @@ export class LibrarianManager extends EventEmitter {
     const success = this.syncClaudeMd();
     console.log(`[LibrarianManager] Enabled set to: ${enabled}`);
     return success;
-  }
-
-  /**
-   * Get the trigger mode setting.
-   */
-  getTriggerMode(): TriggerMode {
-    return this.settings.triggerMode;
-  }
-
-  /**
-   * Set the trigger mode and update CLAUDE.md.
-   */
-  setTriggerMode(mode: TriggerMode): boolean {
-    this.settings.triggerMode = mode;
-    this.saveSettings();
-    const success = this.syncClaudeMd();
-    console.log(`[LibrarianManager] Trigger mode set to: ${mode}`);
-    return success;
-  }
-
-  /**
-   * Get the prompt threshold.
-   */
-  getPromptThreshold(): number {
-    return this.settings.promptThreshold;
-  }
-
-  /**
-   * Set the prompt threshold and update status file + command file.
-   */
-  setPromptThreshold(threshold: number): boolean {
-    this.settings.promptThreshold = threshold;
-    this.saveSettings();
-
-    // Update threshold in global status file (for prompt mode)
-    this.ensureGlobalStatusExists();
-    const statusFile = this.getGlobalStatusPath();
-    try {
-      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
-      status.nextThreshold = threshold;
-      fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
-    } catch {
-      // Ignore errors updating status file
-    }
-
-    // Update command file (threshold is shown in the content)
-    this.syncClaudeMd();
-
-    console.log(`[LibrarianManager] Prompt threshold set to: ${threshold}`);
-    return true;
   }
 
   /**
@@ -1778,6 +1702,416 @@ ${this.CLAUDE_MD_END_MARKER}`;
    */
   private getClaudeSettingsPath(): string {
     return path.join(os.homedir(), '.claude', 'settings.json');
+  }
+
+  /**
+   * Get the permission string for screenshot access.
+   * This allows Claude to read figures from Field Theory's app data directory.
+   */
+  private getScreenshotPermission(): string {
+    const figuresPath = path.join(
+      os.homedir(),
+      'Library',
+      'Application Support',
+      'fieldtheory-mac',
+      'figures',
+      '*'
+    );
+    return `Read(${figuresPath})`;
+  }
+
+  /**
+   * Check if screenshot permission is already enabled in Claude settings.
+   */
+  isScreenshotPermissionEnabled(): boolean {
+    try {
+      const settingsPath = this.getClaudeSettingsPath();
+      if (!fs.existsSync(settingsPath)) {
+        return false;
+      }
+
+      const content = fs.readFileSync(settingsPath, 'utf-8');
+      const settings = JSON.parse(content) as Record<string, unknown>;
+      const permissions = settings.permissions as Record<string, unknown> | undefined;
+      const allow = permissions?.allow as string[] | undefined;
+
+      if (!Array.isArray(allow)) {
+        return false;
+      }
+
+      const permissionToCheck = this.getScreenshotPermission();
+      return allow.includes(permissionToCheck);
+    } catch (error) {
+      console.error('[LibrarianManager] Error checking screenshot permission:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Enable screenshot permission by adding it to Claude's settings.json.
+   * Returns true if successful, false otherwise.
+   */
+  enableScreenshotPermission(): boolean {
+    try {
+      const settingsPath = this.getClaudeSettingsPath();
+      const claudeDir = path.dirname(settingsPath);
+
+      // Ensure ~/.claude directory exists
+      if (!fs.existsSync(claudeDir)) {
+        fs.mkdirSync(claudeDir, { recursive: true });
+      }
+
+      // Read existing settings or create empty object
+      let settings: Record<string, unknown> = {};
+      if (fs.existsSync(settingsPath)) {
+        try {
+          settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+        } catch {
+          console.warn('[LibrarianManager] Could not parse existing settings.json, starting fresh');
+        }
+      }
+
+      // Ensure permissions structure exists
+      if (!settings.permissions) {
+        settings.permissions = { allow: [] };
+      }
+      const permissions = settings.permissions as Record<string, unknown>;
+      if (!Array.isArray(permissions.allow)) {
+        permissions.allow = [];
+      }
+
+      const allowList = permissions.allow as string[];
+      const permissionToAdd = this.getScreenshotPermission();
+
+      // Check if already present
+      if (allowList.includes(permissionToAdd)) {
+        console.log('[LibrarianManager] Screenshot permission already enabled');
+        return true;
+      }
+
+      // Add the permission
+      allowList.push(permissionToAdd);
+
+      // Write back
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+      console.log('[LibrarianManager] Screenshot permission enabled successfully');
+      return true;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to enable screenshot permission:', error);
+      return false;
+    }
+  }
+
+  // ===========================================================================
+  // Permission Profiles System
+  // ===========================================================================
+
+  /**
+   * Permission profile definitions.
+   * Each profile is a set of permissions that can be applied together.
+   */
+  private getPermissionProfiles(): Record<string, { description: string; permissions: string[] }> {
+    return {
+      minimal: {
+        description: 'Read access for screenshots and files',
+        permissions: [
+          this.getScreenshotPermission(),
+          'Read(**/*)',
+        ],
+      },
+      recommended: {
+        description: 'Common development tasks without prompts',
+        permissions: [
+          this.getScreenshotPermission(),
+          'Read(**/*)',
+          'Bash(npm run *)',
+          'Bash(npm test)',
+          'Bash(npm run build)',
+          'Bash(npm run lint)',
+          'Bash(npx tsc --noEmit)',
+          'Bash(git status)',
+          'Bash(git diff *)',
+          'Bash(git log *)',
+        ],
+      },
+      dev: {
+        description: 'Maximum autonomy for trusted workflows',
+        permissions: [
+          this.getScreenshotPermission(),
+          'Read(**/*)',
+          'Bash(npm run *)',
+          'Bash(npm test)',
+          'Bash(npm run build)',
+          'Bash(npm run lint)',
+          'Bash(npx tsc --noEmit)',
+          'Bash(npm install *)',
+          'Bash(git status)',
+          'Bash(git diff *)',
+          'Bash(git log *)',
+          'Bash(git add *)',
+          'Bash(prettier --write *)',
+        ],
+      },
+    };
+  }
+
+  /**
+   * Get the path to Field Theory's permission manifest file.
+   * This tracks what permissions Field Theory has added to Claude's settings.
+   */
+  private getPermissionManifestPath(): string {
+    return path.join(os.homedir(), '.fieldtheory', 'managed-claude-permissions.json');
+  }
+
+  /**
+   * Read the permission manifest (what Field Theory has contributed).
+   */
+  private readPermissionManifest(): { permissions: string[]; profile: string | null } {
+    try {
+      const manifestPath = this.getPermissionManifestPath();
+      if (!fs.existsSync(manifestPath)) {
+        return { permissions: [], profile: null };
+      }
+      const content = fs.readFileSync(manifestPath, 'utf-8');
+      const manifest = JSON.parse(content);
+      return {
+        permissions: Array.isArray(manifest.permissions) ? manifest.permissions : [],
+        profile: typeof manifest.profile === 'string' ? manifest.profile : null,
+      };
+    } catch (error) {
+      console.error('[LibrarianManager] Error reading permission manifest:', error);
+      return { permissions: [], profile: null };
+    }
+  }
+
+  /**
+   * Write the permission manifest.
+   */
+  private writePermissionManifest(permissions: string[], profile: string | null): boolean {
+    try {
+      const manifestPath = this.getPermissionManifestPath();
+      const manifestDir = path.dirname(manifestPath);
+
+      if (!fs.existsSync(manifestDir)) {
+        fs.mkdirSync(manifestDir, { recursive: true });
+      }
+
+      fs.writeFileSync(manifestPath, JSON.stringify({ permissions, profile }, null, 2));
+      return true;
+    } catch (error) {
+      console.error('[LibrarianManager] Error writing permission manifest:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Get all permissions currently in Claude's settings.json.
+   */
+  getClaudePermissions(): string[] {
+    try {
+      const settingsPath = this.getClaudeSettingsPath();
+      if (!fs.existsSync(settingsPath)) {
+        return [];
+      }
+
+      const content = fs.readFileSync(settingsPath, 'utf-8');
+      const settings = JSON.parse(content) as Record<string, unknown>;
+      const permissions = settings.permissions as Record<string, unknown> | undefined;
+      const allow = permissions?.allow as string[] | undefined;
+
+      return Array.isArray(allow) ? [...allow] : [];
+    } catch (error) {
+      console.error('[LibrarianManager] Error reading Claude permissions:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get available permission profiles.
+   */
+  getAvailableProfiles(): Array<{ id: string; name: string; description: string; permissionCount: number; permissions: string[] }> {
+    const profiles = this.getPermissionProfiles();
+    return Object.entries(profiles).map(([id, profile]) => ({
+      id,
+      name: id.charAt(0).toUpperCase() + id.slice(1),
+      description: profile.description,
+      permissionCount: profile.permissions.length,
+      permissions: profile.permissions,
+    }));
+  }
+
+  /**
+   * Get the current permission status.
+   */
+  getPermissionStatus(): {
+    currentProfile: string | null;
+    managedPermissions: string[];
+    allClaudePermissions: string[];
+  } {
+    const manifest = this.readPermissionManifest();
+    const allPermissions = this.getClaudePermissions();
+    return {
+      currentProfile: manifest.profile,
+      managedPermissions: manifest.permissions,
+      allClaudePermissions: allPermissions,
+    };
+  }
+
+  /**
+   * Add permissions to Claude's settings.json and track in manifest.
+   * Returns true if successful.
+   */
+  addPermissions(permissionsToAdd: string[]): boolean {
+    try {
+      const settingsPath = this.getClaudeSettingsPath();
+      const claudeDir = path.dirname(settingsPath);
+
+      // Ensure ~/.claude directory exists
+      if (!fs.existsSync(claudeDir)) {
+        fs.mkdirSync(claudeDir, { recursive: true });
+      }
+
+      // Read existing settings
+      let settings: Record<string, unknown> = {};
+      if (fs.existsSync(settingsPath)) {
+        try {
+          settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+        } catch {
+          console.warn('[LibrarianManager] Could not parse settings.json, starting fresh');
+        }
+      }
+
+      // Ensure permissions structure
+      if (!settings.permissions) {
+        settings.permissions = { allow: [] };
+      }
+      const permissions = settings.permissions as Record<string, unknown>;
+      if (!Array.isArray(permissions.allow)) {
+        permissions.allow = [];
+      }
+
+      const allowList = permissions.allow as string[];
+      const manifest = this.readPermissionManifest();
+      const newManaged = [...manifest.permissions];
+
+      // Add each permission if not already present
+      for (const perm of permissionsToAdd) {
+        if (!allowList.includes(perm)) {
+          allowList.push(perm);
+        }
+        if (!newManaged.includes(perm)) {
+          newManaged.push(perm);
+        }
+      }
+
+      // Write settings
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+
+      // Update manifest (keep existing profile if set)
+      this.writePermissionManifest(newManaged, manifest.profile);
+
+      console.log(`[LibrarianManager] Added ${permissionsToAdd.length} permissions`);
+      return true;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to add permissions:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Remove permissions from Claude's settings.json.
+   * Only removes permissions that are in our manifest (that we added).
+   */
+  removePermissions(permissionsToRemove: string[]): boolean {
+    try {
+      const settingsPath = this.getClaudeSettingsPath();
+      if (!fs.existsSync(settingsPath)) {
+        // Nothing to remove
+        return true;
+      }
+
+      const content = fs.readFileSync(settingsPath, 'utf-8');
+      let settings: Record<string, unknown>;
+      try {
+        settings = JSON.parse(content);
+      } catch {
+        return true; // Can't parse, nothing to remove
+      }
+
+      const permissions = settings.permissions as Record<string, unknown> | undefined;
+      if (!permissions || !Array.isArray(permissions.allow)) {
+        return true;
+      }
+
+      const allowList = permissions.allow as string[];
+      const manifest = this.readPermissionManifest();
+
+      // Only remove permissions that are both in the remove list AND in our manifest
+      const toRemove = permissionsToRemove.filter(p => manifest.permissions.includes(p));
+
+      // Filter out the permissions to remove
+      permissions.allow = allowList.filter(p => !toRemove.includes(p));
+
+      // Update manifest
+      const newManaged = manifest.permissions.filter(p => !toRemove.includes(p));
+      this.writePermissionManifest(newManaged, newManaged.length > 0 ? manifest.profile : null);
+
+      // Write settings
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+
+      console.log(`[LibrarianManager] Removed ${toRemove.length} permissions`);
+      return true;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to remove permissions:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Apply a permission profile.
+   * Removes previously managed permissions and adds the new profile's permissions.
+   */
+  applyPermissionProfile(profileId: string): boolean {
+    const profiles = this.getPermissionProfiles();
+    const profile = profiles[profileId];
+
+    if (!profile) {
+      console.error(`[LibrarianManager] Unknown profile: ${profileId}`);
+      return false;
+    }
+
+    try {
+      // First, remove all previously managed permissions
+      const manifest = this.readPermissionManifest();
+      if (manifest.permissions.length > 0) {
+        this.removePermissions(manifest.permissions);
+      }
+
+      // Then add the new profile's permissions
+      const success = this.addPermissions(profile.permissions);
+
+      if (success) {
+        // Update manifest with profile name
+        const newManifest = this.readPermissionManifest();
+        this.writePermissionManifest(newManifest.permissions, profileId);
+      }
+
+      return success;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to apply profile:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Clear all Field Theory managed permissions.
+   */
+  clearManagedPermissions(): boolean {
+    const manifest = this.readPermissionManifest();
+    if (manifest.permissions.length === 0) {
+      return true;
+    }
+    return this.removePermissions(manifest.permissions);
   }
 
   /**

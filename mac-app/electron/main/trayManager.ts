@@ -34,6 +34,8 @@ export class TrayManager {
   private takeScreenshotCallback: (() => void) | null = null;
   private takeFullScreenCallback: (() => void) | null = null;
   private takeActiveWindowCallback: (() => void) | null = null;
+  private openDevToolsCallback: (() => void) | null = null;
+  private isLoggedInCallback: (() => boolean) | null = null;
   private historyHotkey: string = 'Option+Space';
   private transcriptionHotkey: string = 'Option+Shift+Space';
   private screenshotHotkey: string = 'Command+4';
@@ -91,6 +93,20 @@ export class TrayManager {
     if (this.tray) {
       this.updateTray(this.audioManager.getState());
     }
+  }
+
+  /**
+   * Set the callback to open developer tools.
+   */
+  setOpenDevToolsCallback(callback: () => void): void {
+    this.openDevToolsCallback = callback;
+  }
+
+  /**
+   * Set the callback to check if user is logged in.
+   */
+  setIsLoggedInCallback(callback: () => boolean): void {
+    this.isLoggedInCallback = callback;
   }
 
   /**
@@ -425,6 +441,18 @@ export class TrayManager {
         }
       },
     });
+
+    // View Inspector - only show when logged in
+    const isLoggedIn = this.isLoggedInCallback?.() ?? false;
+    if (isLoggedIn && this.openDevToolsCallback) {
+      items.push({
+        label: 'View Inspector',
+        accelerator: 'Command+Option+I',
+        click: () => {
+          this.openDevToolsCallback?.();
+        },
+      });
+    }
 
     // Check network status at menu build time to show offline state.
     const isOnline = net.isOnline();
