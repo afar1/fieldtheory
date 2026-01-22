@@ -38,8 +38,17 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
 
   // New v2 settings
   const [enabled, setEnabled] = useState(true);
-  const [triggerMode, setTriggerMode] = useState<'prompt' | 'judgment'>('prompt');
+  const [triggerMode, setTriggerMode] = useState<'prompt' | 'judgment' | 'state-enforced'>('prompt');
   const [promptThreshold, setPromptThreshold] = useState<number>(5);
+
+  // State-enforced mode settings
+  const [stateEnforcedThreshold, setStateEnforcedThreshold] = useState<number>(3);
+  const [defaultRuleContent, setDefaultRuleContent] = useState('');
+  const [customRuleContent, setCustomRuleContent] = useState<string | undefined>(undefined);
+  const [ruleContentText, setRuleContentText] = useState('');
+  const [ruleContentSaved, setRuleContentSaved] = useState(false);
+  const [isUsingCustomRule, setIsUsingCustomRule] = useState(false);
+  const [stateEnforcedHookInstalled, setStateEnforcedHookInstalled] = useState(false);
 
 
   // Auto-show on new reading
@@ -65,6 +74,14 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [contentGuidanceSaved, setContentGuidanceSaved] = useState(false);
   const [contentGuidanceSaving, setContentGuidanceSaving] = useState(false);
   const [isUsingCustomGuidance, setIsUsingCustomGuidance] = useState(false);
+
+  // Narration settings
+  const [narrationStatus, setNarrationStatus] = useState<{
+    installStatus: 'not_installed' | 'installing' | 'installed' | 'install_failed';
+    cacheSizeBytes: number;
+    cachedItemCount: number;
+  } | null>(null);
+  const [narrationInstallProgress, setNarrationInstallProgress] = useState<{ progress: number; message: string } | null>(null);
 
   // Edit status for prompt count mode
   const [editStatus, setEditStatus] = useState<{ edits: number; threshold: number } | null>(null);
@@ -126,13 +143,17 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       window.librarianAPI.getDefaultContentGuidance(),
       window.librarianAPI.getCustomContentGuidance(),
       window.librarianAPI.getConfigPaths(),
+      // State-enforced mode settings
+      window.librarianAPI.getStateEnforcedThreshold(),
+      window.librarianAPI.getDefaultRuleContent(),
+      window.librarianAPI.getCustomRuleContent(),
     ])
-      .then(([dirs, readingsList, isEnabled, mode, threshold, autoShow, ccStatus, hookStatus, defaultGuidance, customGuidance, paths]) => {
+      .then(([dirs, readingsList, isEnabled, mode, threshold, autoShow, ccStatus, hookStatus, defaultGuidance, customGuidance, paths, seThreshold, defaultRule, customRule]) => {
         setWatchedDirs(dirs);
         setReadings(readingsList);
         // New v2 settings
         setEnabled(isEnabled);
-        setTriggerMode(mode as 'prompt' | 'judgment');
+        setTriggerMode(mode as 'prompt' | 'judgment' | 'state-enforced');
         setPromptThreshold(threshold);
         // Other settings
         setAutoShowEnabled(autoShow);
@@ -143,6 +164,12 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         setContentGuidanceText(customGuidance || defaultGuidance);
         setIsUsingCustomGuidance(!!customGuidance);
         setConfigPaths(paths);
+        // State-enforced mode settings
+        setStateEnforcedThreshold(seThreshold);
+        setDefaultRuleContent(defaultRule);
+        setCustomRuleContent(customRule);
+        setRuleContentText(customRule || defaultRule);
+        setIsUsingCustomRule(!!customRule);
         setLoading(false);
       })
       .catch((err) => {
@@ -150,6 +177,94 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         setLoading(false);
       });
   }, []);
+
+  // Check global state-enforced hook status
+  useEffect(() => {
+    if (!window.librarianAPI) return;
+
+    const checkHookStatus = async () => {
+      const isInstalled = await window.librarianAPI?.isStateEnforcedHookInstalled();
+      setStateEnforcedHookInstalled(isInstalled ?? false);
+    };
+
+    checkHookStatus();
+  }, []);
+
+  // Fetch narration status and subscribe to install progress
+  useEffect(() => {
+    if (!window.narrationAPI) return;
+
+    // Fetch initial status
+    window.narrationAPI.getStatus().then((status) => {
+      if (status) {
+        setNarrationStatus({
+          installStatus: status.installStatus,
+          cacheSizeBytes: status.cacheSizeBytes,
+          cachedItemCount: status.cachedItemCount,
+        });
+      }
+    });
+
+    // Subscribe to install progress
+    const unsubProgress = window.narrationAPI.onInstallProgress((progress, message) => {
+      setNarrationInstallProgress({ progress, message });
+      // When complete, refresh status
+      if (progress >= 100) {
+        setTimeout(() => {
+          window.narrationAPI?.getStatus().then((status) => {
+            if (status) {
+              setNarrationStatus({
+                installStatus: status.installStatus,
+                cacheSizeBytes: status.cacheSizeBytes,
+                cachedItemCount: status.cachedItemCount,
+              });
+            }
+            setNarrationInstallProgress(null);
+          });
+        }, 500);
+      }
+    });
+
+    return () => {
+      unsubProgress?.();
+    };
+  }, []);
+
+  // Handle narration install
+  const handleNarrationInstall = useCallback(async () => {
+    if (!window.narrationAPI) return;
+    setNarrationStatus((prev) => prev ? { ...prev, installStatus: 'installing' } : null);
+    setNarrationInstallProgress({ progress: 0, message: 'Starting download...' });
+    try {
+      await window.narrationAPI.install();
+    } catch (e) {
+      console.error('Narration install failed:', e);
+      setNarrationStatus((prev) => prev ? { ...prev, installStatus: 'install_failed' } : null);
+      setNarrationInstallProgress(null);
+    }
+  }, []);
+
+  // Handle clear narration cache
+  const handleClearNarrationCache = useCallback(async () => {
+    if (!window.narrationAPI) return;
+    await window.narrationAPI.clearCache();
+    const status = await window.narrationAPI.getStatus();
+    if (status) {
+      setNarrationStatus({
+        installStatus: status.installStatus,
+        cacheSizeBytes: status.cacheSizeBytes,
+        cachedItemCount: status.cachedItemCount,
+      });
+    }
+  }, []);
+
+  // Format bytes for display
+  const formatBytes = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  };
 
   // Handle remove directory
   const handleRemove = useCallback(async (dirPath: string) => {
@@ -213,8 +328,20 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   }, [enabled]);
 
   // Handle trigger mode change
-  const handleTriggerModeChange = useCallback(async (mode: 'prompt' | 'judgment') => {
+  const handleTriggerModeChange = useCallback(async (mode: 'prompt' | 'judgment' | 'state-enforced') => {
     if (!window.librarianAPI) return;
+
+    // Uninstall old hooks when switching away from a mode (prevent conflicts)
+    if (triggerMode === 'prompt' && mode !== 'prompt' && hookInstalled) {
+      await window.librarianAPI.uninstallClaudeCodeHook();
+      setHookInstalled(false);
+    }
+    if (triggerMode === 'state-enforced' && mode !== 'state-enforced' && stateEnforcedHookInstalled) {
+      // Uninstall global state-enforced hook
+      await window.librarianAPI.uninstallStateEnforcedHook();
+      setStateEnforcedHookInstalled(false);
+    }
+
     setTriggerMode(mode);
     setClaudeConfigError(false);
     setSaved(false);
@@ -225,7 +352,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     }
-  }, []);
+  }, [triggerMode, hookInstalled, stateEnforcedHookInstalled]);
 
   // Handle threshold change via slider (debounced)
   const handleThresholdChange = useCallback((threshold: number) => {
@@ -649,6 +776,37 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                     </div>
                   </div>
                 </label>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    cursor: 'pointer',
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    backgroundColor: triggerMode === 'state-enforced'
+                      ? (theme.isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.08)')
+                      : 'transparent',
+                    border: `1px solid ${triggerMode === 'state-enforced' ? theme.accent : 'transparent'}`,
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="triggerMode"
+                    value="state-enforced"
+                    checked={triggerMode === 'state-enforced'}
+                    onChange={() => handleTriggerModeChange('state-enforced')}
+                    style={{ accentColor: theme.accent }}
+                  />
+                  <div>
+                    <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
+                      State-enforced
+                    </div>
+                    <div style={{ fontSize: '11px', color: theme.textSecondary }}>
+                      Creates job files that Claude fulfills before responding
+                    </div>
+                  </div>
+                </label>
               </div>
             </div>
 
@@ -690,6 +848,132 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                 </div>
               </div>
             )}
+
+            {/* State-enforced mode settings */}
+            {triggerMode === 'state-enforced' && (
+              <div
+                style={{
+                  padding: '12px',
+                  marginBottom: '16px',
+                  borderRadius: '6px',
+                  backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                  border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+                }}
+              >
+                {/* Threshold slider */}
+                <div style={{ marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                      Prompts before job creation
+                    </span>
+                    <span style={{ fontSize: '12px', color: theme.text, fontWeight: 500 }}>
+                      {stateEnforcedThreshold}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <span style={{ fontSize: '11px', color: theme.textSecondary, minWidth: '16px' }}>1</span>
+                    <input
+                      type="range"
+                      min="1"
+                      max="10"
+                      value={stateEnforcedThreshold}
+                      onChange={async (e) => {
+                        const value = parseInt(e.target.value, 10);
+                        setStateEnforcedThreshold(value);
+                        await window.librarianAPI?.setStateEnforcedThreshold(value);
+                      }}
+                      style={{
+                        flex: 1,
+                        height: '4px',
+                        cursor: 'pointer',
+                        accentColor: theme.accent,
+                      }}
+                    />
+                    <span style={{ fontSize: '11px', color: theme.textSecondary, minWidth: '16px' }}>10</span>
+                  </div>
+                </div>
+
+                {/* Rule content editor */}
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                      Job language (rule content)
+                    </span>
+                    {isUsingCustomRule && (
+                      <span style={{ fontSize: '10px', color: theme.accent, fontWeight: 500 }}>
+                        Customized
+                      </span>
+                    )}
+                  </div>
+                  <textarea
+                    value={ruleContentText}
+                    onChange={(e) => setRuleContentText(e.target.value)}
+                    placeholder="Write 2-3 paragraphs connecting the current work to engineering history..."
+                    style={{
+                      width: '100%',
+                      minHeight: '80px',
+                      padding: '10px',
+                      fontSize: '11px',
+                      fontFamily: "'SF Mono', Monaco, monospace",
+                      lineHeight: '1.5',
+                      backgroundColor: theme.isDark ? 'rgba(0,0,0,0.2)' : '#fff',
+                      border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
+                      borderRadius: '6px',
+                      color: theme.text,
+                      resize: 'vertical',
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                    <button
+                      onClick={async () => {
+                        const content = ruleContentText.trim() === defaultRuleContent ? undefined : ruleContentText.trim();
+                        await window.librarianAPI?.setCustomRuleContent(content);
+                        setCustomRuleContent(content);
+                        setIsUsingCustomRule(!!content);
+                        setRuleContentSaved(true);
+                        setTimeout(() => setRuleContentSaved(false), 2000);
+                      }}
+                      disabled={ruleContentText === (customRuleContent || defaultRuleContent)}
+                      style={{
+                        padding: '4px 10px',
+                        fontSize: '11px',
+                        fontWeight: 500,
+                        color: ruleContentText !== (customRuleContent || defaultRuleContent) ? '#fff' : theme.textSecondary,
+                        backgroundColor: ruleContentText !== (customRuleContent || defaultRuleContent) ? theme.accent : 'transparent',
+                        border: ruleContentText !== (customRuleContent || defaultRuleContent) ? 'none' : `1px solid ${theme.border}`,
+                        borderRadius: '4px',
+                        cursor: ruleContentText !== (customRuleContent || defaultRuleContent) ? 'pointer' : 'default',
+                      }}
+                    >
+                      {ruleContentSaved ? '✓ Saved' : 'Save'}
+                    </button>
+                    {isUsingCustomRule && (
+                      <button
+                        onClick={async () => {
+                          await window.librarianAPI?.setCustomRuleContent(undefined);
+                          setCustomRuleContent(undefined);
+                          setRuleContentText(defaultRuleContent);
+                          setIsUsingCustomRule(false);
+                        }}
+                        style={{
+                          padding: '4px 10px',
+                          fontSize: '11px',
+                          color: theme.textSecondary,
+                          backgroundColor: 'transparent',
+                          border: `1px solid ${theme.border}`,
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Reset to Default
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
 
@@ -718,7 +1002,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                     <span style={{ fontSize: '10px', color: theme.textSecondary, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)', borderRadius: '4px' }}>
                       Not detected
                     </span>
-                  ) : hookInstalled || triggerMode === 'judgment' ? (
+                  ) : hookInstalled || triggerMode === 'judgment' || (triggerMode === 'state-enforced' && stateEnforcedHookInstalled) ? (
                     <span style={{ fontSize: '10px', color: theme.success, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)', borderRadius: '4px' }}>
                       Connected
                     </span>
@@ -758,6 +1042,38 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                     }}
                   >
                     {hookInstalling ? '...' : hookInstalled ? 'Disconnect' : 'Connect'}
+                  </button>
+                )}
+                {claudeCodeStatus !== 'not-installed' && triggerMode === 'state-enforced' && (
+                  <button
+                    onClick={async () => {
+                      setHookInstalling(true);
+                      try {
+                        if (stateEnforcedHookInstalled) {
+                          await window.librarianAPI?.uninstallStateEnforcedHook();
+                          setStateEnforcedHookInstalled(false);
+                        } else {
+                          const success = await window.librarianAPI?.installStateEnforcedHook();
+                          setStateEnforcedHookInstalled(success ?? false);
+                        }
+                      } finally {
+                        setHookInstalling(false);
+                      }
+                    }}
+                    disabled={hookInstalling}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      color: stateEnforcedHookInstalled ? theme.textSecondary : '#fff',
+                      backgroundColor: stateEnforcedHookInstalled ? 'transparent' : theme.accent,
+                      border: stateEnforcedHookInstalled ? `1px solid ${theme.border}` : 'none',
+                      borderRadius: '4px',
+                      cursor: hookInstalling ? 'wait' : 'pointer',
+                      opacity: hookInstalling ? 0.5 : 1,
+                    }}
+                  >
+                    {hookInstalling ? '...' : stateEnforcedHookInstalled ? 'Disconnect' : 'Connect'}
                   </button>
                 )}
               </div>
@@ -1224,6 +1540,163 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
           />
         </label>
       </div>
+
+      {/* Narration Settings */}
+      {narrationStatus && (
+        <div
+          style={{
+            marginTop: '24px',
+            padding: '16px',
+            borderRadius: '8px',
+            backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
+            border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+            <div>
+              <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
+                Narration
+              </div>
+              <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '2px' }}>
+                Listen to readings with AI-generated voice
+              </div>
+            </div>
+            {narrationStatus.installStatus === 'installed' && (
+              <span
+                style={{
+                  fontSize: '10px',
+                  color: theme.success,
+                  backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)',
+                  padding: '2px 8px',
+                  borderRadius: '4px',
+                  fontWeight: 500,
+                }}
+              >
+                Installed
+              </span>
+            )}
+          </div>
+
+          {narrationStatus.installStatus === 'not_installed' && (
+            <div>
+              <p style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '12px', lineHeight: '1.5' }}>
+                Download the narration model (~400 MB) to enable voice playback for Librarian readings.
+              </p>
+              <button
+                onClick={handleNarrationInstall}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  color: '#fff',
+                  backgroundColor: theme.accent,
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                }}
+              >
+                Download Narration Model
+              </button>
+            </div>
+          )}
+
+          {narrationStatus.installStatus === 'installing' && narrationInstallProgress && (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                  {narrationInstallProgress.message}
+                </span>
+                <span style={{ fontSize: '11px', color: theme.text, fontWeight: 500 }}>
+                  {Math.round(narrationInstallProgress.progress)}%
+                </span>
+              </div>
+              <div
+                style={{
+                  height: '4px',
+                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
+                  borderRadius: '2px',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${narrationInstallProgress.progress}%`,
+                    backgroundColor: theme.accent,
+                    borderRadius: '2px',
+                    transition: 'width 0.3s ease',
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          {narrationStatus.installStatus === 'install_failed' && (
+            <div>
+              <p style={{ fontSize: '11px', color: theme.error, marginBottom: '12px' }}>
+                Installation failed. Please try again.
+              </p>
+              <button
+                onClick={handleNarrationInstall}
+                style={{
+                  padding: '8px 16px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  color: '#fff',
+                  backgroundColor: theme.accent,
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                }}
+              >
+                Retry Download
+              </button>
+            </div>
+          )}
+
+          {narrationStatus.installStatus === 'installed' && (
+            <div>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '10px 12px',
+                  backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                  border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+                  borderRadius: '6px',
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: '12px', color: theme.text }}>
+                    Audio Cache
+                  </div>
+                  <div style={{ fontSize: '11px', color: theme.textSecondary }}>
+                    {narrationStatus.cachedItemCount} item{narrationStatus.cachedItemCount !== 1 ? 's' : ''} ({formatBytes(narrationStatus.cacheSizeBytes)})
+                  </div>
+                </div>
+                {narrationStatus.cachedItemCount > 0 && (
+                  <button
+                    onClick={handleClearNarrationCache}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      color: theme.textSecondary,
+                      backgroundColor: 'transparent',
+                      border: `1px solid ${theme.border}`,
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Watched Directories */}
       <p
