@@ -653,7 +653,8 @@ interface SocialAPI {
   markAsReadBatch: (messageIds: string[]) => Promise<boolean>;
   hasUnread: () => Promise<boolean>;
   hasUnreadFeedback: () => Promise<boolean>;
-  
+  markAllFeedbackAsRead: () => Promise<boolean>;
+
   // Feedback operations
   submitFeedback: (localItemId: number) => Promise<SocialMessage | null>;
   submitTextFeedback: (text: string) => Promise<SocialMessage | null>;
@@ -923,6 +924,16 @@ interface LibrarianAPI {
   isSetupComplete: () => Promise<boolean>;
   setSetupComplete: (complete: boolean) => Promise<void>;
   createWelcomeArtifact: (dirPath: string) => Promise<boolean>;
+  // State-Enforced Mode API
+  getStateEnforcedThreshold: () => Promise<number>;
+  setStateEnforcedThreshold: (threshold: number) => Promise<boolean>;
+  getDefaultRuleContent: () => Promise<string>;
+  getCustomRuleContent: () => Promise<string | undefined>;
+  setCustomRuleContent: (content: string | undefined) => Promise<boolean>;
+  installStateEnforcedHook: () => Promise<boolean>;
+  uninstallStateEnforcedHook: () => Promise<boolean>;
+  isStateEnforcedHookInstalled: () => Promise<boolean>;
+  getPendingJobCount: () => Promise<number>;
   // Legacy Settings API (deprecated)
   getAutoRunFrequency: () => Promise<string>;
   setAutoRunFrequency: (frequency: string) => Promise<boolean>;
@@ -995,6 +1006,52 @@ declare global {
     enabled: boolean;
   }
 
+  /**
+   * Narration types and API.
+   */
+  type NarrationInstallStatus = 'not_installed' | 'installing' | 'installed' | 'install_failed';
+  type NarrationPlaybackStatus = 'idle' | 'generating' | 'playing' | 'paused' | 'stopped';
+  type NarrationEngine = 'chatterbox' | 'macos_say';
+
+  interface NarrationStatus {
+    installStatus: NarrationInstallStatus;
+    playbackStatus: NarrationPlaybackStatus;
+    engine: NarrationEngine | null;
+    currentReadingPath: string | null;
+    cacheSizeBytes: number;
+    cachedItemCount: number;
+  }
+
+  interface NarrationOutputDevice {
+    name: string;
+    uid: string;
+    isDefault: boolean;
+    transportType?: string;
+  }
+
+  interface NarrationPreferences {
+    speakOnOpen: boolean;
+    blockedDevices: string[];
+  }
+
+  interface NarrationAPI {
+    getStatus: () => Promise<NarrationStatus | null>;
+    install: () => Promise<boolean>;
+    playReading: (readingPath: string) => Promise<boolean>;
+    stop: () => Promise<void>;
+    getOutputDevice: () => Promise<NarrationOutputDevice | null>;
+    refreshDevices: () => Promise<NarrationOutputDevice | null>;
+    getPrefs: () => Promise<NarrationPreferences | null>;
+    setSpeakOnOpen: (enabled: boolean) => Promise<void>;
+    addBlockedDevice: (pattern: string) => Promise<void>;
+    removeBlockedDevice: (pattern: string) => Promise<void>;
+    clearCache: () => Promise<void>;
+    onPlaybackStarted: (callback: (readingPath: string) => void) => () => void;
+    onPlaybackStopped: (callback: (readingPath: string | null) => void) => () => void;
+    onPlaybackError: (callback: (error: string, readingPath: string | null) => void) => () => void;
+    onInstallProgress: (callback: (progress: number, message: string) => void) => () => void;
+  }
+
   interface Window {
     audioAPI?: AudioAPI;
     hotkeyAPI?: HotkeyAPI;
@@ -1014,6 +1071,7 @@ declare global {
     commandsAPI?: CommandsAPI;
     themeAPI?: ThemeAPI;
     librarianAPI?: LibrarianAPI;
+    narrationAPI?: NarrationAPI;
     diagnosticsAPI?: DiagnosticsAPI;
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;

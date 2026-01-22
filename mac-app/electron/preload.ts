@@ -426,7 +426,8 @@ const SocialIPCChannels = {
   MARK_AS_READ_BATCH: 'social:markAsReadBatch',
   HAS_UNREAD: 'social:hasUnread',
   HAS_UNREAD_FEEDBACK: 'social:hasUnreadFeedback',
-  
+  MARK_ALL_FEEDBACK_AS_READ: 'social:markAllFeedbackAsRead',
+
   // Feedback operations
   SUBMIT_FEEDBACK: 'social:submitFeedback',
   SUBMIT_TEXT_FEEDBACK: 'social:submitTextFeedback',
@@ -571,6 +572,7 @@ export interface ClipboardAPI {
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
   onShowSettings: (callback: () => void) => () => void;
+  onPlaySound: (callback: (soundId: 'windowOpen' | 'windowClose' | 'artifactDiscovery') => void) => () => void;
   onDialogPosition: (callback: (position: { left: number; top: number }) => void) => () => void;
   onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number }) => void) => () => void;
   onTargetAppInfo: (callback: (info: TargetAppInfo) => void) => () => void;
@@ -1029,6 +1031,16 @@ const clipboardAPI: ClipboardAPI = {
     ipcRenderer.on('clipboard:showSettings', handler);
     return () => {
       ipcRenderer.removeListener('clipboard:showSettings', handler);
+    };
+  },
+
+  onPlaySound: (callback: (soundId: 'windowOpen' | 'windowClose' | 'artifactDiscovery') => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, soundId: 'windowOpen' | 'windowClose' | 'artifactDiscovery') => {
+      callback(soundId);
+    };
+    ipcRenderer.on('clipboard:playSound', handler);
+    return () => {
+      ipcRenderer.removeListener('clipboard:playSound', handler);
     };
   },
 
@@ -1818,7 +1830,12 @@ const socialAPI = {
   hasUnreadFeedback: async (): Promise<boolean> => {
     return ipcRenderer.invoke(SocialIPCChannels.HAS_UNREAD_FEEDBACK);
   },
-  
+
+  // Mark all feedback messages as read.
+  markAllFeedbackAsRead: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(SocialIPCChannels.MARK_ALL_FEEDBACK_AS_READ);
+  },
+
   // =========================================================================
   // Feedback Operations
   // =========================================================================
@@ -2363,6 +2380,27 @@ const librarianAPI = {
   isSetupComplete: (): Promise<boolean> => ipcRenderer.invoke('librarian:isSetupComplete'),
   setSetupComplete: (complete: boolean): Promise<void> => ipcRenderer.invoke('librarian:setSetupComplete', complete),
   createWelcomeArtifact: (dirPath: string): Promise<boolean> => ipcRenderer.invoke('librarian:createWelcomeArtifact', dirPath),
+
+  // ===========================================================================
+  // State-Enforced Mode API
+  // ===========================================================================
+
+  // State-enforced mode threshold
+  getStateEnforcedThreshold: (): Promise<number> => ipcRenderer.invoke('librarian:getStateEnforcedThreshold'),
+  setStateEnforcedThreshold: (threshold: number): Promise<boolean> => ipcRenderer.invoke('librarian:setStateEnforcedThreshold', threshold),
+
+  // Rule content (job language)
+  getDefaultRuleContent: (): Promise<string> => ipcRenderer.invoke('librarian:getDefaultRuleContent'),
+  getCustomRuleContent: (): Promise<string | undefined> => ipcRenderer.invoke('librarian:getCustomRuleContent'),
+  setCustomRuleContent: (content: string | undefined): Promise<boolean> => ipcRenderer.invoke('librarian:setCustomRuleContent', content),
+
+  // Global state-enforced hook management
+  installStateEnforcedHook: (): Promise<boolean> => ipcRenderer.invoke('librarian:installStateEnforcedHook'),
+  uninstallStateEnforcedHook: (): Promise<boolean> => ipcRenderer.invoke('librarian:uninstallStateEnforcedHook'),
+  isStateEnforcedHookInstalled: (): Promise<boolean> => ipcRenderer.invoke('librarian:isStateEnforcedHookInstalled'),
+
+  // Job management
+  getPendingJobCount: (): Promise<number> => ipcRenderer.invoke('librarian:getPendingJobCount'),
 
   // ===========================================================================
   // Legacy Settings API (kept for backward compatibility)

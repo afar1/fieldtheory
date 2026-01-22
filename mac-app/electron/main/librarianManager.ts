@@ -15,8 +15,9 @@ export type AutoRunFrequency = 'off' | 'occasionally' | 'regularly' | 'frequentl
  * Trigger mode for reading creation.
  * - 'prompt': Hook counts prompts and injects reminder at threshold
  * - 'judgment': AI decides when to create based on work volume
+ * - 'state-enforced': Hook creates job files, Claude fulfills via Opinion C
  */
-export type TriggerMode = 'prompt' | 'judgment';
+export type TriggerMode = 'prompt' | 'judgment' | 'state-enforced';
 
 /**
  * Metadata for a reading (cached in index).
@@ -59,6 +60,9 @@ interface LibrarianSettings {
   autoShowEnabled: boolean;
   customContentGuidance?: string;
   librarianSetupComplete?: boolean;    // True after setup wizard completes
+  // State-enforced mode settings (when triggerMode === 'state-enforced')
+  stateEnforcedThreshold?: number;     // Prompts before job creation (default: 3)
+  stateEnforcedRuleContent?: string;   // Custom rule content (the "job language")
   // Legacy fields (kept for migration, will be removed in future)
   autoRunFrequency?: AutoRunFrequency; // @deprecated
   customThreshold?: number;            // @deprecated - use promptThreshold
@@ -113,6 +117,9 @@ export class LibrarianManager extends EventEmitter {
 
     // Load settings
     this.settings = this.loadSettings();
+
+    // Ensure central artifacts directory exists and is watched by default
+    this.ensureCentralArtifactsDir();
 
     // Load index (cached metadata)
     this.loadIndex();
@@ -172,6 +179,8 @@ export class LibrarianManager extends EventEmitter {
       autoShowEnabled: true,
       customContentGuidance: undefined,
       librarianSetupComplete: undefined,
+      stateEnforcedThreshold: 3,
+      stateEnforcedRuleContent: undefined,
     };
 
     try {
@@ -203,6 +212,9 @@ export class LibrarianManager extends EventEmitter {
           autoShowEnabled: data.autoShowEnabled ?? defaults.autoShowEnabled,
           customContentGuidance: data.customContentGuidance || undefined,
           librarianSetupComplete: data.librarianSetupComplete,
+          // State-enforced mode settings
+          stateEnforcedThreshold: data.stateEnforcedThreshold ?? defaults.stateEnforcedThreshold,
+          stateEnforcedRuleContent: data.stateEnforcedRuleContent || undefined,
           // Keep legacy fields for now (will be cleaned on next save)
           autoRunFrequency: data.autoRunFrequency,
           customThreshold: data.customThreshold,
@@ -681,6 +693,48 @@ export class LibrarianManager extends EventEmitter {
     for (const dirPath of this.settings.watchedDirs) {
       this.watchDirectory(dirPath);
     }
+    // Also watch for newly discovered projects from state-enforced hook
+    this.watchDiscoveryFile();
+  }
+
+  /**
+   * Watch the discovery file for auto-adding new watched directories.
+   * The state-enforced hook writes project paths here when creating artifacts.
+   */
+  private watchDiscoveryFile(): void {
+    const discoveryFile = path.join(this.getCentralLibrarianDir(), 'discovered_projects.json');
+
+    // Process any existing discovered projects
+    this.processDiscoveryFile(discoveryFile);
+
+    // Watch for changes
+    const parentDir = path.dirname(discoveryFile);
+    if (fs.existsSync(parentDir)) {
+      fs.watch(parentDir, (eventType, filename) => {
+        if (filename === 'discovered_projects.json') {
+          this.processDiscoveryFile(discoveryFile);
+        }
+      });
+    }
+  }
+
+  /**
+   * Process the discovery file and auto-add any new directories.
+   */
+  private processDiscoveryFile(discoveryFile: string): void {
+    if (!fs.existsSync(discoveryFile)) return;
+
+    try {
+      const discovered: string[] = JSON.parse(fs.readFileSync(discoveryFile, 'utf-8'));
+      for (const dirPath of discovered) {
+        if (!this.settings.watchedDirs.includes(dirPath)) {
+          console.log(`[LibrarianManager] Auto-adding discovered directory: ${dirPath}`);
+          this.addWatchedDir(dirPath);
+        }
+      }
+    } catch (error) {
+      console.error('[LibrarianManager] Error processing discovery file:', error);
+    }
   }
 
   // ===========================================================================
@@ -952,6 +1006,86 @@ export class LibrarianManager extends EventEmitter {
     this.settings.librarianSetupComplete = complete;
     this.saveSettings();
     console.log(`[LibrarianManager] Setup complete set to: ${complete}`);
+  }
+
+  // ===========================================================================
+  // State-Enforced Mode Settings
+  // ===========================================================================
+
+  /**
+   * Default rule content for state-enforced mode artifacts.
+   */
+  private readonly DEFAULT_RULE_CONTENT =
+    'Write 2-3 paragraphs connecting the current work to engineering history, physics, or systems theory.\nInclude at least one concrete technical or historical detail.\nNo time references. No fluff.';
+
+  /**
+   * Get the state-enforced mode threshold (prompts before job creation).
+   */
+  getStateEnforcedThreshold(): number {
+    return this.settings.stateEnforcedThreshold ?? 3;
+  }
+
+  /**
+   * Set the state-enforced mode threshold.
+   * Also updates the global config if hook is installed.
+   */
+  setStateEnforcedThreshold(threshold: number): boolean {
+    this.settings.stateEnforcedThreshold = threshold;
+    this.saveSettings();
+
+    // Update global config if it exists
+    const configPath = this.getGlobalStateEnforcedConfigPath();
+    if (fs.existsSync(configPath)) {
+      try {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        config.threshold = threshold;
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+      } catch {
+        // Ignore errors
+      }
+    }
+
+    console.log(`[LibrarianManager] State-enforced threshold set to: ${threshold}`);
+    return true;
+  }
+
+  /**
+   * Get the default rule content for state-enforced mode.
+   */
+  getDefaultRuleContent(): string {
+    return this.DEFAULT_RULE_CONTENT;
+  }
+
+  /**
+   * Get the custom rule content if set.
+   */
+  getCustomRuleContent(): string | undefined {
+    return this.settings.stateEnforcedRuleContent;
+  }
+
+  /**
+   * Set custom rule content for state-enforced mode.
+   * Also updates the global config if hook is installed.
+   * Pass undefined to reset to default.
+   */
+  setCustomRuleContent(content: string | undefined): boolean {
+    this.settings.stateEnforcedRuleContent = content?.trim() || undefined;
+    this.saveSettings();
+
+    // Update global config if it exists
+    const configPath = this.getGlobalStateEnforcedConfigPath();
+    if (fs.existsSync(configPath)) {
+      try {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        config.rule_content = content?.trim() || this.DEFAULT_RULE_CONTENT;
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+      } catch {
+        // Ignore errors
+      }
+    }
+
+    console.log(`[LibrarianManager] Custom rule content ${content ? 'set' : 'cleared'}`);
+    return true;
   }
 
   /**
@@ -1891,6 +2025,493 @@ exit 0
     } catch {
       return false;
     }
+  }
+
+  // ===========================================================================
+  // State-Enforced Mode Hook Management (Global Hook)
+  // ===========================================================================
+
+  /**
+   * Get the path to the global Field Theory Librarian hook script.
+   * Lives in ~/.claude/ for Claude Code hook registration.
+   */
+  private getStateEnforcedHookPath(): string {
+    return path.join(os.homedir(), '.claude', 'fieldtheory-librarian-hook.py');
+  }
+
+  /**
+   * Get the path to the global Field Theory Librarian config.
+   */
+  private getGlobalStateEnforcedConfigPath(): string {
+    return path.join(os.homedir(), '.claude', 'fieldtheory-librarian-config.json');
+  }
+
+  /**
+   * Get the path to the Field Theory Librarian PreToolUse auto-approve hook.
+   */
+  private getPreToolUseHookPath(): string {
+    return path.join(os.homedir(), '.claude', 'fieldtheory-librarian-pretool.py');
+  }
+
+  /**
+   * Get the central librarian directory path.
+   * All artifacts, jobs, and rules are stored here regardless of project.
+   */
+  private getCentralLibrarianDir(): string {
+    return path.join(os.homedir(), '.fieldtheory', 'librarian');
+  }
+
+  /**
+   * Ensure the central artifacts directory exists and is watched.
+   * This runs on startup so users don't need to configure anything.
+   */
+  private ensureCentralArtifactsDir(): void {
+    const centralDir = this.getCentralLibrarianDir();
+    const artifactsDir = path.join(centralDir, 'artifacts');
+
+    // Create directory if it doesn't exist
+    if (!fs.existsSync(artifactsDir)) {
+      fs.mkdirSync(artifactsDir, { recursive: true });
+      console.log('[LibrarianManager] Created central artifacts directory:', artifactsDir);
+    }
+
+    // Add to watched dirs if not already present
+    if (!this.settings.watchedDirs.includes(artifactsDir)) {
+      this.settings.watchedDirs.push(artifactsDir);
+      this.saveSettings();
+      console.log('[LibrarianManager] Auto-added central artifacts directory to watched dirs:', artifactsDir);
+    }
+  }
+
+  /**
+   * Generate the PreToolUse auto-approve hook script.
+   * This hook auto-approves Write/Edit operations to the Field Theory librarian directory,
+   * eliminating permission prompts for artifact creation.
+   */
+  private generatePreToolUseHookScript(): string {
+    const centralDir = this.getCentralLibrarianDir();
+    return `#!/usr/bin/env python3
+"""
+PreToolUse Auto-Approve Hook for Field Theory Librarian
+Auto-approves Read/Write/Edit to ~/.fieldtheory/librarian/*
+"""
+import json
+import sys
+from pathlib import Path
+
+def main():
+    try:
+        input_data = json.load(sys.stdin)
+    except:
+        sys.exit(0)
+
+    tool_name = input_data.get("tool_name", "")
+    tool_input = input_data.get("tool_input", {})
+
+    # Auto-approve reads/writes to central Field Theory directory
+    if tool_name in ("Read", "Write", "Edit"):
+        file_path = tool_input.get("file_path", "")
+        fieldtheory_dir = "${centralDir}"
+
+        if file_path.startswith(fieldtheory_dir):
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow"
+                }
+            }))
+            sys.exit(0)
+
+    # Default: don't interfere, let normal permission flow happen
+    sys.exit(0)
+
+if __name__ == "__main__":
+    main()
+`;
+  }
+
+  /**
+   * Generate the global state-enforced hook script content (Python).
+   * This script:
+   * 1. Detects the current project from $CLAUDE_PROJECT_DIR
+   * 2. Reads global config for threshold and rule content
+   * 3. Creates centralized job files in ~/.fieldtheory/librarian/
+   * 4. Outputs additionalContext to tell Claude to fulfill pending jobs
+   */
+  private generateStateEnforcedHookScript(): string {
+    const centralDir = this.getCentralLibrarianDir();
+    return `#!/usr/bin/env python3
+"""
+State-Enforced Librarian Hook (Global)
+Works in any directory. Creates job files when threshold is reached.
+All artifacts stored centrally in ~/.fieldtheory/librarian/artifacts/
+PreToolUse hook handles auto-approval - no permissions needed.
+"""
+import json
+import os
+import sys
+import fcntl
+from pathlib import Path
+from datetime import datetime
+
+def main():
+    # Get project root from environment (set by Claude Code)
+    project_root = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
+    project_name = project_root.name  # Just the directory name
+
+    # Read global config from ~/.claude/
+    global_cfg_path = Path.home() / ".claude" / "fieldtheory-librarian-config.json"
+    if not global_cfg_path.exists():
+        return
+
+    with open(global_cfg_path) as f:
+        cfg = json.load(f)
+
+    enabled = cfg.get("enabled", False)
+    if not enabled:
+        return
+
+    threshold = cfg.get("threshold", 3)
+    if not isinstance(threshold, int) or threshold <= 0:
+        return
+
+    rule_content = cfg.get("rule_content", "Write 2-3 paragraphs connecting the current work to engineering history, physics, or systems theory.")
+
+    # Central directory for everything (PreToolUse hook auto-approves writes here)
+    central_dir = Path("${centralDir}")
+    jobs_dir = central_dir / "jobs"
+    artifacts_dir = central_dir / "artifacts"
+    rules_dir = central_dir / "rules"
+
+    # Per-project state directory (for prompt counting)
+    state_dir = central_dir / "state" / project_name
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    count_file = state_dir / "prompt_count"
+    lock_file = state_dir / "lock"
+
+    # Create directories
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    seq_file = central_dir / ".seq"
+
+    # Use fcntl for cross-platform file locking
+    with open(lock_file, "w") as lf:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+
+        # Read and increment count
+        count = 0
+        if count_file.exists():
+            try:
+                count = int(count_file.read_text().strip())
+            except:
+                count = 0
+        count += 1
+        count_file.write_text(str(count))
+
+        if count < threshold:
+            return
+
+        # Reset count, increment global seq
+        count_file.write_text("0")
+
+        seq = 0
+        if seq_file.exists():
+            try:
+                seq = int(seq_file.read_text().strip())
+            except:
+                seq = 0
+        seq += 1
+        seq_file.write_text(str(seq))
+
+        # Generate timestamp-based filename
+        timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        job_file = jobs_dir / f"job_{seq}.json"
+        rule_file = rules_dir / "history_reading.md"
+        # Central artifacts directory - PreToolUse hook auto-approves
+        out_file = artifacts_dir / f"{project_name}-{timestamp}-artifact.md"
+
+        # 1. Check if job already exists and is done (prevent regression)
+        job_is_done = False
+        if job_file.exists():
+            try:
+                existing_job = json.loads(job_file.read_text(encoding="utf-8"))
+                if existing_job.get("status") == "done":
+                    job_is_done = True
+            except (json.JSONDecodeError, OSError):
+                pass  # Treat malformed as not-done
+
+        # 2. Create job file if missing (idempotent per seq)
+        if not job_file.exists():
+            job_data = {
+                "schema_version": 1,
+                "id": seq,
+                "type": "history_artifact",
+                "status": "pending",
+                "project": project_name,
+                "project_path": str(project_root),
+                "output": str(out_file),
+                "rule_file": str(rule_file),
+                "created_at": datetime.now().isoformat()
+            }
+            job_file.write_text(json.dumps(job_data, indent=2) + "\\n")
+
+        # 3. Create rule file if it does not exist
+        if not rule_file.exists():
+            rule_file.write_text(rule_content)
+
+        # 4. Output additionalContext with ALL details (no file reads needed)
+        if not job_is_done:
+            msg = f"""[STATE-ENFORCED] Before responding, write this artifact:
+
+OUTPUT: {out_file}
+RULE: {rule_content}
+THEN: Update {job_file} setting "status" to "done"
+
+Use the current conversation as context. Write the artifact first, then mark the job done."""
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": msg
+                }
+            }))
+
+if __name__ == "__main__":
+    main()
+`;
+  }
+
+  /**
+   * Install the global state-enforced hook.
+   * Works in any directory once enabled.
+   */
+  installStateEnforcedHook(): boolean {
+    try {
+      // 1. Ensure ~/.claude directory exists
+      const claudeDir = path.join(os.homedir(), '.claude');
+      if (!fs.existsSync(claudeDir)) {
+        fs.mkdirSync(claudeDir, { recursive: true });
+      }
+
+      // 2. Create central librarian directory structure
+      const centralDir = this.getCentralLibrarianDir();
+      const dirs = [
+        centralDir,
+        path.join(centralDir, 'jobs'),
+        path.join(centralDir, 'artifacts'),
+        path.join(centralDir, 'rules'),
+        path.join(centralDir, 'state'),
+      ];
+      for (const dir of dirs) {
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+      }
+
+      // 3. Write global hook scripts
+      const userPromptHookPath = this.getStateEnforcedHookPath();
+      const preToolUseHookPath = this.getPreToolUseHookPath();
+      fs.writeFileSync(userPromptHookPath, this.generateStateEnforcedHookScript(), { mode: 0o755 });
+      fs.writeFileSync(preToolUseHookPath, this.generatePreToolUseHookScript(), { mode: 0o755 });
+
+      // 4. Write global config
+      const configPath = this.getGlobalStateEnforcedConfigPath();
+      const config = {
+        enabled: true,
+        threshold: this.getStateEnforcedThreshold(),
+        rule_content: this.getCustomRuleContent() || this.DEFAULT_RULE_CONTENT,
+      };
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+      // 5. Register BOTH hooks in ~/.claude/settings.json
+      const settingsPath = this.getClaudeSettingsPath();
+      let settings: Record<string, unknown> = {};
+
+      if (fs.existsSync(settingsPath)) {
+        try {
+          settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+        } catch {
+          console.warn('[LibrarianManager] Could not parse existing settings.json, starting fresh');
+        }
+      }
+
+      // Ensure hooks object exists
+      if (!settings.hooks || typeof settings.hooks !== 'object') {
+        settings.hooks = {};
+      }
+      const hooks = settings.hooks as Record<string, unknown>;
+
+      // Helper type for hook entries
+      type HookEntry = { matcher?: string; hooks?: Array<{ type?: string; command?: string }> };
+
+      // Check if UserPromptSubmit hook already exists
+      const userPromptCommand = `python3 "${userPromptHookPath}"`;
+      const userPromptHookExists = (): boolean => {
+        if (!Array.isArray(hooks['UserPromptSubmit'])) return false;
+        return (hooks['UserPromptSubmit'] as HookEntry[]).some(h =>
+          h.hooks?.some(hh => hh.command === userPromptCommand)
+        );
+      };
+
+      // Add UserPromptSubmit hook (global, no matcher)
+      if (!userPromptHookExists()) {
+        if (!Array.isArray(hooks['UserPromptSubmit'])) {
+          hooks['UserPromptSubmit'] = [];
+        }
+        (hooks['UserPromptSubmit'] as HookEntry[]).push({
+          hooks: [{ type: 'command', command: userPromptCommand }],
+        });
+      }
+
+      // Check if PreToolUse hook already exists
+      const preToolUseCommand = `python3 "${preToolUseHookPath}"`;
+      const preToolUseHookExists = (): boolean => {
+        if (!Array.isArray(hooks['PreToolUse'])) return false;
+        return (hooks['PreToolUse'] as HookEntry[]).some(h =>
+          h.hooks?.some(hh => hh.command === preToolUseCommand)
+        );
+      };
+
+      // Add PreToolUse hook (with matcher for Read|Write|Edit)
+      if (!preToolUseHookExists()) {
+        if (!Array.isArray(hooks['PreToolUse'])) {
+          hooks['PreToolUse'] = [];
+        }
+        (hooks['PreToolUse'] as HookEntry[]).push({
+          matcher: 'Read|Write|Edit',
+          hooks: [{ type: 'command', command: preToolUseCommand }],
+        });
+      }
+
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+
+      // 6. Auto-add artifacts directory to watched dirs so markdown files open in Field Theory
+      const artifactsDir = path.join(centralDir, 'artifacts');
+      this.addWatchedDir(artifactsDir);
+
+      console.log('[LibrarianManager] Installed global state-enforced hooks (UserPromptSubmit + PreToolUse)');
+      return true;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to install state-enforced hook:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Uninstall the global state-enforced hooks.
+   */
+  uninstallStateEnforcedHook(): boolean {
+    try {
+      const userPromptHookPath = this.getStateEnforcedHookPath();
+      const preToolUseHookPath = this.getPreToolUseHookPath();
+      const configPath = this.getGlobalStateEnforcedConfigPath();
+
+      // Remove hook scripts
+      if (fs.existsSync(userPromptHookPath)) {
+        fs.unlinkSync(userPromptHookPath);
+      }
+      if (fs.existsSync(preToolUseHookPath)) {
+        fs.unlinkSync(preToolUseHookPath);
+      }
+
+      // Disable in config (don't delete, preserve settings)
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        config.enabled = false;
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+      }
+
+      // Remove from ~/.claude/settings.json
+      const settingsPath = this.getClaudeSettingsPath();
+      if (fs.existsSync(settingsPath)) {
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+        const userPromptCommand = `python3 "${userPromptHookPath}"`;
+        const preToolUseCommand = `python3 "${preToolUseHookPath}"`;
+
+        // Remove UserPromptSubmit hook
+        if (settings.hooks?.UserPromptSubmit) {
+          settings.hooks.UserPromptSubmit = settings.hooks.UserPromptSubmit.filter(
+            (h: { hooks?: Array<{ command?: string }> }) =>
+              !h.hooks?.some(hh => hh.command === userPromptCommand)
+          );
+          if (settings.hooks.UserPromptSubmit.length === 0) {
+            delete settings.hooks.UserPromptSubmit;
+          }
+        }
+
+        // Remove PreToolUse hook
+        if (settings.hooks?.PreToolUse) {
+          settings.hooks.PreToolUse = settings.hooks.PreToolUse.filter(
+            (h: { hooks?: Array<{ command?: string }> }) =>
+              !h.hooks?.some(hh => hh.command === preToolUseCommand)
+          );
+          if (settings.hooks.PreToolUse.length === 0) {
+            delete settings.hooks.PreToolUse;
+          }
+        }
+
+        // Clean up empty hooks object
+        if (settings.hooks && Object.keys(settings.hooks).length === 0) {
+          delete settings.hooks;
+        }
+
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+      }
+
+      console.log('[LibrarianManager] Uninstalled global state-enforced hooks');
+      return true;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to uninstall state-enforced hooks:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Check if the global state-enforced hook is installed.
+   */
+  isStateEnforcedHookInstalled(): boolean {
+    const hookPath = this.getStateEnforcedHookPath();
+    const configPath = this.getGlobalStateEnforcedConfigPath();
+
+    if (!fs.existsSync(hookPath) || !fs.existsSync(configPath)) {
+      return false;
+    }
+
+    try {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      return config.enabled === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Get count of pending jobs (from central directory).
+   */
+  getPendingJobCount(): number {
+    const jobsDir = path.join(this.getCentralLibrarianDir(), 'jobs');
+
+    if (!fs.existsSync(jobsDir)) {
+      return 0;
+    }
+
+    let count = 0;
+    const files = fs.readdirSync(jobsDir).filter(f => f.startsWith('job_') && f.endsWith('.json'));
+
+    for (const file of files) {
+      try {
+        const jobPath = path.join(jobsDir, file);
+        const job = JSON.parse(fs.readFileSync(jobPath, 'utf-8'));
+        if (job.status === 'pending') {
+          count++;
+        }
+      } catch {
+        // Skip malformed job files
+      }
+    }
+
+    return count;
   }
 
   /**
