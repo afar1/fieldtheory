@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "id": 48,
+  "type": "history_reading",
+  "status": "pending",
+  "output": "fubar/randomword_48.md",
+  "rule_file": ".librarian/rules/history_reading.md"
+}

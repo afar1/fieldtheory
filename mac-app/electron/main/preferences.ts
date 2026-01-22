@@ -101,6 +101,7 @@ interface Preferences {
   clipboardDesktopScreenshotHotkey?: string;
   clipboardHistoryHotkey?: string;
   priorityDeviceId?: string | null;
+  favoriteDeviceName?: string | null; // For auto-reconnect when device reappears
   clipboardHistoryBounds?: ClipboardHistoryBounds;
   
   // API key stored as encrypted base64 string via safeStorage (OS keychain).

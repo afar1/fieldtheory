@@ -190,19 +190,28 @@ export class TrayManager {
       console.warn('[TrayManager] Failed to load icon:', iconPath);
     }
 
-    // --- Update tooltip ---
+    // --- Update tooltip and title ---
     const priorityDevice = devices.find((d) => d.id === priorityDeviceId);
     const priorityDeviceName = priorityDevice?.name || 'None';
-    
+
+    // Show abbreviated mic name next to tray icon when priority mic is set.
+    // Format: ":Air" or ":Blu" - first 3 letters, capitalized.
+    if (priorityDeviceId && priorityDevice) {
+      const abbrev = priorityDeviceName.slice(0, 3);
+      this.tray.setTitle(`:${abbrev}`);
+    } else {
+      this.tray.setTitle('');
+    }
+
     let tooltip: string;
     if (!priorityDeviceId) {
-      tooltip = 'Audio Priority: No device selected';
+      tooltip = 'Field Theory';
     } else if (priorityMode && !userOverrideId) {
-      tooltip = `Audio Priority: ${priorityDeviceName} locked`;
+      tooltip = `Priority Mic: ${priorityDeviceName}`;
     } else if (priorityMode && userOverrideId) {
-      tooltip = 'Audio Priority: Override active (click to reset)';
+      tooltip = `Priority Mic: ${priorityDeviceName} (override active)`;
     } else {
-      tooltip = `Audio Priority: ${priorityDeviceName} (click menu to lock)`;
+      tooltip = `Priority Mic: ${priorityDeviceName}`;
     }
     this.tray.setToolTip(tooltip);
 
@@ -282,12 +291,14 @@ export class TrayManager {
         ],
       },
       {
-        label: `Current: ${currentDefaultName}`,
+        label: priorityDeviceId
+          ? `Priority Mic: ${priorityDeviceName}`
+          : 'Priority Mic: None',
         enabled: false,
       },
       {
         label: priorityDeviceId
-          ? 'Selected mic will not auto-switch'
+          ? 'Will auto-connect when plugged in'
           : 'Select a mic to lock it',
         enabled: false,
       },

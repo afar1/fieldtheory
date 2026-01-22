@@ -2489,6 +2489,12 @@ const NarrationIPCChannels = {
   ADD_BLOCKED_DEVICE: 'narration:addBlockedDevice',
   REMOVE_BLOCKED_DEVICE: 'narration:removeBlockedDevice',
   CLEAR_CACHE: 'narration:clearCache',
+  // Chatterbox-specific
+  INSTALL_CHATTERBOX: 'narration:installChatterbox',
+  GET_CHATTERBOX_STATUS: 'narration:getChatterboxStatus',
+  TEST_CHATTERBOX_VOICE: 'narration:testChatterboxVoice',
+  TEST_MACOS_VOICE: 'narration:testMacOSVoice',
+  SET_PREFERRED_ENGINE: 'narration:setPreferredEngine',
   // Events
   PLAYBACK_STARTED: 'narration:playbackStarted',
   PLAYBACK_STOPPED: 'narration:playbackStopped',
@@ -2569,6 +2575,26 @@ const narrationAPI = {
   // Clear narration cache
   clearCache: (): Promise<void> =>
     ipcRenderer.invoke(NarrationIPCChannels.CLEAR_CACHE),
+
+  // Install Chatterbox TTS engine
+  installChatterbox: (): Promise<boolean> =>
+    ipcRenderer.invoke(NarrationIPCChannels.INSTALL_CHATTERBOX),
+
+  // Get Chatterbox installation status
+  getChatterboxStatus: (): Promise<{ installed: boolean; installing: boolean; version?: string; error?: string } | null> =>
+    ipcRenderer.invoke(NarrationIPCChannels.GET_CHATTERBOX_STATUS),
+
+  // Test Chatterbox voice
+  testChatterboxVoice: (): Promise<boolean> =>
+    ipcRenderer.invoke(NarrationIPCChannels.TEST_CHATTERBOX_VOICE),
+
+  // Test macOS Say voice
+  testMacOSVoice: (): Promise<boolean> =>
+    ipcRenderer.invoke(NarrationIPCChannels.TEST_MACOS_VOICE),
+
+  // Set preferred narration engine
+  setPreferredEngine: (engine: 'chatterbox' | 'macos_say'): Promise<boolean> =>
+    ipcRenderer.invoke(NarrationIPCChannels.SET_PREFERRED_ENGINE, engine),
 
   // Event listeners
   onPlaybackStarted: (callback: (readingPath: string) => void): (() => void) => {

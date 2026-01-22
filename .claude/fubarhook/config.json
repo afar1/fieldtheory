@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "threshold": 3,
+  "output_dir": "fubar",
+  "filename_prefix": "randomword_",
+  "content": "Augustine of Hippo first wrestled with subjective time in the 4th century, noting that the present has no duration—only the knife-edge between memory and anticipation. Centuries later, William James coined 'the specious present' to describe how consciousness stitches discrete moments into the illusion of flow. Whether silicon or synapse, the question remains: is experience of time a fundamental feature of mind, or an artifact of sequential processing?"
+}

@@ -110,6 +110,10 @@
         {
           "from": "public/sounds",
           "to": "sounds"
+        },
+        {
+          "from": "resources/chatterbox",
+          "to": "chatterbox"
         }
       ]
     },

@@ -307,20 +307,18 @@ function registerHotkeysAfterOnboarding(): void {
   });
 
   // Register history hotkey (Option+Space)
-  let lastHistoryToggleAt = 0;
+  // Uses internal isShowing() state for instant toggle - no debounce needed.
+  // State updates synchronously in show()/hide() so rapid toggle works correctly.
   clipboardManager.registerHistoryHotkey(async () => {
-    const now = Date.now();
-    if (now - lastHistoryToggleAt < 250) return;
-    lastHistoryToggleAt = now;
-
     if (!clipboardHistoryWindow) {
       clipboardHistoryWindow = initClipboardHistoryWindow();
     }
 
-    const visible = clipboardHistoryWindow.isVisible();
+    // Use internal state for instant toggle (avoids querying window system).
+    const showing = clipboardHistoryWindow.isShowing();
     const showInDock = preferencesManager?.getPreference('showInDock') ?? false;
 
-    if (!visible) {
+    if (!showing) {
       clipboardHistoryWindow.playOpenSound();
       const boundsToUse = restoreClipboardHistoryBounds();
       clipboardHistoryWindow.show(boundsToUse, false, true);
@@ -526,29 +524,16 @@ function registerHotkeysAfterOnboarding(): void {
   });
 
   // Register Command Launcher hotkey - now customizable via HotkeyManager
-  // Cycles between: command launcher → clipboard history → command launcher
+  // Simple toggle: open or close the command launcher
   const commandLauncherHotkey = prefs.commandLauncherHotkey || 'Command+Shift+K';
   hotkeyManager.register('commandLauncher', commandLauncherHotkey, async () => {
-      const clipboardVisible = clipboardHistoryWindow?.isVisible() ?? false;
       const launcherVisible = commandLauncherWindow?.isVisible() ?? false;
 
-      if (clipboardVisible) {
-        // Clipboard history is visible → close it, open command launcher
-        clipboardHistoryWindow?.hide();
-        if (commandLauncherWindow) {
-          await commandLauncherWindow.show();
-          metricsManager?.recordCommandLauncherUse();
-        }
-      } else if (launcherVisible) {
-        // Command launcher is visible → close it, open clipboard history
+      if (launcherVisible) {
+        // Command launcher is visible → close it
         commandLauncherWindow?.hide();
-        if (!clipboardHistoryWindow) {
-          clipboardHistoryWindow = initClipboardHistoryWindow();
-        }
-        const boundsToUse = restoreClipboardHistoryBounds();
-        clipboardHistoryWindow.show(boundsToUse);
       } else {
-        // Neither visible → open command launcher
+        // Command launcher not visible → open it
         if (commandLauncherWindow) {
           await commandLauncherWindow.show();
           metricsManager?.recordCommandLauncherUse();
@@ -932,14 +917,19 @@ function restoreClipboardHistoryBounds(): { x: number; y: number; width: number;
  */
 function initClipboardHistoryWindow(): ClipboardHistoryWindow {
   const window = new ClipboardHistoryWindow(preferencesManager ?? undefined);
-  
+
+  // Wire up native helper for fast sound playback if available.
+  if (nativeHelper) {
+    window.getSoundManager().setNativeHelper(nativeHelper);
+  }
+
   // Set up callback to save bounds when window is moved/resized.
   window.setOnBoundsChanged(async (bounds) => {
     if (!preferencesManager) return;
-    
+
     const displayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
     const displayRelative = ClipboardHistoryWindow.convertToDisplayRelative(bounds.x, bounds.y);
-    
+
     await preferencesManager.save({
       clipboardHistoryBounds: {
         relativeX: displayRelative.relativeX,
@@ -951,7 +941,7 @@ function initClipboardHistoryWindow(): ClipboardHistoryWindow {
       },
     });
   });
-  
+
   return window;
 }
 
@@ -1200,6 +1190,55 @@ function setupLibrarianIPCHandlers(): void {
   // Create welcome artifact for setup wizard
   ipcMain.handle('librarian:createWelcomeArtifact', (_event, dirPath: string): boolean => {
     return librarianManager?.createWelcomeArtifact(dirPath) ?? false;
+  });
+
+  // ===========================================================================
+  // State-Enforced Mode API
+  // ===========================================================================
+
+  // Get state-enforced mode threshold
+  ipcMain.handle('librarian:getStateEnforcedThreshold', (): number => {
+    return librarianManager?.getStateEnforcedThreshold() ?? 3;
+  });
+
+  // Set state-enforced mode threshold
+  ipcMain.handle('librarian:setStateEnforcedThreshold', (_event, threshold: number): boolean => {
+    return librarianManager?.setStateEnforcedThreshold(threshold) ?? false;
+  });
+
+  // Get default rule content
+  ipcMain.handle('librarian:getDefaultRuleContent', (): string => {
+    return librarianManager?.getDefaultRuleContent() ?? '';
+  });
+
+  // Get custom rule content
+  ipcMain.handle('librarian:getCustomRuleContent', (): string | undefined => {
+    return librarianManager?.getCustomRuleContent();
+  });
+
+  // Set custom rule content
+  ipcMain.handle('librarian:setCustomRuleContent', (_event, content: string | undefined): boolean => {
+    return librarianManager?.setCustomRuleContent(content) ?? false;
+  });
+
+  // Install global state-enforced hook
+  ipcMain.handle('librarian:installStateEnforcedHook', (): boolean => {
+    return librarianManager?.installStateEnforcedHook() ?? false;
+  });
+
+  // Uninstall global state-enforced hook
+  ipcMain.handle('librarian:uninstallStateEnforcedHook', (): boolean => {
+    return librarianManager?.uninstallStateEnforcedHook() ?? false;
+  });
+
+  // Check if global state-enforced hook is installed
+  ipcMain.handle('librarian:isStateEnforcedHookInstalled', (): boolean => {
+    return librarianManager?.isStateEnforcedHookInstalled() ?? false;
+  });
+
+  // Get count of pending jobs (from central directory)
+  ipcMain.handle('librarian:getPendingJobCount', (): number => {
+    return librarianManager?.getPendingJobCount() ?? 0;
   });
 
   // ===========================================================================
@@ -1679,6 +1718,49 @@ function setupLibrarianIPCHandlers(): void {
   // Clear narration cache
   ipcMain.handle(NarrationIPCChannels.CLEAR_CACHE, async (): Promise<void> => {
     await narrationManager?.clearCache();
+  });
+
+  // Install Chatterbox TTS engine
+  ipcMain.handle(NarrationIPCChannels.INSTALL_CHATTERBOX, async (): Promise<boolean> => {
+    return narrationManager?.installChatterbox() ?? false;
+  });
+
+  // Get Chatterbox installation status
+  ipcMain.handle(NarrationIPCChannels.GET_CHATTERBOX_STATUS, () => {
+    return narrationManager?.getChatterboxStatus() ?? null;
+  });
+
+  // Test Chatterbox voice
+  ipcMain.handle(NarrationIPCChannels.TEST_CHATTERBOX_VOICE, async (): Promise<boolean> => {
+    try {
+      await narrationManager?.testChatterboxVoice();
+      return true;
+    } catch (error) {
+      console.error('[Narration] Test voice failed:', error);
+      return false;
+    }
+  });
+
+  // Test macOS Say voice
+  ipcMain.handle(NarrationIPCChannels.TEST_MACOS_VOICE, async (): Promise<boolean> => {
+    try {
+      await narrationManager?.testMacOSVoice();
+      return true;
+    } catch (error) {
+      console.error('[Narration] Test macOS voice failed:', error);
+      return false;
+    }
+  });
+
+  // Set preferred narration engine
+  ipcMain.handle(NarrationIPCChannels.SET_PREFERRED_ENGINE, async (_event, engine: 'chatterbox' | 'macos_say'): Promise<boolean> => {
+    try {
+      await narrationManager?.setPreferredEngine(engine);
+      return true;
+    } catch (error) {
+      console.error('[Narration] Set preferred engine failed:', error);
+      return false;
+    }
   });
 
   // ===========================================================================
@@ -4225,6 +4307,14 @@ function setupClipboardIPCHandlers(): void {
     return await socialSync.hasUnreadFeedback();
   });
 
+  // Feedback: Mark all feedback messages as read.
+  ipcMain.handle(SocialIPCChannels.MARK_ALL_FEEDBACK_AS_READ, async () => {
+    if (!socialSync) {
+      return false;
+    }
+    return await socialSync.markAllFeedbackAsRead();
+  });
+
   // Feedback: Submit feedback (send to admin).
   ipcMain.handle(SocialIPCChannels.SUBMIT_FEEDBACK, async (_event, localItemId: number) => {
     if (!socialSync) {
@@ -4800,13 +4890,23 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   });
   
   audioManager = new AudioManager(nativeHelper);
-  
+
   // Load saved priority device from preferences
   const prefs = preferencesManager.get();
   if (prefs.priorityDeviceId) {
     audioManager.setSavedPriorityDeviceId(prefs.priorityDeviceId);
   }
-  
+  // Load favorite device name for auto-reconnect
+  if (prefs.favoriteDeviceName) {
+    audioManager.setFavoriteDeviceName(prefs.favoriteDeviceName);
+  }
+  // Save favorite device name when it changes
+  audioManager.setOnFavoriteChanged(async (name) => {
+    if (preferencesManager) {
+      await preferencesManager.save({ favoriteDeviceName: name });
+    }
+  });
+
   audioManager.on('stateChanged', () => {
     broadcastStateChanged();
   });
@@ -5010,6 +5110,14 @@ async function initTranscriberSystem(): Promise<void> {
     });
   });
 
+  narrationManager.on('installProgress', (progress: number, message: string) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(NarrationIPCChannels.INSTALL_PROGRESS, progress, message);
+      }
+    });
+  });
+
   // Broadcast artifact-added events to all windows and auto-show if enabled
   librarianManager.on('reading-added', (reading: Reading) => {
     console.log(`[Librarian] artifact-added event: ${reading.title}`);
@@ -5124,6 +5232,18 @@ async function initTranscriberSystem(): Promise<void> {
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
   await transcriberManager.init();
   broadcastTranscribeEvents();
+
+  // Wire up native helper for fast sound playback and preload all sounds.
+  // This gives ~1-5ms latency instead of ~50-100ms with afplay.
+  if (nativeHelper) {
+    const transcriberSoundManager = transcriberManager.getSoundManager();
+    transcriberSoundManager.setNativeHelper(nativeHelper);
+
+    // Preload all sounds once (shared cache in native helper).
+    transcriberSoundManager.preloadAllSounds().catch((err) => {
+      console.warn('[Main] Failed to preload sounds:', err);
+    });
+  }
 
   // Pass transcriberManager to trayManager for auto-improve toggle
   if (trayManager) {
@@ -5577,6 +5697,20 @@ if (!gotTheLock) {
           ]
         },
         {
+          label: 'View',
+          submenu: [
+            {
+              label: 'Portable Commands',
+              accelerator: 'Command+Shift+K',
+              click: () => {
+                if (commandLauncherWindow) {
+                  commandLauncherWindow.show();
+                }
+              }
+            }
+          ]
+        },
+        {
           label: 'Window',
           submenu: [
             { role: 'minimize' },
@@ -5629,6 +5763,15 @@ if (!gotTheLock) {
     await initAudioSystem(checkForUpdatesManual);
     await initTranscriberSystem();
     await initClipboardCallbacks();
+
+    // Preload clipboard history window for instant first open.
+    // Only if onboarding is complete (user has set up the app).
+    const currentPrefs = preferencesManager?.get();
+    if (currentPrefs?.onboardingComplete) {
+      clipboardHistoryWindow = initClipboardHistoryWindow();
+      const boundsToUse = restoreClipboardHistoryBounds();
+      clipboardHistoryWindow.preload(boundsToUse);
+    }
 
     // Update tray manager with current hotkeys for menu display
     if (trayManager && clipboardManager && transcriberManager) {
@@ -6001,6 +6144,13 @@ if (!gotTheLock) {
 
     if (clipboardManager) {
       clipboardManager.destroy();
+    }
+
+    // Stop Chatterbox sidecar if running
+    if (narrationManager) {
+      narrationManager.stopChatterbox().catch((error) => {
+        console.error('[Main] Failed to stop Chatterbox sidecar:', error);
+      });
     }
 
     if (clipboardHistoryWindow) {

@@ -26,6 +26,11 @@ import {
 } from './types';
 import { NarrationCache } from './cache';
 import { getMacOSSayEngine, MacOSSayEngine } from './engines/macos-say';
+import {
+  getChatterboxSidecarEngine,
+  ChatterboxSidecarEngine,
+  ChatterboxInstallStatus,
+} from './engines/chatterbox-sidecar';
 import { getOutputDeviceDetector, OutputDeviceDetector } from './deviceDetector';
 import { PreferencesManager } from '../preferences';
 
@@ -46,6 +51,7 @@ export class NarrationManager extends EventEmitter {
   private preferences: PreferencesManager;
   private cache: NarrationCache;
   private macosEngine: MacOSSayEngine;
+  private chatterboxEngine: ChatterboxSidecarEngine;
   private deviceDetector: OutputDeviceDetector;
 
   private installStatus: NarrationInstallStatus = 'installed'; // macOS say always available
@@ -53,16 +59,21 @@ export class NarrationManager extends EventEmitter {
   private currentReadingPath: string | null = null;
   private currentPlayProcess: ChildProcess | null = null;
   private narrationPrefs: NarrationPreferences;
+  private preferredEngine: NarrationEngine = 'macos_say';
 
   constructor(preferences: PreferencesManager) {
     super();
     this.preferences = preferences;
     this.cache = new NarrationCache();
     this.macosEngine = getMacOSSayEngine();
+    this.chatterboxEngine = getChatterboxSidecarEngine();
     this.deviceDetector = getOutputDeviceDetector();
 
     // Load narration preferences from stored preferences
     this.narrationPrefs = this.loadNarrationPrefs();
+
+    // Set preferred engine based on Chatterbox availability
+    this.preferredEngine = this.narrationPrefs.preferredEngine || 'macos_say';
   }
 
   /**
@@ -87,23 +98,37 @@ export class NarrationManager extends EventEmitter {
       console.warn('[NarrationManager] macOS Say not available');
     }
 
+    // Check if Chatterbox is installed
+    const chatterboxInstalled = await this.chatterboxEngine.isInstalled();
+    if (chatterboxInstalled) {
+      console.log('[NarrationManager] Chatterbox engine available');
+      // If user previously set Chatterbox as preferred and it's installed, use it
+      if (this.narrationPrefs.preferredEngine === 'chatterbox') {
+        this.preferredEngine = 'chatterbox';
+      }
+    }
+
     // Refresh device detection on init
     await this.deviceDetector.refresh();
 
-    console.log('[NarrationManager] Initialized');
+    console.log(`[NarrationManager] Initialized (preferred engine: ${this.preferredEngine})`);
   }
 
   /**
    * Get current status.
    */
   getStatus(): NarrationStatus {
+    const chatterboxStatus = this.chatterboxEngine.getInstallStatus();
     return {
       installStatus: this.installStatus,
       playbackStatus: this.playbackStatus,
-      engine: this.installStatus === 'installed' ? 'macos_say' : null,
+      engine: this.preferredEngine,
       currentReadingPath: this.currentReadingPath,
       cacheSizeBytes: this.cache.getTotalSize(),
       cachedItemCount: this.cache.getItemCount(),
+      chatterboxInstalled: chatterboxStatus.installed,
+      chatterboxInstalling: chatterboxStatus.installing,
+      preferredEngine: this.preferredEngine,
     };
   }
 
@@ -158,11 +183,12 @@ export class NarrationManager extends EventEmitter {
     this.playbackStatus = 'generating';
 
     try {
-      // Generate content hash
+      // Generate content hash for the preferred engine
       const contentHash = this.cache.generateContentHash(
         readingContent,
         profile,
-        LIBRARIAN_V1_PARAMS
+        LIBRARIAN_V1_PARAMS,
+        this.preferredEngine
       );
 
       let result: NarrateResult;
@@ -277,6 +303,106 @@ export class NarrationManager extends EventEmitter {
   }
 
   /**
+   * Get Chatterbox installation status.
+   */
+  getChatterboxStatus(): ChatterboxInstallStatus {
+    return this.chatterboxEngine.getInstallStatus();
+  }
+
+  /**
+   * Install Chatterbox TTS engine.
+   * Emits 'installProgress' events during installation.
+   */
+  async installChatterbox(): Promise<boolean> {
+    console.log('[NarrationManager] Installing Chatterbox...');
+
+    const success = await this.chatterboxEngine.install((progress, message) => {
+      this.emit('installProgress', progress, message);
+    });
+
+    if (success) {
+      // Automatically set Chatterbox as preferred engine after install
+      this.preferredEngine = 'chatterbox';
+      this.narrationPrefs.preferredEngine = 'chatterbox';
+      await this.saveNarrationPrefs();
+      console.log('[NarrationManager] Chatterbox installed and set as preferred');
+    }
+
+    return success;
+  }
+
+  /**
+   * Test Chatterbox voice with a sample phrase.
+   */
+  async testChatterboxVoice(): Promise<void> {
+    console.log('[NarrationManager] Testing Chatterbox voice...');
+
+    // Stop any current playback
+    this.stop();
+
+    try {
+      const result = await this.chatterboxEngine.testVoice();
+      console.log(`[NarrationManager] Test audio generated: ${result.audioPath}`);
+
+      // Play the test audio
+      this.playbackStatus = 'playing';
+      await this.playAudio(result.audioPath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[NarrationManager] Chatterbox test failed:', message);
+      throw error;
+    }
+  }
+
+  /**
+   * Test macOS Say voice with a sample phrase.
+   */
+  async testMacOSVoice(): Promise<void> {
+    console.log('[NarrationManager] Testing macOS Say voice...');
+
+    // Stop any current playback
+    this.stop();
+
+    try {
+      const result = await this.macosEngine.testVoice();
+      console.log(`[NarrationManager] Test audio generated: ${result.audioPath}`);
+
+      // Play the test audio
+      this.playbackStatus = 'playing';
+      await this.playAudio(result.audioPath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[NarrationManager] macOS Say test failed:', message);
+      throw error;
+    }
+  }
+
+  /**
+   * Set preferred narration engine.
+   */
+  async setPreferredEngine(engine: NarrationEngine): Promise<void> {
+    // Validate engine is available
+    if (engine === 'chatterbox') {
+      const installed = await this.chatterboxEngine.isInstalled();
+      if (!installed) {
+        throw new Error('Chatterbox is not installed');
+      }
+    }
+
+    this.preferredEngine = engine;
+    this.narrationPrefs.preferredEngine = engine;
+    await this.saveNarrationPrefs();
+    console.log(`[NarrationManager] Preferred engine set to: ${engine}`);
+  }
+
+  /**
+   * Stop Chatterbox sidecar (for app shutdown).
+   */
+  async stopChatterbox(): Promise<void> {
+    await this.chatterboxEngine.stop();
+  }
+
+  /**
    * Ensure narration is installed.
    * For v1, macOS say is the engine and is always available.
    */
@@ -326,29 +452,67 @@ export class NarrationManager extends EventEmitter {
 
   /**
    * Synthesize text to audio.
+   * Uses preferred engine with fallback to macOS say.
    */
   private async synthesize(
     text: string,
     contentHash: string,
     profile: NarrationProfile
   ): Promise<NarrateResult> {
-    console.log(`[NarrationManager] Synthesizing ${text.length} chars...`);
+    console.log(`[NarrationManager] Synthesizing ${text.length} chars with ${this.preferredEngine}...`);
 
-    const outputPath = this.cache.generateAudioPath(contentHash);
+    let result: NarrateResult;
+    let engine: NarrationEngine = this.preferredEngine;
+    let actualContentHash = contentHash;
 
-    // Use macOS say engine
-    const result = await this.macosEngine.synthesize(text, outputPath, profile);
+    // Try Chatterbox first if it's preferred
+    if (this.preferredEngine === 'chatterbox') {
+      try {
+        const chatterboxInstalled = await this.chatterboxEngine.isInstalled();
+        if (chatterboxInstalled) {
+          const outputPath = this.cache.generateAudioPath(contentHash, 'chatterbox');
+          result = await this.chatterboxEngine.synthesize(
+            text,
+            outputPath,
+            profile,
+            LIBRARIAN_V1_PARAMS
+          );
+          engine = 'chatterbox';
+        } else {
+          console.warn('[NarrationManager] Chatterbox not installed, falling back to macOS say');
+          // Generate new hash for fallback engine
+          actualContentHash = this.cache.generateContentHash(text, profile, LIBRARIAN_V1_PARAMS, 'macos_say');
+          const outputPath = this.cache.generateAudioPath(actualContentHash, 'macos_say');
+          result = await this.macosEngine.synthesize(text, outputPath, profile);
+          engine = 'macos_say';
+        }
+      } catch (error) {
+        // Silent fallback to macOS say on Chatterbox failure
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[NarrationManager] Chatterbox failed (${message}), falling back to macOS say`);
+        // Generate new hash for fallback engine
+        actualContentHash = this.cache.generateContentHash(text, profile, LIBRARIAN_V1_PARAMS, 'macos_say');
+        const outputPath = this.cache.generateAudioPath(actualContentHash, 'macos_say');
+        result = await this.macosEngine.synthesize(text, outputPath, profile);
+        engine = 'macos_say';
+      }
+    } else {
+      // Use macOS say engine
+      const outputPath = this.cache.generateAudioPath(contentHash, 'macos_say');
+      result = await this.macosEngine.synthesize(text, outputPath, profile);
+      engine = 'macos_say';
+    }
 
-    // Store in cache
+    // Store in cache with the actual hash and engine used
     await this.cache.set(
-      contentHash,
-      outputPath,
+      actualContentHash,
+      result.audioPath,
       profile,
-      'macos_say',
+      engine,
       this.currentReadingPath || undefined
     );
 
-    console.log(`[NarrationManager] Synthesis complete: ${outputPath}`);
+    console.log(`[NarrationManager] Synthesis complete (${engine}): ${result.audioPath}`);
     return result;
   }
 

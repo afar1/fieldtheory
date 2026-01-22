@@ -24,6 +24,11 @@ export class AudioManager extends EventEmitter {
   private isSettingDefaultInput = false;
   private helper: NativeHelper;
   private savedPriorityDeviceId: string | null = null;
+  // Favorite device name - used to auto-reconnect when device reappears.
+  // Names are more stable than IDs across reconnects.
+  private favoriteDeviceName: string | null = null;
+  // Callback to save favorite to preferences
+  private onFavoriteChanged: ((name: string | null) => void) | null = null;
 
   constructor(helper: NativeHelper) {
     super();
@@ -36,6 +41,28 @@ export class AudioManager extends EventEmitter {
    */
   setSavedPriorityDeviceId(deviceId: string | null): void {
     this.savedPriorityDeviceId = deviceId;
+  }
+
+  /**
+   * Set the favorite device name (loaded from preferences).
+   * When this device reconnects, it will automatically become the priority.
+   */
+  setFavoriteDeviceName(name: string | null): void {
+    this.favoriteDeviceName = name;
+  }
+
+  /**
+   * Get the current favorite device name.
+   */
+  getFavoriteDeviceName(): string | null {
+    return this.favoriteDeviceName;
+  }
+
+  /**
+   * Set callback for when favorite device changes (to save to preferences).
+   */
+  setOnFavoriteChanged(callback: (name: string | null) => void): void {
+    this.onFavoriteChanged = callback;
   }
 
   /**
@@ -106,6 +133,16 @@ export class AudioManager extends EventEmitter {
     this.priorityDeviceId = deviceId;
 
     if (deviceId) {
+      // Save device name as favorite for auto-reconnect
+      const device = this.devices.find(d => d.id === deviceId);
+      if (device) {
+        this.favoriteDeviceName = device.name;
+        console.log('[AudioManager] Saved favorite device name:', device.name);
+        if (this.onFavoriteChanged) {
+          this.onFavoriteChanged(device.name);
+        }
+      }
+
       if (!this.priorityMode) {
         this.priorityMode = true;
         console.log('[AudioManager] Auto-enabled priority mode for device:', deviceId);
@@ -113,6 +150,12 @@ export class AudioManager extends EventEmitter {
       this.userOverrideId = null;
       await this.enforcePriority();
     } else {
+      // Clear favorite when explicitly selecting "None"
+      this.favoriteDeviceName = null;
+      if (this.onFavoriteChanged) {
+        this.onFavoriteChanged(null);
+      }
+
       if (this.priorityMode) {
         this.priorityMode = false;
         this.userOverrideId = null;
@@ -186,19 +229,32 @@ export class AudioManager extends EventEmitter {
   /**
    * Handle device list changes from CoreAudio.
    * Re-evaluates priority policy if needed.
-   * Also handles wake-from-sleep recovery.
+   * Also handles wake-from-sleep recovery and favorite device auto-reconnect.
    */
   private async handleDevicesChanged(devices: AudioDevice[]): Promise<void> {
     console.log('[AudioManager] Devices changed, count:', devices.length);
 
     this.devices = devices;
 
-    // If the priority device was removed, clear it.
+    // If the priority device was removed, clear it (but keep favorite name for reconnect).
     if (this.priorityDeviceId) {
       const stillExists = devices.some((d) => d.id === this.priorityDeviceId);
       if (!stillExists) {
-        console.log('[AudioManager] Priority device removed, clearing selection');
+        console.log('[AudioManager] Priority device removed, will auto-reconnect if it reappears');
         this.priorityDeviceId = null;
+        // Don't clear favoriteDeviceName - we want to reconnect when it comes back
+      }
+    }
+
+    // Auto-reconnect: If we have a favorite device name but no current priority device,
+    // check if the favorite device just connected and auto-select it.
+    if (!this.priorityDeviceId && this.favoriteDeviceName) {
+      const favoriteDevice = devices.find(d => d.name === this.favoriteDeviceName && d.isInput);
+      if (favoriteDevice) {
+        console.log('[AudioManager] Favorite device reconnected, auto-selecting:', this.favoriteDeviceName);
+        this.priorityDeviceId = favoriteDevice.id;
+        this.priorityMode = true;
+        await this.enforcePriority();
       }
     }
 

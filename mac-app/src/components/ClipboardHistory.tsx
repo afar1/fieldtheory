@@ -15,6 +15,7 @@ import ReleaseNotesPopup from './ReleaseNotesPopup';
 import LibrarianView from './LibrarianView';
 import type { SketchViewHandle } from './SketchView';
 import { FEATURE_HOT_MIC_ENABLED, FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED } from '../featureFlags';
+import { rendererSoundManager } from '../utils/rendererSoundManager';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
 const SketchView = React.lazy(() => import('./SketchView'));
@@ -1417,6 +1418,15 @@ export default function ClipboardHistory() {
       setShowSettings(true);
     });
 
+    // Preload sounds for instant playback via Web Audio API.
+    // This bypasses the main process entirely for minimal latency.
+    rendererSoundManager.preload();
+
+    // Listen for sound events from main process.
+    const unsubscribePlaySound = window.clipboardAPI.onPlaySound?.((soundId) => {
+      rendererSoundManager.play(soundId);
+    });
+
     // Listen for todo view hotkey (Cmd+Shift+T).
     // Toggles between todo and clipboard view.
     const unsubscribeShowTodos = window.todoAPI?.onShowTodos?.(() => {
@@ -1483,6 +1493,7 @@ export default function ClipboardHistory() {
     return () => {
       unsubscribeShowHistory();
       unsubscribeShowSettings?.();
+      unsubscribePlaySound?.();
       unsubscribeShowTodos?.();
       unsubscribeTargetAppInfo?.();
       unsubscribeAdded();
@@ -4371,7 +4382,17 @@ export default function ClipboardHistory() {
               marginTop: '8px',
             }}
           >
-        {listRows.length === 0 && !loading ? (
+        {listRows.length === 0 && loading ? (
+          <div
+            style={{
+              padding: '40px',
+              textAlign: 'center',
+              color: theme.textSecondary,
+            }}
+          >
+            Loading...
+          </div>
+        ) : listRows.length === 0 ? (
           <div
             style={{
               padding: '40px',
@@ -6329,7 +6350,7 @@ export default function ClipboardHistory() {
               ) : (
                 <>
                   {userCallsign && (
-                    <span style={{ color: theme.textSecondary, fontSize: '9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', letterSpacing: '0.5px' }}>
+                    <span style={{ color: theme.textSecondary, fontSize: '9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', letterSpacing: '0.5px', fontStyle: 'italic' }}>
                       {userCallsign}
                     </span>
                   )}

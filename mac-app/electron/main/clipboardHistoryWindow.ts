@@ -71,6 +71,10 @@ export class ClipboardHistoryWindow {
   // Track if immersive/fullscreen reading mode is active - window should not auto-hide
   private isImmersiveMode: boolean = false;
 
+  // Internal visibility state for instant toggle without querying window.
+  // Updated in show() and hide() to stay in sync with all visibility changes.
+  private _isShowing: boolean = false;
+
   // Saved window bounds before sketch mode expansion (to restore on exit).
   private normalBounds: Electron.Rectangle | null = null;
   
@@ -182,14 +186,15 @@ export class ClipboardHistoryWindow {
    * Show or toggle the clipboard history window.
    */
   toggle(): void {
-    // If window exists but is destroyed, reset it
+    // If window exists but is destroyed, reset it and state
     if (this.window && this.window.isDestroyed()) {
       this.window = null;
+      this._isShowing = false;
     }
 
-    if (this.window && this.window.isVisible()) {
-      // Hide it
-      this.window.hide();
+    if (this._isShowing) {
+      // Hide it (use this.hide() to update state)
+      this.hide();
       return;
     }
 
@@ -206,12 +211,11 @@ export class ClipboardHistoryWindow {
    * @param skipSound If true, skip playing open sound (used when sound was already played externally for faster feedback)
    */
   show(savedBounds?: { x: number; y: number; width: number; height: number }, showSettingsMode: boolean = false, skipSound: boolean = false): void {
-    // Play window open sound (unless caller already played it for faster feedback).
-    if (!skipSound) {
-      this.soundManager.play('windowOpen');
-    }
-    
+    // Update internal state immediately for instant toggle.
+    this._isShowing = true;
+
     // If window exists, reposition and show it.
+    // For existing windows, we can use renderer-based sound (instant via Web Audio API).
     if (this.window && !this.window.isDestroyed()) {
       // Reposition window if bounds provided.
       if (savedBounds) {
@@ -222,28 +226,40 @@ export class ClipboardHistoryWindow {
           height: savedBounds.height,
         });
       }
-      
+
       // Ensure app is visible (un-hide after app.hide() was called).
       // This is needed for Cmd+Tab to properly show windows.
       app.show();
+
+      // Play sound via renderer (instant - Web Audio API) BEFORE showing window.
+      // The renderer plays it immediately with ~1ms latency.
+      if (!skipSound) {
+        this.window.webContents.send('clipboard:playSound', 'windowOpen');
+      }
 
       this.window.show();
       // Bring window to front of window stack (important when not alwaysOnTop)
       this.window.moveTop();
       this.window.focus();
-      
+
       // Notify renderer to reset search query.
       this.window.webContents.send('clipboard:showHistory');
       if (showSettingsMode) {
         this.window.webContents.send('clipboard:showSettings');
       }
       this.sendTargetAppInfo();
-      
+
       // Fetch fresh app data in background.
       this.refreshAppDataInBackground();
       return;
     }
-    
+
+    // For new windows, use main process sound (renderer isn't loaded yet).
+    // The delay is acceptable since content is loading anyway.
+    if (!skipSound) {
+      this.soundManager.play('windowOpen');
+    }
+
     // Ensure app is visible (un-hide after app.hide() was called).
     app.show();
 
@@ -270,13 +286,28 @@ export class ClipboardHistoryWindow {
   }
   
   /**
+   * Preload the window in the background for instant first open.
+   * Creates the window hidden and lets content fully load.
+   * Call once at app startup after systems are initialized.
+   * @param savedBounds Optional saved bounds for position/size
+   */
+  preload(savedBounds?: { x: number; y: number; width: number; height: number }): void {
+    if (this.window && !this.window.isDestroyed()) {
+      return; // Already preloaded
+    }
+    console.log('[ClipboardHistoryWindow] Preloading window in background...');
+    this.createWindow(savedBounds, false, true);
+  }
+
+  /**
    * Create the clipboard history window.
    * Uses native macOS vibrancy for blur effect (like Alfred/Spotlight).
    * Window is sized to dialog dimensions, not full-screen overlay.
    * @param savedBounds Optional saved bounds for position/size (absolute screen coords)
    * @param showSettingsMode If true, send settings mode event after content loads
+   * @param preloadOnly If true, don't show window after load (for background preloading)
    */
-  private createWindow(savedBounds?: { x: number; y: number; width: number; height: number }, showSettingsMode: boolean = false): void {
+  private createWindow(savedBounds?: { x: number; y: number; width: number; height: number }, showSettingsMode: boolean = false, preloadOnly: boolean = false): void {
     // Calculate window position/size.
     // savedBounds are now in absolute screen coordinates (simpler than old overlay-relative).
     let windowX: number;
@@ -357,6 +388,7 @@ export class ClipboardHistoryWindow {
 
     this.window.on('closed', () => {
       this.window = null;
+      this._isShowing = false;
     });
 
     // Dismiss when window loses focus (Alfred behavior).
@@ -432,8 +464,13 @@ export class ClipboardHistoryWindow {
     });
 
     // Show window only after content loads to avoid blank screen.
+    // If preloadOnly, just log and keep window hidden for instant later use.
     this.window.webContents.once('did-finish-load', () => {
-      console.log('[ClipboardHistoryWindow] Content loaded');
+      console.log('[ClipboardHistoryWindow] Content loaded' + (preloadOnly ? ' (preload complete)' : ''));
+      if (preloadOnly) {
+        // Preload complete - window stays hidden but ready for instant show()
+        return;
+      }
       if (this.window && !this.window.isDestroyed()) {
         this.window.show();
         this.window.focus();
@@ -470,6 +507,9 @@ export class ClipboardHistoryWindow {
    * @param hideApp - Whether to hide the entire app. Set to false when other windows (like recording overlay) should remain visible.
    */
   hide(hideApp: boolean = true): void {
+    // Update internal state immediately for instant toggle.
+    this._isShowing = false;
+
     // Cancel any in-progress animation and reset sketch state.
     if (this.animationTimer) {
       clearInterval(this.animationTimer);
@@ -492,10 +532,11 @@ export class ClipboardHistoryWindow {
 
     // Only play sound if window is actually visible.
     // This prevents double-play when blur event fires after direct hide() call.
+    // Use renderer-based sound (Web Audio API) for instant playback.
     if (this.window && !this.window.isDestroyed() && this.window.isVisible()) {
-      this.soundManager.play('windowClose');
+      this.window.webContents.send('clipboard:playSound', 'windowClose');
     }
-    
+
     if (this.window && !this.window.isDestroyed()) {
       this.window.hide();
     }
@@ -526,10 +567,25 @@ export class ClipboardHistoryWindow {
   }
 
   /**
-   * Check if the window is visible.
+   * Get the SoundManager instance for setting native helper.
+   */
+  getSoundManager(): SoundManager {
+    return this.soundManager;
+  }
+
+  /**
+   * Check if the window is visible (queries window state).
    */
   isVisible(): boolean {
     return this.window !== null && !this.window.isDestroyed() && this.window.isVisible();
+  }
+
+  /**
+   * Check internal visibility state for instant toggle.
+   * Use this for hotkey toggle instead of isVisible() to avoid race conditions.
+   */
+  isShowing(): boolean {
+    return this._isShowing;
   }
 
   /**
@@ -537,7 +593,13 @@ export class ClipboardHistoryWindow {
    * Used for faster feedback when there's async work before show() is called.
    */
   playOpenSound(): void {
-    this.soundManager.play('windowOpen');
+    // If window exists, use renderer-based sound for instant playback.
+    // Otherwise fall back to main process sound.
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send('clipboard:playSound', 'windowOpen');
+    } else {
+      this.soundManager.play('windowOpen');
+    }
   }
 
   /**
@@ -545,7 +607,12 @@ export class ClipboardHistoryWindow {
    * Called when a new reading/artifact is created.
    */
   playArtifactDiscoverySound(): void {
-    this.soundManager.play('artifactDiscovery');
+    // Use renderer-based sound for instant playback.
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send('clipboard:playSound', 'artifactDiscovery');
+    } else {
+      this.soundManager.play('artifactDiscovery');
+    }
   }
 
   /**

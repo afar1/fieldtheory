@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "id": 3,
+  "type": "history_artifact",
+  "status": "pending",
+  "output": ".librarian/artifacts/artifact_3.md",
+  "rule_file": ".librarian/rules/history_reading.md"
+}

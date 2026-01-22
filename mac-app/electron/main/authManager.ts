@@ -294,7 +294,11 @@ export class AuthManager extends EventEmitter {
       const reason = isExpired ? 'expired' : (force ? 'forced' : 'expiring soon');
       console.log(`[AuthManager] Token ${reason}, refreshing session...`);
 
-      const { data, error } = await this.supabase.auth.refreshSession();
+      // Pass refresh_token explicitly - don't rely on Supabase's internal state
+      // which can become desynced from our session copy
+      const { data, error } = await this.supabase.auth.refreshSession({
+        refresh_token: this.session.refresh_token,
+      });
 
       if (error || !data.session) {
         if (this.isTokenRevoked(error)) {

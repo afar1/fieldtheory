@@ -36,12 +36,18 @@ enum MessageType: String, Codable {
     case startKeyboardMonitoring
     case stopKeyboardMonitoring
     case getFrontmostWindowBounds
+    // Sound playback
+    case preloadSounds
+    case playSound
+    case stopSounds
 }
 
 /// Message received from Electron.
 struct IncomingMessage: Codable {
     let type: MessageType
     let deviceId: String?
+    let soundPath: String?      // For playSound
+    let soundPaths: [String]?   // For preloadSounds
 }
 
 // MARK: - Outgoing Message Types
@@ -189,6 +195,17 @@ struct FrontmostWindowBoundsMessage: Codable {
     enum CodingKeys: String, CodingKey {
         case type
         case windowBounds
+    }
+}
+
+/// Response after preloading sounds.
+struct SoundsPreloadedMessage: Codable {
+    let type = "soundsPreloaded"
+    let count: Int
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case count
     }
 }
 
@@ -1530,6 +1547,78 @@ func sendError(_ message: String) {
     sendJSON(errorMessage)
 }
 
+// MARK: - Sound Playback Helper
+
+/// Manages preloaded NSSound instances for instant playback.
+/// Thread safety: Only access from main thread (MessageHandler dispatches there).
+final class SoundHelper {
+    static let shared = SoundHelper()
+
+    /// Cache of preloaded sounds, keyed by file path.
+    private var soundCache: [String: NSSound] = [:]
+
+    private init() {}
+
+    /// Preload a sound file for instant playback.
+    /// Returns true if the sound was loaded successfully.
+    @discardableResult
+    func preload(path: String) -> Bool {
+        // Skip if already cached
+        if soundCache[path] != nil {
+            return true
+        }
+
+        // Load sound into memory (byReference: false = copy data for instant playback)
+        guard let sound = NSSound(contentsOfFile: path, byReference: false) else {
+            sendLog(level: "warn", message: "Failed to preload sound: \(path)")
+            return false
+        }
+
+        soundCache[path] = sound
+        return true
+    }
+
+    /// Preload multiple sound files.
+    func preloadAll(paths: [String]) -> Int {
+        var count = 0
+        for path in paths {
+            if preload(path: path) {
+                count += 1
+            }
+        }
+        sendLog(level: "info", message: "Preloaded \(count) sounds")
+        return count
+    }
+
+    /// Play a sound. If not preloaded, attempts to load and play.
+    /// Fire-and-forget: returns immediately, sound plays asynchronously.
+    func play(path: String) {
+        // Try to get from cache first
+        if let cachedSound = soundCache[path] {
+            // NSSound.play() is async - returns immediately
+            // Create a copy to allow overlapping playback of same sound
+            if let soundCopy = cachedSound.copy() as? NSSound {
+                soundCopy.play()
+            } else {
+                cachedSound.play()
+            }
+            return
+        }
+
+        // Not cached - load and play (slightly slower but still works)
+        if preload(path: path) {
+            soundCache[path]?.play()
+        }
+    }
+
+    /// Stop all currently playing sounds.
+    func stopAll() {
+        for sound in soundCache.values {
+            sound.stop()
+        }
+    }
+}
+
 // MARK: - Message Handler
 
 final class MessageHandler {
@@ -1607,6 +1696,27 @@ final class MessageHandler {
             let bounds = getFrontmostWindowBounds()
             let response = FrontmostWindowBoundsMessage(windowBounds: bounds)
             sendJSON(response)
+
+        case .preloadSounds:
+            if let paths = message.soundPaths {
+                let count = SoundHelper.shared.preloadAll(paths: paths)
+                let response = SoundsPreloadedMessage(count: count)
+                sendJSON(response)
+            } else {
+                sendError("preloadSounds requires soundPaths array")
+            }
+
+        case .playSound:
+            if let path = message.soundPath {
+                SoundHelper.shared.play(path: path)
+                // Fire-and-forget - no response needed for minimal latency
+            } else {
+                sendError("playSound requires soundPath")
+            }
+
+        case .stopSounds:
+            SoundHelper.shared.stopAll()
+            sendLog(level: "info", message: "All sounds stopped")
         }
     }
 

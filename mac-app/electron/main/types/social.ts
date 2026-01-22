@@ -12,7 +12,8 @@ export const SocialIPCChannels = {
   MARK_AS_READ_BATCH: 'social:markAsReadBatch',
   HAS_UNREAD: 'social:hasUnread',
   HAS_UNREAD_FEEDBACK: 'social:hasUnreadFeedback',
-  
+  MARK_ALL_FEEDBACK_AS_READ: 'social:markAllFeedbackAsRead',
+
   // Feedback operations
   SUBMIT_FEEDBACK: 'social:submitFeedback',
   SUBMIT_TEXT_FEEDBACK: 'social:submitTextFeedback',

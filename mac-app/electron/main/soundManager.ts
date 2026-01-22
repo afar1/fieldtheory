@@ -2,6 +2,7 @@ import { app } from 'electron';
 import path from 'path';
 import { exec } from 'child_process';
 import { PreferencesManager } from './preferences';
+import { NativeHelper } from './nativeHelper';
 
 /**
  * Available sound options that users can choose from.
@@ -70,32 +71,71 @@ export type SoundEvent = 'recordingStart' | 'recordingStop' | 'recordingCancel' 
 
 /**
  * SoundManager handles playing UI sounds based on user preferences.
- * Uses afplay on macOS for async sound playback.
+ * Uses NSSound via native helper for instant playback (~1-5ms).
+ * Falls back to afplay if native helper is unavailable.
  */
 export class SoundManager {
   private preferences: PreferencesManager;
-  
+  private nativeHelper: NativeHelper | null = null;
+  private soundsDir: string;
+
   constructor(preferences: PreferencesManager) {
     this.preferences = preferences;
+    this.soundsDir = app.isPackaged
+      ? path.join(process.resourcesPath, 'sounds')
+      : path.join(__dirname, '../../public/sounds');
   }
-  
+
+  /**
+   * Set the native helper for fast sound playback.
+   * Must be called after NativeHelper is started.
+   */
+  setNativeHelper(helper: NativeHelper): void {
+    this.nativeHelper = helper;
+  }
+
+  /**
+   * Preload all available sounds for instant playback.
+   * Call once at app startup after NativeHelper is ready.
+   */
+  async preloadAllSounds(): Promise<void> {
+    if (!this.nativeHelper) {
+      console.warn('[SoundManager] No native helper - sounds will use fallback (afplay)');
+      return;
+    }
+
+    const allSounds = getAllSounds();
+    const soundPaths = allSounds.map(s => path.join(this.soundsDir, s.id));
+
+    const count = await this.nativeHelper.preloadSounds(soundPaths);
+    console.log(`[SoundManager] Preloaded ${count}/${soundPaths.length} sounds via native helper`);
+  }
+
   /**
    * Play a sound file by name.
-   * Looks in the public/sounds directory (or resources in packaged app).
+   * Uses native helper for instant playback if available.
+   * Falls back to afplay if native helper is unavailable.
    */
   private playFile(soundFile: string): void {
     if (!soundFile) return;
-    
-    const soundPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'sounds', soundFile)
-      : path.join(__dirname, '../../public/sounds', soundFile);
-    
-    // Use afplay on macOS to play the sound asynchronously.
-    exec(`afplay "${soundPath}"`, (error) => {
-      if (error) {
-        console.warn(`[SoundManager] Failed to play sound ${soundFile}:`, error.message);
-      }
-    });
+
+    const soundPath = path.join(this.soundsDir, soundFile);
+    const startTime = performance.now();
+
+    if (this.nativeHelper) {
+      // Fast path: native NSSound playback (~1-5ms)
+      console.log(`[SoundManager] Playing via native: ${soundFile}`);
+      this.nativeHelper.playSound(soundPath);
+      console.log(`[SoundManager] playSound() returned in ${(performance.now() - startTime).toFixed(2)}ms`);
+    } else {
+      // Fallback: exec afplay (slower, ~50-100ms)
+      console.log(`[SoundManager] Playing via afplay (no native helper): ${soundFile}`);
+      exec(`afplay "${soundPath}"`, (error) => {
+        if (error) {
+          console.warn(`[SoundManager] Failed to play sound ${soundFile}:`, error.message);
+        }
+      });
+    }
   }
   
   /**

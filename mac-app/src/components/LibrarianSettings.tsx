@@ -80,8 +80,12 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     installStatus: 'not_installed' | 'installing' | 'installed' | 'install_failed';
     cacheSizeBytes: number;
     cachedItemCount: number;
+    chatterboxInstalled?: boolean;
+    chatterboxInstalling?: boolean;
+    preferredEngine?: 'chatterbox' | 'macos_say';
   } | null>(null);
   const [narrationInstallProgress, setNarrationInstallProgress] = useState<{ progress: number; message: string } | null>(null);
+  const [testingVoice, setTestingVoice] = useState(false);
 
   // Edit status for prompt count mode
   const [editStatus, setEditStatus] = useState<{ edits: number; threshold: number } | null>(null);
@@ -97,7 +101,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [configFileHasChanges, setConfigFileHasChanges] = useState(false);
 
   // Debounce ref for threshold slider
-  const thresholdDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const thresholdDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Animate scanning dots
   useEffect(() => {
@@ -201,6 +205,9 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
           installStatus: status.installStatus,
           cacheSizeBytes: status.cacheSizeBytes,
           cachedItemCount: status.cachedItemCount,
+          chatterboxInstalled: status.chatterboxInstalled,
+          chatterboxInstalling: status.chatterboxInstalling,
+          preferredEngine: status.preferredEngine,
         });
       }
     });
@@ -217,6 +224,9 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                 installStatus: status.installStatus,
                 cacheSizeBytes: status.cacheSizeBytes,
                 cachedItemCount: status.cachedItemCount,
+                chatterboxInstalled: status.chatterboxInstalled,
+                chatterboxInstalling: status.chatterboxInstalling,
+                preferredEngine: status.preferredEngine,
               });
             }
             setNarrationInstallProgress(null);
@@ -230,17 +240,60 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     };
   }, []);
 
-  // Handle narration install
-  const handleNarrationInstall = useCallback(async () => {
+  // Handle Chatterbox install
+  const handleChatterboxInstall = useCallback(async () => {
     if (!window.narrationAPI) return;
-    setNarrationStatus((prev) => prev ? { ...prev, installStatus: 'installing' } : null);
-    setNarrationInstallProgress({ progress: 0, message: 'Starting download...' });
+    setNarrationStatus((prev) => prev ? { ...prev, chatterboxInstalling: true } : null);
+    setNarrationInstallProgress({ progress: 0, message: 'Starting installation...' });
     try {
-      await window.narrationAPI.install();
-    } catch (e) {
-      console.error('Narration install failed:', e);
-      setNarrationStatus((prev) => prev ? { ...prev, installStatus: 'install_failed' } : null);
+      const success = await window.narrationAPI.installChatterbox();
+      if (success) {
+        // Refresh status after install
+        const status = await window.narrationAPI.getStatus();
+        if (status) {
+          setNarrationStatus({
+            installStatus: status.installStatus,
+            cacheSizeBytes: status.cacheSizeBytes,
+            cachedItemCount: status.cachedItemCount,
+            chatterboxInstalled: status.chatterboxInstalled,
+            chatterboxInstalling: false,
+            preferredEngine: status.preferredEngine,
+          });
+        }
+      } else {
+        setNarrationStatus((prev) => prev ? { ...prev, chatterboxInstalling: false } : null);
+      }
       setNarrationInstallProgress(null);
+    } catch (e) {
+      console.error('Chatterbox install failed:', e);
+      setNarrationStatus((prev) => prev ? { ...prev, chatterboxInstalling: false } : null);
+      setNarrationInstallProgress(null);
+    }
+  }, []);
+
+  // Handle test voice (tests whichever engine is currently selected)
+  const handleTestVoice = useCallback(async () => {
+    if (!window.narrationAPI || !narrationStatus) return;
+    setTestingVoice(true);
+    try {
+      if (narrationStatus.preferredEngine === 'chatterbox') {
+        await window.narrationAPI.testChatterboxVoice();
+      } else {
+        await window.narrationAPI.testMacOSVoice();
+      }
+    } catch (e) {
+      console.error('Test voice failed:', e);
+    } finally {
+      setTestingVoice(false);
+    }
+  }, [narrationStatus]);
+
+  // Handle engine switch
+  const handleEngineSwitch = useCallback(async (engine: 'chatterbox' | 'macos_say') => {
+    if (!window.narrationAPI) return;
+    const success = await window.narrationAPI.setPreferredEngine(engine);
+    if (success) {
+      setNarrationStatus((prev) => prev ? { ...prev, preferredEngine: engine } : null);
     }
   }, []);
 
@@ -1561,29 +1614,39 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                 Listen to readings with AI-generated voice
               </div>
             </div>
-            {narrationStatus.installStatus === 'installed' && (
-              <span
-                style={{
-                  fontSize: '10px',
-                  color: theme.success,
-                  backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)',
-                  padding: '2px 8px',
-                  borderRadius: '4px',
-                  fontWeight: 500,
-                }}
-              >
-                Installed
-              </span>
-            )}
+            <span
+              style={{
+                fontSize: '10px',
+                color: narrationStatus.chatterboxInstalled ? theme.accent : theme.textSecondary,
+                backgroundColor: theme.isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.1)',
+                padding: '2px 8px',
+                borderRadius: '4px',
+                fontWeight: 500,
+              }}
+            >
+              {narrationStatus.chatterboxInstalled ? 'Chatterbox' : 'macOS Say'}
+            </span>
           </div>
 
-          {narrationStatus.installStatus === 'not_installed' && (
-            <div>
+          {/* Chatterbox Installation */}
+          {!narrationStatus.chatterboxInstalled && !narrationStatus.chatterboxInstalling && (
+            <div
+              style={{
+                padding: '12px',
+                marginBottom: '12px',
+                borderRadius: '6px',
+                backgroundColor: theme.isDark ? 'rgba(99, 102, 241, 0.1)' : 'rgba(99, 102, 241, 0.05)',
+                border: `1px solid ${theme.isDark ? 'rgba(99, 102, 241, 0.3)' : 'rgba(99, 102, 241, 0.2)'}`,
+              }}
+            >
+              <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text, marginBottom: '4px' }}>
+                Upgrade to Chatterbox
+              </div>
               <p style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '12px', lineHeight: '1.5' }}>
-                Download the narration model (~400 MB) to enable voice playback for Librarian readings.
+                Install high-quality AI voice synthesis. Requires ~3-4 GB disk space and Apple Silicon Mac.
               </p>
               <button
-                onClick={handleNarrationInstall}
+                onClick={handleChatterboxInstall}
                 style={{
                   padding: '8px 16px',
                   fontSize: '12px',
@@ -1595,13 +1658,22 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                   cursor: 'pointer',
                 }}
               >
-                Download Narration Model
+                Install Chatterbox (~2 GB)
               </button>
             </div>
           )}
 
-          {narrationStatus.installStatus === 'installing' && narrationInstallProgress && (
-            <div>
+          {/* Chatterbox Installing Progress */}
+          {narrationStatus.chatterboxInstalling && narrationInstallProgress && (
+            <div
+              style={{
+                padding: '12px',
+                marginBottom: '12px',
+                borderRadius: '6px',
+                backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+              }}
+            >
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                 <span style={{ fontSize: '11px', color: theme.textSecondary }}>
                   {narrationInstallProgress.message}
@@ -1631,70 +1703,113 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
             </div>
           )}
 
-          {narrationStatus.installStatus === 'install_failed' && (
-            <div>
-              <p style={{ fontSize: '11px', color: theme.error, marginBottom: '12px' }}>
-                Installation failed. Please try again.
-              </p>
+          {/* Engine Selection (when Chatterbox is installed) */}
+          {narrationStatus.chatterboxInstalled && (
+            <div
+              style={{
+                padding: '12px',
+                marginBottom: '12px',
+                borderRadius: '6px',
+                backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+              }}
+            >
+              <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '8px' }}>
+                Voice Engine
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={() => handleEngineSwitch('chatterbox')}
+                  style={{
+                    flex: 1,
+                    padding: '8px 12px',
+                    fontSize: '11px',
+                    fontWeight: 500,
+                    color: narrationStatus.preferredEngine === 'chatterbox' ? '#fff' : theme.text,
+                    backgroundColor: narrationStatus.preferredEngine === 'chatterbox' ? theme.accent : 'transparent',
+                    border: `1px solid ${narrationStatus.preferredEngine === 'chatterbox' ? theme.accent : theme.border}`,
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Chatterbox
+                </button>
+                <button
+                  onClick={() => handleEngineSwitch('macos_say')}
+                  style={{
+                    flex: 1,
+                    padding: '8px 12px',
+                    fontSize: '11px',
+                    fontWeight: 500,
+                    color: narrationStatus.preferredEngine === 'macos_say' ? '#fff' : theme.text,
+                    backgroundColor: narrationStatus.preferredEngine === 'macos_say' ? theme.accent : 'transparent',
+                    border: `1px solid ${narrationStatus.preferredEngine === 'macos_say' ? theme.accent : theme.border}`,
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  macOS Say
+                </button>
+              </div>
               <button
-                onClick={handleNarrationInstall}
+                onClick={handleTestVoice}
+                disabled={testingVoice}
                 style={{
-                  padding: '8px 16px',
-                  fontSize: '12px',
+                  marginTop: '8px',
+                  padding: '6px 12px',
+                  fontSize: '11px',
                   fontWeight: 500,
-                  color: '#fff',
-                  backgroundColor: theme.accent,
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
+                  color: theme.textSecondary,
+                  backgroundColor: 'transparent',
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '4px',
+                  cursor: testingVoice ? 'wait' : 'pointer',
+                  opacity: testingVoice ? 0.6 : 1,
                 }}
               >
-                Retry Download
+                {testingVoice ? 'Playing...' : 'Test Voice'}
               </button>
             </div>
           )}
 
-          {narrationStatus.installStatus === 'installed' && (
+          {/* Audio Cache */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '10px 12px',
+              backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+              border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+              borderRadius: '6px',
+            }}
+          >
             <div>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '10px 12px',
-                  backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-                  border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-                  borderRadius: '6px',
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: '12px', color: theme.text }}>
-                    Audio Cache
-                  </div>
-                  <div style={{ fontSize: '11px', color: theme.textSecondary }}>
-                    {narrationStatus.cachedItemCount} item{narrationStatus.cachedItemCount !== 1 ? 's' : ''} ({formatBytes(narrationStatus.cacheSizeBytes)})
-                  </div>
-                </div>
-                {narrationStatus.cachedItemCount > 0 && (
-                  <button
-                    onClick={handleClearNarrationCache}
-                    style={{
-                      padding: '4px 10px',
-                      fontSize: '11px',
-                      fontWeight: 500,
-                      color: theme.textSecondary,
-                      backgroundColor: 'transparent',
-                      border: `1px solid ${theme.border}`,
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Clear
-                  </button>
-                )}
+              <div style={{ fontSize: '12px', color: theme.text }}>
+                Audio Cache
+              </div>
+              <div style={{ fontSize: '11px', color: theme.textSecondary }}>
+                {narrationStatus.cachedItemCount} item{narrationStatus.cachedItemCount !== 1 ? 's' : ''} ({formatBytes(narrationStatus.cacheSizeBytes)})
               </div>
             </div>
-          )}
+            {narrationStatus.cachedItemCount > 0 && (
+              <button
+                onClick={handleClearNarrationCache}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '11px',
+                  fontWeight: 500,
+                  color: theme.textSecondary,
+                  backgroundColor: 'transparent',
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
         </div>
       )}
 

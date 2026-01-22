@@ -69,9 +69,11 @@ export class NarrationCache {
   generateContentHash(
     text: string,
     profile: NarrationProfile,
-    params: SynthesisParameters = LIBRARIAN_V1_PARAMS
+    params: SynthesisParameters = LIBRARIAN_V1_PARAMS,
+    engine: NarrationEngine = 'macos_say'
   ): string {
-    const data = JSON.stringify({ text, profile, params });
+    // Include engine in hash so different engines produce different cache entries
+    const data = JSON.stringify({ text, profile, params, engine });
     return crypto.createHash('sha256').update(data).digest('hex').slice(0, 32);
   }
 
@@ -239,8 +241,11 @@ export class NarrationCache {
   /**
    * Generate a unique audio file path for new synthesis.
    */
-  generateAudioPath(contentHash: string): string {
-    return path.join(this.cacheDir, `${contentHash}.aiff`);
+  generateAudioPath(contentHash: string, engine: NarrationEngine = 'macos_say'): string {
+    // Chatterbox outputs WAV, macOS say outputs AIFF
+    // afplay handles both formats for playback
+    const ext = engine === 'chatterbox' ? 'wav' : 'aiff';
+    return path.join(this.cacheDir, `${contentHash}.${ext}`);
   }
 
   /**

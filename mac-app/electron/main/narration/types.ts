@@ -50,11 +50,12 @@ export interface SynthesisParameters {
 
 /**
  * Default synthesis parameters for librarian_v1 profile.
- * Voice: Male, ever-so-slightly British, flat but not robotic.
+ * Voice: The Librarian from Snow Crash - measured, confident, slightly British.
+ * Imparts knowledge with authority but never pompous or overbearing.
  */
 export const LIBRARIAN_V1_PARAMS: SynthesisParameters = {
-  exaggeration: 0.35,
-  cfgWeight: 0.30,
+  exaggeration: 0.20,  // Low for measured, calm delivery
+  cfgWeight: 0.45,     // Higher for consistent authority
   temperature: 0.75,
 };
 
@@ -113,6 +114,12 @@ export interface NarrationStatus {
   cacheSizeBytes: number;
   /** Number of cached items. */
   cachedItemCount: number;
+  /** Whether Chatterbox is installed. */
+  chatterboxInstalled?: boolean;
+  /** Whether Chatterbox is currently installing. */
+  chatterboxInstalling?: boolean;
+  /** User's preferred engine. */
+  preferredEngine?: NarrationEngine;
 }
 
 /**
@@ -143,6 +150,8 @@ export interface NarrationPreferences {
   blockedDevices: string[];
   /** Cache size limit in bytes (default 2GB). */
   cacheSizeLimitBytes: number;
+  /** Preferred narration engine. */
+  preferredEngine?: NarrationEngine;
 }
 
 /**
@@ -208,6 +217,13 @@ export const NarrationIPCChannels = {
   ADD_BLOCKED_DEVICE: 'narration:addBlockedDevice',
   REMOVE_BLOCKED_DEVICE: 'narration:removeBlockedDevice',
   CLEAR_CACHE: 'narration:clearCache',
+  // Chatterbox-specific
+  CHECK_CHATTERBOX_REQUIREMENTS: 'narration:checkChatterboxRequirements',
+  INSTALL_CHATTERBOX: 'narration:installChatterbox',
+  GET_CHATTERBOX_STATUS: 'narration:getChatterboxStatus',
+  TEST_CHATTERBOX_VOICE: 'narration:testChatterboxVoice',
+  TEST_MACOS_VOICE: 'narration:testMacOSVoice',
+  SET_PREFERRED_ENGINE: 'narration:setPreferredEngine',
   // Events (renderer listens)
   PLAYBACK_STARTED: 'narration:playbackStarted',
   PLAYBACK_STOPPED: 'narration:playbackStopped',
