@@ -51,7 +51,7 @@ import { CommandLauncherWindow } from './commandLauncherWindow';
 import { LocalLLMManager, LLMModelSize } from './localLLMManager';
 import { LibrarianManager, Reading, ReadingMeta, WatchedDir } from './librarianManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
-import { NarrationManager, getNarrationManager, NarrationStatus, NarrationIPCChannels, OutputDevice, NarrationPreferences } from './narration';
+import { NarrationManager, getNarrationManager, NarrationStatus, NarrationIPCChannels, OutputDevice, NarrationPreferences, FEATURE_NARRATION_ENABLED } from './narration';
 
 // Load environment variables from .env.local for Supabase credentials.
 // In development, the file is in the mac-app directory.
@@ -69,8 +69,11 @@ function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
   // In development: __dirname is electron-dist/main, so ../../ goes to mac-app/
   // In production: app.getAppPath() points to the app bundle
   const envPaths = [
+    '/Users/afar/dev/fieldtheory/.env.local',    // Dev: hardcoded repo root for reliability
+    path.join(__dirname, '../../../.env.local'), // Dev: electron-dist/main -> repo root/.env.local
     path.join(__dirname, '../../.env.local'),    // Dev: electron-dist/main -> mac-app/.env.local
     path.join(process.cwd(), '.env.local'),      // Dev: current working directory
+    path.join(process.cwd(), '../.env.local'),   // Dev: if cwd is mac-app, go to repo root
     path.join(process.cwd(), 'mac-app/.env.local'), // Dev: if running from repo root
     path.join(app.getAppPath(), '.env.local'),   // Production: inside app bundle
     path.join(app.getAppPath(), '../.env.local'), // Production: next to app bundle
@@ -324,8 +327,13 @@ function registerHotkeysAfterOnboarding(): void {
       clipboardHistoryWindow.show(boundsToUse, false, true);
       clipboardHistoryWindow.capturePreviousAppBeforeShow();
     } else if (!showInDock) {
-      const overlayVisible = transcriberManager?.isRecordingOverlayVisible() ?? false;
-      clipboardHistoryWindow.hide(!overlayVisible);
+      // If in immersive mode, collapse instead of hiding
+      if (clipboardHistoryWindow.getImmersiveMode()) {
+        clipboardHistoryWindow.sendCollapseImmersive();
+      } else {
+        const overlayVisible = transcriberManager?.isRecordingOverlayVisible() ?? false;
+        clipboardHistoryWindow.hide(!overlayVisible);
+      }
     }
   });
 
@@ -1154,29 +1162,6 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager?.setEnabled(enabled) ?? false;
   });
 
-  // Get trigger mode
-  ipcMain.handle('librarian:getTriggerMode', (): string => {
-    return librarianManager?.getTriggerMode() || 'prompt';
-  });
-
-  // Set trigger mode
-  ipcMain.handle('librarian:setTriggerMode', (_event, mode: string): boolean => {
-    if (librarianManager && (mode === 'prompt' || mode === 'judgment')) {
-      return librarianManager.setTriggerMode(mode);
-    }
-    return false;
-  });
-
-  // Get prompt threshold
-  ipcMain.handle('librarian:getPromptThreshold', (): number => {
-    return librarianManager?.getPromptThreshold() ?? 5;
-  });
-
-  // Set prompt threshold
-  ipcMain.handle('librarian:setPromptThreshold', (_event, threshold: number): boolean => {
-    return librarianManager?.setPromptThreshold(threshold) ?? false;
-  });
-
   // Check if setup wizard is complete
   ipcMain.handle('librarian:isSetupComplete', (): boolean => {
     return librarianManager?.isSetupComplete() ?? false;
@@ -1648,6 +1633,50 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   // ===========================================================================
+  // Claude IPC handlers - Claude Code integration settings
+  // ===========================================================================
+
+  // Check if screenshot permission is enabled
+  ipcMain.handle('claude:isScreenshotPermissionEnabled', (): boolean => {
+    return librarianManager?.isScreenshotPermissionEnabled() ?? false;
+  });
+
+  // Enable screenshot permission
+  ipcMain.handle('claude:enableScreenshotPermission', (): boolean => {
+    return librarianManager?.enableScreenshotPermission() ?? false;
+  });
+
+  // Get available permission profiles
+  ipcMain.handle('claude:getAvailableProfiles', (): Array<{ id: string; name: string; description: string; permissionCount: number; permissions: string[] }> => {
+    return librarianManager?.getAvailableProfiles() ?? [];
+  });
+
+  // Get current permission status
+  ipcMain.handle('claude:getPermissionStatus', (): { currentProfile: string | null; managedPermissions: string[]; allClaudePermissions: string[] } => {
+    return librarianManager?.getPermissionStatus() ?? { currentProfile: null, managedPermissions: [], allClaudePermissions: [] };
+  });
+
+  // Apply a permission profile
+  ipcMain.handle('claude:applyPermissionProfile', (_event, profileId: string): boolean => {
+    return librarianManager?.applyPermissionProfile(profileId) ?? false;
+  });
+
+  // Add individual permissions
+  ipcMain.handle('claude:addPermissions', (_event, permissions: string[]): boolean => {
+    return librarianManager?.addPermissions(permissions) ?? false;
+  });
+
+  // Remove individual permissions
+  ipcMain.handle('claude:removePermissions', (_event, permissions: string[]): boolean => {
+    return librarianManager?.removePermissions(permissions) ?? false;
+  });
+
+  // Clear all managed permissions
+  ipcMain.handle('claude:clearManagedPermissions', (): boolean => {
+    return librarianManager?.clearManagedPermissions() ?? false;
+  });
+
+  // ===========================================================================
   // Narration IPC handlers - Local, offline TTS for the Librarian
   // ===========================================================================
 
@@ -1683,6 +1712,26 @@ function setupLibrarianIPCHandlers(): void {
   // Stop playback
   ipcMain.handle(NarrationIPCChannels.STOP, (): void => {
     narrationManager?.stop();
+  });
+
+  // Pause playback
+  ipcMain.handle(NarrationIPCChannels.PAUSE, (): boolean => {
+    return narrationManager?.pause() ?? false;
+  });
+
+  // Resume playback
+  ipcMain.handle(NarrationIPCChannels.RESUME, (): boolean => {
+    return narrationManager?.resume() ?? false;
+  });
+
+  // Toggle pause/play
+  ipcMain.handle(NarrationIPCChannels.TOGGLE_PAUSE, (): boolean => {
+    return narrationManager?.togglePause() ?? false;
+  });
+
+  // Get playback progress
+  ipcMain.handle(NarrationIPCChannels.GET_PLAYBACK_PROGRESS, (): { position: number; duration: number; percentage: number } | null => {
+    return narrationManager?.getPlaybackProgress() ?? null;
   });
 
   // Get current output device
@@ -1753,7 +1802,7 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   // Set preferred narration engine
-  ipcMain.handle(NarrationIPCChannels.SET_PREFERRED_ENGINE, async (_event, engine: 'chatterbox' | 'macos_say'): Promise<boolean> => {
+  ipcMain.handle(NarrationIPCChannels.SET_PREFERRED_ENGINE, async (_event, engine: 'chatterbox' | 'macos_say' | 'elevenlabs'): Promise<boolean> => {
     try {
       await narrationManager?.setPreferredEngine(engine);
       return true;
@@ -1761,6 +1810,69 @@ function setupLibrarianIPCHandlers(): void {
       console.error('[Narration] Set preferred engine failed:', error);
       return false;
     }
+  });
+
+  // Set ElevenLabs API key
+  ipcMain.handle(NarrationIPCChannels.SET_ELEVENLABS_API_KEY, async (_event, apiKey: string): Promise<boolean> => {
+    try {
+      await narrationManager?.setElevenlabsApiKey(apiKey);
+      return true;
+    } catch (error) {
+      console.error('[Narration] Set ElevenLabs API key failed:', error);
+      return false;
+    }
+  });
+
+  // Set ElevenLabs voice
+  ipcMain.handle(NarrationIPCChannels.SET_ELEVENLABS_VOICE, async (_event, voiceId: string): Promise<boolean> => {
+    try {
+      await narrationManager?.setElevenlabsVoice(voiceId);
+      return true;
+    } catch (error) {
+      console.error('[Narration] Set ElevenLabs voice failed:', error);
+      return false;
+    }
+  });
+
+  // Test ElevenLabs voice
+  ipcMain.handle(NarrationIPCChannels.TEST_ELEVENLABS_VOICE, async (): Promise<boolean> => {
+    try {
+      await narrationManager?.testElevenlabsVoice();
+      return true;
+    } catch (error) {
+      console.error('[Narration] Test ElevenLabs voice failed:', error);
+      return false;
+    }
+  });
+
+  // Get available ElevenLabs voices
+  ipcMain.handle(NarrationIPCChannels.GET_ELEVENLABS_VOICES, async () => {
+    try {
+      return await narrationManager?.getElevenlabsVoices() ?? [];
+    } catch (error) {
+      console.error('[Narration] Get ElevenLabs voices failed:', error);
+      return [];
+    }
+  });
+
+  // Check ElevenLabs connection
+  ipcMain.handle(NarrationIPCChannels.CHECK_ELEVENLABS_CONNECTION, async () => {
+    try {
+      return await narrationManager?.checkElevenlabsConnection() ?? { connected: false, error: 'Manager not initialized' };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { connected: false, error: message };
+    }
+  });
+
+  // Get predefined Librarian voices
+  ipcMain.handle(NarrationIPCChannels.GET_LIBRARIAN_VOICES, () => {
+    return narrationManager?.getLibrarianVoices() ?? [];
+  });
+
+  // Get current voice ID
+  ipcMain.handle(NarrationIPCChannels.GET_CURRENT_VOICE_ID, () => {
+    return narrationManager?.getCurrentVoiceId() ?? null;
   });
 
   // ===========================================================================
@@ -4993,6 +5105,19 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
     onboardingWindow.show(startStep);
   });
 
+  // Set up callback to check if user is logged in
+  trayManager.setIsLoggedInCallback(() => {
+    const session = authManager?.getSession();
+    return !!session?.user?.email;
+  });
+
+  // Set up callback to open developer tools
+  trayManager.setOpenDevToolsCallback(() => {
+    if (clipboardHistoryWindow) {
+      clipboardHistoryWindow.openDevTools();
+    }
+  });
+
   console.log('[Main] Audio system initialized');
 }
 
@@ -5084,10 +5209,34 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   // Forward narration events to renderer
-  narrationManager.on('playbackStarted', (readingPath: string) => {
+  narrationManager.on('generationStarted', (readingPath: string) => {
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
-        window.webContents.send(NarrationIPCChannels.PLAYBACK_STARTED, readingPath);
+        window.webContents.send(NarrationIPCChannels.GENERATION_STARTED, readingPath);
+      }
+    });
+  });
+
+  narrationManager.on('playbackStarted', (readingPath: string, duration: number) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(NarrationIPCChannels.PLAYBACK_STARTED, readingPath, duration);
+      }
+    });
+  });
+
+  narrationManager.on('playbackPaused', (readingPath: string | null) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(NarrationIPCChannels.PLAYBACK_PAUSED, readingPath);
+      }
+    });
+  });
+
+  narrationManager.on('playbackResumed', (readingPath: string | null) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(NarrationIPCChannels.PLAYBACK_RESUMED, readingPath);
       }
     });
   });
@@ -5119,7 +5268,7 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   // Broadcast artifact-added events to all windows and auto-show if enabled
-  librarianManager.on('reading-added', (reading: Reading) => {
+  librarianManager.on('reading-added', async (reading: Reading) => {
     console.log(`[Librarian] artifact-added event: ${reading.title}`);
 
     // Record librarian artifact created metric
@@ -5135,45 +5284,65 @@ async function initTranscriberSystem(): Promise<void> {
       }
     });
 
-    // Store pending reading for renderer to pull (polling approach)
-    // This avoids IPC timing issues - renderer asks when it's ready
-    if (librarianManager!.isAutoShowEnabled()) {
-      console.log(`[Librarian] Setting pending immersive reading: ${reading.path}`);
-      pendingImmersiveReading = reading.path;
+    // Check if we should auto-speak and have narration enabled (feature flagged)
+    const shouldAutoSpeak = FEATURE_NARRATION_ENABLED && narrationManager ?
+      await narrationManager.shouldSpeakNow().catch(() => ({ shouldSpeak: false })) :
+      { shouldSpeak: false };
 
-      // Ensure window exists and is visible so renderer can poll
+    if (shouldAutoSpeak.shouldSpeak && librarianManager!.isAutoShowEnabled()) {
+      // Pre-generate audio BEFORE showing window
+      // User experience: window opens and playback starts immediately
+      console.log(`[Narration] Pre-generating audio for: ${reading.title}`);
+
+      try {
+        const result = await narrationManager!.preGenerateAudio(reading.path, reading.content);
+
+        if (result) {
+          console.log(`[Narration] Audio ready (fromCache: ${result.fromCache}), showing window`);
+
+          // NOW show the window
+          pendingImmersiveReading = reading.path;
+          if (!clipboardHistoryWindow) {
+            clipboardHistoryWindow = initClipboardHistoryWindow();
+          }
+          const boundsToUse = restoreClipboardHistoryBounds();
+          clipboardHistoryWindow.show(boundsToUse, false, true);
+
+          if (app.dock) {
+            app.dock.bounce('informational');
+          }
+
+          // Play artifact discovery sound
+          clipboardHistoryWindow.playArtifactDiscoverySound();
+
+          // Start playback immediately
+          await narrationManager!.playAudioFile(reading.path, result.audioPath);
+        }
+      } catch (error) {
+        console.warn(`[Narration] Pre-generation failed, showing window without audio:`, error);
+        // Fall back to showing window without audio
+        showWindowWithoutAudio();
+      }
+    } else if (librarianManager!.isAutoShowEnabled()) {
+      // Auto-show enabled but no auto-speak - show window immediately
+      showWindowWithoutAudio();
+    } else {
+      // Just play the discovery sound if window exists
+      clipboardHistoryWindow?.playArtifactDiscoverySound();
+    }
+
+    function showWindowWithoutAudio() {
+      pendingImmersiveReading = reading.path;
       if (!clipboardHistoryWindow) {
         clipboardHistoryWindow = initClipboardHistoryWindow();
       }
       const boundsToUse = restoreClipboardHistoryBounds();
-      // Use skipSound=true to prevent windowOpen sound, we'll play artifact sound instead
       clipboardHistoryWindow.show(boundsToUse, false, true);
 
       if (app.dock) {
         app.dock.bounce('informational');
       }
-    }
-
-    // Play artifact discovery sound AFTER ensuring window exists
-    // This plays the coin sound instead of the window open sound
-    clipboardHistoryWindow?.playArtifactDiscoverySound();
-
-    // Speak-on-open: Auto-narrate the reading if enabled and device allowed
-    // Silent failure rule: if narration fails, reading still opens
-    if (narrationManager) {
-      narrationManager.shouldSpeakNow().then(async ({ shouldSpeak }) => {
-        if (shouldSpeak) {
-          console.log(`[Narration] Auto-speaking reading: ${reading.title}`);
-          try {
-            await narrationManager!.playReading(reading.path, reading.content);
-          } catch (error) {
-            // Silent failure - reading already opened, just log
-            console.warn(`[Narration] Auto-speak failed:`, error);
-          }
-        }
-      }).catch((error) => {
-        console.warn(`[Narration] shouldSpeakNow check failed:`, error);
-      });
+      clipboardHistoryWindow?.playArtifactDiscoverySound();
     }
   });
 
@@ -5371,19 +5540,23 @@ async function initTranscriberSystem(): Promise<void> {
   await metricsManager.init();
 
   // Check if we have a valid session on startup.
-  // If not, ensure cached tier is 'free'.
+  // If not, ensure cached tier is 'free' (unless we have a pending refresh due to network).
   const existingSession = authManager.getSession();
   const now = Math.floor(Date.now() / 1000);
   const isSessionValid = existingSession && existingSession.expires_at &&
     existingSession.expires_at > now;
+  const hasPendingRefresh = authManager.hasPendingRefreshDueToNetwork();
 
-  if (!isSessionValid) {
-    // No valid session on startup - ensure cached tier is 'free'.
+  if (!isSessionValid && !hasPendingRefresh) {
+    // No valid session and no pending refresh - ensure cached tier is 'free'.
     // This handles: expired refresh tokens, app crash without logout, corrupted session files.
+    // We DON'T reset if there's a pending refresh (network error but token may still be valid).
     if (quotaManager && quotaManager.getCachedTier() === 'pro') {
       console.log('[Main] No valid session but cached tier is pro, resetting to free');
       await quotaManager.setCachedTier('free');
     }
+  } else if (hasPendingRefresh) {
+    console.log('[Main] Session refresh pending due to network - preserving cached tier');
   }
 
   // Forward todosChanged events to all renderer windows.
@@ -5705,6 +5878,17 @@ if (!gotTheLock) {
               click: () => {
                 if (commandLauncherWindow) {
                   commandLauncherWindow.show();
+                }
+              }
+            },
+            { type: 'separator' },
+            {
+              label: 'Toggle Developer Tools',
+              accelerator: 'Command+Option+I',
+              click: () => {
+                const focusedWindow = BrowserWindow.getFocusedWindow();
+                if (focusedWindow) {
+                  focusedWindow.webContents.toggleDevTools();
                 }
               }
             }

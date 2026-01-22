@@ -242,10 +242,30 @@ export class NarrationCache {
    * Generate a unique audio file path for new synthesis.
    */
   generateAudioPath(contentHash: string, engine: NarrationEngine = 'macos_say'): string {
-    // Chatterbox outputs WAV, macOS say outputs AIFF
-    // afplay handles both formats for playback
-    const ext = engine === 'chatterbox' ? 'wav' : 'aiff';
+    // Different engines produce different formats:
+    // - Chatterbox: WAV
+    // - macOS say: AIFF
+    // - ElevenLabs: MP3
+    // afplay handles all formats for playback
+    let ext: string;
+    switch (engine) {
+      case 'chatterbox':
+        ext = 'wav';
+        break;
+      case 'elevenlabs':
+        ext = 'mp3';
+        break;
+      default:
+        ext = 'aiff';
+    }
     return path.join(this.cacheDir, `${contentHash}.${ext}`);
+  }
+
+  /**
+   * Get the cache directory path.
+   */
+  getCacheDir(): string {
+    return this.cacheDir;
   }
 
   /**

@@ -43,27 +43,10 @@ function formatNumber(n: number): string {
   return n.toLocaleString();
 }
 
-/**
- * Format timestamp for display
- */
-function formatSyncTime(isoString: string | null): string {
-  if (!isoString) return 'Never';
-  const date = new Date(isoString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins} min ago`;
-  if (diffMins < 1440) return `${Math.floor(diffMins / 60)} hr ago`;
-  return date.toLocaleDateString();
-}
-
 export default function UserStatsPanel() {
   const { theme } = useTheme();
   const [data, setData] = useState<MetricsWithStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
 
   // Load metrics on mount
   useEffect(() => {
@@ -78,31 +61,9 @@ export default function UserStatsPanel() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Manual sync handler
-  const handleSync = async () => {
-    if (!window.metricsAPI || syncing) return;
-    setSyncing(true);
-    try {
-      await window.metricsAPI.syncToSupabase();
-      const newData = await window.metricsAPI.getMetricsWithStatus();
-      setData(newData);
-    } catch (err) {
-      console.error('Sync failed:', err);
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  const isDark = theme === 'dark';
-  const textColor = isDark ? '#e5e5e5' : '#1f2937';
-  const mutedColor = isDark ? '#9ca3af' : '#6b7280';
-  const borderColor = isDark ? '#374151' : '#e5e7eb';
-  const bgColor = isDark ? '#1f2937' : '#f9fafb';
-  const accentColor = '#8b5cf6'; // Violet accent
-
   if (loading) {
     return (
-      <div style={{ padding: '16px', color: mutedColor, fontSize: '13px' }}>
+      <div style={{ padding: '16px', color: theme.textSecondary, fontSize: '13px' }}>
         Loading stats...
       </div>
     );
@@ -110,15 +71,15 @@ export default function UserStatsPanel() {
 
   if (!data) {
     return (
-      <div style={{ padding: '16px', color: mutedColor, fontSize: '13px' }}>
+      <div style={{ padding: '16px', color: theme.textSecondary, fontSize: '13px' }}>
         Stats unavailable
       </div>
     );
   }
 
-  const { metrics, lastSyncedAt, pendingSync } = data;
+  const { metrics } = data;
 
-  // Group metrics for display
+  // Group metrics for display - compact format
   const sections = [
     {
       title: 'Transcription',
@@ -176,100 +137,57 @@ export default function UserStatsPanel() {
   ];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
       {/* Header */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginBottom: '4px'
-      }}>
-        <div>
-          <h3 style={{
-            margin: 0,
-            fontSize: '14px',
-            fontWeight: 600,
-            color: textColor,
-            letterSpacing: '-0.01em'
-          }}>
-            Your Stats
-          </h3>
-          <p style={{
-            margin: '4px 0 0 0',
-            fontSize: '12px',
-            color: mutedColor
-          }}>
-            The metrics you see are the metrics we see.
-          </p>
-        </div>
-        <button
-          onClick={handleSync}
-          disabled={syncing}
-          style={{
-            padding: '6px 12px',
-            fontSize: '12px',
-            fontWeight: 500,
-            color: syncing ? mutedColor : accentColor,
-            backgroundColor: 'transparent',
-            border: `1px solid ${syncing ? borderColor : accentColor}`,
-            borderRadius: '6px',
-            cursor: syncing ? 'default' : 'pointer',
-            opacity: syncing ? 0.6 : 1,
-          }}
-        >
-          {syncing ? 'Syncing...' : 'Sync'}
-        </button>
+      <div>
+        <h3 style={{
+          margin: 0,
+          fontSize: '14px',
+          fontWeight: 600,
+          color: theme.text,
+          letterSpacing: '-0.01em'
+        }}>
+          Stats
+        </h3>
+        <p style={{
+          margin: '4px 0 0 0',
+          fontSize: '12px',
+          color: theme.textSecondary
+        }}>
+          The metrics you see are the metrics we see.
+        </p>
       </div>
 
-      {/* Sync status */}
-      <div style={{
-        fontSize: '11px',
-        color: mutedColor,
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px'
-      }}>
-        <span>Last synced: {formatSyncTime(lastSyncedAt)}</span>
-        {pendingSync && (
-          <span style={{
-            color: '#f59e0b',
-            fontWeight: 500
-          }}>
-            (changes pending)
-          </span>
-        )}
-      </div>
-
-      {/* Stats sections */}
+      {/* Stats sections - compact layout */}
       <div style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: '12px',
-        backgroundColor: bgColor,
+        gap: '2px',
+        backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
         borderRadius: '8px',
         padding: '12px',
-        border: `1px solid ${borderColor}`
+        border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`
       }}>
         {sections.map((section, sectionIndex) => (
           <div key={section.title}>
             {sectionIndex > 0 && (
               <div style={{
                 height: '1px',
-                backgroundColor: borderColor,
-                margin: '8px 0 12px 0'
+                backgroundColor: theme.isDark ? theme.border : '#e5e7eb',
+                margin: '8px 0'
               }} />
             )}
             <div style={{
-              fontSize: '11px',
+              fontSize: '10px',
               fontWeight: 600,
-              color: mutedColor,
+              color: theme.textSecondary,
               textTransform: 'uppercase',
               letterSpacing: '0.05em',
-              marginBottom: '8px'
+              marginBottom: '4px'
             }}>
               {section.title}
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
               {section.items.map((item) => (
                 <div
                   key={item.label}
@@ -277,12 +195,13 @@ export default function UserStatsPanel() {
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
-                    fontSize: '13px'
+                    fontSize: '12px',
+                    lineHeight: '1.4'
                   }}
                 >
-                  <span style={{ color: textColor }}>{item.label}</span>
+                  <span style={{ color: theme.text }}>{item.label}</span>
                   <span style={{
-                    color: item.value > 0 ? accentColor : mutedColor,
+                    color: item.value > 0 ? theme.accent : theme.textSecondary,
                     fontWeight: 500,
                     fontVariantNumeric: 'tabular-nums'
                   }}>
@@ -298,8 +217,8 @@ export default function UserStatsPanel() {
       {/* Privacy note */}
       <p style={{
         fontSize: '11px',
-        color: mutedColor,
-        margin: '4px 0 0 0',
+        color: theme.textSecondary,
+        margin: 0,
         lineHeight: 1.4
       }}>
         These are the only metrics we aggregate. We don't track clipboard content,

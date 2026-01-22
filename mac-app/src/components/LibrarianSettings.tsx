@@ -7,6 +7,7 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
+import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
 
 interface LibrarianSettingsProps {
   librarianEnabled?: boolean;
@@ -36,10 +37,11 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [isScanning, setIsScanning] = useState(false);
   const [scanningDots, setScanningDots] = useState('.');
 
-  // New v2 settings
+  // Settings
   const [enabled, setEnabled] = useState(true);
-  const [triggerMode, setTriggerMode] = useState<'prompt' | 'judgment' | 'state-enforced'>('prompt');
-  const [promptThreshold, setPromptThreshold] = useState<number>(5);
+
+  // State-enforced is now the only trigger mode
+  const triggerMode = 'state-enforced' as const;
 
   // State-enforced mode settings
   const [stateEnforcedThreshold, setStateEnforcedThreshold] = useState<number>(3);
@@ -67,38 +69,19 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [hookInstalled, setHookInstalled] = useState(false);
   const [hookInstalling, setHookInstalling] = useState(false);
 
-  // Content guidance customization
-  const [defaultContentGuidance, setDefaultContentGuidance] = useState('');
-  const [customContentGuidance, setCustomContentGuidance] = useState<string | undefined>(undefined);
-  const [contentGuidanceText, setContentGuidanceText] = useState('');
-  const [contentGuidanceSaved, setContentGuidanceSaved] = useState(false);
-  const [contentGuidanceSaving, setContentGuidanceSaving] = useState(false);
-  const [isUsingCustomGuidance, setIsUsingCustomGuidance] = useState(false);
-
   // Narration settings
   const [narrationStatus, setNarrationStatus] = useState<{
     installStatus: 'not_installed' | 'installing' | 'installed' | 'install_failed';
     cacheSizeBytes: number;
     cachedItemCount: number;
-    chatterboxInstalled?: boolean;
-    chatterboxInstalling?: boolean;
-    preferredEngine?: 'chatterbox' | 'macos_say';
   } | null>(null);
-  const [narrationInstallProgress, setNarrationInstallProgress] = useState<{ progress: number; message: string } | null>(null);
-  const [testingVoice, setTestingVoice] = useState(false);
+
+  // Voice selection
+  const [librarianVoices, setLibrarianVoices] = useState<{ voiceId: string; name: string; speed?: number }[]>([]);
+  const [currentVoiceId, setCurrentVoiceId] = useState<string | null>(null);
 
   // Edit status for prompt count mode
   const [editStatus, setEditStatus] = useState<{ edits: number; threshold: number } | null>(null);
-
-  // Configuration file paths and preview/edit
-  const [configPaths, setConfigPaths] = useState<{ claudeMd: string; librarianCommand: string } | null>(null);
-  const [expandedConfigFile, setExpandedConfigFile] = useState<'claudeMd' | 'librarianCommand' | null>(null);
-  const [configFileContent, setConfigFileContent] = useState<string | null>(null);
-  const [configFileEditContent, setConfigFileEditContent] = useState<string>('');
-  const [configFileLoading, setConfigFileLoading] = useState(false);
-  const [configFileSaving, setConfigFileSaving] = useState(false);
-  const [configFileSaved, setConfigFileSaved] = useState(false);
-  const [configFileHasChanges, setConfigFileHasChanges] = useState(false);
 
   // Debounce ref for threshold slider
   const thresholdDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -136,38 +119,22 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     Promise.all([
       window.librarianAPI.getWatchedDirs(),
       window.librarianAPI.getReadings(),
-      // New v2 APIs
       window.librarianAPI.isEnabled(),
-      window.librarianAPI.getTriggerMode(),
-      window.librarianAPI.getPromptThreshold(),
-      // Other settings
       window.librarianAPI.getAutoShowEnabled(),
       window.librarianAPI.getClaudeCodeStatus(),
       window.librarianAPI.isClaudeCodeHookInstalled(),
-      window.librarianAPI.getDefaultContentGuidance(),
-      window.librarianAPI.getCustomContentGuidance(),
-      window.librarianAPI.getConfigPaths(),
       // State-enforced mode settings
       window.librarianAPI.getStateEnforcedThreshold(),
       window.librarianAPI.getDefaultRuleContent(),
       window.librarianAPI.getCustomRuleContent(),
     ])
-      .then(([dirs, readingsList, isEnabled, mode, threshold, autoShow, ccStatus, hookStatus, defaultGuidance, customGuidance, paths, seThreshold, defaultRule, customRule]) => {
+      .then(([dirs, readingsList, isEnabled, autoShow, ccStatus, hookStatus, seThreshold, defaultRule, customRule]) => {
         setWatchedDirs(dirs);
         setReadings(readingsList);
-        // New v2 settings
         setEnabled(isEnabled);
-        setTriggerMode(mode as 'prompt' | 'judgment' | 'state-enforced');
-        setPromptThreshold(threshold);
-        // Other settings
         setAutoShowEnabled(autoShow);
         setClaudeCodeStatus(ccStatus as 'installed' | 'directory-only' | 'not-installed');
         setHookInstalled(hookStatus);
-        setDefaultContentGuidance(defaultGuidance);
-        setCustomContentGuidance(customGuidance);
-        setContentGuidanceText(customGuidance || defaultGuidance);
-        setIsUsingCustomGuidance(!!customGuidance);
-        setConfigPaths(paths);
         // State-enforced mode settings
         setStateEnforcedThreshold(seThreshold);
         setDefaultRuleContent(defaultRule);
@@ -194,106 +161,36 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     checkHookStatus();
   }, []);
 
-  // Fetch narration status and subscribe to install progress
+  // Fetch narration status and voice options (feature flagged)
   useEffect(() => {
-    if (!window.narrationAPI) return;
+    if (!FEATURE_NARRATION_ENABLED || !window.narrationAPI) return;
 
-    // Fetch initial status
     window.narrationAPI.getStatus().then((status) => {
       if (status) {
         setNarrationStatus({
           installStatus: status.installStatus,
           cacheSizeBytes: status.cacheSizeBytes,
           cachedItemCount: status.cachedItemCount,
-          chatterboxInstalled: status.chatterboxInstalled,
-          chatterboxInstalling: status.chatterboxInstalling,
-          preferredEngine: status.preferredEngine,
         });
       }
     });
 
-    // Subscribe to install progress
-    const unsubProgress = window.narrationAPI.onInstallProgress((progress, message) => {
-      setNarrationInstallProgress({ progress, message });
-      // When complete, refresh status
-      if (progress >= 100) {
-        setTimeout(() => {
-          window.narrationAPI?.getStatus().then((status) => {
-            if (status) {
-              setNarrationStatus({
-                installStatus: status.installStatus,
-                cacheSizeBytes: status.cacheSizeBytes,
-                cachedItemCount: status.cachedItemCount,
-                chatterboxInstalled: status.chatterboxInstalled,
-                chatterboxInstalling: status.chatterboxInstalling,
-                preferredEngine: status.preferredEngine,
-              });
-            }
-            setNarrationInstallProgress(null);
-          });
-        }, 500);
-      }
+    // Fetch available voices and current selection
+    window.narrationAPI.getLibrarianVoices?.().then((voices) => {
+      setLibrarianVoices(voices);
     });
-
-    return () => {
-      unsubProgress?.();
-    };
+    window.narrationAPI.getCurrentVoiceId?.().then((voiceId) => {
+      setCurrentVoiceId(voiceId);
+    });
   }, []);
 
-  // Handle Chatterbox install
-  const handleChatterboxInstall = useCallback(async () => {
-    if (!window.narrationAPI) return;
-    setNarrationStatus((prev) => prev ? { ...prev, chatterboxInstalling: true } : null);
-    setNarrationInstallProgress({ progress: 0, message: 'Starting installation...' });
-    try {
-      const success = await window.narrationAPI.installChatterbox();
-      if (success) {
-        // Refresh status after install
-        const status = await window.narrationAPI.getStatus();
-        if (status) {
-          setNarrationStatus({
-            installStatus: status.installStatus,
-            cacheSizeBytes: status.cacheSizeBytes,
-            cachedItemCount: status.cachedItemCount,
-            chatterboxInstalled: status.chatterboxInstalled,
-            chatterboxInstalling: false,
-            preferredEngine: status.preferredEngine,
-          });
-        }
-      } else {
-        setNarrationStatus((prev) => prev ? { ...prev, chatterboxInstalling: false } : null);
-      }
-      setNarrationInstallProgress(null);
-    } catch (e) {
-      console.error('Chatterbox install failed:', e);
-      setNarrationStatus((prev) => prev ? { ...prev, chatterboxInstalling: false } : null);
-      setNarrationInstallProgress(null);
-    }
-  }, []);
 
-  // Handle test voice (tests whichever engine is currently selected)
-  const handleTestVoice = useCallback(async () => {
-    if (!window.narrationAPI || !narrationStatus) return;
-    setTestingVoice(true);
-    try {
-      if (narrationStatus.preferredEngine === 'chatterbox') {
-        await window.narrationAPI.testChatterboxVoice();
-      } else {
-        await window.narrationAPI.testMacOSVoice();
-      }
-    } catch (e) {
-      console.error('Test voice failed:', e);
-    } finally {
-      setTestingVoice(false);
-    }
-  }, [narrationStatus]);
-
-  // Handle engine switch
-  const handleEngineSwitch = useCallback(async (engine: 'chatterbox' | 'macos_say') => {
+  // Handle voice change
+  const handleVoiceChange = useCallback(async (voiceId: string) => {
     if (!window.narrationAPI) return;
-    const success = await window.narrationAPI.setPreferredEngine(engine);
+    const success = await window.narrationAPI.setElevenlabsVoice(voiceId);
     if (success) {
-      setNarrationStatus((prev) => prev ? { ...prev, preferredEngine: engine } : null);
+      setCurrentVoiceId(voiceId);
     }
   }, []);
 
@@ -380,59 +277,6 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     }
   }, [enabled]);
 
-  // Handle trigger mode change
-  const handleTriggerModeChange = useCallback(async (mode: 'prompt' | 'judgment' | 'state-enforced') => {
-    if (!window.librarianAPI) return;
-
-    // Uninstall old hooks when switching away from a mode (prevent conflicts)
-    if (triggerMode === 'prompt' && mode !== 'prompt' && hookInstalled) {
-      await window.librarianAPI.uninstallClaudeCodeHook();
-      setHookInstalled(false);
-    }
-    if (triggerMode === 'state-enforced' && mode !== 'state-enforced' && stateEnforcedHookInstalled) {
-      // Uninstall global state-enforced hook
-      await window.librarianAPI.uninstallStateEnforcedHook();
-      setStateEnforcedHookInstalled(false);
-    }
-
-    setTriggerMode(mode);
-    setClaudeConfigError(false);
-    setSaved(false);
-    const success = await window.librarianAPI.setTriggerMode(mode);
-    if (!success) {
-      setClaudeConfigError(true);
-    } else {
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    }
-  }, [triggerMode, hookInstalled, stateEnforcedHookInstalled]);
-
-  // Handle threshold change via slider (debounced)
-  const handleThresholdChange = useCallback((threshold: number) => {
-    // Update local state immediately for responsive UI
-    setPromptThreshold(threshold);
-    setSaved(false);
-
-    // Clear any existing debounce timeout
-    if (thresholdDebounceRef.current) {
-      clearTimeout(thresholdDebounceRef.current);
-    }
-
-    // Debounce the API call
-    thresholdDebounceRef.current = setTimeout(async () => {
-      if (!window.librarianAPI) return;
-      setClaudeConfigError(false);
-
-      const success = await window.librarianAPI.setPromptThreshold(threshold);
-      if (success) {
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
-      } else {
-        setClaudeConfigError(true);
-      }
-    }, 300);
-  }, []);
-
   // Handle auto-show toggle
   const handleAutoShowToggle = useCallback(async () => {
     if (!window.librarianAPI) return;
@@ -455,123 +299,6 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, []);
-
-  // Handle toggling config file preview/edit
-  const handleToggleConfigFile = useCallback(async (file: 'claudeMd' | 'librarianCommand') => {
-    if (!window.librarianAPI || !configPaths) return;
-
-    // If already expanded, collapse it
-    if (expandedConfigFile === file) {
-      setExpandedConfigFile(null);
-      setConfigFileContent(null);
-      setConfigFileEditContent('');
-      setConfigFileHasChanges(false);
-      setConfigFileSaved(false);
-      return;
-    }
-
-    // Load and expand the file
-    setConfigFileLoading(true);
-    setExpandedConfigFile(file);
-    setConfigFileSaved(false);
-    try {
-      const filePath = file === 'claudeMd' ? configPaths.claudeMd : configPaths.librarianCommand;
-      const content = await window.librarianAPI.readConfigFile(filePath);
-      setConfigFileContent(content);
-      setConfigFileEditContent(content || '');
-      setConfigFileHasChanges(false);
-    } catch (error) {
-      console.error('Failed to load config file:', error);
-      setConfigFileContent(null);
-      setConfigFileEditContent('');
-    } finally {
-      setConfigFileLoading(false);
-    }
-  }, [configPaths, expandedConfigFile]);
-
-  // Handle config file content change
-  const handleConfigFileChange = useCallback((newContent: string) => {
-    setConfigFileEditContent(newContent);
-    setConfigFileHasChanges(newContent !== configFileContent);
-    setConfigFileSaved(false);
-  }, [configFileContent]);
-
-  // Handle saving config file
-  const handleSaveConfigFile = useCallback(async () => {
-    if (!window.librarianAPI || !configPaths || !expandedConfigFile) return;
-
-    setConfigFileSaving(true);
-    try {
-      const filePath = expandedConfigFile === 'claudeMd' ? configPaths.claudeMd : configPaths.librarianCommand;
-      const success = await window.librarianAPI.writeConfigFile(filePath, configFileEditContent);
-      if (success) {
-        setConfigFileContent(configFileEditContent);
-        setConfigFileHasChanges(false);
-        setConfigFileSaved(true);
-        setTimeout(() => setConfigFileSaved(false), 2000);
-      }
-    } catch (error) {
-      console.error('Failed to save config file:', error);
-    } finally {
-      setConfigFileSaving(false);
-    }
-  }, [configPaths, expandedConfigFile, configFileEditContent]);
-
-  // Handle resetting config file changes
-  const handleResetConfigFile = useCallback(() => {
-    setConfigFileEditContent(configFileContent || '');
-    setConfigFileHasChanges(false);
-  }, [configFileContent]);
-
-  // Handle saving custom content guidance
-  const handleSaveContentGuidance = useCallback(async () => {
-    if (!window.librarianAPI) return;
-
-    setContentGuidanceSaving(true);
-    setContentGuidanceSaved(false);
-
-    try {
-      // If text matches default, clear custom guidance
-      const trimmedText = contentGuidanceText.trim();
-      const guidanceToSave = trimmedText === defaultContentGuidance.trim() ? undefined : trimmedText;
-
-      const success = await window.librarianAPI.setCustomContentGuidance(guidanceToSave);
-      if (success) {
-        setCustomContentGuidance(guidanceToSave);
-        setIsUsingCustomGuidance(!!guidanceToSave);
-        setContentGuidanceSaved(true);
-        setTimeout(() => setContentGuidanceSaved(false), 3000);
-      }
-    } finally {
-      setContentGuidanceSaving(false);
-    }
-  }, [contentGuidanceText, defaultContentGuidance]);
-
-  // Handle resetting content guidance to default
-  const handleResetContentGuidance = useCallback(async () => {
-    if (!window.librarianAPI) return;
-
-    setContentGuidanceSaving(true);
-    setContentGuidanceSaved(false);
-
-    try {
-      const success = await window.librarianAPI.resetContentGuidance();
-      if (success) {
-        setContentGuidanceText(defaultContentGuidance);
-        setCustomContentGuidance(undefined);
-        setIsUsingCustomGuidance(false);
-        setContentGuidanceSaved(true);
-        setTimeout(() => setContentGuidanceSaved(false), 3000);
-      }
-    } finally {
-      setContentGuidanceSaving(false);
-    }
-  }, [defaultContentGuidance]);
-
-  // Check if content guidance has unsaved changes
-  const hasUnsavedGuidanceChanges = customContentGuidance
-    ? contentGuidanceText.trim() !== customContentGuidance.trim()
-    : contentGuidanceText.trim() !== defaultContentGuidance.trim();
 
   // Format path for display
   const formatPath = (path: string): string => {
@@ -675,39 +402,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
           <span style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
             {enabled ? 'ACTIVE' : 'OFF'}
           </span>
-          {enabled && triggerMode === 'prompt' && editStatus && (
-            <>
-              <span style={{ fontSize: '12px', color: theme.textSecondary }}>
-                {editStatus.edits}/{editStatus.threshold} prompts
-              </span>
-            </>
-          )}
-          {enabled && triggerMode === 'judgment' && (
-            <span style={{ fontSize: '12px', color: theme.textSecondary }}>
-              AI judgment mode
-            </span>
-          )}
         </div>
-        {enabled && triggerMode === 'prompt' && editStatus && (
-          <button
-            onClick={async () => {
-              await window.librarianAPI?.resetAllCounters();
-              const status = await window.librarianAPI?.getEditStatus();
-              if (status) setEditStatus(status);
-            }}
-            style={{
-              padding: '4px 8px',
-              fontSize: '10px',
-              color: theme.textSecondary,
-              backgroundColor: 'transparent',
-              border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
-              borderRadius: '4px',
-              cursor: 'pointer',
-            }}
-          >
-            Reset
-          </button>
-        )}
       </div>
 
       {/* Librarian Settings */}
@@ -759,151 +454,34 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
           </button>
         </div>
 
-        {/* Trigger mode selection */}
+        {/* Auto-open on new artifact */}
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 0',
+            cursor: 'pointer',
+          }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
+              Auto-open on new artifact
+            </span>
+            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+              Bring Field Theory to foreground when a new artifact appears
+            </span>
+          </div>
+          <input
+            type="checkbox"
+            checked={autoShowEnabled}
+            onChange={handleAutoShowToggle}
+            style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+          />
+        </label>
+
+        {/* State-enforced mode settings */}
         {enabled && (
-          <>
-            <div style={{ marginBottom: '12px' }}>
-              <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '8px' }}>
-                Trigger mode
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <label
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    cursor: 'pointer',
-                    padding: '8px 12px',
-                    borderRadius: '6px',
-                    backgroundColor: triggerMode === 'prompt'
-                      ? (theme.isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.08)')
-                      : 'transparent',
-                    border: `1px solid ${triggerMode === 'prompt' ? theme.accent : 'transparent'}`,
-                  }}
-                >
-                  <input
-                    type="radio"
-                    name="triggerMode"
-                    value="prompt"
-                    checked={triggerMode === 'prompt'}
-                    onChange={() => handleTriggerModeChange('prompt')}
-                    style={{ accentColor: theme.accent }}
-                  />
-                  <div>
-                    <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
-                      Prompt count
-                    </div>
-                    <div style={{ fontSize: '11px', color: theme.textSecondary }}>
-                      Remind after a set number of prompts
-                    </div>
-                  </div>
-                </label>
-                <label
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    cursor: 'pointer',
-                    padding: '8px 12px',
-                    borderRadius: '6px',
-                    backgroundColor: triggerMode === 'judgment'
-                      ? (theme.isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.08)')
-                      : 'transparent',
-                    border: `1px solid ${triggerMode === 'judgment' ? theme.accent : 'transparent'}`,
-                  }}
-                >
-                  <input
-                    type="radio"
-                    name="triggerMode"
-                    value="judgment"
-                    checked={triggerMode === 'judgment'}
-                    onChange={() => handleTriggerModeChange('judgment')}
-                    style={{ accentColor: theme.accent }}
-                  />
-                  <div>
-                    <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
-                      AI judgment
-                    </div>
-                    <div style={{ fontSize: '11px', color: theme.textSecondary }}>
-                      Let AI decide based on work volume (~50K tokens)
-                    </div>
-                  </div>
-                </label>
-                <label
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    cursor: 'pointer',
-                    padding: '8px 12px',
-                    borderRadius: '6px',
-                    backgroundColor: triggerMode === 'state-enforced'
-                      ? (theme.isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.08)')
-                      : 'transparent',
-                    border: `1px solid ${triggerMode === 'state-enforced' ? theme.accent : 'transparent'}`,
-                  }}
-                >
-                  <input
-                    type="radio"
-                    name="triggerMode"
-                    value="state-enforced"
-                    checked={triggerMode === 'state-enforced'}
-                    onChange={() => handleTriggerModeChange('state-enforced')}
-                    style={{ accentColor: theme.accent }}
-                  />
-                  <div>
-                    <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
-                      State-enforced
-                    </div>
-                    <div style={{ fontSize: '11px', color: theme.textSecondary }}>
-                      Creates job files that Claude fulfills before responding
-                    </div>
-                  </div>
-                </label>
-              </div>
-            </div>
-
-            {/* Prompt threshold slider (only for prompt mode) */}
-            {triggerMode === 'prompt' && (
-              <div
-                style={{
-                  padding: '12px',
-                  marginBottom: '16px',
-                  borderRadius: '6px',
-                  backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-                  border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-                    Prompts between readings
-                  </span>
-                  <span style={{ fontSize: '12px', color: theme.text, fontWeight: 500 }}>
-                    {promptThreshold}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <span style={{ fontSize: '11px', color: theme.textSecondary, minWidth: '16px' }}>1</span>
-                  <input
-                    type="range"
-                    min="1"
-                    max="15"
-                    value={promptThreshold}
-                    onChange={(e) => handleThresholdChange(parseInt(e.target.value, 10))}
-                    style={{
-                      flex: 1,
-                      height: '4px',
-                      cursor: 'pointer',
-                      accentColor: theme.accent,
-                    }}
-                  />
-                  <span style={{ fontSize: '11px', color: theme.textSecondary, minWidth: '16px' }}>15</span>
-                </div>
-              </div>
-            )}
-
-            {/* State-enforced mode settings */}
-            {triggerMode === 'state-enforced' && (
               <div
                 style={{
                   padding: '12px',
@@ -1027,8 +605,6 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                 </div>
               </div>
             )}
-          </>
-        )}
 
         {/* Platforms section */}
         {enabled && (
@@ -1176,426 +752,8 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         )}
       </div>
 
-      {/* Content guidance customization */}
-      {enabled && (
-        <div
-          style={{
-            marginTop: '24px',
-            padding: '16px',
-            borderRadius: '8px',
-            backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
-            border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-          }}
-        >
-          <div style={{ marginBottom: '12px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div>
-                <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
-                  Content guidance
-                </div>
-                <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '2px' }}>
-                  Customize what type of content is produced in readings
-                </div>
-              </div>
-              {isUsingCustomGuidance && (
-                <span
-                  style={{
-                    fontSize: '10px',
-                    color: theme.accent,
-                    backgroundColor: theme.isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.1)',
-                    padding: '2px 8px',
-                    borderRadius: '4px',
-                    fontWeight: 500,
-                  }}
-                >
-                  Customized
-                </span>
-              )}
-            </div>
-          </div>
-
-          <textarea
-            value={contentGuidanceText}
-            onChange={(e) => setContentGuidanceText(e.target.value)}
-            placeholder={defaultContentGuidance}
-            style={{
-              width: '100%',
-              minHeight: '120px',
-              padding: '12px',
-              fontSize: '12px',
-              fontFamily: "'SF Mono', Monaco, 'Cascadia Code', monospace",
-              lineHeight: '1.5',
-              backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-              border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
-              borderRadius: '6px',
-              color: theme.text,
-              resize: 'vertical',
-              outline: 'none',
-            }}
-            onFocus={(e) => {
-              e.currentTarget.style.borderColor = theme.accent;
-            }}
-            onBlur={(e) => {
-              e.currentTarget.style.borderColor = theme.isDark ? theme.border : '#d1d5db';
-            }}
-          />
-
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '12px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <button
-                onClick={handleSaveContentGuidance}
-                disabled={contentGuidanceSaving || !hasUnsavedGuidanceChanges}
-                style={{
-                  padding: '6px 12px',
-                  fontSize: '12px',
-                  fontWeight: 500,
-                  color: hasUnsavedGuidanceChanges ? '#fff' : theme.textSecondary,
-                  backgroundColor: hasUnsavedGuidanceChanges ? theme.accent : 'transparent',
-                  border: hasUnsavedGuidanceChanges ? 'none' : `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
-                  borderRadius: '6px',
-                  cursor: hasUnsavedGuidanceChanges && !contentGuidanceSaving ? 'pointer' : 'default',
-                  opacity: contentGuidanceSaving ? 0.5 : 1,
-                }}
-              >
-                {contentGuidanceSaving ? 'Saving...' : 'Save'}
-              </button>
-              {isUsingCustomGuidance && (
-                <button
-                  onClick={handleResetContentGuidance}
-                  disabled={contentGuidanceSaving}
-                  style={{
-                    padding: '6px 12px',
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    color: theme.textSecondary,
-                    backgroundColor: 'transparent',
-                    border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
-                    borderRadius: '6px',
-                    cursor: contentGuidanceSaving ? 'default' : 'pointer',
-                    opacity: contentGuidanceSaving ? 0.5 : 1,
-                  }}
-                >
-                  Reset to Default
-                </button>
-              )}
-            </div>
-            {contentGuidanceSaved && (
-              <span style={{ fontSize: '11px', color: theme.success, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                  <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
-                </svg>
-                Saved — instructions updated
-              </span>
-            )}
-          </div>
-
-          <p style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '12px', lineHeight: '1.5' }}>
-            This shapes the intellectual content produced in each reading. Technical users might prefer
-            deeper technical content, while others might enjoy broader cultural connections.
-          </p>
-        </div>
-      )}
-
-      {/* Configuration Files */}
-      {configPaths && (
-        <div
-          style={{
-            marginTop: '24px',
-            padding: '16px',
-            borderRadius: '8px',
-            backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
-            border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-          }}
-        >
-          <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text, marginBottom: '12px' }}>
-            Configuration Files
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {/* CLAUDE.md */}
-            <div>
-              <button
-                onClick={() => handleToggleConfigFile('claudeMd')}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  width: '100%',
-                  padding: '10px 12px',
-                  backgroundColor: expandedConfigFile === 'claudeMd'
-                    ? (theme.isDark ? 'rgba(99, 102, 241, 0.1)' : 'rgba(99, 102, 241, 0.05)')
-                    : 'transparent',
-                  border: `1px solid ${expandedConfigFile === 'claudeMd' ? theme.accent : (theme.isDark ? theme.border : '#d1d5db')}`,
-                  borderRadius: expandedConfigFile === 'claudeMd' ? '6px 6px 0 0' : '6px',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
-                    CLAUDE.md
-                  </div>
-                  <div style={{ fontSize: '10px', color: theme.textSecondary, fontFamily: 'monospace' }}>
-                    ~/.claude/CLAUDE.md
-                  </div>
-                </div>
-                <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-                  {expandedConfigFile === 'claudeMd' ? '▼' : '▶'}
-                </span>
-              </button>
-              {expandedConfigFile === 'claudeMd' && (
-                <div
-                  style={{
-                    backgroundColor: theme.isDark ? 'rgba(0,0,0,0.2)' : '#fff',
-                    border: `1px solid ${theme.accent}`,
-                    borderTop: 'none',
-                    borderRadius: '0 0 6px 6px',
-                    overflow: 'hidden',
-                  }}
-                >
-                  {configFileLoading ? (
-                    <div style={{ padding: '12px', fontSize: '11px', color: theme.textSecondary }}>Loading...</div>
-                  ) : configFileContent !== null ? (
-                    <>
-                      <textarea
-                        value={configFileEditContent}
-                        onChange={(e) => handleConfigFileChange(e.target.value)}
-                        style={{
-                          width: '100%',
-                          minHeight: '150px',
-                          maxHeight: '500px',
-                          padding: '12px',
-                          fontSize: '11px',
-                          fontFamily: 'monospace',
-                          color: theme.text,
-                          backgroundColor: 'transparent',
-                          border: 'none',
-                          outline: 'none',
-                          resize: 'vertical',
-                          lineHeight: '1.5',
-                        }}
-                      />
-                      <div style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '8px 12px',
-                        borderTop: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
-                        backgroundColor: theme.isDark ? 'rgba(0,0,0,0.1)' : 'rgba(0,0,0,0.02)',
-                      }}>
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                          <button
-                            onClick={handleSaveConfigFile}
-                            disabled={!configFileHasChanges || configFileSaving}
-                            style={{
-                              padding: '4px 12px',
-                              fontSize: '11px',
-                              fontWeight: 500,
-                              color: configFileHasChanges ? '#fff' : theme.textSecondary,
-                              backgroundColor: configFileHasChanges ? theme.accent : 'transparent',
-                              border: `1px solid ${configFileHasChanges ? theme.accent : theme.border}`,
-                              borderRadius: '4px',
-                              cursor: configFileHasChanges && !configFileSaving ? 'pointer' : 'default',
-                              opacity: configFileSaving ? 0.6 : 1,
-                            }}
-                          >
-                            {configFileSaving ? 'Saving...' : 'Save'}
-                          </button>
-                          {configFileHasChanges && (
-                            <button
-                              onClick={handleResetConfigFile}
-                              style={{
-                                padding: '4px 12px',
-                                fontSize: '11px',
-                                color: theme.textSecondary,
-                                backgroundColor: 'transparent',
-                                border: `1px solid ${theme.border}`,
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              Reset
-                            </button>
-                          )}
-                        </div>
-                        {configFileSaved && (
-                          <span style={{ fontSize: '10px', color: theme.success }}>Saved</span>
-                        )}
-                        {configFileHasChanges && !configFileSaved && (
-                          <span style={{ fontSize: '10px', color: theme.textSecondary }}>Unsaved changes</span>
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <div style={{ padding: '12px', fontSize: '11px', color: theme.textSecondary }}>File not found</div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Librarian Instructions */}
-            <div>
-              <button
-                onClick={() => handleToggleConfigFile('librarianCommand')}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  width: '100%',
-                  padding: '10px 12px',
-                  backgroundColor: expandedConfigFile === 'librarianCommand'
-                    ? (theme.isDark ? 'rgba(99, 102, 241, 0.1)' : 'rgba(99, 102, 241, 0.05)')
-                    : 'transparent',
-                  border: `1px solid ${expandedConfigFile === 'librarianCommand' ? theme.accent : (theme.isDark ? theme.border : '#d1d5db')}`,
-                  borderRadius: expandedConfigFile === 'librarianCommand' ? '6px 6px 0 0' : '6px',
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
-                    Librarian Instructions
-                  </div>
-                  <div style={{ fontSize: '10px', color: theme.textSecondary, fontFamily: 'monospace' }}>
-                    ~/.fieldtheory/commands/librarian.md
-                  </div>
-                </div>
-                <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-                  {expandedConfigFile === 'librarianCommand' ? '▼' : '▶'}
-                </span>
-              </button>
-              {expandedConfigFile === 'librarianCommand' && (
-                <div
-                  style={{
-                    backgroundColor: theme.isDark ? 'rgba(0,0,0,0.2)' : '#fff',
-                    border: `1px solid ${theme.accent}`,
-                    borderTop: 'none',
-                    borderRadius: '0 0 6px 6px',
-                    overflow: 'hidden',
-                  }}
-                >
-                  {configFileLoading ? (
-                    <div style={{ padding: '12px', fontSize: '11px', color: theme.textSecondary }}>Loading...</div>
-                  ) : configFileContent !== null ? (
-                    <>
-                      <textarea
-                        value={configFileEditContent}
-                        onChange={(e) => handleConfigFileChange(e.target.value)}
-                        style={{
-                          width: '100%',
-                          minHeight: '150px',
-                          maxHeight: '500px',
-                          padding: '12px',
-                          fontSize: '11px',
-                          fontFamily: 'monospace',
-                          color: theme.text,
-                          backgroundColor: 'transparent',
-                          border: 'none',
-                          outline: 'none',
-                          resize: 'vertical',
-                          lineHeight: '1.5',
-                        }}
-                      />
-                      <div style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '8px 12px',
-                        borderTop: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
-                        backgroundColor: theme.isDark ? 'rgba(0,0,0,0.1)' : 'rgba(0,0,0,0.02)',
-                      }}>
-                        <div style={{ display: 'flex', gap: '8px' }}>
-                          <button
-                            onClick={handleSaveConfigFile}
-                            disabled={!configFileHasChanges || configFileSaving}
-                            style={{
-                              padding: '4px 12px',
-                              fontSize: '11px',
-                              fontWeight: 500,
-                              color: configFileHasChanges ? '#fff' : theme.textSecondary,
-                              backgroundColor: configFileHasChanges ? theme.accent : 'transparent',
-                              border: `1px solid ${configFileHasChanges ? theme.accent : theme.border}`,
-                              borderRadius: '4px',
-                              cursor: configFileHasChanges && !configFileSaving ? 'pointer' : 'default',
-                              opacity: configFileSaving ? 0.6 : 1,
-                            }}
-                          >
-                            {configFileSaving ? 'Saving...' : 'Save'}
-                          </button>
-                          {configFileHasChanges && (
-                            <button
-                              onClick={handleResetConfigFile}
-                              style={{
-                                padding: '4px 12px',
-                                fontSize: '11px',
-                                color: theme.textSecondary,
-                                backgroundColor: 'transparent',
-                                border: `1px solid ${theme.border}`,
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              Reset
-                            </button>
-                          )}
-                        </div>
-                        {configFileSaved && (
-                          <span style={{ fontSize: '10px', color: theme.success }}>Saved</span>
-                        )}
-                        {configFileHasChanges && !configFileSaved && (
-                          <span style={{ fontSize: '10px', color: theme.textSecondary }}>Unsaved changes</span>
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <div style={{ padding: '12px', fontSize: '11px', color: theme.textSecondary }}>File not found</div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-          <p style={{ fontSize: '10px', color: theme.textSecondary, marginTop: '10px', lineHeight: '1.4' }}>
-            CLAUDE.md references the Librarian instructions file. Changes you make in Settings automatically update both files.
-          </p>
-        </div>
-      )}
-
-      {/* Auto-show on new reading */}
-      <div
-        style={{
-          marginTop: '24px',
-          padding: '16px',
-          borderRadius: '8px',
-          backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
-          border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-        }}
-      >
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            cursor: 'pointer',
-          }}
-        >
-          <div>
-            <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
-              Auto-open on new artifact
-            </div>
-            <div style={{ fontSize: '12px', color: theme.textSecondary, marginTop: '2px' }}>
-              Bring Field Theory to foreground when a new artifact appears
-            </div>
-          </div>
-          <input
-            type="checkbox"
-            checked={autoShowEnabled}
-            onChange={handleAutoShowToggle}
-            style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-          />
-        </label>
-      </div>
-
-      {/* Narration Settings */}
-      {narrationStatus && (
+      {/* Narration Settings (feature flagged) */}
+      {FEATURE_NARRATION_ENABLED && narrationStatus && (
         <div
           style={{
             marginTop: '24px',
@@ -1617,158 +775,52 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
             <span
               style={{
                 fontSize: '10px',
-                color: narrationStatus.chatterboxInstalled ? theme.accent : theme.textSecondary,
+                color: theme.accent,
                 backgroundColor: theme.isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.1)',
                 padding: '2px 8px',
                 borderRadius: '4px',
                 fontWeight: 500,
               }}
             >
-              {narrationStatus.chatterboxInstalled ? 'Chatterbox' : 'macOS Say'}
+              ElevenLabs
             </span>
           </div>
 
-          {/* Chatterbox Installation */}
-          {!narrationStatus.chatterboxInstalled && !narrationStatus.chatterboxInstalling && (
+          {/* Voice Selection */}
+          {librarianVoices.length > 0 && (
             <div
               style={{
-                padding: '12px',
+                padding: '10px 12px',
                 marginBottom: '12px',
-                borderRadius: '6px',
-                backgroundColor: theme.isDark ? 'rgba(99, 102, 241, 0.1)' : 'rgba(99, 102, 241, 0.05)',
-                border: `1px solid ${theme.isDark ? 'rgba(99, 102, 241, 0.3)' : 'rgba(99, 102, 241, 0.2)'}`,
-              }}
-            >
-              <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text, marginBottom: '4px' }}>
-                Upgrade to Chatterbox
-              </div>
-              <p style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '12px', lineHeight: '1.5' }}>
-                Install high-quality AI voice synthesis. Requires ~3-4 GB disk space and Apple Silicon Mac.
-              </p>
-              <button
-                onClick={handleChatterboxInstall}
-                style={{
-                  padding: '8px 16px',
-                  fontSize: '12px',
-                  fontWeight: 500,
-                  color: '#fff',
-                  backgroundColor: theme.accent,
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                }}
-              >
-                Install Chatterbox (~2 GB)
-              </button>
-            </div>
-          )}
-
-          {/* Chatterbox Installing Progress */}
-          {narrationStatus.chatterboxInstalling && narrationInstallProgress && (
-            <div
-              style={{
-                padding: '12px',
-                marginBottom: '12px',
-                borderRadius: '6px',
                 backgroundColor: theme.isDark ? theme.surface2 : '#fff',
                 border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-                  {narrationInstallProgress.message}
-                </span>
-                <span style={{ fontSize: '11px', color: theme.text, fontWeight: 500 }}>
-                  {Math.round(narrationInstallProgress.progress)}%
-                </span>
-              </div>
-              <div
-                style={{
-                  height: '4px',
-                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)',
-                  borderRadius: '2px',
-                  overflow: 'hidden',
-                }}
-              >
-                <div
-                  style={{
-                    height: '100%',
-                    width: `${narrationInstallProgress.progress}%`,
-                    backgroundColor: theme.accent,
-                    borderRadius: '2px',
-                    transition: 'width 0.3s ease',
-                  }}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Engine Selection (when Chatterbox is installed) */}
-          {narrationStatus.chatterboxInstalled && (
-            <div
-              style={{
-                padding: '12px',
-                marginBottom: '12px',
                 borderRadius: '6px',
-                backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-                border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
               }}
             >
               <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '8px' }}>
-                Voice Engine
+                Voice
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
-                <button
-                  onClick={() => handleEngineSwitch('chatterbox')}
-                  style={{
-                    flex: 1,
-                    padding: '8px 12px',
-                    fontSize: '11px',
-                    fontWeight: 500,
-                    color: narrationStatus.preferredEngine === 'chatterbox' ? '#fff' : theme.text,
-                    backgroundColor: narrationStatus.preferredEngine === 'chatterbox' ? theme.accent : 'transparent',
-                    border: `1px solid ${narrationStatus.preferredEngine === 'chatterbox' ? theme.accent : theme.border}`,
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Chatterbox
-                </button>
-                <button
-                  onClick={() => handleEngineSwitch('macos_say')}
-                  style={{
-                    flex: 1,
-                    padding: '8px 12px',
-                    fontSize: '11px',
-                    fontWeight: 500,
-                    color: narrationStatus.preferredEngine === 'macos_say' ? '#fff' : theme.text,
-                    backgroundColor: narrationStatus.preferredEngine === 'macos_say' ? theme.accent : 'transparent',
-                    border: `1px solid ${narrationStatus.preferredEngine === 'macos_say' ? theme.accent : theme.border}`,
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  macOS Say
-                </button>
+                {librarianVoices.map((voice) => (
+                  <button
+                    key={voice.voiceId}
+                    onClick={() => handleVoiceChange(voice.voiceId)}
+                    style={{
+                      flex: 1,
+                      padding: '8px 12px',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      color: currentVoiceId === voice.voiceId ? '#fff' : theme.text,
+                      backgroundColor: currentVoiceId === voice.voiceId ? theme.accent : 'transparent',
+                      border: `1px solid ${currentVoiceId === voice.voiceId ? theme.accent : theme.border}`,
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {voice.name}
+                  </button>
+                ))}
               </div>
-              <button
-                onClick={handleTestVoice}
-                disabled={testingVoice}
-                style={{
-                  marginTop: '8px',
-                  padding: '6px 12px',
-                  fontSize: '11px',
-                  fontWeight: 500,
-                  color: theme.textSecondary,
-                  backgroundColor: 'transparent',
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '4px',
-                  cursor: testingVoice ? 'wait' : 'pointer',
-                  opacity: testingVoice ? 0.6 : 1,
-                }}
-              >
-                {testingVoice ? 'Playing...' : 'Test Voice'}
-              </button>
             </div>
           )}
 

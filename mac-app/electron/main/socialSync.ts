@@ -928,11 +928,32 @@ export class SocialSync extends EventEmitter {
    * Called when user views the feedback tab.
    */
   async markAllFeedbackAsRead(): Promise<boolean> {
-    if (!this.supabase) return false;
+    if (!this.supabase) {
+      console.warn('[SocialSync] markAllFeedbackAsRead: no supabase client');
+      return false;
+    }
     const userId = this.getUserId();
-    if (!userId) return false;
+    if (!userId) {
+      console.warn('[SocialSync] markAllFeedbackAsRead: no userId');
+      return false;
+    }
 
     try {
+      // First check how many unread messages exist
+      const { count: unreadCount } = await this.supabase
+        .from('messages')
+        .select('*', { count: 'exact', head: true })
+        .eq('type', 'feedback')
+        .eq('recipient_user_id', userId)
+        .is('read_at', null);
+
+      console.log('[SocialSync] markAllFeedbackAsRead: found', unreadCount, 'unread feedback messages for user', userId);
+
+      if (!unreadCount || unreadCount === 0) {
+        console.log('[SocialSync] markAllFeedbackAsRead: no unread messages to mark');
+        return true;
+      }
+
       const { error } = await this.supabase
         .from('messages')
         .update({ read_at: new Date().toISOString() })
@@ -941,13 +962,14 @@ export class SocialSync extends EventEmitter {
         .is('read_at', null);
 
       if (error) {
-        console.error('[SocialSync] Mark all feedback as read failed:', error);
+        console.error('[SocialSync] markAllFeedbackAsRead failed:', error);
         return false;
       }
 
+      console.log('[SocialSync] markAllFeedbackAsRead: successfully marked', unreadCount, 'messages as read');
       return true;
     } catch (err) {
-      console.error('[SocialSync] Failed to mark all feedback as read:', err);
+      console.error('[SocialSync] markAllFeedbackAsRead exception:', err);
       return false;
     }
   }

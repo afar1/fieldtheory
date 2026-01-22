@@ -14,7 +14,7 @@ import CommandsView from './CommandsView';
 import ReleaseNotesPopup from './ReleaseNotesPopup';
 import LibrarianView from './LibrarianView';
 import type { SketchViewHandle } from './SketchView';
-import { FEATURE_HOT_MIC_ENABLED, FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED } from '../featureFlags';
+import { FEATURE_HOT_MIC_ENABLED, FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { rendererSoundManager } from '../utils/rendererSoundManager';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
@@ -600,6 +600,14 @@ export default function ClipboardHistory() {
   const [usageHovered, setUsageHovered] = useState(false);
   const [infoHovered, setInfoHovered] = useState(false);
   const [tasksTabEnabled, setTasksTabEnabled] = useState(false);
+
+  // Narration playback state for footer controls
+  const [narrationPlayback, setNarrationPlayback] = useState<{
+    status: 'idle' | 'generating' | 'playing' | 'paused';
+    readingPath: string | null;
+    duration: number;
+  }>({ status: 'idle', readingPath: null, duration: 0 });
+  const [narrationProgress, setNarrationProgress] = useState(0); // percentage 0-100
   
   // Show in Dock - affects header padding for stoplight buttons.
   const [showInDock, setShowInDock] = useState(false);
@@ -681,13 +689,74 @@ export default function ClipboardHistory() {
   // Listen for quota changes to update footer in real-time.
   useEffect(() => {
     if (!window.quotaAPI?.onQuotaChanged) return;
-    
+
     const cleanup = window.quotaAPI.onQuotaChanged((formatted) => {
       setQuotaUsage(formatted);
     });
-    
+
     return cleanup;
   }, []);
+
+  // Subscribe to narration playback events for footer controls (feature flagged)
+  useEffect(() => {
+    if (!FEATURE_NARRATION_ENABLED || !window.narrationAPI) return;
+
+    const unsubGenerating = window.narrationAPI.onGenerationStarted?.((readingPath) => {
+      setNarrationPlayback({ status: 'generating', readingPath, duration: 0 });
+    });
+
+    const unsubStarted = window.narrationAPI.onPlaybackStarted((readingPath, duration) => {
+      setNarrationPlayback({ status: 'playing', readingPath, duration: duration || 0 });
+    });
+
+    const unsubPaused = window.narrationAPI.onPlaybackPaused?.(() => {
+      setNarrationPlayback(prev => ({ ...prev, status: 'paused' }));
+    });
+
+    const unsubResumed = window.narrationAPI.onPlaybackResumed?.(() => {
+      setNarrationPlayback(prev => ({ ...prev, status: 'playing' }));
+    });
+
+    const unsubStopped = window.narrationAPI.onPlaybackStopped(() => {
+      setNarrationPlayback({ status: 'idle', readingPath: null, duration: 0 });
+      setNarrationProgress(0);
+    });
+
+    const unsubError = window.narrationAPI.onPlaybackError(() => {
+      setNarrationPlayback({ status: 'idle', readingPath: null, duration: 0 });
+      setNarrationProgress(0);
+    });
+
+    return () => {
+      unsubGenerating?.();
+      unsubStarted?.();
+      unsubPaused?.();
+      unsubResumed?.();
+      unsubStopped?.();
+      unsubError?.();
+    };
+  }, []);
+
+  // Poll for playback progress while playing (feature flagged)
+  useEffect(() => {
+    if (!FEATURE_NARRATION_ENABLED) return;
+    if (narrationPlayback.status !== 'playing' && narrationPlayback.status !== 'paused') {
+      return;
+    }
+
+    const pollProgress = async () => {
+      const progress = await window.narrationAPI?.getPlaybackProgress?.();
+      if (progress) {
+        setNarrationProgress(progress.percentage);
+      }
+    };
+
+    // Poll every 500ms for smooth progress updates
+    pollProgress();
+    const interval = setInterval(pollProgress, 500);
+
+    return () => clearInterval(interval);
+  }, [narrationPlayback.status]);
 
   useEffect(() => {
     if (!window.transcribeAPI?.onStatusChanged) return;
@@ -915,6 +984,16 @@ export default function ClipboardHistory() {
       setCurrentStatIndex(0);
     }
   }, [statItems.length, currentStatIndex]);
+
+  // Toggle narration playback (pause/resume)
+  const handleNarrationToggle = useCallback(async () => {
+    await window.narrationAPI?.togglePause?.();
+  }, []);
+
+  // Stop narration playback
+  const handleNarrationStop = useCallback(async () => {
+    await window.narrationAPI?.stop();
+  }, []);
   
   const [targetAppInfo, setTargetAppInfo] = useState<{
     previousApp: RunningApp | null;  // Default paste destination (click)
@@ -1418,6 +1497,11 @@ export default function ClipboardHistory() {
       setShowSettings(true);
     });
 
+    // Listen for collapse-immersive event (triggered by hotkey when in immersive mode)
+    const unsubscribeCollapseImmersive = window.clipboardAPI.onCollapseImmersive?.(() => {
+      setLibrarianImmersive(false);
+    });
+
     // Preload sounds for instant playback via Web Audio API.
     // This bypasses the main process entirely for minimal latency.
     rendererSoundManager.preload();
@@ -1493,6 +1577,7 @@ export default function ClipboardHistory() {
     return () => {
       unsubscribeShowHistory();
       unsubscribeShowSettings?.();
+      unsubscribeCollapseImmersive?.();
       unsubscribePlaySound?.();
       unsubscribeShowTodos?.();
       unsubscribeTargetAppInfo?.();
@@ -1605,6 +1690,28 @@ export default function ClipboardHistory() {
       window.removeEventListener('blur', handleBlur);
     };
   }, [optionHeld]);
+
+  // Space bar hotkey for narration play/pause (feature flagged)
+  useEffect(() => {
+    if (!FEATURE_NARRATION_ENABLED) return;
+
+    const handleSpaceBar = (e: KeyboardEvent) => {
+      // Only handle space bar when narration is active and not in a text input
+      if (
+        e.code === 'Space' &&
+        narrationPlayback.status !== 'idle' &&
+        narrationPlayback.status !== 'generating' &&
+        !(e.target instanceof HTMLInputElement) &&
+        !(e.target instanceof HTMLTextAreaElement)
+      ) {
+        e.preventDefault();
+        handleNarrationToggle();
+      }
+    };
+
+    window.addEventListener('keydown', handleSpaceBar);
+    return () => window.removeEventListener('keydown', handleSpaceBar);
+  }, [narrationPlayback.status, handleNarrationToggle]);
 
   // Build list rows with stack grouping.
   // Stacked items are grouped together, non-stacked items appear individually.
@@ -1883,7 +1990,6 @@ export default function ClipboardHistory() {
             // Build visible tabs array in order, then cycle backwards
             const visibleTabs: ViewMode[] = ['clipboard'];
             if (librarianEnabled) visibleTabs.push('librarian');
-            visibleTabs.push('commands');
             if (canShare) visibleTabs.push('team');
             if (FEATURE_HOT_MIC_ENABLED) visibleTabs.push('hotmic');
             if (tasksTabEnabled) visibleTabs.push('todo');
@@ -1899,7 +2005,6 @@ export default function ClipboardHistory() {
             // Build visible tabs array in order, then cycle forwards
             const visibleTabs: ViewMode[] = ['clipboard'];
             if (librarianEnabled) visibleTabs.push('librarian');
-            visibleTabs.push('commands');
             if (canShare) visibleTabs.push('team');
             if (FEATURE_HOT_MIC_ENABLED) visibleTabs.push('hotmic');
             if (tasksTabEnabled) visibleTabs.push('todo');
@@ -3052,6 +3157,10 @@ export default function ClipboardHistory() {
           0% { transform: translateX(-100%); }
           100% { transform: translateX(100%); }
         }
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
       `}</style>
       <div
         ref={dialogRef}
@@ -3164,49 +3273,17 @@ export default function ClipboardHistory() {
           </button>
         )}
         
-        {/* Signed in indicator and Priority Mic - with proper spacing */}
-        {!showSettings && authSession?.user?.email && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              // @ts-ignore - prevent drag
-              WebkitAppRegion: 'no-drag',
-            }}
-          >
-            <span
-              onClick={() => setShowSettings(true)}
-              style={{
-                fontSize: '10px',
-                fontStyle: 'italic',
-                color: theme.textSecondary,
-                opacity: 0.7,
-                cursor: 'pointer',
-              }}
-              title="Click to open Settings"
-            >
-              {authSession.user.email === 'andrew.mfarah@gmail.com' ? 'A. Farah' : authSession.user.email}
-            </span>
-            {audioDevices.length > 0 && (
-              <>
-                <span style={{ 
-                  fontSize: '10px', 
-                  color: theme.textSecondary,
-                  opacity: 0.5,
-                  margin: '0 10px',
-                }}>
-                  |
-                </span>
-                <span style={{ 
-                  fontSize: '10px', 
-                  color: theme.textSecondary,
-                  opacity: 0.7,
-                }}>
-                  Priority Mic:
-                </span>
-              </>
-            )}
-          </div>
+        {/* Priority Mic label */}
+        {!showSettings && audioDevices.length > 0 && (
+          <span style={{
+            fontSize: '10px',
+            color: theme.textSecondary,
+            opacity: 0.7,
+            // @ts-ignore - prevent drag
+            WebkitAppRegion: 'no-drag',
+          }}>
+            Priority Mic:
+          </span>
         )}
         
         {/* Mic Lock dropdown */}
@@ -3361,7 +3438,7 @@ export default function ClipboardHistory() {
             overflow: 'hidden',
             transition: 'height 0.3s ease, min-height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease',
           }}>
-          {(['clipboard', ...(librarianEnabled ? ['librarian'] : []), 'commands', ...(canShare ? ['team'] : []), ...(FEATURE_HOT_MIC_ENABLED ? ['hotmic'] : []), ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
+          {(['clipboard', ...(librarianEnabled ? ['librarian'] : []), ...(canShare ? ['team'] : []), ...(FEATURE_HOT_MIC_ENABLED ? ['hotmic'] : []), ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
             // Hot Mic tab has special styling and the fire toggle.
             const isHotMic = mode === 'hotmic';
             const isSelected = viewMode === mode && !(mode === 'team' && !authSession?.user?.email) && !showSettings;
@@ -3694,6 +3771,47 @@ export default function ClipboardHistory() {
                 backgroundColor: theme.info,
               }} />
             )}
+          </button>
+
+          {/* Commands button */}
+          <button
+            onClick={() => {
+              setViewMode('commands');
+              setShowSettings(false);
+            }}
+            tabIndex={0}
+            style={{
+              padding: '5px 6px',
+              fontSize: '9px',
+              fontWeight: 500,
+              backgroundColor: viewMode === 'commands' && !showSettings ? theme.accent : 'transparent',
+              color: viewMode === 'commands' && !showSettings ? '#fff' : theme.textSecondary,
+              border: 'none',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              outline: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px',
+            }}
+            onMouseEnter={(e) => {
+              if (viewMode !== 'commands' || showSettings) {
+                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (viewMode !== 'commands' || showSettings) {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }
+            }}
+            title="Portable commands"
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="4 17 10 11 4 5" />
+              <line x1="12" y1="19" x2="20" y2="19" />
+            </svg>
+            Commands
           </button>
 
           {/* Settings button */}
@@ -6208,6 +6326,104 @@ export default function ClipboardHistory() {
               ) : null}
         </div>
 
+        {/* Center: Librarian narration playback controls (feature flagged) */}
+        {FEATURE_NARRATION_ENABLED && narrationPlayback.status !== 'idle' && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '0 12px',
+          }}>
+            <span style={{
+              fontSize: '9px',
+              color: theme.textSecondary,
+              fontWeight: 500,
+            }}>
+              Librarian:
+            </span>
+
+            {/* Play/Pause toggle */}
+            <button
+              onClick={handleNarrationToggle}
+              disabled={narrationPlayback.status === 'generating'}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                cursor: narrationPlayback.status === 'generating' ? 'default' : 'pointer',
+                padding: '2px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                opacity: narrationPlayback.status === 'generating' ? 0.5 : 1,
+              }}
+              title={narrationPlayback.status === 'playing' ? 'Pause' : narrationPlayback.status === 'paused' ? 'Resume' : 'Generating...'}
+            >
+              {narrationPlayback.status === 'generating' ? (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2">
+                  <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="10" style={{ animation: 'spin 1s linear infinite' }} />
+                </svg>
+              ) : narrationPlayback.status === 'playing' ? (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill={theme.text}>
+                  <rect x="6" y="4" width="4" height="16" />
+                  <rect x="14" y="4" width="4" height="16" />
+                </svg>
+              ) : (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill={theme.text}>
+                  <polygon points="5,3 19,12 5,21" />
+                </svg>
+              )}
+            </button>
+
+            {/* Progress bar */}
+            <div
+              style={{
+                width: '80px',
+                height: '4px',
+                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.1)',
+                borderRadius: '2px',
+                cursor: 'pointer',
+                position: 'relative',
+              }}
+              onClick={(e) => {
+                if (narrationPlayback.status === 'generating') return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const percentage = ((e.clientX - rect.left) / rect.width) * 100;
+                // TODO: Implement seek functionality when available
+                console.log('Seek to:', percentage, '%');
+              }}
+            >
+              <div
+                style={{
+                  width: `${narrationProgress}%`,
+                  height: '100%',
+                  backgroundColor: theme.text,
+                  borderRadius: '2px',
+                  transition: 'width 0.3s ease',
+                }}
+              />
+            </div>
+
+            {/* Stop button */}
+            <button
+              onClick={handleNarrationStop}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                padding: '2px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                opacity: 0.7,
+              }}
+              title="Stop"
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill={theme.textSecondary}>
+                <rect x="4" y="4" width="16" height="16" />
+              </svg>
+            </button>
+          </div>
+        )}
 
         {/* Right side: update notification OR version + settings button */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', fontSize: '9px', flex: 1 }}>
@@ -6349,14 +6565,14 @@ export default function ClipboardHistory() {
                 </>
               ) : (
                 <>
-                  {userCallsign && (
-                    <span style={{ color: theme.textSecondary, fontSize: '9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', letterSpacing: '0.5px', fontStyle: 'italic' }}>
-                      {userCallsign}
-                    </span>
-                  )}
                   <span style={{ color: updateStatus === 'uptodate' ? theme.success : theme.textSecondary, fontSize: '9px', fontStyle: 'italic' }}>
                     {updateStatus === 'uptodate' ? 'Up to date ✓' : `v${appVersion}`}
                   </span>
+                  {userCallsign && (
+                    <span style={{ color: theme.textSecondary, fontSize: '9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', letterSpacing: '0.5px' }}>
+                      {userCallsign}
+                    </span>
+                  )}
                 </>
               )}
             </div>
