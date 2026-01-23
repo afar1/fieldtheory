@@ -71,6 +71,9 @@ export class ClipboardHistoryWindow {
   // Track if immersive/fullscreen reading mode is active - window should not auto-hide
   private isImmersiveMode: boolean = false;
 
+  // Callback to check if resume after close is enabled (returns to last artifact vs clipboard)
+  private resumeAfterCloseGetter: (() => boolean) | null = null;
+
   // Internal visibility state for instant toggle without querying window.
   // Updated in show() and hide() to stay in sync with all visibility changes.
   private _isShowing: boolean = false;
@@ -528,6 +531,14 @@ export class ClipboardHistoryWindow {
     }
     this.normalBounds = null;
     this.sketchModeActive = false;
+
+    // If we were in immersive mode, tell renderer to reset to clipboard view
+    // so re-opening the window doesn't show the artifact again
+    // (unless "resume after close" setting is enabled)
+    const shouldResume = this.resumeAfterCloseGetter?.() ?? false;
+    if (this.isImmersiveMode && this.window && !this.window.isDestroyed() && !shouldResume) {
+      this.window.webContents.send('clipboard:resetToClipboardView');
+    }
     this.isImmersiveMode = false;
 
     // Only play sound if window is actually visible.
@@ -751,6 +762,14 @@ export class ClipboardHistoryWindow {
    */
   getImmersiveMode(): boolean {
     return this.isImmersiveMode;
+  }
+
+  /**
+   * Set the getter function for resume after close setting.
+   * This is called from index.ts to wire up the librarian manager setting.
+   */
+  setResumeAfterCloseGetter(getter: () => boolean): void {
+    this.resumeAfterCloseGetter = getter;
   }
 
   /**

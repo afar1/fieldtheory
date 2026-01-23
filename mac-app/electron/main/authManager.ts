@@ -83,9 +83,31 @@ class FileStorage implements SupportedStorage {
       this.storage.forEach((value, key) => {
         obj[key] = value;
       });
+
+      // Never overwrite with empty data - preserves session for re-auth later.
+      // Only explicit clearStorage() should write an empty file.
+      if (Object.keys(obj).length === 0) {
+        console.log('[FileStorage] Skipping save - refusing to write empty session');
+        return;
+      }
+
       fs.writeFileSync(this.filePath, JSON.stringify(obj, null, 2));
     } catch (err) {
       console.warn('[FileStorage] Failed to save session to disk:', err);
+    }
+  }
+
+  /**
+   * Explicitly clear storage (for sign-out only).
+   * This is the ONLY way to write an empty session file.
+   */
+  clearStorage(): void {
+    this.storage.clear();
+    try {
+      fs.writeFileSync(this.filePath, '{}');
+      console.log('[FileStorage] Storage cleared (explicit sign-out)');
+    } catch (err) {
+      console.warn('[FileStorage] Failed to clear storage:', err);
     }
   }
 
@@ -408,6 +430,18 @@ export class AuthManager extends EventEmitter {
   }
 
   /**
+   * Check if user is a super admin.
+   * Checks user_metadata.is_super_admin (set via Supabase dashboard).
+   */
+  isSuperAdmin(): boolean {
+    if (!this.session?.user) return false;
+    // Check user_metadata for is_super_admin flag
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const metadata = this.session.user.user_metadata as any;
+    return metadata?.is_super_admin === true;
+  }
+
+  /**
    * Check if user has ever been authenticated (for determining new vs returning user).
    */
   hasEverBeenAuthenticated(): boolean {
@@ -642,6 +676,8 @@ export class AuthManager extends EventEmitter {
       }
 
       this.clearSession();
+      // Explicitly clear the session file (only place this should happen)
+      this.fileStorage?.clearStorage();
       return { error: null };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -674,6 +710,7 @@ export class AuthManager extends EventEmitter {
       }
 
       this.clearSession();
+      this.fileStorage?.clearStorage();
       console.log('[AuthManager] Account deleted');
       return { error: null };
     } catch (err) {
