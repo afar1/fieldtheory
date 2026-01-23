@@ -115,6 +115,7 @@ function getDisplayName(name: string | null, email: string | null): string {
 interface DMsViewProps {
   onSendDM?: (recipientUserId: string, localItemId: number) => void;
   feedbackOnly?: boolean;
+  onSwitchToClipboard?: () => void;
 }
 
 // Cache keys for stale-while-revalidate pattern
@@ -139,7 +140,7 @@ function setCachedData<T>(key: string, data: T): void {
   }
 }
 
-export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps) {
+export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClipboard }: DMsViewProps) {
   const { theme } = useTheme();
 
   // Initialize from cache for instant display (stale-while-revalidate)
@@ -219,12 +220,14 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
         setFeedback(allFeedback);
         setCachedData(FEEDBACK_CACHE_KEY, allFeedback);
 
-        // Mark unread feedback items as read when admin views the list (batch).
-        const unreadIds = allFeedback.filter(item => !item.readAt).map(item => item.id);
-        console.log('[DMsView] Admin unread feedback count:', unreadIds.length);
-        if (unreadIds.length > 0) {
-          window.socialAPI.markAsReadBatch(unreadIds); // Fire and forget
-        }
+        // Mark ALL unread feedback (including replies) as read when admin views the list.
+        // This mirrors what regular users do with markAllFeedbackAsRead.
+        console.log('[FeedbackDot] Admin calling markAllFeedbackAsRead...');
+        window.socialAPI.markAllFeedbackAsRead().then(success => {
+          console.log('[FeedbackDot] Admin markAllFeedbackAsRead result:', success);
+        }).catch(err => {
+          console.error('[FeedbackDot] Admin markAllFeedbackAsRead failed:', err);
+        });
       } else {
         console.log('[DMsView] Loading as regular user');
         const myFeedback = await window.socialAPI.getMyFeedback();
@@ -233,14 +236,14 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
 
         // Mark all feedback messages as read when user views the list.
         // This clears the notification badge for replies from admin.
-        console.log('[DMsView] Calling markAllFeedbackAsRead...');
+        console.log('[FeedbackDot] DMsView calling markAllFeedbackAsRead...');
         window.socialAPI.markAllFeedbackAsRead().then(success => {
-          console.log('[DMsView] markAllFeedbackAsRead result:', success);
+          console.log('[FeedbackDot] DMsView markAllFeedbackAsRead result:', success);
           if (!success) {
-            console.warn('[DMsView] markAllFeedbackAsRead returned false');
+            console.warn('[FeedbackDot] DMsView markAllFeedbackAsRead returned false');
           }
         }).catch(err => {
-          console.error('[DMsView] markAllFeedbackAsRead failed:', err);
+          console.error('[FeedbackDot] DMsView markAllFeedbackAsRead failed:', err);
         });
       }
     } catch (err) {
@@ -292,8 +295,11 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
         unreadIds.push(reply.id);
       }
     }
+    console.log('[FeedbackDot] loadFeedbackDetails: unread replies to mark:', unreadIds);
     if (unreadIds.length > 0) {
-      window.socialAPI.markAsReadBatch(unreadIds); // Fire and forget
+      window.socialAPI.markAsReadBatch(unreadIds).then(success => {
+        console.log('[FeedbackDot] loadFeedbackDetails markAsReadBatch result:', success);
+      });
     }
   }, []);
 
@@ -495,7 +501,13 @@ export default function DMsView({ onSendDM, feedbackOnly = false }: DMsViewProps
           setSelectedFeedback(null);
           return;
         }
-        window.clipboardAPI?.closeWindow();
+        // Return to clipboard if callback provided, otherwise close window
+        if (onSwitchToClipboard) {
+          e.preventDefault();
+          onSwitchToClipboard();
+        } else {
+          window.clipboardAPI?.closeWindow();
+        }
         return;
       }
 

@@ -573,6 +573,7 @@ export interface ClipboardAPI {
   onShowHistory: (callback: () => void) => () => void;
   onShowSettings: (callback: () => void) => () => void;
   onCollapseImmersive: (callback: () => void) => () => void;
+  onResetToClipboardView: (callback: () => void) => () => void;
   onPlaySound: (callback: (soundId: 'windowOpen' | 'windowClose' | 'artifactDiscovery') => void) => () => void;
   onDialogPosition: (callback: (position: { left: number; top: number }) => void) => () => void;
   onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number }) => void) => () => void;
@@ -1042,6 +1043,16 @@ const clipboardAPI: ClipboardAPI = {
     ipcRenderer.on('collapse-immersive', handler);
     return () => {
       ipcRenderer.removeListener('collapse-immersive', handler);
+    };
+  },
+
+  onResetToClipboardView: (callback: () => void): (() => void) => {
+    const handler = () => {
+      callback();
+    };
+    ipcRenderer.on('clipboard:resetToClipboardView', handler);
+    return () => {
+      ipcRenderer.removeListener('clipboard:resetToClipboardView', handler);
     };
   },
 
@@ -1671,7 +1682,10 @@ const authAPI = {
   
   // Get current session.
   getSession: () => ipcRenderer.invoke('auth:getSession'),
-  
+
+  // Check if user is super admin.
+  isSuperAdmin: (): Promise<boolean> => ipcRenderer.invoke('auth:isSuperAdmin'),
+
   // Delete account permanently.
   deleteAccount: () => ipcRenderer.invoke('auth:deleteAccount'),
 };
@@ -2406,6 +2420,26 @@ const librarianAPI = {
   getPendingJobCount: (): Promise<number> => ipcRenderer.invoke('librarian:getPendingJobCount'),
 
   // ===========================================================================
+  // Discovery Frequency API
+  // ===========================================================================
+
+  // Discovery frequency (often/sometimes/rarely)
+  getDiscoveryFrequency: (): Promise<string> => ipcRenderer.invoke('librarian:getDiscoveryFrequency'),
+  setDiscoveryFrequency: (frequency: string): Promise<boolean> => ipcRenderer.invoke('librarian:setDiscoveryFrequency', frequency),
+
+  // ===========================================================================
+  // User Expertise API
+  // ===========================================================================
+
+  // User expertise context
+  getUserExpertiseContext: (): Promise<string | undefined> => ipcRenderer.invoke('librarian:getUserExpertiseContext'),
+  setUserExpertiseContext: (context: string | undefined): Promise<boolean> => ipcRenderer.invoke('librarian:setUserExpertiseContext', context),
+
+  // Expertise insert mode (admin-only)
+  getExpertiseInsertMode: (): Promise<string> => ipcRenderer.invoke('librarian:getExpertiseInsertMode'),
+  setExpertiseInsertMode: (mode: string): Promise<boolean> => ipcRenderer.invoke('librarian:setExpertiseInsertMode', mode),
+
+  // ===========================================================================
   // Legacy Settings API (kept for backward compatibility)
   // ===========================================================================
 
@@ -2437,6 +2471,10 @@ const librarianAPI = {
   // Auto-show on new reading settings
   getAutoShowEnabled: (): Promise<boolean> => ipcRenderer.invoke('librarian:getAutoShowEnabled'),
   setAutoShowEnabled: (enabled: boolean): Promise<void> => ipcRenderer.invoke('librarian:setAutoShowEnabled', enabled),
+
+  // Resume after close settings (return to last artifact vs clipboard)
+  getResumeAfterClose: (): Promise<boolean> => ipcRenderer.invoke('librarian:getResumeAfterClose'),
+  setResumeAfterClose: (enabled: boolean): Promise<void> => ipcRenderer.invoke('librarian:setResumeAfterClose', enabled),
 
   // Get Claude config file path
   getClaudeConfigPath: (): Promise<string> => ipcRenderer.invoke('librarian:getClaudeConfigPath'),
@@ -2766,6 +2804,10 @@ const claudeAPI = {
   // Enable screenshot permission
   enableScreenshotPermission: (): Promise<boolean> =>
     ipcRenderer.invoke('claude:enableScreenshotPermission'),
+
+  // Get figures directory path for permissions
+  getFiguresPath: (): Promise<string> =>
+    ipcRenderer.invoke('claude:getFiguresPath'),
 
   // Get available permission profiles
   getAvailableProfiles: (): Promise<Array<{ id: string; name: string; description: string; permissionCount: number }>> =>

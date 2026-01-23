@@ -2721,8 +2721,8 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
                       await pasteStack(selectedRow.items);
                     }
                   }},
-                  ...(onOpenSketch ? [{ label: 'sketch', key: 'd', action: () => {
-                    // Open sketch mode with this image.
+                  ...(onOpenSketch ? [{ label: 'draw', key: 'd', action: () => {
+                    // Open draw mode with this image.
                     onOpenSketch(preview.url, preview.width || 800, preview.height || 600);
                     dismissPreview();
                   }}] : []),

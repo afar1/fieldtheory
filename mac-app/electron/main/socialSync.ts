@@ -928,6 +928,7 @@ export class SocialSync extends EventEmitter {
    * Called when user views the feedback tab.
    */
   async markAllFeedbackAsRead(): Promise<boolean> {
+    console.log('[FeedbackDot] markAllFeedbackAsRead called');
     if (!this.supabase) {
       console.warn('[SocialSync] markAllFeedbackAsRead: no supabase client');
       return false;
@@ -1008,16 +1009,21 @@ export class SocialSync extends EventEmitter {
     try {
       // Check for unread feedback where user is recipient (admin gets notifications from users,
       // users get notifications from admin responses).
-      const { count, error } = await this.supabase!
+      const { count, data, error } = await this.supabase!
         .from('messages')
-        .select('*', { count: 'exact', head: true })
+        .select('id, parent_message_id, sender_user_id, created_at', { count: 'exact' })
         .eq('type', 'feedback')
         .eq('recipient_user_id', userId)
         .is('read_at', null);
 
+      console.log('[FeedbackDot] hasUnreadFeedback query: userId=', userId, 'count=', count, 'error=', error);
+      if (data && data.length > 0) {
+        console.log('[FeedbackDot] Unread messages:', data.map(m => ({ id: m.id, parent: m.parent_message_id, sender: m.sender_user_id })));
+      }
       if (error) return false;
       return (count || 0) > 0;
     } catch (err) {
+      console.error('[FeedbackDot] hasUnreadFeedback exception:', err);
       return false;
     }
   }
