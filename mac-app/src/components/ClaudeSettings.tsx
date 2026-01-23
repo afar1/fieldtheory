@@ -33,6 +33,7 @@ export default function ClaudeSettings() {
   const [expandedProfile, setExpandedProfile] = useState<string | null>(null);
   const [newPermission, setNewPermission] = useState('');
   const [addingPermission, setAddingPermission] = useState(false);
+  const [figuresPath, setFiguresPath] = useState<string>('');
 
   // Load profiles and status
   const loadData = useCallback(async () => {
@@ -42,12 +43,14 @@ export default function ClaudeSettings() {
     }
 
     try {
-      const [profilesData, statusData] = await Promise.all([
+      const [profilesData, statusData, figuresPathData] = await Promise.all([
         window.claudeAPI.getAvailableProfiles(),
         window.claudeAPI.getPermissionStatus(),
+        window.claudeAPI.getFiguresPath?.() ?? Promise.resolve(''),
       ]);
       setProfiles(profilesData);
       setStatus(statusData);
+      setFiguresPath(figuresPathData);
     } catch (err) {
       console.error('Failed to load Claude settings:', err);
       setError('Failed to load settings');
@@ -166,8 +169,125 @@ export default function ClaudeSettings() {
     dev: 'Dev',
   };
 
+  // Field Theory-specific permission toggles (figuresPath loaded dynamically from main process)
+  const fieldTheoryToggles = [
+    {
+      id: 'read-commands',
+      label: 'Allow reading command files',
+      description: 'Let Claude read .cursor/commands/ files',
+      permission: 'Read(.cursor/commands/*)',
+    },
+    ...(figuresPath ? [{
+      id: 'read-figures',
+      label: 'Allow reading screenshots',
+      description: 'Let Claude read Field Theory screenshot figures',
+      permission: `Read(${figuresPath}/*)`,
+    }] : []),
+    {
+      id: 'git-diff',
+      label: 'Allow git diff',
+      description: 'Let Claude run git diff commands',
+      permission: 'Bash(git diff *)',
+    },
+  ];
+
+  const isPermissionEnabled = (permission: string) => {
+    return status?.allClaudePermissions.includes(permission) ?? false;
+  };
+
+  const handleTogglePermission = async (permission: string, enabled: boolean) => {
+    if (!window.claudeAPI || applying) return;
+
+    setApplying(true);
+    setError(null);
+
+    try {
+      const success = enabled
+        ? await window.claudeAPI.addPermissions([permission])
+        : await window.claudeAPI.removePermissions([permission]);
+      if (success) {
+        await loadData();
+      } else {
+        setError(`Failed to ${enabled ? 'add' : 'remove'} permission`);
+      }
+    } catch (err) {
+      console.error('Failed to toggle permission:', err);
+      setError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setApplying(false);
+    }
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      {/* Field Theory Permissions - Simple Toggles */}
+      <div
+        style={{
+          padding: '16px',
+          borderRadius: '8px',
+          backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
+          border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+        }}
+      >
+        <div style={{ marginBottom: '12px' }}>
+          <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
+            Field Theory Permissions
+          </div>
+          <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '4px' }}>
+            Quick toggles for common Field Theory workflows
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {fieldTheoryToggles.map((toggle) => {
+            const enabled = isPermissionEnabled(toggle.permission);
+            return (
+              <div
+                key={toggle.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '10px 12px',
+                  borderRadius: '6px',
+                  backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                  border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+                }}
+              >
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
+                    {toggle.label}
+                  </div>
+                  <div style={{ fontSize: '10px', color: theme.textSecondary, marginTop: '2px' }}>
+                    {toggle.description}
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleTogglePermission(toggle.permission, !enabled)}
+                  disabled={applying}
+                  style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '4px',
+                    border: `1px solid ${enabled ? theme.accent : theme.border}`,
+                    backgroundColor: enabled ? theme.accent : 'transparent',
+                    cursor: applying ? 'wait' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '14px',
+                    color: enabled ? '#fff' : theme.textSecondary,
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  {enabled ? '✓' : ''}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Terminal Command Allowlist - Single Unified Section */}
       <div
         style={{

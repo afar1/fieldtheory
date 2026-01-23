@@ -170,10 +170,11 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
       reader.onloadend = () => {
         const dataUrl = reader.result as string;
         const appState = excalidrawAPI.getAppState();
+        // Dimensions must account for exportScale since blob is exported at that scale
         onSave({
           dataUrl,
-          width: Math.round(appState.width || 800),
-          height: Math.round(appState.height || 600),
+          width: Math.round((appState.width || 800) * exportScale),
+          height: Math.round((appState.height || 600) * exportScale),
         }, andCopy);
       };
       reader.onerror = () => {

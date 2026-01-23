@@ -12,6 +12,22 @@ import * as chokidar from 'chokidar';
 export type AutoRunFrequency = 'off' | 'occasionally' | 'regularly' | 'frequently' | 'always';
 
 /**
+ * Discovery frequency for artifact creation cadence.
+ * Controls how often discoveries (artifacts) are triggered.
+ */
+export type DiscoveryFrequency = 'often' | 'sometimes' | 'rarely';
+
+/**
+ * Configuration for discovery cadence.
+ * Uses center-biased randomness (median of 3) to feel natural.
+ */
+export const DISCOVERY_CONFIG: Record<DiscoveryFrequency, { min: number; max: number; cap: number }> = {
+  often:     { min: 5,  max: 9,  cap: 10 },
+  sometimes: { min: 7,  max: 13, cap: 14 },
+  rarely:    { min: 10, max: 18, cap: 20 },
+};
+
+/**
  * Metadata for a reading (cached in index).
  * Path is the identity - no numeric IDs.
  */
@@ -47,10 +63,16 @@ interface LibrarianSettings {
   watchedDirs: string[];
   enabled: boolean;                    // Single master toggle
   autoShowEnabled: boolean;
+  resumeAfterClose?: boolean;          // If true, reopen to last artifact instead of clipboard
   librarianSetupComplete?: boolean;    // True after setup wizard completes
   // State-enforced mode settings (the only mode now)
   stateEnforcedThreshold?: number;     // Prompts before job creation (default: 3)
   stateEnforcedRuleContent?: string;   // Custom rule content (the "job language")
+  // Discovery cadence settings
+  discoveryFrequency?: DiscoveryFrequency;  // Controls discovery timing (default: 'sometimes')
+  // User expertise context
+  userExpertiseContext?: string;       // User's background/interests (max 400 chars)
+  expertiseInsertMode?: 'insert' | 'append';  // How expertise is included in prompt (admin-only)
   // Legacy fields (kept for migration only)
   autoRunFrequency?: AutoRunFrequency; // @deprecated
   triggerMode?: string;                // @deprecated - always state-enforced now
@@ -581,18 +603,25 @@ export class LibrarianManager extends EventEmitter {
     // Check cache to determine if this is truly new or just an update.
     // Don't trust chokidar's isNewFile hint - reconciliation scan may have processed it first.
     const cached = this.cache.get(normalizedPath);
-    const isActuallyNew = !cached || meta.mtime > cached.mtime;
+    const isActuallyNew = !cached;
+    const isUpdated = cached && meta.mtime > cached.mtime;
+
+    // Skip if file hasn't changed (same mtime as cached)
+    if (cached && meta.mtime === cached.mtime) {
+      return;
+    }
 
     this.cache.set(normalizedPath, meta);
     this.saveIndex();
 
     if (isActuallyNew) {
-      // Emit event - coordinator in index.ts handles counter reset
+      // Emit event - coordinator in index.ts handles counter reset and auto-show
       const content = fs.readFileSync(normalizedPath, 'utf-8');
       const reading: Reading = { ...meta, content };
       this.emit('reading-added', reading);
       console.log(`[LibrarianManager] New artifact: ${meta.title}`);
-    } else {
+    } else if (isUpdated) {
+      // Existing file was modified - just update UI, no auto-show
       this.emit('reading-updated', meta);
       console.log(`[LibrarianManager] Updated reading: ${meta.title}`);
     }
@@ -1012,6 +1041,119 @@ export class LibrarianManager extends EventEmitter {
     return true;
   }
 
+  // ===========================================================================
+  // Discovery Frequency Settings
+  // ===========================================================================
+
+  /**
+   * Get the current discovery frequency setting.
+   */
+  getDiscoveryFrequency(): DiscoveryFrequency {
+    return this.settings.discoveryFrequency || 'sometimes';
+  }
+
+  /**
+   * Set the discovery frequency and update global status.
+   */
+  setDiscoveryFrequency(frequency: DiscoveryFrequency): boolean {
+    this.settings.discoveryFrequency = frequency;
+    this.saveSettings();
+
+    // Update global status with new threshold
+    this.ensureGlobalStatusExists();
+    const statusFile = this.getGlobalStatusPath();
+    try {
+      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
+      status.nextThreshold = this.pickNextDiscoveryThreshold();
+      status.discoveryFrequency = frequency;
+      fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
+    } catch {
+      // Ignore errors
+    }
+
+    console.log(`[LibrarianManager] Discovery frequency set to: ${frequency}`);
+    return true;
+  }
+
+  // ===========================================================================
+  // User Expertise Context
+  // ===========================================================================
+
+  /**
+   * Get the user's expertise/interests context.
+   */
+  getUserExpertiseContext(): string | undefined {
+    return this.settings.userExpertiseContext;
+  }
+
+  /**
+   * Set the user's expertise/interests context.
+   * Limited to 400 characters.
+   */
+  setUserExpertiseContext(context: string | undefined): boolean {
+    // Enforce 400 char limit
+    const trimmed = context?.trim().slice(0, 400) || undefined;
+    this.settings.userExpertiseContext = trimmed;
+    this.saveSettings();
+    this.updateGlobalConfigWithExpertise();
+    console.log(`[LibrarianManager] User expertise context ${trimmed ? 'set' : 'cleared'}`);
+    return true;
+  }
+
+  /**
+   * Get the expertise insert mode (admin-only setting).
+   */
+  getExpertiseInsertMode(): 'insert' | 'append' {
+    return this.settings.expertiseInsertMode || 'append';
+  }
+
+  /**
+   * Set the expertise insert mode (admin-only).
+   */
+  setExpertiseInsertMode(mode: 'insert' | 'append'): boolean {
+    // Note: Admin check is handled at UI level via authAPI.isSuperAdmin()
+    this.settings.expertiseInsertMode = mode;
+    this.saveSettings();
+    this.updateGlobalConfigWithExpertise();
+    console.log(`[LibrarianManager] Expertise insert mode set to: ${mode}`);
+    return true;
+  }
+
+  /**
+   * Get the effective rule content with user expertise included.
+   */
+  getEffectiveRuleContent(): string {
+    const baseRule = this.settings.stateEnforcedRuleContent || this.DEFAULT_RULE_CONTENT;
+    const expertise = this.settings.userExpertiseContext;
+
+    if (!expertise) {
+      return baseRule;
+    }
+
+    const mode = this.settings.expertiseInsertMode || 'append';
+    if (mode === 'insert') {
+      return `The reader: ${expertise}\n\n${baseRule}`;
+    } else {
+      return `${baseRule}\n\nContext about the reader: ${expertise}`;
+    }
+  }
+
+  /**
+   * Update global config with effective rule content (includes expertise).
+   */
+  private updateGlobalConfigWithExpertise(): void {
+    const configPath = this.getGlobalStateEnforcedConfigPath();
+    if (fs.existsSync(configPath)) {
+      try {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        config.rule_content = this.getEffectiveRuleContent();
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+      } catch {
+        // Ignore errors
+      }
+    }
+  }
+
   /**
    * Sync CLAUDE.md with current settings.
    * Called whenever enabled, triggerMode, or content guidance changes.
@@ -1077,6 +1219,22 @@ export class LibrarianManager extends EventEmitter {
    */
   setAutoShowEnabled(enabled: boolean): void {
     this.settings.autoShowEnabled = enabled;
+    this.saveSettings();
+  }
+
+  /**
+   * Check if resume after close is enabled.
+   * When true, reopening the window returns to the last artifact instead of clipboard.
+   */
+  isResumeAfterCloseEnabled(): boolean {
+    return this.settings.resumeAfterClose ?? false;
+  }
+
+  /**
+   * Set resume after close setting.
+   */
+  setResumeAfterClose(enabled: boolean): void {
+    this.settings.resumeAfterClose = enabled;
     this.saveSettings();
   }
 
@@ -1628,6 +1786,7 @@ ${this.CLAUDE_MD_END_MARKER}`;
    * Get the threshold range for a frequency setting.
    * Returns [min, max] for random threshold selection.
    * Ranges overlap slightly to maintain serendipity.
+   * @deprecated Use getDiscoveryConfig() instead
    */
   private getThresholdRange(frequency: AutoRunFrequency): [number, number] {
     switch (frequency) {
@@ -1639,11 +1798,80 @@ ${this.CLAUDE_MD_END_MARKER}`;
     }
   }
 
+  // ===========================================================================
+  // Discovery Cadence Algorithm (center-biased randomness)
+  // ===========================================================================
+
+  /**
+   * Return the median of three numbers.
+   * Used to create center-biased distribution.
+   */
+  private median3(x: number, y: number, z: number): number {
+    if ((x <= y && y <= z) || (z <= y && y <= x)) return y;
+    if ((y <= x && x <= z) || (z <= x && x <= y)) return x;
+    return z;
+  }
+
+  /**
+   * Generate a random integer in [min, max] inclusive.
+   */
+  private randIntInclusive(min: number, max: number): number {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+  /**
+   * Roll a center-biased value using median of 3.
+   * Samples 3 times uniformly and returns median -> biases toward center.
+   */
+  private rollCenterBiased(min: number, max: number): number {
+    const r1 = this.randIntInclusive(min, max);
+    const r2 = this.randIntInclusive(min, max);
+    const r3 = this.randIntInclusive(min, max);
+    return this.median3(r1, r2, r3);
+  }
+
+  /**
+   * Add small jitter to prevent identical patterns.
+   */
+  private jitter(k: number): number {
+    const j = this.randIntInclusive(-1, 1); // -1, 0, or +1
+    return k + j;
+  }
+
+  /**
+   * Clamp value to [min, cap] range.
+   */
+  private clamp(k: number, min: number, cap: number): number {
+    if (k < min) return min;
+    if (k > cap) return cap;
+    return k;
+  }
+
+  /**
+   * Pick next discovery threshold using center-biased algorithm.
+   * Uses the new DiscoveryFrequency settings.
+   */
+  private pickNextDiscoveryThreshold(): number {
+    const frequency = this.settings.discoveryFrequency || 'sometimes';
+    const cfg = DISCOVERY_CONFIG[frequency];
+
+    let k = this.rollCenterBiased(cfg.min, cfg.max);
+    k = this.jitter(k);
+    k = this.clamp(k, cfg.min, cfg.cap);
+
+    return k;
+  }
+
   /**
    * Pick a random threshold within the range for a frequency.
    * If customThreshold or promptThreshold is set, always use that instead.
+   * Now uses center-biased algorithm for discovery frequency.
    */
   private pickNextThreshold(frequency?: AutoRunFrequency): number {
+    // New: Use discovery frequency if set
+    if (this.settings.discoveryFrequency) {
+      return this.pickNextDiscoveryThreshold();
+    }
     // If using new v2 settings, use promptThreshold directly
     if (this.settings.promptThreshold !== undefined) {
       return this.settings.promptThreshold;

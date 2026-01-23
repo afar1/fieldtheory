@@ -95,6 +95,33 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     localStorage.setItem('fieldTheorySettingsSection', selectedSection);
   }, [selectedSection]);
 
+  // Keyboard navigation for settings sections (up/down arrows)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't intercept if user is typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        const currentIndex = SECTIONS_ORDER.indexOf(selectedSection);
+        let newIndex: number;
+
+        if (e.key === 'ArrowUp') {
+          newIndex = currentIndex > 0 ? currentIndex - 1 : SECTIONS_ORDER.length - 1;
+        } else {
+          newIndex = currentIndex < SECTIONS_ORDER.length - 1 ? currentIndex + 1 : 0;
+        }
+
+        setSelectedSection(SECTIONS_ORDER[newIndex]);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedSection]);
+
   // Permissions state
   const [permissions, setPermissions] = useState<{ accessibilityGranted: boolean } | null>(null);
   const [showPermissionsGate, setShowPermissionsGate] = useState(false);
@@ -701,6 +728,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       // manually to prevent getSession() from restoring the old session.
       const supabaseKeys = Object.keys(localStorage).filter(k => k.startsWith('sb-'));
       supabaseKeys.forEach(k => localStorage.removeItem(k));
+
+      // Also clear sharing unlock state to hide Team button
+      localStorage.removeItem('sharingUnlocked');
       
       setSyncStatus(null);
       setSession(null);

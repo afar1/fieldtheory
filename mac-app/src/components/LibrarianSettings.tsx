@@ -52,9 +52,24 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [isUsingCustomRule, setIsUsingCustomRule] = useState(false);
   const [stateEnforcedHookInstalled, setStateEnforcedHookInstalled] = useState(false);
 
+  // Discovery frequency (often/sometimes/rarely)
+  const [discoveryFrequency, setDiscoveryFrequency] = useState<'often' | 'sometimes' | 'rarely'>('sometimes');
+
+  // Admin check
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  // User expertise context
+  const [userExpertiseContext, setUserExpertiseContext] = useState<string>('');
+  const [expertiseText, setExpertiseText] = useState('');
+  const [expertiseSaved, setExpertiseSaved] = useState(false);
+  const [expertiseInsertMode, setExpertiseInsertMode] = useState<'insert' | 'append'>('append');
+
 
   // Auto-show on new reading
   const [autoShowEnabled, setAutoShowEnabled] = useState(true);
+
+  // Resume after close (return to last artifact vs clipboard)
+  const [resumeAfterClose, setResumeAfterClose] = useState(false);
 
   // Cursor instructions modal
   const [showCursorModal, setShowCursorModal] = useState(false);
@@ -127,8 +142,14 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       window.librarianAPI.getStateEnforcedThreshold(),
       window.librarianAPI.getDefaultRuleContent(),
       window.librarianAPI.getCustomRuleContent(),
+      // Discovery frequency & expertise settings
+      window.librarianAPI.getDiscoveryFrequency(),
+      window.authAPI?.isSuperAdmin() ?? Promise.resolve(false),
+      window.librarianAPI.getUserExpertiseContext(),
+      window.librarianAPI.getExpertiseInsertMode(),
+      window.librarianAPI.getResumeAfterClose(),
     ])
-      .then(([dirs, readingsList, isEnabled, autoShow, ccStatus, hookStatus, seThreshold, defaultRule, customRule]) => {
+      .then(([dirs, readingsList, isEnabled, autoShow, ccStatus, hookStatus, seThreshold, defaultRule, customRule, discFreq, adminStatus, expertiseCtx, insertMode, resumeClose]) => {
         setWatchedDirs(dirs);
         setReadings(readingsList);
         setEnabled(isEnabled);
@@ -141,6 +162,13 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         setCustomRuleContent(customRule);
         setRuleContentText(customRule || defaultRule);
         setIsUsingCustomRule(!!customRule);
+        // Discovery frequency & admin/expertise settings
+        setDiscoveryFrequency(discFreq as 'often' | 'sometimes' | 'rarely');
+        setIsAdmin(adminStatus);
+        setUserExpertiseContext(expertiseCtx || '');
+        setExpertiseText(expertiseCtx || '');
+        setExpertiseInsertMode(insertMode as 'insert' | 'append');
+        setResumeAfterClose(resumeClose);
         setLoading(false);
       })
       .catch((err) => {
@@ -480,6 +508,36 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
           />
         </label>
 
+        {/* Resume after close */}
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 0',
+            cursor: 'pointer',
+          }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
+              Resume on reopen
+            </span>
+            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+              Return to last artifact instead of Fields
+            </span>
+          </div>
+          <input
+            type="checkbox"
+            checked={resumeAfterClose}
+            onChange={async () => {
+              const newValue = !resumeAfterClose;
+              setResumeAfterClose(newValue);
+              await window.librarianAPI?.setResumeAfterClose(newValue);
+            }}
+            style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+          />
+        </label>
+
         {/* State-enforced mode settings */}
         {enabled && (
               <div
@@ -491,58 +549,65 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                   border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
                 }}
               >
-                {/* Threshold slider */}
+                {/* Discovery frequency selector */}
                 <div style={{ marginBottom: '16px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                     <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-                      Prompts before job creation
-                    </span>
-                    <span style={{ fontSize: '12px', color: theme.text, fontWeight: 500 }}>
-                      {stateEnforcedThreshold}
+                      Discovery frequency
                     </span>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <span style={{ fontSize: '11px', color: theme.textSecondary, minWidth: '16px' }}>1</span>
-                    <input
-                      type="range"
-                      min="1"
-                      max="10"
-                      value={stateEnforcedThreshold}
-                      onChange={async (e) => {
-                        const value = parseInt(e.target.value, 10);
-                        setStateEnforcedThreshold(value);
-                        await window.librarianAPI?.setStateEnforcedThreshold(value);
-                      }}
-                      style={{
-                        flex: 1,
-                        height: '4px',
-                        cursor: 'pointer',
-                        accentColor: theme.accent,
-                      }}
-                    />
-                    <span style={{ fontSize: '11px', color: theme.textSecondary, minWidth: '16px' }}>10</span>
+                  <div style={{ display: 'flex', gap: '0', borderRadius: '6px', overflow: 'hidden', border: `1px solid ${theme.border}` }}>
+                    {(['often', 'sometimes', 'rarely'] as const).map((freq) => (
+                      <button
+                        key={freq}
+                        onClick={async () => {
+                          setDiscoveryFrequency(freq);
+                          await window.librarianAPI?.setDiscoveryFrequency(freq);
+                        }}
+                        style={{
+                          flex: 1,
+                          padding: '8px 12px',
+                          fontSize: '11px',
+                          fontWeight: discoveryFrequency === freq ? 600 : 400,
+                          color: discoveryFrequency === freq ? '#fff' : theme.textSecondary,
+                          backgroundColor: discoveryFrequency === freq ? theme.accent : 'transparent',
+                          border: 'none',
+                          borderRight: freq !== 'rarely' ? `1px solid ${theme.border}` : 'none',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                          textTransform: 'capitalize',
+                        }}
+                      >
+                        {freq}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
-                {/* Rule content editor */}
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                {/* User expertise context (visible to all users) */}
+                <div style={{ marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
                     <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-                      Job language (rule content)
+                      About you (optional)
                     </span>
-                    {isUsingCustomRule && (
-                      <span style={{ fontSize: '10px', color: theme.accent, fontWeight: 500 }}>
-                        Customized
-                      </span>
-                    )}
+                    <span style={{ fontSize: '10px', color: theme.textSecondary }}>
+                      {expertiseText.length} / 400
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '8px', lineHeight: '1.4' }}>
+                    Helps the Librarian tailor content. Try: role, experience level, interests.
                   </div>
                   <textarea
-                    value={ruleContentText}
-                    onChange={(e) => setRuleContentText(e.target.value)}
-                    placeholder="Write 2-3 paragraphs connecting the current work to engineering history..."
+                    value={expertiseText}
+                    onChange={(e) => {
+                      if (e.target.value.length <= 400) {
+                        setExpertiseText(e.target.value);
+                      }
+                    }}
+                    placeholder="e.g., Senior engineer with 10 years in distributed systems. Interested in PLT and type theory. Background in physics."
                     style={{
                       width: '100%',
-                      minHeight: '80px',
+                      minHeight: '60px',
                       padding: '10px',
                       fontSize: '11px',
                       fontFamily: "'SF Mono', Monaco, monospace",
@@ -556,37 +621,35 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                       boxSizing: 'border-box',
                     }}
                   />
-                  <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '8px', alignItems: 'center' }}>
                     <button
                       onClick={async () => {
-                        const content = ruleContentText.trim() === defaultRuleContent ? undefined : ruleContentText.trim();
-                        await window.librarianAPI?.setCustomRuleContent(content);
-                        setCustomRuleContent(content);
-                        setIsUsingCustomRule(!!content);
-                        setRuleContentSaved(true);
-                        setTimeout(() => setRuleContentSaved(false), 2000);
+                        const context = expertiseText.trim() || undefined;
+                        await window.librarianAPI?.setUserExpertiseContext(context);
+                        setUserExpertiseContext(context || '');
+                        setExpertiseSaved(true);
+                        setTimeout(() => setExpertiseSaved(false), 2000);
                       }}
-                      disabled={ruleContentText === (customRuleContent || defaultRuleContent)}
+                      disabled={expertiseText === userExpertiseContext}
                       style={{
                         padding: '4px 10px',
                         fontSize: '11px',
                         fontWeight: 500,
-                        color: ruleContentText !== (customRuleContent || defaultRuleContent) ? '#fff' : theme.textSecondary,
-                        backgroundColor: ruleContentText !== (customRuleContent || defaultRuleContent) ? theme.accent : 'transparent',
-                        border: ruleContentText !== (customRuleContent || defaultRuleContent) ? 'none' : `1px solid ${theme.border}`,
+                        color: expertiseText !== userExpertiseContext ? '#fff' : theme.textSecondary,
+                        backgroundColor: expertiseText !== userExpertiseContext ? theme.accent : 'transparent',
+                        border: expertiseText !== userExpertiseContext ? 'none' : `1px solid ${theme.border}`,
                         borderRadius: '4px',
-                        cursor: ruleContentText !== (customRuleContent || defaultRuleContent) ? 'pointer' : 'default',
+                        cursor: expertiseText !== userExpertiseContext ? 'pointer' : 'default',
                       }}
                     >
-                      {ruleContentSaved ? '✓ Saved' : 'Save'}
+                      {expertiseSaved ? '✓ Saved' : 'Save'}
                     </button>
-                    {isUsingCustomRule && (
+                    {userExpertiseContext && (
                       <button
                         onClick={async () => {
-                          await window.librarianAPI?.setCustomRuleContent(undefined);
-                          setCustomRuleContent(undefined);
-                          setRuleContentText(defaultRuleContent);
-                          setIsUsingCustomRule(false);
+                          await window.librarianAPI?.setUserExpertiseContext(undefined);
+                          setUserExpertiseContext('');
+                          setExpertiseText('');
                         }}
                         style={{
                           padding: '4px 10px',
@@ -598,11 +661,123 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                           cursor: 'pointer',
                         }}
                       >
-                        Reset to Default
+                        Clear
                       </button>
+                    )}
+                    {/* Admin-only: Insert mode toggle */}
+                    {isAdmin && userExpertiseContext && (
+                      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontSize: '10px', color: theme.textSecondary }}>Mode:</span>
+                        <div style={{ display: 'flex', gap: '0', borderRadius: '4px', overflow: 'hidden', border: `1px solid ${theme.border}` }}>
+                          {(['insert', 'append'] as const).map((mode) => (
+                            <button
+                              key={mode}
+                              onClick={async () => {
+                                setExpertiseInsertMode(mode);
+                                await window.librarianAPI?.setExpertiseInsertMode(mode);
+                              }}
+                              style={{
+                                padding: '2px 8px',
+                                fontSize: '10px',
+                                fontWeight: expertiseInsertMode === mode ? 600 : 400,
+                                color: expertiseInsertMode === mode ? '#fff' : theme.textSecondary,
+                                backgroundColor: expertiseInsertMode === mode ? theme.accent : 'transparent',
+                                border: 'none',
+                                borderRight: mode === 'insert' ? `1px solid ${theme.border}` : 'none',
+                                cursor: 'pointer',
+                                textTransform: 'capitalize',
+                              }}
+                            >
+                              {mode}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     )}
                   </div>
                 </div>
+
+                {/* Rule content editor (admin-only) */}
+                {isAdmin && (
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                        Job language (rule content)
+                      </span>
+                      {isUsingCustomRule && (
+                        <span style={{ fontSize: '10px', color: theme.accent, fontWeight: 500 }}>
+                          Customized
+                        </span>
+                      )}
+                    </div>
+                    <textarea
+                      value={ruleContentText}
+                      onChange={(e) => setRuleContentText(e.target.value)}
+                      placeholder="Write 2-3 paragraphs connecting the current work to engineering history..."
+                      style={{
+                        width: '100%',
+                        minHeight: '80px',
+                        padding: '10px',
+                        fontSize: '11px',
+                        fontFamily: "'SF Mono', Monaco, monospace",
+                        lineHeight: '1.5',
+                        backgroundColor: theme.isDark ? 'rgba(0,0,0,0.2)' : '#fff',
+                        border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
+                        borderRadius: '6px',
+                        color: theme.text,
+                        resize: 'vertical',
+                        outline: 'none',
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                      <button
+                        onClick={async () => {
+                          const content = ruleContentText.trim() === defaultRuleContent ? undefined : ruleContentText.trim();
+                          await window.librarianAPI?.setCustomRuleContent(content);
+                          setCustomRuleContent(content);
+                          setIsUsingCustomRule(!!content);
+                          setRuleContentSaved(true);
+                          setTimeout(() => setRuleContentSaved(false), 2000);
+                        }}
+                        disabled={ruleContentText === (customRuleContent || defaultRuleContent)}
+                        style={{
+                          padding: '4px 10px',
+                          fontSize: '11px',
+                          fontWeight: 500,
+                          color: ruleContentText !== (customRuleContent || defaultRuleContent) ? '#fff' : theme.textSecondary,
+                          backgroundColor: ruleContentText !== (customRuleContent || defaultRuleContent) ? theme.accent : 'transparent',
+                          border: ruleContentText !== (customRuleContent || defaultRuleContent) ? 'none' : `1px solid ${theme.border}`,
+                          borderRadius: '4px',
+                          cursor: ruleContentText !== (customRuleContent || defaultRuleContent) ? 'pointer' : 'default',
+                        }}
+                      >
+                        {ruleContentSaved ? '✓ Saved' : 'Save'}
+                      </button>
+                      {isUsingCustomRule && (
+                        <button
+                          onClick={async () => {
+                            await window.librarianAPI?.setCustomRuleContent(undefined);
+                            setCustomRuleContent(undefined);
+                            setRuleContentText(defaultRuleContent);
+                            setIsUsingCustomRule(false);
+                          }}
+                          style={{
+                            padding: '4px 10px',
+                            fontSize: '11px',
+                            color: theme.textSecondary,
+                            backgroundColor: 'transparent',
+                            border: `1px solid ${theme.border}`,
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Reset to Default
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -865,7 +1040,9 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         </div>
       )}
 
-      {/* Watched Directories */}
+      {/* Watched Directories (admin-only) */}
+      {isAdmin && (
+        <>
       <p
         style={{
           fontSize: '12px',
@@ -1063,6 +1240,8 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
           </p>
         )}
       </div>
+        </>
+      )}
 
       {/* Cursor Instructions Modal */}
       {showCursorModal && (

@@ -29,6 +29,8 @@ export class AudioManager extends EventEmitter {
   private favoriteDeviceName: string | null = null;
   // Callback to save favorite to preferences
   private onFavoriteChanged: ((name: string | null) => void) | null = null;
+  // Timer for tracking priority mic minutes (time the mic is locked)
+  private priorityMicTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(helper: NativeHelper) {
     super();
@@ -130,6 +132,7 @@ export class AudioManager extends EventEmitter {
    */
   async setPriorityDevice(deviceId: string | null): Promise<void> {
     console.log('[AudioManager] setPriorityDevice:', deviceId);
+    const wasLocked = this.priorityDeviceId !== null;
     this.priorityDeviceId = deviceId;
 
     if (deviceId) {
@@ -149,7 +152,22 @@ export class AudioManager extends EventEmitter {
       }
       this.userOverrideId = null;
       await this.enforcePriority();
+
+      // Track priority mic minutes only for actual input devices (not speakers)
+      if (device?.isInput) {
+        // Start timer if not already running
+        if (!this.priorityMicTimer) {
+          this.startPriorityMicTimer();
+        }
+      } else {
+        // Not an input device - stop tracking
+        console.log('[AudioManager] Not tracking priority mic minutes - device is not an input device');
+        this.stopPriorityMicTimer();
+      }
     } else {
+      // Stop tracking priority mic minutes
+      this.stopPriorityMicTimer();
+
       // Clear favorite when explicitly selecting "None"
       this.favoriteDeviceName = null;
       if (this.onFavoriteChanged) {
@@ -164,6 +182,32 @@ export class AudioManager extends EventEmitter {
     }
 
     this.emitStateChanged();
+  }
+
+  /**
+   * Start the priority mic minute timer.
+   * Emits 'priorityMicMinute' event every 60 seconds while mic is locked.
+   */
+  private startPriorityMicTimer(): void {
+    if (this.priorityMicTimer) return; // Already running
+
+    console.log('[AudioManager] Starting priority mic minute timer');
+    this.priorityMicTimer = setInterval(() => {
+      if (this.priorityDeviceId) {
+        this.emit('priorityMicMinute');
+      }
+    }, 60 * 1000); // Every 60 seconds
+  }
+
+  /**
+   * Stop the priority mic minute timer.
+   */
+  private stopPriorityMicTimer(): void {
+    if (this.priorityMicTimer) {
+      console.log('[AudioManager] Stopping priority mic minute timer');
+      clearInterval(this.priorityMicTimer);
+      this.priorityMicTimer = null;
+    }
   }
 
   /**

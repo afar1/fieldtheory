@@ -13,6 +13,7 @@ import HotMicView from './HotMicView';
 import CommandsView from './CommandsView';
 import ReleaseNotesPopup from './ReleaseNotesPopup';
 import LibrarianView from './LibrarianView';
+import DebugConsole from './DebugConsole';
 import type { SketchViewHandle } from './SketchView';
 import { FEATURE_HOT_MIC_ENABLED, FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { rendererSoundManager } from '../utils/rendererSoundManager';
@@ -809,7 +810,11 @@ export default function ClipboardHistory() {
     // Check current view to avoid race condition where async query overwrites cleared state.
     window.socialAPI.hasUnreadFeedback?.().then(hasUnread => {
       const currentView = localStorage.getItem('fieldTheoryView');
-      if (hasUnread && currentView !== 'feedback') setHasUnreadFeedback(true);
+      console.log('[FeedbackDot] hasUnreadFeedback API returned:', hasUnread, 'currentView:', currentView);
+      if (hasUnread && currentView !== 'feedback') {
+        console.log('[FeedbackDot] Setting hasUnreadFeedback to TRUE');
+        setHasUnreadFeedback(true);
+      }
     });
     
     // Listen for incoming messages for Hot Mic and notifications.
@@ -817,7 +822,10 @@ export default function ClipboardHistory() {
       // Update unread indicators (skip if viewing that section).
       const currentView = localStorage.getItem('fieldTheoryView');
       if (message.type === 'feedback') {
-        if (currentView !== 'feedback') setHasUnreadFeedback(true);
+        if (currentView !== 'feedback') {
+          console.log('[FeedbackDot] New feedback message received - setting hasUnreadFeedback to TRUE');
+          setHasUnreadFeedback(true);
+        }
       } else {
         if (currentView !== 'hotmic') setHasUnreadDMs(true);
       }
@@ -1291,6 +1299,7 @@ export default function ClipboardHistory() {
     }
     // Clear unread indicator when entering feedback view.
     if (viewMode === 'feedback') {
+      console.log('[FeedbackDot] Entering feedback view - setting hasUnreadFeedback to FALSE');
       setHasUnreadFeedback(false);
     }
     // Clear unread indicator when entering hot mic view.
@@ -1391,11 +1400,15 @@ export default function ClipboardHistory() {
         // Auth is managed by main process (AuthManager) - we don't need to call clearSyncSession.
         // Main process handles all session clearing and will emit events via IPC.
         if (event === 'SIGNED_OUT') {
-          console.log(`[ClipboardHistory] User signed out - clearing unread indicators`);
+          console.log('[FeedbackDot] User signed out - setting hasUnreadFeedback to FALSE');
           // Clear unread indicators when signing out.
           setHasUnreadDMs(false);
           setHasUnreadFeedback(false);
           setHasUnreadShared(false);
+          // Also reset sharing unlock to hide Team button.
+          setSharingUnlocked(false);
+          // Switch to clipboard view if on a view that requires auth.
+          setViewMode('clipboard');
         } else {
           console.log(`[ClipboardHistory] Session became null after ${event} event`);
         }
@@ -1502,6 +1515,14 @@ export default function ClipboardHistory() {
       setLibrarianImmersive(false);
     });
 
+    // Listen for reset-to-clipboard event (triggered when window hides while in immersive mode)
+    // This ensures re-opening the window shows clipboard, not the artifact
+    const unsubscribeResetToClipboard = window.clipboardAPI.onResetToClipboardView?.(() => {
+      setLibrarianImmersive(false);
+      setViewMode('clipboard');
+      setPendingReadingPath(null);
+    });
+
     // Preload sounds for instant playback via Web Audio API.
     // This bypasses the main process entirely for minimal latency.
     rendererSoundManager.preload();
@@ -1578,6 +1599,7 @@ export default function ClipboardHistory() {
       unsubscribeShowHistory();
       unsubscribeShowSettings?.();
       unsubscribeCollapseImmersive?.();
+      unsubscribeResetToClipboard?.();
       unsubscribePlaySound?.();
       unsubscribeShowTodos?.();
       unsubscribeTargetAppInfo?.();
@@ -2077,18 +2099,25 @@ export default function ClipboardHistory() {
           const hoveredItem = hoveredImageId ? items.find(i => i.id === hoveredImageId) : null;
           const selectedRow = listRows[selectedIndex];
           const selectedItem = selectedRow?.type === 'item' ? selectedRow.item : null;
-          const imageItem = hoveredItem || (selectedItem?.imageData ? selectedItem : null);
-          
-          // Only open draw if there's an image
-          if (imageItem?.imageData) {
+          // Check for imageData OR thumbnailData (thumbnail indicates it's an image item)
+          const imageItem = hoveredItem || (selectedItem?.imageData || selectedItem?.thumbnailData ? selectedItem : null);
+
+          // Only open draw if there's an image item
+          if (imageItem && (imageItem.imageData || imageItem.thumbnailData)) {
             e.preventDefault();
-            setEditingSketchItem(null);
-            setSketchBackgroundImage({
-              dataUrl: `data:image/png;base64,${imageItem.imageData}`,
-              width: imageItem.imageWidth || 800,
-              height: imageItem.imageHeight || 600,
-            });
-            setViewMode('sketch');
+            // Load full image data if not already available
+            (async () => {
+              const fullImageData = await getFullImageData(imageItem.id, imageItem.imageData);
+              if (fullImageData) {
+                setEditingSketchItem(null);
+                setSketchBackgroundImage({
+                  dataUrl: `data:image/png;base64,${fullImageData}`,
+                  width: imageItem.imageWidth || 800,
+                  height: imageItem.imageHeight || 600,
+                });
+                setViewMode('sketch');
+              }
+            })();
           }
         }
         return;
@@ -2304,10 +2333,10 @@ export default function ClipboardHistory() {
       }
 
       if (key === 'Escape') {
-        // If in settings, close the window directly
+        // If in settings, return to clipboard view (like commands tab)
         if (showSettings) {
           e.preventDefault();
-          window.clipboardAPI?.closeWindow();
+          setShowSettings(false);
           return;
         }
         // If dragging, cancel the drag first
@@ -2923,7 +2952,7 @@ export default function ClipboardHistory() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, sharingUnlocked, setViewMode, updatePreviewForRow, loadFullImageForPreview, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, sharingUnlocked, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
   
@@ -3211,7 +3240,7 @@ export default function ClipboardHistory() {
         style={{
           height: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '52px',
           minHeight: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '52px',
-          overflow: 'hidden',
+          overflow: showMicDropdown ? 'visible' : 'hidden',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'flex-start',
@@ -3583,14 +3612,14 @@ export default function ClipboardHistory() {
               e.currentTarget.style.backgroundColor = 'transparent';
               e.currentTarget.style.borderColor = theme.border;
             }}
-            title="Create a new sketch"
+            title="Create a new drawing"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 19l7-7 3 3-7 7-3-3z" />
               <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
               <path d="M2 2l7.586 7.586" />
             </svg>
-            Sketch
+            Draw
           </button>
           
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -3866,12 +3895,20 @@ export default function ClipboardHistory() {
             marginBottom: '8px',
             position: 'relative',
           }}>
-          {/* Left: Cancel button - styled like Draw button */}
+          {/* Left: Back button */}
           <button
-            onClick={handleSketchClose}
+            onClick={() => {
+              if (sketchHasChanges) {
+                if (window.confirm('You have unsaved changes. Discard drawing?')) {
+                  handleSketchClose();
+                }
+              } else {
+                handleSketchClose();
+              }
+            }}
             tabIndex={0}
             style={{
-              padding: '6px 8px',
+              padding: '6px 12px',
               fontSize: '10px',
               fontWeight: 500,
               backgroundColor: 'transparent',
@@ -3894,7 +3931,7 @@ export default function ClipboardHistory() {
               e.currentTarget.style.borderColor = theme.border;
             }}
           >
-            cancel <KeyCap small>esc</KeyCap>
+            Back
           </button>
           
           {/* Center: Draw header */}
@@ -4140,7 +4177,7 @@ export default function ClipboardHistory() {
       ) : viewMode === 'feedback' ? (
         // Feedback view - rendered inline for authenticated users, sign-in prompt for others
         sessionInitialized && authSession?.user?.email ? (
-          <DMsView feedbackOnly={true} />
+          <DMsView feedbackOnly={true} onSwitchToClipboard={() => setViewMode('clipboard')} />
         ) : sessionInitialized ? (
           <div style={{
             flex: 1,
@@ -7180,7 +7217,7 @@ export default function ClipboardHistory() {
                       showFeedback('copied to clipboard');
                     }
                   }},
-                  { label: 'sketch', key: 'd', action: () => {
+                  { label: 'draw', key: 'd', action: () => {
                     setSketchBackgroundImage({
                       dataUrl: `data:image/png;base64,${preview.data}`,
                       width: preview.width || 800,
@@ -7475,6 +7512,9 @@ export default function ClipboardHistory() {
         isLatestMode={releaseNotesLatestMode}
       />
     )}
+
+    {/* Debug console sidebar - toggle with Cmd+Shift+D */}
+    <DebugConsole />
     </>
   );
 }

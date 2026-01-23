@@ -538,7 +538,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
-      // Escape: exit edit mode first, then fullscreen, then close window
+      // Escape: exit edit mode first, then close window (which will also reset view)
       if (e.key === 'Escape') {
         if (isEditing) {
           if (isDirty) {
@@ -546,10 +546,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
             if (!confirmed) return;
           }
           exitEditMode();
-        } else if (isFullScreen) {
-          setIsFullScreen(false);
         } else {
-          // Close the window instead of just switching views
+          // Close the window - if in fullscreen/immersive mode, the window hide
+          // handler will reset to clipboard view for next open
           window.clipboardAPI?.closeWindow();
         }
         return;

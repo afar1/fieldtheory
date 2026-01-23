@@ -543,6 +543,11 @@ function registerHotkeysAfterOnboarding(): void {
       } else {
         // Command launcher not visible → open it
         if (commandLauncherWindow) {
+          // If immersive view is open, dismiss it first to avoid z-order conflicts
+          if (clipboardHistoryWindow?.getImmersiveMode()) {
+            console.log('[Main] Dismissing immersive view before showing command launcher');
+            clipboardHistoryWindow.hide();
+          }
           await commandLauncherWindow.show();
           metricsManager?.recordCommandLauncherUse();
         }
@@ -931,6 +936,11 @@ function initClipboardHistoryWindow(): ClipboardHistoryWindow {
     window.getSoundManager().setNativeHelper(nativeHelper);
   }
 
+  // Wire up resume-after-close setting getter for immersive mode
+  window.setResumeAfterCloseGetter(() => {
+    return librarianManager?.isResumeAfterCloseEnabled() ?? false;
+  });
+
   // Set up callback to save bounds when window is moved/resized.
   window.setOnBoundsChanged(async (bounds) => {
     if (!preferencesManager) return;
@@ -978,16 +988,19 @@ function showSettingsInClipboardWindow(): void {
  * Called from app 'activate' event handler.
  */
 function showClipboardHistoryOnActivate(): void {
+  console.log('[Main] showClipboardHistoryOnActivate called');
 
   // Don't show clipboard history if onboarding is not complete.
   const prefs = preferencesManager?.get();
   if (!prefs?.onboardingComplete) {
+    console.log('[Main] showClipboardHistoryOnActivate: blocked (onboarding incomplete)');
     return;
   }
 
-  // Don't show clipboard history if the command launcher is visible.
-  // This prevents both windows from opening when user triggers Cmd+Shift+K.
-  if (commandLauncherWindow?.isVisible()) {
+  // Don't show clipboard history if the command launcher is visible OR showing.
+  // Using isShowingOrVisible() closes the TOCTTOU race window during async show().
+  if (commandLauncherWindow?.isShowingOrVisible()) {
+    console.log('[Main] showClipboardHistoryOnActivate: blocked (command launcher showing/visible)');
     return;
   }
 
@@ -995,7 +1008,15 @@ function showClipboardHistoryOnActivate(): void {
     clipboardHistoryWindow = initClipboardHistoryWindow();
   }
 
-  // Always show the clipboard window when app is activated (e.g., Dock icon click).
+  // If clipboard history is already visible (e.g., immersive mode), don't call show().
+  // Calling show() triggers moveTop() which would steal focus from other windows.
+  if (clipboardHistoryWindow.isVisible()) {
+    console.log('[Main] showClipboardHistoryOnActivate: blocked (clipboard already visible)');
+    return;
+  }
+
+  console.log('[Main] showClipboardHistoryOnActivate: showing clipboard window');
+  // Show the clipboard window when app is activated (e.g., Dock icon click).
   const boundsToUse = restoreClipboardHistoryBounds();
   clipboardHistoryWindow.show(boundsToUse);
 }
@@ -1227,6 +1248,50 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   // ===========================================================================
+  // Discovery Frequency API
+  // ===========================================================================
+
+  // Get discovery frequency
+  ipcMain.handle('librarian:getDiscoveryFrequency', (): string => {
+    return librarianManager?.getDiscoveryFrequency() ?? 'sometimes';
+  });
+
+  // Set discovery frequency
+  ipcMain.handle('librarian:setDiscoveryFrequency', (_event, frequency: string): boolean => {
+    if (librarianManager && (frequency === 'often' || frequency === 'sometimes' || frequency === 'rarely')) {
+      return librarianManager.setDiscoveryFrequency(frequency);
+    }
+    return false;
+  });
+
+  // ===========================================================================
+  // User Expertise API
+  // ===========================================================================
+
+  // Get user expertise context
+  ipcMain.handle('librarian:getUserExpertiseContext', (): string | undefined => {
+    return librarianManager?.getUserExpertiseContext();
+  });
+
+  // Set user expertise context
+  ipcMain.handle('librarian:setUserExpertiseContext', (_event, context: string | undefined): boolean => {
+    return librarianManager?.setUserExpertiseContext(context) ?? false;
+  });
+
+  // Get expertise insert mode (admin-only setting)
+  ipcMain.handle('librarian:getExpertiseInsertMode', (): string => {
+    return librarianManager?.getExpertiseInsertMode() ?? 'append';
+  });
+
+  // Set expertise insert mode (admin-only)
+  ipcMain.handle('librarian:setExpertiseInsertMode', (_event, mode: string): boolean => {
+    if (librarianManager && (mode === 'insert' || mode === 'append')) {
+      return librarianManager.setExpertiseInsertMode(mode);
+    }
+    return false;
+  });
+
+  // ===========================================================================
   // Legacy Settings API (kept for backward compatibility)
   // ===========================================================================
 
@@ -1335,6 +1400,16 @@ function setupLibrarianIPCHandlers(): void {
   // Set auto-show setting
   ipcMain.handle('librarian:setAutoShowEnabled', (_event, enabled: boolean): void => {
     librarianManager?.setAutoShowEnabled(enabled);
+  });
+
+  // Get resume after close setting
+  ipcMain.handle('librarian:getResumeAfterClose', (): boolean => {
+    return librarianManager?.isResumeAfterCloseEnabled() ?? false;
+  });
+
+  // Set resume after close setting
+  ipcMain.handle('librarian:setResumeAfterClose', (_event, enabled: boolean): void => {
+    librarianManager?.setResumeAfterClose(enabled);
   });
 
   // Get Claude config file path
@@ -1644,6 +1719,11 @@ function setupLibrarianIPCHandlers(): void {
   // Enable screenshot permission
   ipcMain.handle('claude:enableScreenshotPermission', (): boolean => {
     return librarianManager?.enableScreenshotPermission() ?? false;
+  });
+
+  // Get figures directory path for permissions
+  ipcMain.handle('claude:getFiguresPath', (): string => {
+    return path.join(app.getPath('userData'), 'figures');
   });
 
   // Get available permission profiles
@@ -3397,9 +3477,41 @@ function setupClipboardIPCHandlers(): void {
     }
     const result = await authManager.signOut();
 
-    // Reset cached tier to 'free' on logout so quotas show free limits.
-    if (!result.error && quotaManager) {
-      await quotaManager.setCachedTier('free');
+    if (!result.error) {
+      // Reset cached tier to 'free' on logout so quotas show free limits.
+      if (quotaManager) {
+        await quotaManager.setCachedTier('free');
+      }
+
+      // Reset onboarding state so user sees login screen on next open.
+      if (preferencesManager) {
+        await preferencesManager.save({
+          onboardingComplete: false,
+          onboardingStep: undefined,
+        });
+      }
+
+      // Unregister all hotkeys - they shouldn't work while signed out.
+      globalShortcut.unregisterAll();
+
+      // Refresh tray menu to show onboarding-only options.
+      if (trayManager) {
+        trayManager.refreshMenu();
+      }
+
+      // Notify all windows that session has ended.
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send('session-changed', null);
+          window.webContents.send('tier:changed', 'free');
+        }
+      });
+
+      // Hide clipboard history and show onboarding window.
+      clipboardHistoryWindow?.hide(true);
+      if (onboardingWindow) {
+        onboardingWindow.show(); // show() handles focus internally
+      }
     }
 
     return result;
@@ -3443,12 +3555,34 @@ function setupClipboardIPCHandlers(): void {
         await quotaManager.setCachedTier('free');
       }
 
+      // Reset onboarding state so user sees login screen on next open.
+      if (preferencesManager) {
+        await preferencesManager.save({
+          onboardingComplete: false,
+          onboardingStep: undefined,
+        });
+      }
+
+      // Unregister all hotkeys - they shouldn't work while signed out.
+      globalShortcut.unregisterAll();
+
+      // Refresh tray menu to show onboarding-only options.
+      if (trayManager) {
+        trayManager.refreshMenu();
+      }
+
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send('session-changed', null);
-          window.webContents.send('tier-changed', 'free');
+          window.webContents.send('tier:changed', 'free');
         }
       });
+
+      // Hide clipboard history and show onboarding window.
+      clipboardHistoryWindow?.hide(true);
+      if (onboardingWindow) {
+        onboardingWindow.show(); // show() handles focus internally
+      }
 
       return { error: null };
     } catch (err) {
@@ -3462,6 +3596,10 @@ function setupClipboardIPCHandlers(): void {
       return null;
     }
     return authManager.getSession();
+  });
+
+  ipcMain.handle('auth:isSuperAdmin', (): boolean => {
+    return authManager?.isSuperAdmin() ?? false;
   });
 
   // Open external URL in default browser (for Stripe checkout, etc).
@@ -3970,10 +4108,10 @@ function setupClipboardIPCHandlers(): void {
       
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
-          window.webContents.send('tier-changed', tier);
+          window.webContents.send('tier:changed', tier);
         }
       });
-      
+
       return { tier, error: null };
     } catch (err) {
       console.error('[Main] Error refreshing tier:', err);
@@ -5022,6 +5160,12 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   audioManager.on('stateChanged', () => {
     broadcastStateChanged();
   });
+
+  // Track priority mic minutes (time the mic is locked)
+  audioManager.on('priorityMicMinute', () => {
+    metricsManager?.recordPriorityMicMinute();
+  });
+
   await audioManager.init();
 
   trayManager = new TrayManager(audioManager, undefined, preferencesManager);
@@ -5539,25 +5683,13 @@ async function initTranscriberSystem(): Promise<void> {
   metricsManager = new MetricsManager(authManager);
   await metricsManager.init();
 
-  // Check if we have a valid session on startup.
-  // If not, ensure cached tier is 'free' (unless we have a pending refresh due to network).
+  // Trust cached tier until we get positive confirmation from server.
+  // Don't reset pro→free just because session isn't immediately valid.
+  // If user is offline, they can't use cost-incurring features anyway (API calls fail).
+  // Tier only changes when: (1) server confirms different tier, or (2) explicit sign-out.
   const existingSession = authManager.getSession();
-  const now = Math.floor(Date.now() / 1000);
-  const isSessionValid = existingSession && existingSession.expires_at &&
-    existingSession.expires_at > now;
-  const hasPendingRefresh = authManager.hasPendingRefreshDueToNetwork();
-
-  if (!isSessionValid && !hasPendingRefresh) {
-    // No valid session and no pending refresh - ensure cached tier is 'free'.
-    // This handles: expired refresh tokens, app crash without logout, corrupted session files.
-    // We DON'T reset if there's a pending refresh (network error but token may still be valid).
-    if (quotaManager && quotaManager.getCachedTier() === 'pro') {
-      console.log('[Main] No valid session but cached tier is pro, resetting to free');
-      await quotaManager.setCachedTier('free');
-    }
-  } else if (hasPendingRefresh) {
-    console.log('[Main] Session refresh pending due to network - preserving cached tier');
-  }
+  const cachedTier = quotaManager?.getCachedTier();
+  console.log('[Main] Startup: session=', existingSession?.user?.email ?? 'none', 'cachedTier=', cachedTier);
 
   // Forward todosChanged events to all renderer windows.
   mobileSync.on('todosChanged', (todos) => {

@@ -15,7 +15,11 @@
 
 import { app, BrowserWindow, screen, ipcMain } from 'electron';
 import path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import type { NativeHelper, FrontmostAppInfo } from './nativeHelper';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Represents a running application with its bundle ID and display name.
@@ -52,6 +56,10 @@ export class CommandLauncherWindow {
   // The app that was active before we showed the launcher.
   private previousApp: RunningApp | null = null;
 
+  // Track when show() is in progress (before window.show() is called).
+  // This closes the race window where isVisible() returns false during async setup.
+  private _isShowing: boolean = false;
+
   // Window dimensions - starts small, expands for results.
   private readonly WINDOW_WIDTH = 320;
   private readonly WINDOW_HEIGHT_COLLAPSED = 36;
@@ -84,6 +92,10 @@ export class CommandLauncherWindow {
    * even when switching between windows of the same app.
    */
   async show(): Promise<void> {
+    // Mark as showing BEFORE any async work to close the race window.
+    // This allows other code to check isShowingOrVisible() during the await.
+    this._isShowing = true;
+
     // If window exists but is destroyed, reset it.
     if (this.window && this.window.isDestroyed()) {
       this.window = null;
@@ -134,7 +146,9 @@ export class CommandLauncherWindow {
 
     console.log('[CommandLauncher] Showing window...');
     this.window!.show();
+    this.window!.moveTop(); // Ensure we're at top of window stack (above immersive clipboard)
     this.window!.focus();
+    this._isShowing = false; // Window is now visible, clear the showing flag
     console.log('[CommandLauncher] Window shown, isVisible:', this.window!.isVisible());
 
     // Tell renderer to reset state.
@@ -143,14 +157,42 @@ export class CommandLauncherWindow {
   
   /**
    * Hide the command launcher window.
-   * Calls app.hide() to restore focus to the previous app (Alfred behavior).
+   * Explicitly activates the previous app to restore focus.
+   * app.hide() doesn't work reliably when other Electron windows are visible (e.g., immersive mode).
    */
   hide(): void {
+    this._isShowing = false; // Clear showing flag on hide
     if (this.window && !this.window.isDestroyed()) {
       this.window.hide();
     }
-    // Hide entire app to restore focus to previous app
-    app.hide();
+
+    // Explicitly activate the previous app instead of hiding entire Electron app.
+    // This works even when clipboard history is visible in immersive mode.
+    if (this.previousApp?.bundleId) {
+      this.activatePreviousApp(this.previousApp.bundleId);
+    } else {
+      // Fallback to app.hide() if we don't know the previous app
+      app.hide();
+    }
+  }
+
+  /**
+   * Activate a specific app by bundle ID using AppleScript.
+   */
+  private async activatePreviousApp(bundleId: string): Promise<void> {
+    try {
+      if (bundleId.includes('"') || bundleId.includes("'")) {
+        console.error('[CommandLauncher] Invalid bundleId contains quotes:', bundleId);
+        app.hide();
+        return;
+      }
+      const script = `tell application id "${bundleId}"\n  activate\nend tell`;
+      await execFileAsync('osascript', ['-e', script]);
+      console.log(`[CommandLauncher] Activated previous app: ${bundleId}`);
+    } catch (error) {
+      console.error('[CommandLauncher] Failed to activate previous app:', error);
+      app.hide(); // Fallback
+    }
   }
   
   /**
@@ -159,7 +201,16 @@ export class CommandLauncherWindow {
   isVisible(): boolean {
     return this.window !== null && !this.window.isDestroyed() && this.window.isVisible();
   }
-  
+
+  /**
+   * Check if the command launcher is visible OR in the process of showing.
+   * This closes the TOCTTOU race window where isVisible() returns false
+   * during the async setup phase of show().
+   */
+  isShowingOrVisible(): boolean {
+    return this._isShowing || this.isVisible();
+  }
+
   /**
    * Get the app that was active before showing the launcher.
    */
@@ -193,13 +244,13 @@ export class CommandLauncherWindow {
     // Stay on top of everything.
     this.window.setAlwaysOnTop(true, 'screen-saver', 1);
     this.window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    
-    // Hide on blur (user clicked away).
+
+    // Hide on blur (clicking away).
     this.window.on('blur', () => {
-      console.log('[CommandLauncher] Window lost focus, hiding');
+      console.log('[CommandLauncher] Window blurred, hiding');
       this.hide();
     });
-    
+
     this.window.on('closed', () => {
       this.window = null;
     });

@@ -245,6 +245,7 @@ interface ClipboardAPI {
   onShowHistory: (callback: () => void) => () => void;
   onShowSettings?: (callback: () => void) => () => void;
   onCollapseImmersive?: (callback: () => void) => () => void;
+  onResetToClipboardView?: (callback: () => void) => () => void;
   onDialogPosition: (callback: (position: { left: number; top: number }) => void) => () => void;
   onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number; overlayWidth: number; overlayHeight: number }) => void) => () => void;
   onTargetAppInfo: (callback: (info: TargetAppInfo) => void) => () => void;
@@ -476,6 +477,7 @@ interface AuthAPI {
   verifyOtp: (email: string, token: string) => Promise<{ error: string | null; session: any | null }>;
   signOut: () => Promise<{ error: string | null }>;
   getSession: () => Promise<any | null>;
+  isSuperAdmin: () => Promise<boolean>;
   // Password authentication methods
   signUp?: (email: string, password: string) => Promise<{ error: string | null }>;
   signInWithPassword?: (email: string, password: string) => Promise<{ error: string | null; session: any | null }>;
@@ -931,6 +933,14 @@ interface LibrarianAPI {
   uninstallStateEnforcedHook: () => Promise<boolean>;
   isStateEnforcedHookInstalled: () => Promise<boolean>;
   getPendingJobCount: () => Promise<number>;
+  // Discovery Frequency API
+  getDiscoveryFrequency: () => Promise<string>;
+  setDiscoveryFrequency: (frequency: string) => Promise<boolean>;
+  // User Expertise API
+  getUserExpertiseContext: () => Promise<string | undefined>;
+  setUserExpertiseContext: (context: string | undefined) => Promise<boolean>;
+  getExpertiseInsertMode: () => Promise<string>;
+  setExpertiseInsertMode: (mode: string) => Promise<boolean>;
   // Legacy Settings API (deprecated)
   getAutoRunFrequency: () => Promise<string>;
   setAutoRunFrequency: (frequency: string) => Promise<boolean>;
@@ -942,6 +952,8 @@ interface LibrarianAPI {
   writeConfigFile: (filePath: string, content: string) => Promise<boolean>;
   getAutoShowEnabled: () => Promise<boolean>;
   setAutoShowEnabled: (enabled: boolean) => Promise<void>;
+  getResumeAfterClose: () => Promise<boolean>;
+  setResumeAfterClose: (enabled: boolean) => Promise<void>;
   getClaudeCodeStatus: () => Promise<'installed' | 'directory-only' | 'not-installed'>;
   getClaudeConfigPath: () => Promise<string>;
   resyncClaudeMd: () => Promise<boolean>;
@@ -1117,6 +1129,7 @@ declare global {
   interface ClaudeAPI {
     isScreenshotPermissionEnabled: () => Promise<boolean>;
     enableScreenshotPermission: () => Promise<boolean>;
+    getFiguresPath?: () => Promise<string>;
     getAvailableProfiles: () => Promise<PermissionProfile[]>;
     getPermissionStatus: () => Promise<PermissionStatus>;
     applyPermissionProfile: (profileId: string) => Promise<boolean>;
