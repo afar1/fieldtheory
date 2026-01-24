@@ -362,7 +362,7 @@ export class ClipboardHistoryWindow {
       visualEffectState: 'active',
       skipTaskbar: !showInDock,     // Show in Dock when showInDock is true.
       resizable: true,
-      minWidth: 750,   // Minimum to fit all components including recording UI.
+      minWidth: 600,   // Minimum window width.
       minHeight: 500,  // Ensures settings and controls remain visible.
       movable: true,
       focusable: true,
