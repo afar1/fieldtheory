@@ -555,14 +555,10 @@ export class ClipboardHistoryWindow {
     // Hide entire app to guarantee focus returns to previous app
     // This ensures the exact input field that was active gets focus back
     // Skip if other windows need to stay visible (e.g., recording overlay)
-    const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
     if (hideApp) {
-      // Hide dock icon only when showInDock is false
-      // (when showInDock is true, keep the dock icon visible for Cmd+Tab access)
-      if (process.platform === 'darwin' && !showInDock) {
+      if (process.platform === 'darwin') {
         app.dock.hide();
       }
-      // Always hide app to return focus to previous app
       app.hide();
     }
     this.previouslyFocusedWindow = null;
@@ -732,16 +728,8 @@ export class ClipboardHistoryWindow {
     this.isImmersiveMode = immersive;
     console.log(`[ClipboardHistoryWindow] Immersive mode: ${wasImmersive} → ${immersive}`);
 
-    // Toggle dock visibility based on immersive mode
-    if (process.platform === 'darwin') {
-      if (immersive) {
-        app.dock.show();
-      }
-      // When exiting immersive mode, don't hide dock here - let it stay visible
-      // until window actually hides. This avoids window reordering issues.
-      // The dock will be hidden in the hide() method when window is dismissed.
-      // If !immersive && !wasImmersive, do nothing - dock is already hidden
-    }
+    // Dock stays hidden - panel mode is the only mode now.
+    // Don't show dock when entering immersive mode.
 
     // Only adjust alwaysOnTop in panel mode (not showInDock mode)
     const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;

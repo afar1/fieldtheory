@@ -988,7 +988,7 @@ interface LibrarianAPI {
   discoverLibrarianDirs: () => Promise<string[]>;
   // Debug/testing
   resetAllCounters: () => Promise<boolean>;
-  getEditStatus: () => Promise<{ edits: number; threshold: number } | null>;
+  getEditStatus: () => Promise<{ edits: number; threshold: number; frequency: string } | null>;
   // Custom threshold
   getCustomThreshold: () => Promise<number | undefined>;
   setCustomThreshold: (threshold: number | undefined) => Promise<boolean>;
