@@ -18,7 +18,7 @@ type PermissionStatus = {
   screenRecording: boolean;
 };
 
-type ModelSize = 'small' | 'medium' | 'large';
+type ModelSize = 'small' | 'medium';
 
 interface ModelInfo {
   name: string;
@@ -30,11 +30,10 @@ interface ModelInfo {
 const MODELS: Record<ModelSize, ModelInfo> = {
   small: { name: 'Small', size: '466 MB', description: 'Faster, good for simple notes' },
   medium: { name: 'Medium', size: '1.4 GB', description: 'Best balance of speed and accuracy', recommended: true },
-  large: { name: 'Large', size: '2.9 GB', description: 'Highest accuracy, slower' },
 };
 
-// Model selection order (natural size order: small to large).
-const MODEL_ORDER: ModelSize[] = ['small', 'medium', 'large'];
+// Model selection order.
+const MODEL_ORDER: ModelSize[] = ['small', 'medium'];
 
 // Phase to step number mapping for persistence.
 const PHASE_TO_STEP: Record<OnboardingPhase, number> = {
@@ -1050,7 +1049,7 @@ export default function Onboarding() {
             }
           }
 
-          if (currentModel && ['small', 'medium', 'large'].includes(currentModel)) {
+          if (currentModel && ['small', 'medium'].includes(currentModel)) {
             setSelectedModel(currentModel as ModelSize);
           }
 

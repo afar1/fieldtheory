@@ -8,7 +8,7 @@ import https from 'https';
  * Available Whisper model sizes.
  * Larger models provide better accuracy but require more disk space and processing time.
  */
-export type ModelSize = 'small' | 'medium' | 'large';
+export type ModelSize = 'small' | 'medium';
 
 /**
  * Model metadata including name, URL, and expected size.
@@ -36,12 +36,6 @@ const MODELS: Record<ModelSize, ModelInfo> = {
     sizeBytes: 1420 * 1024 * 1024, // ~1.4GB
     description: 'Medium (1.4GB) - High accuracy',
   },
-  large: {
-    name: 'ggml-large-v3.bin',
-    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin',
-    sizeBytes: 2900 * 1024 * 1024, // ~2.9GB
-    description: 'Large (2.9GB) - Best accuracy (multilingual)',
-  },
 };
 
 /**
@@ -54,6 +48,7 @@ export class ModelManager {
   private downloadingModels: Set<ModelSize> = new Set();
   private statusCache: { status: Record<ModelSize, boolean>; timestamp: number } | null = null;
   private static STATUS_CACHE_TTL = 5000; // 5 second cache
+  private loggedModelStatus: Set<ModelSize> = new Set(); // Only log model status once
 
   constructor(selectedModel?: ModelSize) {
     const appDataPath = app.getPath('userData');
@@ -103,6 +98,7 @@ export class ModelManager {
    */
   invalidateCache(): void {
     this.statusCache = null;
+    this.loggedModelStatus.clear();  // Re-log status after changes
   }
 
   /**
@@ -117,7 +113,7 @@ export class ModelManager {
     }
 
     const status: Record<ModelSize, boolean> = {} as Record<ModelSize, boolean>;
-    const modelSizes: ModelSize[] = ['small', 'medium', 'large'];
+    const modelSizes: ModelSize[] = ['small', 'medium'];
 
     await Promise.all(
       modelSizes.map(async (size) => {
@@ -180,14 +176,22 @@ export class ModelManager {
         console.warn(`[ModelManager] Model ${size} too small: ${fileSizeMB.toFixed(2)}MB (min ${(minSize / 1024 / 1024).toFixed(0)}MB)`);
         return false;
       }
-      
-      console.log(`[ModelManager] Model ${size} found: ${fileSizeMB.toFixed(2)}MB at ${modelPath}`);
+
+      // Only log model found once per size
+      if (!this.loggedModelStatus.has(size)) {
+        console.log(`[ModelManager] Model ${size} found: ${fileSizeMB.toFixed(2)}MB at ${modelPath}`);
+        this.loggedModelStatus.add(size);
+      }
       return true;
     } catch (error: any) {
-      if (error.code === 'ENOENT') {
-        console.log(`[ModelManager] Model ${size} not found at: ${modelPath}`);
-      } else {
-        console.warn(`[ModelManager] Model ${size} check failed:`, error.message);
+      // Only log model not found once per size
+      if (!this.loggedModelStatus.has(size)) {
+        if (error.code === 'ENOENT') {
+          console.log(`[ModelManager] Model ${size} not found at: ${modelPath}`);
+        } else {
+          console.warn(`[ModelManager] Model ${size} check failed:`, error.message);
+        }
+        this.loggedModelStatus.add(size);
       }
       return false;
     }

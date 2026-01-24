@@ -480,6 +480,8 @@ interface TodoAPI {
 /**
  * Auth API for OTP authentication via main process (avoids CORS).
  */
+type AuthTestState = 'NEW_USER' | 'RETURNING_VALID' | 'RETURNING_EXPIRED' | 'OFFLINE_MODE' | 'TOKEN_REVOKED' | 'SIGNED_OUT';
+
 interface AuthAPI {
   requestOtp: (email: string) => Promise<{ error: string | null }>;
   verifyOtp: (email: string, token: string) => Promise<{ error: string | null; session: any | null }>;
@@ -493,6 +495,10 @@ interface AuthAPI {
   updatePassword?: (newPassword: string) => Promise<{ error: string | null }>;
   setSessionFromUrl?: (accessToken: string, refreshToken: string) => Promise<{ error: string | null; session: any | null }>;
   deleteAccount?: () => Promise<{ error: string | null }>;
+  // Auth state simulator (dev only)
+  simulateState?: (state: AuthTestState, options?: { tier?: 'free' | 'pro' }) => Promise<{ success: boolean; message: string }>;
+  resetSimulator?: () => Promise<{ success: boolean }>;
+  getSimulatorState?: () => Promise<{ offline: boolean; revoked: boolean }>;
 }
 
 /**

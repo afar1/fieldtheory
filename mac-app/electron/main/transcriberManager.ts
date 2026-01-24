@@ -218,7 +218,7 @@ export class TranscriberManager extends EventEmitter {
 
     // Set the selected model from preferences.
     // Validate that the model is still supported (base was removed in v0.1.29).
-    const validModels: ModelSize[] = ['small', 'medium', 'large'];
+    const validModels: ModelSize[] = ['small', 'medium'];
     let selectedModel = this.preferences.getPreference('selectedModel');
     if (!validModels.includes(selectedModel)) {
       console.log(`[TranscriberManager] Invalid model "${selectedModel}", migrating to "small"`);

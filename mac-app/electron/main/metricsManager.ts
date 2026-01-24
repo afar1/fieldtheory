@@ -310,11 +310,14 @@ export class MetricsManager {
     }
 
     try {
+      // Exclude items_added_to_context - column doesn't exist in DB yet
+      const { items_added_to_context, ...syncableMetrics } = this.storage.metrics;
+      
       const { error } = await supabase
         .from('user_metrics')
         .upsert({
           user_id: session.user.id,
-          ...this.storage.metrics,
+          ...syncableMetrics,
           updated_at: new Date().toISOString(),
         }, {
           onConflict: 'user_id',
