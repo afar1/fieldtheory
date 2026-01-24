@@ -582,6 +582,10 @@ export class TranscriberManager extends EventEmitter {
       // Also strip all-caps parenthetical sound descriptions like (MUMBLING), (MUSIC), (LAUGHING).
       // These are Whisper artifacts. Preserve normal parenthetical comments.
       cleanedText = cleanedText.replace(/\s*\([A-Z\s]+\)\s*/g, ' ').trim();
+
+      // Apply user-configured word substitutions.
+      // This corrects common transcription mistakes like "main" -> "main" for the branch.
+      cleanedText = this.applyWordSubstitutions(cleanedText);
       
       // If nothing remains after stripping brackets, treat as silence.
       if (cleanedText.length === 0) {
@@ -1530,6 +1534,49 @@ export class TranscriberManager extends EventEmitter {
     console.log(`[TranscriberManager] Added figure references (fallback): ${figureRefs}`);
     
     return `${text} ${figureRefs}`;
+  }
+
+  /**
+   * Apply word substitutions to transcription text.
+   * Replaces each "from" word with its "to" equivalent based on user preferences.
+   * Uses word boundaries to avoid partial matches.
+   */
+  private applyWordSubstitutions(text: string): string {
+    const substitutions = this.preferences.getPreference('wordSubstitutions') ?? [];
+    
+    if (substitutions.length === 0) {
+      return text;
+    }
+    
+    let result = text;
+    let totalReplacements = 0;
+    
+    for (const { from, to } of substitutions) {
+      if (!from || from === to) continue;
+      
+      // Use word boundaries to match whole words only (case-insensitive).
+      // This prevents "main" from matching "maintain" or "mainly".
+      const regex = new RegExp(`\\b${this.escapeRegex(from)}\\b`, 'gi');
+      const matches = result.match(regex);
+      
+      if (matches) {
+        result = result.replace(regex, to);
+        totalReplacements += matches.length;
+      }
+    }
+    
+    if (totalReplacements > 0) {
+      console.log(`[TranscriberManager] Applied ${totalReplacements} word substitution(s)`);
+    }
+    
+    return result;
+  }
+
+  /**
+   * Escape special regex characters in a string.
+   */
+  private escapeRegex(str: string): string {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   /**

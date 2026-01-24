@@ -1948,17 +1948,21 @@ export class ClipboardManager extends EventEmitter {
 
   /**
    * Cleanup old items based on retention policy.
+   * Note: Uses config.retentionDays as fallback. Prefer applyDataRetention()
+   * for user-configured retention settings.
    */
   private cleanupOldItems(): void {
     const { retentionDays, maxItems } = this.config;
 
-    // Delete items older than retention period
-    if (retentionDays) {
+    // Delete items older than retention period.
+    // This uses the config value, not the user preference.
+    // User preference is applied via applyDataRetention().
+    if (retentionDays && retentionDays > 0) {
       const cutoffTime = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
       this.db.prepare('DELETE FROM clipboard_items WHERE created_at < ?').run(cutoffTime);
     }
 
-    // Delete oldest items if over max count
+    // Delete oldest items if over max count.
     if (maxItems) {
       const count = this.db.prepare('SELECT COUNT(*) as count FROM clipboard_items').get() as { count: number };
       if (count.count > maxItems) {
@@ -1972,6 +1976,29 @@ export class ClipboardManager extends EventEmitter {
           )
         `).run(toDelete);
       }
+    }
+  }
+
+  /**
+   * Apply user-configured data retention setting.
+   * Deletes items older than the specified number of days.
+   * Called when user changes the setting and on app startup.
+   * @param days - Number of days to keep items. -1 means never delete.
+   */
+  applyDataRetention(days: number): void {
+    if (days === -1) {
+      // Never delete - no action needed.
+      console.log('[ClipboardManager] Data retention: never delete');
+      return;
+    }
+
+    const cutoffTime = Date.now() - days * 24 * 60 * 60 * 1000;
+    const result = this.db.prepare('DELETE FROM clipboard_items WHERE created_at < ?').run(cutoffTime);
+    
+    if (result.changes > 0) {
+      console.log(`[ClipboardManager] Data retention: deleted ${result.changes} items older than ${days} days`);
+    } else {
+      console.log(`[ClipboardManager] Data retention: no items older than ${days} days`);
     }
   }
 

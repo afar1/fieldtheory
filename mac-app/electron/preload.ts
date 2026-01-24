@@ -663,6 +663,14 @@ export interface ClipboardAPI {
   getTasksTabEnabled?: () => Promise<boolean>;
   setTasksTabEnabled?: (enabled: boolean) => Promise<boolean>;
   onTasksTabToggled?: (callback: (enabled: boolean) => void) => () => void;
+
+  // Word substitutions - correction pairs for transcription
+  getWordSubstitutions?: () => Promise<Array<{ from: string; to: string }>>;
+  setWordSubstitutions?: (substitutions: Array<{ from: string; to: string }>) => Promise<boolean>;
+
+  // Data retention - how long to keep clipboard history
+  getDataRetentionDays?: () => Promise<number>;
+  setDataRetentionDays?: (days: number) => Promise<boolean>;
 }
 
 export interface PermissionsAPI {
@@ -1355,6 +1363,24 @@ const clipboardAPI: ClipboardAPI = {
     return () => {
       ipcRenderer.removeListener('clipboard:tasksTabToggled', handler);
     };
+  },
+
+  // Word substitutions - correction pairs for transcription.
+  getWordSubstitutions: async (): Promise<Array<{ from: string; to: string }>> => {
+    return ipcRenderer.invoke('clipboard:getWordSubstitutions');
+  },
+
+  setWordSubstitutions: async (substitutions: Array<{ from: string; to: string }>): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:setWordSubstitutions', substitutions);
+  },
+
+  // Data retention - how long to keep clipboard history.
+  getDataRetentionDays: async (): Promise<number> => {
+    return ipcRenderer.invoke('clipboard:getDataRetentionDays');
+  },
+
+  setDataRetentionDays: async (days: number): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:setDataRetentionDays', days);
   },
 };
 
