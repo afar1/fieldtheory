@@ -211,6 +211,15 @@ export default function ClipboardHistory() {
   const [showSettings, setShowSettings] = useState(() => {
     return localStorage.getItem('fieldTheoryShowSettings') === 'true';
   });
+
+  // DEBUG: Window width overlay
+  const [debugWidth, setDebugWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const handleResize = () => setDebugWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     // If user started a transcription, always show Fields on next open.
     const shouldShowFields = localStorage.getItem('shouldShowFieldsOnOpen') === 'true';
@@ -3191,6 +3200,24 @@ export default function ClipboardHistory() {
           100% { transform: rotate(360deg); }
         }
       `}</style>
+
+      {/* DEBUG: Width overlay */}
+      <div style={{
+        position: 'fixed',
+        bottom: '8px',
+        right: '8px',
+        padding: '4px 8px',
+        backgroundColor: 'rgba(0,0,0,0.8)',
+        color: '#0f0',
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        borderRadius: '4px',
+        zIndex: 99999,
+        pointerEvents: 'none',
+      }}>
+        {debugWidth}px
+      </div>
+
       <div
         ref={dialogRef}
         style={{
@@ -3355,9 +3382,9 @@ export default function ClipboardHistory() {
                 <line x1="8" y1="23" x2="16" y2="23"/>
               </svg>
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {priorityDeviceId 
+                {priorityDeviceId
                   ? audioDevices.find(d => d.id === priorityDeviceId)?.name?.replace(/^(Built-in |MacBook )/, '') || 'Mic'
-                  : 'System'}
+                  : 'None'}
               </span>
               <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <polyline points="6 9 12 15 18 9"/>
@@ -3366,23 +3393,36 @@ export default function ClipboardHistory() {
             
             {/* Dropdown menu */}
             {showMicDropdown && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: '100%',
-                  right: 0,
-                  marginTop: '4px',
-                  backgroundColor: theme.isDark ? '#2a2a2a' : '#fff',
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '6px',
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                  zIndex: 200,
-                  minWidth: '180px',
-                  maxWidth: '240px',
-                  padding: '4px 0',
-                }}
-              >
-                {/* System Default option */}
+              <>
+                {/* Overlay to catch clicks outside dropdown */}
+                <div
+                  onClick={() => setShowMicDropdown(false)}
+                  style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    zIndex: 199,
+                  }}
+                />
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '100%',
+                    right: 0,
+                    marginTop: '4px',
+                    backgroundColor: theme.isDark ? '#2a2a2a' : '#fff',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '6px',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                    zIndex: 200,
+                    minWidth: '180px',
+                    maxWidth: '240px',
+                    padding: '4px 0',
+                  }}
+                >
+                {/* None option (no priority mic) */}
                 <button
                   onClick={() => {
                     window.audioAPI?.setPriorityDevice(null);
@@ -3403,7 +3443,7 @@ export default function ClipboardHistory() {
                   }}
                 >
                   {!priorityDeviceId && <span style={{ color: theme.accent }}>✓</span>}
-                  <span style={{ marginLeft: !priorityDeviceId ? 0 : '16px' }}>System Default</span>
+                  <span style={{ marginLeft: !priorityDeviceId ? 0 : '16px' }}>None</span>
                 </button>
                 
                 <div style={{ height: '1px', backgroundColor: theme.border, margin: '4px 0' }} />
@@ -3443,12 +3483,13 @@ export default function ClipboardHistory() {
                   </button>
                 ))}
               </div>
+              </>
             )}
           </div>
         )}
-        
+
       </div>
-      
+
       {/* View mode tabs - collapses in Librarian immersive mode */}
       {viewMode !== 'sketch' && (
         <div

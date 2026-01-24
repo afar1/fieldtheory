@@ -9,6 +9,14 @@ export default function App() {
     const saved = localStorage.getItem('darkMode');
     return saved === 'true';
   });
+
+  // DEBUG: Window width overlay
+  const [debugWidth, setDebugWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const handleResize = () => setDebugWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
   
   // Permissions state
   const [permissions, setPermissions] = useState<{ accessibilityGranted: boolean } | null>(null);
@@ -448,8 +456,25 @@ export default function App() {
 
   return (
     <>
+      {/* DEBUG: Width overlay */}
+      <div style={{
+        position: 'fixed',
+        bottom: '8px',
+        right: '8px',
+        padding: '4px 8px',
+        backgroundColor: 'rgba(0,0,0,0.8)',
+        color: '#0f0',
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        borderRadius: '4px',
+        zIndex: 99999,
+        pointerEvents: 'none',
+      }}>
+        {debugWidth}px
+      </div>
+
       <div style={styles.draggableRegion}></div>
-      <div 
+      <div
         style={{
           ...styles.root,
           backgroundColor: darkMode ? '#1a1a1a' : '#f5f5f5',
