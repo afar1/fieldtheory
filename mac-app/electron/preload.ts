@@ -1714,6 +1714,19 @@ const authAPI = {
 
   // Delete account permanently.
   deleteAccount: () => ipcRenderer.invoke('auth:deleteAccount'),
+
+  // Auth state simulator (dev only) - for testing different auth states
+  simulateState: (
+    state: 'NEW_USER' | 'RETURNING_VALID' | 'RETURNING_EXPIRED' | 'OFFLINE_MODE' | 'TOKEN_REVOKED' | 'SIGNED_OUT',
+    options?: { tier?: 'free' | 'pro' }
+  ): Promise<{ success: boolean; message: string }> =>
+    ipcRenderer.invoke('auth:simulateState', state, options),
+
+  resetSimulator: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('auth:resetSimulator'),
+
+  getSimulatorState: (): Promise<{ offline: boolean; revoked: boolean }> =>
+    ipcRenderer.invoke('auth:getSimulatorState'),
 };
 
 type AuthAPI = typeof authAPI;

@@ -538,6 +538,17 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
+      // Cmd+W - close window (same as red close button)
+      if (e.key === 'w' && e.metaKey) {
+        e.preventDefault();
+        if (isEditing && isDirty) {
+          const confirmed = window.confirm('You have unsaved changes. Discard them?');
+          if (!confirmed) return;
+        }
+        window.clipboardAPI?.closeWindow();
+        return;
+      }
+
       // Escape: exit edit mode first, then close window (which will also reset view)
       if (e.key === 'Escape') {
         if (isEditing) {

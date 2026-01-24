@@ -554,17 +554,15 @@ export class ClipboardHistoryWindow {
 
     // Hide entire app to guarantee focus returns to previous app
     // This ensures the exact input field that was active gets focus back
-    // Skip app.hide() if:
-    // - Other windows need to stay visible (e.g., recording overlay)
-    // - showInDock is true: just hide window, keep app in Dock/Cmd+Tab
-    //   (Swift's appBecameFrontmost will show window when user Cmd+Tabs back)
+    // Skip if other windows need to stay visible (e.g., recording overlay)
     const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
-    const willCallAppHide = hideApp && !showInDock;
-    if (willCallAppHide) {
-      // Also hide dock if it was shown during immersive mode
-      if (process.platform === 'darwin') {
+    if (hideApp) {
+      // Hide dock icon only when showInDock is false
+      // (when showInDock is true, keep the dock icon visible for Cmd+Tab access)
+      if (process.platform === 'darwin' && !showInDock) {
         app.dock.hide();
       }
+      // Always hide app to return focus to previous app
       app.hide();
     }
     this.previouslyFocusedWindow = null;

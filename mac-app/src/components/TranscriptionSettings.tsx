@@ -513,9 +513,7 @@ export default function TranscriptionSettings() {
               const sizeMB = (info.sizeBytes / 1024 / 1024).toFixed(0);
 
               const qualityHint = size === 'small' ? 'Good for quick tasks'
-                : size === 'medium' ? 'Balanced accuracy'
-                : size === 'large' ? 'Best accuracy'
-                : size === 'turbo' ? 'Fast + accurate'
+                : size === 'medium' ? 'Best accuracy'
                 : '';
 
               return (
