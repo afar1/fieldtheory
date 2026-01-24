@@ -153,16 +153,9 @@ export class AudioManager extends EventEmitter {
       this.userOverrideId = null;
       await this.enforcePriority();
 
-      // Track priority mic minutes only for actual input devices (not speakers)
-      if (device?.isInput) {
-        // Start timer if not already running
-        if (!this.priorityMicTimer) {
-          this.startPriorityMicTimer();
-        }
-      } else {
-        // Not an input device - stop tracking
-        console.log('[AudioManager] Not tracking priority mic minutes - device is not an input device');
-        this.stopPriorityMicTimer();
+      // Start tracking priority mic minutes if not already tracking
+      if (!wasLocked) {
+        this.startPriorityMicTimer();
       }
     } else {
       // Stop tracking priority mic minutes
