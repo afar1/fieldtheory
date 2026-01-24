@@ -210,10 +210,15 @@ export class LibrarianManager extends EventEmitter {
           watchedDirs: data.watchedDirs || defaults.watchedDirs,
           enabled: enabled ?? defaults.enabled,
           autoShowEnabled: data.autoShowEnabled ?? defaults.autoShowEnabled,
+          resumeAfterClose: data.resumeAfterClose,
           librarianSetupComplete: data.librarianSetupComplete,
           // State-enforced mode settings (the only mode now)
           stateEnforcedThreshold: data.stateEnforcedThreshold ?? defaults.stateEnforcedThreshold,
           stateEnforcedRuleContent: data.stateEnforcedRuleContent || undefined,
+          // Discovery and expertise settings
+          discoveryFrequency: data.discoveryFrequency,
+          userExpertiseContext: data.userExpertiseContext,
+          expertiseInsertMode: data.expertiseInsertMode,
         };
       }
     } catch (error) {
@@ -3125,7 +3130,7 @@ if __name__ == "__main__":
    * Get the current global status for debugging.
    * Returns prompt count and threshold from the global status file.
    */
-  getEditStatus(): { edits: number; threshold: number } | null {
+  getEditStatus(): { edits: number; threshold: number; frequency: string } | null {
     try {
       this.ensureGlobalStatusExists();
       const statusFile = this.getGlobalStatusPath();
@@ -3133,6 +3138,7 @@ if __name__ == "__main__":
       return {
         edits: status.promptsSinceReading || 0,
         threshold: status.nextThreshold || 5,
+        frequency: this.settings.discoveryFrequency || 'sometimes',
       };
     } catch (error) {
       console.error('[LibrarianManager] Failed to get edit status:', error);
