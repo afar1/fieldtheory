@@ -4022,6 +4022,51 @@ function setupClipboardIPCHandlers(): void {
   });
 
   // =========================================================================
+  // Word Substitutions - correction pairs for transcription
+  // =========================================================================
+
+  ipcMain.handle('clipboard:getWordSubstitutions', async () => {
+    if (!preferencesManager) {
+      return [];
+    }
+    return preferencesManager.getPreference('wordSubstitutions') ?? [];
+  });
+
+  ipcMain.handle('clipboard:setWordSubstitutions', async (_event, substitutions: Array<{ from: string; to: string }>) => {
+    if (!preferencesManager) {
+      return false;
+    }
+    await preferencesManager.save({ wordSubstitutions: substitutions });
+    console.log(`[Main] Word substitutions updated: ${substitutions.length} pairs`);
+    return true;
+  });
+
+  // =========================================================================
+  // Data Retention - how long to keep clipboard history
+  // =========================================================================
+
+  ipcMain.handle('clipboard:getDataRetentionDays', async () => {
+    if (!preferencesManager) {
+      return -1; // Default: never delete
+    }
+    return preferencesManager.getPreference('dataRetentionDays') ?? -1;
+  });
+
+  ipcMain.handle('clipboard:setDataRetentionDays', async (_event, days: number) => {
+    if (!preferencesManager) {
+      return false;
+    }
+    await preferencesManager.save({ dataRetentionDays: days });
+    console.log(`[Main] Data retention set to: ${days === -1 ? 'never' : days + ' days'}`);
+    
+    // Trigger immediate cleanup with new retention setting.
+    if (clipboardManager && days !== -1) {
+      clipboardManager.applyDataRetention(days);
+    }
+    return true;
+  });
+
+  // =========================================================================
   // Quota IPC Handlers - Local usage tracking
   // QuotaManager handles session checking internally via setSessionChecker().
   // =========================================================================
@@ -5307,6 +5352,13 @@ async function initTranscriberSystem(): Promise<void> {
     prefs.clipboardScreenshotHotkey,
     prefs.clipboardHistoryHotkey
   );
+
+  // Apply user-configured data retention on startup.
+  // This cleans up items older than the user's retention setting.
+  const retentionDays = prefs.dataRetentionDays ?? -1;
+  if (retentionDays !== -1) {
+    clipboardManager.applyDataRetention(retentionDays);
+  }
   
   // Load continuous context preferences
   // Continuous Context feature disabled for now

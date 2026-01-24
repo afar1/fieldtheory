@@ -243,6 +243,14 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   // Diagnostics modal visibility.
   const [showDiagnostics, setShowDiagnostics] = useState(false);
 
+  // Word substitutions for transcription correction.
+  const [wordSubstitutions, setWordSubstitutions] = useState<Array<{ from: string; to: string }>>([]);
+  const [newSubFrom, setNewSubFrom] = useState('');
+  const [newSubTo, setNewSubTo] = useState('');
+
+  // Data retention - how long to keep clipboard history.
+  const [dataRetentionDays, setDataRetentionDays] = useState<number>(-1);
+
   const styles = getStyles(theme);
 
   // Load system permissions on mount and when window gains focus
@@ -334,6 +342,16 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       // Load tasks tab enabled setting
       window.clipboardAPI.getTasksTabEnabled?.().then(enabled => {
         setTasksTabEnabled(enabled);
+      });
+
+      // Load word substitutions
+      window.clipboardAPI.getWordSubstitutions?.().then(subs => {
+        setWordSubstitutions(subs || []);
+      });
+
+      // Load data retention setting
+      window.clipboardAPI.getDataRetentionDays?.().then(days => {
+        setDataRetentionDays(days);
       });
       
       // Load show in dock setting
@@ -652,6 +670,52 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       }
     } catch (err) {
       console.error('Failed to toggle hide status labels:', err);
+    }
+  };
+
+  // Handler for adding a word substitution pair.
+  const handleAddWordSubstitution = async () => {
+    if (!window.clipboardAPI?.setWordSubstitutions || !newSubFrom.trim()) return;
+
+    const updated = [...wordSubstitutions, { from: newSubFrom.trim(), to: newSubTo.trim() }];
+    try {
+      const success = await window.clipboardAPI.setWordSubstitutions(updated);
+      if (success) {
+        setWordSubstitutions(updated);
+        setNewSubFrom('');
+        setNewSubTo('');
+      }
+    } catch (err) {
+      console.error('Failed to add word substitution:', err);
+    }
+  };
+
+  // Handler for removing a word substitution pair.
+  const handleRemoveWordSubstitution = async (index: number) => {
+    if (!window.clipboardAPI?.setWordSubstitutions) return;
+
+    const updated = wordSubstitutions.filter((_, i) => i !== index);
+    try {
+      const success = await window.clipboardAPI.setWordSubstitutions(updated);
+      if (success) {
+        setWordSubstitutions(updated);
+      }
+    } catch (err) {
+      console.error('Failed to remove word substitution:', err);
+    }
+  };
+
+  // Handler for changing data retention setting.
+  const handleDataRetentionChange = async (days: number) => {
+    if (!window.clipboardAPI?.setDataRetentionDays) return;
+
+    try {
+      const success = await window.clipboardAPI.setDataRetentionDays(days);
+      if (success) {
+        setDataRetentionDays(days);
+      }
+    } catch (err) {
+      console.error('Failed to change data retention:', err);
     }
   };
   
@@ -1542,6 +1606,37 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </div>
         </div>
       )}
+
+      {/* Data Retention Section */}
+      <div style={styles.section}>
+        <SectionHeader title="Data Retention" />
+        <p style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '12px' }}>
+          Automatically delete clipboard history older than the selected period.
+        </p>
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Delete after</span>
+          <select
+            value={dataRetentionDays}
+            onChange={(e) => handleDataRetentionChange(parseInt(e.target.value, 10))}
+            style={styles.select}
+          >
+            <option value={2}>2 days</option>
+            <option value={7}>7 days</option>
+            <option value={30}>30 days</option>
+            <option value={90}>3 months</option>
+            <option value={-1}>Never</option>
+          </select>
+        </div>
+        {dataRetentionDays !== -1 && (
+          <p style={{
+            fontSize: '11px',
+            color: theme.textSecondary,
+            marginTop: '8px',
+          }}>
+            Items older than {dataRetentionDays} days will be automatically deleted.
+          </p>
+        )}
+      </div>
         </>
       )}
 
@@ -2150,6 +2245,133 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       {/* Transcription Section */}
       <div style={styles.section}>
         <TranscriptionSettings />
+      </div>
+
+      {/* Word Substitutions Section */}
+      <div style={styles.section}>
+        <SectionHeader title="Word Corrections" />
+        <p style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '12px' }}>
+          Fix common transcription mistakes. Words on the left will be replaced with words on the right.
+        </p>
+
+        {/* Existing substitutions list */}
+        {wordSubstitutions.length > 0 && (
+          <div style={{
+            marginBottom: '12px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '6px',
+          }}>
+            {wordSubstitutions.map((sub, index) => (
+              <div
+                key={index}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '8px 12px',
+                  borderRadius: '6px',
+                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+                  border: `1px solid ${theme.border}`,
+                }}
+              >
+                <span style={{
+                  flex: 1,
+                  fontSize: '12px',
+                  color: theme.text,
+                  fontFamily: 'monospace',
+                }}>
+                  {sub.from}
+                </span>
+                <span style={{ color: theme.textSecondary, fontSize: '12px' }}>→</span>
+                <span style={{
+                  flex: 1,
+                  fontSize: '12px',
+                  color: theme.text,
+                  fontFamily: 'monospace',
+                }}>
+                  {sub.to || '(remove)'}
+                </span>
+                <button
+                  onClick={() => handleRemoveWordSubstitution(index)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: theme.textSecondary,
+                    cursor: 'pointer',
+                    padding: '4px',
+                    fontSize: '14px',
+                    lineHeight: 1,
+                  }}
+                  title="Remove"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Add new substitution form */}
+        <div style={{
+          display: 'flex',
+          gap: '8px',
+          alignItems: 'center',
+        }}>
+          <input
+            type="text"
+            value={newSubFrom}
+            onChange={(e) => setNewSubFrom(e.target.value)}
+            placeholder="Heard as..."
+            style={{
+              ...styles.input,
+              flex: 1,
+              minWidth: 0,
+              fontFamily: 'monospace',
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && newSubFrom.trim()) handleAddWordSubstitution();
+            }}
+          />
+          <span style={{ color: theme.textSecondary, fontSize: '12px' }}>→</span>
+          <input
+            type="text"
+            value={newSubTo}
+            onChange={(e) => setNewSubTo(e.target.value)}
+            placeholder="Change to..."
+            style={{
+              ...styles.input,
+              flex: 1,
+              minWidth: 0,
+              fontFamily: 'monospace',
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && newSubFrom.trim()) handleAddWordSubstitution();
+            }}
+          />
+          <button
+            onClick={handleAddWordSubstitution}
+            disabled={!newSubFrom.trim()}
+            style={{
+              ...styles.btn,
+              opacity: newSubFrom.trim() ? 1 : 0.5,
+              minWidth: '60px',
+            }}
+          >
+            Add
+          </button>
+        </div>
+
+        {wordSubstitutions.length === 0 && (
+          <p style={{
+            fontSize: '11px',
+            color: theme.textSecondary,
+            marginTop: '8px',
+            fontStyle: 'italic',
+          }}>
+            Example: "main" → "main" (for git branches)
+          </p>
+        )}
       </div>
       </>
       )}

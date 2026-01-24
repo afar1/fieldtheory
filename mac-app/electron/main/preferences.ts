@@ -194,6 +194,14 @@ interface Preferences {
   // Dark mode preference - synced across all windows.
   darkMode?: boolean;
 
+  // Word substitutions - pairs of [from, to] for transcription correction.
+  // Example: ["main", "main"] for correcting "main" state to "main" branch.
+  wordSubstitutions?: Array<{ from: string; to: string }>;
+
+  // Data retention - how long to keep clipboard history items.
+  // Values: 2, 7, 30, 90 (days) or -1 (never delete)
+  dataRetentionDays?: number;
+
   // Narration capability settings.
   // Local, offline text-to-speech for the Librarian.
   narrationPrefs?: {
@@ -252,6 +260,12 @@ const DEFAULT_PREFERENCES: Preferences = {
 
   // Dark mode - disabled by default (light mode).
   darkMode: false,
+
+  // Word substitutions - empty by default.
+  wordSubstitutions: [],
+
+  // Data retention - never delete by default.
+  dataRetentionDays: -1,
 };
 
 /**
