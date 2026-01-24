@@ -24,6 +24,7 @@ import { app } from 'electron';
 class FileStorage implements SupportedStorage {
   private storage: Map<string, string> = new Map();
   private filePath: string;
+  private hasLoggedEmptySkip: boolean = false;  // Only log "skipping save" once
 
   constructor(userDataPath: string) {
     this.filePath = path.join(userDataPath, 'supabase-session.json');
@@ -87,9 +88,13 @@ class FileStorage implements SupportedStorage {
       // Never overwrite with empty data - preserves session for re-auth later.
       // Only explicit clearStorage() should write an empty file.
       if (Object.keys(obj).length === 0) {
-        console.log('[FileStorage] Skipping save - refusing to write empty session');
+        if (!this.hasLoggedEmptySkip) {
+          console.log('[FileStorage] Skipping save - refusing to write empty session');
+          this.hasLoggedEmptySkip = true;
+        }
         return;
       }
+      this.hasLoggedEmptySkip = false;  // Reset flag when we have real data to save
 
       fs.writeFileSync(this.filePath, JSON.stringify(obj, null, 2));
     } catch (err) {
@@ -140,9 +145,12 @@ export class AuthManager extends EventEmitter {
   private session: Session | null = null;
   private fileStorage: FileStorage | null = null;
   private lastFailedToken: string | null = null;
-  private refreshRetryTimeout: NodeJS.Timeout | null = null;
   private hasEverAuthenticated: boolean = false;
-  private pendingRefreshDueToNetwork: boolean = false;
+
+  // Debug flags for testing auth states
+  private simulateOffline: boolean = false;
+  private simulateRevoked: boolean = false;
+  private lastEmittedUserId: string | null = null;  // Dedupe sessionChanged events
 
   constructor() {
     super();
@@ -167,13 +175,39 @@ export class AuthManager extends EventEmitter {
     this.supabase = createClient(url, anonKey, {
       auth: {
         storage: this.fileStorage,
-        autoRefreshToken: false,
+        autoRefreshToken: true,  // SDK handles token refresh automatically
         persistSession: true,
         detectSessionInUrl: false,
       },
       realtime: {
         transport: WebSocket as any,
       },
+    });
+
+    // Listen to SDK auth state changes (handles auto-refresh events)
+    // Dedupe: only emit if user actually changed (SDK fires multiple events on init)
+    this.supabase.auth.onAuthStateChange((event, session) => {
+      const newUserId = session?.user?.id ?? null;
+      const isNewSession = newUserId !== this.lastEmittedUserId;
+      
+      console.log('[AuthManager] Auth state changed:', event, isNewSession ? '(new)' : '(duplicate)');
+      
+      if (event === 'TOKEN_REFRESHED') {
+        console.log('[AuthManager] Token refreshed by SDK');
+        this.session = session;
+        // Don't emit sessionChanged for token refresh - session user didn't change
+      } else if (event === 'SIGNED_OUT') {
+        if (this.lastEmittedUserId !== null) {
+          this.session = null;
+          this.lastEmittedUserId = null;
+          this.emit('sessionChanged', null);
+        }
+      } else if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && isNewSession) {
+        // Only emit if this is actually a new user session
+        this.session = session;
+        this.lastEmittedUserId = newUserId;
+        this.emit('sessionChanged', session);
+      }
     });
 
     console.log('[AuthManager] Initialized with session storage:', userDataPath);
@@ -196,6 +230,7 @@ export class AuthManager extends EventEmitter {
       if (data?.session) {
         this.session = data.session;
         this.hasEverAuthenticated = true;
+        this.lastEmittedUserId = data.session.user?.id ?? null;
         console.log('[AuthManager] Restored session for user:', data.session.user?.email);
         this.emit('sessionChanged', this.session);
         return;
@@ -229,16 +264,15 @@ export class AuthManager extends EventEmitter {
             console.log('[AuthManager] Refresh token revoked, user must re-login');
             // Don't emit sessionChanged here - they weren't logged in yet
           } else {
-            console.log('[AuthManager] Network error during restore, will retry later:', refreshError.message);
-            this.pendingRefreshDueToNetwork = true;
-            this.scheduleRefreshRetry();
+            // Network error - SDK will retry automatically via autoRefreshToken
+            console.log('[AuthManager] Network error during restore, SDK will retry:', refreshError.message);
           }
           return;
         }
 
         if (refreshData.session) {
           this.session = refreshData.session;
-          this.pendingRefreshDueToNetwork = false;
+          this.lastEmittedUserId = refreshData.session.user?.id ?? null;
           console.log('[AuthManager] Manual refresh succeeded for user:', refreshData.session.user?.email);
           this.emit('sessionChanged', this.session);
           return;
@@ -282,9 +316,8 @@ export class AuthManager extends EventEmitter {
           return;
         }
 
-        // Network error - don't clear session, schedule retry
-        console.log('[AuthManager] Network error during refresh, will retry:', refreshResult.error?.message);
-        this.scheduleRefreshRetry();
+        // Network error - SDK will retry automatically via autoRefreshToken
+        console.log('[AuthManager] Network error during refresh, SDK will retry:', refreshResult.error?.message);
         return;
       }
 
@@ -300,75 +333,6 @@ export class AuthManager extends EventEmitter {
   }
 
   /**
-   * Refresh session if needed (called when app becomes active).
-   */
-  async refreshSessionIfNeeded(force: boolean = false): Promise<boolean> {
-    if (!this.supabase || !this.session) {
-      return false;
-    }
-
-    const expiresAt = this.session.expires_at;
-    if (!expiresAt) return !!this.session;
-
-    const now = Math.floor(Date.now() / 1000);
-    const fiveMinutes = 5 * 60;
-    const isExpired = expiresAt <= now;
-    const isExpiringSoon = expiresAt - now < fiveMinutes;
-
-    if (force || isExpired || isExpiringSoon) {
-      const reason = isExpired ? 'expired' : (force ? 'forced' : 'expiring soon');
-      console.log(`[AuthManager] Token ${reason}, refreshing session...`);
-
-      // Pass refresh_token explicitly - don't rely on Supabase's internal state
-      // which can become desynced from our session copy
-      const { data, error } = await this.supabase.auth.refreshSession({
-        refresh_token: this.session.refresh_token,
-      });
-
-      if (error || !data.session) {
-        if (this.isTokenRevoked(error)) {
-          console.log('[AuthManager] Token revoked during refresh');
-          this.clearSession();
-          return false;
-        }
-
-        // Network error - keep session, schedule retry
-        console.log('[AuthManager] Network error during refresh, keeping session:', error?.message);
-        this.scheduleRefreshRetry();
-        return true; // Return true because we still have a session
-      }
-
-      this.session = data.session;
-      this.pendingRefreshDueToNetwork = false;
-      console.log('[AuthManager] Session refreshed, new expiry:',
-        new Date((data.session.expires_at || 0) * 1000).toISOString());
-      this.emit('sessionChanged', this.session);
-      return true;
-    }
-
-    return true;
-  }
-
-  /**
-   * Schedule a retry for refresh after network error.
-   */
-  private scheduleRefreshRetry(): void {
-    if (this.refreshRetryTimeout) return; // Already scheduled
-
-    console.log('[AuthManager] Scheduling refresh retry in 30 seconds...');
-    this.refreshRetryTimeout = setTimeout(async () => {
-      this.refreshRetryTimeout = null;
-      if (this.session) {
-        await this.refreshSessionIfNeeded(true);
-      } else {
-        // No session yet (startup case) - try restoring again
-        console.log('[AuthManager] Retrying session restore...');
-        await this.restoreSessionFromStorage();
-      }
-    }, 30000);
-  }
-
-  /**
    * Check if error indicates token was revoked (not a network error).
    */
   private isTokenRevoked(error: { message?: string; code?: string } | null): boolean {
@@ -380,7 +344,9 @@ export class AuthManager extends EventEmitter {
            msg.includes('token expired') ||
            msg.includes('token revoked') ||
            msg.includes('refresh token not found') ||
-           code === 'invalid_grant';
+           msg.includes('already used') ||
+           code === 'invalid_grant' ||
+           code === 'refresh_token_already_used';
   }
 
   /**
@@ -446,15 +412,6 @@ export class AuthManager extends EventEmitter {
    */
   hasEverBeenAuthenticated(): boolean {
     return this.hasEverAuthenticated;
-  }
-
-  /**
-   * Check if there's a pending refresh due to network error.
-   * When true, we have a stored refresh token that may still be valid but
-   * couldn't be verified due to network issues.
-   */
-  hasPendingRefreshDueToNetwork(): boolean {
-    return this.pendingRefreshDueToNetwork;
   }
 
   // ===========================================================================
@@ -774,12 +731,130 @@ export class AuthManager extends EventEmitter {
    * Cleanup resources.
    */
   destroy(): void {
-    if (this.refreshRetryTimeout) {
-      clearTimeout(this.refreshRetryTimeout);
-      this.refreshRetryTimeout = null;
-    }
     this.session = null;
     this.removeAllListeners();
     console.log('[AuthManager] Destroyed');
+  }
+
+  // ===========================================================================
+  // Auth State Simulator (for testing)
+  // ===========================================================================
+
+  /**
+   * Simulate different auth states for testing.
+   * Only available in development mode.
+   */
+  async simulateState(
+    state: 'NEW_USER' | 'RETURNING_VALID' | 'RETURNING_EXPIRED' | 'OFFLINE_MODE' | 'TOKEN_REVOKED' | 'SIGNED_OUT',
+    options?: { tier?: 'free' | 'pro' }
+  ): Promise<{ success: boolean; message: string }> {
+    if (process.env.NODE_ENV !== 'development') {
+      return { success: false, message: 'Simulator only available in development mode' };
+    }
+
+    console.log(`[AuthManager] Simulating state: ${state}`, options || '');
+
+    switch (state) {
+      case 'NEW_USER':
+      case 'SIGNED_OUT':
+        // Clear everything - user must re-authenticate
+        this.fileStorage?.clearStorage();
+        this.session = null;
+        this.hasEverAuthenticated = state === 'SIGNED_OUT'; // SIGNED_OUT = was authenticated before
+        this.simulateOffline = false;
+        this.simulateRevoked = false;
+        this.emit('sessionChanged', null);
+        return { success: true, message: `Simulated ${state}: session cleared, showing onboarding` };
+
+      case 'RETURNING_VALID':
+        // Create a mock valid session
+        const mockSession = this.createMockSession(options?.tier || 'free', false);
+        this.session = mockSession;
+        this.hasEverAuthenticated = true;
+        this.simulateOffline = false;
+        this.simulateRevoked = false;
+        this.emit('sessionChanged', mockSession);
+        return { success: true, message: `Simulated RETURNING_VALID: ${options?.tier || 'free'} user with valid session` };
+
+      case 'RETURNING_EXPIRED':
+        // Create an expired session - SDK will attempt refresh
+        const expiredSession = this.createMockSession(options?.tier || 'free', true);
+        this.session = null; // Expired = no in-memory session
+        this.hasEverAuthenticated = true;
+        this.simulateOffline = false;
+        this.simulateRevoked = false;
+        // Store in file storage so SDK can attempt refresh
+        if (this.fileStorage) {
+          const sessionKey = 'sb-session';
+          await this.fileStorage.setItem(sessionKey, JSON.stringify(expiredSession));
+        }
+        this.emit('sessionChanged', null);
+        return { success: true, message: 'Simulated RETURNING_EXPIRED: session expired, SDK will attempt refresh' };
+
+      case 'OFFLINE_MODE':
+        // Keep current session, simulate network failure
+        this.simulateOffline = true;
+        this.simulateRevoked = false;
+        return { success: true, message: 'Simulated OFFLINE_MODE: network requests will fail' };
+
+      case 'TOKEN_REVOKED':
+        // Next refresh will return revoked error
+        this.simulateRevoked = true;
+        this.simulateOffline = false;
+        return { success: true, message: 'Simulated TOKEN_REVOKED: next refresh will fail with revoked error' };
+
+      default:
+        return { success: false, message: `Unknown state: ${state}` };
+    }
+  }
+
+  /**
+   * Reset simulator flags.
+   */
+  resetSimulator(): void {
+    this.simulateOffline = false;
+    this.simulateRevoked = false;
+    console.log('[AuthManager] Simulator reset');
+  }
+
+  /**
+   * Create a mock session for testing.
+   */
+  private createMockSession(tier: 'free' | 'pro', expired: boolean): Session {
+    const now = Math.floor(Date.now() / 1000);
+    const expiresAt = expired ? now - 3600 : now + 3600; // -1hr or +1hr
+
+    return {
+      access_token: `mock_access_token_${Date.now()}`,
+      refresh_token: `mock_refresh_token_${Date.now()}`,
+      expires_at: expiresAt,
+      expires_in: expired ? -3600 : 3600,
+      token_type: 'bearer',
+      user: {
+        id: 'mock-user-id-12345',
+        aud: 'authenticated',
+        role: 'authenticated',
+        email: `test-${tier}@example.com`,
+        email_confirmed_at: new Date().toISOString(),
+        phone: '',
+        confirmed_at: new Date().toISOString(),
+        last_sign_in_at: new Date().toISOString(),
+        app_metadata: { provider: 'email', providers: ['email'] },
+        user_metadata: { tier },
+        identities: [],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    };
+  }
+
+  /**
+   * Get current simulator state (for debugging).
+   */
+  getSimulatorState(): { offline: boolean; revoked: boolean } {
+    return {
+      offline: this.simulateOffline,
+      revoked: this.simulateRevoked,
+    };
   }
 }

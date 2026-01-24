@@ -223,7 +223,7 @@ export class DiagnosticsCollector {
     const downloadingModels = this.modelManager.getDownloadingModels();
 
     const models: ModelDiagnostics[] = [];
-    for (const size of ['small', 'medium', 'large'] as ModelSize[]) {
+    for (const size of ['small', 'medium'] as ModelSize[]) {
       const modelPath = this.modelManager.getModelPathForSize(size);
       let fileSizeMB: number | null = null;
       let downloaded = false;

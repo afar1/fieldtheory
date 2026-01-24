@@ -162,6 +162,15 @@ let metricsManager: MetricsManager | null = null;
 // Track pending update state so windows can query it when they open.
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
 
+// Consolidated user state logging - single line showing auth/tier state
+function logUserState(context: string) {
+  const session = authManager?.getSession();
+  const tier = quotaManager?.getCachedTier() ?? 'unknown';
+  const email = session?.user?.email ?? 'none';
+  const hasSession = !!session;
+  console.log(`[UserState] ${context}: authenticated=${hasSession} tier=${tier} email=${email}`);
+}
+
 // Track pending reading to show in immersive mode. Renderer polls for this.
 let pendingImmersiveReading: string | null = null;
 
@@ -2060,7 +2069,7 @@ function setupTranscribeIPCHandlers(): void {
     
     const downloadFn = modelSize 
       ? (onProgress?: (downloaded: number, total: number) => void) => 
-          modelManager.downloadModelForSize(modelSize as 'small' | 'medium' | 'large', onProgress)
+          modelManager.downloadModelForSize(modelSize as 'small' | 'medium', onProgress)
       : (onProgress?: (downloaded: number, total: number) => void) => 
           modelManager.downloadModel(onProgress);
     
@@ -2082,7 +2091,7 @@ function setupTranscribeIPCHandlers(): void {
       throw new Error('TranscriberManager not initialized');
     }
     const modelManager = transcriberManager.getModelManager();
-    const validSizes: ModelSize[] = ['small', 'medium', 'large'];
+    const validSizes: ModelSize[] = ['small', 'medium'];
     if (!validSizes.includes(modelSize as ModelSize)) {
       throw new Error(`Invalid model size: ${modelSize}`);
     }
@@ -2124,7 +2133,7 @@ function setupTranscribeIPCHandlers(): void {
     if (!transcriberManager) {
       throw new Error('TranscriberManager not initialized');
     }
-    const validSizes: ModelSize[] = ['small', 'medium', 'large'];
+    const validSizes: ModelSize[] = ['small', 'medium'];
     if (!validSizes.includes(modelSize as ModelSize)) {
       throw new Error(`Invalid model size: ${modelSize}`);
     }
@@ -5739,9 +5748,12 @@ async function initTranscriberSystem(): Promise<void> {
   // Don't reset pro→free just because session isn't immediately valid.
   // If user is offline, they can't use cost-incurring features anyway (API calls fail).
   // Tier only changes when: (1) server confirms different tier, or (2) explicit sign-out.
-  const existingSession = authManager.getSession();
-  const cachedTier = quotaManager?.getCachedTier();
-  console.log('[Main] Startup: session=', existingSession?.user?.email ?? 'none', 'cachedTier=', cachedTier);
+  logUserState('startup');
+
+  // Listen for auth state changes
+  authManager.on('sessionChanged', (session) => {
+    logUserState(session ? 'login' : 'logout');
+  });
 
   // Forward todosChanged events to all renderer windows.
   mobileSync.on('todosChanged', (todos) => {
@@ -5787,7 +5799,9 @@ async function initTranscriberSystem(): Promise<void> {
     if (quotaManager) {
       await quotaManager.setCachedTier(tier);
     }
-    
+
+    logUserState('tierChanged');
+
     // Broadcast to all windows so UI updates immediately.
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
@@ -6471,13 +6485,8 @@ if (!gotTheLock) {
       // We no longer create the old main/settings window - the app is a background app
       // that primarily operates through the clipboard history window and tray.
       showClipboardHistoryOnActivate();
-
-      // Refresh session if tokens are expiring soon to prevent auto-logout
-      if (authManager) {
-        authManager.refreshSessionIfNeeded().catch((err: Error) => {
-          console.error('[Main] Failed to refresh session on activate:', err);
-        });
-      }
+      logUserState('activate');
+      // Note: SDK handles token refresh automatically via autoRefreshToken
     });
   });
 
