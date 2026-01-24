@@ -325,6 +325,14 @@ interface ClipboardAPI {
   // Launch at login
   getLaunchAtLogin?: () => Promise<boolean>;
   setLaunchAtLogin?: (enabled: boolean) => Promise<{ success: boolean; enabled: boolean }>;
+
+  // Word substitutions - correction pairs for transcription
+  getWordSubstitutions?: () => Promise<Array<{ from: string; to: string }>>;
+  setWordSubstitutions?: (substitutions: Array<{ from: string; to: string }>) => Promise<boolean>;
+
+  // Data retention - how long to keep clipboard history
+  getDataRetentionDays?: () => Promise<number>;
+  setDataRetentionDays?: (days: number) => Promise<boolean>;
 }
 
 /**
