@@ -10,12 +10,16 @@ export default function App() {
     return saved === 'true';
   });
 
-  // DEBUG: Window width overlay
-  const [debugWidth, setDebugWidth] = useState(window.innerWidth);
+  // DEBUG: Librarian count overlay
+  const [librarianStatus, setLibrarianStatus] = useState<{ edits: number; threshold: number; frequency: string } | null>(null);
   useEffect(() => {
-    const handleResize = () => setDebugWidth(window.innerWidth);
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    const fetchStatus = async () => {
+      const status = await window.librarianAPI?.getEditStatus();
+      setLibrarianStatus(status ?? null);
+    };
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 2000); // Poll every 2 seconds
+    return () => clearInterval(interval);
   }, []);
   
   // Permissions state
@@ -456,22 +460,24 @@ export default function App() {
 
   return (
     <>
-      {/* DEBUG: Width overlay */}
-      <div style={{
-        position: 'fixed',
-        bottom: '8px',
-        right: '8px',
-        padding: '4px 8px',
-        backgroundColor: 'rgba(0,0,0,0.8)',
-        color: '#0f0',
-        fontFamily: 'monospace',
-        fontSize: '12px',
-        borderRadius: '4px',
-        zIndex: 99999,
-        pointerEvents: 'none',
-      }}>
-        {debugWidth}px
-      </div>
+      {/* DEBUG: Librarian count overlay */}
+      {librarianStatus && (
+        <div style={{
+          position: 'fixed',
+          bottom: '8px',
+          right: '8px',
+          padding: '4px 8px',
+          backgroundColor: 'rgba(0,0,0,0.8)',
+          color: librarianStatus.edits >= librarianStatus.threshold ? '#f59e0b' : '#0f0',
+          fontFamily: 'monospace',
+          fontSize: '12px',
+          borderRadius: '4px',
+          zIndex: 99999,
+          pointerEvents: 'none',
+        }}>
+          count: {librarianStatus.edits} ({librarianStatus.frequency})
+        </div>
+      )}
 
       <div style={styles.draggableRegion}></div>
       <div
