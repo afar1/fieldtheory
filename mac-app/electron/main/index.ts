@@ -692,7 +692,7 @@ function createWindow(): void {
     height: savedState?.height || defaultHeight,
     x: savedState?.x,
     y: savedState?.y,
-    minWidth: 500,  // Settings panel doesn't need to be too wide
+    minWidth: 600,  // Minimum window width
     minHeight: 400, // More compact for settings
     backgroundColor: '#f5f5f5',
     titleBarStyle: 'hiddenInset', // Modern macOS style with traffic lights in content.
