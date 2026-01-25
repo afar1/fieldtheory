@@ -1,6 +1,7 @@
 import { BrowserWindow, screen, app, ipcMain } from 'electron';
 import { EventEmitter } from 'events';
 import path from 'path';
+import { MESSAGES } from './messages';
 
 /**
  * Status states for the cursor indicator.
@@ -390,7 +391,7 @@ export class CursorStatusManager extends EventEmitter {
    * @deprecated Use showCriticalMessage() instead for consistency
    */
   showNoTargetError(message?: string): void {
-    this.showCriticalMessage(message || 'No target input field');
+    this.showCriticalMessage(message || MESSAGES.critical.noTargetInputField);
   }
   
   /**

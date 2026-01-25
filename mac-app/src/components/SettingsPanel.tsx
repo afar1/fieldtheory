@@ -99,11 +99,18 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     localStorage.setItem('fieldTheorySettingsSection', selectedSection);
   }, [selectedSection]);
 
-  // Keyboard navigation for settings sections (up/down arrows)
+  // Keyboard navigation for settings sections (up/down arrows, Escape to close)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Don't intercept if user is typing in an input
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      // Escape closes the window (same as other tabs)
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        window.clipboardAPI?.closeWindow();
         return;
       }
 
@@ -182,18 +189,13 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   // Callsign state
   const [callsign, setCallsign] = useState<string | null>(null);
 
+  // Full name editing state
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState('');
+  const [savingName, setSavingName] = useState(false);
+
   // Superadmin state - for scenario testing panel access
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
-
-  // API key state - for Engineer feature (Anthropic API)
-  const [hasApiKey, setHasApiKey] = useState(false);
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
-  const [apiKeySaving, setApiKeySaving] = useState(false);
-  const [maskedApiKey, setMaskedApiKey] = useState<string | null>(null);
-  const [detectedProvider, setDetectedProvider] = useState<string>('unknown');
-  const [apiKeyTesting, setApiKeyTesting] = useState(false);
-  const [apiKeyTestResult, setApiKeyTestResult] = useState<{ success: boolean; error?: string } | null>(null);
 
   // Auto-improve transcripts state
   const [autoImprove, setAutoImprove] = useState(false);
@@ -298,12 +300,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         }
       });
       
-      // Load API key info (status, masked key, provider)
-      window.clipboardAPI.getApiKeyInfo?.().then(info => {
-        setHasApiKey(info.hasKey);
-        setMaskedApiKey(info.maskedKey);
-        setDetectedProvider(info.provider);
-      });
 
       // Load auto-improve settings
       window.transcribeAPI?.getAutoImprove?.().then(enabled => {
@@ -472,73 +468,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     };
   }, []);
   
-  // Handler for saving API key
-  const handleSaveApiKey = async () => {
-    if (!window.clipboardAPI?.setApiKey || !apiKeyInput.trim()) return;
-
-    setApiKeySaving(true);
-    setApiKeyError(null);
-    setApiKeyTestResult(null);
-
-    try {
-      const result = await window.clipboardAPI.setApiKey(apiKeyInput.trim());
-      if (result.success) {
-        setHasApiKey(true);
-        setApiKeyInput('');
-        // Refresh API key info to get masked key and provider
-        const info = await window.clipboardAPI.getApiKeyInfo?.();
-        if (info) {
-          setMaskedApiKey(info.maskedKey);
-          setDetectedProvider(info.provider);
-        }
-      } else {
-        setApiKeyError(result.error || 'Failed to save API key');
-      }
-    } catch (err) {
-      setApiKeyError(err instanceof Error ? err.message : 'Failed to save API key');
-    } finally {
-      setApiKeySaving(false);
-    }
-  };
-
-  // Handler for clearing API key
-  const handleClearApiKey = async () => {
-    if (!window.clipboardAPI?.clearApiKey) return;
-
-    try {
-      const result = await window.clipboardAPI.clearApiKey();
-      if (result.success) {
-        setHasApiKey(false);
-        setApiKeyInput('');
-        setMaskedApiKey(null);
-        setDetectedProvider('unknown');
-        setApiKeyTestResult(null);
-      }
-    } catch (err) {
-      console.error('Failed to clear API key:', err);
-    }
-  };
-
-  // Handler for testing API key connection
-  const handleTestApiKey = async () => {
-    if (!window.clipboardAPI?.testApiKey) return;
-
-    setApiKeyTesting(true);
-    setApiKeyTestResult(null);
-
-    try {
-      const result = await window.clipboardAPI.testApiKey();
-      setApiKeyTestResult(result);
-    } catch (err) {
-      setApiKeyTestResult({
-        success: false,
-        error: err instanceof Error ? err.message : 'Connection test failed'
-      });
-    } finally {
-      setApiKeyTesting(false);
-    }
-  };
-
   // Handler for toggling auto-improve
   const handleAutoImproveChange = async (enabled: boolean) => {
     if (!window.transcribeAPI?.setAutoImprove) return;
@@ -1804,92 +1733,12 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                 </div>
               </div>
 
-              {/* API Mode - show API key input */}
+              {/* Cloud Mode - uses server-side API */}
               {!useLocalLLM && (
                 <div style={{ marginTop: '8px' }}>
-                  {hasApiKey ? (
-                    <>
-                      <div style={styles.row}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <span style={{
-                            ...styles.statusDot,
-                            backgroundColor: apiKeyTestResult?.success ? theme.success : (apiKeyTestResult?.success === false ? theme.error : '#9ca3af'),
-                          }} />
-                          <span style={{ fontSize: '12px', color: theme.textSecondary }}>{maskedApiKey || '•••••••'}</span>
-                          {detectedProvider !== 'unknown' && (
-                            <span style={{
-                              padding: '2px 6px',
-                              borderRadius: '4px',
-                              fontSize: '10px',
-                              fontWeight: 600,
-                              backgroundColor: theme.accent,
-                              color: '#fff',
-                              textTransform: 'capitalize' as const,
-                            }}>
-                              {detectedProvider}
-                            </span>
-                          )}
-                        </div>
-                        <div style={styles.rowControls}>
-                          <button
-                            onClick={handleTestApiKey}
-                            disabled={apiKeyTesting}
-                            style={styles.linkBtn}
-                          >
-                            {apiKeyTesting ? 'Testing...' : 'Test'}
-                          </button>
-                          <button
-                            onClick={handleClearApiKey}
-                            style={{ ...styles.linkBtn, color: theme.error }}
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      </div>
-                      {apiKeyTestResult && (
-                        <p style={{
-                          fontSize: '12px',
-                          color: apiKeyTestResult.success ? theme.success : theme.error,
-                          margin: '4px 0 0 16px',
-                        }}>
-                          {apiKeyTestResult.success ? 'Connected' : apiKeyTestResult.error}
-                        </p>
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <input
-                          type="password"
-                          value={apiKeyInput}
-                          onChange={(e) => setApiKeyInput(e.target.value)}
-                          placeholder="Paste API key"
-                          style={{
-                            ...styles.input,
-                            flex: 1,
-                            minWidth: 0,
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleSaveApiKey();
-                          }}
-                        />
-                        <button
-                          onClick={handleSaveApiKey}
-                          disabled={apiKeySaving || !apiKeyInput.trim()}
-                          style={{
-                            ...styles.btn,
-                            backgroundColor: apiKeyInput.trim() ? theme.accent : undefined,
-                            color: apiKeyInput.trim() ? '#fff' : undefined,
-                            border: apiKeyInput.trim() ? 'none' : undefined,
-                            opacity: apiKeySaving || !apiKeyInput.trim() ? 0.5 : 1,
-                          }}
-                        >
-                          {apiKeySaving ? '...' : 'Save'}
-                        </button>
-                      </div>
-                      {apiKeyError && <p style={styles.error}>{apiKeyError}</p>}
-                    </>
-                  )}
+                  <p style={{ fontSize: '12px', color: theme.textSecondary, margin: 0 }}>
+                    Uses cloud-based AI for best results. Requires sign-in.
+                  </p>
                   {/* Fallback note */}
                   {Object.values(localLLMStatus).some(Boolean) && (
                     <p style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '8px' }}>
@@ -1981,67 +1830,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </>
         )}
 
-        {/* Auto-Improve Usage Stats - always visible */}
-        <div style={{ marginTop: '16px', paddingTop: '12px', borderTop: `1px solid ${theme.border}` }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-            <span style={{
-              fontSize: '11px',
-              fontWeight: 600,
-              color: theme.textSecondary,
-              textTransform: 'uppercase' as const,
-              letterSpacing: '0.08em',
-              whiteSpace: 'nowrap' as const,
-            }}>Usage</span>
-            <div style={{ flex: 1, height: '1px', backgroundColor: theme.border }} />
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-              <span style={{ fontSize: '12px', color: theme.textSecondary }}>Words improved</span>
-              <span style={{ fontSize: '12px', color: theme.text, fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
-                {autoImproveStats.wordsImproved.toLocaleString()}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-              <span style={{ fontSize: '12px', color: theme.textSecondary }}>API calls</span>
-              <span style={{ fontSize: '12px', color: theme.text, fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
-                {autoImproveStats.apiCalls.toLocaleString()}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-              <span style={{ fontSize: '12px', color: theme.textSecondary }}>Input tokens</span>
-              <span style={{ fontSize: '12px', color: theme.text, fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
-                {autoImproveStats.inputTokens.toLocaleString()}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-              <span style={{ fontSize: '12px', color: theme.textSecondary }}>Output tokens</span>
-              <span style={{ fontSize: '12px', color: theme.text, fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
-                {autoImproveStats.outputTokens.toLocaleString()}
-              </span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-              <span style={{ fontSize: '12px', color: theme.textSecondary }}>Est. cost</span>
-              <span style={{ fontSize: '12px', color: theme.text, fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
-                ${((autoImproveStats.inputTokens * 0.003 + autoImproveStats.outputTokens * 0.015) / 1000).toFixed(4)}
-              </span>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
-            <button
-              onClick={handleResetAutoImproveStats}
-              disabled={isResettingStats || autoImproveStats.apiCalls === 0}
-              style={{
-                ...styles.linkBtn,
-                color: theme.textSecondary,
-                opacity: isResettingStats || autoImproveStats.apiCalls === 0 ? 0.5 : 1,
-              }}
-            >
-              {isResettingStats ? 'Resetting...' : 'Reset Stats'}
-            </button>
-          </div>
-        </div>
       </div>
         );
       })()}
@@ -2445,18 +2233,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             
             {session ? (
               <>
-                {/* User info row with sign out - name + email stacked */}
+                {/* Email row with sign out */}
                 <div style={styles.row}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                    <span style={styles.rowValue}>
-                      {userFullName || userEmail}
-                    </span>
-                    {userFullName && userEmail && (
-                      <span style={{ fontSize: '12px', color: theme.textSecondary }}>
-                        {userEmail}
-                      </span>
-                    )}
-                  </div>
+                  <span style={styles.rowValue}>{userEmail}</span>
                   <button
                     onClick={handleSignOut}
                     disabled={authLoading}
@@ -2464,6 +2243,96 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                   >
                     {authLoading ? '...' : 'Sign out'}
                   </button>
+                </div>
+
+                {/* Editable name row */}
+                <div style={styles.row}>
+                  <span style={styles.rowLabel}>Name</span>
+                  {editingName ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <input
+                        type="text"
+                        value={nameInput}
+                        onChange={(e) => setNameInput(e.target.value)}
+                        placeholder="Full name"
+                        disabled={savingName}
+                        autoFocus
+                        style={{
+                          padding: '4px 8px',
+                          fontSize: '13px',
+                          border: `1px solid ${theme.border}`,
+                          borderRadius: '4px',
+                          backgroundColor: theme.bg,
+                          color: theme.text,
+                          width: '150px',
+                        }}
+                        onKeyDown={async (e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            setSavingName(true);
+                            try {
+                              await window.authAPI?.updateFullName?.(nameInput.trim());
+                              // Refresh session to get updated user data
+                              const newSession = await window.authAPI?.getSession?.();
+                              if (newSession) setSession(newSession);
+                            } catch (err) {
+                              console.error('Failed to save name:', err);
+                            } finally {
+                              setSavingName(false);
+                              setEditingName(false);
+                            }
+                          } else if (e.key === 'Escape') {
+                            setEditingName(false);
+                            setNameInput(userFullName || '');
+                          }
+                        }}
+                      />
+                      <button
+                        onClick={async () => {
+                          setSavingName(true);
+                          try {
+                            await window.authAPI?.updateFullName?.(nameInput.trim());
+                            const newSession = await window.authAPI?.getSession?.();
+                            if (newSession) setSession(newSession);
+                          } catch (err) {
+                            console.error('Failed to save name:', err);
+                          } finally {
+                            setSavingName(false);
+                            setEditingName(false);
+                          }
+                        }}
+                        disabled={savingName}
+                        style={styles.linkBtn}
+                      >
+                        {savingName ? '...' : 'Save'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEditingName(false);
+                          setNameInput(userFullName || '');
+                        }}
+                        disabled={savingName}
+                        style={{ ...styles.linkBtn, color: theme.textSecondary }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ ...styles.rowValue, color: userFullName ? theme.text : theme.textSecondary }}>
+                        {userFullName || 'Not set'}
+                      </span>
+                      <button
+                        onClick={() => {
+                          setNameInput(userFullName || '');
+                          setEditingName(true);
+                        }}
+                        style={styles.linkBtn}
+                      >
+                        {userFullName ? 'Edit' : 'Add'}
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Callsign row */}
@@ -2510,10 +2379,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                             );
                           }}
                           style={{
-                            ...styles.btn,
-                            backgroundColor: theme.accent,
-                            color: '#fff',
-                            border: 'none',
+                            ...styles.linkBtn,
+                            color: theme.accent,
+                            fontWeight: 500,
                           }}
                         >
                           Upgrade
@@ -2822,8 +2690,8 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         onSendAsFeedback={onNavigateToFeedback}
       />
 
-      {/* Delete Account button - absolute bottom right, aligned with content */}
-      {session && (
+      {/* Delete Account button - only show in account section */}
+      {session && selectedSection === 'account' && (
         <button
           onClick={() => setShowDeleteModal(true)}
           onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.color = theme.error; }}

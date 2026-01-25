@@ -20,6 +20,7 @@ import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
 import { EventEmitter } from 'events';
+import { UserDataManager } from './userDataManager';
 
 /**
  * Settings stored in JSON file.
@@ -92,6 +93,7 @@ export class CommandsManager extends EventEmitter {
   private settingsPath: string;
   private commands: Map<string, PortableCommand> = new Map();
   private watchers: Map<string, AbortController> = new Map();
+  private userDataManager: UserDataManager | null = null;
 
   // Legacy single directory support (for migration)
   private directoryPath: string | null = null;
@@ -100,12 +102,64 @@ export class CommandsManager extends EventEmitter {
   constructor() {
     super();
 
-    // Settings file path
+    // Settings file path (legacy - will be updated when user logs in)
     const userDataPath = app.getPath('userData');
     this.settingsPath = path.join(userDataPath, 'commands-settings.json');
 
     // Load settings
     this.loadSettings();
+  }
+
+  /**
+   * Set the UserDataManager for per-user paths.
+   */
+  setUserDataManager(manager: UserDataManager): void {
+    this.userDataManager = manager;
+  }
+
+  /**
+   * Update the settings path for the current user.
+   */
+  private updateSettingsPath(): void {
+    if (this.userDataManager?.isLoggedIn()) {
+      this.settingsPath = this.userDataManager.getUserDataPath('commands-settings.json');
+      console.log('[CommandsManager] Using user-specific path:', this.settingsPath);
+    }
+  }
+
+  /**
+   * Reinitialize for the current user. Call after setUserDataManager.
+   */
+  async reinitializeForUser(): Promise<void> {
+    // Stop existing watchers
+    for (const abort of this.watchers.values()) {
+      abort.abort();
+    }
+    this.watchers.clear();
+    this.commands.clear();
+
+    // Update path and reload
+    this.updateSettingsPath();
+    this.loadSettings();
+
+    // Rescan all directories
+    await this.initialize();
+
+    console.log('[CommandsManager] Reinitialized for user');
+  }
+
+  /**
+   * Clear state on logout.
+   */
+  onUserLoggedOut(): void {
+    console.log('[CommandsManager] User logged out, clearing state');
+
+    // Stop watchers
+    for (const abort of this.watchers.values()) {
+      abort.abort();
+    }
+    this.watchers.clear();
+    this.commands.clear();
   }
 
   /**
@@ -134,6 +188,12 @@ export class CommandsManager extends EventEmitter {
    */
   private saveSettings(): void {
     try {
+      // Ensure directory exists
+      const dir = path.dirname(this.settingsPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+
       fs.writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2));
     } catch (error) {
       console.error('[CommandsManager] Error saving settings:', error);

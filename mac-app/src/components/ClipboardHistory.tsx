@@ -608,7 +608,7 @@ export default function ClipboardHistory() {
   });
   
   // Quota usage for free users (priority mic, auto-stacking, text improve).
-  const [quotaUsage, setQuotaUsage] = useState<{ priorityMic: string; autoStack: string; textImprove: string } | null>(null);
+  const [quotaUsage, setQuotaUsage] = useState<{ priorityMic: string; autoStack: string; textImprove: string; verbalCommands: string } | null>(null);
   const [cachedTier, setCachedTier] = useState<'free' | 'pro'>('free');
   const [quotaPercentUsed, setQuotaPercentUsed] = useState(0); // Max percentage of either quota
   const [usageHovered, setUsageHovered] = useState(false);
@@ -6341,7 +6341,7 @@ export default function ClipboardHistory() {
           {/* Plan info - always show for logged in users */}
           {authSession && cachedTier === 'pro' ? (
                 <>
-                  <span style={{ fontWeight: 500 }}>Pro Plan:</span>
+                  <span style={{ fontWeight: 500 }}>Pro:</span>
                   {statItems.length > 0 ? (
                     <>
                       <span
@@ -6365,28 +6365,18 @@ export default function ClipboardHistory() {
                   )}
                 </>
               ) : authSession && quotaUsage ? (
-                // Basic Plan: show quotas with info icon and upgrade option
+                // Basic Plan: show quotas with upgrade on footer hover
                 <div
-                  onMouseEnter={() => setUsageHovered(true)}
-                  onMouseLeave={() => setUsageHovered(false)}
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px', position: 'relative' }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}
+                  title="Resets monthly"
                 >
-                  {/* Info icon with tooltip on hover - left of Usage */}
-                  <span
-                    style={{
-                      opacity: 0.4,
-                      fontSize: '10px',
-                      cursor: 'help',
-                    }}
-                    title="Resets monthly on the 1st"
-                  >
-                    ⓘ
-                  </span>
                   <span>{quotaUsage.autoStack}</span>
                   <span style={{ opacity: 0.4 }}>·</span>
                   <span>{quotaUsage.textImprove}</span>
-                  {/* Upgrade link - only show when quota >= 50% used */}
-                  {quotaPercentUsed >= 50 && (
+                  <span style={{ opacity: 0.4 }}>·</span>
+                  <span>{quotaUsage.verbalCommands}</span>
+                  {/* Upgrade link - show when footer is hovered */}
+                  {headerHovered && (
                     <>
                       <span style={{ opacity: 0.4 }}>·</span>
                       <span
