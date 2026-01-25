@@ -335,24 +335,9 @@ export default function ClipboardHistory() {
   const [screenRecordingGranted, setScreenRecordingGranted] = useState(true);
   const [hideScreenRecordingBanner, setHideScreenRecordingBanner] = useState(true);
   
-  // Improve feature - track loading state and result per stack
-  const [improvingStackId, setImprovingStackId] = useState<string | null>(null);
-  const [improveResult, setImproveResult] = useState<{
-    stackId: string;
-    refinedPrompt: string;
-  } | null>(null);
-  const [improvedIds, setImprovedIds] = useState<Set<string>>(new Set());
-  const [showImproveResult, setShowImproveResult] = useState<string | null>(null);
-  
   // Track which items/stacks the user wants to view as original (toggle from improved).
   // Items in this set show original content even if improved content is available.
   const [viewOriginalIds, setViewOriginalIds] = useState<Set<string>>(new Set());
-  
-  // Confirmation modal for re-improving already improved content.
-  const [confirmReimproveModal, setConfirmReimproveModal] = useState<{
-    itemId: string;
-    type: 'original' | 'improved'; // Which content will be sent for improvement
-  } | null>(null);
   
   // Hover states for UI interactions
   const [hoveredImageId, setHoveredImageId] = useState<number | null>(null);
@@ -1356,9 +1341,11 @@ export default function ClipboardHistory() {
 
     // Initialize auth session from both Supabase client AND main process.
     // This handles the case where main process has a valid session but Supabase client doesn't.
+    // Note: supabase is guaranteed non-null here due to the guard above.
+    const client = supabase;
     const initializeSession = async () => {
       // First check Supabase client's localStorage.
-      const { data: { session: clientSession } } = await supabase.auth.getSession();
+      const { data: { session: clientSession } } = await client.auth.getSession();
 
       // Then check if main process has a session (MobileSync).
       const mainProcessSession = await window.authAPI?.getSession?.();
@@ -1367,7 +1354,7 @@ export default function ClipboardHistory() {
       if (mainProcessSession && !clientSession) {
         console.log('[ClipboardHistory] Restoring session from main process to Supabase client');
         try {
-          const { data, error } = await supabase.auth.setSession({
+          const { data, error } = await client.auth.setSession({
             access_token: mainProcessSession.access_token,
             refresh_token: mainProcessSession.refresh_token,
           });
@@ -1399,7 +1386,7 @@ export default function ClipboardHistory() {
     initializeSession();
 
     // Listen for auth state changes.
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = client.auth.onAuthStateChange((event, session) => {
       // Log auth event to help debug unexpected sign-outs.
       // Events: INITIAL_SESSION, SIGNED_IN, SIGNED_OUT, TOKEN_REFRESHED, USER_UPDATED
       console.log(`[ClipboardHistory] Auth event: ${event}, session: ${session ? 'present' : 'null'}`);
@@ -2635,23 +2622,13 @@ export default function ClipboardHistory() {
           // Check what type of row is selected
           const selectedRow = listRows[selectedIndex];
           if (selectedRow?.type === 'stack') {
-            // If there's an improved version, paste that instead
-            if (improveResult?.stackId === selectedRow.stack.stackId) {
-              window.clipboardAPI?.pasteText?.(improveResult.refinedPrompt, pasteBundleId);
-            } else {
-              // Paste all items in the stack
-              const itemIds = selectedRow.items.map(i => i.id);
-              window.clipboardAPI?.pasteStack(itemIds, pasteBundleId);
-            }
+            // Paste all items in the stack
+            const itemIds = selectedRow.items.map(i => i.id);
+            window.clipboardAPI?.pasteStack(itemIds, pasteBundleId);
             window.clipboardAPI?.closeWindow();
           } else if (selectedRow?.type === 'item') {
-            // If there's an improved version, paste that instead
-            if (improveResult?.stackId === `item-${selectedRow.item.id}`) {
-              window.clipboardAPI?.pasteText?.(improveResult.refinedPrompt, pasteBundleId);
-            } else {
-              // Paste single item to target app
-              window.clipboardAPI?.pasteItem(selectedRow.item.id, pasteBundleId);
-            }
+            // Paste single item to target app
+            window.clipboardAPI?.pasteItem(selectedRow.item.id, pasteBundleId);
             window.clipboardAPI?.closeWindow();
           }
         }
@@ -3076,12 +3053,7 @@ export default function ClipboardHistory() {
         return;
       }
       
-      // If there's an improved version, paste that instead
-      if (improveResult?.stackId === `item-${item.id}`) {
-        window.clipboardAPI?.pasteText?.(improveResult.refinedPrompt, pasteBundleId);
-      } else {
-        window.clipboardAPI?.pasteItem(item.id, pasteBundleId);
-      }
+      window.clipboardAPI?.pasteItem(item.id, pasteBundleId);
       window.clipboardAPI?.closeWindow();
     }
   };
@@ -4729,16 +4701,10 @@ export default function ClipboardHistory() {
                         ? (targetAppInfo.targetApp?.bundleId ?? targetAppInfo.previousApp?.bundleId)
                         : targetAppInfo.previousApp?.bundleId;
                       
-                      // If there's an improved version, paste that instead
-                      if (improveResult?.stackId === stack.stackId) {
-                        window.clipboardAPI?.pasteText?.(improveResult.refinedPrompt, pasteBundleId);
-                        window.clipboardAPI?.closeWindow();
-                      } else {
-                        // Paste all items in the stack
-                        const itemIds = stackItems.map(i => i.id);
-                        window.clipboardAPI?.pasteStack(itemIds, pasteBundleId);
-                        window.clipboardAPI?.closeWindow();
-                      }
+                      // Paste all items in the stack
+                      const itemIds = stackItems.map(i => i.id);
+                      window.clipboardAPI?.pasteStack(itemIds, pasteBundleId);
+                      window.clipboardAPI?.closeWindow();
                     }}
                     style={{
                       padding: '10px 16px 6px 16px',
@@ -4871,13 +4837,10 @@ export default function ClipboardHistory() {
                         </div>
                       )}
 
-                      {/* Combined text - show improved if available and expanded */}
+                      {/* Combined text */}
                       {combinedText && (() => {
                         // Use smart truncation to show beginning and end of text.
-                        const displayText = expanded && improveResult?.stackId === stack.stackId 
-                          ? improveResult.refinedPrompt 
-                          : combinedText;
-                        const truncated = smartTruncateText(displayText, 8, containerWidth);
+                        const truncated = smartTruncateText(combinedText, 8, containerWidth);
                         const showSmartTruncation = !expanded && truncated.needsTruncation;
                         
                         if (expanded) {
@@ -4894,7 +4857,7 @@ export default function ClipboardHistory() {
                                 overflow: 'visible',
                               }}
                             >
-                              {displayText}
+                              {combinedText}
                             </div>
                           );
                         }
@@ -4932,26 +4895,9 @@ export default function ClipboardHistory() {
                                     textDecoration: 'underline',
                                   }}
                                 >
-                                  ...{improveResult?.stackId === stack.stackId ? 'show improved' : 'expand'}...
+                                  ...expand...
                                 </button>
                                 {' '}{truncated.lastPart}
-                                
-                                {/* Improved badge inline */}
-                                {improveResult?.stackId === stack.stackId && (
-                                  <span style={{
-                                    display: 'inline-block',
-                                    fontSize: '9px',
-                                    fontWeight: 600,
-                                    color: theme.success,
-                                    backgroundColor: theme.successBg,
-                                    padding: '2px 6px',
-                                    borderRadius: '3px',
-                                    marginLeft: '8px',
-                                    verticalAlign: 'middle',
-                                  }}>
-                                    ✨ improved
-                                  </span>
-                                )}
                               </div>
                             </div>
                           );
@@ -4973,26 +4919,10 @@ export default function ClipboardHistory() {
                               overflow: 'hidden',
                             }}
                           >
-                            {displayText}
+                            {combinedText}
                           </div>
                         );
                       })()}
-                      
-                      {/* Improved badge - shown for short text that doesn't use smart truncation */}
-                      {combinedText && !smartTruncateText(combinedText, 8, containerWidth).needsTruncation && improveResult?.stackId === stack.stackId && !expanded && (
-                        <span style={{
-                          display: 'inline-block',
-                          fontSize: '9px',
-                          fontWeight: 600,
-                          color: theme.success,
-                          backgroundColor: theme.successBg,
-                          padding: '2px 6px',
-                          borderRadius: '3px',
-                          marginBottom: '0px',
-                        }}>
-                          Improved version available
-                        </span>
-                      )}
 
                       {/* Show less button - only when expanded */}
                       {combinedText && expanded && (
@@ -5029,10 +4959,9 @@ export default function ClipboardHistory() {
                       marginLeft: '52px',
                     }}>
                       {/* Metadata - left side */}
-                      <div style={{ fontSize: '10px', color: improveResult?.stackId === stack.stackId ? theme.success : theme.textSecondary, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <div style={{ fontSize: '10px', color: theme.textSecondary, display: 'flex', alignItems: 'center', gap: '4px' }}>
                         <span>
                           {stackItems.length} items stacked {formatTimeAgo(stack.createdAt)}
-                          {improveResult?.stackId === stack.stackId && ' • ✨ improved'}
                         </span>
                       </div>
 
@@ -5191,14 +5120,9 @@ export default function ClipboardHistory() {
                               : targetAppInfo.previousApp?.bundleId;
                             
                             // Paste stack content
-                            if (improveResult?.stackId === stack.stackId) {
-                              window.clipboardAPI?.pasteText?.(improveResult.refinedPrompt, pasteBundleId);
-                              window.clipboardAPI?.closeWindow();
-                            } else {
-                              const itemIds = stackItems.map(i => i.id);
-                              window.clipboardAPI?.pasteStack(itemIds, pasteBundleId);
-                              window.clipboardAPI?.closeWindow();
-                            }
+                            const itemIds = stackItems.map(i => i.id);
+                            window.clipboardAPI?.pasteStack(itemIds, pasteBundleId);
+                            window.clipboardAPI?.closeWindow();
                           }}
                           style={{
                             padding: '4px 6px',
@@ -5436,11 +5360,8 @@ export default function ClipboardHistory() {
                       <>
                         {(() => {
                           // Determine which content to show based on toggle state.
-                          // Priority: transient improveResult > stored improvedContent > original content.
-                          const hasTransientImprove = improveResult?.stackId === `item-${item.id}`;
-                          const improvedText = hasTransientImprove ? improveResult.refinedPrompt : item.improvedContent;
-                          const shouldShowImproved = (hasTransientImprove || item.improvedContent) && item.useImprovedVersion;
-                          const displayText = shouldShowImproved && improvedText ? improvedText : (item.content || 'Empty');
+                          const shouldShowImproved = item.improvedContent && item.useImprovedVersion;
+                          const displayText = (shouldShowImproved && item.improvedContent) || item.content || 'Empty';
                           const truncated = smartTruncateText(displayText, 8, containerWidth);
                           const showSmartTruncation = !itemExpanded && truncated.needsTruncation;
                           const colorValue = detectColor(item.content);
@@ -5536,26 +5457,9 @@ export default function ClipboardHistory() {
                                       textDecoration: 'underline',
                                     }}
                                   >
-                                    ...{improveResult?.stackId === `item-${item.id}` ? 'show improved' : 'expand'}...
+                                    ...expand...
                                   </button>
                                   {' '}{truncated.lastPart}
-                                  
-                                  {/* Improved badge inline */}
-                                  {improveResult?.stackId === `item-${item.id}` && (
-                                    <span style={{
-                                      display: 'inline-block',
-                                      fontSize: '9px',
-                                      fontWeight: 600,
-                                      color: theme.success,
-                                      backgroundColor: theme.successBg,
-                                      padding: '2px 6px',
-                                      borderRadius: '3px',
-                                      marginLeft: '8px',
-                                      verticalAlign: 'middle',
-                                    }}>
-                                      ✨ improved
-                                    </span>
-                                  )}
                                 </div>
                               </div>
                             );
@@ -5605,12 +5509,8 @@ export default function ClipboardHistory() {
                               >
                                 {/* Show improved or original content based on useImprovedVersion toggle. */}
                                 {(() => {
-                                  // Same logic as smart truncation path.
-                                  const hasTransientImprove = improveResult?.stackId === `item-${item.id}`;
-                                  const improvedText = hasTransientImprove ? improveResult.refinedPrompt : item.improvedContent;
-                                  const shouldShowImproved = (hasTransientImprove || item.improvedContent) && item.useImprovedVersion;
-                                  const displayText = shouldShowImproved && improvedText ? improvedText : (item.content || 'Empty');
-                                  return displayText;
+                                  const shouldShowImproved = item.improvedContent && item.useImprovedVersion;
+                                  return shouldShowImproved ? item.improvedContent : (item.content || 'Empty');
                                 })()}
                               </span>
                             </div>
@@ -5618,7 +5518,7 @@ export default function ClipboardHistory() {
                         })()}
                         
                         {/* Controls row: Improved/Original toggle OR Show more/less (not both) */}
-                        {(item.improvedContent || improveResult?.stackId === `item-${item.id}`) ? (
+                        {item.improvedContent ? (
                           <div style={{
                             display: 'flex',
                             alignItems: 'center',
@@ -5841,9 +5741,6 @@ export default function ClipboardHistory() {
                           <>
                             {item.wordCount ? `${item.wordCount} words ` : ''}
                             {item.type === 'transcript' || (item.wordCount && item.wordCount >= 20) ? 'transcribed' : 'created'}{item.sourceAppName ? ` in ${item.sourceAppName}` : ''} {formatTimeAgo(item.createdAt)}
-                            {improveResult?.stackId === `item-${item.id}` && (
-                              <span style={{ color: theme.success, marginLeft: '4px' }}>• ✨ improved</span>
-                            )}
                           </>
                         ) : (
                           <>
@@ -6332,11 +6229,8 @@ export default function ClipboardHistory() {
                     <span style={{ opacity: 0.5 }}>No activity yet</span>
                   )}
                 </>
-              ) : authSession ? (
-                // Logged in but not pro - show nothing or basic info
-                <span style={{ fontWeight: 500, opacity: 0.7 }}>Basic Plan</span>
-              ) : quotaUsage ? (
-                // Usage: show quotas with info icon and hover-to-upgrade
+              ) : authSession && quotaUsage ? (
+                // Basic Plan: show quotas with info icon and upgrade option
                 <div
                   onMouseEnter={() => setUsageHovered(true)}
                   onMouseLeave={() => setUsageHovered(false)}
@@ -6346,16 +6240,16 @@ export default function ClipboardHistory() {
                   <span
                     onMouseEnter={() => setInfoHovered(true)}
                     onMouseLeave={() => setInfoHovered(false)}
-                    style={{ 
+                    style={{
                       position: 'relative',
-                      opacity: 0.4, 
+                      opacity: 0.4,
                       fontSize: '10px',
                     }}
                   >
                     ⓘ
                     {infoHovered && (
                       <span
-                        style={{ 
+                        style={{
                           position: 'absolute',
                           bottom: '100%',
                           left: 0,
@@ -6383,12 +6277,6 @@ export default function ClipboardHistory() {
                       <span style={{ opacity: 0.4 }}>·</span>
                       <span
                         onClick={() => {
-                          // Require sign-in before upgrading.
-                          if (!authSession?.user?.id) {
-                            alert('Sign in or create an account to upgrade.');
-                            setViewMode('team');
-                            return;
-                          }
                           // Open Stripe checkout with user ID for webhook linking.
                           const userId = authSession.user.id;
                           const paymentLink = window.stripeConfig?.paymentLink || '';
@@ -7411,141 +7299,6 @@ export default function ClipboardHistory() {
         </div>
       )}
 
-      {/* Confirmation modal for re-improving already improved content */}
-      {confirmReimproveModal && (
-        <div
-          onClick={() => setConfirmReimproveModal(null)}
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.4)',
-            backdropFilter: 'blur(4px)',
-            WebkitBackdropFilter: 'blur(4px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 10001,
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              backgroundColor: theme.bg,
-              borderRadius: '12px',
-              padding: '20px 24px',
-              maxWidth: '400px',
-              boxShadow: '0 20px 40px rgba(0, 0, 0, 0.3)',
-              border: `1px solid ${theme.border}`,
-            }}
-          >
-            <h3 style={{ 
-              margin: '0 0 12px 0', 
-              fontSize: '16px', 
-              fontWeight: 600,
-              color: theme.text,
-            }}>
-              Re-improve this content?
-            </h3>
-            <p style={{ 
-              margin: '0 0 16px 0', 
-              fontSize: '13px', 
-              color: theme.textSecondary,
-              lineHeight: 1.5,
-            }}>
-              This content has already been improved. Do you want to run improvement again?
-              You can choose to improve the original transcription or the current improved version.
-            </p>
-            <div style={{ 
-              display: 'flex', 
-              gap: '8px',
-              justifyContent: 'flex-end',
-            }}>
-              <button
-                onClick={() => setConfirmReimproveModal(null)}
-                style={{
-                  padding: '8px 16px',
-                  fontSize: '13px',
-                  fontWeight: 500,
-                  color: theme.textSecondary,
-                  backgroundColor: theme.bgSecondary,
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={async () => {
-                  // Get the item ID from the modal state
-                  const itemIdMatch = confirmReimproveModal.itemId.match(/item-(\d+)/);
-                  if (!itemIdMatch) {
-                    setConfirmReimproveModal(null);
-                    return;
-                  }
-                  const itemId = parseInt(itemIdMatch[1], 10);
-                  const item = items.find(i => i.id === itemId);
-                  if (!item) {
-                    setConfirmReimproveModal(null);
-                    return;
-                  }
-                  
-                  setConfirmReimproveModal(null);
-                  
-                  // Proceed with improvement
-                  const tempStackId = crypto.randomUUID();
-                  await window.clipboardAPI?.updateStackId?.([itemId], tempStackId);
-                  setImprovingStackId(`item-${itemId}`);
-                  setImproveResult(null);
-                  
-                  try {
-                    const result = await window.clipboardAPI?.engineerStack?.(tempStackId);
-                    await window.clipboardAPI?.updateStackId?.([itemId], item.stackId || null);
-                    if (result?.success && result.refinedPrompt) {
-                      await window.clipboardAPI?.saveImprovedContent?.(itemId, result.refinedPrompt);
-                      setImproveResult({
-                        stackId: `item-${itemId}`,
-                        refinedPrompt: result.refinedPrompt,
-                      });
-                      setItems(prev => prev.map(i => 
-                        i.id === itemId ? { ...i, improvedContent: result.refinedPrompt ?? null } : i
-                      ));
-                      // Clear viewOriginalIds so the new improved version is shown
-                      setViewOriginalIds(prev => {
-                        const next = new Set(prev);
-                        next.delete(`item-${itemId}`);
-                        return next;
-                      });
-                      window.clipboardAPI?.incrementImprovedCount?.().then(count => {
-                        setAllTimeStats(prev => ({ ...prev, improved: count }));
-                      });
-                    }
-                  } catch (err) {
-                    await window.clipboardAPI?.updateStackId?.([itemId], item.stackId || null);
-                  } finally {
-                    setImprovingStackId(null);
-                  }
-                }}
-                style={{
-                  padding: '8px 16px',
-                  fontSize: '13px',
-                  fontWeight: 500,
-                  color: '#fff',
-                  backgroundColor: theme.info,
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                }}
-              >
-                Re-improve
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
 
     {/* Release notes popup - shows after app update, on first install, or on version hover */}

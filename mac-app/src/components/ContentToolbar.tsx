@@ -140,9 +140,19 @@ export default function ContentToolbar({
         </button>
       )}
 
-      {/* Text size controls */}
+      {/* Text size controls - grouped for shared hover */}
       {showTextSize && onTextSizeChange && (
-        <>
+        <div
+          onMouseEnter={() => setHoveredButton('textSize')}
+          onMouseLeave={() => setHoveredButton(null)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            backgroundColor: getHoverBg('textSize'),
+            borderRadius: '4px',
+            transition: 'background-color 0.15s ease',
+          }}
+        >
           <button
             onClick={() => onTextSizeChange('small')}
             style={{
@@ -197,7 +207,7 @@ export default function ContentToolbar({
           >
             A
           </button>
-        </>
+        </div>
       )}
 
       {/* Spacer to push remaining controls to the right - also serves as drag region */}
@@ -211,59 +221,63 @@ export default function ContentToolbar({
         }}
       />
 
-      {/* Folder button (show in Finder) */}
-      {showFolder && onShowInFolder && !isEditing && (
-        <button
-          onClick={onShowInFolder}
-          onMouseEnter={() => setHoveredButton('folder')}
+      {/* Icon buttons group (folder, delete) - grouped for shared hover */}
+      {(showFolder || showDelete) && !isEditing && (
+        <div
+          onMouseEnter={() => setHoveredButton('icons')}
           onMouseLeave={() => setHoveredButton(null)}
           style={{
-            padding: '4px 6px',
-            color: theme.textSecondary,
-            backgroundColor: getHoverBg('folder'),
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            height: '24px',
-            transition: 'background-color 0.15s ease',
-          }}
-          title="Show in Finder"
-        >
-          <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor">
-            <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9zM2.5 3a.5.5 0 0 0-.5.5V6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5zM14 7H2v5.5a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5V7z" />
-          </svg>
-        </button>
-      )}
-
-      {/* Delete button */}
-      {showDelete && onDelete && !isEditing && (
-        <button
-          onClick={onDelete}
-          onMouseEnter={() => setHoveredButton('delete')}
-          onMouseLeave={() => setHoveredButton(null)}
-          style={{
-            padding: '4px 6px',
-            color: theme.textSecondary,
-            backgroundColor: getHoverBg('delete'),
-            border: 'none',
+            backgroundColor: getHoverBg('icons'),
             borderRadius: '4px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            height: '24px',
             transition: 'background-color 0.15s ease',
           }}
-          title="Delete"
         >
-          <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor">
-            <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
-            <path fillRule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
-          </svg>
-        </button>
+          {showFolder && onShowInFolder && (
+            <button
+              onClick={onShowInFolder}
+              style={{
+                padding: '4px 6px',
+                color: theme.textSecondary,
+                backgroundColor: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '24px',
+              }}
+              title="Show in Finder"
+            >
+              <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor">
+                <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9zM2.5 3a.5.5 0 0 0-.5.5V6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5zM14 7H2v5.5a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5V7z" />
+              </svg>
+            </button>
+          )}
+          {showDelete && onDelete && (
+            <button
+              onClick={onDelete}
+              style={{
+                padding: '4px 6px',
+                color: theme.textSecondary,
+                backgroundColor: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '24px',
+              }}
+              title="Delete"
+            >
+              <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor">
+                <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
+                <path fillRule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
+              </svg>
+            </button>
+          )}
+        </div>
       )}
 
       {/* Edit controls */}
@@ -351,77 +365,6 @@ export default function ContentToolbar({
         </button>
       )}
 
-      {/* Separator before sharing controls */}
-      {showShare && (
-        <div
-          style={{
-            width: '1px',
-            height: '16px',
-            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.1)',
-            margin: '0 4px',
-          }}
-        />
-      )}
-
-      {/* Private/Shared toggle */}
-      {showShare && onToggleShare && (
-        <button
-          onClick={onToggleShare}
-          disabled={isSharing}
-          onMouseEnter={() => setHoveredButton('share')}
-          onMouseLeave={() => setHoveredButton(null)}
-          style={{
-            padding: '3px 8px',
-            fontSize: '11px',
-            minWidth: '52px',
-            color: shareStatus?.shared ? theme.accent : theme.textSecondary,
-            backgroundColor: getHoverBg('share'),
-            border: 'none',
-            borderRadius: '4px',
-            cursor: isSharing ? 'default' : 'pointer',
-            opacity: isSharing ? 0.6 : 1,
-            fontWeight: shareStatus?.shared ? 500 : 400,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            height: '24px',
-            transition: 'background-color 0.15s ease',
-          }}
-          title={shareStatus?.shared ? 'Click to make private' : 'Click to share'}
-        >
-          {isSharing ? '...' : shareStatus?.shared ? 'Shared' : 'Private'}
-        </button>
-      )}
-
-      {/* Copy button - appears after share toggle (for copy link when shared) */}
-      {showCopy && onCopy && (
-        <button
-          onClick={handleCopy}
-          onMouseEnter={() => setHoveredButton('copy')}
-          onMouseLeave={() => setHoveredButton(null)}
-          style={{
-            padding: '4px 6px',
-            fontSize: '11px',
-            color: copied ? theme.success : theme.textSecondary,
-            backgroundColor: hoveredButton === 'copy' && !copied ? getHoverBg('copy') : 'transparent',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            height: '24px',
-            gap: '4px',
-            transition: 'background-color 0.15s ease',
-          }}
-          title="Copy to clipboard"
-        >
-          <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor">
-            <path d="M4 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6zM2 5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1h1v1a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h1v1H2z"/>
-          </svg>
-          {copied && <span style={{ fontSize: '10px' }}>Copied</span>}
-        </button>
-      )}
     </div>
   );
 }

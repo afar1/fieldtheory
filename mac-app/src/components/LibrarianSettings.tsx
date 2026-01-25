@@ -40,9 +40,6 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   // Settings
   const [enabled, setEnabled] = useState(true);
 
-  // State-enforced is now the only trigger mode
-  const triggerMode = 'state-enforced' as const;
-
   // State-enforced mode settings
   const [stateEnforcedThreshold, setStateEnforcedThreshold] = useState<number>(3);
   const [defaultRuleContent, setDefaultRuleContent] = useState('');
@@ -81,7 +78,6 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [claudeConfigError, setClaudeConfigError] = useState(false);
   const [resynced, setResynced] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [hookInstalled, setHookInstalled] = useState(false);
   const [hookInstalling, setHookInstalling] = useState(false);
 
   // Narration settings
@@ -95,9 +91,6 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [librarianVoices, setLibrarianVoices] = useState<{ voiceId: string; name: string; speed?: number }[]>([]);
   const [currentVoiceId, setCurrentVoiceId] = useState<string | null>(null);
 
-  // Edit status for prompt count mode
-  const [editStatus, setEditStatus] = useState<{ edits: number; threshold: number } | null>(null);
-
   // Debounce ref for threshold slider
   const thresholdDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -110,19 +103,6 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     return () => clearInterval(interval);
   }, [isScanning]);
 
-  // Fetch edit status for status banner (prompt count mode)
-  useEffect(() => {
-    if (!enabled || triggerMode !== 'prompt' || !window.librarianAPI?.getEditStatus) return;
-
-    const fetchStatus = async () => {
-      const status = await window.librarianAPI!.getEditStatus();
-      setEditStatus(status);
-    };
-
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 2000); // Refresh every 2s
-    return () => clearInterval(interval);
-  }, [enabled, triggerMode]);
 
   // Load initial state
   useEffect(() => {
@@ -137,7 +117,6 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       window.librarianAPI.isEnabled(),
       window.librarianAPI.getAutoShowEnabled(),
       window.librarianAPI.getClaudeCodeStatus(),
-      window.librarianAPI.isClaudeCodeHookInstalled(),
       // State-enforced mode settings
       window.librarianAPI.getStateEnforcedThreshold(),
       window.librarianAPI.getDefaultRuleContent(),
@@ -149,13 +128,12 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       window.librarianAPI.getExpertiseInsertMode(),
       window.librarianAPI.getResumeAfterClose(),
     ])
-      .then(([dirs, readingsList, isEnabled, autoShow, ccStatus, hookStatus, seThreshold, defaultRule, customRule, discFreq, adminStatus, expertiseCtx, insertMode, resumeClose]) => {
+      .then(([dirs, readingsList, isEnabled, autoShow, ccStatus, seThreshold, defaultRule, customRule, discFreq, adminStatus, expertiseCtx, insertMode, resumeClose]) => {
         setWatchedDirs(dirs);
         setReadings(readingsList);
         setEnabled(isEnabled);
         setAutoShowEnabled(autoShow);
         setClaudeCodeStatus(ccStatus as 'installed' | 'directory-only' | 'not-installed');
-        setHookInstalled(hookStatus);
         // State-enforced mode settings
         setStateEnforcedThreshold(seThreshold);
         setDefaultRuleContent(defaultRule);
@@ -595,7 +573,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                     </span>
                   </div>
                   <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '8px', lineHeight: '1.4' }}>
-                    Helps the Librarian tailor content. Try: role, experience level, interests.
+                    Librarian uses this to tune its voice. "Make it weirder" is valid. So is "I'm a senior engineer who likes precision."
                   </div>
                   <textarea
                     value={expertiseText}
@@ -604,7 +582,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                         setExpertiseText(e.target.value);
                       }
                     }}
-                    placeholder="e.g., Senior engineer with 10 years in distributed systems. Interested in PLT and type theory. Background in physics."
+                    placeholder=""
                     style={{
                       width: '100%',
                       minHeight: '60px',
@@ -806,7 +784,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                     <span style={{ fontSize: '10px', color: theme.textSecondary, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)', borderRadius: '4px' }}>
                       Not detected
                     </span>
-                  ) : hookInstalled || triggerMode === 'judgment' || (triggerMode === 'state-enforced' && stateEnforcedHookInstalled) ? (
+                  ) : stateEnforcedHookInstalled ? (
                     <span style={{ fontSize: '10px', color: theme.success, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)', borderRadius: '4px' }}>
                       Connected
                     </span>
@@ -816,39 +794,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                     </span>
                   )}
                 </div>
-                {claudeCodeStatus !== 'not-installed' && triggerMode === 'prompt' && (
-                  <button
-                    onClick={async () => {
-                      setHookInstalling(true);
-                      try {
-                        if (hookInstalled) {
-                          const success = await window.librarianAPI?.uninstallClaudeCodeHook();
-                          if (success) setHookInstalled(false);
-                        } else {
-                          const success = await window.librarianAPI?.installClaudeCodeHook();
-                          if (success) setHookInstalled(true);
-                        }
-                      } finally {
-                        setHookInstalling(false);
-                      }
-                    }}
-                    disabled={hookInstalling}
-                    style={{
-                      padding: '4px 10px',
-                      fontSize: '11px',
-                      fontWeight: 500,
-                      color: hookInstalled ? theme.textSecondary : '#fff',
-                      backgroundColor: hookInstalled ? 'transparent' : theme.accent,
-                      border: hookInstalled ? `1px solid ${theme.border}` : 'none',
-                      borderRadius: '4px',
-                      cursor: hookInstalling ? 'wait' : 'pointer',
-                      opacity: hookInstalling ? 0.5 : 1,
-                    }}
-                  >
-                    {hookInstalling ? '...' : hookInstalled ? 'Disconnect' : 'Connect'}
-                  </button>
-                )}
-                {claudeCodeStatus !== 'not-installed' && triggerMode === 'state-enforced' && (
+                {claudeCodeStatus !== 'not-installed' && (
                   <button
                     onClick={async () => {
                       setHookInstalling(true);

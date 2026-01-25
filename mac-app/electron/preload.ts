@@ -2532,7 +2532,7 @@ const librarianAPI = {
   resetAllCounters: (): Promise<boolean> => ipcRenderer.invoke('librarian:resetAllCounters'),
 
   // Get edit status for debugging (returns first project's status)
-  getEditStatus: (): Promise<{ edits: number; threshold: number } | null> => ipcRenderer.invoke('librarian:getEditStatus'),
+  getEditStatus: (): Promise<{ edits: number; threshold: number; frequency: string } | null> => ipcRenderer.invoke('librarian:getEditStatus'),
 
   // Custom threshold control (undefined means frequency-based)
   getCustomThreshold: (): Promise<number | undefined> => ipcRenderer.invoke('librarian:getCustomThreshold'),
