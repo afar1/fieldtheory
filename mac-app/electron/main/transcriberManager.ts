@@ -108,6 +108,7 @@ export class TranscriberManager extends EventEmitter {
   private recordingStartTime: number = 0;
   private skipNextPasteFailedNotification: boolean = false;
   private priorityMicSkippedForQuota: boolean = false; // True when quota exhausted, skip tracking
+  private autoStackLimitShownThisSession: boolean = false; // Only show limit message once per session
   
   // Track which hotkey started recording for cross-hotkey improvement trigger.
   // If user starts with primary and ends with secondary (or vice versa), trigger improvement.
@@ -466,6 +467,7 @@ export class TranscriberManager extends EventEmitter {
     // Check priority mic quota if a priority device is selected.
     // If quota exhausted, recording still works but priority mic won't be tracked.
     this.priorityMicSkippedForQuota = false;
+    this.autoStackLimitShownThisSession = false; // Reset limit message flag
     if (this.quotaManager && this.audioManager) {
       const state = this.audioManager.getState();
       if (state.priorityDeviceId) {
@@ -665,7 +667,10 @@ export class TranscriberManager extends EventEmitter {
               const stackId = crypto.randomUUID();
               this.clipboardManager.updateStackId(this.currentStack, stackId);
               console.log(`[TranscriberManager] Auto-stacked ${this.currentStack.length} items (stackId: ${stackId})`);
-              
+
+              // Emit event for metrics tracking
+              this.emit('autostackCreated');
+
               // Track auto-stack quota usage.
               await this.trackAutoStackUsage();
             }
@@ -1286,7 +1291,10 @@ export class TranscriberManager extends EventEmitter {
         const stackId = crypto.randomUUID();
         this.clipboardManager.updateStackId(this.currentStack, stackId);
         console.log(`[TranscriberManager] Stacked ${this.currentStack.length} screenshots (no audio, stackId: ${stackId})`);
-        
+
+        // Emit event for metrics tracking
+        this.emit('autostackCreated');
+
         // Track auto-stack quota usage.
         await this.trackAutoStackUsage();
       }
@@ -1318,9 +1326,10 @@ export class TranscriberManager extends EventEmitter {
         const quotaCheck = this.quotaManager.checkQuota('autoStack');
         if (!quotaCheck.allowed) {
           console.log(`[TranscriberManager] Auto-stack quota exhausted, screenshot ${itemId} saved separately (${existingScreenshots} already stacked)`);
-          // Show cursor message with limit info.
-          if (this.cursorStatusManager) {
+          // Show cursor message with limit info, but only once per session.
+          if (this.cursorStatusManager && !this.autoStackLimitShownThisSession) {
             this.cursorStatusManager.showRecordingNote(`Auto-stack limit reached (${quotaCheck.used}/${quotaCheck.limit}) — upgrade for more`);
+            this.autoStackLimitShownThisSession = true;
           }
           this.emit('stackingDisabled', {
             itemId,

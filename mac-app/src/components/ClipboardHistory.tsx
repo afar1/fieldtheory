@@ -56,15 +56,30 @@ import { KeyCap } from './KeyCap';
 import { DraggableDroppableRow } from './DraggableDroppableRow';
 
 /**
+ * Check if any items in a stack have improved content.
+ */
+function stackHasImprovedContent(items: ClipboardItem[]): boolean {
+  return items.some(item =>
+    (item.type === 'text' || item.type === 'transcript') &&
+    item.improvedContent
+  );
+}
+
+/**
  * Combine text content from stack items into a single paragraph.
  * Items are sorted chronologically (oldest first, newest last) so reading
  * flows naturally like a paragraph being spoken over time.
+ * @param useImproved - if true, uses improvedContent where available
  */
-function combineStackText(items: ClipboardItem[]): string {
+function combineStackText(items: ClipboardItem[], useImproved: boolean = false): string {
   return items
     .filter(item => (item.type === 'text' || item.type === 'transcript') && item.content)
     .sort((a, b) => a.createdAt - b.createdAt) // Oldest first, newest last
-    .map(item => item.content!.trim())
+    .map(item => {
+      // Use improved content if available and useImproved is true
+      const text = (useImproved && item.improvedContent) ? item.improvedContent : item.content;
+      return text!.trim();
+    })
     .join('\n\n');
 }
 
@@ -592,12 +607,16 @@ export default function ClipboardHistory() {
     stacks: 0, transcriptions: 0, screenshots: 0, improved: 0, words: 0,
   });
   
-  // Quota usage for free users (priority mic + auto-stacking).
-  const [quotaUsage, setQuotaUsage] = useState<{ priorityMic: string; autoStack: string } | null>(null);
+  // Quota usage for free users (priority mic, auto-stacking, text improve).
+  const [quotaUsage, setQuotaUsage] = useState<{ priorityMic: string; autoStack: string; textImprove: string } | null>(null);
   const [cachedTier, setCachedTier] = useState<'free' | 'pro'>('free');
   const [quotaPercentUsed, setQuotaPercentUsed] = useState(0); // Max percentage of either quota
   const [usageHovered, setUsageHovered] = useState(false);
-  const [infoHovered, setInfoHovered] = useState(false);
+  const [priorityMicQuotaExhausted, setPriorityMicQuotaExhausted] = useState(false);
+
+  // Scenario testing state (superadmin only)
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [hasSimOverrides, setHasSimOverrides] = useState(false);
   const [tasksTabEnabled, setTasksTabEnabled] = useState(false);
 
   // Narration playback state for footer controls
@@ -660,10 +679,13 @@ export default function ClipboardHistory() {
           // Use the tier directly from the quota API
           const isPro = quotas.tier === 'pro';
           setCachedTier(isPro ? 'pro' : 'free');
-          
+
           // Track max percentage for Upgrade visibility (show at >= 50%).
           const maxPercent = Math.max(quotas.priorityMic.percentUsed, quotas.autoStack.percentUsed);
           setQuotaPercentUsed(maxPercent);
+
+          // Track if priority mic quota is exhausted for dropdown
+          setPriorityMicQuotaExhausted(!quotas.priorityMic.allowed);
         }
       } catch (err) {
         console.error('[ClipboardHistory] Failed to load quota usage:', err);
@@ -691,6 +713,29 @@ export default function ClipboardHistory() {
 
     const cleanup = window.quotaAPI.onQuotaChanged((formatted) => {
       setQuotaUsage(formatted);
+    });
+
+    return cleanup;
+  }, []);
+
+  // Check superadmin status and override state for Sim badge
+  useEffect(() => {
+    if (!window.scenarioAPI) return;
+
+    // Check superadmin status
+    window.scenarioAPI.isSuperAdmin().then((result) => setIsSuperAdmin(result ?? false));
+
+    // Check for active overrides
+    window.scenarioAPI.hasActiveOverrides().then((result) => setHasSimOverrides(result ?? false));
+
+    // Listen for override changes
+    const cleanup = window.scenarioAPI.onOverridesChanged((overrides) => {
+      const hasOverrides = !!(overrides && (
+        overrides.tier !== undefined ||
+        overrides.authState !== undefined ||
+        (overrides.quotaPercentages && Object.keys(overrides.quotaPercentages).length > 0)
+      ));
+      setHasSimOverrides(hasOverrides);
     });
 
     return cleanup;
@@ -3269,21 +3314,22 @@ export default function ClipboardHistory() {
             objectFit: 'contain',
           }}
         />
-        {showSettings && (
-          <span style={{ 
-            marginLeft: '8px', 
-            fontSize: '14px', 
+        {/* Header title based on current view - Fields (clipboard) is the only view without a title */}
+        {(showSettings || viewMode === 'commands' || viewMode === 'feedback' || viewMode === 'sketch' || viewMode === 'librarian') && (
+          <span style={{
+            marginLeft: '8px',
+            fontSize: '14px',
             fontWeight: 500,
             color: theme.textSecondary,
             marginRight: 'auto',
           }}>
-            Settings
+            {showSettings ? 'Settings' : viewMode === 'commands' ? 'Commands' : viewMode === 'feedback' ? 'Feedback' : viewMode === 'sketch' ? 'Draw' : viewMode === 'librarian' ? 'Librarian' : ''}
           </span>
         )}
-        {!showSettings && <div style={{ marginRight: 'auto' }} />}
+        {!showSettings && viewMode !== 'commands' && viewMode !== 'feedback' && viewMode !== 'sketch' && viewMode !== 'librarian' && <div style={{ marginRight: 'auto' }} />}
         
-        {/* Sign in button when not authenticated */}
-        {!showSettings && !authSession?.user?.email && (
+        {/* Sign in button when not authenticated - hidden in views with titles (commands, feedback, librarian) but shown in sketch/draw */}
+        {!showSettings && viewMode !== 'commands' && viewMode !== 'feedback' && viewMode !== 'librarian' && !authSession?.user?.email && (
           <button
             onClick={() => {
               setViewMode('team');
@@ -3307,8 +3353,8 @@ export default function ClipboardHistory() {
           </button>
         )}
         
-        {/* Priority Mic label */}
-        {!showSettings && audioDevices.length > 0 && (
+        {/* Priority Mic label - visible in all views */}
+        {audioDevices.length > 0 && (
           <span style={{
             fontSize: '10px',
             color: theme.textSecondary,
@@ -3319,9 +3365,9 @@ export default function ClipboardHistory() {
             Priority Mic:
           </span>
         )}
-        
-        {/* Mic Lock dropdown */}
-        {!showSettings && audioDevices.length > 0 && (
+
+        {/* Mic Lock dropdown - visible in all views */}
+        {audioDevices.length > 0 && (
           <div 
             style={{ 
               position: 'relative',
@@ -3431,9 +3477,12 @@ export default function ClipboardHistory() {
                   <button
                     key={device.id}
                     onClick={() => {
-                      window.audioAPI?.setPriorityDevice(device.id);
-                      setShowMicDropdown(false);
+                      if (!priorityMicQuotaExhausted) {
+                        window.audioAPI?.setPriorityDevice(device.id);
+                        setShowMicDropdown(false);
+                      }
                     }}
+                    disabled={priorityMicQuotaExhausted}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -3441,16 +3490,21 @@ export default function ClipboardHistory() {
                       width: '100%',
                       padding: '6px 10px',
                       fontSize: '11px',
-                      color: priorityDeviceId === device.id ? theme.accent : theme.text,
+                      color: priorityMicQuotaExhausted
+                        ? theme.textSecondary
+                        : priorityDeviceId === device.id
+                          ? theme.accent
+                          : theme.text,
                       backgroundColor: 'transparent',
                       border: 'none',
-                      cursor: 'pointer',
+                      cursor: priorityMicQuotaExhausted ? 'not-allowed' : 'pointer',
                       textAlign: 'left',
                       overflow: 'hidden',
+                      opacity: priorityMicQuotaExhausted ? 0.5 : 1,
                     }}
                   >
                     {priorityDeviceId === device.id && <span style={{ color: theme.accent }}>✓</span>}
-                    <span style={{ 
+                    <span style={{
                       marginLeft: priorityDeviceId === device.id ? 0 : '16px',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
@@ -3460,6 +3514,20 @@ export default function ClipboardHistory() {
                     </span>
                   </button>
                 ))}
+
+                {/* Quota info at bottom of dropdown (free tier only) */}
+                {cachedTier === 'free' && quotaUsage && (
+                  <>
+                    <div style={{ height: '1px', backgroundColor: theme.border, margin: '4px 0' }} />
+                    <div style={{
+                      padding: '6px 10px',
+                      fontSize: '10px',
+                      color: priorityMicQuotaExhausted ? theme.error : theme.textSecondary,
+                    }}>
+                      {priorityMicQuotaExhausted ? 'Limit reached' : quotaUsage.priorityMic}
+                    </div>
+                  </>
+                )}
               </div>
               </>
             )}
@@ -4585,7 +4653,11 @@ export default function ClipboardHistory() {
               // Get images and text separately for rendering
               // Check for thumbnailData too - large images only have thumbnails in list queries.
               const stackImages = stackItems.filter(i => (i.type === 'image' || i.type === 'screenshot') && (i.imageData || i.thumbnailData));
-              const combinedText = combineStackText(stackItems);
+              // Check if stack has improved content for toggle UI
+              const hasImprovedContent = stackHasImprovedContent(stackItems);
+              // Show improved content unless user toggled to view original
+              const showImproved = hasImprovedContent && !viewOriginalIds.has(stack.stackId);
+              const combinedText = combineStackText(stackItems, showImproved);
               const hasText = combinedText.length > 0;
               // Show previousApp by default, targetApp when Option is held.
               // Fall back to previousApp name if targetApp isn't set.
@@ -4959,10 +5031,73 @@ export default function ClipboardHistory() {
                       marginLeft: '52px',
                     }}>
                       {/* Metadata - left side */}
-                      <div style={{ fontSize: '10px', color: theme.textSecondary, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <div style={{ fontSize: '10px', color: theme.textSecondary, display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <span>
                           {stackItems.length} items stacked {formatTimeAgo(stack.createdAt)}
                         </span>
+                        {/* Improved/Original toggle for stacks with improved content */}
+                        {hasImprovedContent && (
+                          <div style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+                            borderRadius: '4px',
+                            padding: '2px',
+                          }}>
+                            <button
+                              tabIndex={-1}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                // Toggle to original (add to viewOriginalIds)
+                                if (!viewOriginalIds.has(stack.stackId)) {
+                                  setViewOriginalIds(prev => new Set([...prev, stack.stackId]));
+                                }
+                              }}
+                              style={{
+                                background: viewOriginalIds.has(stack.stackId) ? theme.accent : 'transparent',
+                                border: 'none',
+                                padding: '2px 6px',
+                                fontSize: '9px',
+                                fontWeight: 500,
+                                color: viewOriginalIds.has(stack.stackId) ? '#fff' : theme.textSecondary,
+                                cursor: 'pointer',
+                                borderRadius: '3px',
+                                transition: 'all 0.15s ease',
+                              }}
+                            >
+                              Original
+                            </button>
+                            <button
+                              tabIndex={-1}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                // Toggle to improved (remove from viewOriginalIds)
+                                if (viewOriginalIds.has(stack.stackId)) {
+                                  setViewOriginalIds(prev => {
+                                    const next = new Set(prev);
+                                    next.delete(stack.stackId);
+                                    return next;
+                                  });
+                                }
+                              }}
+                              style={{
+                                background: !viewOriginalIds.has(stack.stackId) ? theme.accent : 'transparent',
+                                border: 'none',
+                                padding: '2px 6px',
+                                fontSize: '9px',
+                                fontWeight: 500,
+                                color: !viewOriginalIds.has(stack.stackId) ? '#fff' : theme.textSecondary,
+                                cursor: 'pointer',
+                                borderRadius: '3px',
+                                transition: 'all 0.15s ease',
+                              }}
+                            >
+                              Improved
+                            </button>
+                          </div>
+                        )}
                       </div>
 
                       {/* Right side: buttons + optional time for B3 variant */}
@@ -6238,39 +6373,18 @@ export default function ClipboardHistory() {
                 >
                   {/* Info icon with tooltip on hover - left of Usage */}
                   <span
-                    onMouseEnter={() => setInfoHovered(true)}
-                    onMouseLeave={() => setInfoHovered(false)}
                     style={{
-                      position: 'relative',
                       opacity: 0.4,
                       fontSize: '10px',
+                      cursor: 'help',
                     }}
+                    title="Resets monthly on the 1st"
                   >
                     ⓘ
-                    {infoHovered && (
-                      <span
-                        style={{
-                          position: 'absolute',
-                          bottom: '100%',
-                          left: 0,
-                          marginBottom: '4px',
-                          padding: '4px 8px',
-                          backgroundColor: theme.isDark ? 'rgba(50, 50, 50, 0.95)' : 'rgba(0, 0, 0, 0.8)',
-                          color: '#fff',
-                          borderRadius: '4px',
-                          fontSize: '10px',
-                          whiteSpace: 'nowrap',
-                          pointerEvents: 'none',
-                          zIndex: 1000,
-                        }}
-                      >
-                        Resets monthly on the 1st
-                      </span>
-                    )}
                   </span>
-                  <span>{quotaUsage.priorityMic}</span>
-                  <span style={{ opacity: 0.4 }}>·</span>
                   <span>{quotaUsage.autoStack}</span>
+                  <span style={{ opacity: 0.4 }}>·</span>
+                  <span>{quotaUsage.textImprove}</span>
                   {/* Upgrade link - only show when quota >= 50% used */}
                   {quotaPercentUsed >= 50 && (
                     <>

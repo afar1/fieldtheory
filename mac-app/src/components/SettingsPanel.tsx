@@ -7,6 +7,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import AudioSettingsPanel from './AudioSettingsPanel';
 import TranscriptionSettings from './TranscriptionSettings';
+import SoundsSettings from './SoundsSettings';
 import DiagnosticsModal from './DiagnosticsModal';
 import CommandsSettings from './CommandsSettings';
 import ClaudeSettings from './ClaudeSettings';
@@ -26,6 +27,7 @@ type SettingsSection =
   | 'keyboard'
   | 'librarian-claude'
   | 'commands'
+  | 'sounds'
   | 'stats';
 
 // Hotkey capture state - only one hotkey can be captured at a time
@@ -51,6 +53,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'keyboard': 'Keyboard Shortcuts',
   'librarian-claude': 'Librarian & Claude',
   'commands': 'Portable Commands',
+  'sounds': 'Sounds',
   'stats': 'Stats',
 };
 
@@ -63,6 +66,7 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'commands',
   'keyboard',
   'librarian-claude',
+  'sounds',
   'stats',
 ];
 
@@ -177,6 +181,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
 
   // Callsign state
   const [callsign, setCallsign] = useState<string | null>(null);
+
+  // Superadmin state - for scenario testing panel access
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
 
   // API key state - for Engineer feature (Anthropic API)
   const [hasApiKey, setHasApiKey] = useState(false);
@@ -776,6 +783,15 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       .then(({ data }) => {
         setCallsign(data?.callsign || null);
       });
+  }, [session?.user?.id]);
+
+  // Check superadmin status when session changes
+  useEffect(() => {
+    if (!session?.user?.id) {
+      setIsSuperAdmin(false);
+      return;
+    }
+    window.scenarioAPI?.isSuperAdmin().then(setIsSuperAdmin);
   }, [session?.user?.id]);
 
   // Handle sign out.
@@ -2406,6 +2422,13 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       </div>
       )}
 
+      {/* Sounds Section */}
+      {selectedSection === 'sounds' && (
+      <div style={styles.section}>
+        <SoundsSettings />
+      </div>
+      )}
+
       {/* Account Section - combines account info, subscription, and support */}
       {selectedSection === 'account' && (() => {
         // Only trust cached 'pro' tier if user is actually signed in.
@@ -2666,29 +2689,32 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
               </button>
             </div>
 
-            {/* Delete Account button - bottom right, only for signed-in users */}
-            {session && (
-              <div style={{ marginTop: '48px', display: 'flex', justifyContent: 'flex-end' }}>
-                <button
-                  onClick={() => setShowDeleteModal(true)}
-                  onMouseEnter={(e) => { e.currentTarget.style.color = theme.error; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.color = theme.textSecondary; }}
-                  style={{
-                    ...styles.linkBtn,
-                    color: theme.textSecondary,
-                    fontSize: '12px',
-                  }}
-                >
-                  Delete Account
-                </button>
-              </div>
+            {/* Scenario Testing - superadmin only */}
+            {isSuperAdmin && (
+              <>
+                <SectionHeader title="Developer" />
+                <div style={styles.row}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <span style={styles.rowLabel}>Scenario Testing</span>
+                    <span style={styles.rowHint}>Simulate different app states for testing</span>
+                  </div>
+                  <button
+                    onClick={() => window.scenarioAPI?.showPanel()}
+                    style={styles.linkBtn}
+                  >
+                    Open
+                  </button>
+                </div>
+              </>
             )}
+
           </div>
         );
       })()}
 
       </div>
       {/* End of content area */}
+
 
       {/* Delete Account Confirmation Modal */}
       {showDeleteModal && (
@@ -2790,11 +2816,31 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       )}
 
       {/* Diagnostics Modal */}
-      <DiagnosticsModal 
-        isOpen={showDiagnostics} 
+      <DiagnosticsModal
+        isOpen={showDiagnostics}
         onClose={() => setShowDiagnostics(false)}
         onSendAsFeedback={onNavigateToFeedback}
       />
+
+      {/* Delete Account button - absolute bottom right, aligned with content */}
+      {session && (
+        <button
+          onClick={() => setShowDeleteModal(true)}
+          onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.color = theme.error; }}
+          onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.6'; e.currentTarget.style.color = theme.textSecondary; }}
+          style={{
+            ...styles.linkBtn,
+            position: 'absolute',
+            bottom: '16px',
+            right: '16px',
+            color: theme.textSecondary,
+            fontSize: '11px',
+            opacity: 0.6,
+          }}
+        >
+          Delete Account
+        </button>
+      )}
     </div>
   );
 }
@@ -2808,6 +2854,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     minHeight: 0, // Required for flex children to shrink below content size
     boxSizing: 'border-box',
     borderTop: `1px solid ${theme.border}`,
+    position: 'relative' as const,
   },
   sidebar: {
     width: '180px',

@@ -74,6 +74,9 @@ export class ClipboardHistoryWindow {
   // Callback to check if resume after close is enabled (returns to last artifact vs clipboard)
   private resumeAfterCloseGetter: (() => boolean) | null = null;
 
+  // Track if scenario testing panel is active - window should not auto-hide when adjusting overrides
+  private scenarioTestingActive: boolean = false;
+
   // Internal visibility state for instant toggle without querying window.
   // Updated in show() and hide() to stay in sync with all visibility changes.
   private _isShowing: boolean = false;
@@ -409,6 +412,12 @@ export class ClipboardHistoryWindow {
       // When in immersive/fullscreen reading mode, don't auto-hide.
       // User may have positioned window to read while working.
       if (this.isImmersiveMode) {
+        return;
+      }
+
+      // Don't hide when scenario testing panel is active.
+      // User needs to see changes in real-time while adjusting overrides.
+      if (this.scenarioTestingActive) {
         return;
       }
 
@@ -748,6 +757,15 @@ export class ClipboardHistoryWindow {
    */
   getImmersiveMode(): boolean {
     return this.isImmersiveMode;
+  }
+
+  /**
+   * Set scenario testing panel active state.
+   * When active, window will not auto-hide on blur so user can see real-time changes.
+   */
+  setScenarioTestingActive(active: boolean): void {
+    this.scenarioTestingActive = active;
+    console.log(`[ClipboardHistoryWindow] Scenario testing active: ${active}`);
   }
 
   /**

@@ -2045,6 +2045,7 @@ const quotaAPI = {
     priorityMicMinutes: number;
     autoStackSessions: number;
     textImprovementWords: number;
+    verbalCommands: number;
   }>,
 
   // Manually refresh tier from server (debugging and edge cases).
@@ -2875,6 +2876,61 @@ const claudeAPI = {
 
 type ClaudeAPI = typeof claudeAPI;
 
+// =============================================================================
+// Scenario Testing API - Superadmin-only testing panel
+// =============================================================================
+
+interface DevOverrides {
+  tier?: 'free' | 'pro';
+  quotaPercentages?: {
+    priorityMic?: number;
+    autoStack?: number;
+    textImprove?: number;
+  };
+  authState?: 'logged_out' | 'offline';
+}
+
+const scenarioAPI = {
+  // Check if current user is superadmin (uses REAL auth, not simulated)
+  isSuperAdmin: (): Promise<boolean> =>
+    ipcRenderer.invoke('scenario:isSuperAdmin'),
+
+  // Show/hide the scenario testing panel
+  showPanel: (): Promise<boolean> =>
+    ipcRenderer.invoke('scenario:showPanel'),
+  hidePanel: (): Promise<void> =>
+    ipcRenderer.invoke('scenario:hidePanel'),
+
+  // Get current overrides
+  getOverrides: (): Promise<DevOverrides | null> =>
+    ipcRenderer.invoke('scenario:getOverrides'),
+
+  // Set individual overrides
+  setTierOverride: (tier: 'free' | 'pro' | null): Promise<boolean> =>
+    ipcRenderer.invoke('scenario:setTierOverride', tier),
+  setQuotaOverride: (feature: 'priorityMic' | 'autoStack' | 'textImprove', percentage: number | null): Promise<boolean> =>
+    ipcRenderer.invoke('scenario:setQuotaOverride', feature, percentage),
+  setAuthStateOverride: (state: 'logged_out' | 'offline' | null): Promise<boolean> =>
+    ipcRenderer.invoke('scenario:setAuthStateOverride', state),
+
+  // Reset all overrides
+  resetAll: (): Promise<boolean> =>
+    ipcRenderer.invoke('scenario:resetAll'),
+
+  // Check if any overrides are active
+  hasActiveOverrides: (): Promise<boolean> =>
+    ipcRenderer.invoke('scenario:hasActiveOverrides'),
+
+  // Listen for override changes
+  onOverridesChanged: (callback: (overrides: DevOverrides | null) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, overrides: DevOverrides | null) => callback(overrides);
+    ipcRenderer.on('scenario:overridesChanged', handler);
+    return () => ipcRenderer.removeListener('scenario:overridesChanged', handler);
+  },
+};
+
+type ScenarioAPI = typeof scenarioAPI;
+
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);
 contextBridge.exposeInMainWorld('themeAPI', themeAPI);
 contextBridge.exposeInMainWorld('librarianAPI', librarianAPI);
@@ -2896,6 +2952,7 @@ contextBridge.exposeInMainWorld('commandsAPI', commandsAPI);
 contextBridge.exposeInMainWorld('metricsAPI', metricsAPI);
 contextBridge.exposeInMainWorld('claudeAPI', claudeAPI);
 contextBridge.exposeInMainWorld('narrationAPI', narrationAPI);
+contextBridge.exposeInMainWorld('scenarioAPI', scenarioAPI);
 
 contextBridge.exposeInMainWorld('platform', {
   isMacOS: process.platform === 'darwin',
@@ -2937,6 +2994,7 @@ declare global {
     librarianAPI: LibrarianAPI;
     metricsAPI: MetricsAPI;
     narrationAPI: NarrationAPI;
+    scenarioAPI: ScenarioAPI;
     stripeConfig: {
       paymentLink: string;
       portalLink: string;

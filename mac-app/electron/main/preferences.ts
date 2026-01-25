@@ -84,6 +84,7 @@ export interface LocalQuotas {
   priorityMicSecondsUsed: number;     // Seconds of priority mic used this month
   autoStackSessionsUsed: number;      // Multi-image stack sessions (2+ images)
   textImprovementWordsUsed: number;   // Input words improved this month
+  verbalCommandsUsed: number;         // Voice commands used this month
   cachedTier: 'free' | 'pro';         // Cached tier for offline access
   cachedTierUpdatedAt: string;        // ISO timestamp of last tier sync
 }
@@ -211,6 +212,20 @@ interface Preferences {
     blockedDevices: string[];
     cacheSizeLimitBytes: number;
   };
+
+  // Dev/testing overrides (superadmin only) - persists until manually cleared.
+  devOverrides?: {
+    tier?: 'free' | 'pro';
+    quotaPercentages?: {
+      priorityMic?: number;   // 0-100
+      autoStack?: number;     // 0-100
+      textImprove?: number;   // 0-100
+    };
+    authState?: 'logged_out' | 'offline';
+  };
+
+  // Scenario testing panel position.
+  scenarioTestingBounds?: { x: number; y: number };
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
