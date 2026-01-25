@@ -34,16 +34,6 @@ export default function TranscriptionSettings() {
   const [abandonHotkeyError, setAbandonHotkeyError] = useState<string | null>(null);
   const [abandonConfirmation, setAbandonConfirmation] = useState(true);
 
-  const [soundsEnabled, setSoundsEnabled] = useState(true);
-  const [recordingStartSound, setRecordingStartSound] = useState<string | undefined>('ButtonClickDown.mp3');
-  const [recordingStopSound, setRecordingStopSound] = useState<string | undefined>('ButtonClickUp.mp3');
-  const [recordingCancelSound, setRecordingCancelSound] = useState<string | undefined>('AlertBonk.mp3');
-  const [windowOpenSound, setWindowOpenSound] = useState<string | undefined>('WindowOpen.mp3');
-  const [windowCloseSound, setWindowCloseSound] = useState<string | undefined>('WindowClose.mp3');
-  const [transcribingSound, setTranscribingSound] = useState<string | undefined>('ButtonClickUp.mp3');
-  const [pasteSound, setPasteSound] = useState<string | undefined>('Click.mp3');
-  const [availableSounds, setAvailableSounds] = useState<Array<{ id: string; name: string; category: string }>>([]);
-
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
 
   const styles = getStyles(theme);
@@ -55,7 +45,7 @@ export default function TranscriptionSettings() {
 
     const fetchStatus = async () => {
       try {
-        const [currentStatus, currentModelStatus, currentHotkey, models, currentSelectedModel, downloadStatus, downloadingModels, currentOverlayStyle, currentAbandonHotkey, currentAbandonConfirmation, soundConfig, sounds] = await Promise.all([
+        const [currentStatus, currentModelStatus, currentHotkey, models, currentSelectedModel, downloadStatus, downloadingModels, currentOverlayStyle, currentAbandonHotkey, currentAbandonConfirmation] = await Promise.all([
           window.transcribeAPI!.getStatus(),
           window.transcribeAPI!.getModelStatus(),
           window.transcribeAPI!.getHotkey(),
@@ -66,8 +56,6 @@ export default function TranscriptionSettings() {
           window.transcribeAPI!.getOverlayStyle(),
           window.transcribeAPI!.getAbandonHotkey?.() ?? 'Escape',
           window.transcribeAPI!.getAbandonConfirmation?.() ?? true,
-          window.transcribeAPI!.getSoundConfig?.() ?? { enabled: true, recordingStart: 'ButtonClickDown.mp3', recordingStop: 'ButtonClickUp.mp3', recordingCancel: 'AlertBonk.mp3', windowOpen: 'WindowOpen.mp3', windowClose: 'WindowClose.mp3', transcribing: 'Beep.mp3', paste: 'ButtonClickUp.mp3' },
-          window.transcribeAPI!.getAvailableSounds?.() ?? [],
         ]);
         setStatus(currentStatus);
         setModelStatus(currentModelStatus);
@@ -82,15 +70,6 @@ export default function TranscriptionSettings() {
         setOverlayStyle(currentOverlayStyle);
         setAbandonHotkey(currentAbandonHotkey);
         setAbandonConfirmation(currentAbandonConfirmation);
-        setSoundsEnabled(soundConfig.enabled);
-        setRecordingStartSound(soundConfig.recordingStart);
-        setRecordingStopSound(soundConfig.recordingStop);
-        setRecordingCancelSound(soundConfig.recordingCancel);
-        setWindowOpenSound(soundConfig.windowOpen);
-        setWindowCloseSound(soundConfig.windowClose);
-        setTranscribingSound(soundConfig.transcribing);
-        setPasteSound(soundConfig.paste);
-        setAvailableSounds(sounds);
       } catch (err) {
         console.error('Failed to fetch transcription status:', err);
       }
@@ -281,45 +260,6 @@ export default function TranscriptionSettings() {
       await window.transcribeAPI.setAbandonConfirmation(enabled);
     } catch (err) {
       console.error('Failed to change abandon confirmation setting:', err);
-    }
-  }, []);
-
-  const handleSoundsEnabledChange = useCallback(async (enabled: boolean) => {
-    if (!window.transcribeAPI?.setSoundConfig) return;
-    
-    setSoundsEnabled(enabled);
-    try {
-      await window.transcribeAPI.setSoundConfig({ enabled });
-    } catch (err) {
-      console.error('Failed to change sounds enabled setting:', err);
-    }
-  }, []);
-  
-  const handleSoundChange = useCallback(async (event: 'recordingStart' | 'recordingStop' | 'recordingCancel' | 'windowOpen' | 'windowClose' | 'transcribing' | 'paste', soundId: string) => {
-    if (!window.transcribeAPI?.setSoundConfig) return;
-    
-    if (event === 'recordingStart') setRecordingStartSound(soundId);
-    if (event === 'recordingStop') setRecordingStopSound(soundId);
-    if (event === 'recordingCancel') setRecordingCancelSound(soundId);
-    if (event === 'windowOpen') setWindowOpenSound(soundId);
-    if (event === 'windowClose') setWindowCloseSound(soundId);
-    if (event === 'transcribing') setTranscribingSound(soundId);
-    if (event === 'paste') setPasteSound(soundId);
-    
-    try {
-      await window.transcribeAPI.setSoundConfig({ [event]: soundId });
-    } catch (err) {
-      console.error(`Failed to change ${event} sound:`, err);
-    }
-  }, []);
-  
-  const handlePreviewSound = useCallback(async (soundId: string) => {
-    if (!window.transcribeAPI?.previewSound) return;
-
-    try {
-      await window.transcribeAPI.previewSound(soundId);
-    } catch (err) {
-      console.error('Failed to preview sound:', err);
     }
   }, []);
 
@@ -572,209 +512,6 @@ export default function TranscriptionSettings() {
       </div>
 
       {error && <p style={styles.error}>{error}</p>}
-
-      <div style={styles.soundsSection}>
-        <div style={styles.sectionHeader}>
-          <span style={styles.sectionTitle}>SOUNDS</span>
-          <div style={styles.sectionLine} />
-          <button
-            onClick={() => handleSoundsEnabledChange(!soundsEnabled)}
-            style={{ ...styles.toggle, backgroundColor: soundsEnabled ? theme.success : '#d1d5db' }}
-            title={soundsEnabled ? 'Sounds enabled' : 'Sounds disabled'}
-          >
-            <span style={{ ...styles.toggleKnob, transform: soundsEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
-          </button>
-        </div>
-        
-        {soundsEnabled && (
-          <>
-            <div style={styles.row}>
-              <span style={styles.rowLabel}>Start</span>
-              <div style={styles.rowControls}>
-                <select
-                  value={recordingStartSound || ''}
-                  onChange={(e) => handleSoundChange('recordingStart', e.target.value)}
-                  style={styles.selectSmall}
-                >
-                  <option value="">None</option>
-                  {availableSounds.map((sound) => (
-                    <option key={sound.id} value={sound.id}>
-                      {sound.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => recordingStartSound && handlePreviewSound(recordingStartSound)}
-                  style={styles.btnGhost}
-                  title="Preview sound"
-                >
-                  ▶
-                </button>
-              </div>
-            </div>
-
-            <div style={styles.row}>
-              <span style={styles.rowLabel}>Stop</span>
-              <div style={styles.rowControls}>
-                <select
-                  value={recordingStopSound || ''}
-                  onChange={(e) => handleSoundChange('recordingStop', e.target.value)}
-                  style={styles.selectSmall}
-                >
-                  <option value="">None</option>
-                  {availableSounds.map((sound) => (
-                    <option key={sound.id} value={sound.id}>
-                      {sound.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => recordingStopSound && handlePreviewSound(recordingStopSound)}
-                  style={styles.btnGhost}
-                  title="Preview sound"
-                >
-                  ▶
-                </button>
-              </div>
-            </div>
-
-            <div style={styles.row}>
-              <span style={styles.rowLabel}>Cancel</span>
-              <div style={styles.rowControls}>
-                <select
-                  value={recordingCancelSound || ''}
-                  onChange={(e) => handleSoundChange('recordingCancel', e.target.value)}
-                  style={styles.selectSmall}
-                >
-                  <option value="">None</option>
-                  {availableSounds.map((sound) => (
-                    <option key={sound.id} value={sound.id}>
-                      {sound.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => recordingCancelSound && handlePreviewSound(recordingCancelSound)}
-                  style={styles.btnGhost}
-                  title="Preview sound"
-                >
-                  ▶
-                </button>
-              </div>
-            </div>
-
-            <div style={styles.row}>
-              <span style={styles.rowLabel}>Transcribing</span>
-              <div style={styles.rowControls}>
-                <select
-                  value={transcribingSound || ''}
-                  onChange={(e) => handleSoundChange('transcribing', e.target.value)}
-                  style={styles.selectSmall}
-                >
-                  <option value="">None</option>
-                  {availableSounds.map((sound) => (
-                    <option key={sound.id} value={sound.id}>
-                      {sound.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => transcribingSound && handlePreviewSound(transcribingSound)}
-                  style={styles.btnGhost}
-                  title="Preview sound"
-                >
-                  ▶
-                </button>
-              </div>
-            </div>
-
-            <div style={styles.row}>
-              <span style={styles.rowLabel}>Open Window</span>
-              <div style={styles.rowControls}>
-                <select
-                  value={windowOpenSound || ''}
-                  onChange={(e) => handleSoundChange('windowOpen', e.target.value)}
-                  style={styles.selectSmall}
-                >
-                  <option value="">None</option>
-                  {availableSounds.map((sound) => (
-                    <option key={sound.id} value={sound.id}>
-                      {sound.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => windowOpenSound && handlePreviewSound(windowOpenSound)}
-                  style={styles.btnGhost}
-                  title="Preview sound"
-                >
-                  ▶
-                </button>
-              </div>
-            </div>
-
-            <div style={styles.row}>
-              <span style={styles.rowLabel}>Close Window</span>
-              <div style={styles.rowControls}>
-                <select
-                  value={windowCloseSound || ''}
-                  onChange={(e) => handleSoundChange('windowClose', e.target.value)}
-                  style={styles.selectSmall}
-                >
-                  <option value="">None</option>
-                  {availableSounds.map((sound) => (
-                    <option key={sound.id} value={sound.id}>
-                      {sound.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => windowCloseSound && handlePreviewSound(windowCloseSound)}
-                  style={styles.btnGhost}
-                  title="Preview sound"
-                >
-                  ▶
-                </button>
-              </div>
-            </div>
-
-            <div style={styles.row}>
-              <span style={styles.rowLabel}>Paste Item</span>
-              <div style={styles.rowControls}>
-                <select
-                  value={pasteSound || ''}
-                  onChange={(e) => handleSoundChange('paste', e.target.value)}
-                  style={styles.selectSmall}
-                >
-                  <option value="">None</option>
-                  {availableSounds.map((sound) => (
-                    <option key={sound.id} value={sound.id}>
-                      {sound.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => pasteSound && handlePreviewSound(pasteSound)}
-                  style={styles.btnGhost}
-                  title="Preview sound"
-                >
-                  ▶
-                </button>
-              </div>
-            </div>
-
-            {/* Note about restart for window sounds */}
-            <p style={{
-              fontSize: '11px',
-              color: theme.textSecondary,
-              marginTop: '8px',
-              lineHeight: 1.4,
-            }}>
-              Window open/close sounds require restart to take effect.
-            </p>
-          </>
-        )}
-      </div>
     </div>
   );
 }
@@ -898,21 +635,6 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     fontSize: '12px',
     color: theme.error,
     margin: '4px 0',
-  },
-
-  // Sounds section.
-  soundsSection: {
-    marginTop: '16px',
-  },
-  selectSmall: {
-    padding: '4px 8px',
-    fontSize: '12px',
-    color: theme.text,
-    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
-    border: `1px solid ${theme.border}`,
-    borderRadius: '6px',
-    cursor: 'pointer',
-    minWidth: '140px',
   },
 
   // Models section.

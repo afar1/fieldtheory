@@ -278,33 +278,54 @@ export class TrayManager {
     const priorityDevice = devices.find((d) => d.id === priorityDeviceId);
     const priorityDeviceName = priorityDevice?.name || 'None';
 
+    // Check priority mic quota status.
+    const quotas = this.quotaManager?.getQuotas();
+    const priorityMicQuotaExhausted = quotas && !quotas.priorityMic.allowed;
+    const priorityMicQuotaLabel = this.quotaManager
+      ? this.quotaManager.formatPriorityMicUsage()
+      : null;
+
+    // Build submenu items for priority mic selection.
+    const priorityMicSubmenu: MenuItemConstructorOptions[] = [
+      {
+        label: 'None',
+        type: 'radio',
+        checked: priorityDeviceId === null,
+        click: async () => {
+          await this.audioManager.setPriorityDevice(null);
+        },
+      },
+      { type: 'separator' },
+      ...inputDevices.map((device) => ({
+        label: device.name,
+        type: 'radio' as const,
+        checked: device.id === priorityDeviceId,
+        // Disable device options when quota is exhausted.
+        enabled: !priorityMicQuotaExhausted,
+        click: async () => {
+          // Auto-enable priority mode when selecting a device.
+          await this.audioManager.setPriorityDevice(device.id);
+          if (!priorityMode) {
+            await this.audioManager.setPriorityMode(true);
+          }
+        },
+      })),
+    ];
+
+    // Add quota info at the bottom of submenu (for free tier).
+    if (priorityMicQuotaLabel && quotas && quotas.tier === 'free') {
+      priorityMicSubmenu.push({ type: 'separator' });
+      priorityMicSubmenu.push({
+        label: priorityMicQuotaExhausted ? `Limit reached` : priorityMicQuotaLabel,
+        enabled: false,
+      });
+    }
+
     // Menu structure: Set Priority Mic submenu, then Current mic, then helper text.
     const items: MenuItemConstructorOptions[] = [
       {
         label: 'Set Priority Mic',
-        submenu: [
-          {
-            label: 'None',
-            type: 'radio',
-            checked: priorityDeviceId === null,
-            click: async () => {
-              await this.audioManager.setPriorityDevice(null);
-            },
-          },
-          { type: 'separator' },
-          ...inputDevices.map((device) => ({
-            label: device.name,
-            type: 'radio' as const,
-            checked: device.id === priorityDeviceId,
-            click: async () => {
-              // Auto-enable priority mode when selecting a device.
-              await this.audioManager.setPriorityDevice(device.id);
-              if (!priorityMode) {
-                await this.audioManager.setPriorityMode(true);
-              }
-            },
-          })),
-        ],
+        submenu: priorityMicSubmenu,
       },
       {
         label: priorityDeviceId
@@ -313,9 +334,11 @@ export class TrayManager {
         enabled: false,
       },
       {
-        label: priorityDeviceId
-          ? 'Will auto-connect when plugged in'
-          : 'Select a mic to lock it',
+        label: priorityMicQuotaExhausted
+          ? 'Limit reached - upgrade to Pro'
+          : priorityDeviceId
+            ? 'Will auto-connect when plugged in'
+            : 'Select a mic to lock it',
         enabled: false,
       },
     ];

@@ -777,6 +777,7 @@ interface QuotaLimits {
   priorityMicMinutes: number;
   autoStackSessions: number;
   textImprovementWords: number;
+  verbalCommands: number;
 }
 
 /**
@@ -784,8 +785,8 @@ interface QuotaLimits {
  * Free users have monthly limits on priority mic, auto-stacking, and text improvements.
  */
 interface QuotaAPI {
-  getQuotas: () => Promise<{ priorityMic: QuotaStatus; autoStack: QuotaStatus; textImprove: QuotaStatus; tier: 'free' | 'pro' } | null>;
-  checkQuota: (feature: 'priorityMic' | 'autoStack' | 'textImprove') => Promise<QuotaCheckResult>;
+  getQuotas: () => Promise<{ priorityMic: QuotaStatus; autoStack: QuotaStatus; textImprove: QuotaStatus; verbalCommands: QuotaStatus; tier: 'free' | 'pro' } | null>;
+  checkQuota: (feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'verbalCommands') => Promise<QuotaCheckResult>;
   getFormattedUsage: () => Promise<{ priorityMic: string; autoStack: string; textImprove: string }>;
   getResetDate: () => Promise<Date>;
   getDaysUntilReset: () => Promise<number>;
@@ -1188,6 +1189,37 @@ declare global {
     fetchFromSupabase: () => Promise<boolean>;
   }
 
+  /**
+   * Dev overrides for scenario testing (superadmin only).
+   * Allows simulating different app states for testing.
+   */
+  interface DevOverrides {
+    tier?: 'free' | 'pro';
+    quotaPercentages?: {
+      priorityMic?: number;   // 0-100
+      autoStack?: number;     // 0-100
+      textImprove?: number;   // 0-100
+    };
+    authState?: 'logged_out' | 'offline';
+  }
+
+  /**
+   * Scenario Testing API - Superadmin-only testing panel.
+   * Allows simulating different tier, quota, and auth states.
+   */
+  interface ScenarioAPI {
+    isSuperAdmin: () => Promise<boolean>;
+    showPanel: () => Promise<boolean>;
+    hidePanel: () => Promise<void>;
+    getOverrides: () => Promise<DevOverrides | null>;
+    setTierOverride: (tier: 'free' | 'pro' | null) => Promise<boolean>;
+    setQuotaOverride: (feature: 'priorityMic' | 'autoStack' | 'textImprove', percentage: number | null) => Promise<boolean>;
+    setAuthStateOverride: (state: 'logged_out' | 'offline' | null) => Promise<boolean>;
+    resetAll: () => Promise<boolean>;
+    hasActiveOverrides: () => Promise<boolean>;
+    onOverridesChanged: (callback: (overrides: DevOverrides | null) => void) => () => void;
+  }
+
   interface Window {
     audioAPI?: AudioAPI;
     hotkeyAPI?: HotkeyAPI;
@@ -1211,6 +1243,7 @@ declare global {
     claudeAPI?: ClaudeAPI;
     metricsAPI?: MetricsAPI;
     diagnosticsAPI?: DiagnosticsAPI;
+    scenarioAPI?: ScenarioAPI;
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;
   }
