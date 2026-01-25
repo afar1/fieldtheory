@@ -291,6 +291,7 @@ export class AudioManager extends EventEmitter {
         console.log('[AudioManager] Favorite device reconnected, auto-selecting:', this.favoriteDeviceName);
         this.priorityDeviceId = favoriteDevice.id;
         this.priorityMode = true;
+        this.startPriorityMicTimer();
         await this.enforcePriority();
       }
     }

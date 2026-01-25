@@ -5013,6 +5013,10 @@ function broadcastTranscribeEvents(): void {
     metricsManager?.recordTranscription(wordCount);
   });
 
+  transcriberManager.on('verbalCommand', () => {
+    metricsManager?.recordVerbalCommand();
+  });
+
   transcriberManager.on('error', (error) => {
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {

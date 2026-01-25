@@ -110,7 +110,7 @@ export default function UserStatsPanel() {
     {
       title: 'Creative',
       items: [
-        { label: 'Sketches created', value: metrics.sketches_created },
+        { label: 'Drawings created', value: metrics.sketches_created },
         { label: 'Screenshots taken', value: metrics.screenshots_taken },
       ],
     },
