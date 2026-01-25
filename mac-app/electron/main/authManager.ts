@@ -16,6 +16,7 @@ import WebSocket from 'ws';
 import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
+import { getUserDataManager, UserDataManager } from './userDataManager';
 
 // =============================================================================
 // FileStorage - Persists session to disk for survival across app updates
@@ -138,6 +139,8 @@ class FileStorage implements SupportedStorage {
 export interface AuthManagerEvents {
   sessionChanged: (session: Session | null) => void;
   tierChanged: (tier: string) => void;
+  userChanged: (callsign: string) => void;
+  userLoggedOut: () => void;
 }
 
 export class AuthManager extends EventEmitter {
@@ -146,14 +149,44 @@ export class AuthManager extends EventEmitter {
   private fileStorage: FileStorage | null = null;
   private lastFailedToken: string | null = null;
   private hasEverAuthenticated: boolean = false;
+  private userDataManager: UserDataManager | null = null;
 
   // Debug flags for testing auth states
   private simulateOffline: boolean = false;
   private simulateRevoked: boolean = false;
   private lastEmittedUserId: string | null = null;  // Dedupe sessionChanged events
+  private lastEmittedCallsign: string | null = null;  // Track callsign for user-changed events
 
   constructor() {
     super();
+  }
+
+  /**
+   * Set the UserDataManager instance for coordinating user data paths.
+   */
+  setUserDataManager(manager: UserDataManager): void {
+    this.userDataManager = manager;
+  }
+
+  /**
+   * Get the callsign from the current session.
+   * Callsign is stored in user_metadata.callsign.
+   */
+  getCallsign(): string | null {
+    if (!this.session?.user) return null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const metadata = this.session.user.user_metadata as any;
+    return metadata?.callsign || null;
+  }
+
+  /**
+   * Get the callsign from a session object.
+   */
+  private getCallsignFromSession(session: Session | null): string | null {
+    if (!session?.user) return null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const metadata = session.user.user_metadata as any;
+    return metadata?.callsign || null;
   }
 
   /**
@@ -186,12 +219,14 @@ export class AuthManager extends EventEmitter {
 
     // Listen to SDK auth state changes (handles auto-refresh events)
     // Dedupe: only emit if user actually changed (SDK fires multiple events on init)
-    this.supabase.auth.onAuthStateChange((event, session) => {
+    this.supabase.auth.onAuthStateChange(async (event, session) => {
       const newUserId = session?.user?.id ?? null;
+      const newCallsign = this.getCallsignFromSession(session);
       const isNewSession = newUserId !== this.lastEmittedUserId;
-      
-      console.log('[AuthManager] Auth state changed:', event, isNewSession ? '(new)' : '(duplicate)');
-      
+      const isNewCallsign = newCallsign !== this.lastEmittedCallsign;
+
+      console.log('[AuthManager] Auth state changed:', event, isNewSession ? '(new)' : '(duplicate)', newCallsign ? `callsign: ${newCallsign}` : '');
+
       if (event === 'TOKEN_REFRESHED') {
         console.log('[AuthManager] Token refreshed by SDK');
         this.session = session;
@@ -200,12 +235,28 @@ export class AuthManager extends EventEmitter {
         if (this.lastEmittedUserId !== null) {
           this.session = null;
           this.lastEmittedUserId = null;
+          this.lastEmittedCallsign = null;
+
+          // Coordinate with UserDataManager
+          if (this.userDataManager) {
+            await this.userDataManager.clearCurrentUser();
+          }
+          this.emit('userLoggedOut');
           this.emit('sessionChanged', null);
         }
       } else if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && isNewSession) {
         // Only emit if this is actually a new user session
         this.session = session;
         this.lastEmittedUserId = newUserId;
+
+        // Coordinate with UserDataManager if callsign changed
+        if (newCallsign && isNewCallsign && this.userDataManager) {
+          this.lastEmittedCallsign = newCallsign;
+          await this.userDataManager.setCurrentUser(newCallsign);
+          await this.userDataManager.migrateExistingData(newCallsign);
+          this.emit('userChanged', newCallsign);
+        }
+
         this.emit('sessionChanged', session);
       }
     });
@@ -231,7 +282,17 @@ export class AuthManager extends EventEmitter {
         this.session = data.session;
         this.hasEverAuthenticated = true;
         this.lastEmittedUserId = data.session.user?.id ?? null;
-        console.log('[AuthManager] Restored session for user:', data.session.user?.email);
+
+        // Coordinate with UserDataManager
+        const callsign = this.getCallsignFromSession(data.session);
+        if (callsign && this.userDataManager) {
+          this.lastEmittedCallsign = callsign;
+          await this.userDataManager.setCurrentUser(callsign);
+          await this.userDataManager.migrateExistingData(callsign);
+          this.emit('userChanged', callsign);
+        }
+
+        console.log('[AuthManager] Restored session for user:', data.session.user?.email, callsign ? `(${callsign})` : '');
         this.emit('sessionChanged', this.session);
         return;
       }
@@ -273,7 +334,17 @@ export class AuthManager extends EventEmitter {
         if (refreshData.session) {
           this.session = refreshData.session;
           this.lastEmittedUserId = refreshData.session.user?.id ?? null;
-          console.log('[AuthManager] Manual refresh succeeded for user:', refreshData.session.user?.email);
+
+          // Coordinate with UserDataManager
+          const callsign = this.getCallsignFromSession(refreshData.session);
+          if (callsign && this.userDataManager) {
+            this.lastEmittedCallsign = callsign;
+            await this.userDataManager.setCurrentUser(callsign);
+            await this.userDataManager.migrateExistingData(callsign);
+            this.emit('userChanged', callsign);
+          }
+
+          console.log('[AuthManager] Manual refresh succeeded for user:', refreshData.session.user?.email, callsign ? `(${callsign})` : '');
           this.emit('sessionChanged', this.session);
           return;
         }
@@ -596,6 +667,44 @@ export class AuthManager extends EventEmitter {
     }
   }
 
+  /**
+   * Update user's full name in user_metadata.
+   */
+  async updateFullName(fullName: string): Promise<{ error: string | null }> {
+    if (!this.supabase) {
+      return { error: 'Supabase not initialized' };
+    }
+
+    if (!this.session) {
+      return { error: 'No active session' };
+    }
+
+    console.log('[AuthManager] Updating full name...');
+
+    try {
+      const { data, error } = await this.supabase.auth.updateUser({
+        data: { full_name: fullName }
+      });
+
+      if (error) {
+        console.error('[AuthManager] Full name update failed:', error);
+        return { error: error.message };
+      }
+
+      // Update local session with new user data
+      if (data.user && this.session) {
+        this.session = { ...this.session, user: data.user };
+      }
+
+      console.log('[AuthManager] Full name updated successfully');
+      return { error: null };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      console.error('[AuthManager] Full name update exception:', message);
+      return { error: message };
+    }
+  }
+
   async setSessionFromUrl(accessToken: string, refreshToken: string): Promise<{ error: string | null; session: Session | null }> {
     if (!this.supabase) {
       return { error: 'Supabase not initialized', session: null };
@@ -619,6 +728,17 @@ export class AuthManager extends EventEmitter {
     }
   }
 
+  /**
+   * Clear session storage to prepare for fresh login.
+   * Call before requestOtp() when starting a new login flow.
+   */
+  prepareForNewLogin(): void {
+    console.log('[AuthManager] Clearing session for new login');
+    this.fileStorage?.clearStorage();
+    this.session = null;
+    this.lastEmittedUserId = null;
+  }
+
   async signOut(): Promise<{ error: string | null }> {
     if (!this.supabase) {
       return { error: 'Supabase not initialized' };
@@ -631,6 +751,13 @@ export class AuthManager extends EventEmitter {
         console.error('[AuthManager] Sign out failed:', error);
         return { error: error.message };
       }
+
+      // Coordinate with UserDataManager before clearing session
+      if (this.userDataManager) {
+        await this.userDataManager.clearCurrentUser();
+      }
+      this.lastEmittedCallsign = null;
+      this.emit('userLoggedOut');
 
       this.clearSession();
       // Explicitly clear the session file (only place this should happen)

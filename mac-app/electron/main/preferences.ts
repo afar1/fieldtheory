@@ -3,43 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 
 import { ModelSize } from './modelManager';
-
-/**
- * Simple obfuscation for API keys stored locally.
- * Not cryptographically secure, but prevents casual copying from the prefs file.
- * Uses XOR with a static key + base64 encoding.
- */
-const OBFUSCATION_KEY = 'fth3ory2026';
-
-function obfuscate(plainText: string): string {
-  const bytes = Buffer.from(plainText, 'utf-8');
-  const keyBytes = Buffer.from(OBFUSCATION_KEY, 'utf-8');
-  const result = Buffer.alloc(bytes.length);
-  for (let i = 0; i < bytes.length; i++) {
-    result[i] = bytes[i] ^ keyBytes[i % keyBytes.length];
-  }
-  return result.toString('base64');
-}
-
-function deobfuscate(obfuscated: string): string {
-  const bytes = Buffer.from(obfuscated, 'base64');
-  const keyBytes = Buffer.from(OBFUSCATION_KEY, 'utf-8');
-  const result = Buffer.alloc(bytes.length);
-  for (let i = 0; i < bytes.length; i++) {
-    result[i] = bytes[i] ^ keyBytes[i % keyBytes.length];
-  }
-  return result.toString('utf-8');
-}
-
-/**
- * Check if a string looks like a valid API key (printable ASCII only).
- * Returns false if the string contains garbage/corrupted characters.
- */
-function isValidApiKeyFormat(key: string): boolean {
-  // API keys should only contain printable ASCII (32-126) and common separators
-  // eslint-disable-next-line no-control-regex
-  return /^[\x20-\x7E]+$/.test(key) && key.length >= 10;
-}
+import { UserDataManager, getUserDataManager } from './userDataManager';
 
 /**
  * Window state for persistence.
@@ -77,14 +41,16 @@ export type OverlayStyle = 'rectangle' | 'top-emerging';
 
 /**
  * Local quota tracking for free users.
- * Resets on calendar month boundary (YYYY-MM format).
+ * Resets on per-user anniversary date (day of month they signed up).
  */
 export interface LocalQuotas {
-  period: string;                     // "YYYY-MM" format (e.g., "2026-01")
-  priorityMicSecondsUsed: number;     // Seconds of priority mic used this month
+  period: string;                     // DEPRECATED: "YYYY-MM" format, kept for migration
+  lastResetDate?: string;             // ISO date of last reset (YYYY-MM-DD)
+  signupDay?: number;                 // Day of month user signed up (1-31)
+  priorityMicSecondsUsed: number;     // Seconds of priority mic used this period
   autoStackSessionsUsed: number;      // Multi-image stack sessions (2+ images)
-  textImprovementWordsUsed: number;   // Input words improved this month
-  verbalCommandsUsed: number;         // Voice commands used this month
+  textImprovementWordsUsed: number;   // Input words improved this period
+  verbalCommandsUsed: number;         // Voice commands used this period
   cachedTier: 'free' | 'pro';         // Cached tier for offline access
   cachedTierUpdatedAt: string;        // ISO timestamp of last tier sync
 }
@@ -104,11 +70,7 @@ interface Preferences {
   priorityDeviceId?: string | null;
   favoriteDeviceName?: string | null; // For auto-reconnect when device reappears
   clipboardHistoryBounds?: ClipboardHistoryBounds;
-  
-  // API key stored as encrypted base64 string via safeStorage (OS keychain).
-  // Never store plain text API keys - use getApiKey/setApiKey methods.
-  anthropicApiKeyEncrypted?: string;
-  
+
   // Onboarding state - tracks whether user has completed first-run setup.
   onboardingComplete?: boolean;
   onboardingStep?: number; // For resuming interrupted onboarding
@@ -203,16 +165,6 @@ interface Preferences {
   // Values: 2, 7, 30, 90 (days) or -1 (never delete)
   dataRetentionDays?: number;
 
-  // Narration capability settings.
-  // Local, offline text-to-speech for the Librarian.
-  narrationPrefs?: {
-    installed: boolean;
-    installedVersion?: string;
-    speakOnOpen: boolean;
-    blockedDevices: string[];
-    cacheSizeLimitBytes: number;
-  };
-
   // Dev/testing overrides (superadmin only) - persists until manually cleared.
   devOverrides?: {
     tier?: 'free' | 'pro';
@@ -285,29 +237,65 @@ const DEFAULT_PREFERENCES: Preferences = {
 
 /**
  * Manages application preferences stored as JSON.
+ *
+ * Supports per-user data isolation via UserDataManager.
+ * When a user logs in, call setUserDataManager() and then load() to load their preferences.
+ * When a user logs out, call reset() to clear in-memory state.
  */
 export class PreferencesManager {
   private prefsPath: string;
   private preferences: Preferences;
+  private userDataManager: UserDataManager | null = null;
 
   constructor() {
+    // Default to legacy path; will be updated when user logs in
     const userDataPath = app.getPath('userData');
     this.prefsPath = path.join(userDataPath, 'preferences.json');
     this.preferences = { ...DEFAULT_PREFERENCES };
   }
 
   /**
+   * Set the UserDataManager for per-user paths.
+   * Call this before load() after user logs in.
+   */
+  setUserDataManager(manager: UserDataManager): void {
+    this.userDataManager = manager;
+    this.updatePrefsPath();
+  }
+
+  /**
+   * Update the prefs path based on current user.
+   * Called automatically when UserDataManager is set.
+   */
+  private updatePrefsPath(): void {
+    if (this.userDataManager?.isLoggedIn()) {
+      this.prefsPath = this.userDataManager.getUserDataPath('preferences.json');
+      console.log('[PreferencesManager] Using user-specific path:', this.prefsPath);
+    } else {
+      // Fallback to legacy path (should not normally be used)
+      const userDataPath = app.getPath('userData');
+      this.prefsPath = path.join(userDataPath, 'preferences.json');
+      console.log('[PreferencesManager] Using legacy path (no user):', this.prefsPath);
+    }
+  }
+
+  /**
    * Load preferences from disk.
    */
   async load(): Promise<Preferences> {
+    // Update path in case user changed
+    this.updatePrefsPath();
+
     try {
       const data = await fs.readFile(this.prefsPath, 'utf-8');
       const loaded = JSON.parse(data) as Partial<Preferences>;
       this.preferences = { ...DEFAULT_PREFERENCES, ...loaded };
+      console.log('[PreferencesManager] Loaded preferences from:', this.prefsPath);
       return this.preferences;
     } catch (error) {
       // File doesn't exist or is invalid, use defaults
-      console.log('[PreferencesManager] Using default preferences');
+      console.log('[PreferencesManager] Using default preferences (no file at:', this.prefsPath, ')');
+      this.preferences = { ...DEFAULT_PREFERENCES };
       return this.preferences;
     }
   }
@@ -317,6 +305,11 @@ export class PreferencesManager {
    */
   async save(prefs: Partial<Preferences>): Promise<void> {
     this.preferences = { ...this.preferences, ...prefs };
+
+    // Ensure directory exists
+    const dir = path.dirname(this.prefsPath);
+    await fs.mkdir(dir, { recursive: true }).catch(() => {});
+
     try {
       await fs.writeFile(this.prefsPath, JSON.stringify(this.preferences, null, 2), 'utf-8');
       console.log('[PreferencesManager] Preferences saved');
@@ -324,6 +317,14 @@ export class PreferencesManager {
       console.error('[PreferencesManager] Failed to save preferences:', error);
       throw error;
     }
+  }
+
+  /**
+   * Reset preferences to defaults. Called on logout.
+   */
+  reset(): void {
+    console.log('[PreferencesManager] Resetting to defaults (user logged out)');
+    this.preferences = { ...DEFAULT_PREFERENCES };
   }
 
   /**
@@ -338,129 +339,6 @@ export class PreferencesManager {
    */
   getPreference<K extends keyof Preferences>(key: K): Preferences[K] {
     return this.preferences[key];
-  }
-
-  /**
-   * Store an API key with local obfuscation.
-   * Not cryptographically secure, but prevents casual copying from prefs file.
-   */
-  async setApiKey(plainTextKey: string): Promise<void> {
-    const obfuscated = obfuscate(plainTextKey);
-    await this.save({ anthropicApiKeyEncrypted: obfuscated });
-    console.log('[PreferencesManager] API key stored');
-  }
-
-  /**
-   * Retrieve the API key, deobfuscating from storage.
-   * Returns null if no key is stored, deobfuscation fails, or key is corrupted.
-   */
-  getApiKey(): string | null {
-    const obfuscated = this.preferences.anthropicApiKeyEncrypted;
-    if (!obfuscated) {
-      return null;
-    }
-
-    try {
-      const key = deobfuscate(obfuscated);
-      // Validate the deobfuscated key looks like a real API key
-      if (!isValidApiKeyFormat(key)) {
-        console.warn('[PreferencesManager] Stored API key appears corrupted, treating as empty');
-        return null;
-      }
-      return key;
-    } catch (error) {
-      console.error('[PreferencesManager] Failed to deobfuscate API key:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Check if an API key is stored.
-   */
-  hasApiKey(): boolean {
-    return !!this.preferences.anthropicApiKeyEncrypted;
-  }
-
-  /**
-   * Remove the stored API key.
-   */
-  async clearApiKey(): Promise<void> {
-    await this.save({ anthropicApiKeyEncrypted: undefined });
-    console.log('[PreferencesManager] API key cleared');
-  }
-
-  /**
-   * Get masked version of the API key for display purposes.
-   * Shows the identifiable prefix followed by fixed dots.
-   * Example: "sk-ant-api03-••••••••"
-   */
-  getMaskedApiKey(): string | null {
-    const key = this.getApiKey();
-    if (!key || key.length < 12) {
-      return null;
-    }
-
-    // Find the identifiable prefix (first segment with alphanumerics)
-    // For Anthropic: "sk-ant-api03-" prefix
-    // For OpenAI: "sk-proj-" or "sk-" prefix
-    // For others: first 8-12 chars
-    let prefixLength = 7;
-
-    if (key.startsWith('sk-ant-api')) {
-      // Anthropic format: sk-ant-api03-...
-      const match = key.match(/^sk-ant-api\d+-/);
-      prefixLength = match ? match[0].length : 13;
-    } else if (key.startsWith('sk-proj-')) {
-      prefixLength = 8;
-    } else if (key.startsWith('sk-')) {
-      prefixLength = 3;
-    } else if (key.startsWith('gsk_')) {
-      prefixLength = 4;
-    } else if (key.startsWith('AIza')) {
-      prefixLength = 4;
-    }
-
-    const prefix = key.slice(0, prefixLength);
-    // Use fixed 8 dots for clean display
-    return `${prefix}••••••••`;
-  }
-
-  /**
-   * Detect the API provider from the key format.
-   * Returns the provider name or 'unknown' if not recognized.
-   */
-  detectProvider(apiKey?: string): 'anthropic' | 'openai' | 'google' | 'groq' | 'mistral' | 'unknown' {
-    const key = apiKey || this.getApiKey();
-    if (!key) return 'unknown';
-
-    // Anthropic keys start with "sk-ant-"
-    if (key.startsWith('sk-ant-')) {
-      return 'anthropic';
-    }
-
-    // OpenAI keys start with "sk-" (but not "sk-ant-")
-    // Also includes "sk-proj-" format for project-specific keys
-    if (key.startsWith('sk-') && !key.startsWith('sk-ant-')) {
-      return 'openai';
-    }
-
-    // Groq keys start with "gsk_"
-    if (key.startsWith('gsk_')) {
-      return 'groq';
-    }
-
-    // Google/Gemini keys are typically "AIza" prefix
-    if (key.startsWith('AIza')) {
-      return 'google';
-    }
-
-    // Mistral keys are typically alphanumeric without specific prefix
-    // They're usually 32 chars and all lowercase alphanumeric
-    if (/^[a-zA-Z0-9]{32}$/.test(key)) {
-      return 'mistral';
-    }
-
-    return 'unknown';
   }
 }
 

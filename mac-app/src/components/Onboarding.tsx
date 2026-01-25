@@ -394,6 +394,10 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
   const [existingEmail, setExistingEmail] = useState<string | null>(null);
   const [launchAtLogin, setLaunchAtLogin] = useState(true);
   const [launchAtLoginError, setLaunchAtLoginError] = useState(false);
+  // Name input state (shown after OTP verification for new users)
+  const [showNameInput, setShowNameInput] = useState(false);
+  const [fullName, setFullName] = useState('');
+  const [isSavingName, setIsSavingName] = useState(false);
 
   // Load launch at login setting on mount (checks actual system state).
   useEffect(() => {
@@ -447,6 +451,8 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
     setError(null);
 
     try {
+      // Clear any existing session before new login (prevents session bleed from aliases)
+      await window.authAPI?.prepareForNewLogin();
       const result = await window.authAPI?.requestOtp(email.trim());
       if (result?.error) {
         setError(result.error);
@@ -484,11 +490,11 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
           result.session.access_token,
           result.session.refresh_token
         );
-        // Complete onboarding - skip shortcuts for returning users
+        // Show name input for new users, skip for returning users
         if (onFinishReturning) {
           onFinishReturning();
         } else {
-          onFinish();
+          setShowNameInput(true);
         }
       }
     } catch (err) {
@@ -498,11 +504,69 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
     }
   };
 
+  const handleSaveName = async () => {
+    if (isSavingName) return;
+
+    if (fullName.trim()) {
+      setIsSavingName(true);
+      try {
+        await window.authAPI?.updateFullName?.(fullName.trim());
+      } catch (err) {
+        console.error('[Onboarding] Failed to save name:', err);
+      } finally {
+        setIsSavingName(false);
+      }
+    }
+    onFinish();
+  };
+
   // Show loading state while checking session.
   if (isCheckingSession) {
     return (
       <div style={styles.phase}>
         <h1 style={styles.title}>Checking account...</h1>
+      </div>
+    );
+  }
+
+  // Show name input after OTP verification for new users.
+  if (showNameInput) {
+    return (
+      <div style={styles.phase}>
+        <h1 style={styles.title}>What's your name?</h1>
+        <p style={styles.subtitle}>
+          This is optional — you can skip or add it later in Settings.
+        </p>
+
+        <div style={styles.accountForm}>
+          <input
+            type="text"
+            placeholder="Full name"
+            value={fullName}
+            onChange={(e) => setFullName(e.target.value)}
+            disabled={isSavingName}
+            style={styles.input}
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleSaveName();
+              }
+            }}
+          />
+          <button
+            onClick={handleSaveName}
+            disabled={isSavingName}
+            style={{
+              ...styles.primaryButton,
+              opacity: isSavingName ? 0.5 : 1,
+              cursor: isSavingName ? 'not-allowed' : 'pointer',
+              width: '100%',
+            }}
+          >
+            {isSavingName ? 'Saving...' : fullName.trim() ? 'Continue' : 'Skip'}
+          </button>
+        </div>
       </div>
     );
   }

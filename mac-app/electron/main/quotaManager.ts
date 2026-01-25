@@ -55,6 +55,10 @@ export class QuotaManager extends EventEmitter {
   private preferencesManager: PreferencesManager;
   private quotas: LocalQuotas;
 
+  // Per-user quota reset tracking
+  private signupDay: number = 1;  // Day of month user signed up (1-31)
+  private lastResetDate: Date | null = null;  // Date of last quota reset
+
   // Session checker function injected from main process.
   // Returns true if user has a valid (non-expired) session.
   // When not logged in, we enforce free tier limits regardless of cached tier.
@@ -183,30 +187,40 @@ export class QuotaManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Load quotas from preferences, resetting if month has changed.
+   * Load quotas from preferences, handling migration and per-user reset.
    */
   private loadQuotas(): LocalQuotas {
     const stored = this.preferencesManager.getPreference('localQuotas');
     const currentPeriod = this.getCurrentPeriod();
 
-    // If no stored quotas or month changed, reset counters.
-    if (!stored || stored.period !== currentPeriod) {
+    // If no stored quotas, create fresh
+    if (!stored) {
       const fresh: LocalQuotas = {
         period: currentPeriod,
         priorityMicSecondsUsed: 0,
         autoStackSessionsUsed: 0,
         textImprovementWordsUsed: 0,
         verbalCommandsUsed: 0,
-        cachedTier: stored?.cachedTier || 'free',
-        cachedTierUpdatedAt: stored?.cachedTierUpdatedAt || new Date().toISOString(),
+        cachedTier: 'free',
+        cachedTierUpdatedAt: new Date().toISOString(),
       };
       this.saveQuotas(fresh);
       return fresh;
     }
 
+    // Load signup day and last reset date for per-user reset logic
+    this.signupDay = stored.signupDay || 1;
+    this.lastResetDate = stored.lastResetDate ? new Date(stored.lastResetDate) : null;
+
+    // Migration: if old period exists but no lastResetDate, convert
+    // Assume last reset was 1st of stored period month
+    if (stored.period && !stored.lastResetDate) {
+      const [year, month] = stored.period.split('-').map(Number);
+      this.lastResetDate = new Date(year, month - 1, 1);
+      stored.lastResetDate = this.lastResetDate.toISOString().split('T')[0];
+    }
+
     // Handle migration from older quota format (count-based to word-based).
-    // If old textImprovementsUsed exists but new textImprovementWordsUsed doesn't,
-    // reset to 0 (don't try to convert counts to words).
     if (stored.textImprovementWordsUsed === undefined) {
       stored.textImprovementWordsUsed = 0;
     }
@@ -259,6 +273,59 @@ export class QuotaManager extends EventEmitter {
       cachedTierUpdatedAt: new Date().toISOString(),
     });
     this.emit('tierChanged', tier);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Per-user quota reset
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Set signup day. Called when user creates account or logs in.
+   * Signup day determines when quotas reset each month.
+   */
+  async setSignupDay(day: number): Promise<void> {
+    // Clamp to valid range (1-31)
+    this.signupDay = Math.max(1, Math.min(31, day));
+    this.quotas.signupDay = this.signupDay;
+
+    // If no lastResetDate yet (new user), set it to today
+    if (!this.quotas.lastResetDate) {
+      const today = new Date();
+      this.quotas.lastResetDate = today.toISOString().split('T')[0];
+      this.lastResetDate = today;
+    }
+
+    await this.saveQuotas(this.quotas);
+  }
+
+  /**
+   * Get the effective signup day for a given month (handles 31st in Feb, etc.)
+   */
+  private getEffectiveSignupDay(year: number, month: number): number {
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    return Math.min(this.signupDay, daysInMonth);
+  }
+
+  /**
+   * Get the next reset date after a given date.
+   */
+  private getNextResetAfter(afterDate: Date): Date {
+    const year = afterDate.getFullYear();
+    const month = afterDate.getMonth();
+    const day = afterDate.getDate();
+    const effectiveDay = this.getEffectiveSignupDay(year, month);
+
+    // If we haven't passed signup day this month, next reset is this month
+    if (day < effectiveDay) {
+      return new Date(year, month, effectiveDay);
+    }
+
+    // Otherwise, next reset is next month
+    const nextMonth = month + 1;
+    const nextYear = nextMonth > 11 ? year + 1 : year;
+    const normalizedMonth = nextMonth % 12;
+    const effectiveDayNextMonth = this.getEffectiveSignupDay(nextYear, normalizedMonth);
+    return new Date(nextYear, normalizedMonth, effectiveDayNextMonth);
   }
 
   // ---------------------------------------------------------------------------
@@ -533,19 +600,32 @@ export class QuotaManager extends EventEmitter {
   }
 
   /**
-   * Check for month rollover and reset if needed.
+   * Check if quotas should reset based on per-user anniversary date.
    */
   private checkAndResetIfNeeded(): void {
-    const currentPeriod = this.getCurrentPeriod();
-    if (this.quotas.period !== currentPeriod) {
+    // If no lastResetDate, this is a new user - quotas start fresh
+    if (!this.lastResetDate) {
+      return;
+    }
+
+    const now = new Date();
+    const nextReset = this.getNextResetAfter(this.lastResetDate);
+
+    if (now >= nextReset) {
+      // Time to reset quotas
+      const todayStr = now.toISOString().split('T')[0];
       this.quotas = {
         ...this.quotas,
-        period: currentPeriod,
+        period: this.getCurrentPeriod(),  // Keep period updated for backwards compat
+        lastResetDate: todayStr,
         priorityMicSecondsUsed: 0,
         autoStackSessionsUsed: 0,
         textImprovementWordsUsed: 0,
         verbalCommandsUsed: 0,
       };
+      this.lastResetDate = now;
+      this.saveQuotas(this.quotas);
+      this.emit('quotaReset');
     }
   }
 
@@ -555,77 +635,80 @@ export class QuotaManager extends EventEmitter {
 
   /**
    * Format priority mic usage for display.
-   * Returns "0 of 500 priority mic mins" or "0 of ∞ priority mic mins".
-   * Caps displayed usage at limit (shows "30 of 30" not "35 of 30").
+   * Returns "0/500 priority mic mins" or "0/∞ priority mic mins".
+   * Caps displayed usage at limit (shows "30/30" not "35/30").
    */
   formatPriorityMicUsage(): string {
     const status = this.getPriorityMicStatus();
     const usedMinutes = Math.floor(status.used / 60);
     if (isUnlimited(status.limit)) {
-      return `${usedMinutes} of ∞ priority mic mins`;
+      return `${usedMinutes}/∞ priority mic mins`;
     }
     const limitMinutes = Math.floor(status.limit / 60);
     const displayedMinutes = Math.min(usedMinutes, limitMinutes);
-    return `${displayedMinutes} of ${limitMinutes} priority mic mins`;
+    return `${displayedMinutes}/${limitMinutes} priority mic mins`;
   }
 
   /**
    * Format auto-stack usage for display.
-   * Returns "7 of 50 auto-stacks" or "7 of ∞ auto-stacks".
-   * Caps displayed usage at limit (shows "30 of 30" not "35 of 30").
+   * Returns "7/50 auto-stacks" or "7/∞ auto-stacks".
+   * Caps displayed usage at limit (shows "30/30" not "35/30").
    */
   formatAutoStackUsage(): string {
     const status = this.getAutoStackStatus();
     if (isUnlimited(status.limit)) {
-      return `${status.used} of ∞ auto-stacks`;
+      return `${status.used}/∞ auto-stacks`;
     }
     const displayedUsed = Math.min(status.used, status.limit);
-    return `${displayedUsed} of ${status.limit} auto-stacks`;
+    return `${displayedUsed}/${status.limit} auto-stacks`;
   }
 
   /**
    * Format text improvement usage for display.
-   * Returns "2,340 of 5,000 words" or "2,340 of ∞ words".
-   * Caps displayed usage at limit (shows "5,000 of 5,000" not "5,500 of 5,000").
+   * Returns "2,340/5,000 words" or "2,340/∞ words".
+   * Caps displayed usage at limit (shows "5,000/5,000" not "5,500/5,000").
    */
   formatTextImproveUsage(): string {
     const status = this.getTextImproveStatus();
     if (isUnlimited(status.limit)) {
-      return `${status.used.toLocaleString()} of ∞ words`;
+      return `${status.used.toLocaleString()}/∞ words`;
     }
     const displayedUsed = Math.min(status.used, status.limit);
-    return `${displayedUsed.toLocaleString()} of ${status.limit.toLocaleString()} words`;
+    return `${displayedUsed.toLocaleString()}/${status.limit.toLocaleString()} words`;
   }
 
   /**
    * Format verbal commands usage for display.
-   * Returns "25 of 50 voice commands" or "25 of ∞ voice commands".
+   * Returns "25/50 voice commands" or "25/∞ voice commands".
    */
   formatVerbalCommandsUsage(): string {
     const status = this.getVerbalCommandsStatus();
     if (isUnlimited(status.limit)) {
-      return `${status.used} of ∞ voice commands`;
+      return `${status.used}/∞ voice commands`;
     }
     const displayedUsed = Math.min(status.used, status.limit);
-    return `${displayedUsed} of ${status.limit} voice commands`;
+    return `${displayedUsed}/${status.limit} voice commands`;
   }
 
   /**
-   * Get the reset date (first of next month).
+   * Get the next reset date based on user's signup day.
    */
   getResetDate(): Date {
-    const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    if (!this.lastResetDate) {
+      // Fallback: if no reset date yet, calculate from today
+      return this.getNextResetAfter(new Date());
+    }
+    return this.getNextResetAfter(this.lastResetDate);
   }
 
   /**
-   * Get days until quota reset (first of next month).
+   * Get days until quota reset (based on user's signup day).
    */
   getDaysUntilReset(): number {
     const now = new Date();
     const resetDate = this.getResetDate();
     const diffMs = resetDate.getTime() - now.getTime();
-    return Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+    return Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
   }
 
   /**

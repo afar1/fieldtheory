@@ -15,8 +15,9 @@ import { SoundManager } from './soundManager';
 import { QuotaManager } from './quotaManager';
 import { AudioManager } from './audioManager';
 import { CursorStatusManager } from './cursorStatusManager';
-import { improveTranscript, setApiKey as setEngineerApiKey } from './promptEngineer';
+import { improveTranscript } from './promptEngineer';
 import { CommandsManager } from './commandsManager';
+import { MESSAGES } from './messages';
 import * as plist from 'plist';
 
 // Feature flag for live transcript improvement.
@@ -105,6 +106,8 @@ export class TranscriberManager extends EventEmitter {
   private audioManager: AudioManager | null = null;
   private cursorStatusManager: CursorStatusManager | null = null;
   private commandsManager: CommandsManager | null = null;
+  private accessTokenGetter: (() => string | undefined) | null = null;
+  private hasShownQuotaMessageThisPeriod: boolean = false;
   private recordingStartTime: number = 0;
   private skipNextPasteFailedNotification: boolean = false;
   private priorityMicSkippedForQuota: boolean = false; // True when quota exhausted, skip tracking
@@ -206,6 +209,14 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
+   * Set a function to get the current access token for API calls.
+   * Used for cloud-based transcript improvement.
+   */
+  setAccessTokenGetter(getter: () => string | undefined): void {
+    this.accessTokenGetter = getter;
+  }
+
+  /**
    * Initialize the transcriber manager.
    * Loads preferences and registers the global hotkey.
    */
@@ -249,6 +260,18 @@ export class TranscriberManager extends EventEmitter {
       this.registeredHotkey = null;
       this.registeredSecondaryHotkey = null;
     });
+  }
+
+  /**
+   * Re-register hotkeys after they've been unregistered (e.g., during onboarding).
+   * Called by index.ts after onboarding completes.
+   */
+  reRegisterHotkeys(): void {
+    console.log('[TranscriberManager] Re-registering hotkeys');
+    this.registerHotkey(this.hotkey);
+    if (this.secondaryHotkey) {
+      this.registerSecondaryHotkey(this.secondaryHotkey);
+    }
   }
 
   /**
@@ -477,7 +500,7 @@ export class TranscriberManager extends EventEmitter {
           this.priorityMicSkippedForQuota = true;
           // Show note but don't block recording - graceful degradation
           this.cursorStatusManager?.showRecordingNote(
-            'Priority mic limit reached — using default mic'
+            MESSAGES.recordingNote.priorityMicLimitReached
           );
           this.emit('quotaExhausted', quotaCheck);
         }
@@ -572,10 +595,10 @@ export class TranscriberManager extends EventEmitter {
         // Still stack screenshots if any were taken during recording (no audio).
         await this.stackScreenshotsIfAny();
         this.setStatus('idle');
-        this.overlay.showStatus('No audio found');
+        this.overlay.showStatus(MESSAGES.overlay.noAudioFound);
         return;
       }
-      
+
       // Strip bracketed content like [BLANK_AUDIO], [MUSIC], [SILENCE] from anywhere in the text.
       // These are whisper artifacts that shouldn't appear in final transcription.
       // Preserve [Figure X] references by using a negative lookahead (X can be number or letter).
@@ -595,7 +618,7 @@ export class TranscriberManager extends EventEmitter {
         // Still stack screenshots if any were taken during recording (no audio).
         await this.stackScreenshotsIfAny();
         this.setStatus('idle');
-        this.overlay.showStatus('No audio found');
+        this.overlay.showStatus(MESSAGES.overlay.noAudioFound);
         return;
       }
       
@@ -706,39 +729,25 @@ export class TranscriberManager extends EventEmitter {
       }
 
       if (shouldTriggerImprovement && FEATURE_IMPROVE_ENABLED && this.clipboardManager) {
-        // Check quota before calling AI.
-        const quotaCheck = this.quotaManager?.checkQuota('textImprove');
-        if (quotaCheck && !quotaCheck.allowed) {
-          console.log('[TranscriberManager] Text improve quota exhausted');
-          this.cursorStatusManager?.showCriticalMessage('Improvement quota exhausted');
-        } else {
-          // Check if we can improve: either local LLM is enabled or API key exists.
-          const useLocalLLM = this.preferences.getPreference('useLocalLLM') as boolean | undefined;
-          const apiKey = this.preferences.getApiKey();
+        // Check if we can improve: either local LLM is enabled or we have an access token for cloud API.
+        const useLocalLLM = this.preferences.getPreference('useLocalLLM') as boolean | undefined;
+        const accessToken = this.accessTokenGetter?.();
 
-          // Set API key if available (needed for API fallback).
-          if (apiKey) {
-            setEngineerApiKey(apiKey);
-          }
-
-          if (useLocalLLM || apiKey) {
-            // Bail silently if no text to improve
-            if (!cleanedText || cleanedText.trim().length === 0) {
-              console.log('[TranscriberManager] No text to improve, skipping silently');
-            } else {
+        if (useLocalLLM || accessToken) {
+          // Bail silently if no text to improve
+          if (!cleanedText || cleanedText.trim().length === 0) {
+            console.log('[TranscriberManager] No text to improve, skipping silently');
+          } else {
             // Show improving state.
             this.cursorStatusManager?.setState('improving');
 
-            console.log(`[TranscriberManager] Running AI improvement on transcript (mode: ${useLocalLLM ? 'local' : 'API'})...`);
-            const result = await improveTranscript(cleanedText);
+            console.log(`[TranscriberManager] Running AI improvement on transcript (mode: ${useLocalLLM ? 'local' : 'cloud'})...`);
+            const result = await improveTranscript(cleanedText, accessToken);
 
             if (result.success && result.refinedPrompt) {
               improvedText = result.refinedPrompt;
               finalText = improvedText;
               console.log('[TranscriberManager] Transcript improved successfully');
-
-              // Track quota usage (wordCount was calculated earlier for threshold check).
-              await this.quotaManager?.incrementTextImprove(wordCount);
 
               // Track auto-improve usage stats (only for API calls with usage data)
               if (result.usage) {
@@ -759,23 +768,35 @@ export class TranscriberManager extends EventEmitter {
                 });
               }
 
+              // Track quota and metrics for words improved
+              const improvedWordCount = result.wordCount || wordCount;
+              await this.quotaManager?.incrementTextImprove(improvedWordCount);
+              this.emit('wordsImproved', improvedWordCount);
+
               // Save improved content to the transcript item in the database.
               // The transcript item is the last one added to currentStack.
               const transcriptItemId = this.currentStack[this.currentStack.length - 1];
               if (transcriptItemId) {
                 this.clipboardManager.saveImprovedContent(transcriptItemId, improvedText);
               }
+            } else if (result.quotaExceeded) {
+              // Quota exceeded - show message once per billing period, then fail silently
+              console.log('[TranscriberManager] Text improve quota exceeded');
+              if (result.showQuotaMessage && !this.hasShownQuotaMessageThisPeriod) {
+                this.hasShownQuotaMessageThisPeriod = true;
+                this.cursorStatusManager?.showCriticalMessage(MESSAGES.critical.improvementQuotaExhausted);
+              }
+              // Use raw transcript (already in finalText)
             } else {
               console.error('[TranscriberManager] Improvement failed:', result.error);
               // Fail silently - don't show error message, just fall back to original transcript
             }
-            }
-          } else {
-            console.log('[TranscriberManager] No improvement method available (no API key, no local model)');
-            this.cursorStatusManager?.showCriticalMessage('Enable local model or add API key in Settings');
-            // Skip paste-failed notification since we're showing the config message
-            this.skipNextPasteFailedNotification = true;
           }
+        } else {
+          console.log('[TranscriberManager] No improvement method available (not signed in, no local model)');
+          this.cursorStatusManager?.showCriticalMessage(MESSAGES.critical.noLlmConfigured);
+          // Skip paste-failed notification since we're showing the config message
+          this.skipNextPasteFailedNotification = true;
         }
       }
 
@@ -836,7 +857,7 @@ export class TranscriberManager extends EventEmitter {
       this.hasAudioContent = false;
       this.currentStack = [];
       this.screenshotMetadata = [];
-      this.overlay.showStatus('Cancelled');
+      this.overlay.showStatus(MESSAGES.overlay.cancelled);
       this.unregisterAbandonHotkey();
     } catch (error) {
       console.error('[TranscriberManager] Failed to cancel recording:', error);
@@ -844,7 +865,7 @@ export class TranscriberManager extends EventEmitter {
       this.hasAudioContent = false;
       this.currentStack = [];
       this.screenshotMetadata = [];
-      this.overlay.showStatus('Cancelled');
+      this.overlay.showStatus(MESSAGES.overlay.cancelled);
       this.unregisterAbandonHotkey();
     }
   }
@@ -1328,7 +1349,9 @@ export class TranscriberManager extends EventEmitter {
           console.log(`[TranscriberManager] Auto-stack quota exhausted, screenshot ${itemId} saved separately (${existingScreenshots} already stacked)`);
           // Show cursor message with limit info, but only once per session.
           if (this.cursorStatusManager && !this.autoStackLimitShownThisSession) {
-            this.cursorStatusManager.showRecordingNote(`Auto-stack limit reached (${quotaCheck.used}/${quotaCheck.limit}) — upgrade for more`);
+            this.cursorStatusManager.showRecordingNote(
+              MESSAGES.recordingNote.autoStackLimitReached(quotaCheck.used, quotaCheck.limit)
+            );
             this.autoStackLimitShownThisSession = true;
           }
           this.emit('stackingDisabled', {
@@ -1370,7 +1393,7 @@ export class TranscriberManager extends EventEmitter {
 
         // Show warning when reaching 10 screenshots during recording.
         if (this.screenshotMetadata.length === 10 && this.cursorStatusManager) {
-          this.cursorStatusManager.showRecordingNote('Note: Stacking 10+ images, some input fields may have limits');
+          this.cursorStatusManager.showRecordingNote(MESSAGES.recordingNote.tooManyImages);
         }
       }
     }

@@ -16,6 +16,7 @@ import { MobileSync } from './mobileSync';
 import { SharedClipboardSync, SharedClipboardQueryOptions } from './sharedClipboardSync';
 import { SocialSync } from './socialSync';
 import { AuthManager } from './authManager';
+import { createUserDataManager, UserDataManager } from './userDataManager';
 import { SharedClipboardIPCChannels } from './types/clipboard';
 import { SocialIPCChannels } from './types/social';
 import {
@@ -34,10 +35,10 @@ import {
 import { ClipboardItem, isTerminalApp, isIDEWithTerminal, obscureHomePath } from './clipboardManager';
 import { getHotkeyManager } from './hotkeyManager';
 import {
-  setApiKey as setEngineerApiKey,
   improveTranscript,
   setLocalLLMManager as setEngineerLocalLLMManager,
   setUseLocalLLM as setEngineerUseLocalLLM,
+  setSupabaseUrl as setEngineerSupabaseUrl,
 } from './promptEngineer';
 import { OnboardingWindow, OnboardingStep } from './onboardingWindow';
 import { OnboardingIPCChannels } from './types/onboarding';
@@ -52,7 +53,7 @@ import { ScenarioTestingWindow } from './scenarioTestingWindow';
 import { LocalLLMManager, LLMModelSize } from './localLLMManager';
 import { LibrarianManager, Reading, ReadingMeta, WatchedDir } from './librarianManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
-import { NarrationManager, getNarrationManager, NarrationStatus, NarrationIPCChannels, OutputDevice, NarrationPreferences, FEATURE_NARRATION_ENABLED } from './narration';
+import { MESSAGES } from './messages';
 
 // Load environment variables from .env.local for Supabase credentials.
 // In development, the file is in the mac-app directory.
@@ -146,6 +147,7 @@ let preferencesManager: PreferencesManager | null = null;
 let clipboardManager: ClipboardManager | null = null;
 let clipboardHistoryWindow: ClipboardHistoryWindow | null = null;
 let authManager: AuthManager | null = null;
+let userDataManager: UserDataManager | null = null;
 let mobileSync: MobileSync | null = null;
 let localLLMManager: LocalLLMManager | null = null;
 let sharedClipboardSync: SharedClipboardSync | null = null;
@@ -155,7 +157,6 @@ let cursorStatusManager: CursorStatusManager | null = null;
 let quotaManager: QuotaManager | null = null;
 let diagnosticsCollector: DiagnosticsCollector | null = null;
 let librarianManager: LibrarianManager | null = null;
-let narrationManager: NarrationManager | null = null;
 let commandsManager: CommandsManager | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
 let scenarioTestingWindow: ScenarioTestingWindow | null = null;
@@ -270,6 +271,11 @@ function registerHotkeysAfterOnboarding(): void {
   if (!clipboardManager || !preferencesManager) {
     console.warn('[Main] Cannot register hotkeys: managers not initialized');
     return;
+  }
+
+  // Re-register transcription hotkeys (may have been unregistered by globalShortcut.unregisterAll())
+  if (transcriberManager) {
+    transcriberManager.reRegisterHotkeys();
   }
 
   const prefs = preferencesManager.get();
@@ -390,7 +396,9 @@ function registerHotkeysAfterOnboarding(): void {
       }
 
       // Get most recent item from clipboard history
-      const stmt = clipboardManager['db'].prepare('SELECT id FROM clipboard_items ORDER BY created_at DESC LIMIT 1');
+      const db = clipboardManager['db'];
+      if (!db) return;
+      const stmt = db.prepare('SELECT id FROM clipboard_items ORDER BY created_at DESC LIMIT 1');
       const row = stmt.get() as { id: number } | undefined;
 
       if (!row) return;
@@ -537,7 +545,7 @@ function registerHotkeysAfterOnboarding(): void {
     // Show cursor notification of the new state
     if (cursorStatusManager) {
       cursorStatusManager.showRecordingNote(
-        newState ? 'Auto-improve enabled' : 'Auto-improve disabled'
+        newState ? MESSAGES.recordingNote.autoImproveEnabled : MESSAGES.recordingNote.autoImproveDisabled
       );
     }
   });
@@ -606,17 +614,11 @@ async function handleImproveSelectedText(): Promise<void> {
     // Show blue dot (improving state).
     cursorStatusManager?.setState('improving');
 
-    // Get API key.
-    const apiKey = preferencesManager?.getApiKey();
-    if (!apiKey) {
-      console.error('[ImproveText] No API key configured');
-      cursorStatusManager?.setState('idle');
-      return;
-    }
+    // Get auth token for cloud API.
+    const accessToken = authManager?.getSession()?.access_token;
 
-    // Call improve API.
-    setEngineerApiKey(apiKey);
-    const result = await improveTranscript(selectedText);
+    // Call improve API (will use local LLM if no auth token).
+    const result = await improveTranscript(selectedText, accessToken);
 
     if (!result.success || !result.refinedPrompt) {
       console.error('[ImproveText] Improvement failed:', result.error);
@@ -633,9 +635,10 @@ async function handleImproveSelectedText(): Promise<void> {
     // Show done state briefly.
     cursorStatusManager?.setState('done');
 
-    // Track quota usage (count input words).
+    // Track quota usage and metrics (count input words).
     const inputWordCount = selectedText.trim().split(/\s+/).filter(w => w.length > 0).length;
     await quotaManager?.incrementTextImprove(inputWordCount);
+    metricsManager?.recordWordsImproved(inputWordCount);
 
     // Track auto-improve usage stats (only for API calls with usage data)
     if (result.usage && preferencesManager) {
@@ -1259,6 +1262,25 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   // ===========================================================================
+  // Cursor Hook API
+  // ===========================================================================
+
+  // Check if Cursor hook is installed
+  ipcMain.handle('librarian:isCursorHookInstalled', (): boolean => {
+    return librarianManager?.isCursorHookInstalled() ?? false;
+  });
+
+  // Install Cursor hook
+  ipcMain.handle('librarian:installCursorHook', (): boolean => {
+    return librarianManager?.installCursorHook() ?? false;
+  });
+
+  // Uninstall Cursor hook
+  ipcMain.handle('librarian:uninstallCursorHook', (): boolean => {
+    return librarianManager?.uninstallCursorHook() ?? false;
+  });
+
+  // ===========================================================================
   // Discovery Frequency API
   // ===========================================================================
 
@@ -1768,205 +1790,6 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   // ===========================================================================
-  // Narration IPC handlers - Local, offline TTS for the Librarian
-  // ===========================================================================
-
-  // Get narration status (installation, playback, cache)
-  ipcMain.handle(NarrationIPCChannels.GET_STATUS, (): NarrationStatus | null => {
-    return narrationManager?.getStatus() ?? null;
-  });
-
-  // Install narration capability (verifies macOS say is available)
-  ipcMain.handle(NarrationIPCChannels.INSTALL, async (): Promise<boolean> => {
-    return narrationManager?.install() ?? false;
-  });
-
-  // Play a reading aloud
-  ipcMain.handle(NarrationIPCChannels.PLAY_READING, async (_event, readingPath: string): Promise<boolean> => {
-    if (!narrationManager || !librarianManager) return false;
-
-    try {
-      const reading = librarianManager.getReading(readingPath);
-      if (!reading) {
-        console.warn(`[Narration] Reading not found: ${readingPath}`);
-        return false;
-      }
-
-      await narrationManager.playReading(readingPath, reading.content);
-      return true;
-    } catch (error) {
-      console.error('[Narration] Play reading failed:', error);
-      return false;
-    }
-  });
-
-  // Stop playback
-  ipcMain.handle(NarrationIPCChannels.STOP, (): void => {
-    narrationManager?.stop();
-  });
-
-  // Pause playback
-  ipcMain.handle(NarrationIPCChannels.PAUSE, (): boolean => {
-    return narrationManager?.pause() ?? false;
-  });
-
-  // Resume playback
-  ipcMain.handle(NarrationIPCChannels.RESUME, (): boolean => {
-    return narrationManager?.resume() ?? false;
-  });
-
-  // Toggle pause/play
-  ipcMain.handle(NarrationIPCChannels.TOGGLE_PAUSE, (): boolean => {
-    return narrationManager?.togglePause() ?? false;
-  });
-
-  // Get playback progress
-  ipcMain.handle(NarrationIPCChannels.GET_PLAYBACK_PROGRESS, (): { position: number; duration: number; percentage: number } | null => {
-    return narrationManager?.getPlaybackProgress() ?? null;
-  });
-
-  // Get current output device
-  ipcMain.handle(NarrationIPCChannels.GET_OUTPUT_DEVICE, async (): Promise<OutputDevice | null> => {
-    return narrationManager?.getCurrentOutputDevice() ?? null;
-  });
-
-  // Refresh device detection
-  ipcMain.handle(NarrationIPCChannels.REFRESH_DEVICES, async (): Promise<OutputDevice | null> => {
-    return narrationManager?.refreshDevices() ?? null;
-  });
-
-  // Get narration preferences
-  ipcMain.handle(NarrationIPCChannels.GET_PREFS, (): NarrationPreferences | null => {
-    return narrationManager?.getPrefs() ?? null;
-  });
-
-  // Set speak-on-open preference
-  ipcMain.handle(NarrationIPCChannels.SET_SPEAK_ON_OPEN, async (_event, enabled: boolean): Promise<void> => {
-    await narrationManager?.setSpeakOnOpen(enabled);
-  });
-
-  // Add blocked device pattern
-  ipcMain.handle(NarrationIPCChannels.ADD_BLOCKED_DEVICE, async (_event, pattern: string): Promise<void> => {
-    await narrationManager?.addBlockedDevice(pattern);
-  });
-
-  // Remove blocked device pattern
-  ipcMain.handle(NarrationIPCChannels.REMOVE_BLOCKED_DEVICE, async (_event, pattern: string): Promise<void> => {
-    await narrationManager?.removeBlockedDevice(pattern);
-  });
-
-  // Clear narration cache
-  ipcMain.handle(NarrationIPCChannels.CLEAR_CACHE, async (): Promise<void> => {
-    await narrationManager?.clearCache();
-  });
-
-  // Install Chatterbox TTS engine
-  ipcMain.handle(NarrationIPCChannels.INSTALL_CHATTERBOX, async (): Promise<boolean> => {
-    return narrationManager?.installChatterbox() ?? false;
-  });
-
-  // Get Chatterbox installation status
-  ipcMain.handle(NarrationIPCChannels.GET_CHATTERBOX_STATUS, () => {
-    return narrationManager?.getChatterboxStatus() ?? null;
-  });
-
-  // Test Chatterbox voice
-  ipcMain.handle(NarrationIPCChannels.TEST_CHATTERBOX_VOICE, async (): Promise<boolean> => {
-    try {
-      await narrationManager?.testChatterboxVoice();
-      return true;
-    } catch (error) {
-      console.error('[Narration] Test voice failed:', error);
-      return false;
-    }
-  });
-
-  // Test macOS Say voice
-  ipcMain.handle(NarrationIPCChannels.TEST_MACOS_VOICE, async (): Promise<boolean> => {
-    try {
-      await narrationManager?.testMacOSVoice();
-      return true;
-    } catch (error) {
-      console.error('[Narration] Test macOS voice failed:', error);
-      return false;
-    }
-  });
-
-  // Set preferred narration engine
-  ipcMain.handle(NarrationIPCChannels.SET_PREFERRED_ENGINE, async (_event, engine: 'chatterbox' | 'macos_say' | 'elevenlabs'): Promise<boolean> => {
-    try {
-      await narrationManager?.setPreferredEngine(engine);
-      return true;
-    } catch (error) {
-      console.error('[Narration] Set preferred engine failed:', error);
-      return false;
-    }
-  });
-
-  // Set ElevenLabs API key
-  ipcMain.handle(NarrationIPCChannels.SET_ELEVENLABS_API_KEY, async (_event, apiKey: string): Promise<boolean> => {
-    try {
-      await narrationManager?.setElevenlabsApiKey(apiKey);
-      return true;
-    } catch (error) {
-      console.error('[Narration] Set ElevenLabs API key failed:', error);
-      return false;
-    }
-  });
-
-  // Set ElevenLabs voice
-  ipcMain.handle(NarrationIPCChannels.SET_ELEVENLABS_VOICE, async (_event, voiceId: string): Promise<boolean> => {
-    try {
-      await narrationManager?.setElevenlabsVoice(voiceId);
-      return true;
-    } catch (error) {
-      console.error('[Narration] Set ElevenLabs voice failed:', error);
-      return false;
-    }
-  });
-
-  // Test ElevenLabs voice
-  ipcMain.handle(NarrationIPCChannels.TEST_ELEVENLABS_VOICE, async (): Promise<boolean> => {
-    try {
-      await narrationManager?.testElevenlabsVoice();
-      return true;
-    } catch (error) {
-      console.error('[Narration] Test ElevenLabs voice failed:', error);
-      return false;
-    }
-  });
-
-  // Get available ElevenLabs voices
-  ipcMain.handle(NarrationIPCChannels.GET_ELEVENLABS_VOICES, async () => {
-    try {
-      return await narrationManager?.getElevenlabsVoices() ?? [];
-    } catch (error) {
-      console.error('[Narration] Get ElevenLabs voices failed:', error);
-      return [];
-    }
-  });
-
-  // Check ElevenLabs connection
-  ipcMain.handle(NarrationIPCChannels.CHECK_ELEVENLABS_CONNECTION, async () => {
-    try {
-      return await narrationManager?.checkElevenlabsConnection() ?? { connected: false, error: 'Manager not initialized' };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { connected: false, error: message };
-    }
-  });
-
-  // Get predefined Librarian voices
-  ipcMain.handle(NarrationIPCChannels.GET_LIBRARIAN_VOICES, () => {
-    return narrationManager?.getLibrarianVoices() ?? [];
-  });
-
-  // Get current voice ID
-  ipcMain.handle(NarrationIPCChannels.GET_CURRENT_VOICE_ID, () => {
-    return narrationManager?.getCurrentVoiceId() ?? null;
-  });
-
-  // ===========================================================================
   // Metrics IPC handlers - User-visible usage stats
   // "The metrics you see are the metrics we see."
   // ===========================================================================
@@ -1976,6 +1799,7 @@ function setupLibrarianIPCHandlers(): void {
     return metricsManager?.getMetrics() ?? {
       transcriptions: 0,
       words_transcribed: 0,
+      words_improved: 0,
       priority_mic_minutes: 0,
       verbal_commands: 0,
       command_launcher_uses: 0,
@@ -2001,6 +1825,7 @@ function setupLibrarianIPCHandlers(): void {
       metrics: {
         transcriptions: 0,
         words_transcribed: 0,
+        words_improved: 0,
         priority_mic_minutes: 0,
         verbal_commands: 0,
         command_launcher_uses: 0,
@@ -2722,7 +2547,7 @@ function setupClipboardIPCHandlers(): void {
       
       // Show warning for more than 10 images being pasted to multimodal apps.
       if (imagesToPaste > 10 && cursorStatusManager) {
-        cursorStatusManager.showCriticalMessage('Pasting more than 10 images – some apps may have limits');
+        cursorStatusManager.showCriticalMessage(MESSAGES.critical.pastingManyImages);
       }
 
       // Build figure paths for text content if we have multiple items.
@@ -3078,137 +2903,6 @@ function setupClipboardIPCHandlers(): void {
   });
 
   // =========================================================================
-  // API Key Management - Securely stored via OS keychain (safeStorage)
-  // =========================================================================
-
-  // Check if API key is set (without exposing the key itself).
-  ipcMain.handle(ClipboardIPCChannels.GET_API_KEY_STATUS, async () => {
-    return {
-      hasKey: preferencesManager?.hasApiKey() ?? false,
-    };
-  });
-
-  // Set API key securely.
-  ipcMain.handle(ClipboardIPCChannels.SET_API_KEY, async (_event, apiKey: string) => {
-    try {
-      if (!preferencesManager) {
-        return { success: false, error: 'Preferences not initialized' };
-      }
-      await preferencesManager.setApiKey(apiKey);
-      
-      // Update the engineer service with the new key
-      setEngineerApiKey(apiKey);
-      
-      return { success: true };
-    } catch (error) {
-      console.error('[Main] setApiKey error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to save API key',
-      };
-    }
-  });
-
-  // Clear the stored API key.
-  ipcMain.handle(ClipboardIPCChannels.CLEAR_API_KEY, async () => {
-    try {
-      if (!preferencesManager) {
-        return { success: false, error: 'Preferences not initialized' };
-      }
-      await preferencesManager.clearApiKey();
-      return { success: true };
-    } catch (error) {
-      console.error('[Main] clearApiKey error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to clear API key',
-      };
-    }
-  });
-
-  // Get API key info (masked key + detected provider) for display.
-  ipcMain.handle(ClipboardIPCChannels.GET_API_KEY_INFO, async () => {
-    if (!preferencesManager) {
-      return { hasKey: false, maskedKey: null, provider: 'unknown' };
-    }
-    const hasKey = preferencesManager.hasApiKey();
-    const maskedKey = preferencesManager.getMaskedApiKey();
-    const provider = preferencesManager.detectProvider();
-    return { hasKey, maskedKey, provider };
-  });
-
-  // Test the API key by making a lightweight API call.
-  ipcMain.handle(ClipboardIPCChannels.TEST_API_KEY, async () => {
-    if (!preferencesManager) {
-      return { success: false, error: 'Preferences not initialized' };
-    }
-
-    const apiKey = preferencesManager.getApiKey();
-    if (!apiKey) {
-      return { success: false, error: 'No API key configured' };
-    }
-
-    const provider = preferencesManager.detectProvider();
-
-    try {
-      // Test based on detected provider
-      if (provider === 'anthropic') {
-        // Use the messages endpoint with a minimal request
-        const response = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify({
-            model: 'claude-3-haiku-20240307',
-            max_tokens: 1,
-            messages: [{ role: 'user', content: 'Hi' }],
-          }),
-        });
-
-        if (response.ok) {
-          return { success: true, provider: 'anthropic' };
-        }
-
-        const errorData = await response.json().catch(() => ({})) as { error?: { message?: string } };
-        const errorMessage = errorData?.error?.message || `API returned status ${response.status}`;
-        return { success: false, error: errorMessage, provider: 'anthropic' };
-      } else if (provider === 'openai') {
-        // Test OpenAI with models endpoint (doesn't consume tokens)
-        const response = await fetch('https://api.openai.com/v1/models', {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${apiKey}`,
-          },
-        });
-
-        if (response.ok) {
-          return { success: true, provider: 'openai' };
-        }
-
-        const errorData = await response.json().catch(() => ({})) as { error?: { message?: string } };
-        const errorMessage = errorData?.error?.message || `API returned status ${response.status}`;
-        return { success: false, error: errorMessage, provider: 'openai' };
-      } else {
-        // For other providers, just validate the key format is recognized
-        return {
-          success: true,
-          provider,
-          warning: 'Key format recognized but connection not verified'
-        };
-      }
-    } catch (error) {
-      console.error('[Main] testApiKey error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Connection failed',
-        provider,
-      };
-    }
-  });
-
   // =========================================================================
   // Local LLM Management - Download and use local models for transcript improvement
   // =========================================================================
@@ -3455,6 +3149,10 @@ function setupClipboardIPCHandlers(): void {
     return await authManager.signInWithPassword(email, password);
   });
 
+  ipcMain.handle('auth:prepareForNewLogin', async () => {
+    authManager?.prepareForNewLogin();
+  });
+
   ipcMain.handle('auth:requestOtp', async (_event, email: string) => {
     if (!authManager) {
       return { error: 'Auth manager not initialized' };
@@ -3466,7 +3164,18 @@ function setupClipboardIPCHandlers(): void {
     if (!authManager) {
       return { error: 'Auth manager not initialized', session: null };
     }
-    return await authManager.verifyOtp(email, token);
+    const result = await authManager.verifyOtp(email, token);
+
+    // Set signup day for per-user quota reset
+    if (result.session && quotaManager) {
+      const createdAt = result.session.user?.created_at;
+      if (createdAt) {
+        const signupDay = new Date(createdAt).getDate();
+        await quotaManager.setSignupDay(signupDay);
+      }
+    }
+
+    return result;
   });
 
   ipcMain.handle('auth:resetPasswordForEmail', async (_event, email: string) => {
@@ -3481,6 +3190,13 @@ function setupClipboardIPCHandlers(): void {
       return { error: 'Auth manager not initialized' };
     }
     return await authManager.updatePassword(newPassword);
+  });
+
+  ipcMain.handle('auth:updateFullName', async (_event, fullName: string) => {
+    if (!authManager) {
+      return { error: 'Auth manager not initialized' };
+    }
+    return await authManager.updateFullName(fullName);
   });
 
   ipcMain.handle('auth:setSessionFromUrl', async (_event, accessToken: string, refreshToken: string) => {
@@ -4255,12 +3971,13 @@ function setupClipboardIPCHandlers(): void {
 
   ipcMain.handle('quota:getFormattedUsage', async () => {
     if (!quotaManager) {
-      return { priorityMic: 'Unlimited', autoStack: 'Unlimited', textImprove: 'Unlimited' };
+      return { priorityMic: 'Unlimited', autoStack: 'Unlimited', textImprove: 'Unlimited', verbalCommands: 'Unlimited' };
     }
     return {
       priorityMic: quotaManager.formatPriorityMicUsage(),
       autoStack: quotaManager.formatAutoStackUsage(),
       textImprove: quotaManager.formatTextImproveUsage(),
+      verbalCommands: quotaManager.formatVerbalCommandsUsage(),
     };
   });
 
@@ -5174,6 +4891,11 @@ function broadcastTranscribeEvents(): void {
 
   transcriberManager.on('verbalCommand', () => {
     metricsManager?.recordVerbalCommand();
+    quotaManager?.incrementVerbalCommands();
+  });
+
+  transcriberManager.on('wordsImproved', (wordCount: number) => {
+    metricsManager?.recordWordsImproved(wordCount);
   });
 
   transcriberManager.on('autostackCreated', () => {
@@ -5571,74 +5293,6 @@ async function initTranscriberSystem(): Promise<void> {
   // Initialize librarian manager for watching markdown reading files.
   librarianManager = new LibrarianManager();
 
-  // Initialize narration manager for TTS capability.
-  // Local, offline text-to-speech for the Librarian voice.
-  narrationManager = getNarrationManager(preferencesManager);
-  narrationManager.init().then(() => {
-    console.log('[Main] Narration manager initialized');
-  }).catch((error) => {
-    console.error('[Main] Narration manager init failed:', error);
-  });
-
-  // Forward narration events to renderer
-  narrationManager.on('generationStarted', (readingPath: string) => {
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(NarrationIPCChannels.GENERATION_STARTED, readingPath);
-      }
-    });
-  });
-
-  narrationManager.on('playbackStarted', (readingPath: string, duration: number) => {
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(NarrationIPCChannels.PLAYBACK_STARTED, readingPath, duration);
-      }
-    });
-  });
-
-  narrationManager.on('playbackPaused', (readingPath: string | null) => {
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(NarrationIPCChannels.PLAYBACK_PAUSED, readingPath);
-      }
-    });
-  });
-
-  narrationManager.on('playbackResumed', (readingPath: string | null) => {
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(NarrationIPCChannels.PLAYBACK_RESUMED, readingPath);
-      }
-    });
-  });
-
-  narrationManager.on('playbackStopped', (readingPath: string | null) => {
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(NarrationIPCChannels.PLAYBACK_STOPPED, readingPath);
-      }
-    });
-  });
-
-  narrationManager.on('playbackError', (error: string, readingPath: string | null) => {
-    // Only log, don't show modal - silent failure rule
-    console.warn(`[Narration] Playback error: ${error}`);
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(NarrationIPCChannels.PLAYBACK_ERROR, error, readingPath);
-      }
-    });
-  });
-
-  narrationManager.on('installProgress', (progress: number, message: string) => {
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(NarrationIPCChannels.INSTALL_PROGRESS, progress, message);
-      }
-    });
-  });
-
   // Broadcast artifact-added events to all windows and auto-show if enabled
   librarianManager.on('reading-added', async (reading: Reading) => {
     console.log(`[Librarian] artifact-added event: ${reading.title}`);
@@ -5656,54 +5310,8 @@ async function initTranscriberSystem(): Promise<void> {
       }
     });
 
-    // Check if we should auto-speak and have narration enabled (feature flagged)
-    const shouldAutoSpeak = FEATURE_NARRATION_ENABLED && narrationManager ?
-      await narrationManager.shouldSpeakNow().catch(() => ({ shouldSpeak: false })) :
-      { shouldSpeak: false };
-
-    if (shouldAutoSpeak.shouldSpeak && librarianManager!.isAutoShowEnabled()) {
-      // Pre-generate audio BEFORE showing window
-      // User experience: window opens and playback starts immediately
-      console.log(`[Narration] Pre-generating audio for: ${reading.title}`);
-
-      try {
-        const result = await narrationManager!.preGenerateAudio(reading.path, reading.content);
-
-        if (result) {
-          console.log(`[Narration] Audio ready (fromCache: ${result.fromCache}), showing window`);
-
-          // NOW show the window
-          pendingImmersiveReading = reading.path;
-          if (!clipboardHistoryWindow) {
-            clipboardHistoryWindow = initClipboardHistoryWindow();
-          }
-          const boundsToUse = restoreClipboardHistoryBounds();
-          clipboardHistoryWindow.show(boundsToUse, false, true);
-
-          if (app.dock) {
-            app.dock.bounce('informational');
-          }
-
-          // Play artifact discovery sound
-          clipboardHistoryWindow.playArtifactDiscoverySound();
-
-          // Start playback immediately
-          await narrationManager!.playAudioFile(reading.path, result.audioPath);
-        }
-      } catch (error) {
-        console.warn(`[Narration] Pre-generation failed, showing window without audio:`, error);
-        // Fall back to showing window without audio
-        showWindowWithoutAudio();
-      }
-    } else if (librarianManager!.isAutoShowEnabled()) {
-      // Auto-show enabled but no auto-speak - show window immediately
-      showWindowWithoutAudio();
-    } else {
-      // Just play the discovery sound if window exists
-      clipboardHistoryWindow?.playArtifactDiscoverySound();
-    }
-
-    function showWindowWithoutAudio() {
+    // Auto-show the window if enabled
+    if (librarianManager!.isAutoShowEnabled()) {
       pendingImmersiveReading = reading.path;
       if (!clipboardHistoryWindow) {
         clipboardHistoryWindow = initClipboardHistoryWindow();
@@ -5714,6 +5322,9 @@ async function initTranscriberSystem(): Promise<void> {
       if (app.dock) {
         app.dock.bounce('informational');
       }
+      clipboardHistoryWindow?.playArtifactDiscoverySound();
+    } else {
+      // Just play the discovery sound if window exists
       clipboardHistoryWindow?.playArtifactDiscoverySound();
     }
   });
@@ -5748,6 +5359,7 @@ async function initTranscriberSystem(): Promise<void> {
       priorityMic: quotaManager!.formatPriorityMicUsage(),
       autoStack: quotaManager!.formatAutoStackUsage(),
       textImprove: quotaManager!.formatTextImproveUsage(),
+      verbalCommands: quotaManager!.formatVerbalCommandsUsage(),
     };
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
@@ -5830,6 +5442,8 @@ async function initTranscriberSystem(): Promise<void> {
   // Wire up commands manager to transcriber manager for command detection.
   if (transcriberManager) {
     transcriberManager.setCommandsManager(commandsManager);
+    // Provide access token getter for cloud-based transcript improvement.
+    transcriberManager.setAccessTokenGetter(() => authManager?.getSession()?.access_token);
   }
 
   // Initialize multi-directory watching from settings file.
@@ -5900,8 +5514,81 @@ async function initTranscriberSystem(): Promise<void> {
   // Initialize auth manager first - single source of truth for authentication.
   // Load Supabase credentials from .env.local file.
   const envVars = loadEnvVars();
+
+  // Create UserDataManager for per-user data isolation.
+  // This must be created before AuthManager so it can coordinate user changes.
+  userDataManager = createUserDataManager();
+
   authManager = new AuthManager();
+  authManager.setUserDataManager(userDataManager);
   await authManager.init(envVars.supabaseUrl, envVars.supabaseAnonKey);
+
+  // Configure prompt engineer with Supabase URL for Edge Function calls.
+  if (envVars.supabaseUrl) {
+    setEngineerSupabaseUrl(envVars.supabaseUrl);
+  }
+
+  // Set UserDataManager on managers that are already initialized.
+  // Note: metricsManager is set later when it's created.
+  if (preferencesManager) {
+    preferencesManager.setUserDataManager(userDataManager);
+  }
+  if (clipboardManager) {
+    clipboardManager.setUserDataManager(userDataManager);
+  }
+  if (librarianManager) {
+    librarianManager.setUserDataManager(userDataManager);
+  }
+  if (commandsManager) {
+    commandsManager.setUserDataManager(userDataManager);
+  }
+
+  // Listen for user changes to reinitialize managers with user-specific data.
+  authManager.on('userChanged', async (callsign: string) => {
+    console.log(`[Main] User changed to: ${callsign}, reinitializing managers...`);
+
+    // Reinitialize all managers with user-specific data
+    if (preferencesManager) {
+      await preferencesManager.load();
+    }
+    if (clipboardManager) {
+      await clipboardManager.reinitializeForUser();
+    }
+    if (metricsManager) {
+      await metricsManager.reinitializeForUser();
+    }
+    if (librarianManager) {
+      await librarianManager.reinitializeForUser();
+    }
+    if (commandsManager) {
+      await commandsManager.reinitializeForUser();
+    }
+
+    console.log('[Main] All managers reinitialized for user:', callsign);
+  });
+
+  // Listen for logout to clear manager state.
+  authManager.on('userLoggedOut', async () => {
+    console.log('[Main] User logged out, clearing manager state...');
+
+    if (preferencesManager) {
+      preferencesManager.reset();
+    }
+    if (clipboardManager) {
+      clipboardManager.onUserLoggedOut();
+    }
+    if (metricsManager) {
+      metricsManager.reset();
+    }
+    if (librarianManager) {
+      await librarianManager.onUserLoggedOut();
+    }
+    if (commandsManager) {
+      commandsManager.onUserLoggedOut();
+    }
+
+    console.log('[Main] All managers cleared for logout');
+  });
 
   // Initialize mobile sync to pull iOS transcriptions into clipboard history.
   // AuthManager is passed as dependency for session state.
@@ -5927,6 +5614,9 @@ async function initTranscriberSystem(): Promise<void> {
   // Initialize metrics manager for user-visible usage stats.
   // "The metrics you see are the metrics we see."
   metricsManager = new MetricsManager(authManager);
+  if (userDataManager) {
+    metricsManager.setUserDataManager(userDataManager);
+  }
   await metricsManager.init();
 
   // Trust cached tier until we get positive confirmation from server.
@@ -5936,8 +5626,14 @@ async function initTranscriberSystem(): Promise<void> {
   logUserState('startup');
 
   // Listen for auth state changes
-  authManager.on('sessionChanged', (session) => {
+  authManager.on('sessionChanged', async (session) => {
     logUserState(session ? 'login' : 'logout');
+
+    // Set signup day for per-user quota reset when session is restored
+    if (session?.user?.created_at && quotaManager) {
+      const signupDay = new Date(session.user.created_at).getDate();
+      await quotaManager.setSignupDay(signupDay);
+    }
   });
 
   // Forward todosChanged events to all renderer windows.
@@ -6709,13 +6405,6 @@ if (!gotTheLock) {
 
     if (clipboardManager) {
       clipboardManager.destroy();
-    }
-
-    // Stop Chatterbox sidecar if running
-    if (narrationManager) {
-      narrationManager.stopChatterbox().catch((error) => {
-        console.error('[Main] Failed to stop Chatterbox sidecar:', error);
-      });
     }
 
     if (clipboardHistoryWindow) {

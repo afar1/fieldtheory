@@ -2,10 +2,11 @@
 """
 State-Enforced Librarian Hook
 Creates job files when threshold is reached.
-Outputs additionalContext to tell Claude to fulfill pending jobs.
+Optionally auto-runs job fulfillment via run_jobs.py.
 """
 import json
 import os
+import subprocess
 import sys
 import fcntl
 from pathlib import Path
@@ -31,6 +32,8 @@ def main():
     threshold = cfg.get("threshold", 3)
     if not isinstance(threshold, int) or threshold <= 0:
         return
+
+    auto_run_jobs = cfg.get("auto_run_jobs", False)
 
     state_dir.mkdir(parents=True, exist_ok=True)
 
@@ -109,14 +112,19 @@ No time references. No fluff.'''
             placeholder = f"# Pending\n\nJob {seq} created. Awaiting artifact generation.\n"
             out_file.write_text(placeholder)
 
-            # 5. Output additionalContext to tell Claude about pending job
-            msg = f"[STATE-ENFORCED] Job {seq} created. Before responding: check .librarian/jobs/ for pending jobs. For each with status 'pending': read rule_file, create artifact at output path following the rule, then set status to 'done'. Use conversation since last fulfilled job as context."
-            print(json.dumps({
-                "hookSpecificOutput": {
-                    "hookEventName": "UserPromptSubmit",
-                    "additionalContext": msg
-                }
-            }))
+        # 5. Run job runner to fulfill pending jobs (best-effort, do not break hook on failure)
+        if auto_run_jobs:
+            try:
+                runner_path = root / ".claude" / "fubarhook" / "run_jobs.py"
+                if runner_path.exists():
+                    subprocess.run(
+                        [sys.executable, str(runner_path)],
+                        cwd=str(root),
+                        capture_output=True,
+                        timeout=10
+                    )
+            except Exception:
+                pass  # Best-effort: ignore failures
 
 if __name__ == "__main__":
     main()

@@ -5,8 +5,8 @@
  * Users can view their own stats in Settings. We aggregate the same metrics
  * for product understanding. Nothing hidden.
  *
- * All 16 metrics tracked:
- * - Transcription: transcriptions, words_transcribed, priority_mic_minutes
+ * All 17 metrics tracked:
+ * - Transcription: transcriptions, words_transcribed, words_improved, priority_mic_minutes
  * - Voice: verbal_commands, command_launcher_uses
  * - Clipboard: clipboard_items, pastes_used, stacks_created, autostacks_created
  * - Creative: sketches_created, screenshots_taken
@@ -20,6 +20,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { AuthManager } from './authManager';
 import { Session } from '@supabase/supabase-js';
+import { UserDataManager } from './userDataManager';
 
 // =============================================================================
 // Types
@@ -32,6 +33,7 @@ export interface UserMetrics {
   // Transcription
   transcriptions: number;
   words_transcribed: number;
+  words_improved: number;
   priority_mic_minutes: number;
 
   // Voice commands
@@ -81,11 +83,13 @@ export class MetricsManager {
   private storage: LocalMetricsStorage;
   private syncInterval: NodeJS.Timeout | null = null;
   private boundHandleSessionChanged: (session: Session | null) => void;
+  private userDataManager: UserDataManager | null = null;
 
   private static readonly SYNC_INTERVAL_MS = 5 * 60 * 1000; // Sync every 5 minutes
   private static readonly DEFAULT_METRICS: UserMetrics = {
     transcriptions: 0,
     words_transcribed: 0,
+    words_improved: 0,
     priority_mic_minutes: 0,
     verbal_commands: 0,
     command_launcher_uses: 0,
@@ -115,6 +119,47 @@ export class MetricsManager {
 
     this.boundHandleSessionChanged = this.handleSessionChanged.bind(this);
     this.authManager.on('sessionChanged', this.boundHandleSessionChanged);
+  }
+
+  /**
+   * Set the UserDataManager for per-user paths.
+   */
+  setUserDataManager(manager: UserDataManager): void {
+    this.userDataManager = manager;
+    this.updateLocalPath();
+  }
+
+  /**
+   * Update the local path based on current user.
+   */
+  private updateLocalPath(): void {
+    if (this.userDataManager?.isLoggedIn()) {
+      this.localPath = this.userDataManager.getUserDataPath('user-metrics.json');
+      console.log('[MetricsManager] Using user-specific path:', this.localPath);
+    } else {
+      this.localPath = path.join(app.getPath('userData'), 'user-metrics.json');
+    }
+  }
+
+  /**
+   * Reinitialize for current user. Call after setUserDataManager.
+   */
+  async reinitializeForUser(): Promise<void> {
+    this.updateLocalPath();
+    await this.loadFromDisk();
+    console.log('[MetricsManager] Reinitialized for user');
+  }
+
+  /**
+   * Reset metrics on logout.
+   */
+  reset(): void {
+    console.log('[MetricsManager] Resetting metrics (user logged out)');
+    this.storage = {
+      metrics: { ...MetricsManager.DEFAULT_METRICS },
+      lastSyncedAt: null,
+      pendingSync: false,
+    };
   }
 
   /**
@@ -154,6 +199,10 @@ export class MetricsManager {
    */
   private async saveToDisk(): Promise<void> {
     try {
+      // Ensure directory exists
+      const dir = path.dirname(this.localPath);
+      await fs.mkdir(dir, { recursive: true }).catch(() => {});
+
       await fs.writeFile(this.localPath, JSON.stringify(this.storage, null, 2), 'utf-8');
     } catch (error) {
       console.error('[MetricsManager] Failed to save metrics:', error);
@@ -181,6 +230,10 @@ export class MetricsManager {
   recordTranscription(wordCount: number): void {
     this.increment('transcriptions');
     this.increment('words_transcribed', wordCount);
+  }
+
+  recordWordsImproved(wordCount: number): void {
+    this.increment('words_improved', wordCount);
   }
 
   recordPriorityMicMinute(): void {

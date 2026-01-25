@@ -106,3 +106,78 @@ Icon colors:
 **File**: `mac-app/electron/main/librarianManager.ts` - Librarian window management
 
 Window sizing is configured in main process when creating BrowserWindows.
+
+## Claude Code Hook System (Librarian Artifacts)
+
+The Librarian hook system creates reflective artifacts based on conversation activity. **DO NOT MODIFY** without understanding this architecture.
+
+### How It Works
+
+```
+User sends prompt
+       ↓
+┌─────────────────────────────────────────────────────────┐
+│  UserPromptSubmit Hook (hook.py)                        │
+│  1. Increment global counter in state.json              │
+│  2. If count >= threshold: create job, output context   │
+└─────────────────────────────────────────────────────────┘
+       ↓
+Claude sees additionalContext: "[STATE-ENFORCED] Before responding, write this artifact..."
+       ↓
+Claude writes artifact to ~/.fieldtheory/librarian/artifacts/
+       ↓
+┌─────────────────────────────────────────────────────────┐
+│  PreToolUse Hook (pretool.py)                           │
+│  Auto-approves Write/Edit to ~/.fieldtheory/librarian/  │
+└─────────────────────────────────────────────────────────┘
+       ↓
+Claude updates job status to "done"
+```
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `~/.claude/settings.json` | Hook registration |
+| `~/.fieldtheory/librarian/hook.py` | Counter + job creation + context injection |
+| `~/.fieldtheory/librarian/pretool.py` | Auto-approve file ops to librarian dir |
+| `~/.fieldtheory/librarian/config.json` | Enable/disable, rule content |
+| `~/.fieldtheory/librarian/state.json` | Global count + threshold (game mechanics) |
+| `~/.fieldtheory/librarian/jobs/` | Job files (pending/done status) |
+| `~/.fieldtheory/librarian/artifacts/` | Generated artifact markdown files |
+
+### Key Mechanisms
+
+**1. Counter + Threshold (Game Mechanics)**
+- `state.json` stores `{"count": N, "threshold": M}`
+- Field Theory app can adjust threshold dynamically
+- Hook just increments and checks, doesn't set threshold
+
+**2. Context Injection via `additionalContext`**
+```python
+print(json.dumps({
+    "hookSpecificOutput": {
+        "hookEventName": "UserPromptSubmit",
+        "additionalContext": "[STATE-ENFORCED] Before responding, write this artifact..."
+    }
+}))
+```
+This injects instructions into Claude's context so it knows to create the artifact.
+
+**3. Auto-Approval via PreToolUse**
+```python
+print(json.dumps({
+    "hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "allow"
+    }
+}))
+```
+This lets Claude write to `~/.fieldtheory/librarian/` without permission prompts.
+
+### DO NOT
+
+- Remove or modify `additionalContext` output - this is how Claude knows to create artifacts
+- Change the `hookSpecificOutput` JSON structure - Claude Code expects this exact format
+- Move counting logic to PreToolUse - that hook fires per-tool, not per-prompt
+- Create "auto-generate" static artifacts - defeats the purpose of AI-written reflections

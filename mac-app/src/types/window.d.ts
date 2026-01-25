@@ -260,13 +260,6 @@ interface ClipboardAPI {
   getUniqueStacks?: () => Promise<StackInfo[]>;
   updateStackId?: (itemIds: number[], stackId: string | null) => Promise<void>;
   startDrag?: (stackId: string) => Promise<void>;
-  
-  // API key management (stored securely via OS keychain)
-  getApiKeyStatus?: () => Promise<{ hasKey: boolean }>;
-  getApiKeyInfo?: () => Promise<{ hasKey: boolean; maskedKey: string | null; provider: string }>;
-  testApiKey?: () => Promise<{ success: boolean; error?: string; provider?: string; warning?: string }>;
-  setApiKey?: (apiKey: string) => Promise<{ success: boolean; error?: string }>;
-  clearApiKey?: () => Promise<{ success: boolean; error?: string }>;
 
   // Local LLM model management
   getLocalLLMModels?: () => Promise<Record<string, { name: string; filename: string; sizeBytes: number; description: string }>>;
@@ -333,6 +326,9 @@ interface ClipboardAPI {
   // Data retention - how long to keep clipboard history
   getDataRetentionDays?: () => Promise<number>;
   setDataRetentionDays?: (days: number) => Promise<boolean>;
+
+  // Sound playback events (internal use)
+  onPlaySound?: (callback: (soundId: string) => void) => () => void;
 }
 
 /**
@@ -483,6 +479,7 @@ interface TodoAPI {
 type AuthTestState = 'NEW_USER' | 'RETURNING_VALID' | 'RETURNING_EXPIRED' | 'OFFLINE_MODE' | 'TOKEN_REVOKED' | 'SIGNED_OUT';
 
 interface AuthAPI {
+  prepareForNewLogin: () => Promise<void>;
   requestOtp: (email: string) => Promise<{ error: string | null }>;
   verifyOtp: (email: string, token: string) => Promise<{ error: string | null; session: any | null }>;
   signOut: () => Promise<{ error: string | null }>;
@@ -493,6 +490,7 @@ interface AuthAPI {
   signInWithPassword?: (email: string, password: string) => Promise<{ error: string | null; session: any | null }>;
   resetPasswordForEmail?: (email: string) => Promise<{ error: string | null }>;
   updatePassword?: (newPassword: string) => Promise<{ error: string | null }>;
+  updateFullName?: (fullName: string) => Promise<{ error: string | null }>;
   setSessionFromUrl?: (accessToken: string, refreshToken: string) => Promise<{ error: string | null; session: any | null }>;
   deleteAccount?: () => Promise<{ error: string | null }>;
   // Auth state simulator (dev only)
@@ -787,14 +785,14 @@ interface QuotaLimits {
 interface QuotaAPI {
   getQuotas: () => Promise<{ priorityMic: QuotaStatus; autoStack: QuotaStatus; textImprove: QuotaStatus; verbalCommands: QuotaStatus; tier: 'free' | 'pro' } | null>;
   checkQuota: (feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'verbalCommands') => Promise<QuotaCheckResult>;
-  getFormattedUsage: () => Promise<{ priorityMic: string; autoStack: string; textImprove: string }>;
+  getFormattedUsage: () => Promise<{ priorityMic: string; autoStack: string; textImprove: string; verbalCommands: string }>;
   getResetDate: () => Promise<Date>;
   getDaysUntilReset: () => Promise<number>;
   getLimits: () => Promise<QuotaLimits>;
   refreshTier: () => Promise<{ tier: 'free' | 'pro'; error: string | null }>;
   onTierChanged: (callback: (tier: 'free' | 'pro') => void) => () => void;
   onQuotaExhausted: (callback: (data: QuotaExhaustedData) => void) => () => void;
-  onQuotaChanged: (callback: (data: { priorityMic: string; autoStack: string; textImprove: string }) => void) => () => void;
+  onQuotaChanged: (callback: (data: { priorityMic: string; autoStack: string; textImprove: string; verbalCommands: string }) => void) => () => void;
 }
 
 /**
@@ -948,6 +946,10 @@ interface LibrarianAPI {
   uninstallStateEnforcedHook: () => Promise<boolean>;
   isStateEnforcedHookInstalled: () => Promise<boolean>;
   getPendingJobCount: () => Promise<number>;
+  // Cursor Hook API
+  isCursorHookInstalled: () => Promise<boolean>;
+  installCursorHook: () => Promise<boolean>;
+  uninstallCursorHook: () => Promise<boolean>;
   // Discovery Frequency API
   getDiscoveryFrequency: () => Promise<string>;
   setDiscoveryFrequency: (frequency: string) => Promise<boolean>;
@@ -998,6 +1000,8 @@ interface LibrarianAPI {
   unshareReading: (filePath: string) => Promise<boolean>;
   getShareStatus: (filePath: string) => Promise<{ shared: boolean; slug?: string; url?: string } | null>;
   updateSharedReading: (filePath: string, content: string, title: string) => Promise<boolean>;
+  // Poll status (used in ClipboardHistory)
+  pollStatus?: () => Promise<{ pending: number; completed: number; pendingPath?: string } | null>;
 }
 
 declare global {
@@ -1028,94 +1032,6 @@ declare global {
   interface WatchedDir {
     path: string;
     enabled: boolean;
-  }
-
-  /**
-   * Narration types and API.
-   */
-  type NarrationInstallStatus = 'not_installed' | 'installing' | 'installed' | 'install_failed';
-  type NarrationPlaybackStatus = 'idle' | 'generating' | 'playing' | 'paused' | 'stopped';
-  type NarrationEngine = 'chatterbox' | 'macos_say' | 'elevenlabs';
-
-  interface ElevenLabsVoiceInfo {
-    voice_id: string;
-    name: string;
-    category?: string;
-    description?: string;
-    labels?: Record<string, string>;
-  }
-
-  interface NarrationStatus {
-    installStatus: NarrationInstallStatus;
-    playbackStatus: NarrationPlaybackStatus;
-    engine: NarrationEngine | null;
-    currentReadingPath: string | null;
-    cacheSizeBytes: number;
-    cachedItemCount: number;
-    chatterboxInstalled?: boolean;
-    chatterboxInstalling?: boolean;
-    preferredEngine?: NarrationEngine;
-    elevenlabsConfigured?: boolean;
-    elevenlabsVoiceId?: string;
-  }
-
-  interface ChatterboxInstallStatus {
-    installed: boolean;
-    installing: boolean;
-    version?: string;
-    error?: string;
-  }
-
-  interface NarrationOutputDevice {
-    name: string;
-    uid: string;
-    isDefault: boolean;
-    transportType?: string;
-  }
-
-  interface NarrationPreferences {
-    speakOnOpen: boolean;
-    blockedDevices: string[];
-  }
-
-  interface NarrationAPI {
-    getStatus: () => Promise<NarrationStatus | null>;
-    install: () => Promise<boolean>;
-    playReading: (readingPath: string) => Promise<boolean>;
-    stop: () => Promise<void>;
-    pause?: () => Promise<boolean>;
-    resume?: () => Promise<boolean>;
-    togglePause?: () => Promise<boolean>;
-    getPlaybackProgress?: () => Promise<{ position: number; duration: number; percentage: number } | null>;
-    getOutputDevice: () => Promise<NarrationOutputDevice | null>;
-    refreshDevices: () => Promise<NarrationOutputDevice | null>;
-    getPrefs: () => Promise<NarrationPreferences | null>;
-    setSpeakOnOpen: (enabled: boolean) => Promise<void>;
-    addBlockedDevice: (pattern: string) => Promise<void>;
-    removeBlockedDevice: (pattern: string) => Promise<void>;
-    clearCache: () => Promise<void>;
-    // Chatterbox-specific methods
-    installChatterbox: () => Promise<boolean>;
-    getChatterboxStatus: () => Promise<ChatterboxInstallStatus | null>;
-    testChatterboxVoice: () => Promise<boolean>;
-    testMacOSVoice: () => Promise<boolean>;
-    setPreferredEngine: (engine: NarrationEngine) => Promise<boolean>;
-    // ElevenLabs-specific methods
-    setElevenlabsApiKey: (apiKey: string) => Promise<boolean>;
-    setElevenlabsVoice: (voiceId: string) => Promise<boolean>;
-    testElevenlabsVoice: () => Promise<boolean>;
-    getElevenlabsVoices: () => Promise<ElevenLabsVoiceInfo[]>;
-    checkElevenlabsConnection: () => Promise<{ connected: boolean; error?: string }>;
-    getLibrarianVoices?: () => Promise<{ voiceId: string; name: string; speed?: number }[]>;
-    getCurrentVoiceId?: () => Promise<string | null>;
-    // Event listeners
-    onGenerationStarted?: (callback: (readingPath: string) => void) => () => void;
-    onPlaybackStarted: (callback: (readingPath: string, duration: number) => void) => () => void;
-    onPlaybackPaused?: (callback: (readingPath: string | null) => void) => () => void;
-    onPlaybackResumed?: (callback: (readingPath: string | null) => void) => () => void;
-    onPlaybackStopped: (callback: (readingPath: string | null) => void) => () => void;
-    onPlaybackError: (callback: (error: string, readingPath: string | null) => void) => () => void;
-    onInstallProgress: (callback: (progress: number, message: string) => void) => () => void;
   }
 
   /**
@@ -1160,6 +1076,7 @@ declare global {
   interface UserMetrics {
     transcriptions: number;
     words_transcribed: number;
+    words_improved: number;
     priority_mic_minutes: number;
     verbal_commands: number;
     command_launcher_uses: number;
@@ -1220,6 +1137,80 @@ declare global {
     onOverridesChanged: (callback: (overrides: DevOverrides | null) => void) => () => void;
   }
 
+  // =============================================================================
+  // Narration API - STUB TYPES (feature disabled via FEATURE_NARRATION_ENABLED)
+  // These types exist only to satisfy TypeScript for feature-flagged code
+  // =============================================================================
+
+  /**
+   * Narration status stub.
+   */
+  interface NarrationStatus {
+    state: 'idle' | 'loading' | 'playing' | 'paused' | 'error';
+    readingPath: string | null;
+    progress: number;
+    duration: number;
+    error: string | null;
+    playbackStatus: 'idle' | 'playing' | 'paused' | 'generating' | 'stopped';
+    currentReadingPath: string | null;
+    installStatus: 'installed' | 'not_installed' | 'installing' | 'install_failed';
+    cacheSizeBytes: number;
+    cachedItemCount: number;
+  }
+
+  /**
+   * Narration voice stub.
+   */
+  interface NarrationVoice {
+    voiceId: string;
+    name: string;
+    speed?: number;
+  }
+
+  /**
+   * Narration preferences stub.
+   */
+  interface NarrationPreferences {
+    autoPlay: boolean;
+    selectedVoice: string | null;
+    speakOnOpen: boolean;
+    blockedDevices: string[];
+  }
+
+  /**
+   * Narration API stub - feature disabled, types for compile-time only.
+   */
+  interface NarrationAPI {
+    getStatus: () => Promise<NarrationStatus>;
+    getVoices: () => Promise<NarrationVoice[]>;
+    getSelectedVoice: () => Promise<string | null>;
+    setSelectedVoice: (voiceId: string) => Promise<boolean>;
+    getPreferences: () => Promise<NarrationPreferences>;
+    setPreferences: (prefs: Partial<NarrationPreferences>) => Promise<boolean>;
+    getPrefs: () => Promise<NarrationPreferences>;
+    playReading: (readingPath: string) => Promise<boolean>;
+    play: () => Promise<boolean>;
+    pause: () => Promise<boolean>;
+    stop: () => Promise<boolean>;
+    togglePause: () => Promise<boolean>;
+    getPlaybackProgress: () => Promise<{ progress: number; duration: number; percentage: number } | null>;
+    getLibrarianVoices: () => Promise<NarrationVoice[]>;
+    getCurrentVoiceId: () => Promise<string | null>;
+    setElevenlabsVoice: (voiceId: string) => Promise<boolean>;
+    clearCache: () => Promise<boolean>;
+    onStatusChange: (callback: (status: NarrationStatus) => void) => () => void;
+    onLoadingProgress: (callback: (readingPath: string, progress: number) => void) => () => void;
+    onPlaybackProgress: (callback: (readingPath: string, progress: number, duration: number) => void) => () => void;
+    onError: (callback: (readingPath: string, error: string) => void) => () => void;
+    onGenerationStarted: (callback: (readingPath: string) => void) => () => void;
+    onPlaybackStarted: (callback: (readingPath: string, duration: number) => void) => () => void;
+    onPlaybackPaused: (callback: () => void) => () => void;
+    onPlaybackResumed: (callback: () => void) => () => void;
+    onPlaybackStopped: (callback: () => void) => () => void;
+    onPlaybackError: (callback: (error: string) => void) => () => void;
+    removeAllListeners: (event: string) => void;
+  }
+
   interface Window {
     audioAPI?: AudioAPI;
     hotkeyAPI?: HotkeyAPI;
@@ -1239,11 +1230,11 @@ declare global {
     commandsAPI?: CommandsAPI;
     themeAPI?: ThemeAPI;
     librarianAPI?: LibrarianAPI;
-    narrationAPI?: NarrationAPI;
     claudeAPI?: ClaudeAPI;
     metricsAPI?: MetricsAPI;
     diagnosticsAPI?: DiagnosticsAPI;
     scenarioAPI?: ScenarioAPI;
+    narrationAPI?: NarrationAPI;  // Stub - feature disabled
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;
   }
