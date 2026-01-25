@@ -404,9 +404,14 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
 
   // Check if user is already logged in on mount.
   useEffect(() => {
+    if (!supabase) {
+      setIsCheckingSession(false);
+      return;
+    }
+    const client = supabase;
     const checkSession = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session } } = await client.auth.getSession();
         if (session?.user?.email) {
           setExistingEmail(session.user.email);
         }

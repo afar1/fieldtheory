@@ -1340,7 +1340,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
             flex: 1,
             minHeight: 0, // Required for flex child to shrink and enable scrolling
             overflowY: 'auto',
-            padding: isFullScreen ? '16px' : '24px 20px',
+            padding: isFullScreen ? '8px 16px 16px 16px' : '24px 20px',
             display: 'flex',
             justifyContent: 'center',
           }}
@@ -1381,6 +1381,20 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
             ) : (
               /* View mode - markdown renderer */
               <>
+            {/* Field Theory icon - only in immersive mode */}
+            {isFullScreen && (
+              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
+                <img
+                  src={theme.isDark ? 'fieldtheory-icon.png' : 'field-theory-icon-black.png'}
+                  alt="Field Theory"
+                  style={{ height: '32px', width: 'auto', opacity: 0.6 }}
+                />
+              </div>
+            )}
+            {/* Divider - only in immersive mode */}
+            {isFullScreen && (
+              <hr style={{ border: 'none', height: '1px', backgroundColor: theme.border, margin: '0 0 20px 0' }} />
+            )}
             {/* Content - markdown renders the title */}
             <div
               className="librarian-content"
@@ -1620,6 +1634,76 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 {selectedReading.content}
               </ReactMarkdown>
             </div>
+            {/* Footer - only in immersive mode */}
+            {isFullScreen && (
+              <>
+                <hr style={{ border: 'none', height: '1px', backgroundColor: theme.border, margin: '32px 0 24px 0' }} />
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    justifyContent: 'space-between',
+                    paddingBottom: '24px',
+                  }}
+                >
+                  <div style={{ color: theme.textSecondary }}>
+                    <div style={{ fontSize: '13px' }}>Artifact made by the Librarian</div>
+                    <div style={{ fontSize: '12px', marginTop: '2px', fontStyle: 'italic' }}>
+                      Inspired by <span title={shareStatus?.slug || ''} style={{ cursor: shareStatus?.slug ? 'help' : 'default' }}>your work</span>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                    <button
+                      onClick={async () => {
+                        if (shareStatus?.shared) {
+                          // Already shared - unshare
+                          await handleShare();
+                        } else {
+                          // Not shared - share and copy link
+                          setIsSharing(true);
+                          try {
+                            const result = await window.librarianAPI?.shareReading(selectedPath!);
+                            if (result) {
+                              setShareStatus({ shared: true, slug: result.slug, url: result.url });
+                              // Copy link to clipboard
+                              await navigator.clipboard.writeText(result.url);
+                              setLinkCopied(true);
+                              setTimeout(() => setLinkCopied(false), 2000);
+                            }
+                          } finally {
+                            setIsSharing(false);
+                          }
+                        }
+                      }}
+                      disabled={isSharing}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        padding: '4px 10px',
+                        fontSize: '11px',
+                        fontWeight: 500,
+                        color: shareStatus?.shared ? '#22c55e' : theme.textSecondary,
+                        backgroundColor: shareStatus?.shared
+                          ? (theme.isDark ? 'rgba(34, 197, 94, 0.1)' : 'rgba(34, 197, 94, 0.08)')
+                          : 'transparent',
+                        border: `1px solid ${shareStatus?.shared ? 'rgba(34, 197, 94, 0.4)' : theme.border}`,
+                        borderRadius: '5px',
+                        cursor: isSharing ? 'wait' : 'pointer',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M4.715 6.542 3.343 7.914a3 3 0 1 0 4.243 4.243l1.828-1.829A3 3 0 0 0 8.586 5.5L8 6.086a1.002 1.002 0 0 0-.154.199 2 2 0 0 1 .861 3.337L6.88 11.45a2 2 0 1 1-2.83-2.83l.793-.792a4.018 4.018 0 0 1-.128-1.287z"/>
+                        <path d="M6.586 4.672A3 3 0 0 0 7.414 9.5l.775-.776a2 2 0 0 1-.896-3.346L9.12 3.55a2 2 0 1 1 2.83 2.83l-.793.792c.112.42.155.855.128 1.287l1.372-1.372a3 3 0 1 0-4.243-4.243L6.586 4.672z"/>
+                      </svg>
+                      {isSharing ? '...' : shareStatus?.shared ? 'Shareable' : 'Not shared'}
+                    </button>
+                    <span style={{ fontSize: '9px', color: '#22c55e', marginTop: '3px', height: '12px', visibility: linkCopied ? 'visible' : 'hidden' }}>Copied!</span>
+                  </div>
+                </div>
+              </>
+            )}
               </>
             )}
           </div>

@@ -1152,6 +1152,42 @@ declare global {
     clearManagedPermissions: () => Promise<boolean>;
   }
 
+  /**
+   * Metrics API - User-visible usage stats
+   * "The metrics you see are the metrics we see."
+   */
+  interface UserMetrics {
+    transcriptions: number;
+    words_transcribed: number;
+    priority_mic_minutes: number;
+    verbal_commands: number;
+    command_launcher_uses: number;
+    clipboard_items: number;
+    pastes_used: number;
+    stacks_created: number;
+    autostacks_created: number;
+    stacks_pasted: number;
+    items_added_to_context: number;
+    sketches_created: number;
+    screenshots_taken: number;
+    librarian_artifacts_created: number;
+    librarian_artifacts_shared: number;
+    commands_executed: number;
+    commands_contributed: number;
+    feedback_given: number;
+  }
+
+  interface MetricsAPI {
+    getMetrics: () => Promise<UserMetrics>;
+    getMetricsWithStatus: () => Promise<{
+      metrics: UserMetrics;
+      lastSyncedAt: string | null;
+      pendingSync: boolean;
+    }>;
+    syncToSupabase: () => Promise<boolean>;
+    fetchFromSupabase: () => Promise<boolean>;
+  }
+
   interface Window {
     audioAPI?: AudioAPI;
     hotkeyAPI?: HotkeyAPI;
@@ -1173,6 +1209,7 @@ declare global {
     librarianAPI?: LibrarianAPI;
     narrationAPI?: NarrationAPI;
     claudeAPI?: ClaudeAPI;
+    metricsAPI?: MetricsAPI;
     diagnosticsAPI?: DiagnosticsAPI;
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;

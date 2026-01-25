@@ -1058,25 +1058,40 @@ export class LibrarianManager extends EventEmitter {
   }
 
   /**
-   * Set the discovery frequency and update global status.
+   * Set the discovery frequency and update thresholds.
    */
   setDiscoveryFrequency(frequency: DiscoveryFrequency): boolean {
     this.settings.discoveryFrequency = frequency;
     this.saveSettings();
 
-    // Update global status with new threshold
-    this.ensureGlobalStatusExists();
-    const statusFile = this.getGlobalStatusPath();
+    const newThreshold = this.pickNextDiscoveryThreshold();
+
+    // Update global state.json with new threshold (keep current count)
     try {
-      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
-      status.nextThreshold = this.pickNextDiscoveryThreshold();
-      status.discoveryFrequency = frequency;
-      fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
-    } catch {
-      // Ignore errors
+      const stateFile = path.join(this.getCentralLibrarianDir(), 'state.json');
+      let state = { count: 0, threshold: newThreshold };
+      if (fs.existsSync(stateFile)) {
+        state = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+        state.threshold = newThreshold;
+      }
+      fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to update state:', error);
     }
 
-    console.log(`[LibrarianManager] Discovery frequency set to: ${frequency}`);
+    // Sync frequency to config.json (for reference/debugging)
+    try {
+      const configPath = path.join(this.getCentralLibrarianDir(), 'config.json');
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        config.frequency = frequency;
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+      }
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to sync frequency to config:', error);
+    }
+
+    console.log(`[LibrarianManager] Discovery frequency set to: ${frequency}, threshold: ${newThreshold}`);
     return true;
   }
 
@@ -2882,12 +2897,12 @@ if __name__ == "__main__":
       fs.writeFileSync(userPromptHookPath, this.generateStateEnforcedHookScript(), { mode: 0o755 });
       fs.writeFileSync(preToolUseHookPath, this.generatePreToolUseHookScript(), { mode: 0o755 });
 
-      // 4. Write global config
+      // 4. Write global config (includes user expertise context)
       const configPath = this.getGlobalStateEnforcedConfigPath();
       const config = {
         enabled: true,
         threshold: this.getStateEnforcedThreshold(),
-        rule_content: this.getCustomRuleContent() || this.DEFAULT_RULE_CONTENT,
+        rule_content: this.getEffectiveRuleContent(),
       };
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 
@@ -3107,39 +3122,32 @@ if __name__ == "__main__":
   }
 
   /**
-   * Reset the prompt count after a reading is created.
-   * Called when a new .md file appears in any watched .librarian/ directory.
-   */
-  resetPromptCount(): void {
-    this.ensureGlobalStatusExists();
-    const statusFile = this.getGlobalStatusPath();
-
-    try {
-      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
-      status.promptsSinceReading = 0;
-      status.nextThreshold = this.pickNextThreshold(this.settings.autoRunFrequency);
-      status.lastReading = new Date().toISOString();
-      fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
-      this.logStatus('reset');
-    } catch (error) {
-      console.error('[LibrarianManager] Failed to reset prompt count:', error);
-    }
-  }
-
-  /**
-   * Get the current global status for debugging.
-   * Returns prompt count and threshold from the global status file.
+   * Get the current status for debugging.
+   * Reads from the GLOBAL state.json file (shared across all projects).
    */
   getEditStatus(): { edits: number; threshold: number; frequency: string } | null {
     try {
-      this.ensureGlobalStatusExists();
-      const statusFile = this.getGlobalStatusPath();
-      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
-      return {
-        edits: status.promptsSinceReading || 0,
-        threshold: status.nextThreshold || 5,
-        frequency: this.settings.discoveryFrequency || 'sometimes',
-      };
+      const stateFile = path.join(this.getCentralLibrarianDir(), 'state.json');
+      const frequency = this.settings.discoveryFrequency || 'sometimes';
+
+      console.log(`[LibrarianManager] getEditStatus reading from: ${stateFile}`);
+
+      if (fs.existsSync(stateFile)) {
+        const raw = fs.readFileSync(stateFile, 'utf-8');
+        const state = JSON.parse(raw);
+        console.log(`[LibrarianManager] getEditStatus raw: ${raw.trim()}`);
+        return {
+          edits: state.count || 0,
+          threshold: state.threshold || 7,
+          frequency,
+        };
+      }
+
+      console.log(`[LibrarianManager] getEditStatus: state file not found, initializing`);
+      // Initialize global state file
+      const initialState = { count: 0, threshold: this.pickNextDiscoveryThreshold() };
+      fs.writeFileSync(stateFile, JSON.stringify(initialState, null, 2));
+      return { edits: 0, threshold: initialState.threshold, frequency };
     } catch (error) {
       console.error('[LibrarianManager] Failed to get edit status:', error);
       return null;
@@ -3189,19 +3197,17 @@ if __name__ == "__main__":
   }
 
   /**
-   * Reset the counter. Called when a reading is created.
-   * Simple and direct - no timestamp comparisons.
+   * Reset the counter and pick new threshold. Called when a reading is created.
+   * Updates the GLOBAL state.json with a fresh game-mechanics threshold.
    */
   resetCounter(): void {
+    const newThreshold = this.pickNextDiscoveryThreshold();
+
     try {
-      this.ensureGlobalStatusExists();
-      const statusFile = this.getGlobalStatusPath();
-      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
-      status.promptsSinceReading = 0;
-      status.nextThreshold = this.pickNextThreshold(this.settings.autoRunFrequency);
-      status.lastReading = new Date().toISOString();
-      fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
-      this.logStatus('reset');
+      const stateFile = path.join(this.getCentralLibrarianDir(), 'state.json');
+      const newState = { count: 0, threshold: newThreshold };
+      fs.writeFileSync(stateFile, JSON.stringify(newState, null, 2));
+      console.log(`[LibrarianManager] Reset counter, new threshold: ${newThreshold}`);
     } catch (error) {
       console.error('[LibrarianManager] Failed to reset counter:', error);
     }
@@ -3213,12 +3219,9 @@ if __name__ == "__main__":
    */
   resetAllCounters(): boolean {
     try {
-      this.ensureGlobalStatusExists();
-      const statusFile = this.getGlobalStatusPath();
-      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
-      status.promptsSinceReading = 0;
-      status.nextThreshold = this.pickNextThreshold(this.settings.autoRunFrequency);
-      fs.writeFileSync(statusFile, JSON.stringify(status, null, 2));
+      const stateFile = path.join(this.getCentralLibrarianDir(), 'state.json');
+      const newState = { count: 0, threshold: this.pickNextDiscoveryThreshold() };
+      fs.writeFileSync(stateFile, JSON.stringify(newState, null, 2));
       console.log('[LibrarianManager] Reset global counter');
       return true;
     } catch (error) {

@@ -617,6 +617,8 @@ export class TranscriberManager extends EventEmitter {
             filePath: cmd.filePath,
           }));
           console.log(`[TranscriberManager] Detected commands: ${this.detectedCommands.map(c => c.name).join(', ')}`);
+          // Emit event for each verbal command detected (for metrics tracking)
+          this.detectedCommands.forEach(() => this.emit('verbalCommand'));
         }
       }
 

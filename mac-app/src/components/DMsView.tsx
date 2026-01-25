@@ -1138,48 +1138,6 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
             }}
             onClick={(e) => e.stopPropagation()}
           />
-          {/* Action buttons */}
-          <div
-            style={{
-              display: 'flex',
-              gap: '12px',
-              marginTop: '16px',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              onClick={async () => {
-                try {
-                  // Fetch image and add to clipboard/field
-                  const response = await fetch(expandedImage.url);
-                  const blob = await response.blob();
-                  const reader = new FileReader();
-                  reader.onloadend = async () => {
-                    const base64 = (reader.result as string).split(',')[1];
-                    if (base64 && window.clipboardAPI?.addImageItem) {
-                      await window.clipboardAPI.addImageItem(base64);
-                      setExpandedImage(null);
-                    }
-                  };
-                  reader.readAsDataURL(blob);
-                } catch (err) {
-                  console.error('Failed to add image to field:', err);
-                }
-              }}
-              style={{
-                padding: '10px 20px',
-                fontSize: '13px',
-                fontWeight: 500,
-                backgroundColor: theme.accent,
-                color: '#fff',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-              }}
-            >
-              Add to Field
-            </button>
-          </div>
           {/* Close button */}
           <button
             onClick={() => setExpandedImage(null)}
