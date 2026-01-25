@@ -80,13 +80,6 @@ const ClipboardIPCChannels = {
   DIALOG_POSITION: 'clipboard:dialogPosition',
   DIALOG_BOUNDS: 'clipboard:dialogBounds',
   TARGET_APP_INFO: 'clipboard:targetAppInfo',
-  
-  // API key management (stored securely via OS keychain)
-  GET_API_KEY_STATUS: 'clipboard:getApiKeyStatus',
-  GET_API_KEY_INFO: 'clipboard:getApiKeyInfo',
-  TEST_API_KEY: 'clipboard:testApiKey',
-  SET_API_KEY: 'clipboard:setApiKey',
-  CLEAR_API_KEY: 'clipboard:clearApiKey',
 
   // Local LLM model management
   GET_LOCAL_LLM_MODELS: 'clipboard:getLocalLLMModels',
@@ -592,13 +585,6 @@ export interface ClipboardAPI {
   // All-time stats for footer display
   getAllTimeStats: () => Promise<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>;
   incrementImprovedCount: () => Promise<number>;
-  
-  // API key management (stored securely via OS keychain)
-  getApiKeyStatus: () => Promise<{ hasKey: boolean }>;
-  getApiKeyInfo: () => Promise<{ hasKey: boolean; maskedKey: string | null; provider: string }>;
-  testApiKey: () => Promise<{ success: boolean; error?: string; provider?: string; warning?: string }>;
-  setApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>;
-  clearApiKey: () => Promise<{ success: boolean; error?: string }>;
 
   // Local LLM model management
   getLocalLLMModels: () => Promise<Record<string, { name: string; filename: string; sizeBytes: number; description: string }>>;
@@ -1147,27 +1133,6 @@ const clipboardAPI: ClipboardAPI = {
     return ipcRenderer.invoke('clipboard:incrementImprovedCount');
   },
 
-  // API key management (stored securely via OS keychain)
-  getApiKeyStatus: async (): Promise<{ hasKey: boolean }> => {
-    return ipcRenderer.invoke(ClipboardIPCChannels.GET_API_KEY_STATUS);
-  },
-
-  getApiKeyInfo: async (): Promise<{ hasKey: boolean; maskedKey: string | null; provider: string }> => {
-    return ipcRenderer.invoke(ClipboardIPCChannels.GET_API_KEY_INFO);
-  },
-
-  testApiKey: async (): Promise<{ success: boolean; error?: string; provider?: string; warning?: string }> => {
-    return ipcRenderer.invoke(ClipboardIPCChannels.TEST_API_KEY);
-  },
-
-  setApiKey: async (apiKey: string): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke(ClipboardIPCChannels.SET_API_KEY, apiKey);
-  },
-
-  clearApiKey: async (): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke(ClipboardIPCChannels.CLEAR_API_KEY);
-  },
-
   // Local LLM model management
   getLocalLLMModels: async () => {
     return ipcRenderer.invoke(ClipboardIPCChannels.GET_LOCAL_LLM_MODELS);
@@ -1683,8 +1648,12 @@ const authAPI = {
   signInWithPassword: (email: string, password: string) => 
     ipcRenderer.invoke('auth:signInWithPassword', email, password),
   
+  // Clear session storage before new login (prevents session bleed from aliases).
+  prepareForNewLogin: () =>
+    ipcRenderer.invoke('auth:prepareForNewLogin'),
+
   // Request OTP code via email.
-  requestOtp: (email: string) => 
+  requestOtp: (email: string) =>
     ipcRenderer.invoke('auth:requestOtp', email),
   
   // Verify OTP code and sign in.
@@ -1696,9 +1665,13 @@ const authAPI = {
     ipcRenderer.invoke('auth:resetPasswordForEmail', email),
   
   // Update password (after clicking reset link).
-  updatePassword: (newPassword: string) => 
+  updatePassword: (newPassword: string) =>
     ipcRenderer.invoke('auth:updatePassword', newPassword),
-  
+
+  // Update user's full name.
+  updateFullName: (fullName: string) =>
+    ipcRenderer.invoke('auth:updateFullName', fullName),
+
   // Set session from recovery token in URL.
   setSessionFromUrl: (accessToken: string, refreshToken: string) =>
     ipcRenderer.invoke('auth:setSessionFromUrl', accessToken, refreshToken),
@@ -2074,8 +2047,8 @@ const quotaAPI = {
   },
 
   // Listen for quota changes (updates in real-time after usage).
-  onQuotaChanged: (callback: (data: { priorityMic: string; autoStack: string; textImprove: string }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, data: { priorityMic: string; autoStack: string; textImprove: string }) => {
+  onQuotaChanged: (callback: (data: { priorityMic: string; autoStack: string; textImprove: string; verbalCommands: string }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { priorityMic: string; autoStack: string; textImprove: string; verbalCommands: string }) => {
       callback(data);
     };
     ipcRenderer.on('quota:changed', handler);
@@ -2459,6 +2432,11 @@ const librarianAPI = {
   // Job management
   getPendingJobCount: (): Promise<number> => ipcRenderer.invoke('librarian:getPendingJobCount'),
 
+  // Cursor hook management
+  isCursorHookInstalled: (): Promise<boolean> => ipcRenderer.invoke('librarian:isCursorHookInstalled'),
+  installCursorHook: (): Promise<boolean> => ipcRenderer.invoke('librarian:installCursorHook'),
+  uninstallCursorHook: (): Promise<boolean> => ipcRenderer.invoke('librarian:uninstallCursorHook'),
+
   // ===========================================================================
   // Discovery Frequency API
   // ===========================================================================
@@ -2551,240 +2529,6 @@ const librarianAPI = {
 };
 
 type LibrarianAPI = typeof librarianAPI;
-
-// =============================================================================
-// Narration API - Local, offline TTS for the Librarian
-// Reads auto-opened readings aloud with a canonical, restrained voice.
-// =============================================================================
-
-// IPC channel names for narration (must match main process)
-const NarrationIPCChannels = {
-  INSTALL: 'narration:install',
-  GET_STATUS: 'narration:getStatus',
-  PLAY_READING: 'narration:playReading',
-  STOP: 'narration:stop',
-  PAUSE: 'narration:pause',
-  RESUME: 'narration:resume',
-  TOGGLE_PAUSE: 'narration:togglePause',
-  GET_PLAYBACK_PROGRESS: 'narration:getPlaybackProgress',
-  GET_OUTPUT_DEVICE: 'narration:getOutputDevice',
-  REFRESH_DEVICES: 'narration:refreshDevices',
-  GET_PREFS: 'narration:getPrefs',
-  SET_SPEAK_ON_OPEN: 'narration:setSpeakOnOpen',
-  ADD_BLOCKED_DEVICE: 'narration:addBlockedDevice',
-  REMOVE_BLOCKED_DEVICE: 'narration:removeBlockedDevice',
-  CLEAR_CACHE: 'narration:clearCache',
-  // Chatterbox-specific
-  INSTALL_CHATTERBOX: 'narration:installChatterbox',
-  GET_CHATTERBOX_STATUS: 'narration:getChatterboxStatus',
-  TEST_CHATTERBOX_VOICE: 'narration:testChatterboxVoice',
-  TEST_MACOS_VOICE: 'narration:testMacOSVoice',
-  SET_PREFERRED_ENGINE: 'narration:setPreferredEngine',
-  // ElevenLabs-specific
-  SET_ELEVENLABS_API_KEY: 'narration:setElevenlabsApiKey',
-  SET_ELEVENLABS_VOICE: 'narration:setElevenlabsVoice',
-  TEST_ELEVENLABS_VOICE: 'narration:testElevenlabsVoice',
-  GET_ELEVENLABS_VOICES: 'narration:getElevenlabsVoices',
-  CHECK_ELEVENLABS_CONNECTION: 'narration:checkElevenlabsConnection',
-  GET_LIBRARIAN_VOICES: 'narration:getLibrarianVoices',
-  GET_CURRENT_VOICE_ID: 'narration:getCurrentVoiceId',
-  // Events
-  GENERATION_STARTED: 'narration:generationStarted',
-  PLAYBACK_STARTED: 'narration:playbackStarted',
-  PLAYBACK_PAUSED: 'narration:playbackPaused',
-  PLAYBACK_RESUMED: 'narration:playbackResumed',
-  PLAYBACK_STOPPED: 'narration:playbackStopped',
-  PLAYBACK_ERROR: 'narration:playbackError',
-  INSTALL_PROGRESS: 'narration:installProgress',
-} as const;
-
-// Types for narration
-type NarrationInstallStatus = 'not_installed' | 'installing' | 'installed' | 'install_failed';
-type NarrationPlaybackStatus = 'idle' | 'generating' | 'playing' | 'paused' | 'stopped';
-type NarrationEngine = 'chatterbox' | 'macos_say' | 'elevenlabs';
-
-interface ElevenLabsVoiceInfo {
-  voice_id: string;
-  name: string;
-  category?: string;
-  description?: string;
-  labels?: Record<string, string>;
-}
-
-interface NarrationStatus {
-  installStatus: NarrationInstallStatus;
-  playbackStatus: NarrationPlaybackStatus;
-  engine: NarrationEngine | null;
-  currentReadingPath: string | null;
-  cacheSizeBytes: number;
-  cachedItemCount: number;
-}
-
-interface OutputDevice {
-  name: string;
-  uid: string;
-  isDefault: boolean;
-  transportType?: string;
-}
-
-interface NarrationPreferences {
-  installed: boolean;
-  installedVersion?: string;
-  speakOnOpen: boolean;
-  blockedDevices: string[];
-  cacheSizeLimitBytes: number;
-}
-
-const narrationAPI = {
-  // Get narration status (installation, playback, cache)
-  getStatus: (): Promise<NarrationStatus | null> =>
-    ipcRenderer.invoke(NarrationIPCChannels.GET_STATUS),
-
-  // Install narration capability
-  install: (): Promise<boolean> =>
-    ipcRenderer.invoke(NarrationIPCChannels.INSTALL),
-
-  // Play a reading aloud
-  playReading: (readingPath: string): Promise<boolean> =>
-    ipcRenderer.invoke(NarrationIPCChannels.PLAY_READING, readingPath),
-
-  // Stop playback
-  stop: (): Promise<void> =>
-    ipcRenderer.invoke(NarrationIPCChannels.STOP),
-
-  // Pause playback
-  pause: (): Promise<boolean> =>
-    ipcRenderer.invoke(NarrationIPCChannels.PAUSE),
-
-  // Resume playback
-  resume: (): Promise<boolean> =>
-    ipcRenderer.invoke(NarrationIPCChannels.RESUME),
-
-  // Toggle pause/play
-  togglePause: (): Promise<boolean> =>
-    ipcRenderer.invoke(NarrationIPCChannels.TOGGLE_PAUSE),
-
-  // Get playback progress
-  getPlaybackProgress: (): Promise<{ position: number; duration: number; percentage: number } | null> =>
-    ipcRenderer.invoke(NarrationIPCChannels.GET_PLAYBACK_PROGRESS),
-
-  // Get current output device
-  getOutputDevice: (): Promise<OutputDevice | null> =>
-    ipcRenderer.invoke(NarrationIPCChannels.GET_OUTPUT_DEVICE),
-
-  // Refresh device detection
-  refreshDevices: (): Promise<OutputDevice | null> =>
-    ipcRenderer.invoke(NarrationIPCChannels.REFRESH_DEVICES),
-
-  // Get narration preferences
-  getPrefs: (): Promise<NarrationPreferences | null> =>
-    ipcRenderer.invoke(NarrationIPCChannels.GET_PREFS),
-
-  // Set speak-on-open preference
-  setSpeakOnOpen: (enabled: boolean): Promise<void> =>
-    ipcRenderer.invoke(NarrationIPCChannels.SET_SPEAK_ON_OPEN, enabled),
-
-  // Add blocked device pattern
-  addBlockedDevice: (pattern: string): Promise<void> =>
-    ipcRenderer.invoke(NarrationIPCChannels.ADD_BLOCKED_DEVICE, pattern),
-
-  // Remove blocked device pattern
-  removeBlockedDevice: (pattern: string): Promise<void> =>
-    ipcRenderer.invoke(NarrationIPCChannels.REMOVE_BLOCKED_DEVICE, pattern),
-
-  // Clear narration cache
-  clearCache: (): Promise<void> =>
-    ipcRenderer.invoke(NarrationIPCChannels.CLEAR_CACHE),
-
-  // Install Chatterbox TTS engine
-  installChatterbox: (): Promise<boolean> =>
-    ipcRenderer.invoke(NarrationIPCChannels.INSTALL_CHATTERBOX),
-
-  // Get Chatterbox installation status
-  getChatterboxStatus: (): Promise<{ installed: boolean; installing: boolean; version?: string; error?: string } | null> =>
-    ipcRenderer.invoke(NarrationIPCChannels.GET_CHATTERBOX_STATUS),
-
-  // Test Chatterbox voice
-  testChatterboxVoice: (): Promise<boolean> =>
-    ipcRenderer.invoke(NarrationIPCChannels.TEST_CHATTERBOX_VOICE),
-
-  // Test macOS Say voice
-  testMacOSVoice: (): Promise<boolean> =>
-    ipcRenderer.invoke(NarrationIPCChannels.TEST_MACOS_VOICE),
-
-  // Set preferred narration engine
-  setPreferredEngine: (engine: 'chatterbox' | 'macos_say' | 'elevenlabs'): Promise<boolean> =>
-    ipcRenderer.invoke(NarrationIPCChannels.SET_PREFERRED_ENGINE, engine),
-
-  // ElevenLabs methods
-  setElevenlabsApiKey: (apiKey: string): Promise<boolean> =>
-    ipcRenderer.invoke(NarrationIPCChannels.SET_ELEVENLABS_API_KEY, apiKey),
-
-  setElevenlabsVoice: (voiceId: string): Promise<boolean> =>
-    ipcRenderer.invoke(NarrationIPCChannels.SET_ELEVENLABS_VOICE, voiceId),
-
-  testElevenlabsVoice: (): Promise<boolean> =>
-    ipcRenderer.invoke(NarrationIPCChannels.TEST_ELEVENLABS_VOICE),
-
-  getElevenlabsVoices: (): Promise<ElevenLabsVoiceInfo[]> =>
-    ipcRenderer.invoke(NarrationIPCChannels.GET_ELEVENLABS_VOICES),
-
-  checkElevenlabsConnection: (): Promise<{ connected: boolean; error?: string }> =>
-    ipcRenderer.invoke(NarrationIPCChannels.CHECK_ELEVENLABS_CONNECTION),
-
-  getLibrarianVoices: (): Promise<{ voiceId: string; name: string; speed?: number }[]> =>
-    ipcRenderer.invoke(NarrationIPCChannels.GET_LIBRARIAN_VOICES),
-
-  getCurrentVoiceId: (): Promise<string | null> =>
-    ipcRenderer.invoke(NarrationIPCChannels.GET_CURRENT_VOICE_ID),
-
-  // Event listeners
-  onGenerationStarted: (callback: (readingPath: string) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, readingPath: string) => callback(readingPath);
-    ipcRenderer.on(NarrationIPCChannels.GENERATION_STARTED, handler);
-    return () => ipcRenderer.removeListener(NarrationIPCChannels.GENERATION_STARTED, handler);
-  },
-
-  onPlaybackStarted: (callback: (readingPath: string, duration: number) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, readingPath: string, duration: number) => callback(readingPath, duration);
-    ipcRenderer.on(NarrationIPCChannels.PLAYBACK_STARTED, handler);
-    return () => ipcRenderer.removeListener(NarrationIPCChannels.PLAYBACK_STARTED, handler);
-  },
-
-  onPlaybackPaused: (callback: (readingPath: string | null) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, readingPath: string | null) => callback(readingPath);
-    ipcRenderer.on(NarrationIPCChannels.PLAYBACK_PAUSED, handler);
-    return () => ipcRenderer.removeListener(NarrationIPCChannels.PLAYBACK_PAUSED, handler);
-  },
-
-  onPlaybackResumed: (callback: (readingPath: string | null) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, readingPath: string | null) => callback(readingPath);
-    ipcRenderer.on(NarrationIPCChannels.PLAYBACK_RESUMED, handler);
-    return () => ipcRenderer.removeListener(NarrationIPCChannels.PLAYBACK_RESUMED, handler);
-  },
-
-  onPlaybackStopped: (callback: (readingPath: string | null) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, readingPath: string | null) => callback(readingPath);
-    ipcRenderer.on(NarrationIPCChannels.PLAYBACK_STOPPED, handler);
-    return () => ipcRenderer.removeListener(NarrationIPCChannels.PLAYBACK_STOPPED, handler);
-  },
-
-  onPlaybackError: (callback: (error: string, readingPath: string | null) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, error: string, readingPath: string | null) =>
-      callback(error, readingPath);
-    ipcRenderer.on(NarrationIPCChannels.PLAYBACK_ERROR, handler);
-    return () => ipcRenderer.removeListener(NarrationIPCChannels.PLAYBACK_ERROR, handler);
-  },
-
-  onInstallProgress: (callback: (progress: number, message: string) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, progress: number, message: string) =>
-      callback(progress, message);
-    ipcRenderer.on(NarrationIPCChannels.INSTALL_PROGRESS, handler);
-    return () => ipcRenderer.removeListener(NarrationIPCChannels.INSTALL_PROGRESS, handler);
-  },
-};
-
-type NarrationAPI = typeof narrationAPI;
 
 // =============================================================================
 // Metrics API - User-visible usage stats
@@ -2951,7 +2695,6 @@ contextBridge.exposeInMainWorld('socialAPI', socialAPI);
 contextBridge.exposeInMainWorld('commandsAPI', commandsAPI);
 contextBridge.exposeInMainWorld('metricsAPI', metricsAPI);
 contextBridge.exposeInMainWorld('claudeAPI', claudeAPI);
-contextBridge.exposeInMainWorld('narrationAPI', narrationAPI);
 contextBridge.exposeInMainWorld('scenarioAPI', scenarioAPI);
 
 contextBridge.exposeInMainWorld('platform', {
@@ -2960,19 +2703,12 @@ contextBridge.exposeInMainWorld('platform', {
   isLinux: process.platform === 'linux',
 });
 
-// Stripe configuration - uses test links in development, live links in production.
-// Check for ELECTRON_START_URL which is set in dev mode.
-const isDev = !!process.env.ELECTRON_START_URL;
-
+// Stripe configuration - always use live links.
 contextBridge.exposeInMainWorld('stripeConfig', {
-  // Payment link for upgrading to Dev+
-  paymentLink: isDev
-    ? 'https://buy.stripe.com/test_aFadR96pW4vJdA9gPvfYY00'
-    : 'https://buy.stripe.com/14A00j3iCbyl6aZ3fU3Ru00',
+  // Payment link for upgrading to Pro
+  paymentLink: 'https://buy.stripe.com/14A00j3iCbyl6aZ3fU3Ru00',
   // Customer portal for managing subscription
-  portalLink: isDev
-    ? 'https://billing.stripe.com/p/login/test_aFadR96pW4vJdA9gPvfYY00'
-    : 'https://billing.stripe.com/p/login/14A00j3iCbyl6aZ3fU3Ru00',
+  portalLink: 'https://billing.stripe.com/p/login/14A00j3iCbyl6aZ3fU3Ru00',
 });
 
 declare global {
@@ -2993,7 +2729,6 @@ declare global {
     commandsAPI: CommandsAPI;
     librarianAPI: LibrarianAPI;
     metricsAPI: MetricsAPI;
-    narrationAPI: NarrationAPI;
     scenarioAPI: ScenarioAPI;
     stripeConfig: {
       paymentLink: string;

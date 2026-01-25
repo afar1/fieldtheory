@@ -48,6 +48,8 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [ruleContentSaved, setRuleContentSaved] = useState(false);
   const [isUsingCustomRule, setIsUsingCustomRule] = useState(false);
   const [stateEnforcedHookInstalled, setStateEnforcedHookInstalled] = useState(false);
+  const [cursorHookInstalled, setCursorHookInstalled] = useState(false);
+  const [cursorHookInstalling, setCursorHookInstalling] = useState(false);
 
   // Discovery frequency (often/sometimes/rarely)
   const [discoveryFrequency, setDiscoveryFrequency] = useState<'often' | 'sometimes' | 'rarely'>('sometimes');
@@ -165,6 +167,18 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     };
 
     checkHookStatus();
+  }, []);
+
+  // Check Cursor hook status
+  useEffect(() => {
+    if (!window.librarianAPI) return;
+
+    const checkCursorHookStatus = async () => {
+      const isInstalled = await window.librarianAPI?.isCursorHookInstalled();
+      setCursorHookInstalled(isInstalled ?? false);
+    };
+
+    checkCursorHookStatus();
   }, []);
 
   // Fetch narration status and voice options (feature flagged)
@@ -842,25 +856,64 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>Cursor</span>
-                  <span style={{ fontSize: '10px', color: theme.textSecondary, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)', borderRadius: '4px' }}>
-                    Manual
-                  </span>
+                  {cursorHookInstalled ? (
+                    <span style={{ fontSize: '10px', color: theme.success, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)', borderRadius: '4px' }}>
+                      Connected
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: '10px', color: theme.warning, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(234, 179, 8, 0.15)' : 'rgba(234, 179, 8, 0.1)', borderRadius: '4px' }}>
+                      Setup needed
+                    </span>
+                  )}
                 </div>
-                <button
-                  onClick={handleShowCursorInstructions}
-                  style={{
-                    padding: '4px 10px',
-                    fontSize: '11px',
-                    fontWeight: 500,
-                    color: theme.textSecondary,
-                    backgroundColor: 'transparent',
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Setup...
-                </button>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    onClick={async () => {
+                      setCursorHookInstalling(true);
+                      try {
+                        if (cursorHookInstalled) {
+                          await window.librarianAPI?.uninstallCursorHook();
+                          setCursorHookInstalled(false);
+                        } else {
+                          const success = await window.librarianAPI?.installCursorHook();
+                          setCursorHookInstalled(success ?? false);
+                        }
+                      } finally {
+                        setCursorHookInstalling(false);
+                      }
+                    }}
+                    disabled={cursorHookInstalling}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      color: cursorHookInstalled ? theme.textSecondary : '#fff',
+                      backgroundColor: cursorHookInstalled ? 'transparent' : theme.accent,
+                      border: cursorHookInstalled ? `1px solid ${theme.border}` : 'none',
+                      borderRadius: '4px',
+                      cursor: cursorHookInstalling ? 'wait' : 'pointer',
+                      opacity: cursorHookInstalling ? 0.5 : 1,
+                    }}
+                  >
+                    {cursorHookInstalling ? '...' : cursorHookInstalled ? 'Disconnect' : 'Connect'}
+                  </button>
+                  <button
+                    onClick={handleShowCursorInstructions}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      color: theme.textSecondary,
+                      backgroundColor: 'transparent',
+                      border: `1px solid ${theme.border}`,
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                    }}
+                    title="Manual setup instructions"
+                  >
+                    ?
+                  </button>
+                </div>
               </div>
             </div>
           </div>

@@ -7,6 +7,7 @@ import { exec, spawn, ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import crypto from 'crypto';
 import { EventEmitter } from 'events';
+import { UserDataManager } from './userDataManager';
 
 const execAsync = promisify(exec);
 
@@ -229,7 +230,21 @@ export interface ClipboardManagerEvents {
  * Also manages Continuous Context mode for multi-screenshot capture sessions.
  */
 export class ClipboardManager extends EventEmitter {
-  private db: Database.Database;
+  private _db: Database.Database | null = null;
+  private dbPath: string | null = null;
+
+  /** Get database instance, throwing if not initialized */
+  private get db(): Database.Database {
+    if (!this._db) {
+      throw new Error('ClipboardManager: Database not initialized');
+    }
+    return this._db;
+  }
+
+  /** Set database instance */
+  private set db(value: Database.Database | null) {
+    this._db = value;
+  }
   private pollInterval: NodeJS.Timeout | null = null;
   private lastContentHash: string = '';
   private config: ClipboardConfig;
@@ -255,22 +270,98 @@ export class ClipboardManager extends EventEmitter {
   private screencaptureProcess: ChildProcess | null = null;
   private continuousContextEscapeRegistered: boolean = false;
   private continuousContextPausedForCommand: boolean = false;
-  
+
   // Screenshot capture lock to prevent race condition with clipboard polling.
   // When true, checkClipboard() skips to avoid storing duplicate screenshot.
   private screenshotInProgress: boolean = false;
 
+  // User data isolation
+  private userDataManager: UserDataManager | null = null;
+
   constructor(config: Partial<ClipboardConfig> = {}) {
     super();
     this.config = { ...DEFAULT_CONFIG, ...config };
-    
-    // Initialize database
+
+    // Database will be initialized when setUserDataManager is called
+    // For backward compatibility, initialize with legacy path if no user manager
     const userDataPath = app.getPath('userData');
-    const dbPath = path.join(userDataPath, 'clipboard.db');
-    this.db = new Database(dbPath);
-    
+    this.dbPath = path.join(userDataPath, 'clipboard.db');
+    this.db = new Database(this.dbPath);
+
     this.initDatabase();
     this.startPolling();
+  }
+
+  /**
+   * Set the UserDataManager for per-user paths.
+   * Call this to switch to a different user's database.
+   */
+  setUserDataManager(manager: UserDataManager): void {
+    this.userDataManager = manager;
+  }
+
+  /**
+   * Reinitialize database for the current user.
+   * Call this after setUserDataManager when user changes.
+   */
+  async reinitializeForUser(): Promise<void> {
+    if (!this.userDataManager?.isLoggedIn()) {
+      console.log('[ClipboardManager] No user logged in, skipping reinitialize');
+      return;
+    }
+
+    // Close existing database
+    if (this._db) {
+      this.db.close();
+      this.db = null;
+    }
+
+    // Get new path for current user
+    this.dbPath = this.userDataManager.getUserDataPath('clipboard.db');
+    console.log('[ClipboardManager] Reinitializing database for user:', this.dbPath);
+
+    // Ensure directory exists
+    const dir = path.dirname(this.dbPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    // Open new database
+    this.db = new Database(this.dbPath);
+    this.initDatabase();
+
+    // Reset state and restart polling
+    this.lastContentHash = '';
+    this.startPolling();
+  }
+
+  /**
+   * Clear state on logout. Closes database and resets state.
+   */
+  onUserLoggedOut(): void {
+    console.log('[ClipboardManager] User logged out, clearing state');
+
+    // Stop polling to prevent database access errors
+    this.stopPolling();
+
+    // Close database
+    if (this._db) {
+      this.db.close();
+      this.db = null;
+    }
+    this.dbPath = null;
+    this.lastContentHash = '';
+  }
+
+  /**
+   * Get the figures cache directory path.
+   */
+  getFiguresPath(): string {
+    if (this.userDataManager?.isLoggedIn()) {
+      return this.userDataManager.getUserDataPath('figures');
+    }
+    // Fallback to legacy path
+    return path.join(app.getPath('userData'), 'figures');
   }
 
   /**
@@ -1963,7 +2054,7 @@ export class ClipboardManager extends EventEmitter {
     }
 
     // Delete oldest items if over max count.
-    if (maxItems) {
+    if (maxItems && this._db) {
       const count = this.db.prepare('SELECT COUNT(*) as count FROM clipboard_items').get() as { count: number };
       if (count.count > maxItems) {
         const toDelete = count.count - maxItems;
@@ -1992,9 +2083,11 @@ export class ClipboardManager extends EventEmitter {
       return;
     }
 
+    if (!this._db) return;
+
     const cutoffTime = Date.now() - days * 24 * 60 * 60 * 1000;
     const result = this.db.prepare('DELETE FROM clipboard_items WHERE created_at < ?').run(cutoffTime);
-    
+
     if (result.changes > 0) {
       console.log(`[ClipboardManager] Data retention: deleted ${result.changes} items older than ${days} days`);
     } else {
@@ -2014,7 +2107,7 @@ export class ClipboardManager extends EventEmitter {
     }
 
     // Create cache directory if it doesn't exist
-    const cacheDir = path.join(app.getPath('userData'), 'figures');
+    const cacheDir = this.getFiguresPath();
     if (!fs.existsSync(cacheDir)) {
       fs.mkdirSync(cacheDir, { recursive: true });
     }
@@ -2088,7 +2181,10 @@ export class ClipboardManager extends EventEmitter {
       globalShortcut.unregister(this.continuousContextHotkey);
     }
 
-    this.db.close();
+    if (this._db) {
+      this.db.close();
+      this.db = null;
+    }
     console.log('[ClipboardManager] Destroyed');
   }
 }

@@ -4,6 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import { EventEmitter } from 'events';
 import * as chokidar from 'chokidar';
+import { UserDataManager } from './userDataManager';
 
 /**
  * Auto-run frequency for generating readings.
@@ -114,11 +115,12 @@ export class LibrarianManager extends EventEmitter {
   private watchers: Map<string, chokidar.FSWatcher> = new Map();
   private settings: LibrarianSettings;
   private scanningDirs: Set<string> = new Set();
+  private userDataManager: UserDataManager | null = null;
 
   constructor() {
     super();
 
-    // Initialize paths
+    // Initialize paths (legacy - will be updated when user logs in)
     const userDataPath = app.getPath('userData');
     this.settingsPath = path.join(userDataPath, 'librarian-settings.json');
     this.indexPath = path.join(userDataPath, 'librarian-index.json');
@@ -144,6 +146,79 @@ export class LibrarianManager extends EventEmitter {
     this.logAllProjectStatuses();
 
     console.log('[LibrarianManager] Initialized (file-only mode)');
+  }
+
+  /**
+   * Set the UserDataManager for per-user paths.
+   */
+  setUserDataManager(manager: UserDataManager): void {
+    this.userDataManager = manager;
+  }
+
+  /**
+   * Update paths for the current user.
+   */
+  private updatePathsForUser(): void {
+    if (this.userDataManager?.isLoggedIn()) {
+      this.settingsPath = this.userDataManager.getUserDataPath('librarian-settings.json');
+      this.indexPath = this.userDataManager.getUserDataPath('librarian-index.json');
+      console.log('[LibrarianManager] Using user-specific paths:', this.settingsPath);
+    }
+  }
+
+  /**
+   * Get the central librarian directory (user-specific).
+   */
+  getCentralLibrarianDir(): string {
+    if (this.userDataManager?.isLoggedIn()) {
+      return this.userDataManager.getFieldTheoryPath('librarian');
+    }
+    // Fallback to legacy path
+    return path.join(os.homedir(), '.fieldtheory', 'librarian');
+  }
+
+  /**
+   * Get the central artifacts directory (user-specific).
+   */
+  getCentralArtifactsDir(): string {
+    return path.join(this.getCentralLibrarianDir(), 'artifacts');
+  }
+
+  /**
+   * Reinitialize for the current user. Call after setUserDataManager when user changes.
+   */
+  async reinitializeForUser(): Promise<void> {
+    // Stop existing watchers
+    for (const watcher of this.watchers.values()) {
+      await watcher.close();
+    }
+    this.watchers.clear();
+    this.cache.clear();
+
+    // Update paths
+    this.updatePathsForUser();
+
+    // Reload settings and index for new user
+    this.settings = this.loadSettings();
+    this.ensureCentralArtifactsDir();
+    this.loadIndex();
+    this.startWatching();
+
+    console.log('[LibrarianManager] Reinitialized for user');
+  }
+
+  /**
+   * Clear state on logout.
+   */
+  async onUserLoggedOut(): Promise<void> {
+    console.log('[LibrarianManager] User logged out, clearing state');
+
+    // Stop watchers
+    for (const watcher of this.watchers.values()) {
+      await watcher.close();
+    }
+    this.watchers.clear();
+    this.cache.clear();
   }
 
   /**
@@ -2636,14 +2711,6 @@ exit 0
   }
 
   /**
-   * Get the central librarian directory path.
-   * All artifacts, jobs, and rules are stored here regardless of project.
-   */
-  private getCentralLibrarianDir(): string {
-    return path.join(os.homedir(), '.fieldtheory', 'librarian');
-  }
-
-  /**
    * Ensure the central artifacts directory exists and is watched.
    * This runs on startup so users don't need to configure anything.
    */
@@ -3420,5 +3487,372 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
     console.log(`[LibrarianManager] Discovered ${unique.length} .librarian directories with readings`);
 
     return unique;
+  }
+
+  // ===========================================================================
+  // Cursor Hook Management
+  // ===========================================================================
+
+  /**
+   * Get the path to the global Cursor hooks config file.
+   */
+  private getCursorHooksConfigPath(): string {
+    return path.join(os.homedir(), '.cursor', 'hooks.json');
+  }
+
+  /**
+   * Get the path to the Field Theory Cursor hook script.
+   */
+  private getCursorHookScriptPath(): string {
+    return path.join(os.homedir(), '.fieldtheory', 'hooks', 'cursor-before-submit.py');
+  }
+
+  /**
+   * Get the path to the Field Theory Cursor hook config.
+   */
+  private getCursorHookConfigPath(): string {
+    return path.join(os.homedir(), '.fieldtheory', 'hooks', 'cursor-config.json');
+  }
+
+  /**
+   * Generate the Cursor beforeSubmitPrompt hook script content (Python).
+   * This script:
+   * 1. Reads prompt from stdin JSON
+   * 2. Increments per-project prompt count
+   * 3. At threshold, injects additionalContext to trigger artifact creation
+   */
+  private generateCursorHookScript(): string {
+    const centralDir = this.getCentralLibrarianDir();
+    const configPath = this.getCursorHookConfigPath();
+    return `#!/usr/bin/env python3
+"""
+Field Theory Librarian Hook for Cursor
+beforeSubmitPrompt hook that triggers artifact creation at threshold.
+"""
+import json
+import os
+import sys
+import fcntl
+from pathlib import Path
+from datetime import datetime
+
+def main():
+    # Read input from stdin
+    try:
+        input_data = json.load(sys.stdin)
+    except:
+        # Output continue:true to not block
+        print(json.dumps({"continue": True}))
+        return
+
+    # Get workspace root from input
+    workspace_roots = input_data.get("workspace_roots", [])
+    project_root = Path(workspace_roots[0]) if workspace_roots else Path.cwd()
+    project_name = project_root.name
+
+    # Read config from ~/.fieldtheory/hooks/cursor-config.json
+    cfg_path = Path("${configPath}")
+    if not cfg_path.exists():
+        print(json.dumps({"continue": True}))
+        return
+
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+
+    enabled = cfg.get("enabled", False)
+    if not enabled:
+        print(json.dumps({"continue": True}))
+        return
+
+    threshold = cfg.get("threshold", 3)
+    if not isinstance(threshold, int) or threshold <= 0:
+        print(json.dumps({"continue": True}))
+        return
+
+    rule_content = cfg.get("rule_content", "Write 2-3 paragraphs connecting the current work to engineering history, physics, or systems theory.")
+
+    # Central directory for everything
+    central_dir = Path("${centralDir}")
+    jobs_dir = central_dir / "jobs"
+    artifacts_dir = central_dir / "artifacts"
+    rules_dir = central_dir / "rules"
+
+    # Per-project state directory (for prompt counting)
+    state_dir = central_dir / "state" / f"cursor-{project_name}"
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    count_file = state_dir / "prompt_count"
+    lock_file = state_dir / "lock"
+
+    # Create directories
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    seq_file = central_dir / ".cursor-seq"
+
+    # Use fcntl for file locking
+    with open(lock_file, "w") as lf:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+
+        # Read and increment count
+        count = 0
+        if count_file.exists():
+            try:
+                count = int(count_file.read_text().strip())
+            except:
+                count = 0
+        count += 1
+        count_file.write_text(str(count))
+
+        if count < threshold:
+            print(json.dumps({"continue": True}))
+            return
+
+        # Reset count, increment global seq
+        count_file.write_text("0")
+
+        seq = 0
+        if seq_file.exists():
+            try:
+                seq = int(seq_file.read_text().strip())
+            except:
+                seq = 0
+        seq += 1
+        seq_file.write_text(str(seq))
+
+        # Generate timestamp-based filename
+        timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        job_file = jobs_dir / f"cursor-job_{seq}.json"
+        rule_file = rules_dir / "history_reading.md"
+        out_file = artifacts_dir / f"{project_name}-cursor-{timestamp}-artifact.md"
+
+        # Check if job already exists and is done
+        job_is_done = False
+        if job_file.exists():
+            try:
+                existing_job = json.loads(job_file.read_text(encoding="utf-8"))
+                if existing_job.get("status") == "done":
+                    job_is_done = True
+            except:
+                pass
+
+        # Create job file if missing
+        if not job_file.exists():
+            job_data = {
+                "schema_version": 1,
+                "id": seq,
+                "type": "history_artifact",
+                "status": "pending",
+                "source": "cursor",
+                "project": project_name,
+                "project_path": str(project_root),
+                "output": str(out_file),
+                "rule_file": str(rule_file),
+                "created_at": datetime.now().isoformat()
+            }
+            job_file.write_text(json.dumps(job_data, indent=2) + "\\n")
+
+        # Create rule file if needed
+        if not rule_file.exists():
+            rule_file.write_text(rule_content)
+
+        # Output with additionalContext if job not done
+        if not job_is_done:
+            msg = f"""[FIELD THEORY LIBRARIAN] Before responding, write this artifact:
+
+OUTPUT: {out_file}
+RULE: {rule_content}
+THEN: Update {job_file} setting "status" to "done"
+
+Use the current conversation as context. Write the artifact first, then mark the job done."""
+            print(json.dumps({
+                "continue": True,
+                "additionalContext": msg
+            }))
+        else:
+            print(json.dumps({"continue": True}))
+
+if __name__ == "__main__":
+    main()
+`;
+  }
+
+  /**
+   * Check if the Cursor hook is installed.
+   */
+  isCursorHookInstalled(): boolean {
+    const hookPath = this.getCursorHookScriptPath();
+    const configPath = this.getCursorHookConfigPath();
+    const cursorConfigPath = this.getCursorHooksConfigPath();
+
+    // Check if our hook script and config exist
+    if (!fs.existsSync(hookPath) || !fs.existsSync(configPath)) {
+      return false;
+    }
+
+    // Check if our hook is registered in Cursor's hooks.json
+    if (!fs.existsSync(cursorConfigPath)) {
+      return false;
+    }
+
+    try {
+      const cursorConfig = JSON.parse(fs.readFileSync(cursorConfigPath, 'utf-8'));
+      const hooks = cursorConfig.hooks?.beforeSubmitPrompt;
+      if (!Array.isArray(hooks)) {
+        return false;
+      }
+
+      // Check if our hook command is in the list
+      const ourCommand = `python3 "${hookPath}"`;
+      const isRegistered = hooks.some((h: { command?: string }) => h.command === ourCommand);
+
+      // Also check our config is enabled
+      const ourConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      return isRegistered && ourConfig.enabled === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Install the Cursor hook.
+   */
+  installCursorHook(): boolean {
+    try {
+      // 1. Ensure directories exist
+      const hooksDir = path.dirname(this.getCursorHookScriptPath());
+      if (!fs.existsSync(hooksDir)) {
+        fs.mkdirSync(hooksDir, { recursive: true });
+      }
+
+      const cursorDir = path.dirname(this.getCursorHooksConfigPath());
+      if (!fs.existsSync(cursorDir)) {
+        fs.mkdirSync(cursorDir, { recursive: true });
+      }
+
+      // 2. Ensure central librarian directories exist
+      const centralDir = this.getCentralLibrarianDir();
+      const dirs = [
+        centralDir,
+        path.join(centralDir, 'jobs'),
+        path.join(centralDir, 'artifacts'),
+        path.join(centralDir, 'rules'),
+        path.join(centralDir, 'state'),
+      ];
+      for (const dir of dirs) {
+        if (!fs.existsSync(dir)) {
+          fs.mkdirSync(dir, { recursive: true });
+        }
+      }
+
+      // 3. Write hook script
+      const hookPath = this.getCursorHookScriptPath();
+      fs.writeFileSync(hookPath, this.generateCursorHookScript(), { mode: 0o755 });
+
+      // 4. Write hook config
+      const configPath = this.getCursorHookConfigPath();
+      const config = {
+        enabled: true,
+        threshold: this.getStateEnforcedThreshold(),
+        rule_content: this.getEffectiveRuleContent(),
+      };
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+      // 5. Register hook in Cursor's ~/.cursor/hooks.json
+      const cursorConfigPath = this.getCursorHooksConfigPath();
+      let cursorConfig: Record<string, unknown> = { version: 1, hooks: {} };
+
+      if (fs.existsSync(cursorConfigPath)) {
+        try {
+          cursorConfig = JSON.parse(fs.readFileSync(cursorConfigPath, 'utf-8'));
+        } catch {
+          console.warn('[LibrarianManager] Could not parse existing Cursor hooks.json, starting fresh');
+        }
+      }
+
+      // Ensure hooks object exists
+      if (!cursorConfig.hooks || typeof cursorConfig.hooks !== 'object') {
+        cursorConfig.hooks = {};
+      }
+      const hooks = cursorConfig.hooks as Record<string, unknown>;
+
+      // Ensure beforeSubmitPrompt array exists
+      if (!Array.isArray(hooks.beforeSubmitPrompt)) {
+        hooks.beforeSubmitPrompt = [];
+      }
+
+      // Check if our hook already exists
+      const ourCommand = `python3 "${hookPath}"`;
+      const existingHooks = hooks.beforeSubmitPrompt as Array<{ command?: string }>;
+      const alreadyExists = existingHooks.some(h => h.command === ourCommand);
+
+      if (!alreadyExists) {
+        existingHooks.push({ command: ourCommand });
+      }
+
+      // Write updated Cursor config
+      fs.writeFileSync(cursorConfigPath, JSON.stringify(cursorConfig, null, 2));
+
+      // 6. Auto-add artifacts directory to watched dirs
+      const artifactsDir = path.join(centralDir, 'artifacts');
+      this.addWatchedDir(artifactsDir);
+
+      console.log('[LibrarianManager] Installed Cursor hook (beforeSubmitPrompt)');
+      return true;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to install Cursor hook:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Uninstall the Cursor hook.
+   */
+  uninstallCursorHook(): boolean {
+    try {
+      const hookPath = this.getCursorHookScriptPath();
+      const configPath = this.getCursorHookConfigPath();
+
+      // Remove hook script
+      if (fs.existsSync(hookPath)) {
+        fs.unlinkSync(hookPath);
+      }
+
+      // Disable in config (don't delete, preserve settings)
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        config.enabled = false;
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+      }
+
+      // Remove from Cursor's hooks.json
+      const cursorConfigPath = this.getCursorHooksConfigPath();
+      if (fs.existsSync(cursorConfigPath)) {
+        const cursorConfig = JSON.parse(fs.readFileSync(cursorConfigPath, 'utf-8'));
+        const ourCommand = `python3 "${hookPath}"`;
+
+        if (cursorConfig.hooks?.beforeSubmitPrompt) {
+          cursorConfig.hooks.beforeSubmitPrompt = cursorConfig.hooks.beforeSubmitPrompt.filter(
+            (h: { command?: string }) => h.command !== ourCommand
+          );
+          if (cursorConfig.hooks.beforeSubmitPrompt.length === 0) {
+            delete cursorConfig.hooks.beforeSubmitPrompt;
+          }
+        }
+
+        // Clean up empty hooks object
+        if (cursorConfig.hooks && Object.keys(cursorConfig.hooks).length === 0) {
+          delete cursorConfig.hooks;
+        }
+
+        fs.writeFileSync(cursorConfigPath, JSON.stringify(cursorConfig, null, 2));
+      }
+
+      console.log('[LibrarianManager] Uninstalled Cursor hook');
+      return true;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to uninstall Cursor hook:', error);
+      return false;
+    }
   }
 }

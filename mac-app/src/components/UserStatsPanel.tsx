@@ -12,6 +12,7 @@ import { useTheme } from '../contexts/ThemeContext';
 interface UserMetrics {
   transcriptions: number;
   words_transcribed: number;
+  words_improved: number;
   priority_mic_minutes: number;
   verbal_commands: number;
   command_launcher_uses: number;
@@ -112,6 +113,11 @@ export default function UserStatsPanel() {
       items: [
         { label: 'Total transcriptions', value: metrics.transcriptions },
         { label: 'Words transcribed', value: metrics.words_transcribed },
+        {
+          label: 'Words improved',
+          value: metrics.words_improved,
+          quotaInfo: formatQuota(limits?.textImprovementWords, 'mo'),
+        },
         {
           label: 'Priority mic minutes',
           value: metrics.priority_mic_minutes,

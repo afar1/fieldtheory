@@ -2,17 +2,25 @@
  * Transcript Improvement Service
  *
  * Cleans up spoken transcripts into clear, concise prose using
- * either the Anthropic API or a local LLM.
+ * the cloud Edge Function or a local LLM.
  */
 
 import { LocalLLMManager } from './localLLMManager';
 
-// API key is provided at runtime from preferences or environment.
-let anthropicApiKey: string | null = null;
+// Supabase URL for Edge Functions (set from environment)
+let supabaseUrl: string | null = null;
 
 // Local LLM settings
 let localLLMManager: LocalLLMManager | null = null;
 let useLocalLLM: boolean = false;
+
+/**
+ * Set the Supabase URL for Edge Function calls.
+ */
+export function setSupabaseUrl(url: string): void {
+  supabaseUrl = url;
+  console.log('[PromptEngineer] Supabase URL configured');
+}
 
 /**
  * Set the local LLM manager instance.
@@ -27,20 +35,6 @@ export function setLocalLLMManager(manager: LocalLLMManager): void {
 export function setUseLocalLLM(useLocal: boolean): void {
   useLocalLLM = useLocal;
   console.log('[PromptEngineer] Use local LLM:', useLocal);
-}
-
-/**
- * Set the Anthropic API key for the engineer service.
- */
-export function setApiKey(key: string): void {
-  anthropicApiKey = key;
-}
-
-/**
- * Get the API key, checking environment as fallback.
- */
-function getApiKey(): string | null {
-  return anthropicApiKey || process.env.ANTHROPIC_API_KEY || null;
 }
 
 /**
@@ -60,19 +54,12 @@ export interface EngineerResult {
   error?: string;
   usage?: TokenUsage;
   wordCount?: number;
+  quotaExceeded?: boolean;
+  showQuotaMessage?: boolean;
 }
 
 /**
- * Hardcoded system prompt for transcript improvement (API/large models).
- * Not user-modifiable to ensure consistent quality.
- */
-const IMPROVE_TRANSCRIPT_PROMPT = `Rewrite this spoken feedback as clear prose. Same meaning with less ambiguity. If a portion of the transcript's intent is not obvious, don't attempt to rephrase that portion just include the full sentence. Questions from a user are crtically important and should always be presented as questions. If the transcript contains a question mark, always maintain the same meaning but feel free to rephrase to be more clear and concise. If intent of question is not obvious, include the full original question. Replace vague references with specific names. Remove filler words. Keep it as one paragraph. Do not add structure, bullets, or headers.
-
-IMPORTANT: Preserve any [Figure X] references and [cmd:name.md] references exactly as written. These reference images and commands that must remain in the output in their original positions relative to the surrounding text.`;
-
-/**
  * Prompt for local LLM transcript improvement.
- * Identical to cloud prompt for consistency.
  */
 const LOCAL_LLM_TRANSCRIPT_PROMPT = `Rewrite this spoken feedback as clear prose. Same meaning with less ambiguity. If a portion of the transcript's intent is not obvious, don't attempt to rephrase that portion just include the full sentence. Questions from a user are crtically important and should always be presented as questions. If the transcript contains a question mark, always maintain the same meaning but feel free to rephrase to be more clear and concise. If intent of question is not obvious, include the full original question. Replace vague references with specific names. Remove filler words. Keep it as one paragraph. Do not add structure, bullets, or headers.
 
@@ -152,38 +139,20 @@ async function tryLocalLLM(rawTranscript: string): Promise<EngineerResult | null
 }
 
 /**
- * Check if network is available by attempting a lightweight request.
- */
-async function isNetworkAvailable(): Promise<boolean> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3000);
-
-    const response = await fetch('https://api.anthropic.com/', {
-      method: 'HEAD',
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeout);
-    return true;
-  } catch (error) {
-    console.log('[PromptEngineer] Network check failed:', error instanceof Error ? error.message : 'unknown');
-    return false;
-  }
-}
-
-/**
  * Improve a transcript by cleaning up spoken language into clear prose.
- * Uses a hardcoded prompt optimized for transcript improvement.
  *
  * Mode selection:
  * - If useLocalLLM is true: use local model
- * - If useLocalLLM is false (API mode): use API, but fall back to local if network unavailable
+ * - If useLocalLLM is false (cloud mode): use Edge Function
  *
  * @param rawTranscript - The raw transcribed text to improve
+ * @param accessToken - Supabase auth token for cloud mode
  * @returns The improved text, or error if failed
  */
-export async function improveTranscript(rawTranscript: string): Promise<EngineerResult> {
+export async function improveTranscript(
+  rawTranscript: string,
+  accessToken?: string
+): Promise<EngineerResult> {
   if (!rawTranscript || rawTranscript.trim().length === 0) {
     return {
       success: false,
@@ -204,81 +173,102 @@ export async function improveTranscript(rawTranscript: string): Promise<Engineer
     };
   }
 
-  // API mode - try API first, fall back to local if network unavailable
-  const apiKey = getApiKey();
-
-  if (!apiKey) {
-    // No API key - try local as fallback
+  // Cloud mode - use Edge Function
+  if (!supabaseUrl) {
+    // Try local as fallback
     const localResult = await tryLocalLLM(rawTranscript);
     if (localResult) {
-      console.log('[PromptEngineer] No API key, using local LLM fallback');
+      console.log('[PromptEngineer] No Supabase URL, using local LLM fallback');
       return localResult;
     }
     return {
       success: false,
-      error: 'No API key configured and no local model available.',
+      error: 'Service not configured. Please sign in or use local model.',
+    };
+  }
+
+  if (!accessToken) {
+    // Try local as fallback
+    const localResult = await tryLocalLLM(rawTranscript);
+    if (localResult) {
+      console.log('[PromptEngineer] No auth token, using local LLM fallback');
+      return localResult;
+    }
+    return {
+      success: false,
+      error: 'Not signed in. Please sign in or use local model.',
     };
   }
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    console.log('[PromptEngineer] Calling Edge Function:', `${supabaseUrl}/functions/v1/improve-text`);
+    const response = await fetch(`${supabaseUrl}/functions/v1/improve-text`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
+        'Authorization': `Bearer ${accessToken}`,
       },
-      body: JSON.stringify({
-        // Use Sonnet for high-quality transcript improvement
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 8192,
-        system: IMPROVE_TRANSCRIPT_PROMPT,
-        messages: [
-          {
-            role: 'user',
-            content: rawTranscript.trim(),
-          },
-        ],
-      }),
+      body: JSON.stringify({ text: rawTranscript }),
     });
+
+    if (response.status === 429) {
+      // Quota exceeded
+      const data = await response.json() as { showMessage?: boolean };
+      console.log('[PromptEngineer] Quota exceeded:', data);
+      return {
+        success: false,
+        error: 'Text improvement quota exceeded for this month.',
+        quotaExceeded: true,
+        showQuotaMessage: data.showMessage === true,
+      };
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[PromptEngineer] improveTranscript API error:', response.status, errorText);
+      console.error('[PromptEngineer] Edge function error:', response.status, errorText);
+
+      // Try local fallback on server error
+      const localResult = await tryLocalLLM(rawTranscript);
+      if (localResult) {
+        console.log('[PromptEngineer] Server error, using local LLM fallback');
+        return localResult;
+      }
+
       return {
         success: false,
-        error: `API error: ${response.status}`,
+        error: `Server error: ${response.status}`,
       };
     }
 
     const data = await response.json() as {
-      content?: Array<{ text?: string }>;
-      usage?: { input_tokens?: number; output_tokens?: number };
+      improvedText?: string;
+      inputTokens?: number;
+      outputTokens?: number;
+      wordCount?: number;
     };
-    const content = data.content?.[0]?.text;
 
-    if (!content) {
+    if (!data.improvedText) {
       return {
         success: false,
-        error: 'No content in API response.',
+        error: 'No content in response.',
       };
     }
 
-    // Calculate word count from input
-    const wordCount = rawTranscript.trim().split(/\s+/).length;
+    console.log('[PromptEngineer] Edge Function success, tokens:', data.inputTokens, '/', data.outputTokens);
 
     return {
       success: true,
-      refinedPrompt: content.trim(),
-      usage: data.usage ? {
-        inputTokens: data.usage.input_tokens || 0,
-        outputTokens: data.usage.output_tokens || 0,
+      refinedPrompt: data.improvedText.trim(),
+      usage: data.inputTokens && data.outputTokens ? {
+        inputTokens: data.inputTokens,
+        outputTokens: data.outputTokens,
       } : undefined,
-      wordCount,
+      wordCount: data.wordCount,
     };
+
   } catch (error) {
     // Network error - try local LLM as fallback
-    console.error('[PromptEngineer] API request failed, checking for local fallback:', error);
+    console.error('[PromptEngineer] Network error, checking for local fallback:', error);
 
     const localResult = await tryLocalLLM(rawTranscript);
     if (localResult) {
