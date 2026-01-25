@@ -48,6 +48,7 @@ import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, PortableCommand } from './commandsManager';
 import { CommandsIPCChannels } from './types/commands';
 import { CommandLauncherWindow } from './commandLauncherWindow';
+import { ScenarioTestingWindow } from './scenarioTestingWindow';
 import { LocalLLMManager, LLMModelSize } from './localLLMManager';
 import { LibrarianManager, Reading, ReadingMeta, WatchedDir } from './librarianManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
@@ -157,6 +158,7 @@ let librarianManager: LibrarianManager | null = null;
 let narrationManager: NarrationManager | null = null;
 let commandsManager: CommandsManager | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
+let scenarioTestingWindow: ScenarioTestingWindow | null = null;
 let metricsManager: MetricsManager | null = null;
 
 // Track pending update state so windows can query it when they open.
@@ -2997,7 +2999,15 @@ function setupClipboardIPCHandlers(): void {
         console.error('[Main] updateStackId: clipboardManager not initialized');
         return;
       }
+      // Check if this creates a new stack (for metrics)
+      const isNewStack = stackId !== null && clipboardManager.queryItemsByStackId(stackId).length === 0;
+
       clipboardManager.updateStackId(itemIds, stackId);
+
+      // Record manual stack creation metric
+      if (isNewStack) {
+        metricsManager?.recordStackCreated();
+      }
     } catch (error) {
       console.error('[Main] updateStackId error:', error);
     }
@@ -3611,6 +3621,155 @@ function setupClipboardIPCHandlers(): void {
     return authManager?.isSuperAdmin() ?? false;
   });
 
+  // =========================================================================
+  // Scenario Testing IPC Handlers - Superadmin-only testing panel
+  // =========================================================================
+
+  // Check superadmin status (always uses REAL auth, not simulated)
+  ipcMain.handle('scenario:isSuperAdmin', (): boolean => {
+    return authManager?.isSuperAdmin() ?? false;
+  });
+
+  // Show/hide the scenario testing panel
+  ipcMain.handle('scenario:showPanel', async (): Promise<boolean> => {
+    if (!authManager?.isSuperAdmin()) {
+      console.log('[Scenario] Panel access denied - not superadmin');
+      return false;
+    }
+    // Prevent clipboard history from auto-hiding while scenario testing is active
+    clipboardHistoryWindow?.setScenarioTestingActive(true);
+    await scenarioTestingWindow?.show();
+    return true;
+  });
+
+  ipcMain.handle('scenario:hidePanel', async (): Promise<void> => {
+    scenarioTestingWindow?.hide();
+    // Re-enable clipboard history auto-hide when scenario testing closes
+    clipboardHistoryWindow?.setScenarioTestingActive(false);
+  });
+
+  // Get current overrides from preferences
+  ipcMain.handle('scenario:getOverrides', (): any => {
+    return preferencesManager?.getPreference('devOverrides') ?? null;
+  });
+
+  // Set tier override
+  ipcMain.handle('scenario:setTierOverride', async (_event, tier: 'free' | 'pro' | null): Promise<boolean> => {
+    if (!authManager?.isSuperAdmin()) return false;
+
+    const current = preferencesManager?.getPreference('devOverrides') ?? {};
+    if (tier === null) {
+      delete current.tier;
+    } else {
+      current.tier = tier;
+    }
+
+    // Save to preferences
+    const hasOverrides = Object.keys(current).length > 0;
+    await preferencesManager?.save({ devOverrides: hasOverrides ? current : undefined });
+
+    // Apply to quota manager
+    quotaManager?.setDevOverrides(hasOverrides ? current : null);
+
+    // Broadcast change to all windows
+    broadcastOverridesChanged(hasOverrides ? current : null);
+    return true;
+  });
+
+  // Set quota percentage override
+  ipcMain.handle('scenario:setQuotaOverride', async (
+    _event,
+    feature: 'priorityMic' | 'autoStack' | 'textImprove',
+    percentage: number | null
+  ): Promise<boolean> => {
+    if (!authManager?.isSuperAdmin()) return false;
+
+    const current = preferencesManager?.getPreference('devOverrides') ?? {};
+    if (!current.quotaPercentages) {
+      current.quotaPercentages = {};
+    }
+
+    if (percentage === null) {
+      delete current.quotaPercentages[feature];
+      if (Object.keys(current.quotaPercentages).length === 0) {
+        delete current.quotaPercentages;
+      }
+    } else {
+      current.quotaPercentages[feature] = Math.max(0, Math.min(100, percentage));
+    }
+
+    // Save to preferences
+    const hasOverrides = Object.keys(current).length > 0;
+    await preferencesManager?.save({ devOverrides: hasOverrides ? current : undefined });
+
+    // Apply to quota manager
+    quotaManager?.setDevOverrides(hasOverrides ? current : null);
+
+    // Broadcast change
+    broadcastOverridesChanged(hasOverrides ? current : null);
+    return true;
+  });
+
+  // Set auth state override
+  ipcMain.handle('scenario:setAuthStateOverride', async (
+    _event,
+    state: 'logged_out' | 'offline' | null
+  ): Promise<boolean> => {
+    if (!authManager?.isSuperAdmin()) return false;
+
+    const current = preferencesManager?.getPreference('devOverrides') ?? {};
+    if (state === null) {
+      delete current.authState;
+    } else {
+      current.authState = state;
+    }
+
+    // Save to preferences
+    const hasOverrides = Object.keys(current).length > 0;
+    await preferencesManager?.save({ devOverrides: hasOverrides ? current : undefined });
+
+    // Apply auth state simulation
+    if (state === 'logged_out') {
+      authManager?.simulateState?.('SIGNED_OUT', {});
+    } else if (state === 'offline') {
+      authManager?.simulateState?.('OFFLINE_MODE', {});
+    } else {
+      authManager?.resetSimulator?.();
+    }
+
+    // Broadcast change
+    broadcastOverridesChanged(hasOverrides ? current : null);
+    return true;
+  });
+
+  // Reset all overrides
+  ipcMain.handle('scenario:resetAll', async (): Promise<boolean> => {
+    if (!authManager?.isSuperAdmin()) return false;
+
+    await preferencesManager?.save({ devOverrides: undefined });
+    quotaManager?.clearDevOverrides();
+    authManager?.resetSimulator?.();
+
+    // Broadcast change
+    broadcastOverridesChanged(null);
+    return true;
+  });
+
+  // Check if any overrides are active
+  ipcMain.handle('scenario:hasActiveOverrides', (): boolean => {
+    const overrides = preferencesManager?.getPreference('devOverrides');
+    return overrides !== undefined && Object.keys(overrides).length > 0;
+  });
+
+  // Helper to broadcast override changes to all windows
+  function broadcastOverridesChanged(overrides: any) {
+    BrowserWindow.getAllWindows().forEach(win => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('scenario:overridesChanged', overrides);
+      }
+    });
+  }
+
   // Open external URL in default browser (for Stripe checkout, etc).
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
     await shell.openExternal(url);
@@ -4121,7 +4280,7 @@ function setupClipboardIPCHandlers(): void {
 
   ipcMain.handle('quota:getLimits', async () => {
     if (!quotaManager) {
-      return { priorityMicMinutes: Infinity, autoStackSessions: Infinity, textImprovementWords: Infinity };
+      return { priorityMicMinutes: Infinity, autoStackSessions: Infinity, textImprovementWords: Infinity, verbalCommands: Infinity };
     }
     return quotaManager.getLimits();
   });
@@ -5017,6 +5176,10 @@ function broadcastTranscribeEvents(): void {
     metricsManager?.recordVerbalCommand();
   });
 
+  transcriberManager.on('autostackCreated', () => {
+    metricsManager?.recordAutostackCreated();
+  });
+
   transcriberManager.on('error', (error) => {
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
@@ -5579,6 +5742,7 @@ async function initTranscriberSystem(): Promise<void> {
   }
 
   // Broadcast quota changes to all windows so UI can update in real-time.
+  // Also auto-select 'none' for priority mic when quota is exhausted.
   quotaManager.on('quotaChanged', (quotas) => {
     const formatted = {
       priorityMic: quotaManager!.formatPriorityMicUsage(),
@@ -5590,6 +5754,16 @@ async function initTranscriberSystem(): Promise<void> {
         window.webContents.send('quota:changed', formatted);
       }
     });
+
+    // Auto-select 'none' when priority mic quota is exhausted.
+    // This ensures users don't stay on a device they can't use.
+    if (!quotas.priorityMic.allowed && audioManager) {
+      const audioState = audioManager.getState();
+      if (audioState.priorityDeviceId) {
+        console.log('[Quota] Priority mic quota exhausted, auto-selecting none');
+        audioManager.setPriorityDevice(null);
+      }
+    }
   });
 
   // Initialize cursor status indicator BEFORE transcriberManager so it can be passed in.
@@ -5700,6 +5874,13 @@ async function initTranscriberSystem(): Promise<void> {
   // Initialize command launcher window for Cmd+Shift+K.
   // Pass nativeHelper for instant access to cached frontmost app info.
   commandLauncherWindow = new CommandLauncherWindow(nativeHelper ?? undefined);
+
+  // Initialize scenario testing window for superadmin testing.
+  scenarioTestingWindow = new ScenarioTestingWindow(preferencesManager ?? undefined);
+  scenarioTestingWindow.setOnHide(() => {
+    // Re-enable clipboard history auto-hide when scenario testing closes
+    clipboardHistoryWindow?.setScenarioTestingActive(false);
+  });
 
   // Set up escape key priority: dismiss clipboard history before canceling recording
   transcriberManager.setClipboardHistoryVisibilityChecker(() => {
@@ -5911,6 +6092,9 @@ async function initClipboardCallbacks(): Promise<void> {
   // This ensures ALL clipboard items (text, images, screenshots) are added to the recording stack.
   clipboardManager.setOnItemAdded((id) => {
     const item = clipboardManager!.getItem(id);
+
+    // Record clipboard item metric
+    metricsManager?.recordClipboardItem();
 
     // Add ALL items to recording stack if user is currently recording.
     // This enables any clipboard copy (text, images, screenshots) to participate in auto-stacking.

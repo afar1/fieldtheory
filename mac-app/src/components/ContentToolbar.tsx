@@ -82,8 +82,8 @@ export default function ContentToolbar({
   headerHovered = true,
 }: ContentToolbarProps) {
   const { theme } = useTheme();
-  const [hoveredButton, setHoveredButton] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [rowHovered, setRowHovered] = useState(false);
 
   // Handle copy with feedback
   const handleCopy = () => {
@@ -94,36 +94,35 @@ export default function ContentToolbar({
     }
   };
 
-  // Button hover style helper
-  const getHoverBg = (buttonId: string) => {
-    if (hoveredButton === buttonId) {
-      return theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-    }
-    return 'transparent';
-  };
+  // Row background when hovered
+  const rowBg = rowHovered ? (theme.isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)') : 'transparent';
 
   return (
     <div
+      onMouseEnter={() => setRowHovered(true)}
+      onMouseLeave={() => setRowHovered(false)}
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: '2px',
         flex: 1,
         opacity: isFullScreen && !headerHovered ? 0 : 1,
-        transition: 'opacity 0.2s ease',
+        transition: 'opacity 0.2s ease, background-color 0.15s ease',
+        backgroundColor: rowBg,
+        borderRadius: '6px',
+        margin: '0 -4px',
+        padding: '0 4px',
       }}
     >
       {/* Expand/collapse toggle */}
       {onToggleFullScreen && (
         <button
           onClick={onToggleFullScreen}
-          onMouseEnter={() => setHoveredButton('expand')}
-          onMouseLeave={() => setHoveredButton(null)}
           style={{
             padding: '4px 6px',
             fontSize: '20px',
             color: theme.textSecondary,
-            backgroundColor: getHoverBg('expand'),
+            backgroundColor: 'transparent',
             border: 'none',
             borderRadius: '4px',
             cursor: 'pointer',
@@ -132,7 +131,6 @@ export default function ContentToolbar({
             alignItems: 'center',
             justifyContent: 'center',
             height: '24px',
-            transition: 'background-color 0.15s ease',
           }}
           title={isFullScreen ? "Show sidebar" : "Focus mode"}
         >
@@ -140,17 +138,12 @@ export default function ContentToolbar({
         </button>
       )}
 
-      {/* Text size controls - grouped for shared hover */}
+      {/* Text size controls */}
       {showTextSize && onTextSizeChange && (
         <div
-          onMouseEnter={() => setHoveredButton('textSize')}
-          onMouseLeave={() => setHoveredButton(null)}
           style={{
             display: 'flex',
             alignItems: 'center',
-            backgroundColor: getHoverBg('textSize'),
-            borderRadius: '4px',
-            transition: 'background-color 0.15s ease',
           }}
         >
           <button
@@ -221,17 +214,12 @@ export default function ContentToolbar({
         }}
       />
 
-      {/* Icon buttons group (folder, delete) - grouped for shared hover */}
+      {/* Icon buttons group (folder, delete) */}
       {(showFolder || showDelete) && !isEditing && (
         <div
-          onMouseEnter={() => setHoveredButton('icons')}
-          onMouseLeave={() => setHoveredButton(null)}
           style={{
             display: 'flex',
             alignItems: 'center',
-            backgroundColor: getHoverBg('icons'),
-            borderRadius: '4px',
-            transition: 'background-color 0.15s ease',
           }}
         >
           {showFolder && onShowInFolder && (
@@ -298,13 +286,11 @@ export default function ContentToolbar({
           <button
             onClick={onSave}
             disabled={!isDirty || isSaving}
-            onMouseEnter={() => setHoveredButton('save')}
-            onMouseLeave={() => setHoveredButton(null)}
             style={{
               padding: '3px 8px',
               fontSize: '11px',
               color: isDirty ? '#fff' : theme.textSecondary,
-              backgroundColor: isDirty ? theme.accent : getHoverBg('save'),
+              backgroundColor: isDirty ? theme.accent : 'transparent',
               border: 'none',
               borderRadius: '4px',
               cursor: isDirty ? 'pointer' : 'default',
@@ -313,20 +299,17 @@ export default function ContentToolbar({
               alignItems: 'center',
               justifyContent: 'center',
               height: '24px',
-              transition: 'background-color 0.15s ease',
             }}
           >
             {isSaving ? 'Saving...' : 'Save'}
           </button>
           <button
             onClick={onCancel}
-            onMouseEnter={() => setHoveredButton('cancel')}
-            onMouseLeave={() => setHoveredButton(null)}
             style={{
               padding: '3px 8px',
               fontSize: '11px',
               color: theme.textSecondary,
-              backgroundColor: getHoverBg('cancel'),
+              backgroundColor: 'transparent',
               border: 'none',
               borderRadius: '4px',
               cursor: 'pointer',
@@ -334,7 +317,6 @@ export default function ContentToolbar({
               alignItems: 'center',
               justifyContent: 'center',
               height: '24px',
-              transition: 'background-color 0.15s ease',
             }}
           >
             Cancel
@@ -343,13 +325,11 @@ export default function ContentToolbar({
       ) : onEdit && (
         <button
           onClick={onEdit}
-          onMouseEnter={() => setHoveredButton('edit')}
-          onMouseLeave={() => setHoveredButton(null)}
           style={{
             padding: '3px 8px',
             fontSize: '11px',
             color: theme.textSecondary,
-            backgroundColor: getHoverBg('edit'),
+            backgroundColor: 'transparent',
             border: 'none',
             borderRadius: '4px',
             cursor: 'pointer',
@@ -357,7 +337,6 @@ export default function ContentToolbar({
             alignItems: 'center',
             justifyContent: 'center',
             height: '24px',
-            transition: 'background-color 0.15s ease',
           }}
           title="Edit (⌘E)"
         >

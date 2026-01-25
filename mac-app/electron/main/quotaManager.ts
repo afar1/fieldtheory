@@ -16,11 +16,13 @@ const TIER_LIMITS = {
     priorityMicMinutes: 500,      // ~8 hours per month
     autoStackSessions: 50,        // Only counts 2+ image sessions
     textImprovementWords: 5000,   // Word-based (input words)
+    verbalCommands: 50,           // Voice commands (copy that, new line, etc.)
   },
   pro: {
     priorityMicMinutes: Infinity,
     autoStackSessions: Infinity,
     textImprovementWords: Infinity,
+    verbalCommands: Infinity,
   },
 } as const;
 
@@ -41,7 +43,7 @@ export interface QuotaCheckResult {
   allowed: boolean;
   used: number;
   limit: number;
-  feature: 'priorityMic' | 'autoStack' | 'textImprove';
+  feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'verbalCommands';
 }
 
 /**
@@ -52,16 +54,78 @@ export interface QuotaCheckResult {
 export class QuotaManager extends EventEmitter {
   private preferencesManager: PreferencesManager;
   private quotas: LocalQuotas;
-  
+
   // Session checker function injected from main process.
   // Returns true if user has a valid (non-expired) session.
   // When not logged in, we enforce free tier limits regardless of cached tier.
   private sessionChecker: (() => boolean) | null = null;
 
+  // Dev overrides for scenario testing (superadmin only).
+  // When set, these values override the real tier/quota values.
+  private devOverrides: {
+    tier?: 'free' | 'pro';
+    quotaPercentages?: {
+      priorityMic?: number;
+      autoStack?: number;
+      textImprove?: number;
+      verbalCommands?: number;
+    };
+  } | null = null;
+
   constructor(preferencesManager: PreferencesManager) {
     super();
     this.preferencesManager = preferencesManager;
     this.quotas = this.loadQuotas();
+
+    // Load any persisted dev overrides
+    const persistedOverrides = preferencesManager.getPreference('devOverrides');
+    if (persistedOverrides && (persistedOverrides.tier || persistedOverrides.quotaPercentages)) {
+      this.devOverrides = {
+        tier: persistedOverrides.tier,
+        quotaPercentages: persistedOverrides.quotaPercentages,
+      };
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Dev Overrides (Scenario Testing)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Set dev overrides for scenario testing.
+   * When set, these values override real tier and quota values.
+   */
+  setDevOverrides(overrides: typeof this.devOverrides): void {
+    this.devOverrides = overrides;
+
+    // Emit tier change if tier is being overridden
+    if (overrides?.tier) {
+      this.emit('tierChanged', overrides.tier);
+    }
+
+    // Always emit quota change so UI updates
+    this.emit('quotaChanged', this.getQuotas());
+  }
+
+  /**
+   * Clear all dev overrides and restore real values.
+   */
+  clearDevOverrides(): void {
+    this.devOverrides = null;
+
+    // Emit events to restore real state in UI
+    this.emit('tierChanged', this.quotas.cachedTier);
+    this.emit('quotaChanged', this.getQuotas());
+  }
+
+  /**
+   * Check if any dev overrides are active.
+   */
+  hasDevOverrides(): boolean {
+    if (!this.devOverrides) return false;
+    return this.devOverrides.tier !== undefined ||
+           (this.devOverrides.quotaPercentages !== undefined &&
+            Object.keys(this.devOverrides.quotaPercentages).length > 0);
   }
   
   /**
@@ -74,11 +138,17 @@ export class QuotaManager extends EventEmitter {
   
   /**
    * Get the effective tier based on login state:
+   * - Dev override → use override tier
    * - Not logged in → 'free' (all users must have accounts)
    * - Logged in + free → 'free'
    * - Logged in + pro → 'pro' (unlimited)
    */
   private getEffectiveTier(): UserTier {
+    // Check for dev override first (scenario testing).
+    if (this.devOverrides?.tier) {
+      return this.devOverrides.tier;
+    }
+
     // If no session checker set, fall back to cached tier.
     if (!this.sessionChecker) {
       return this.quotas.cachedTier;
@@ -126,6 +196,7 @@ export class QuotaManager extends EventEmitter {
         priorityMicSecondsUsed: 0,
         autoStackSessionsUsed: 0,
         textImprovementWordsUsed: 0,
+        verbalCommandsUsed: 0,
         cachedTier: stored?.cachedTier || 'free',
         cachedTierUpdatedAt: stored?.cachedTierUpdatedAt || new Date().toISOString(),
       };
@@ -138,6 +209,11 @@ export class QuotaManager extends EventEmitter {
     // reset to 0 (don't try to convert counts to words).
     if (stored.textImprovementWordsUsed === undefined) {
       stored.textImprovementWordsUsed = 0;
+    }
+
+    // Handle migration for verbal commands quota.
+    if (stored.verbalCommandsUsed === undefined) {
+      stored.verbalCommandsUsed = 0;
     }
 
     return stored;
@@ -215,6 +291,23 @@ export class QuotaManager extends EventEmitter {
     const tier = this.getEffectiveTier();
     const limitMinutes = TIER_LIMITS[tier].priorityMicMinutes;
     const limitSeconds = isUnlimited(limitMinutes) ? Infinity : limitMinutes * 60;
+
+    // Check for percentage override (scenario testing).
+    if (this.devOverrides?.quotaPercentages?.priorityMic !== undefined) {
+      const overridePercent = this.devOverrides.quotaPercentages.priorityMic;
+      const simulatedUsed = isUnlimited(limitSeconds)
+        ? Math.floor(500 * 60 * overridePercent / 100)  // Use free tier limit for simulation
+        : Math.floor(limitSeconds * overridePercent / 100);
+      const simulatedLimit = isUnlimited(limitSeconds) ? 500 * 60 : limitSeconds;
+      return {
+        used: simulatedUsed,
+        limit: simulatedLimit,
+        remaining: Math.max(0, simulatedLimit - simulatedUsed),
+        allowed: simulatedUsed < simulatedLimit,
+        percentUsed: overridePercent,
+      };
+    }
+
     const used = this.quotas.priorityMicSecondsUsed;
     const remaining = isUnlimited(limitSeconds) ? Infinity : Math.max(0, limitSeconds - used);
 
@@ -256,6 +349,22 @@ export class QuotaManager extends EventEmitter {
   getAutoStackStatus(): QuotaStatus {
     const tier = this.getEffectiveTier();
     const limit = TIER_LIMITS[tier].autoStackSessions;
+
+    // Check for percentage override (scenario testing).
+    if (this.devOverrides?.quotaPercentages?.autoStack !== undefined) {
+      const overridePercent = this.devOverrides.quotaPercentages.autoStack;
+      const freeLimit = TIER_LIMITS.free.autoStackSessions;
+      const simulatedLimit = isUnlimited(limit) ? freeLimit : limit;
+      const simulatedUsed = Math.floor(simulatedLimit * overridePercent / 100);
+      return {
+        used: simulatedUsed,
+        limit: simulatedLimit,
+        remaining: Math.max(0, simulatedLimit - simulatedUsed),
+        allowed: simulatedUsed < simulatedLimit,
+        percentUsed: overridePercent,
+      };
+    }
+
     const used = this.quotas.autoStackSessionsUsed;
     const remaining = isUnlimited(limit) ? Infinity : Math.max(0, limit - used);
 
@@ -298,7 +407,80 @@ export class QuotaManager extends EventEmitter {
   getTextImproveStatus(): QuotaStatus {
     const tier = this.getEffectiveTier();
     const limit = TIER_LIMITS[tier].textImprovementWords;
+
+    // Check for percentage override (scenario testing).
+    if (this.devOverrides?.quotaPercentages?.textImprove !== undefined) {
+      const overridePercent = this.devOverrides.quotaPercentages.textImprove;
+      const freeLimit = TIER_LIMITS.free.textImprovementWords;
+      const simulatedLimit = isUnlimited(limit) ? freeLimit : limit;
+      const simulatedUsed = Math.floor(simulatedLimit * overridePercent / 100);
+      return {
+        used: simulatedUsed,
+        limit: simulatedLimit,
+        remaining: Math.max(0, simulatedLimit - simulatedUsed),
+        allowed: simulatedUsed < simulatedLimit,
+        percentUsed: overridePercent,
+      };
+    }
+
     const used = this.quotas.textImprovementWordsUsed || 0;
+    const remaining = isUnlimited(limit) ? Infinity : Math.max(0, limit - used);
+
+    return {
+      used,
+      limit,
+      remaining,
+      allowed: isUnlimited(limit) || used < limit,
+      percentUsed: isUnlimited(limit) ? 0 : Math.min(100, (used / limit) * 100),
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Verbal commands quota
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Increment verbal commands count.
+   * Call once per voice command executed (copy that, new line, etc.).
+   */
+  async incrementVerbalCommands(): Promise<void> {
+    // Pro users don't consume quota.
+    if (this.getEffectiveTier() === 'pro') return;
+
+    // Check for month rollover before incrementing.
+    this.checkAndResetIfNeeded();
+
+    await this.saveQuotas({
+      ...this.quotas,
+      verbalCommandsUsed: (this.quotas.verbalCommandsUsed || 0) + 1,
+    });
+
+    this.emit('quotaChanged', this.getQuotas());
+  }
+
+  /**
+   * Get verbal commands quota status.
+   */
+  getVerbalCommandsStatus(): QuotaStatus {
+    const tier = this.getEffectiveTier();
+    const limit = TIER_LIMITS[tier].verbalCommands;
+
+    // Check for percentage override (scenario testing).
+    if (this.devOverrides?.quotaPercentages?.verbalCommands !== undefined) {
+      const overridePercent = this.devOverrides.quotaPercentages.verbalCommands;
+      const freeLimit = TIER_LIMITS.free.verbalCommands;
+      const simulatedLimit = isUnlimited(limit) ? freeLimit : limit;
+      const simulatedUsed = Math.floor(simulatedLimit * overridePercent / 100);
+      return {
+        used: simulatedUsed,
+        limit: simulatedLimit,
+        remaining: Math.max(0, simulatedLimit - simulatedUsed),
+        allowed: simulatedUsed < simulatedLimit,
+        percentUsed: overridePercent,
+      };
+    }
+
+    const used = this.quotas.verbalCommandsUsed || 0;
     const remaining = isUnlimited(limit) ? Infinity : Math.max(0, limit - used);
 
     return {
@@ -317,11 +499,12 @@ export class QuotaManager extends EventEmitter {
   /**
    * Get all quotas at once, plus the current tier.
    */
-  getQuotas(): { priorityMic: QuotaStatus; autoStack: QuotaStatus; textImprove: QuotaStatus; tier: UserTier } {
+  getQuotas(): { priorityMic: QuotaStatus; autoStack: QuotaStatus; textImprove: QuotaStatus; verbalCommands: QuotaStatus; tier: UserTier } {
     return {
       priorityMic: this.getPriorityMicStatus(),
       autoStack: this.getAutoStackStatus(),
       textImprove: this.getTextImproveStatus(),
+      verbalCommands: this.getVerbalCommandsStatus(),
       tier: this.getEffectiveTier(),
     };
   }
@@ -329,12 +512,14 @@ export class QuotaManager extends EventEmitter {
   /**
    * Check if a specific quota is exhausted.
    */
-  checkQuota(feature: 'priorityMic' | 'autoStack' | 'textImprove'): QuotaCheckResult {
+  checkQuota(feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'verbalCommands'): QuotaCheckResult {
     let status: QuotaStatus;
     if (feature === 'priorityMic') {
       status = this.getPriorityMicStatus();
     } else if (feature === 'autoStack') {
       status = this.getAutoStackStatus();
+    } else if (feature === 'verbalCommands') {
+      status = this.getVerbalCommandsStatus();
     } else {
       status = this.getTextImproveStatus();
     }
@@ -359,6 +544,7 @@ export class QuotaManager extends EventEmitter {
         priorityMicSecondsUsed: 0,
         autoStackSessionsUsed: 0,
         textImprovementWordsUsed: 0,
+        verbalCommandsUsed: 0,
       };
     }
   }
@@ -412,6 +598,19 @@ export class QuotaManager extends EventEmitter {
   }
 
   /**
+   * Format verbal commands usage for display.
+   * Returns "25 of 50 voice commands" or "25 of ∞ voice commands".
+   */
+  formatVerbalCommandsUsage(): string {
+    const status = this.getVerbalCommandsStatus();
+    if (isUnlimited(status.limit)) {
+      return `${status.used} of ∞ voice commands`;
+    }
+    const displayedUsed = Math.min(status.used, status.limit);
+    return `${displayedUsed} of ${status.limit} voice commands`;
+  }
+
+  /**
    * Get the reset date (first of next month).
    */
   getResetDate(): Date {
@@ -433,12 +632,13 @@ export class QuotaManager extends EventEmitter {
    * Get the quota limits for the current tier.
    * Used to display "resets to X" in UI.
    */
-  getLimits(): { priorityMicMinutes: number; autoStackSessions: number; textImprovementWords: number } {
+  getLimits(): { priorityMicMinutes: number; autoStackSessions: number; textImprovementWords: number; verbalCommands: number } {
     const tier = this.getEffectiveTier();
     return {
       priorityMicMinutes: TIER_LIMITS[tier].priorityMicMinutes,
       autoStackSessions: TIER_LIMITS[tier].autoStackSessions,
       textImprovementWords: TIER_LIMITS[tier].textImprovementWords,
+      verbalCommands: TIER_LIMITS[tier].verbalCommands,
     };
   }
 }

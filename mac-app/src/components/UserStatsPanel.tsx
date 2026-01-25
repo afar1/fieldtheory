@@ -36,6 +36,13 @@ interface MetricsWithStatus {
   pendingSync: boolean;
 }
 
+interface QuotaLimits {
+  priorityMicMinutes: number;
+  autoStackSessions: number;
+  textImprovementWords: number;
+  verbalCommands: number;
+}
+
 /**
  * Format a number for display (e.g., 1234 -> "1,234")
  */
@@ -47,8 +54,10 @@ export default function UserStatsPanel() {
   const { theme } = useTheme();
   const [data, setData] = useState<MetricsWithStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [tier, setTier] = useState<'free' | 'pro'>('free');
+  const [limits, setLimits] = useState<QuotaLimits | null>(null);
 
-  // Load metrics on mount
+  // Load metrics and quota info on mount
   useEffect(() => {
     if (!window.metricsAPI) {
       setLoading(false);
@@ -59,6 +68,15 @@ export default function UserStatsPanel() {
       .then(setData)
       .catch(console.error)
       .finally(() => setLoading(false));
+
+    // Also fetch quota info for Pro indicators
+    window.quotaAPI?.getQuotas().then(quotas => {
+      if (quotas) {
+        setTier(quotas.tier);
+      }
+    }).catch(console.error);
+
+    window.quotaAPI?.getLimits().then(setLimits).catch(console.error);
   }, []);
 
   if (loading) {
@@ -79,20 +97,36 @@ export default function UserStatsPanel() {
 
   const { metrics } = data;
 
+  // Helper to format quota info for display
+  const formatQuota = (limit: number | undefined, unit: string) => {
+    if (tier === 'pro') return 'Unlimited';
+    if (limit === undefined || limit === Infinity) return 'Unlimited';
+    return `${limit.toLocaleString()}/${unit}`;
+  };
+
   // Group metrics for display - compact format
+  // Items with quotaInfo show the limit for free users or "Unlimited" for pro
   const sections = [
     {
       title: 'Transcription',
       items: [
         { label: 'Total transcriptions', value: metrics.transcriptions },
         { label: 'Words transcribed', value: metrics.words_transcribed },
-        { label: 'Priority mic minutes', value: metrics.priority_mic_minutes },
+        {
+          label: 'Priority mic minutes',
+          value: metrics.priority_mic_minutes,
+          quotaInfo: formatQuota(limits?.priorityMicMinutes, 'mo'),
+        },
       ],
     },
     {
       title: 'Voice Commands',
       items: [
-        { label: 'Verbal commands', value: metrics.verbal_commands },
+        {
+          label: 'Verbal commands',
+          value: metrics.verbal_commands,
+          quotaInfo: formatQuota(limits?.verbalCommands, 'mo'),
+        },
         { label: 'Command launcher uses', value: metrics.command_launcher_uses },
       ],
     },
@@ -102,7 +136,11 @@ export default function UserStatsPanel() {
         { label: 'Items captured', value: metrics.clipboard_items },
         { label: 'Pastes used', value: metrics.pastes_used },
         { label: 'Stacks created', value: metrics.stacks_created },
-        { label: 'Autostacks created', value: metrics.autostacks_created },
+        {
+          label: 'Autostacks created',
+          value: metrics.autostacks_created,
+          quotaInfo: formatQuota(limits?.autoStackSessions, 'mo'),
+        },
         { label: 'Stacks pasted', value: metrics.stacks_pasted },
         { label: 'Items added to context', value: metrics.items_added_to_context },
       ],
@@ -199,7 +237,19 @@ export default function UserStatsPanel() {
                     lineHeight: '1.4'
                   }}
                 >
-                  <span style={{ color: theme.text }}>{item.label}</span>
+                  <span style={{ color: theme.text }}>
+                    {item.label}
+                    {item.quotaInfo && (
+                      <span style={{
+                        marginLeft: '6px',
+                        fontSize: '10px',
+                        color: tier === 'pro' ? theme.accent : theme.textSecondary,
+                        fontWeight: tier === 'pro' ? 500 : 400,
+                      }}>
+                        {item.quotaInfo}
+                      </span>
+                    )}
+                  </span>
                   <span style={{
                     color: item.value > 0 ? theme.accent : theme.textSecondary,
                     fontWeight: 500,

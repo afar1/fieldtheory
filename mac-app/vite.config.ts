@@ -23,6 +23,7 @@ export default defineConfig(({ mode }) => {
           clipboardHistory: path.resolve(__dirname, 'clipboard-history.html'),
           cursorStatus: path.resolve(__dirname, 'cursor-status.html'),
           commandLauncher: path.resolve(__dirname, 'command-launcher.html'),
+          scenarioTesting: path.resolve(__dirname, 'scenario-testing.html'),
         },
       },
     },
