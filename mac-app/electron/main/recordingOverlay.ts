@@ -1,7 +1,9 @@
 import { app, BrowserWindow, screen, ipcMain } from 'electron';
 import { EventEmitter } from 'events';
 import path from 'path';
-import { OverlayStyle } from './preferences';
+
+// Overlay style is now fixed to 'rectangle' only (dot indicator was removed)
+type OverlayStyle = 'rectangle';
 
 /**
  * Manages the recording indicator overlay window.
@@ -10,7 +12,8 @@ import { OverlayStyle } from './preferences';
  */
 export class RecordingOverlay extends EventEmitter {
   private window: BrowserWindow | null = null;
-  private overlayStyle: OverlayStyle = 'rectangle';
+  // Overlay style is now fixed to 'rectangle' (dot indicator removed)
+  private overlayStyle: 'rectangle' = 'rectangle';
   private isShowingConfirmation: boolean = false;
   
   // When true, overlay window is hidden (cursor status widget shows UI instead)
@@ -19,11 +22,7 @@ export class RecordingOverlay extends EventEmitter {
   // Rectangle style dimensions
   private readonly RECTANGLE_WIDTH = 100;
   private readonly RECTANGLE_HEIGHT = 36;
-  
-  // Top-emerging style dimensions (wider, taller to look like Dynamic Island)
-  private readonly TOP_EMERGING_WIDTH = 120;
-  private readonly TOP_EMERGING_HEIGHT = 44;
-  
+
   // Confirmation dimensions (wider to fit message)
   private readonly CONFIRMATION_WIDTH = 280;
   private readonly CONFIRMATION_HEIGHT = 60;
@@ -77,16 +76,15 @@ export class RecordingOverlay extends EventEmitter {
       return;
     }
 
-    const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
-    const isTopEmerging = this.overlayStyle === 'top-emerging';
-    
-    // Calculate dimensions based on style
-    const width = isTopEmerging ? this.TOP_EMERGING_WIDTH : this.RECTANGLE_WIDTH;
-    const height = isTopEmerging ? this.TOP_EMERGING_HEIGHT : this.RECTANGLE_HEIGHT;
-    
-    // Calculate position based on style
+    const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
+
+    // Rectangle style dimensions
+    const width = this.RECTANGLE_WIDTH;
+    const height = this.RECTANGLE_HEIGHT;
+
+    // Center horizontally, position near top
     const x = Math.floor((screenWidth - width) / 2);
-    const y = isTopEmerging ? 8 : 50; // Top-emerging: near top (8px), Rectangle: centered vertically (50px)
+    const y = 50;
 
     this.window = new BrowserWindow({
       width,
@@ -94,14 +92,14 @@ export class RecordingOverlay extends EventEmitter {
       x,
       y,
       frame: false,
-      transparent: isTopEmerging, // Top-emerging uses transparent for rounded top effect
+      transparent: false,
       alwaysOnTop: true,
       skipTaskbar: true,
       resizable: false,
       movable: false,
       focusable: false,
       show: false,
-      backgroundColor: isTopEmerging ? '#00000000' : '#1a1a1a', // Transparent for top-emerging, dark for rectangle
+      backgroundColor: '#1a1a1a',
       hasShadow: true,
       roundedCorners: true,
       webPreferences: {
@@ -253,13 +251,12 @@ export class RecordingOverlay extends EventEmitter {
       return;
     }
     
-    // Resize window back to normal recording size.
-    const isTopEmerging = this.overlayStyle === 'top-emerging';
-    const width = isTopEmerging ? this.TOP_EMERGING_WIDTH : this.RECTANGLE_WIDTH;
-    const height = isTopEmerging ? this.TOP_EMERGING_HEIGHT : this.RECTANGLE_HEIGHT;
+    // Resize window back to normal recording size (rectangle style).
+    const width = this.RECTANGLE_WIDTH;
+    const height = this.RECTANGLE_HEIGHT;
     const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
     const newX = Math.floor((screenWidth - width) / 2);
-    const y = isTopEmerging ? 8 : 50;
+    const y = 50;
     
     this.window.setBounds({
       x: newX,

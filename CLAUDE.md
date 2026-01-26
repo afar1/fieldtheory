@@ -9,12 +9,14 @@ All commands run from `mac-app/` directory:
 ```bash
 # Development
 npm run dev              # Start Vite + Electron concurrently
+npm run dev:experimental # Dev with experimental features enabled
 npm run build            # Build both Electron and Vite
 npm run typecheck        # TypeScript check (both configs)
 
 # Testing
 npm run test             # Run vitest once
 npm run test:watch       # Watch mode
+npm run test -- src/__tests__/syncUtils.test.ts  # Run specific test file
 
 # Native builds (required for full functionality)
 npm run build:native     # Build Swift helper (audio/permissions)
@@ -37,9 +39,12 @@ Manager pattern with EventEmitter for inter-component communication:
 | `TranscriberManager` | Whisper transcription, audio recording |
 | `AudioManager` | Audio devices, priority mic enforcement |
 | `LibrarianManager` | `.librarian/` file watching, reading metadata |
-| `NarrationManager` | TTS orchestration (multiple engines) |
 | `AuthManager` | Supabase authentication |
-| `PreferencesManager` | JSON settings persistence |
+| `PreferencesManager` | JSON settings persistence (serialized saves) |
+| `QuotaManager` | Usage tracking and tier limits |
+| `CommandsManager` | Portable commands (markdown files) |
+| `MetricsManager` | User-visible usage statistics |
+| `UserDataManager` | Per-user data isolation (paths by user ID) |
 
 Entry point: `index.ts` initializes all managers and sets up IPC handlers.
 
@@ -47,7 +52,7 @@ Entry point: `index.ts` initializes all managers and sets up IPC handlers.
 
 - **Preload bridge** (`preload.ts`) exposes typed APIs via `contextBridge`
 - **Channel naming**: `domain:action` (e.g., `clipboard:queryItems`, `transcribe:toggle`)
-- **Type definitions**: `window.d.ts` declares all `window.*API` interfaces
+- **Type definitions**: `src/types/window.d.ts` declares all `window.*API` interfaces (authoritative reference)
 
 Example flow:
 ```
@@ -55,21 +60,69 @@ React → window.clipboardAPI.queryItems() → ipcRenderer.invoke('clipboard:que
      → ipcMain.handle() → ClipboardManager.queryItems() → SQLite → response
 ```
 
+### Multi-Window Architecture
+
+The app has multiple separate React entry points (each a separate HTML file):
+
+| Window | Entry Point | Purpose |
+|--------|-------------|---------|
+| Clipboard History | `clipboard-history.tsx` | Main popup (Control+Alt+Space) |
+| Settings | `App.tsx` | Settings panel |
+| Onboarding | `onboarding.tsx` | First-run wizard |
+| Recording Overlay | `overlay.tsx` | Transcription UI overlay |
+| Cursor Status | `cursor-status.tsx` | Status indicator |
+| Command Launcher | `command-launcher.tsx` | Cmd+Shift+K launcher |
+| Scenario Testing | `scenario-testing.tsx` | Dev/superadmin testing |
+
 ### React Renderer (`src/`)
 
-- **`ClipboardHistory.tsx`** (~7000 lines): Main popup UI, search, multi-select, tabs
+- **`ClipboardHistory.tsx`** (~8000 lines): Main popup UI, search, multi-select, tabs
 - **`SettingsPanel.tsx`**: Settings navigation and section rendering
 - **`App.tsx`**: Settings window root (separate from clipboard popup)
 - **Feature flags**: `featureFlags.ts` controls experimental features
+
+### Native Swift Helper (`electron/native/`)
+
+`FieldTheoryHelper` provides macOS-specific functionality:
+- CoreAudio device enumeration and default input management
+- System permission checks (Accessibility, Input Monitoring, Microphone)
+- Low-latency audio recording to WAV files (16kHz mono)
+- Real-time audio level metering
+
+Build: `npm run build:native`
 
 ### Data Storage
 
 ```
 ~/Library/Application Support/Field Theory/
-├── clipboard.db          # SQLite: clipboard items
-├── preferences.json      # User settings
-└── .librarian-index.json # Cached reading metadata
+├── clipboard.db              # SQLite: clipboard items (shared)
+├── preferences.json          # Legacy prefs (pre-login)
+└── users/<user-id>/          # Per-user data (when logged in)
+    ├── preferences.json      # User settings
+    └── .librarian-index.json # Cached reading metadata
 ```
+
+Logged-in users get isolated data via `UserDataManager`. Legacy paths used when logged out.
+
+### Supabase Edge Functions (`supabase/functions/`)
+
+| Function | Purpose |
+|----------|---------|
+| `delete-account` | Account deletion API |
+| `get-usage` | Quota/usage tracking |
+| `improve-text` | Claude API proxy for text improvements |
+| `stripe-webhook` | Payment webhook handler |
+
+Deploy: `supabase functions deploy <function-name>`
+
+## iOS App (React Native + Expo)
+
+The iOS companion app lives in the repo root (`App.tsx`, `hooks/`, `services/`). It provides:
+- Voice recording with on-device Whisper transcription
+- Sync to Supabase for Mac retrieval
+- Cursor browser integration
+
+See `PRODUCT_OVERVIEW.md` for detailed iOS architecture.
 
 ## Releases
 
@@ -85,14 +138,14 @@ When releasing:
 ## Key Files Reference
 
 ### ClipboardHistory Component
-**File**: `mac-app/src/components/ClipboardHistory.tsx` (~7000+ lines)
+**File**: `mac-app/src/components/ClipboardHistory.tsx` (~8000 lines)
 
-Key sections:
-- **Lines 2988-3024**: Main component return, outer container (fills 100% of window)
-- **Lines 5016-5065**: Individual item row rendering (`DraggableDroppableRow`)
-- **Lines 5114-5171**: Content type icon grid (2x2 quad: transcript/image/path/text)
-- **Lines 5173-5300**: Main content area with smart truncation
-- **Lines 5579-5593**: Metadata display ("15 words transcribed in iTerm2 9 hrs ago")
+This is the main UI component. Key areas:
+- Main component return and outer container
+- Individual item row rendering (`DraggableDroppableRow`)
+- Content type icon grid (2x2 quad: transcript/image/path/text)
+- Main content area with smart truncation
+- Metadata display ("15 words transcribed in iTerm2 9 hrs ago")
 
 Icon colors:
 - Transcript (microphone): violet `#8b5cf6`
@@ -100,6 +153,10 @@ Icon colors:
 - Path/URL (folder): blue `#3b82f6`
 - Plain text (T): amber `#f59e0b`
 - Disabled: gray `#4b5563` (dark) / `#d1d5db` (light)
+
+### Type Definitions
+- **`src/types/window.d.ts`**: All `window.*API` interfaces for IPC - the authoritative reference for renderer-to-main communication
+- **`electron/main/types/`**: Domain-specific types (audio, clipboard, commands, etc.)
 
 ### Electron Window Management
 **File**: `mac-app/electron/main/index.ts` - Main process, window creation

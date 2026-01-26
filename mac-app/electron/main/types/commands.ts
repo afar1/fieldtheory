@@ -36,6 +36,7 @@ export const CommandsIPCChannels = {
   SAVE_COMMAND: 'commands:saveCommand',
   CREATE_COMMAND: 'commands:createCommand',
   DELETE_COMMAND: 'commands:deleteCommand',
+  RENAME_COMMAND: 'commands:renameCommand',
 } as const;
 
 /**

@@ -25,10 +25,11 @@ type SettingsSection =
   | 'audio'
   | 'auto-improve'
   | 'keyboard'
-  | 'librarian-claude'
+  | 'librarian'
   | 'commands'
   | 'sounds'
-  | 'stats';
+  | 'stats'
+  | 'terminal-commands';
 
 // Hotkey capture state - only one hotkey can be captured at a time
 type HotkeyCapture =
@@ -51,10 +52,11 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'audio': 'Audio & Transcription',
   'auto-improve': 'Auto-Improve',
   'keyboard': 'Keyboard Shortcuts',
-  'librarian-claude': 'Librarian & Claude',
+  'librarian': 'Librarian',
   'commands': 'Portable Commands',
   'sounds': 'Sounds',
   'stats': 'Stats',
+  'terminal-commands': 'Terminal Commands',
 };
 
 // Alphabetically ordered sections for navigation
@@ -65,9 +67,10 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'auto-improve',
   'commands',
   'keyboard',
-  'librarian-claude',
+  'librarian',
   'sounds',
   'stats',
+  'terminal-commands',
 ];
 
 interface SettingsPanelProps {
@@ -75,6 +78,7 @@ interface SettingsPanelProps {
   onNavigateToFeedback?: () => void;
   librarianEnabled?: boolean;
   onLibrarianEnabledChange?: (enabled: boolean) => void;
+  initialSection?: SettingsSection;
 }
 
 /**
@@ -82,11 +86,15 @@ interface SettingsPanelProps {
  * Keeps the same functionality as the original App.tsx settings, but styled for the
  * clipboard history context.
  */
-export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback, librarianEnabled, onLibrarianEnabledChange }: SettingsPanelProps) {
+export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback, librarianEnabled, onLibrarianEnabledChange, initialSection }: SettingsPanelProps) {
   const { theme, toggleDarkMode, accentPreset, setAccentPreset, darkModeIntensity, setDarkModeIntensity } = useTheme();
 
   // Selected section state for sidebar navigation
   const [selectedSection, setSelectedSection] = useState<SettingsSection>(() => {
+    // Use initialSection if provided, otherwise restore from localStorage
+    if (initialSection) {
+      return initialSection;
+    }
     const saved = localStorage.getItem('fieldTheorySettingsSection');
     if (saved && SECTIONS_ORDER.includes(saved as SettingsSection)) {
       return saved as SettingsSection;
@@ -98,6 +106,13 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   useEffect(() => {
     localStorage.setItem('fieldTheorySettingsSection', selectedSection);
   }, [selectedSection]);
+
+  // Navigate to initialSection when it changes (e.g., from Commands "Command Settings" button)
+  useEffect(() => {
+    if (initialSection) {
+      setSelectedSection(initialSection);
+    }
+  }, [initialSection]);
 
   // Keyboard navigation for settings sections (up/down arrows, Escape to close)
   useEffect(() => {
@@ -172,8 +187,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
 
   // Abandon recording hotkey configuration
   const [abandonHotkey, setAbandonHotkey] = useState('Escape');
-  const [abandonConfirmation, setAbandonConfirmation] = useState(true);
-  
+
   // Mobile sync state - sign-in is handled via TeamView, we just listen for session.
   const [session, setSession] = useState<Session | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
@@ -401,9 +415,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         if (hotkey) {
           setAbandonHotkey(hotkey);
         }
-      });
-      window.transcribeAPI.getAbandonConfirmation?.().then(enabled => {
-        setAbandonConfirmation(enabled);
       });
     }
     
@@ -1264,18 +1275,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       console.error('Failed to set abandon hotkey:', err);
     }
   }, []);
-  
-  // Handler for toggling abandon confirmation
-  const handleAbandonConfirmationChange = useCallback(async (enabled: boolean) => {
-    if (!window.transcribeAPI?.setAbandonConfirmation) return;
-    try {
-      await window.transcribeAPI.setAbandonConfirmation(enabled);
-      setAbandonConfirmation(enabled);
-    } catch (err) {
-      console.error('Failed to set abandon confirmation:', err);
-    }
-  }, []);
-  
+
   // Capture hotkey when user is setting any shortcut.
   useEffect(() => {
     if (!capturingHotkey) return;
@@ -1850,12 +1850,12 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </div>
         )}
 
-        {/* Super Paste - Smart context-aware paste */}
+        {/* Terminal Image Paste - Pastes images in terminal-compatible format */}
         <div style={styles.row}>
           <span style={styles.rowLabel}>
-            Super Paste
+            Terminal Image Paste
             <span style={{ marginLeft: '8px', fontSize: '10px', color: theme.textSecondary }}>
-              (pastes last stack or smart clipboard)
+              (pastes images as base64 for terminals)
             </span>
           </span>
           <div style={styles.rowControls}>
@@ -2068,18 +2068,22 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       </div>
       )}
 
-      {/* Librarian & Claude Section - Combined */}
-      {selectedSection === 'librarian-claude' && (
+      {/* Librarian Section */}
+      {selectedSection === 'librarian' && (
       <div style={styles.section}>
         <SectionHeader title="Librarian" />
         <LibrarianSettings
           librarianEnabled={librarianEnabled}
           onLibrarianEnabledChange={onLibrarianEnabledChange}
         />
-        <div style={{ marginTop: '24px' }}>
-          <SectionHeader title="Claude Code" />
-          <ClaudeSettings />
-        </div>
+      </div>
+      )}
+
+      {/* Terminal Commands Section */}
+      {selectedSection === 'terminal-commands' && (
+      <div style={styles.section}>
+        <SectionHeader title="Terminal Commands" />
+        <ClaudeSettings />
       </div>
       )}
 
@@ -2627,6 +2631,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     borderRadius: '6px',
     cursor: 'pointer',
     transition: 'background-color 0.15s',
+    outline: 'none',
   },
   content: {
     flex: 1,

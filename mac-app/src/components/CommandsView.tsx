@@ -87,6 +87,11 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
   const [editContent, setEditContent] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
+  // Inline new command input
+  const [creatingInDir, setCreatingInDir] = useState<string | null>(null);
+  const [newCommandName, setNewCommandName] = useState('');
+  const newCommandInputRef = useRef<HTMLInputElement>(null);
+
   // Text size
   const [textSize, setTextSize] = useState<'small' | 'normal' | 'large'>(() => {
     const saved = localStorage.getItem('commands-text-size');
@@ -534,14 +539,24 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
     containerRef.current?.focus();
   }, []);
 
-  // Format directory path for display (abbreviated - just last folder name)
-  const formatDirPath = useCallback((path: string): string => {
-    // Get last directory name for brevity
-    const parts = path.split('/').filter(Boolean);
-    if (parts.length > 0) {
-      return parts[parts.length - 1];
+  // Format directory path for display
+  // Shows enough context to distinguish between directories
+  const formatDirPath = useCallback((dirPath: string): string => {
+    const parts = dirPath.split('/').filter(Boolean);
+    if (parts.length === 0) return dirPath;
+
+    // If the last folder is a common name like "commands", show more context
+    const lastPart = parts[parts.length - 1];
+    const commonNames = ['commands', 'rules', 'skills', 'prompts'];
+
+    if (commonNames.includes(lastPart.toLowerCase()) && parts.length >= 2) {
+      // Show parent/folder (e.g., ".cursor/commands")
+      const parentPart = parts[parts.length - 2];
+      return `${parentPart}/${lastPart}`;
     }
-    return path;
+
+    // For unique folder names, just show the folder name
+    return lastPart;
   }, []);
 
   // Filter commands by search
@@ -637,20 +652,60 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
       }
     }
 
-    const result = await window.commandsAPI?.createCommand(targetDir, name, `# ${name}\n\n`);
+    const initialContent = `# ${name}\n\n`;
+    const result = await window.commandsAPI?.createCommand(targetDir, name, initialContent);
     if (result) {
       // Refresh and select the new command
       const updatedCommands = await window.commandsAPI?.getCommands();
       if (updatedCommands) {
         setCommands(updatedCommands);
         setSelectedPath(result.path);
-        // Enter edit mode for the new command
-        setTimeout(() => {
-          enterEditMode();
-        }, 100);
+        // Enter edit mode directly with the content we already know
+        setEditContent(initialContent);
+        setIsEditing(true);
       }
     }
-  }, [watchedDirs, enterEditMode]);
+  }, [watchedDirs]);
+
+  // Create new command in a specific directory
+  // Start inline input for new command
+  const startCreatingCommand = useCallback((dirPath: string) => {
+    setCreatingInDir(dirPath);
+    setNewCommandName('');
+    // Focus the input after render
+    setTimeout(() => newCommandInputRef.current?.focus(), 50);
+  }, []);
+
+  // Cancel inline input
+  const cancelCreatingCommand = useCallback(() => {
+    setCreatingInDir(null);
+    setNewCommandName('');
+  }, []);
+
+  // Actually create the command with the given name
+  const handleCreateCommandInDir = useCallback(async (targetDir: string, name: string) => {
+    if (!name.trim()) {
+      cancelCreatingCommand();
+      return;
+    }
+
+    const initialContent = `# ${name}\n\n`;
+    const result = await window.commandsAPI?.createCommand(targetDir, name.trim(), initialContent);
+    if (result) {
+      // Refresh and select the new command
+      const updatedCommands = await window.commandsAPI?.getCommands();
+      if (updatedCommands) {
+        setCommands(updatedCommands);
+        setSelectedPath(result.path);
+        // Enter edit mode directly with the content we already know
+        setEditContent(initialContent);
+        setIsEditing(true);
+      }
+      cancelCreatingCommand();
+    } else {
+      alert('Failed to create command. A file with that name may already exist.');
+    }
+  }, [cancelCreatingCommand]);
 
   // Delete command handler
   const handleDeleteCommand = useCallback(async (filePath: string) => {
@@ -674,6 +729,25 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
       }
     }
   }, [selectedPath]);
+
+  // Rename command handler
+  const handleRenameCommand = useCallback(async (filePath: string, currentName: string) => {
+    const newName = window.prompt('Enter new command name (without .md extension):', currentName);
+    if (!newName || newName === currentName) return;
+
+    const newFilePath = await window.commandsAPI?.renameCommand(filePath, newName);
+    if (newFilePath) {
+      // Refresh commands
+      const updatedCommands = await window.commandsAPI?.getCommands();
+      if (updatedCommands) {
+        setCommands(updatedCommands);
+        // Update selected path to the new file path
+        setSelectedPath(newFilePath);
+      }
+    } else {
+      window.alert('Failed to rename command. A file with that name may already exist.');
+    }
+  }, []);
 
   // Common command directory paths
   const examplePaths = [
@@ -930,7 +1004,79 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
                         : 'rgba(0,0,0,0.08)',
                     }}
                   />
+                  {/* Plus button to create new command in this directory */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startCreatingCommand(dirPath);
+                    }}
+                    style={{
+                      padding: '2px',
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: theme.textSecondary,
+                      display: 'flex',
+                      alignItems: 'center',
+                      flexShrink: 0,
+                      opacity: 0.6,
+                    }}
+                    title="Create new command"
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.opacity = '1';
+                      e.currentTarget.style.color = theme.accent;
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.opacity = '0.6';
+                      e.currentTarget.style.color = theme.textSecondary;
+                    }}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                      <path d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2z"/>
+                    </svg>
+                  </button>
                 </div>
+                {/* Inline input for new command name */}
+                {creatingInDir === dirPath && (
+                  <div
+                    style={{
+                      padding: '4px 8px 4px 16px',
+                    }}
+                  >
+                    <input
+                      ref={newCommandInputRef}
+                      type="text"
+                      value={newCommandName}
+                      onChange={(e) => setNewCommandName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          handleCreateCommandInDir(dirPath, newCommandName);
+                        } else if (e.key === 'Escape') {
+                          cancelCreatingCommand();
+                        }
+                      }}
+                      onBlur={() => {
+                        // Create on blur if there's a name, otherwise cancel
+                        if (newCommandName.trim()) {
+                          handleCreateCommandInDir(dirPath, newCommandName);
+                        } else {
+                          cancelCreatingCommand();
+                        }
+                      }}
+                      placeholder="command name..."
+                      style={{
+                        width: '100%',
+                        padding: '4px 8px',
+                        fontSize: '12px',
+                        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+                        border: `1px solid ${theme.accent}`,
+                        borderRadius: '4px',
+                        color: theme.text,
+                        outline: 'none',
+                      }}
+                    />
+                  </div>
+                )}
                 {/* Command items - indented under directory like Librarian */}
                 {items.map((cmd) => (
                   <div
@@ -1152,6 +1298,7 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
                 }}
                 onDelete={viewMode === 'mine' && selectedCommand && selectedPath ? () => handleDeleteCommand(selectedPath) : undefined}
                 showDelete={viewMode === 'mine' && !!selectedCommand}
+                showRename={false}
                 onShowInFolder={viewMode === 'mine' && selectedCommand ? () => window.shellAPI?.showItemInFolder(selectedCommand.filePath) : undefined}
                 showFolder={viewMode === 'mine' && !!selectedCommand}
                 onCopy={() => {

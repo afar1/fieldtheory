@@ -24,7 +24,6 @@ export default function TranscriptionSettings() {
   const [availableModels, setAvailableModels] = useState<Record<string, ModelInfo>>({});
   const [selectedModel, setSelectedModel] = useState<string>('small');
   const [modelDownloadStatus, setModelDownloadStatus] = useState<Record<string, boolean>>({});
-  const [overlayStyle, setOverlayStyle] = useState<'rectangle' | 'top-emerging'>('rectangle');
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [deletingModel, setDeletingModel] = useState<string | null>(null);
   const [modelDownloadProgress, setModelDownloadProgress] = useState<Record<string, { downloaded: number; total: number }>>({});
@@ -32,7 +31,6 @@ export default function TranscriptionSettings() {
   const [abandonHotkey, setAbandonHotkey] = useState<string>('Escape');
   const [isCapturingAbandonHotkey, setIsCapturingAbandonHotkey] = useState(false);
   const [abandonHotkeyError, setAbandonHotkeyError] = useState<string | null>(null);
-  const [abandonConfirmation, setAbandonConfirmation] = useState(true);
 
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
 
@@ -45,7 +43,7 @@ export default function TranscriptionSettings() {
 
     const fetchStatus = async () => {
       try {
-        const [currentStatus, currentModelStatus, currentHotkey, models, currentSelectedModel, downloadStatus, downloadingModels, currentOverlayStyle, currentAbandonHotkey, currentAbandonConfirmation] = await Promise.all([
+        const [currentStatus, currentModelStatus, currentHotkey, models, currentSelectedModel, downloadStatus, downloadingModels, currentAbandonHotkey] = await Promise.all([
           window.transcribeAPI!.getStatus(),
           window.transcribeAPI!.getModelStatus(),
           window.transcribeAPI!.getHotkey(),
@@ -53,9 +51,7 @@ export default function TranscriptionSettings() {
           window.transcribeAPI!.getSelectedModel(),
           window.transcribeAPI!.getModelDownloadStatus(),
           window.transcribeAPI!.getDownloadingModels?.() ?? [],
-          window.transcribeAPI!.getOverlayStyle(),
           window.transcribeAPI!.getAbandonHotkey?.() ?? 'Escape',
-          window.transcribeAPI!.getAbandonConfirmation?.() ?? true,
         ]);
         setStatus(currentStatus);
         setModelStatus(currentModelStatus);
@@ -67,9 +63,7 @@ export default function TranscriptionSettings() {
         if (downloadingModels.length > 0) {
           setDownloadingModel(downloadingModels[0]);
         }
-        setOverlayStyle(currentOverlayStyle);
         setAbandonHotkey(currentAbandonHotkey);
-        setAbandonConfirmation(currentAbandonConfirmation);
       } catch (err) {
         console.error('Failed to fetch transcription status:', err);
       }
@@ -220,19 +214,6 @@ export default function TranscriptionSettings() {
     }
   }, [deletingModel, selectedModel, handleModelChange]);
 
-  const handleOverlayStyleChange = useCallback(async (newStyle: 'rectangle' | 'top-emerging') => {
-    if (!window.transcribeAPI) return;
-    
-    setOverlayStyle(newStyle);
-    setError(null);
-    try {
-      await window.transcribeAPI.setOverlayStyle(newStyle);
-    } catch (err) {
-      console.error('Failed to change overlay style:', err);
-      setError(err instanceof Error ? err.message : 'Failed to change overlay style');
-    }
-  }, []);
-  
   const handleSetAbandonHotkey = useCallback(async (newHotkey: string) => {
     if (!window.transcribeAPI?.setAbandonHotkey) return;
 
@@ -249,17 +230,6 @@ export default function TranscriptionSettings() {
     } catch (err) {
       setAbandonHotkeyError(err instanceof Error ? err.message : 'Failed to set abandon hotkey');
       console.error('Failed to set abandon hotkey:', err);
-    }
-  }, []);
-  
-  const handleAbandonConfirmationChange = useCallback(async (enabled: boolean) => {
-    if (!window.transcribeAPI?.setAbandonConfirmation) return;
-
-    setAbandonConfirmation(enabled);
-    try {
-      await window.transcribeAPI.setAbandonConfirmation(enabled);
-    } catch (err) {
-      console.error('Failed to change abandon confirmation setting:', err);
     }
   }, []);
 
@@ -413,15 +383,13 @@ export default function TranscriptionSettings() {
         </div>
 
         <div style={styles.row}>
-          <span style={styles.rowLabel}>Status</span>
-          <span style={{ ...styles.rowValue, color: getStatusColor() }}>
-            <span style={{ ...styles.statusDot, backgroundColor: getStatusColor() }} />
-            {selectedModel === 'none' ? 'No model - download one below' : `${getStatusText()} • ${selectedModel} ${modelStatus === 'downloaded' ? '✓' : modelStatus === 'downloading' ? '↓' : '✗'}`}
-          </span>
-        </div>
-
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Active</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={styles.rowLabel}>Active</span>
+            <span style={{ fontSize: '10px', color: getStatusColor(), display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <span style={{ ...styles.statusDot, backgroundColor: getStatusColor(), width: '6px', height: '6px' }} />
+              {selectedModel === 'none' ? 'No model' : `${getStatusText()} • ${selectedModel} ${modelStatus === 'downloaded' ? '✓' : modelStatus === 'downloading' ? '↓' : '✗'}`}
+            </span>
+          </div>
           <select
             value={selectedModel}
             onChange={(e) => handleModelChange(e.target.value)}
