@@ -606,6 +606,18 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
         >
           Continue
         </button>
+
+        <button
+          type="button"
+          onClick={async () => {
+            // Clear session to allow signing in with a different account
+            await window.authAPI?.prepareForNewLogin();
+            setExistingEmail(null);
+          }}
+          style={styles.secondaryButton}
+        >
+          Use a different account
+        </button>
       </div>
     );
   }

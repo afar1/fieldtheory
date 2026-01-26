@@ -246,6 +246,7 @@ export class PreferencesManager {
   private prefsPath: string;
   private preferences: Preferences;
   private userDataManager: UserDataManager | null = null;
+  private saveLock: Promise<void> = Promise.resolve();  // Serializes save() calls
 
   constructor() {
     // Default to legacy path; will be updated when user logs in
@@ -256,11 +257,14 @@ export class PreferencesManager {
 
   /**
    * Set the UserDataManager for per-user paths.
-   * Call this before load() after user logs in.
+   * If user is already logged in, automatically reloads preferences from their path.
    */
   setUserDataManager(manager: UserDataManager): void {
     this.userDataManager = manager;
     this.updatePrefsPath();
+    // Note: Don't reload here - the userChanged event handler in index.ts
+    // is the authoritative place for reloading preferences after auth.
+    // At this point during startup, isLoggedIn() returns false anyway.
   }
 
   /**
@@ -281,20 +285,47 @@ export class PreferencesManager {
 
   /**
    * Load preferences from disk.
+   * If logged in with per-user path but file doesn't exist, migrates from legacy path.
    */
   async load(): Promise<Preferences> {
+    console.log('[PreferencesManager] load() called, userDataManager set:', !!this.userDataManager);
     // Update path in case user changed
     this.updatePrefsPath();
 
     try {
+      console.log('[PreferencesManager] Attempting to load from:', this.prefsPath);
       const data = await fs.readFile(this.prefsPath, 'utf-8');
       const loaded = JSON.parse(data) as Partial<Preferences>;
       this.preferences = { ...DEFAULT_PREFERENCES, ...loaded };
       console.log('[PreferencesManager] Loaded preferences from:', this.prefsPath);
+      console.log('[PreferencesManager] Loaded hotkey:', this.preferences.transcriptionHotkey);
       return this.preferences;
     } catch (error) {
-      // File doesn't exist or is invalid, use defaults
-      console.log('[PreferencesManager] Using default preferences (no file at:', this.prefsPath, ')');
+      // File doesn't exist at current path
+      console.log('[PreferencesManager] File not found at:', this.prefsPath, '- checking migration...');
+      console.log('[PreferencesManager] isLoggedIn:', this.userDataManager?.isLoggedIn());
+
+      // If logged in with per-user path, try migrating from legacy path
+      if (this.userDataManager?.isLoggedIn()) {
+        const legacyPath = path.join(app.getPath('userData'), 'preferences.json');
+        console.log('[PreferencesManager] Legacy path:', legacyPath);
+        console.log('[PreferencesManager] Current path:', this.prefsPath);
+        if (legacyPath !== this.prefsPath) {
+          try {
+            const legacyData = await fs.readFile(legacyPath, 'utf-8');
+            const legacyPrefs = JSON.parse(legacyData) as Partial<Preferences>;
+            this.preferences = { ...DEFAULT_PREFERENCES, ...legacyPrefs };
+            console.log('[PreferencesManager] Migrated from legacy, hotkey:', this.preferences.transcriptionHotkey);
+            // Save to new per-user path
+            await this.save({});
+            return this.preferences;
+          } catch (migrationError) {
+            console.log('[PreferencesManager] Legacy file also not found or invalid');
+          }
+        }
+      }
+
+      console.log('[PreferencesManager] Using DEFAULT preferences, hotkey:', DEFAULT_PREFERENCES.transcriptionHotkey);
       this.preferences = { ...DEFAULT_PREFERENCES };
       return this.preferences;
     }
@@ -302,9 +333,51 @@ export class PreferencesManager {
 
   /**
    * Save preferences to disk.
+   * Serialized to prevent race conditions when multiple saves occur during user switch.
    */
   async save(prefs: Partial<Preferences>): Promise<void> {
-    this.preferences = { ...this.preferences, ...prefs };
+    // Serialize save operations to prevent race conditions
+    const previousLock = this.saveLock;
+    let releaseLock: () => void;
+    this.saveLock = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+
+    try {
+      await previousLock;  // Wait for previous save to complete
+      await this.saveInternal(prefs);
+    } finally {
+      releaseLock!();
+    }
+  }
+
+  /**
+   * Internal save implementation.
+   */
+  private async saveInternal(prefs: Partial<Preferences>): Promise<void> {
+    // Check if path needs updating (user logged in since last load)
+    const oldPath = this.prefsPath;
+    this.updatePrefsPath();
+
+    // If path changed (user logged in since last load), the file at the NEW path is authoritative.
+    // Don't include stale in-memory prefs from the old (legacy) path.
+    if (oldPath !== this.prefsPath) {
+      console.log('[PreferencesManager] Path changed during save:', { oldPath, newPath: this.prefsPath });
+      try {
+        const data = await fs.readFile(this.prefsPath, 'utf-8');
+        const filePrefs = JSON.parse(data) as Partial<Preferences>;
+        // File at new path is authoritative - only overlay the new prefs being saved
+        this.preferences = { ...DEFAULT_PREFERENCES, ...filePrefs, ...prefs };
+        console.log('[PreferencesManager] Loaded from new path, hotkey:', this.preferences.transcriptionHotkey);
+      } catch (error) {
+        // File doesn't exist at new path, use current in-memory + new prefs
+        console.log('[PreferencesManager] File read failed, using in-memory:', error);
+        this.preferences = { ...this.preferences, ...prefs };
+      }
+    } else {
+      // No path change - just merge new prefs into current in-memory state
+      this.preferences = { ...this.preferences, ...prefs };
+    }
 
     // Ensure directory exists
     const dir = path.dirname(this.prefsPath);
@@ -312,7 +385,8 @@ export class PreferencesManager {
 
     try {
       await fs.writeFile(this.prefsPath, JSON.stringify(this.preferences, null, 2), 'utf-8');
-      console.log('[PreferencesManager] Preferences saved');
+      console.log('[PreferencesManager] Preferences saved to:', this.prefsPath);
+      console.log('[PreferencesManager] Saved hotkey:', this.preferences.transcriptionHotkey);
     } catch (error) {
       console.error('[PreferencesManager] Failed to save preferences:', error);
       throw error;

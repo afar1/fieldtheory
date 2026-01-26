@@ -1016,10 +1016,19 @@ export class LibrarianManager extends EventEmitter {
 
   /**
    * Enable or disable Librarian and update CLAUDE.md.
+   * When disabling, also uninstalls hooks to prevent blocking Claude Code/Cursor.
    */
   setEnabled(enabled: boolean): boolean {
     this.settings.enabled = enabled;
     this.saveSettings();
+
+    if (!enabled) {
+      // Uninstall hooks when disabling to prevent blocking user.
+      // If hooks point to non-existent scripts, Claude Code fails entirely.
+      this.uninstallStateEnforcedHook();
+      this.uninstallCursorHook();
+    }
+
     const success = this.syncClaudeMd();
     console.log(`[LibrarianManager] Enabled set to: ${enabled}`);
     return success;

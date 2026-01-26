@@ -5519,17 +5519,9 @@ async function initTranscriberSystem(): Promise<void> {
   // This must be created before AuthManager so it can coordinate user changes.
   userDataManager = createUserDataManager();
 
-  authManager = new AuthManager();
-  authManager.setUserDataManager(userDataManager);
-  await authManager.init(envVars.supabaseUrl, envVars.supabaseAnonKey);
-
-  // Configure prompt engineer with Supabase URL for Edge Function calls.
-  if (envVars.supabaseUrl) {
-    setEngineerSupabaseUrl(envVars.supabaseUrl);
-  }
-
-  // Set UserDataManager on managers that are already initialized.
-  // Note: metricsManager is set later when it's created.
+  // Set UserDataManager on managers BEFORE authManager.init().
+  // authManager.init() may emit 'userChanged' during session restoration,
+  // so managers must have their userDataManager ready to use per-user paths.
   if (preferencesManager) {
     preferencesManager.setUserDataManager(userDataManager);
   }
@@ -5543,13 +5535,43 @@ async function initTranscriberSystem(): Promise<void> {
     commandsManager.setUserDataManager(userDataManager);
   }
 
-  // Listen for user changes to reinitialize managers with user-specific data.
-  authManager.on('userChanged', async (callsign: string) => {
-    console.log(`[Main] User changed to: ${callsign}, reinitializing managers...`);
+  authManager = new AuthManager();
+  authManager.setUserDataManager(userDataManager);
+
+  // Initialize metrics manager BEFORE authManager.init() so it exists when userChanged fires.
+  // "The metrics you see are the metrics we see."
+  metricsManager = new MetricsManager(authManager);
+  if (userDataManager) {
+    metricsManager.setUserDataManager(userDataManager);
+  }
+  await metricsManager.init();
+
+  // Register event handlers BEFORE authManager.init().
+  // init() restores session and may emit 'userChanged' synchronously.
+  authManager.on('userChanged', async (userId: string) => {
+    console.log(`[Main] userChanged event received for: ${userId}`);
 
     // Reinitialize all managers with user-specific data
     if (preferencesManager) {
+      console.log('[Main] Reloading preferences in userChanged handler...');
       await preferencesManager.load();
+      // Log which path was used (access private field for debugging)
+      console.log('[Main] Preferences reloaded from:', (preferencesManager as unknown as { prefsPath: string }).prefsPath);
+
+      // Reload hotkeys from freshly loaded preferences
+      const prefs = preferencesManager.get();
+      if (clipboardManager) {
+        clipboardManager.loadHotkeysFromPreferences(
+          prefs.clipboardScreenshotHotkey,
+          prefs.clipboardHistoryHotkey,
+          prefs.clipboardDesktopScreenshotHotkey
+        );
+        console.log('[Main] Clipboard hotkeys reloaded:', {
+          screenshot: prefs.clipboardScreenshotHotkey,
+          history: prefs.clipboardHistoryHotkey,
+          fullScreen: prefs.clipboardDesktopScreenshotHotkey,
+        });
+      }
     }
     if (clipboardManager) {
       await clipboardManager.reinitializeForUser();
@@ -5564,7 +5586,7 @@ async function initTranscriberSystem(): Promise<void> {
       await commandsManager.reinitializeForUser();
     }
 
-    console.log('[Main] All managers reinitialized for user:', callsign);
+    console.log('[Main] All managers reinitialized for user:', userId);
   });
 
   // Listen for logout to clear manager state.
@@ -5590,6 +5612,31 @@ async function initTranscriberSystem(): Promise<void> {
     console.log('[Main] All managers cleared for logout');
   });
 
+  // Listen for session changes (login/logout, token refresh)
+  authManager.on('sessionChanged', async (session) => {
+    logUserState(session ? 'login' : 'logout');
+
+    // Set signup day for per-user quota reset when session is restored
+    if (session?.user?.created_at && quotaManager) {
+      const signupDay = new Date(session.user.created_at).getDate();
+      await quotaManager.setSignupDay(signupDay);
+    }
+  });
+
+  // Now safe to init AuthManager - handlers are registered
+  await authManager.init(envVars.supabaseUrl, envVars.supabaseAnonKey);
+
+  // The userChanged handler (line 5551) handles preference reloading when session is restored.
+  // Don't call load() again here - it would race with the async handler.
+  if (authManager.isAuthenticated()) {
+    console.log('[Main] Session restored for user');
+  }
+
+  // Configure prompt engineer with Supabase URL for Edge Function calls.
+  if (envVars.supabaseUrl) {
+    setEngineerSupabaseUrl(envVars.supabaseUrl);
+  }
+
   // Initialize mobile sync to pull iOS transcriptions into clipboard history.
   // AuthManager is passed as dependency for session state.
   mobileSync = new MobileSync(authManager, clipboardManager, preferencesManager);
@@ -5611,30 +5658,13 @@ async function initTranscriberSystem(): Promise<void> {
   // Also subscribes to AuthManager for session.
   socialSync = new SocialSync(authManager, clipboardManager);
 
-  // Initialize metrics manager for user-visible usage stats.
-  // "The metrics you see are the metrics we see."
-  metricsManager = new MetricsManager(authManager);
-  if (userDataManager) {
-    metricsManager.setUserDataManager(userDataManager);
-  }
-  await metricsManager.init();
+  // metricsManager was initialized earlier, before authManager.init()
 
   // Trust cached tier until we get positive confirmation from server.
   // Don't reset pro→free just because session isn't immediately valid.
   // If user is offline, they can't use cost-incurring features anyway (API calls fail).
   // Tier only changes when: (1) server confirms different tier, or (2) explicit sign-out.
   logUserState('startup');
-
-  // Listen for auth state changes
-  authManager.on('sessionChanged', async (session) => {
-    logUserState(session ? 'login' : 'logout');
-
-    // Set signup day for per-user quota reset when session is restored
-    if (session?.user?.created_at && quotaManager) {
-      const signupDay = new Date(session.user.created_at).getDate();
-      await quotaManager.setSignupDay(signupDay);
-    }
-  });
 
   // Forward todosChanged events to all renderer windows.
   mobileSync.on('todosChanged', (todos) => {

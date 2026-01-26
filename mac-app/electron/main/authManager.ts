@@ -155,7 +155,6 @@ export class AuthManager extends EventEmitter {
   private simulateOffline: boolean = false;
   private simulateRevoked: boolean = false;
   private lastEmittedUserId: string | null = null;  // Dedupe sessionChanged events
-  private lastEmittedCallsign: string | null = null;  // Track callsign for user-changed events
 
   constructor() {
     super();
@@ -221,11 +220,9 @@ export class AuthManager extends EventEmitter {
     // Dedupe: only emit if user actually changed (SDK fires multiple events on init)
     this.supabase.auth.onAuthStateChange(async (event, session) => {
       const newUserId = session?.user?.id ?? null;
-      const newCallsign = this.getCallsignFromSession(session);
       const isNewSession = newUserId !== this.lastEmittedUserId;
-      const isNewCallsign = newCallsign !== this.lastEmittedCallsign;
 
-      console.log('[AuthManager] Auth state changed:', event, isNewSession ? '(new)' : '(duplicate)', newCallsign ? `callsign: ${newCallsign}` : '');
+      console.log('[AuthManager] Auth state changed:', event, isNewSession ? '(new)' : '(duplicate)', newUserId ? `userId: ${newUserId}` : '');
 
       if (event === 'TOKEN_REFRESHED') {
         console.log('[AuthManager] Token refreshed by SDK');
@@ -235,7 +232,6 @@ export class AuthManager extends EventEmitter {
         if (this.lastEmittedUserId !== null) {
           this.session = null;
           this.lastEmittedUserId = null;
-          this.lastEmittedCallsign = null;
 
           // Coordinate with UserDataManager
           if (this.userDataManager) {
@@ -247,14 +243,14 @@ export class AuthManager extends EventEmitter {
       } else if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && isNewSession) {
         // Only emit if this is actually a new user session
         this.session = session;
+        const previousUserId = this.lastEmittedUserId;
         this.lastEmittedUserId = newUserId;
 
-        // Coordinate with UserDataManager if callsign changed
-        if (newCallsign && isNewCallsign && this.userDataManager) {
-          this.lastEmittedCallsign = newCallsign;
-          await this.userDataManager.setCurrentUser(newCallsign);
-          await this.userDataManager.migrateExistingData(newCallsign);
-          this.emit('userChanged', newCallsign);
+        // Coordinate with UserDataManager - use user ID for per-user directories
+        if (newUserId && this.userDataManager) {
+          await this.userDataManager.setCurrentUser(newUserId);
+          await this.userDataManager.migrateExistingData(newUserId);
+          this.emit('userChanged', newUserId);
         }
 
         this.emit('sessionChanged', session);
@@ -281,18 +277,20 @@ export class AuthManager extends EventEmitter {
       if (data?.session) {
         this.session = data.session;
         this.hasEverAuthenticated = true;
-        this.lastEmittedUserId = data.session.user?.id ?? null;
+        const userId = data.session.user?.id ?? null;
 
-        // Coordinate with UserDataManager
-        const callsign = this.getCallsignFromSession(data.session);
-        if (callsign && this.userDataManager) {
-          this.lastEmittedCallsign = callsign;
-          await this.userDataManager.setCurrentUser(callsign);
-          await this.userDataManager.migrateExistingData(callsign);
-          this.emit('userChanged', callsign);
+        // Only emit userChanged if onAuthStateChange hasn't already done so
+        const shouldEmitUserChanged = userId !== this.lastEmittedUserId;
+        this.lastEmittedUserId = userId;
+
+        // Coordinate with UserDataManager - use user ID for per-user directories
+        if (shouldEmitUserChanged && userId && this.userDataManager) {
+          await this.userDataManager.setCurrentUser(userId);
+          await this.userDataManager.migrateExistingData(userId);
+          this.emit('userChanged', userId);
         }
 
-        console.log('[AuthManager] Restored session for user:', data.session.user?.email, callsign ? `(${callsign})` : '');
+        console.log('[AuthManager] Restored session for user:', data.session.user?.email, userId ? `(${userId})` : '', shouldEmitUserChanged ? '(new)' : '(already emitted)');
         this.emit('sessionChanged', this.session);
         return;
       }
@@ -333,18 +331,20 @@ export class AuthManager extends EventEmitter {
 
         if (refreshData.session) {
           this.session = refreshData.session;
-          this.lastEmittedUserId = refreshData.session.user?.id ?? null;
+          const userId = refreshData.session.user?.id ?? null;
 
-          // Coordinate with UserDataManager
-          const callsign = this.getCallsignFromSession(refreshData.session);
-          if (callsign && this.userDataManager) {
-            this.lastEmittedCallsign = callsign;
-            await this.userDataManager.setCurrentUser(callsign);
-            await this.userDataManager.migrateExistingData(callsign);
-            this.emit('userChanged', callsign);
+          // Only emit userChanged if onAuthStateChange hasn't already done so
+          const shouldEmitUserChanged = userId !== this.lastEmittedUserId;
+          this.lastEmittedUserId = userId;
+
+          // Coordinate with UserDataManager - use user ID for per-user directories
+          if (shouldEmitUserChanged && userId && this.userDataManager) {
+            await this.userDataManager.setCurrentUser(userId);
+            await this.userDataManager.migrateExistingData(userId);
+            this.emit('userChanged', userId);
           }
 
-          console.log('[AuthManager] Manual refresh succeeded for user:', refreshData.session.user?.email, callsign ? `(${callsign})` : '');
+          console.log('[AuthManager] Manual refresh succeeded for user:', refreshData.session.user?.email, userId ? `(${userId})` : '', shouldEmitUserChanged ? '(new)' : '(already emitted)');
           this.emit('sessionChanged', this.session);
           return;
         }
@@ -756,7 +756,6 @@ export class AuthManager extends EventEmitter {
       if (this.userDataManager) {
         await this.userDataManager.clearCurrentUser();
       }
-      this.lastEmittedCallsign = null;
       this.emit('userLoggedOut');
 
       this.clearSession();
