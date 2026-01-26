@@ -3501,14 +3501,22 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
   }
 
   /**
-   * Get the path to the Field Theory Cursor hook script.
+   * Get the path to the Field Theory Cursor beforeSubmitPrompt hook script.
    */
   private getCursorHookScriptPath(): string {
-    return path.join(os.homedir(), '.fieldtheory', 'hooks', 'cursor-before-submit.py');
+    return path.join(os.homedir(), '.fieldtheory', 'librarian', 'cursor-hook.py');
+  }
+
+  /**
+   * Get the path to the Field Theory Cursor preToolUse hook script.
+   */
+  private getCursorPreToolScriptPath(): string {
+    return path.join(os.homedir(), '.fieldtheory', 'librarian', 'cursor-pretool.py');
   }
 
   /**
    * Get the path to the Field Theory Cursor hook config.
+   * @deprecated - now uses central librarian config
    */
   private getCursorHookConfigPath(): string {
     return path.join(os.homedir(), '.fieldtheory', 'hooks', 'cursor-config.json');
@@ -3516,18 +3524,20 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
 
   /**
    * Generate the Cursor beforeSubmitPrompt hook script content (Python).
-   * This script:
-   * 1. Reads prompt from stdin JSON
-   * 2. Increments per-project prompt count
-   * 3. At threshold, injects additionalContext to trigger artifact creation
+   * This script counts prompts and creates jobs at threshold.
+   * It does NOT output additionalContext (Cursor ignores it).
+   * The preToolUse hook (cursor-pretool.py) enforces artifact creation via deny pattern.
    */
   private generateCursorHookScript(): string {
-    const centralDir = this.getCentralLibrarianDir();
-    const configPath = this.getCursorHookConfigPath();
     return `#!/usr/bin/env python3
 """
-Field Theory Librarian Hook for Cursor
-beforeSubmitPrompt hook that triggers artifact creation at threshold.
+Field Theory Librarian Hook for Cursor (beforeSubmitPrompt)
+
+Counts prompts and creates job files when threshold is reached.
+Does NOT output additionalContext (Cursor ignores it anyway).
+The preToolUse hook (cursor-pretool.py) handles artifact enforcement via deny pattern.
+
+State is GLOBAL at ~/.fieldtheory/librarian/state.json
 """
 import json
 import os
@@ -3536,81 +3546,77 @@ import fcntl
 from pathlib import Path
 from datetime import datetime
 
-def main():
-    # Read input from stdin
-    try:
-        input_data = json.load(sys.stdin)
-    except:
-        # Output continue:true to not block
-        print(json.dumps({"continue": True}))
-        return
+DEFAULT_THRESHOLD = 7
 
-    # Get workspace root from input
+
+def main():
+    # Read stdin (Cursor passes JSON here)
+    input_data = {}
+    try:
+        import select
+        if select.select([sys.stdin], [], [], 0.0)[0]:
+            input_data = json.load(sys.stdin)
+    except:
+        pass
+
+    # Get project info (for artifact metadata)
     workspace_roots = input_data.get("workspace_roots", [])
-    project_root = Path(workspace_roots[0]) if workspace_roots else Path.cwd()
+    if workspace_roots:
+        project_root = Path(workspace_roots[0])
+    else:
+        project_root = Path(os.environ.get("CURSOR_PROJECT_DIR", os.getcwd()))
     project_name = project_root.name
 
-    # Read config from ~/.fieldtheory/hooks/cursor-config.json
-    cfg_path = Path("${configPath}")
-    if not cfg_path.exists():
-        print(json.dumps({"continue": True}))
+    # Read config
+    central_dir = Path.home() / ".fieldtheory" / "librarian"
+    config_path = central_dir / "config.json"
+    if not config_path.exists():
         return
 
-    with open(cfg_path) as f:
+    with open(config_path) as f:
         cfg = json.load(f)
 
-    enabled = cfg.get("enabled", False)
-    if not enabled:
-        print(json.dumps({"continue": True}))
+    if not cfg.get("enabled", False):
         return
 
-    threshold = cfg.get("threshold", 3)
-    if not isinstance(threshold, int) or threshold <= 0:
-        print(json.dumps({"continue": True}))
-        return
-
-    rule_content = cfg.get("rule_content", "Write 2-3 paragraphs connecting the current work to engineering history, physics, or systems theory.")
-
-    # Central directory for everything
-    central_dir = Path("${centralDir}")
+    # Paths
     jobs_dir = central_dir / "jobs"
     artifacts_dir = central_dir / "artifacts"
     rules_dir = central_dir / "rules"
+    rule_file = rules_dir / "history_reading.md"
+    state_file = central_dir / "state.json"
+    lock_file = central_dir / ".lock"
+    seq_file = central_dir / ".seq"
 
-    # Per-project state directory (for prompt counting)
-    state_dir = central_dir / "state" / f"cursor-{project_name}"
-    state_dir.mkdir(parents=True, exist_ok=True)
-
-    count_file = state_dir / "prompt_count"
-    lock_file = state_dir / "lock"
-
-    # Create directories
+    # Ensure directories exist
     jobs_dir.mkdir(parents=True, exist_ok=True)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     rules_dir.mkdir(parents=True, exist_ok=True)
-    seq_file = central_dir / ".cursor-seq"
 
-    # Use fcntl for file locking
+    # File-locked state update
     with open(lock_file, "w") as lf:
         fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
 
-        # Read and increment count
-        count = 0
-        if count_file.exists():
+        # Read current state
+        state = {"count": 0, "threshold": DEFAULT_THRESHOLD}
+        if state_file.exists():
             try:
-                count = int(count_file.read_text().strip())
+                state = json.loads(state_file.read_text())
             except:
-                count = 0
-        count += 1
-        count_file.write_text(str(count))
+                pass
 
-        if count < threshold:
-            print(json.dumps({"continue": True}))
+        count = state.get("count", 0) + 1
+        threshold = state.get("threshold", DEFAULT_THRESHOLD)
+        triggered = count >= threshold
+
+        # Single write: either incremented count, or reset to 0 if triggered
+        state["count"] = 0 if triggered else count
+        state_file.write_text(json.dumps(state, indent=2))
+
+        if not triggered:
             return
 
-        # Reset count, increment global seq
-        count_file.write_text("0")
-
+        # Threshold reached - create artifact job
         seq = 0
         if seq_file.exists():
             try:
@@ -3620,57 +3626,36 @@ def main():
         seq += 1
         seq_file.write_text(str(seq))
 
-        # Generate timestamp-based filename
         timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-        job_file = jobs_dir / f"cursor-job_{seq}.json"
-        rule_file = rules_dir / "history_reading.md"
-        out_file = artifacts_dir / f"{project_name}-cursor-{timestamp}-artifact.md"
+        job_file = jobs_dir / f"job_{seq}.json"
+        out_file = artifacts_dir / f"{project_name}-{timestamp}-artifact.md"
 
-        # Check if job already exists and is done
+        # Check if job already done
         job_is_done = False
         if job_file.exists():
             try:
-                existing_job = json.loads(job_file.read_text(encoding="utf-8"))
-                if existing_job.get("status") == "done":
-                    job_is_done = True
+                existing = json.loads(job_file.read_text())
+                job_is_done = existing.get("status") == "done"
             except:
                 pass
 
-        # Create job file if missing
+        # Create job file (preToolUse hook will enforce artifact creation)
         if not job_file.exists():
-            job_data = {
+            job_file.write_text(json.dumps({
                 "schema_version": 1,
                 "id": seq,
                 "type": "history_artifact",
                 "status": "pending",
-                "source": "cursor",
                 "project": project_name,
                 "project_path": str(project_root),
                 "output": str(out_file),
                 "rule_file": str(rule_file),
                 "created_at": datetime.now().isoformat()
-            }
-            job_file.write_text(json.dumps(job_data, indent=2) + "\\n")
+            }, indent=2) + "\\n")
 
-        # Create rule file if needed
-        if not rule_file.exists():
-            rule_file.write_text(rule_content)
+        # No additionalContext output - Cursor ignores it
+        # The preToolUse hook (cursor-pretool.py) will enforce artifact creation
 
-        # Output with additionalContext if job not done
-        if not job_is_done:
-            msg = f"""[FIELD THEORY LIBRARIAN] Before responding, write this artifact:
-
-OUTPUT: {out_file}
-RULE: {rule_content}
-THEN: Update {job_file} setting "status" to "done"
-
-Use the current conversation as context. Write the artifact first, then mark the job done."""
-            print(json.dumps({
-                "continue": True,
-                "additionalContext": msg
-            }))
-        else:
-            print(json.dumps({"continue": True}))
 
 if __name__ == "__main__":
     main()
@@ -3678,66 +3663,142 @@ if __name__ == "__main__":
   }
 
   /**
-   * Check if the Cursor hook is installed.
+   * Generate the Cursor preToolUse hook script content (Python).
+   * This script gates tool use on pending Librarian jobs.
+   * When a pending job exists, it denies tool use with instructions to create artifact first.
+   * This is the "semaphore" that enforces artifact-before-implementation ordering.
+   */
+  private generateCursorPreToolScript(): string {
+    return `#!/usr/bin/env python3
+"""
+Field Theory Librarian PreToolUse Hook for Cursor
+
+Gates tool use on pending Librarian jobs.
+When a pending job exists, denies tool use with instructions to create artifact first.
+Always allows operations on the librarian directory (needed to write artifact and mark done).
+
+This is the "semaphore" that enforces artifact-before-implementation ordering.
+"""
+import json
+import sys
+from pathlib import Path
+
+LIBRARIAN_DIR = Path.home() / ".fieldtheory" / "librarian"
+
+
+def main():
+    # Parse stdin for tool info
+    input_data = {}
+    try:
+        import select
+        if select.select([sys.stdin], [], [], 0.0)[0]:
+            input_data = json.load(sys.stdin)
+    except:
+        pass
+
+    # Extract file path from tool arguments
+    # Cursor format - trying common patterns
+    file_path = ""
+    if "arguments" in input_data:
+        args = input_data["arguments"]
+        if isinstance(args, dict):
+            file_path = args.get("file_path", "") or args.get("path", "") or args.get("filePath", "")
+
+    # Also check tool_input for some tools
+    if not file_path and "tool_input" in input_data:
+        tool_input = input_data["tool_input"]
+        if isinstance(tool_input, dict):
+            file_path = tool_input.get("file_path", "") or tool_input.get("path", "")
+
+    # Always allow operations on librarian directory
+    # (needed to write artifact and mark job done)
+    if file_path and file_path.startswith(str(LIBRARIAN_DIR)):
+        print(json.dumps({"decision": "allow"}))
+        return
+
+    # Check for pending jobs
+    jobs_dir = LIBRARIAN_DIR / "jobs"
+    pending_job = None
+
+    if jobs_dir.exists():
+        for job_file in sorted(jobs_dir.glob("job_*.json"), reverse=True):
+            try:
+                job = json.loads(job_file.read_text())
+                if job.get("status") == "pending":
+                    pending_job = (job_file, job)
+                    break
+            except:
+                continue
+
+    if pending_job:
+        job_file, job = pending_job
+        rule_file = job.get("rule_file", str(LIBRARIAN_DIR / "rules" / "history_reading.md"))
+
+        reason = f"""[LIBRARIAN] Pending artifact job must be completed first.
+
+Job file: {job_file}
+Output path: {job.get('output')}
+Rule file: {rule_file}
+
+Steps:
+1. Read the rule file for content guidance
+2. Write artifact to the output path (120-200 words connecting current work to science/history)
+3. Update the job file, setting "status" to "done"
+4. Retry your original tool operation"""
+
+        # DENY: output JSON reason AND exit code 2 (Cursor honors exit code 2 for blocking)
+        print(json.dumps({"decision": "deny", "reason": reason}))
+        sys.exit(2)
+    else:
+        # No pending jobs - allow
+        print(json.dumps({"decision": "allow"}))
+
+
+if __name__ == "__main__":
+    main()
+`;
+  }
+
+  /**
+   * Check if the Cursor hooks are installed.
+   * Only checks preToolUse - Cursor reads Claude's hook.py for counting.
    */
   isCursorHookInstalled(): boolean {
-    const hookPath = this.getCursorHookScriptPath();
-    const configPath = this.getCursorHookConfigPath();
+    const preToolPath = this.getCursorPreToolScriptPath();
     const cursorConfigPath = this.getCursorHooksConfigPath();
 
-    // Check if our hook script and config exist
-    if (!fs.existsSync(hookPath) || !fs.existsSync(configPath)) {
-      return false;
-    }
-
-    // Check if our hook is registered in Cursor's hooks.json
-    if (!fs.existsSync(cursorConfigPath)) {
+    if (!fs.existsSync(preToolPath) || !fs.existsSync(cursorConfigPath)) {
       return false;
     }
 
     try {
       const cursorConfig = JSON.parse(fs.readFileSync(cursorConfigPath, 'utf-8'));
-      const hooks = cursorConfig.hooks?.beforeSubmitPrompt;
-      if (!Array.isArray(hooks)) {
+      const preToolHooks = cursorConfig.hooks?.preToolUse;
+      if (!Array.isArray(preToolHooks)) {
         return false;
       }
-
-      // Check if our hook command is in the list
-      const ourCommand = `python3 "${hookPath}"`;
-      const isRegistered = hooks.some((h: { command?: string }) => h.command === ourCommand);
-
-      // Also check our config is enabled
-      const ourConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-      return isRegistered && ourConfig.enabled === true;
+      const preToolCommand = `python3 ${preToolPath}`;
+      return preToolHooks.some((h: { command?: string }) =>
+        h.command === preToolCommand || h.command === `python3 "${preToolPath}"`
+      );
     } catch {
       return false;
     }
   }
 
   /**
-   * Install the Cursor hook.
+   * Install the Cursor hooks.
+   * Installs both beforeSubmitPrompt (job creation) and preToolUse (deny pattern gate).
    */
   installCursorHook(): boolean {
     try {
-      // 1. Ensure directories exist
-      const hooksDir = path.dirname(this.getCursorHookScriptPath());
-      if (!fs.existsSync(hooksDir)) {
-        fs.mkdirSync(hooksDir, { recursive: true });
-      }
-
-      const cursorDir = path.dirname(this.getCursorHooksConfigPath());
-      if (!fs.existsSync(cursorDir)) {
-        fs.mkdirSync(cursorDir, { recursive: true });
-      }
-
-      // 2. Ensure central librarian directories exist
+      // 1. Ensure central librarian directories exist
       const centralDir = this.getCentralLibrarianDir();
       const dirs = [
         centralDir,
         path.join(centralDir, 'jobs'),
         path.join(centralDir, 'artifacts'),
         path.join(centralDir, 'rules'),
-        path.join(centralDir, 'state'),
       ];
       for (const dir of dirs) {
         if (!fs.existsSync(dir)) {
@@ -3745,20 +3806,40 @@ if __name__ == "__main__":
         }
       }
 
-      // 3. Write hook script
-      const hookPath = this.getCursorHookScriptPath();
-      fs.writeFileSync(hookPath, this.generateCursorHookScript(), { mode: 0o755 });
+      // Ensure ~/.cursor directory exists
+      const cursorDir = path.dirname(this.getCursorHooksConfigPath());
+      if (!fs.existsSync(cursorDir)) {
+        fs.mkdirSync(cursorDir, { recursive: true });
+      }
 
-      // 4. Write hook config
-      const configPath = this.getCursorHookConfigPath();
-      const config = {
-        enabled: true,
-        threshold: this.getStateEnforcedThreshold(),
-        rule_content: this.getEffectiveRuleContent(),
-      };
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+      // 2. Write preToolUse hook script (for artifact enforcement via deny pattern)
+      // NOTE: We don't write a beforeSubmitPrompt hook - Cursor reads Claude's hook.py
+      // from ~/.claude/settings.json for counting.
+      const preToolPath = this.getCursorPreToolScriptPath();
+      fs.writeFileSync(preToolPath, this.generateCursorPreToolScript(), { mode: 0o755 });
 
-      // 5. Register hook in Cursor's ~/.cursor/hooks.json
+      // 4. Ensure rule file exists
+      const ruleFile = path.join(centralDir, 'rules', 'history_reading.md');
+      if (!fs.existsSync(ruleFile)) {
+        fs.writeFileSync(ruleFile, this.getEffectiveRuleContent());
+      }
+
+      // 5. Ensure config file exists
+      const configFile = path.join(centralDir, 'config.json');
+      if (!fs.existsSync(configFile)) {
+        fs.writeFileSync(configFile, JSON.stringify({ enabled: true }, null, 2));
+      } else {
+        // Make sure it's enabled
+        try {
+          const config = JSON.parse(fs.readFileSync(configFile, 'utf-8'));
+          config.enabled = true;
+          fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
+        } catch {
+          fs.writeFileSync(configFile, JSON.stringify({ enabled: true }, null, 2));
+        }
+      }
+
+      // 6. Register hooks in Cursor's ~/.cursor/hooks.json
       const cursorConfigPath = this.getCursorHooksConfigPath();
       let cursorConfig: Record<string, unknown> = { version: 1, hooks: {} };
 
@@ -3776,67 +3857,108 @@ if __name__ == "__main__":
       }
       const hooks = cursorConfig.hooks as Record<string, unknown>;
 
-      // Ensure beforeSubmitPrompt array exists
-      if (!Array.isArray(hooks.beforeSubmitPrompt)) {
-        hooks.beforeSubmitPrompt = [];
+      // NOTE: We do NOT register beforeSubmitPrompt hook for Cursor.
+      // Cursor reads ~/.claude/settings.json hooks, so Claude Code's hook.py handles counting.
+      // We only register preToolUse for artifact enforcement (deny pattern with exit code 2).
+
+      // Register preToolUse hook
+      if (!Array.isArray(hooks.preToolUse)) {
+        hooks.preToolUse = [];
       }
-
-      // Check if our hook already exists
-      const ourCommand = `python3 "${hookPath}"`;
-      const existingHooks = hooks.beforeSubmitPrompt as Array<{ command?: string }>;
-      const alreadyExists = existingHooks.some(h => h.command === ourCommand);
-
-      if (!alreadyExists) {
-        existingHooks.push({ command: ourCommand });
+      const preToolCommand = `python3 ${preToolPath}`;
+      const preToolHooks = hooks.preToolUse as Array<{ type?: string; command?: string; timeout?: number }>;
+      const preToolExists = preToolHooks.some(h => h.command === preToolCommand);
+      if (!preToolExists) {
+        preToolHooks.push({ type: 'command', command: preToolCommand, timeout: 5 });
       }
 
       // Write updated Cursor config
       fs.writeFileSync(cursorConfigPath, JSON.stringify(cursorConfig, null, 2));
 
-      // 6. Auto-add artifacts directory to watched dirs
+      // 7. Auto-add artifacts directory to watched dirs
       const artifactsDir = path.join(centralDir, 'artifacts');
       this.addWatchedDir(artifactsDir);
 
-      console.log('[LibrarianManager] Installed Cursor hook (beforeSubmitPrompt)');
+      // 8. Add librarian paths to Cursor's permissions allow list
+      const cursorCliConfigPath = path.join(os.homedir(), '.cursor', 'cli-config.json');
+      try {
+        let cliConfig: Record<string, unknown> = { version: 1, permissions: { allow: [], deny: [] } };
+
+        if (fs.existsSync(cursorCliConfigPath)) {
+          cliConfig = JSON.parse(fs.readFileSync(cursorCliConfigPath, 'utf-8'));
+        }
+
+        // Ensure permissions.allow exists
+        if (!cliConfig.permissions) cliConfig.permissions = { allow: [], deny: [] };
+        if (!Array.isArray((cliConfig.permissions as Record<string, unknown>).allow)) {
+          (cliConfig.permissions as Record<string, unknown>).allow = [];
+        }
+
+        const allowList = (cliConfig.permissions as Record<string, unknown>).allow as string[];
+        // Use tilde notation for portable paths that work for any user
+        const librarianPatterns = [
+          'Read(~/.fieldtheory/librarian/**)',
+          'Write(~/.fieldtheory/librarian/**)',
+        ];
+
+        for (const pattern of librarianPatterns) {
+          if (!allowList.includes(pattern)) {
+            allowList.push(pattern);
+          }
+        }
+
+        fs.writeFileSync(cursorCliConfigPath, JSON.stringify(cliConfig, null, 2));
+        console.log('[LibrarianManager] Added librarian paths to Cursor permissions');
+      } catch (error) {
+        console.warn('[LibrarianManager] Could not update Cursor cli-config.json:', error);
+      }
+
+      console.log('[LibrarianManager] Installed Cursor hooks (beforeSubmitPrompt + preToolUse deny pattern)');
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to install Cursor hook:', error);
+      console.error('[LibrarianManager] Failed to install Cursor hooks:', error);
       return false;
     }
   }
 
   /**
-   * Uninstall the Cursor hook.
+   * Uninstall the Cursor hooks.
    */
   uninstallCursorHook(): boolean {
     try {
       const hookPath = this.getCursorHookScriptPath();
-      const configPath = this.getCursorHookConfigPath();
+      const preToolPath = this.getCursorPreToolScriptPath();
 
-      // Remove hook script
+      // Remove hook scripts
       if (fs.existsSync(hookPath)) {
         fs.unlinkSync(hookPath);
       }
-
-      // Disable in config (don't delete, preserve settings)
-      if (fs.existsSync(configPath)) {
-        const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-        config.enabled = false;
-        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+      if (fs.existsSync(preToolPath)) {
+        fs.unlinkSync(preToolPath);
       }
 
       // Remove from Cursor's hooks.json
       const cursorConfigPath = this.getCursorHooksConfigPath();
       if (fs.existsSync(cursorConfigPath)) {
         const cursorConfig = JSON.parse(fs.readFileSync(cursorConfigPath, 'utf-8'));
-        const ourCommand = `python3 "${hookPath}"`;
 
+        // Remove beforeSubmitPrompt hook
         if (cursorConfig.hooks?.beforeSubmitPrompt) {
           cursorConfig.hooks.beforeSubmitPrompt = cursorConfig.hooks.beforeSubmitPrompt.filter(
-            (h: { command?: string }) => h.command !== ourCommand
+            (h: { command?: string }) => !h.command?.includes('cursor-hook.py')
           );
           if (cursorConfig.hooks.beforeSubmitPrompt.length === 0) {
             delete cursorConfig.hooks.beforeSubmitPrompt;
+          }
+        }
+
+        // Remove preToolUse hook
+        if (cursorConfig.hooks?.preToolUse) {
+          cursorConfig.hooks.preToolUse = cursorConfig.hooks.preToolUse.filter(
+            (h: { command?: string }) => !h.command?.includes('cursor-pretool.py')
+          );
+          if (cursorConfig.hooks.preToolUse.length === 0) {
+            delete cursorConfig.hooks.preToolUse;
           }
         }
 
@@ -3848,10 +3970,35 @@ if __name__ == "__main__":
         fs.writeFileSync(cursorConfigPath, JSON.stringify(cursorConfig, null, 2));
       }
 
-      console.log('[LibrarianManager] Uninstalled Cursor hook');
+      // Remove librarian paths from Cursor's permissions allow list
+      const cursorCliConfigPath = path.join(os.homedir(), '.cursor', 'cli-config.json');
+      try {
+        if (fs.existsSync(cursorCliConfigPath)) {
+          const cliConfig = JSON.parse(fs.readFileSync(cursorCliConfigPath, 'utf-8'));
+
+          if (cliConfig.permissions?.allow && Array.isArray(cliConfig.permissions.allow)) {
+            // Use tilde notation to match what we added during install
+            const librarianPatterns = [
+              'Read(~/.fieldtheory/librarian/**)',
+              'Write(~/.fieldtheory/librarian/**)',
+            ];
+
+            cliConfig.permissions.allow = cliConfig.permissions.allow.filter(
+              (p: string) => !librarianPatterns.includes(p)
+            );
+
+            fs.writeFileSync(cursorCliConfigPath, JSON.stringify(cliConfig, null, 2));
+            console.log('[LibrarianManager] Removed librarian paths from Cursor permissions');
+          }
+        }
+      } catch (error) {
+        console.warn('[LibrarianManager] Could not update Cursor cli-config.json:', error);
+      }
+
+      console.log('[LibrarianManager] Uninstalled Cursor hooks');
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to uninstall Cursor hook:', error);
+      console.error('[LibrarianManager] Failed to uninstall Cursor hooks:', error);
       return false;
     }
   }

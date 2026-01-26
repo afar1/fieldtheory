@@ -1,6 +1,0 @@
-{
-  "enabled": true,
-  "threshold": 3,
-  "output_dir": ".librarian/artifacts",
-  "filename_prefix": "artifact_"
-}

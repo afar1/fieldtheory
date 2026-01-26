@@ -21,7 +21,7 @@ const TIER_LIMITS = {
   pro: {
     priorityMicMinutes: Infinity,
     autoStackSessions: Infinity,
-    textImprovementWords: Infinity,
+    textImprovementWords: 50000,   // 50k words/month for Pro
     verbalCommands: Infinity,
   },
 } as const;
@@ -452,11 +452,9 @@ export class QuotaManager extends EventEmitter {
    * Increment text improvement word count.
    * Call with the number of input words being improved.
    * Uses "grace" logic: if user has any quota remaining, allow the full request.
+   * Both free (5k) and pro (50k) users have limits tracked.
    */
   async incrementTextImprove(wordCount: number): Promise<void> {
-    // Pro users don't consume quota.
-    if (this.getEffectiveTier() === 'pro') return;
-
     // Check for month rollover before incrementing.
     this.checkAndResetIfNeeded();
 
