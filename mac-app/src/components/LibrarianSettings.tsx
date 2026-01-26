@@ -134,6 +134,10 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         setWatchedDirs(dirs);
         setReadings(readingsList);
         setEnabled(isEnabled);
+        // Sync tab visibility with feature state
+        if (isEnabled !== librarianEnabled) {
+          onLibrarianEnabledChange?.(isEnabled);
+        }
         setAutoShowEnabled(autoShow);
         setClaudeCodeStatus(ccStatus as 'installed' | 'directory-only' | 'not-installed');
         // State-enforced mode settings
@@ -280,7 +284,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     }
   }, [manualPath, isScanning]);
 
-  // Handle enable toggle
+  // Handle enable toggle - controls both feature AND tab visibility
   const handleEnabledToggle = useCallback(async () => {
     if (!window.librarianAPI) return;
     const newValue = !enabled;
@@ -292,10 +296,12 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       setClaudeConfigError(true);
       setEnabled(!newValue); // Revert on failure
     } else {
+      // Also update tab visibility to match feature state
+      onLibrarianEnabledChange?.(newValue);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     }
-  }, [enabled]);
+  }, [enabled, onLibrarianEnabledChange]);
 
   // Handle auto-show toggle
   const handleAutoShowToggle = useCallback(async () => {
@@ -341,104 +347,35 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
 
   return (
     <div style={{ padding: '0' }}>
-      {/* Enable/Disable Librarian toggle */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '8px 0',
-          marginBottom: '12px',
-        }}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-          <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
-            Show Librarian Tab
-          </span>
-          <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-            Display the Librarian tab in the header
-          </span>
-        </div>
-        <button
-          onClick={() => onLibrarianEnabledChange?.(!librarianEnabled)}
-          style={{
-            position: 'relative',
-            width: '44px',
-            minWidth: '44px',
-            height: '24px',
-            minHeight: '24px',
-            borderRadius: '12px',
-            cursor: 'pointer',
-            border: 'none',
-            padding: 0,
-            flexShrink: 0,
-            transition: 'background-color 0.2s',
-            backgroundColor: librarianEnabled ? theme.accent : '#d1d5db',
-          }}
-        >
-          <span
-            style={{
-              position: 'absolute',
-              top: '2px',
-              left: 0,
-              width: '20px',
-              height: '20px',
-              borderRadius: '10px',
-              backgroundColor: '#fff',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
-              transition: 'transform 0.2s',
-              transform: librarianEnabled ? 'translateX(22px)' : 'translateX(2px)',
-            }}
-          />
-        </button>
-      </div>
-
-      {/* Status Banner */}
-      <div
-        style={{
-          marginTop: '24px',
-          padding: '12px 16px',
-          borderRadius: '8px',
-          backgroundColor: enabled
-            ? (theme.isDark ? 'rgba(34, 197, 94, 0.1)' : 'rgba(34, 197, 94, 0.08)')
-            : (theme.isDark ? theme.bgSecondary : '#f9fafb'),
-          border: `1px solid ${enabled
-            ? (theme.isDark ? 'rgba(34, 197, 94, 0.3)' : 'rgba(34, 197, 94, 0.2)')
-            : (theme.isDark ? theme.border : '#e5e7eb')}`,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span
-            style={{
-              width: '8px',
-              height: '8px',
-              borderRadius: '50%',
-              backgroundColor: enabled ? '#22c55e' : theme.textSecondary,
-            }}
-          />
-          <span style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
-            {enabled ? 'ACTIVE' : 'OFF'}
-          </span>
-        </div>
-      </div>
-
       {/* Librarian Settings */}
       <div
         style={{
-          marginTop: '16px',
           padding: '16px',
           borderRadius: '8px',
           backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
           border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
         }}
       >
-        {/* Enable toggle */}
+        {/* Enable toggle with status tag */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-          <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
-            Librarian
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
+              Librarian
+            </span>
+            <span
+              style={{
+                fontSize: '10px',
+                fontWeight: 500,
+                color: enabled ? '#22c55e' : theme.textSecondary,
+                backgroundColor: enabled
+                  ? (theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)')
+                  : (theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'),
+                padding: '2px 6px',
+                borderRadius: '4px',
+              }}
+            >
+              {enabled ? 'Active' : 'Off'}
+            </span>
           </div>
           <button
             onClick={handleEnabledToggle}

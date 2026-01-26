@@ -2108,6 +2108,7 @@ const CommandsIPCChannels = {
   SAVE_COMMAND: 'commands:saveCommand',
   CREATE_COMMAND: 'commands:createCommand',
   DELETE_COMMAND: 'commands:deleteCommand',
+  RENAME_COMMAND: 'commands:renameCommand',
 } as const;
 
 type PortableCommandInfo = {
@@ -2238,6 +2239,11 @@ const commandsAPI = {
   // Delete a command file.
   deleteCommand: async (filePath: string): Promise<boolean> => {
     return ipcRenderer.invoke(CommandsIPCChannels.DELETE_COMMAND, filePath);
+  },
+
+  // Rename a command file.
+  renameCommand: async (oldFilePath: string, newName: string): Promise<string | null> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.RENAME_COMMAND, oldFilePath, newName);
   },
 
   // ==========================================================================

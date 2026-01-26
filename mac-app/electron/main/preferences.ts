@@ -35,11 +35,6 @@ interface ClipboardHistoryBounds {
 }
 
 /**
- * Overlay animation style options.
- */
-export type OverlayStyle = 'rectangle' | 'top-emerging';
-
-/**
  * Local quota tracking for free users.
  * Resets on per-user anniversary date (day of month they signed up).
  */
@@ -62,7 +57,6 @@ interface Preferences {
   transcriptionHotkey: string;
   transcriptionSecondaryHotkey?: string;
   selectedModel: ModelSize;
-  overlayStyle: OverlayStyle;
   windowState?: WindowState;
   clipboardScreenshotHotkey?: string;
   clipboardDesktopScreenshotHotkey?: string;
@@ -183,7 +177,6 @@ interface Preferences {
 const DEFAULT_PREFERENCES: Preferences = {
   transcriptionHotkey: 'Command+\\',
   selectedModel: 'small',
-  overlayStyle: 'rectangle',
   clipboardScreenshotHotkey: 'Alt+4',
   clipboardDesktopScreenshotHotkey: 'Alt+3',
   clipboardHistoryHotkey: 'Alt+Space',
