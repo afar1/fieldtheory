@@ -172,9 +172,9 @@ function getBuiltInActions(hotkeys: typeof DEFAULT_HOTKEYS, isDarkMode: boolean)
     {
       id: 'action-superpaste',
       type: 'action',
-      name: 'super paste',
-      displayName: 'Super Paste',
-      keywords: ['super', 'paste', 'smart', 'stack', 'quick'],
+      name: 'terminal image paste',
+      displayName: 'Terminal Image Paste',
+      keywords: ['terminal', 'image', 'paste', 'base64', 'stack', 'quick'],
       hotkey: hotkeys.superPaste,
       hotkeyDisplay: formatHotkeyDisplay(hotkeys.superPaste),
       actionId: 'super-paste',

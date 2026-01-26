@@ -877,6 +877,7 @@ interface CommandsAPI {
   saveCommand: (filePath: string, content: string) => Promise<boolean>;
   createCommand: (directoryPath: string, name: string, content?: string) => Promise<{ path: string; name: string } | null>;
   deleteCommand: (filePath: string) => Promise<boolean>;
+  renameCommand: (oldFilePath: string, newName: string) => Promise<string | null>;
 
   // Command launcher (Cmd+Shift+K)
   invokeCommand?: (commandName: string) => Promise<{ success: boolean; error?: string }>;

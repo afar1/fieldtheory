@@ -172,7 +172,6 @@ export interface ClipboardQueryOptions {
  * Configuration for clipboard manager.
  */
 interface ClipboardConfig {
-  retentionDays?: number;
   maxItems?: number;
   ignoreApps?: string[]; // Bundle IDs to ignore
   screenshotHotkey?: string;
@@ -192,7 +191,6 @@ type ScreenshotCallback = () => void | Promise<void>;
 type HistoryCallback = () => void;
 
 const DEFAULT_CONFIG: ClipboardConfig = {
-  retentionDays: 30,
   maxItems: 1000,
   ignoreApps: [
     'com.1password.1password',
@@ -2038,20 +2036,11 @@ export class ClipboardManager extends EventEmitter {
   }
 
   /**
-   * Cleanup old items based on retention policy.
-   * Note: Uses config.retentionDays as fallback. Prefer applyDataRetention()
-   * for user-configured retention settings.
+   * Cleanup old items based on max item count.
+   * Time-based retention is handled by applyDataRetention() using user preferences.
    */
   private cleanupOldItems(): void {
-    const { retentionDays, maxItems } = this.config;
-
-    // Delete items older than retention period.
-    // This uses the config value, not the user preference.
-    // User preference is applied via applyDataRetention().
-    if (retentionDays && retentionDays > 0) {
-      const cutoffTime = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
-      this.db.prepare('DELETE FROM clipboard_items WHERE created_at < ?').run(cutoffTime);
-    }
+    const { maxItems } = this.config;
 
     // Delete oldest items if over max count.
     if (maxItems && this._db) {

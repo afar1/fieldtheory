@@ -226,6 +226,7 @@ export default function ClipboardHistory() {
   const [showSettings, setShowSettings] = useState(() => {
     return localStorage.getItem('fieldTheoryShowSettings') === 'true';
   });
+  const [settingsSection, setSettingsSection] = useState<string | undefined>(undefined);
 
   // DEBUG: Librarian count overlay
   const [librarianStatus, setLibrarianStatus] = useState<{ edits: number; threshold: number; frequency: string } | null>(null);
@@ -1363,9 +1364,12 @@ export default function ClipboardHistory() {
     });
   }, [viewMode]);
 
-  // Persist showSettings state when it changes
+  // Persist showSettings state when it changes and clear section override when closing
   useEffect(() => {
     localStorage.setItem('fieldTheoryShowSettings', showSettings ? 'true' : 'false');
+    if (!showSettings) {
+      setSettingsSection(undefined);  // Clear section override when settings closes
+    }
   }, [showSettings]);
 
   // Persist librarianEnabled state when it changes
@@ -3932,7 +3936,7 @@ export default function ClipboardHistory() {
 
           {/* Settings button */}
           <button
-            onClick={() => setShowSettings(!showSettings)}
+            onClick={() => { if (!showSettings) setShowSettings(true); }}
             tabIndex={0}
             style={{
               padding: '5px 6px',
@@ -4185,6 +4189,7 @@ export default function ClipboardHistory() {
           }}
           librarianEnabled={librarianEnabled}
           onLibrarianEnabledChange={setLibrarianEnabled}
+          initialSection={settingsSection as any}
         />
       ) : viewMode === 'todo' ? (
         <TodoView onSwitchToClipboard={() => setViewMode('clipboard')} />
@@ -4317,7 +4322,10 @@ export default function ClipboardHistory() {
       ) : viewMode === 'commands' ? (
         <CommandsView
           onSwitchToClipboard={() => setViewMode('clipboard')}
-          onSwitchToSettings={() => setShowSettings(true)}
+          onSwitchToSettings={() => {
+            setSettingsSection('commands');
+            setShowSettings(true);
+          }}
         />
       ) : viewMode === 'sketch' ? (
         <Suspense fallback={<div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>}>

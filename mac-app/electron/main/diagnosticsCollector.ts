@@ -61,7 +61,6 @@ export interface DiagnosticsReport {
   };
   preferences: {
     transcriptionHotkey: string;
-    overlayStyle: string;
     soundsEnabled: boolean;
     showInDock: boolean;
     cursorStatusEnabled: boolean;
@@ -165,7 +164,6 @@ export class DiagnosticsCollector {
     lines.push('');
     lines.push('### Preferences');
     lines.push(`- Transcription Hotkey: ${report.preferences.transcriptionHotkey}`);
-    lines.push(`- Overlay Style: ${report.preferences.overlayStyle}`);
     lines.push(`- Sounds Enabled: ${report.preferences.soundsEnabled}`);
     lines.push(`- Show in Dock: ${report.preferences.showInDock}`);
     lines.push(`- Cursor Status: ${report.preferences.cursorStatusEnabled}`);
@@ -291,7 +289,6 @@ export class DiagnosticsCollector {
   private collectPreferences(): DiagnosticsReport['preferences'] {
     return {
       transcriptionHotkey: this.preferencesManager.getPreference('transcriptionHotkey'),
-      overlayStyle: this.preferencesManager.getPreference('overlayStyle'),
       soundsEnabled: this.preferencesManager.getPreference('soundsEnabled') ?? true,
       showInDock: this.preferencesManager.getPreference('showInDock') ?? true,
       cursorStatusEnabled: this.preferencesManager.getPreference('cursorStatusEnabled') ?? false,

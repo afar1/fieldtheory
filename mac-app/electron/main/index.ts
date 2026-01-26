@@ -2004,20 +2004,6 @@ function setupTranscribeIPCHandlers(): void {
     return await transcriberManager.setSecondaryHotkey(hotkey);
   });
 
-  ipcMain.handle(TranscribeIPCChannels.GET_OVERLAY_STYLE, () => {
-    if (!transcriberManager) {
-      return 'rectangle';
-    }
-    return transcriberManager.getOverlayStyle();
-  });
-
-  ipcMain.handle(TranscribeIPCChannels.SET_OVERLAY_STYLE, async (_event, style: string) => {
-    if (!transcriberManager) {
-      throw new Error('TranscriberManager not initialized');
-    }
-    await transcriberManager.setOverlayStyle(style as 'rectangle' | 'top-emerging');
-  });
-
   // Abandon recording hotkey settings.
   ipcMain.handle(TranscribeIPCChannels.GET_ABANDON_HOTKEY, () => {
     if (!transcriberManager) {
@@ -4227,6 +4213,13 @@ function setupClipboardIPCHandlers(): void {
       return false;
     }
     return commandsManager.deleteCommand(filePath);
+  });
+
+  ipcMain.handle(CommandsIPCChannels.RENAME_COMMAND, async (_event, oldFilePath: string, newName: string) => {
+    if (!commandsManager) {
+      return null;
+    }
+    return commandsManager.renameCommand(oldFilePath, newName);
   });
 
   // Handle direct command invocation from command launcher (Cmd+Shift+K).

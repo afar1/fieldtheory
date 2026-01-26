@@ -22,6 +22,15 @@ body {
   -webkit-user-select: none;
 }
 
+/* Remove default focus outlines - app uses custom focus states */
+*:focus {
+  outline: none;
+}
+
+button:focus, input:focus, select:focus, textarea:focus {
+  outline: none;
+}
+
 /* Allow text selection in inputs and textareas */
 input, textarea, [contenteditable="true"] {
   user-select: text;

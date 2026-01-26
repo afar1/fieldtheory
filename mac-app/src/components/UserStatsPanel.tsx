@@ -257,10 +257,12 @@ export default function UserStatsPanel() {
         </h3>
         <p style={{
           margin: '4px 0 0 0',
-          fontSize: '12px',
-          color: theme.textSecondary
+          fontSize: '11px',
+          color: theme.textSecondary,
+          lineHeight: 1.4
         }}>
-          The metrics you see are the metrics we see.
+          These are the only metrics we aggregate. We don't track clipboard content,
+          transcription text, or anything outside this list.
         </p>
       </div>
 
@@ -331,17 +333,6 @@ export default function UserStatsPanel() {
           </div>
         ))}
       </div>
-
-      {/* Privacy note */}
-      <p style={{
-        fontSize: '11px',
-        color: theme.textSecondary,
-        margin: 0,
-        lineHeight: 1.4
-      }}>
-        These are the only metrics we aggregate. We don't track clipboard content,
-        transcription text, or anything outside this list.
-      </p>
     </div>
   );
 }

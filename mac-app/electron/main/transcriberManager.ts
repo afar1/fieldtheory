@@ -240,10 +240,8 @@ export class TranscriberManager extends EventEmitter {
     this.modelManager.setSelectedModel(selectedModel);
     console.log(`[TranscriberManager] Using model: ${selectedModel}`);
 
-    // Set overlay style from preferences
-    const overlayStyle = this.preferences.getPreference('overlayStyle');
-    this.overlay.setOverlayStyle(overlayStyle);
-    console.log(`[TranscriberManager] Using overlay style: ${overlayStyle}`);
+    // Overlay style hardcoded to 'rectangle' (cursor status indicator is primary UI)
+    this.overlay.setOverlayStyle('rectangle');
 
     // Register global hotkey for normal transcription
     await this.registerHotkey(this.hotkey);
@@ -1256,22 +1254,6 @@ export class TranscriberManager extends EventEmitter {
     this.modelManager.setSelectedModel(size);
     await this.preferences.save({ selectedModel: size });
     console.log(`[TranscriberManager] Model changed to: ${size}`);
-  }
-
-  /**
-   * Set the overlay style and save to preferences.
-   */
-  async setOverlayStyle(style: 'rectangle' | 'top-emerging'): Promise<void> {
-    this.overlay.setOverlayStyle(style);
-    await this.preferences.save({ overlayStyle: style });
-    console.log(`[TranscriberManager] Overlay style changed to: ${style}`);
-  }
-
-  /**
-   * Get the current overlay style.
-   */
-  getOverlayStyle(): 'rectangle' | 'top-emerging' {
-    return this.preferences.getPreference('overlayStyle');
   }
 
   /**

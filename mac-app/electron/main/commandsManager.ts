@@ -443,12 +443,10 @@ export class CommandsManager extends EventEmitter {
       const stats = fs.statSync(filePath);
       const filename = path.basename(filePath);
       const nameWithoutExt = filename.replace(/\.(md|markdown)$/i, '');
-      
-      // Convert filename to command name: kebab-case or snake_case -> spaces
-      // e.g., "debug-assistant.md" -> "debug assistant"
-      const displayName = nameWithoutExt
-        .replace(/[-_]/g, ' ')
-        .replace(/\b\w/g, c => c.toUpperCase()); // Title case
+
+      // Preserve original filename as displayName (respecting casing)
+      // e.g., "camelCase.md" -> "camelCase", "Best.md" -> "Best"
+      const displayName = nameWithoutExt;
 
       return {
         name: nameWithoutExt.toLowerCase(),
@@ -1077,9 +1075,8 @@ End of User Commands
       const filename = path.basename(filePath);
       const nameWithoutExt = filename.replace(/\.(md|markdown)$/i, '');
 
-      const displayName = nameWithoutExt
-        .replace(/[-_]/g, ' ')
-        .replace(/\b\w/g, c => c.toUpperCase());
+      // Preserve original filename as displayName (respecting casing)
+      const displayName = nameWithoutExt;
 
       return {
         name: nameWithoutExt.toLowerCase(),
@@ -1127,6 +1124,13 @@ End of User Commands
       // Create the file
       fs.writeFileSync(filePath, content, 'utf-8');
 
+      // Add to commands map immediately (don't wait for file watcher)
+      const command = this.createCommandFromFile(filePath);
+      if (command) {
+        this.commands.set(command.name, command);
+        this.emit('commandsChanged', this.getCommands());
+      }
+
       console.log(`[CommandsManager] Created command: ${filePath}`);
       return { path: filePath, name: fileName.replace('.md', '') };
     } catch (error) {
@@ -1158,6 +1162,49 @@ End of User Commands
     } catch (error) {
       console.error(`[CommandsManager] Error deleting command ${filePath}:`, error);
       return false;
+    }
+  }
+
+  /**
+   * Rename a command file.
+   * Returns the new file path if successful, null otherwise.
+   */
+  renameCommand(oldFilePath: string, newName: string): string | null {
+    try {
+      if (!fs.existsSync(oldFilePath)) {
+        return null;
+      }
+
+      // Ensure the name has .md extension
+      const newFileName = newName.endsWith('.md') ? newName : `${newName}.md`;
+      const directory = path.dirname(oldFilePath);
+      const newFilePath = path.join(directory, newFileName);
+
+      // Check if target file already exists
+      if (fs.existsSync(newFilePath)) {
+        console.warn(`[CommandsManager] File already exists: ${newFilePath}`);
+        return null;
+      }
+
+      // Rename the file
+      fs.renameSync(oldFilePath, newFilePath);
+
+      // Update commands map
+      const oldCommand = Array.from(this.commands.values()).find(c => c.filePath === oldFilePath);
+      if (oldCommand) {
+        this.commands.delete(oldCommand.name);
+        const newCommand = this.createCommandFromFile(newFilePath);
+        if (newCommand) {
+          this.commands.set(newCommand.name, newCommand);
+        }
+        this.emit('commandsChanged', this.getCommands());
+      }
+
+      console.log(`[CommandsManager] Renamed command: ${oldFilePath} -> ${newFilePath}`);
+      return newFilePath;
+    } catch (error) {
+      console.error(`[CommandsManager] Error renaming command ${oldFilePath}:`, error);
+      return null;
     }
   }
 }
