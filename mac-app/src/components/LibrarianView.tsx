@@ -1340,7 +1340,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
             flex: 1,
             minHeight: 0, // Required for flex child to shrink and enable scrolling
             overflowY: 'auto',
-            padding: isFullScreen ? '8px 16px 16px 16px' : '24px 20px',
+            padding: isFullScreen ? '8px 32px 16px 32px' : '24px 32px',
             display: 'flex',
             justifyContent: 'center',
           }}

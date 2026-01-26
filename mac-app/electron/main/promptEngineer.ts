@@ -119,7 +119,7 @@ async function tryLocalLLM(rawTranscript: string): Promise<EngineerResult | null
   // Use simpler prompt for local models
   const result = await localLLMManager.generateResponse(
     LOCAL_LLM_TRANSCRIPT_PROMPT,
-    rawTranscript.trim(),
+    `Transcript to improve:\n\n${rawTranscript.trim()}`,
     maxOutputTokens
   );
 

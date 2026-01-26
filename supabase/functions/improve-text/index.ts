@@ -163,7 +163,7 @@ serve(async (req: Request) => {
         model: 'claude-sonnet-4-20250514',
         max_tokens: 8192,
         system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: text.trim() }],
+        messages: [{ role: 'user', content: `Transcript to improve:\n\n${text.trim()}` }],
       }),
     });
 

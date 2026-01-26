@@ -199,7 +199,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
 
   // Auto-improve transcripts state
   const [autoImprove, setAutoImprove] = useState(false);
-  const [autoImproveMinWords, setAutoImproveMinWords] = useState(60);
+  const [autoImproveMinWords, setAutoImproveMinWords] = useState(70);
   const [autoImproveStats, setAutoImproveStats] = useState<{
     wordsImproved: number;
     apiCalls: number;
@@ -655,9 +655,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     }
   };
   
-  // Check Supabase auth state on mount and listen for changes.
-  // When authenticated, pass session to main process for mobile sync.
-  // The sign-in form is in TeamView - this just listens for session changes.
+  // Check auth state on mount and listen for changes.
+  // Auth is managed by main process AuthManager - get session from there first,
+  // then sync to client-side Supabase (needed for realtime subscriptions).
   useEffect(() => {
     // If supabase client is not available, skip auth. This can happen if
     // environment variables are missing during development.
@@ -666,17 +666,36 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       return;
     }
 
-    // Get initial session.
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
+    // Get initial session from main process (source of truth).
+    // This handles the case where user signed in via Onboarding window.
+    const client = supabase; // Capture non-null reference for async closure
+    const initSession = async () => {
+      // First check main process AuthManager
+      const mainSession = await window.authAPI?.getSession();
+      if (mainSession) {
+        console.log('[SettingsPanel] Got session from main process:', mainSession.user?.email);
+        setSession(mainSession);
+        // Sync to client-side Supabase (needed for realtime subscriptions)
+        await client.auth.setSession({
+          access_token: mainSession.access_token,
+          refresh_token: mainSession.refresh_token,
+        });
+        return;
+      }
+
+      // Fallback: check client-side Supabase (handles TeamView sign-in in same window)
+      const { data: { session } } = await client.auth.getSession();
       if (session) {
-        // Pass session to main process for MobileSync.
+        console.log('[SettingsPanel] Got session from client-side Supabase:', session.user?.email);
+        setSession(session);
+        // Pass to main process for sync
         window.clipboardAPI?.setSyncSession?.(
           session.access_token,
           session.refresh_token
         );
       }
-    });
+    };
+    initSession();
 
     // Listen for auth changes (triggered by TeamView sign-in or token refresh).
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
@@ -1688,145 +1707,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                 <span style={{ fontSize: '11px', color: theme.textSecondary }}>500</span>
               </div>
             </div>
-
-            {/* Method Selector - API vs Local */}
-            <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: `1px solid ${theme.border}` }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                <span style={{ fontSize: '12px', color: theme.text }}>Method</span>
-                <div style={{
-                  display: 'flex',
-                  borderRadius: '6px',
-                  overflow: 'hidden',
-                  border: `1px solid ${theme.border}`,
-                }}>
-                  <button
-                    onClick={() => handleUseLocalLLMChange(false)}
-                    style={{
-                      padding: '4px 8px',
-                      fontSize: '12px',
-                      fontWeight: 500,
-                      border: 'none',
-                      cursor: 'pointer',
-                      backgroundColor: !useLocalLLM ? theme.accent : 'transparent',
-                      color: !useLocalLLM ? '#fff' : theme.text,
-                      transition: 'background-color 0.2s',
-                    }}
-                  >
-                    API
-                  </button>
-                  <button
-                    onClick={() => handleUseLocalLLMChange(true)}
-                    style={{
-                      padding: '4px 8px',
-                      fontSize: '12px',
-                      fontWeight: 500,
-                      border: 'none',
-                      borderLeft: `1px solid ${theme.border}`,
-                      cursor: 'pointer',
-                      backgroundColor: useLocalLLM ? theme.accent : 'transparent',
-                      color: useLocalLLM ? '#fff' : theme.text,
-                      transition: 'background-color 0.2s',
-                    }}
-                  >
-                    Local
-                  </button>
-                </div>
-              </div>
-
-              {/* Cloud Mode - uses server-side API */}
-              {!useLocalLLM && (
-                <div style={{ marginTop: '8px' }}>
-                  <p style={{ fontSize: '12px', color: theme.textSecondary, margin: 0 }}>
-                    Uses cloud-based AI for best results. Requires sign-in.
-                  </p>
-                  {/* Fallback note */}
-                  {Object.values(localLLMStatus).some(Boolean) && (
-                    <p style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '8px' }}>
-                      Falls back to local model if offline
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {/* Local Mode - show model download */}
-              {useLocalLLM && (() => {
-                const modelId = 'llama-3.2-1b';
-                const model = localLLMModels[modelId];
-                if (!model) return null;
-                const isDownloaded = localLLMStatus[modelId] || false;
-                const isDownloading = downloadingLocalLLM === modelId;
-                const sizeMB = Math.round(model.sizeBytes / 1024 / 1024);
-                const progressPercent = localLLMProgress && isDownloading
-                  ? Math.round((localLLMProgress.downloaded / localLLMProgress.total) * 100)
-                  : 0;
-
-                return (
-                  <div style={{ marginTop: '8px' }}>
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '8px 12px',
-                      borderRadius: '6px',
-                      border: `1px solid ${theme.border}`,
-                      backgroundColor: 'transparent',
-                    }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
-                        <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
-                          {model.name}
-                        </span>
-                        <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-                          {sizeMB}MB {isDownloaded && '· Downloaded'}
-                        </span>
-                      </div>
-
-                      <div style={styles.rowControls}>
-                        {isDownloading && localLLMProgress ? (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <div style={{
-                              width: '60px',
-                              height: '4px',
-                              backgroundColor: theme.border,
-                              borderRadius: '2px',
-                              overflow: 'hidden',
-                            }}>
-                              <div style={{
-                                width: `${progressPercent}%`,
-                                height: '100%',
-                                backgroundColor: theme.info,
-                                transition: 'width 0.3s',
-                              }} />
-                            </div>
-                            <span style={{ fontSize: '11px', color: theme.textSecondary }}>{progressPercent}%</span>
-                          </div>
-                        ) : isDownloaded ? (
-                          <button
-                            onClick={() => handleDeleteLocalLLM(modelId)}
-                            style={{ ...styles.linkBtn, color: '#9ca3af' }}
-                          >
-                            Delete
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => handleDownloadLocalLLM(modelId)}
-                            disabled={downloadingLocalLLM !== null}
-                            style={{
-                              ...styles.btn,
-                              opacity: downloadingLocalLLM !== null ? 0.5 : 1,
-                            }}
-                          >
-                            Download
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    <p style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '8px', marginBottom: 0 }}>
-                      Experimental feature. Results may vary.
-                    </p>
-                  </div>
-                );
-              })()}
-            </div>
           </>
         )}
 
@@ -2018,18 +1898,18 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         {/* Permission Reminders - removed, always show until permissions granted */}
         {/* Cursor Status Indicator - removed, always show the dot */}
 
-        {/* Hide Status Labels */}
+        {/* Show Transcription Status Text */}
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={styles.rowLabel}>Hide Status Text</span>
-            <span style={styles.rowHint}>Show only colored dots without text labels</span>
+            <span style={styles.rowLabel}>Show transcription status text</span>
+            <span style={styles.rowHint}>Display text labels alongside status indicator</span>
           </div>
           <div style={styles.rowControls}>
             <button
               onClick={() => handleToggleHideStatusLabels(!hideStatusLabels)}
-              style={{ ...styles.toggle, backgroundColor: hideStatusLabels ? theme.accent : '#d1d5db' }}
+              style={{ ...styles.toggle, backgroundColor: !hideStatusLabels ? theme.accent : '#d1d5db' }}
             >
-              <span style={{ ...styles.toggleKnob, transform: hideStatusLabels ? 'translateX(20px)' : 'translateX(2px)' }} />
+              <span style={{ ...styles.toggleKnob, transform: !hideStatusLabels ? 'translateX(20px)' : 'translateX(2px)' }} />
             </button>
           </div>
         </div>

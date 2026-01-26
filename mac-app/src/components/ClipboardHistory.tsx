@@ -632,13 +632,13 @@ export default function ClipboardHistory() {
 
   useEffect(() => {
     if (!isVisible || !window.clipboardAPI?.getAllTimeStats) return;
-    
+
     window.clipboardAPI.getAllTimeStats().then(stats => {
       setAllTimeStats(stats);
     }).catch(err => {
       console.error('[ClipboardHistory] Failed to load all-time stats:', err);
     });
-  }, [isVisible]);
+  }, [isVisible, authSession?.user?.id]); // Refresh stats when user changes
   
   // Load tasks tab setting.
   useEffect(() => {

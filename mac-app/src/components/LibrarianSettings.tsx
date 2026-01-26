@@ -596,7 +596,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                         setExpertiseText(e.target.value);
                       }
                     }}
-                    placeholder=""
+                    placeholder="e.g., I'm a senior engineer who prefers concise technical writing"
                     style={{
                       width: '100%',
                       minHeight: '60px',
@@ -688,88 +688,6 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                     )}
                   </div>
                 </div>
-
-                {/* Rule content editor (admin-only) */}
-                {isAdmin && (
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                      <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-                        Job language (rule content)
-                      </span>
-                      {isUsingCustomRule && (
-                        <span style={{ fontSize: '10px', color: theme.accent, fontWeight: 500 }}>
-                          Customized
-                        </span>
-                      )}
-                    </div>
-                    <textarea
-                      value={ruleContentText}
-                      onChange={(e) => setRuleContentText(e.target.value)}
-                      placeholder="Write 2-3 paragraphs connecting the current work to engineering history..."
-                      style={{
-                        width: '100%',
-                        minHeight: '80px',
-                        padding: '10px',
-                        fontSize: '11px',
-                        fontFamily: "'SF Mono', Monaco, monospace",
-                        lineHeight: '1.5',
-                        backgroundColor: theme.isDark ? 'rgba(0,0,0,0.2)' : '#fff',
-                        border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
-                        borderRadius: '6px',
-                        color: theme.text,
-                        resize: 'vertical',
-                        outline: 'none',
-                        boxSizing: 'border-box',
-                      }}
-                    />
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                      <button
-                        onClick={async () => {
-                          const content = ruleContentText.trim() === defaultRuleContent ? undefined : ruleContentText.trim();
-                          await window.librarianAPI?.setCustomRuleContent(content);
-                          setCustomRuleContent(content);
-                          setIsUsingCustomRule(!!content);
-                          setRuleContentSaved(true);
-                          setTimeout(() => setRuleContentSaved(false), 2000);
-                        }}
-                        disabled={ruleContentText === (customRuleContent || defaultRuleContent)}
-                        style={{
-                          padding: '4px 10px',
-                          fontSize: '11px',
-                          fontWeight: 500,
-                          color: ruleContentText !== (customRuleContent || defaultRuleContent) ? '#fff' : theme.textSecondary,
-                          backgroundColor: ruleContentText !== (customRuleContent || defaultRuleContent) ? theme.accent : 'transparent',
-                          border: ruleContentText !== (customRuleContent || defaultRuleContent) ? 'none' : `1px solid ${theme.border}`,
-                          borderRadius: '4px',
-                          cursor: ruleContentText !== (customRuleContent || defaultRuleContent) ? 'pointer' : 'default',
-                        }}
-                      >
-                        {ruleContentSaved ? '✓ Saved' : 'Save'}
-                      </button>
-                      {isUsingCustomRule && (
-                        <button
-                          onClick={async () => {
-                            await window.librarianAPI?.setCustomRuleContent(undefined);
-                            setCustomRuleContent(undefined);
-                            setRuleContentText(defaultRuleContent);
-                            setIsUsingCustomRule(false);
-                          }}
-                          style={{
-                            padding: '4px 10px',
-                            fontSize: '11px',
-                            color: theme.textSecondary,
-                            backgroundColor: 'transparent',
-                            border: `1px solid ${theme.border}`,
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          Reset to Default
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )}
               </div>
             )}
 
@@ -866,54 +784,36 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                     </span>
                   )}
                 </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button
-                    onClick={async () => {
-                      setCursorHookInstalling(true);
-                      try {
-                        if (cursorHookInstalled) {
-                          await window.librarianAPI?.uninstallCursorHook();
-                          setCursorHookInstalled(false);
-                        } else {
-                          const success = await window.librarianAPI?.installCursorHook();
-                          setCursorHookInstalled(success ?? false);
-                        }
-                      } finally {
-                        setCursorHookInstalling(false);
+                <button
+                  onClick={async () => {
+                    setCursorHookInstalling(true);
+                    try {
+                      if (cursorHookInstalled) {
+                        await window.librarianAPI?.uninstallCursorHook();
+                        setCursorHookInstalled(false);
+                      } else {
+                        const success = await window.librarianAPI?.installCursorHook();
+                        setCursorHookInstalled(success ?? false);
                       }
-                    }}
-                    disabled={cursorHookInstalling}
-                    style={{
-                      padding: '4px 10px',
-                      fontSize: '11px',
-                      fontWeight: 500,
-                      color: cursorHookInstalled ? theme.textSecondary : '#fff',
-                      backgroundColor: cursorHookInstalled ? 'transparent' : theme.accent,
-                      border: cursorHookInstalled ? `1px solid ${theme.border}` : 'none',
-                      borderRadius: '4px',
-                      cursor: cursorHookInstalling ? 'wait' : 'pointer',
-                      opacity: cursorHookInstalling ? 0.5 : 1,
-                    }}
-                  >
-                    {cursorHookInstalling ? '...' : cursorHookInstalled ? 'Disconnect' : 'Connect'}
-                  </button>
-                  <button
-                    onClick={handleShowCursorInstructions}
-                    style={{
-                      padding: '4px 10px',
-                      fontSize: '11px',
-                      fontWeight: 500,
-                      color: theme.textSecondary,
-                      backgroundColor: 'transparent',
-                      border: `1px solid ${theme.border}`,
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                    }}
-                    title="Manual setup instructions"
-                  >
-                    ?
-                  </button>
-                </div>
+                    } finally {
+                      setCursorHookInstalling(false);
+                    }
+                  }}
+                  disabled={cursorHookInstalling}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: '11px',
+                    fontWeight: 500,
+                    color: cursorHookInstalled ? theme.textSecondary : '#fff',
+                    backgroundColor: cursorHookInstalled ? 'transparent' : theme.accent,
+                    border: cursorHookInstalled ? `1px solid ${theme.border}` : 'none',
+                    borderRadius: '4px',
+                    cursor: cursorHookInstalling ? 'wait' : 'pointer',
+                    opacity: cursorHookInstalling ? 0.5 : 1,
+                  }}
+                >
+                  {cursorHookInstalling ? '...' : cursorHookInstalled ? 'Disconnect' : 'Connect'}
+                </button>
               </div>
             </div>
           </div>
@@ -1037,209 +937,6 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
             )}
           </div>
         </div>
-      )}
-
-      {/* Watched Directories (admin-only) */}
-      {isAdmin && (
-        <>
-      <p
-        style={{
-          fontSize: '12px',
-          color: theme.textSecondary,
-          marginBottom: '16px',
-          marginTop: '24px',
-          lineHeight: '1.5',
-          opacity: librarianEnabled ? 1 : 0.5,
-        }}
-      >
-        Add directories to watch for markdown artifacts. Field Theory will import new artifacts
-        automatically and display them in the Librarian tab.
-      </p>
-
-      <div
-        style={{
-          padding: '16px',
-          borderRadius: '8px',
-          backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
-          border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-        }}
-      >
-        {/* Watched Directories */}
-        <div>
-          <label style={{
-            display: 'block',
-            marginBottom: '8px',
-            fontSize: '12px',
-            fontWeight: 600,
-            color: theme.text,
-          }}>
-            Watched Directories
-          </label>
-
-          {/* List of watched directories with reading counts */}
-          {watchedDirs.length > 0 && (
-            <div style={{
-              marginBottom: '12px',
-              border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-              borderRadius: '6px',
-              backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-              overflow: 'hidden',
-            }}>
-              {watchedDirs.map((dir, index) => {
-                const count = readingCountsByDir[dir.path] || 0;
-                return (
-                  <div
-                    key={dir.path}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '8px 12px',
-                      borderBottom: index < watchedDirs.length - 1
-                        ? `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`
-                        : 'none',
-                    }}
-                  >
-                    <div style={{ flex: 1, minWidth: 0, marginRight: '8px' }}>
-                      <code style={{
-                        fontSize: '12px',
-                        fontFamily: 'monospace',
-                        color: theme.text,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        display: 'block',
-                      }}>
-                        {formatPath(dir.path)}
-                      </code>
-                      <span style={{
-                        fontSize: '11px',
-                        color: theme.textSecondary,
-                      }}>
-                        {count} artifact{count !== 1 ? 's' : ''}
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => handleRemove(dir.path)}
-                      style={{
-                        padding: '4px 8px',
-                        fontSize: '11px',
-                        fontWeight: 500,
-                        color: theme.error,
-                        backgroundColor: 'transparent',
-                        border: `1px solid ${theme.isDark ? 'rgba(248,113,113,0.3)' : '#fecaca'}`,
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        flexShrink: 0,
-                      }}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Add directory input */}
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <input
-              type="text"
-              value={manualPath}
-              onChange={(e) => setManualPath(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleManualPathSubmit()}
-              placeholder="Enter path (e.g., ~/.librarian)"
-              disabled={isScanning}
-              style={{
-                flex: 1,
-                padding: '8px 12px',
-                fontSize: '12px',
-                fontFamily: 'monospace',
-                backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-                border: `1px solid ${theme.isDark ? theme.border : '#d1d5db'}`,
-                borderRadius: '6px',
-                color: theme.text,
-                outline: 'none',
-                opacity: isScanning ? 0.5 : 1,
-              }}
-            />
-            {isScanning ? (
-              <span
-                style={{
-                  padding: '8px 16px',
-                  fontSize: '12px',
-                  fontWeight: 500,
-                  color: theme.textSecondary,
-                  fontFamily: "'SF Mono', Monaco, 'Cascadia Code', monospace",
-                  display: 'flex',
-                  alignItems: 'center',
-                  minWidth: '90px',
-                }}
-              >
-                Scanning{scanningDots}
-              </span>
-            ) : (
-              <button
-                onClick={handleManualPathSubmit}
-                disabled={!manualPath.trim()}
-                style={{
-                  padding: '8px 16px',
-                  fontSize: '12px',
-                  fontWeight: 500,
-                  color: manualPath.trim() ? '#fff' : theme.textSecondary,
-                  backgroundColor: manualPath.trim() ? theme.info : 'transparent',
-                  border: manualPath.trim() ? 'none' : `1px solid ${theme.border}`,
-                  borderRadius: '6px',
-                  cursor: manualPath.trim() ? 'pointer' : 'not-allowed',
-                  opacity: manualPath.trim() ? 1 : 0.5,
-                }}
-              >
-                Add
-              </button>
-            )}
-          </div>
-
-          {/* Common paths hint - only show when empty */}
-          {watchedDirs.length === 0 && (
-            <p style={{
-              fontSize: '11px',
-              color: theme.textSecondary,
-              marginTop: '8px',
-              marginBottom: '0',
-              lineHeight: '1.5',
-            }}>
-              <strong>Common locations:</strong><br />
-              • <code style={{ fontSize: '10px', backgroundColor: theme.isDark ? '#2d2d2d' : '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>~/.librarian</code> — Global readings<br />
-              • <code style={{ fontSize: '10px', backgroundColor: theme.isDark ? '#2d2d2d' : '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>~/project/.librarian</code> — Project readings
-            </p>
-          )}
-        </div>
-
-        {/* Error display */}
-        {error && (
-          <p style={{
-            marginTop: '8px',
-            marginBottom: '0',
-            fontSize: '12px',
-            color: theme.error,
-          }}>
-            {error}
-          </p>
-        )}
-
-        {/* View readings note */}
-        {watchedDirs.length > 0 && (
-          <p style={{
-            marginTop: '12px',
-            marginBottom: '0',
-            fontSize: '12px',
-            color: theme.textSecondary,
-          }}>
-            View artifacts in the <strong>Librarian</strong> tab.
-          </p>
-        )}
-      </div>
-        </>
       )}
 
       {/* Cursor Instructions Modal */}
