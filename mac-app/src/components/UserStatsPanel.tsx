@@ -51,12 +51,29 @@ function formatNumber(n: number): string {
   return n.toLocaleString();
 }
 
+// Quota status for checking if at limit
+interface QuotaStatus {
+  used: number;
+  limit: number;
+  allowed: boolean;
+  percentUsed: number;
+}
+
+interface FullQuotas {
+  tier: 'free' | 'pro';
+  priorityMic: QuotaStatus;
+  autoStack: QuotaStatus;
+  textImprove: QuotaStatus;
+  verbalCommands: QuotaStatus;
+}
+
 export default function UserStatsPanel() {
   const { theme } = useTheme();
   const [data, setData] = useState<MetricsWithStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [tier, setTier] = useState<'free' | 'pro'>('free');
   const [limits, setLimits] = useState<QuotaLimits | null>(null);
+  const [quotas, setQuotas] = useState<FullQuotas | null>(null);
 
   // Load metrics and quota info on mount
   useEffect(() => {
@@ -70,10 +87,11 @@ export default function UserStatsPanel() {
       .catch(console.error)
       .finally(() => setLoading(false));
 
-    // Also fetch quota info for Pro indicators
-    window.quotaAPI?.getQuotas().then(quotas => {
-      if (quotas) {
-        setTier(quotas.tier);
+    // Fetch full quota info for tier and at-limit states
+    window.quotaAPI?.getQuotas().then(q => {
+      if (q) {
+        setTier(q.tier);
+        setQuotas(q as FullQuotas);
       }
     }).catch(console.error);
 
@@ -99,14 +117,20 @@ export default function UserStatsPanel() {
   const { metrics } = data;
 
   // Helper to format quota info for display
+  // Shows actual limit regardless of tier (Pro has limits on some features like text improvement)
   const formatQuota = (limit: number | undefined, unit: string) => {
-    if (tier === 'pro') return 'Unlimited';
-    if (limit === undefined || limit === Infinity) return 'Unlimited';
+    if (limit === undefined || limit === Infinity || limit >= Number.MAX_SAFE_INTEGER) return 'Unlimited';
     return `${limit.toLocaleString()}/${unit}`;
   };
 
+  // Check if a quota is at or over limit
+  const isAtQuota = (status: QuotaStatus | undefined) => {
+    if (!status) return false;
+    return !status.allowed || status.percentUsed >= 100;
+  };
+
   // Group metrics for display - compact format
-  // Items with quotaInfo show the limit for free users or "Unlimited" for pro
+  // Items with quotaInfo show the limit, atQuota shows red when at limit
   const sections = [
     {
       title: 'Transcription',
@@ -117,11 +141,13 @@ export default function UserStatsPanel() {
           label: 'Words improved',
           value: metrics.words_improved,
           quotaInfo: formatQuota(limits?.textImprovementWords, 'mo'),
+          atQuota: isAtQuota(quotas?.textImprove),
         },
         {
           label: 'Priority mic minutes',
           value: metrics.priority_mic_minutes,
           quotaInfo: formatQuota(limits?.priorityMicMinutes, 'mo'),
+          atQuota: isAtQuota(quotas?.priorityMic),
         },
       ],
     },
@@ -132,6 +158,7 @@ export default function UserStatsPanel() {
           label: 'Verbal commands',
           value: metrics.verbal_commands,
           quotaInfo: formatQuota(limits?.verbalCommands, 'mo'),
+          atQuota: isAtQuota(quotas?.verbalCommands),
         },
         { label: 'Command launcher uses', value: metrics.command_launcher_uses },
       ],
@@ -146,6 +173,7 @@ export default function UserStatsPanel() {
           label: 'Autostacks created',
           value: metrics.autostacks_created,
           quotaInfo: formatQuota(limits?.autoStackSessions, 'mo'),
+          atQuota: isAtQuota(quotas?.autoStack),
         },
         { label: 'Stacks pasted', value: metrics.stacks_pasted },
         { label: 'Items added to context', value: metrics.items_added_to_context },
@@ -249,15 +277,15 @@ export default function UserStatsPanel() {
                       <span style={{
                         marginLeft: '6px',
                         fontSize: '10px',
-                        color: tier === 'pro' ? theme.accent : theme.textSecondary,
-                        fontWeight: tier === 'pro' ? 500 : 400,
+                        color: item.atQuota ? theme.error : (tier === 'pro' ? theme.accent : theme.textSecondary),
+                        fontWeight: item.atQuota ? 600 : (tier === 'pro' ? 500 : 400),
                       }}>
-                        {item.quotaInfo}
+                        {item.atQuota ? 'Limit reached' : item.quotaInfo}
                       </span>
                     )}
                   </span>
                   <span style={{
-                    color: item.value > 0 ? theme.accent : theme.textSecondary,
+                    color: item.atQuota ? theme.error : (item.value > 0 ? theme.accent : theme.textSecondary),
                     fontWeight: 500,
                     fontVariantNumeric: 'tabular-nums'
                   }}>
