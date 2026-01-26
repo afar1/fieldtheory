@@ -265,9 +265,15 @@ export class TranscriberManager extends EventEmitter {
   /**
    * Re-register hotkeys after they've been unregistered (e.g., during onboarding).
    * Called by index.ts after onboarding completes.
+   * Re-reads hotkeys from preferences to pick up any changes (e.g., after user login).
    */
   reRegisterHotkeys(): void {
     console.log('[TranscriberManager] Re-registering hotkeys');
+
+    // Re-read hotkeys from preferences to pick up changes after user login
+    this.hotkey = this.preferences.getPreference('transcriptionHotkey');
+    this.secondaryHotkey = this.preferences.getPreference('transcriptionSecondaryHotkey') || null;
+
     this.registerHotkey(this.hotkey);
     if (this.secondaryHotkey) {
       this.registerSecondaryHotkey(this.secondaryHotkey);
@@ -1029,10 +1035,10 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Get the minimum word count for auto-improve.
-   * Default is 100 words.
+   * Default is 70 words.
    */
   getAutoImproveMinWords(): number {
-    return this.preferences.getPreference('autoImproveMinWords') ?? 100;
+    return this.preferences.getPreference('autoImproveMinWords') ?? 70;
   }
 
   // ---------------------------------------------------------------------------
