@@ -276,10 +276,19 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     }
   }, [manualPath, isScanning]);
 
+  // Check if any platform is connected (required for Librarian)
+  const anyPlatformConnected = stateEnforcedHookInstalled || cursorHookInstalled;
+
   // Handle enable toggle - controls both feature AND tab visibility
   const handleEnabledToggle = useCallback(async () => {
     if (!window.librarianAPI) return;
     const newValue = !enabled;
+
+    // Require at least one platform to be connected to enable
+    if (newValue && !anyPlatformConnected) {
+      return; // Don't allow enabling without a platform
+    }
+
     setEnabled(newValue);
     setClaudeConfigError(false);
     setSaved(false);
@@ -293,7 +302,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     }
-  }, [enabled, onLibrarianEnabledChange]);
+  }, [enabled, onLibrarianEnabledChange, anyPlatformConnected]);
 
   // Handle auto-show toggle
   const handleAutoShowToggle = useCallback(async () => {
@@ -354,23 +363,56 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
             <span style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
               Librarian
             </span>
-            <span
-              style={{
-                fontSize: '10px',
-                fontWeight: 500,
-                color: enabled ? '#22c55e' : theme.textSecondary,
-                backgroundColor: enabled
-                  ? (theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)')
-                  : (theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'),
-                padding: '2px 6px',
-                borderRadius: '4px',
-              }}
-            >
-              {enabled ? 'Active' : 'Off'}
-            </span>
+            {enabled && anyPlatformConnected ? (
+              <>
+                {stateEnforcedHookInstalled && (
+                  <span
+                    style={{
+                      fontSize: '10px',
+                      fontWeight: 500,
+                      color: theme.accent,
+                      backgroundColor: theme.isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.1)',
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                    }}
+                  >
+                    Claude Code
+                  </span>
+                )}
+                {cursorHookInstalled && (
+                  <span
+                    style={{
+                      fontSize: '10px',
+                      fontWeight: 500,
+                      color: theme.accent,
+                      backgroundColor: theme.isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.1)',
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                    }}
+                  >
+                    Cursor
+                  </span>
+                )}
+              </>
+            ) : (
+              <span
+                style={{
+                  fontSize: '10px',
+                  fontWeight: 500,
+                  color: theme.textSecondary,
+                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                }}
+              >
+                Off
+              </span>
+            )}
           </div>
           <button
             onClick={handleEnabledToggle}
+            disabled={!enabled && !anyPlatformConnected}
+            title={!enabled && !anyPlatformConnected ? 'Connect a platform first' : undefined}
             style={{
               position: 'relative',
               width: '44px',
@@ -378,12 +420,13 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
               height: '24px',
               minHeight: '24px',
               borderRadius: '12px',
-              cursor: 'pointer',
+              cursor: (!enabled && !anyPlatformConnected) ? 'not-allowed' : 'pointer',
               border: 'none',
               padding: 0,
               flexShrink: 0,
               transition: 'background-color 0.2s',
               backgroundColor: enabled ? theme.accent : '#d1d5db',
+              opacity: (!enabled && !anyPlatformConnected) ? 0.5 : 1,
             }}
           >
             <span
@@ -401,6 +444,137 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
               }}
             />
           </button>
+        </div>
+
+        {/* Platforms section - required for Librarian to function */}
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ marginBottom: '8px' }}>
+            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+              Platforms
+            </span>
+            <div style={{ fontSize: '10px', color: theme.textSecondary, marginTop: '2px' }}>
+              At least one must be connected for Librarian to work
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {/* Claude Code */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '8px 12px',
+                borderRadius: '6px',
+                backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>Claude Code</span>
+                {claudeCodeStatus === 'not-installed' ? (
+                  <span style={{ fontSize: '10px', color: theme.textSecondary, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)', borderRadius: '4px' }}>
+                    Not detected
+                  </span>
+                ) : stateEnforcedHookInstalled ? (
+                  <span style={{ fontSize: '10px', color: theme.success, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)', borderRadius: '4px' }}>
+                    Connected
+                  </span>
+                ) : (
+                  <span style={{ fontSize: '10px', color: theme.warning, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(234, 179, 8, 0.15)' : 'rgba(234, 179, 8, 0.1)', borderRadius: '4px' }}>
+                    Setup needed
+                  </span>
+                )}
+              </div>
+              {claudeCodeStatus !== 'not-installed' && (
+                <button
+                  onClick={async () => {
+                    setHookInstalling(true);
+                    try {
+                      if (stateEnforcedHookInstalled) {
+                        await window.librarianAPI?.uninstallStateEnforcedHook();
+                        setStateEnforcedHookInstalled(false);
+                      } else {
+                        const success = await window.librarianAPI?.installStateEnforcedHook();
+                        setStateEnforcedHookInstalled(success ?? false);
+                      }
+                    } finally {
+                      setHookInstalling(false);
+                    }
+                  }}
+                  disabled={hookInstalling}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: '11px',
+                    fontWeight: 500,
+                    color: stateEnforcedHookInstalled ? theme.textSecondary : '#fff',
+                    backgroundColor: stateEnforcedHookInstalled ? 'transparent' : theme.accent,
+                    border: stateEnforcedHookInstalled ? `1px solid ${theme.border}` : 'none',
+                    borderRadius: '4px',
+                    cursor: hookInstalling ? 'wait' : 'pointer',
+                    opacity: hookInstalling ? 0.5 : 1,
+                  }}
+                >
+                  {hookInstalling ? '...' : stateEnforcedHookInstalled ? 'Disconnect' : 'Connect'}
+                </button>
+              )}
+            </div>
+
+            {/* Cursor */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '8px 12px',
+                borderRadius: '6px',
+                backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>Cursor</span>
+                {cursorHookInstalled ? (
+                  <span style={{ fontSize: '10px', color: theme.success, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)', borderRadius: '4px' }}>
+                    Connected
+                  </span>
+                ) : (
+                  <span style={{ fontSize: '10px', color: theme.warning, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(234, 179, 8, 0.15)' : 'rgba(234, 179, 8, 0.1)', borderRadius: '4px' }}>
+                    Setup needed
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={async () => {
+                  setCursorHookInstalling(true);
+                  try {
+                    if (cursorHookInstalled) {
+                      await window.librarianAPI?.uninstallCursorHook();
+                      setCursorHookInstalled(false);
+                    } else {
+                      const success = await window.librarianAPI?.installCursorHook();
+                      setCursorHookInstalled(success ?? false);
+                    }
+                  } finally {
+                    setCursorHookInstalling(false);
+                  }
+                }}
+                disabled={cursorHookInstalling}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '11px',
+                  fontWeight: 500,
+                  color: cursorHookInstalled ? theme.textSecondary : '#fff',
+                  backgroundColor: cursorHookInstalled ? 'transparent' : theme.accent,
+                  border: cursorHookInstalled ? `1px solid ${theme.border}` : 'none',
+                  borderRadius: '4px',
+                  cursor: cursorHookInstalling ? 'wait' : 'pointer',
+                  opacity: cursorHookInstalling ? 0.5 : 1,
+                }}
+              >
+                {cursorHookInstalling ? '...' : cursorHookInstalled ? 'Disconnect' : 'Connect'}
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Auto-open on new artifact */}
@@ -589,134 +763,6 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                 </div>
               </div>
             )}
-
-        {/* Platforms section */}
-        {enabled && (
-          <div style={{ marginTop: '4px' }}>
-            <div style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '8px' }}>
-              Platforms
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {/* Claude Code */}
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-                  border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>Claude Code</span>
-                  {claudeCodeStatus === 'not-installed' ? (
-                    <span style={{ fontSize: '10px', color: theme.textSecondary, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)', borderRadius: '4px' }}>
-                      Not detected
-                    </span>
-                  ) : stateEnforcedHookInstalled ? (
-                    <span style={{ fontSize: '10px', color: theme.success, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)', borderRadius: '4px' }}>
-                      Connected
-                    </span>
-                  ) : (
-                    <span style={{ fontSize: '10px', color: theme.warning, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(234, 179, 8, 0.15)' : 'rgba(234, 179, 8, 0.1)', borderRadius: '4px' }}>
-                      Setup needed
-                    </span>
-                  )}
-                </div>
-                {claudeCodeStatus !== 'not-installed' && (
-                  <button
-                    onClick={async () => {
-                      setHookInstalling(true);
-                      try {
-                        if (stateEnforcedHookInstalled) {
-                          await window.librarianAPI?.uninstallStateEnforcedHook();
-                          setStateEnforcedHookInstalled(false);
-                        } else {
-                          const success = await window.librarianAPI?.installStateEnforcedHook();
-                          setStateEnforcedHookInstalled(success ?? false);
-                        }
-                      } finally {
-                        setHookInstalling(false);
-                      }
-                    }}
-                    disabled={hookInstalling}
-                    style={{
-                      padding: '4px 10px',
-                      fontSize: '11px',
-                      fontWeight: 500,
-                      color: stateEnforcedHookInstalled ? theme.textSecondary : '#fff',
-                      backgroundColor: stateEnforcedHookInstalled ? 'transparent' : theme.accent,
-                      border: stateEnforcedHookInstalled ? `1px solid ${theme.border}` : 'none',
-                      borderRadius: '4px',
-                      cursor: hookInstalling ? 'wait' : 'pointer',
-                      opacity: hookInstalling ? 0.5 : 1,
-                    }}
-                  >
-                    {hookInstalling ? '...' : stateEnforcedHookInstalled ? 'Disconnect' : 'Connect'}
-                  </button>
-                )}
-              </div>
-
-              {/* Cursor */}
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-                  border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>Cursor</span>
-                  {cursorHookInstalled ? (
-                    <span style={{ fontSize: '10px', color: theme.success, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)', borderRadius: '4px' }}>
-                      Connected
-                    </span>
-                  ) : (
-                    <span style={{ fontSize: '10px', color: theme.warning, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(234, 179, 8, 0.15)' : 'rgba(234, 179, 8, 0.1)', borderRadius: '4px' }}>
-                      Setup needed
-                    </span>
-                  )}
-                </div>
-                <button
-                  onClick={async () => {
-                    setCursorHookInstalling(true);
-                    try {
-                      if (cursorHookInstalled) {
-                        await window.librarianAPI?.uninstallCursorHook();
-                        setCursorHookInstalled(false);
-                      } else {
-                        const success = await window.librarianAPI?.installCursorHook();
-                        setCursorHookInstalled(success ?? false);
-                      }
-                    } finally {
-                      setCursorHookInstalling(false);
-                    }
-                  }}
-                  disabled={cursorHookInstalling}
-                  style={{
-                    padding: '4px 10px',
-                    fontSize: '11px',
-                    fontWeight: 500,
-                    color: cursorHookInstalled ? theme.textSecondary : '#fff',
-                    backgroundColor: cursorHookInstalled ? 'transparent' : theme.accent,
-                    border: cursorHookInstalled ? `1px solid ${theme.border}` : 'none',
-                    borderRadius: '4px',
-                    cursor: cursorHookInstalling ? 'wait' : 'pointer',
-                    opacity: cursorHookInstalling ? 0.5 : 1,
-                  }}
-                >
-                  {cursorHookInstalling ? '...' : cursorHookInstalled ? 'Disconnect' : 'Connect'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
 
         {claudeConfigError && (
           <p style={{ fontSize: '11px', color: theme.error, marginTop: '12px' }}>

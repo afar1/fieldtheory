@@ -336,11 +336,11 @@ export default function LibrarianSetupWizard({ onComplete }: LibrarianSetupWizar
         {!hasConnection && (
           <p style={{
             fontSize: '12px',
-            color: theme.textSecondary,
+            color: theme.warning,
             textAlign: 'center',
             marginBottom: '24px',
           }}>
-            Connect at least one platform to enable artifact creation.
+            Connect at least one platform to enable Librarian
           </p>
         )}
 

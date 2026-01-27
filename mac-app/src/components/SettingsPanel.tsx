@@ -56,7 +56,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'commands': 'Portable Commands',
   'sounds': 'Sounds',
   'stats': 'Stats',
-  'terminal-commands': 'Terminal Commands',
+  'terminal-commands': 'Claude Code',
 };
 
 // Alphabetically ordered sections for navigation
@@ -2079,10 +2079,10 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       </div>
       )}
 
-      {/* Terminal Commands Section */}
+      {/* Claude Code Section */}
       {selectedSection === 'terminal-commands' && (
       <div style={styles.section}>
-        <SectionHeader title="Terminal Commands" />
+        <SectionHeader title="Claude Code" />
         <ClaudeSettings />
       </div>
       )}
