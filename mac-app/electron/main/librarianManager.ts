@@ -2825,12 +2825,14 @@ exit 0
   }
 
   /**
-   * Ensure the central artifacts directory exists and is watched.
+   * Ensure the global artifacts directory exists and is watched.
+   * Uses GLOBAL path (same as hook.py) so artifacts auto-open.
    * This runs on startup so users don't need to configure anything.
    */
   private ensureCentralArtifactsDir(): void {
-    const centralDir = this.getCentralLibrarianDir();
-    const artifactsDir = path.join(centralDir, 'artifacts');
+    // Use global path - hooks write artifacts here, not per-user path
+    const globalLibrarianDir = path.join(os.homedir(), '.fieldtheory', 'librarian');
+    const artifactsDir = path.join(globalLibrarianDir, 'artifacts');
 
     // Create directory if it doesn't exist
     if (!fs.existsSync(artifactsDir)) {
@@ -3194,9 +3196,10 @@ if __name__ == "__main__":
 
       fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 
-      // 6. Auto-add artifacts directory to watched dirs so markdown files open in Field Theory
-      const artifactsDir = path.join(centralDir, 'artifacts');
-      this.addWatchedDir(artifactsDir);
+      // 6. Auto-add GLOBAL artifacts directory to watched dirs so markdown files open in Field Theory
+      // Use global path (same as hook.py writes to), not per-user path
+      const globalArtifactsDir = path.join(os.homedir(), '.fieldtheory', 'librarian', 'artifacts');
+      this.addWatchedDir(globalArtifactsDir);
 
       console.log('[LibrarianManager] Installed global state-enforced hooks (UserPromptSubmit + PreToolUse)');
       return true;
@@ -3295,10 +3298,11 @@ if __name__ == "__main__":
   }
 
   /**
-   * Get count of pending jobs (from central directory).
+   * Get count of pending jobs (from global directory where hooks write).
    */
   getPendingJobCount(): number {
-    const jobsDir = path.join(this.getCentralLibrarianDir(), 'jobs');
+    // Use GLOBAL path (same as hook.py writes to), not per-user path
+    const jobsDir = path.join(os.homedir(), '.fieldtheory', 'librarian', 'jobs');
 
     if (!fs.existsSync(jobsDir)) {
       return 0;
@@ -4047,9 +4051,10 @@ if __name__ == "__main__":
       // Write updated Cursor config
       fs.writeFileSync(cursorConfigPath, JSON.stringify(cursorConfig, null, 2));
 
-      // 7. Auto-add artifacts directory to watched dirs
-      const artifactsDir = path.join(centralDir, 'artifacts');
-      this.addWatchedDir(artifactsDir);
+      // 7. Auto-add GLOBAL artifacts directory to watched dirs
+      // Use global path (same as hook.py writes to), not per-user path
+      const globalArtifactsDir = path.join(os.homedir(), '.fieldtheory', 'librarian', 'artifacts');
+      this.addWatchedDir(globalArtifactsDir);
 
       // 8. Add librarian paths to Cursor's permissions allow list
       const cursorCliConfigPath = path.join(os.homedir(), '.cursor', 'cli-config.json');

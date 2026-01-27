@@ -169,49 +169,35 @@ export default function ClaudeSettings() {
     dev: 'Dev',
   };
 
-  // Field Theory-specific permission toggles (figuresPath loaded dynamically from main process)
-  const fieldTheoryToggles = [
-    {
-      id: 'read-commands',
-      label: 'Allow reading command files',
-      description: 'Let Claude read .cursor/commands/ files',
-      permission: 'Read(.cursor/commands/*)',
-    },
-    ...(figuresPath ? [{
-      id: 'read-figures',
-      label: 'Allow reading screenshots',
-      description: 'Let Claude read Field Theory screenshot figures',
-      permission: `Read(${figuresPath}/*)`,
-    }] : []),
-    {
-      id: 'git-diff',
-      label: 'Allow git diff',
-      description: 'Let Claude run git diff commands',
-      permission: 'Bash(git diff *)',
-    },
+  // Field Theory permissions - all granted together
+  const fieldTheoryPermissions = [
+    'Read(.cursor/commands/*)',
+    ...(figuresPath ? [`Read(${figuresPath}/*)`] : []),
+    'Bash(git diff *)',
   ];
 
-  const isPermissionEnabled = (permission: string) => {
-    return status?.allClaudePermissions.includes(permission) ?? false;
-  };
+  // Check if all Field Theory permissions are granted
+  const allPermissionsGranted = fieldTheoryPermissions.every(
+    perm => status?.allClaudePermissions.includes(perm)
+  );
 
-  const handleTogglePermission = async (permission: string, enabled: boolean) => {
+  const handleToggleAllPermissions = async () => {
     if (!window.claudeAPI || applying) return;
 
     setApplying(true);
     setError(null);
 
     try {
-      const success = enabled
-        ? await window.claudeAPI.addPermissions([permission])
-        : await window.claudeAPI.removePermissions([permission]);
+      const success = allPermissionsGranted
+        ? await window.claudeAPI.removePermissions(fieldTheoryPermissions)
+        : await window.claudeAPI.addPermissions(fieldTheoryPermissions);
       if (success) {
         await loadData();
       } else {
-        setError(`Failed to ${enabled ? 'add' : 'remove'} permission`);
+        setError(`Failed to ${allPermissionsGranted ? 'remove' : 'add'} permissions`);
       }
     } catch (err) {
-      console.error('Failed to toggle permission:', err);
+      console.error('Failed to toggle permissions:', err);
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setApplying(false);
@@ -220,7 +206,7 @@ export default function ClaudeSettings() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      {/* Field Theory Permissions - Simple Toggles */}
+      {/* Field Theory Permissions - Single Connect/Disconnect */}
       <div
         style={{
           padding: '16px',
@@ -229,66 +215,64 @@ export default function ClaudeSettings() {
           border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
         }}
       >
-        <div style={{ marginBottom: '12px' }}>
-          <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
-            Field Theory Permissions
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
+              Read Access
+            </span>
+            {allPermissionsGranted ? (
+              <span style={{
+                fontSize: '10px',
+                color: theme.success,
+                padding: '2px 6px',
+                backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)',
+                borderRadius: '4px',
+              }}>
+                Connected
+              </span>
+            ) : (
+              <span style={{
+                fontSize: '10px',
+                color: theme.warning,
+                padding: '2px 6px',
+                backgroundColor: theme.isDark ? 'rgba(234, 179, 8, 0.15)' : 'rgba(234, 179, 8, 0.1)',
+                borderRadius: '4px',
+              }}>
+                Setup needed
+              </span>
+            )}
           </div>
-          <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '4px' }}>
-            Quick toggles for common Field Theory workflows
-          </div>
+          <button
+            onClick={handleToggleAllPermissions}
+            disabled={applying}
+            style={{
+              padding: '4px 10px',
+              fontSize: '11px',
+              fontWeight: 500,
+              color: theme.text,
+              backgroundColor: 'transparent',
+              border: `1px solid ${theme.border}`,
+              borderRadius: '4px',
+              cursor: applying ? 'wait' : 'pointer',
+              opacity: applying ? 0.5 : 1,
+            }}
+          >
+            {applying ? '...' : allPermissionsGranted ? 'Disconnect' : 'Connect'}
+          </button>
         </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {fieldTheoryToggles.map((toggle) => {
-            const enabled = isPermissionEnabled(toggle.permission);
-            return (
-              <div
-                key={toggle.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '10px 12px',
-                  borderRadius: '6px',
-                  backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-                  border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-                }}
-              >
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
-                    {toggle.label}
-                  </div>
-                  <div style={{ fontSize: '10px', color: theme.textSecondary, marginTop: '2px' }}>
-                    {toggle.description}
-                  </div>
-                </div>
-                <button
-                  onClick={() => handleTogglePermission(toggle.permission, !enabled)}
-                  disabled={applying}
-                  style={{
-                    width: '24px',
-                    height: '24px',
-                    borderRadius: '4px',
-                    border: `1px solid ${enabled ? theme.accent : theme.border}`,
-                    backgroundColor: enabled ? theme.accent : 'transparent',
-                    cursor: applying ? 'wait' : 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '14px',
-                    color: enabled ? '#fff' : theme.textSecondary,
-                    transition: 'all 0.15s ease',
-                  }}
-                >
-                  {enabled ? '✓' : ''}
-                </button>
-              </div>
-            );
-          })}
+        <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '8px' }}>
+          Let Claude Code read screenshots and portable commands (does not affect Librarian)
         </div>
       </div>
 
-      {/* Terminal Command Allowlist - Single Unified Section */}
+      {/* Terminal Command Allowlist - Hidden until ready */}
+      {false && (
       <div
         style={{
           padding: '16px',
@@ -561,16 +545,16 @@ export default function ClaudeSettings() {
           </p>
         )}
       </div>
+      )}
 
       {/* Info Footer */}
       <p style={{ fontSize: '10px', color: theme.textSecondary, lineHeight: '1.5', margin: 0 }}>
-        Permissions are stored in <code style={{
+        Stored in <code style={{
           fontSize: '9px',
           backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
           padding: '1px 4px',
           borderRadius: '3px'
-        }}>~/.claude/settings.json</code>.
-        Field Theory tracks what it adds and only removes its own permissions.
+        }}>~/.claude/settings.json</code>. Librarian write permissions are configured separately per-project.
       </p>
     </div>
   );
