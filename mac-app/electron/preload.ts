@@ -2459,10 +2459,6 @@ const librarianAPI = {
   getUserExpertiseContext: (): Promise<string | undefined> => ipcRenderer.invoke('librarian:getUserExpertiseContext'),
   setUserExpertiseContext: (context: string | undefined): Promise<boolean> => ipcRenderer.invoke('librarian:setUserExpertiseContext', context),
 
-  // Expertise insert mode (admin-only)
-  getExpertiseInsertMode: (): Promise<string> => ipcRenderer.invoke('librarian:getExpertiseInsertMode'),
-  setExpertiseInsertMode: (mode: string): Promise<boolean> => ipcRenderer.invoke('librarian:setExpertiseInsertMode', mode),
-
   // ===========================================================================
   // Legacy Settings API (kept for backward compatibility)
   // ===========================================================================

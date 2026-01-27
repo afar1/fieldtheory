@@ -73,7 +73,6 @@ interface LibrarianSettings {
   discoveryFrequency?: DiscoveryFrequency;  // Controls discovery timing (default: 'sometimes')
   // User expertise context
   userExpertiseContext?: string;       // User's background/interests (max 400 chars)
-  expertiseInsertMode?: 'insert' | 'append';  // How expertise is included in prompt (admin-only)
   // Legacy fields (kept for migration only)
   autoRunFrequency?: AutoRunFrequency; // @deprecated
   triggerMode?: string;                // @deprecated - always state-enforced now
@@ -309,7 +308,6 @@ export class LibrarianManager extends EventEmitter {
           // Discovery and expertise settings
           discoveryFrequency: data.discoveryFrequency,
           userExpertiseContext: data.userExpertiseContext,
-          expertiseInsertMode: data.expertiseInsertMode,
         };
       }
     } catch (error) {
@@ -1192,26 +1190,7 @@ export class LibrarianManager extends EventEmitter {
   }
 
   /**
-   * Get the expertise insert mode (admin-only setting).
-   */
-  getExpertiseInsertMode(): 'insert' | 'append' {
-    return this.settings.expertiseInsertMode || 'append';
-  }
-
-  /**
-   * Set the expertise insert mode (admin-only).
-   */
-  setExpertiseInsertMode(mode: 'insert' | 'append'): boolean {
-    // Note: Admin check is handled at UI level via authAPI.isSuperAdmin()
-    this.settings.expertiseInsertMode = mode;
-    this.saveSettings();
-    this.syncToGlobalConfig(false);
-    console.log(`[LibrarianManager] Expertise insert mode set to: ${mode}`);
-    return true;
-  }
-
-  /**
-   * Get the effective rule content with user expertise included.
+   * Get the effective rule content with user expertise appended.
    */
   getEffectiveRuleContent(): string {
     const baseRule = this.settings.stateEnforcedRuleContent || this.DEFAULT_RULE_CONTENT;
@@ -1221,12 +1200,7 @@ export class LibrarianManager extends EventEmitter {
       return baseRule;
     }
 
-    const mode = this.settings.expertiseInsertMode || 'append';
-    if (mode === 'insert') {
-      return `The reader: ${expertise}\n\n${baseRule}`;
-    } else {
-      return `${baseRule}\n\nContext about the reader: ${expertise}`;
-    }
+    return `${baseRule}\n\nContext about the reader: ${expertise}`;
   }
 
   /**
@@ -2878,7 +2852,7 @@ exit 0
    * eliminating permission prompts for artifact creation.
    */
   private generatePreToolUseHookScript(): string {
-    const centralDir = this.getCentralLibrarianDir();
+    // Use global path (same as hook.py) - NOT per-user path
     return `#!/usr/bin/env python3
 """
 PreToolUse Auto-Approve Hook for Field Theory Librarian
@@ -2897,12 +2871,12 @@ def main():
     tool_name = input_data.get("tool_name", "")
     tool_input = input_data.get("tool_input", {})
 
-    # Auto-approve reads/writes to central Field Theory directory
+    # Auto-approve reads/writes to global librarian directory (where hooks write artifacts/jobs)
     if tool_name in ("Read", "Write", "Edit"):
         file_path = tool_input.get("file_path", "")
-        fieldtheory_dir = "${centralDir}"
+        global_librarian_dir = str(Path.home() / ".fieldtheory" / "librarian")
 
-        if file_path.startswith(fieldtheory_dir):
+        if file_path.startswith(global_librarian_dir):
             print(json.dumps({
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",

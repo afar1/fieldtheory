@@ -957,8 +957,6 @@ interface LibrarianAPI {
   // User Expertise API
   getUserExpertiseContext: () => Promise<string | undefined>;
   setUserExpertiseContext: (context: string | undefined) => Promise<boolean>;
-  getExpertiseInsertMode: () => Promise<string>;
-  setExpertiseInsertMode: (mode: string) => Promise<boolean>;
   // Legacy Settings API (deprecated)
   getAutoRunFrequency: () => Promise<string>;
   setAutoRunFrequency: (frequency: string) => Promise<boolean>;

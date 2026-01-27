@@ -1311,19 +1311,6 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager?.setUserExpertiseContext(context) ?? false;
   });
 
-  // Get expertise insert mode (admin-only setting)
-  ipcMain.handle('librarian:getExpertiseInsertMode', (): string => {
-    return librarianManager?.getExpertiseInsertMode() ?? 'append';
-  });
-
-  // Set expertise insert mode (admin-only)
-  ipcMain.handle('librarian:setExpertiseInsertMode', (_event, mode: string): boolean => {
-    if (librarianManager && (mode === 'insert' || mode === 'append')) {
-      return librarianManager.setExpertiseInsertMode(mode);
-    }
-    return false;
-  });
-
   // ===========================================================================
   // Legacy Settings API (kept for backward compatibility)
   // ===========================================================================
