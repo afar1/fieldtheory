@@ -54,14 +54,10 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   // Discovery frequency (often/sometimes/rarely)
   const [discoveryFrequency, setDiscoveryFrequency] = useState<'often' | 'sometimes' | 'rarely'>('sometimes');
 
-  // Admin check
-  const [isAdmin, setIsAdmin] = useState(false);
-
   // User expertise context
   const [userExpertiseContext, setUserExpertiseContext] = useState<string>('');
   const [expertiseText, setExpertiseText] = useState('');
   const [expertiseSaved, setExpertiseSaved] = useState(false);
-  const [expertiseInsertMode, setExpertiseInsertMode] = useState<'insert' | 'append'>('append');
 
 
   // Auto-show on new reading
@@ -125,12 +121,10 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       window.librarianAPI.getCustomRuleContent(),
       // Discovery frequency & expertise settings
       window.librarianAPI.getDiscoveryFrequency(),
-      window.authAPI?.isSuperAdmin() ?? Promise.resolve(false),
       window.librarianAPI.getUserExpertiseContext(),
-      window.librarianAPI.getExpertiseInsertMode(),
       window.librarianAPI.getResumeAfterClose(),
     ])
-      .then(([dirs, readingsList, isEnabled, autoShow, ccStatus, seThreshold, defaultRule, customRule, discFreq, adminStatus, expertiseCtx, insertMode, resumeClose]) => {
+      .then(([dirs, readingsList, isEnabled, autoShow, ccStatus, seThreshold, defaultRule, customRule, discFreq, expertiseCtx, resumeClose]) => {
         setWatchedDirs(dirs);
         setReadings(readingsList);
         setEnabled(isEnabled);
@@ -146,12 +140,10 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         setCustomRuleContent(customRule);
         setRuleContentText(customRule || defaultRule);
         setIsUsingCustomRule(!!customRule);
-        // Discovery frequency & admin/expertise settings
+        // Discovery frequency & expertise settings
         setDiscoveryFrequency(discFreq as 'often' | 'sometimes' | 'rarely');
-        setIsAdmin(adminStatus);
         setUserExpertiseContext(expertiseCtx || '');
         setExpertiseText(expertiseCtx || '');
-        setExpertiseInsertMode(insertMode as 'insert' | 'append');
         setResumeAfterClose(resumeClose);
         setLoading(false);
       })
@@ -592,36 +584,6 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                       >
                         Clear
                       </button>
-                    )}
-                    {/* Admin-only: Insert mode toggle */}
-                    {isAdmin && userExpertiseContext && (
-                      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span style={{ fontSize: '10px', color: theme.textSecondary }}>Mode:</span>
-                        <div style={{ display: 'flex', gap: '0', borderRadius: '4px', overflow: 'hidden', border: `1px solid ${theme.border}` }}>
-                          {(['insert', 'append'] as const).map((mode) => (
-                            <button
-                              key={mode}
-                              onClick={async () => {
-                                setExpertiseInsertMode(mode);
-                                await window.librarianAPI?.setExpertiseInsertMode(mode);
-                              }}
-                              style={{
-                                padding: '2px 8px',
-                                fontSize: '10px',
-                                fontWeight: expertiseInsertMode === mode ? 600 : 400,
-                                color: expertiseInsertMode === mode ? '#fff' : theme.textSecondary,
-                                backgroundColor: expertiseInsertMode === mode ? theme.accent : 'transparent',
-                                border: 'none',
-                                borderRight: mode === 'insert' ? `1px solid ${theme.border}` : 'none',
-                                cursor: 'pointer',
-                                textTransform: 'capitalize',
-                              }}
-                            >
-                              {mode}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
                     )}
                   </div>
                 </div>
