@@ -40,6 +40,7 @@ const IDE_WITH_TERMINAL_BUNDLE_IDS = new Set([
   'com.microsoft.VSCodeInsiders',  // VS Code Insiders
   'dev.zed.Zed',                   // Zed
   'dev.zed.Zed-Preview',           // Zed Preview
+  'com.anthropic.claudefordesktop', // Claude (Claude Code needs text paths)
 ]);
 
 /**
