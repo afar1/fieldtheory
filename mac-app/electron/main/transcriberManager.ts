@@ -635,9 +635,9 @@ export class TranscriberManager extends EventEmitter {
       if (this.commandsManager) {
         const commandDetection = this.commandsManager.detectCommands(cleanedText);
         if (commandDetection.detected) {
-          // Insert [cmd:name.md] references at the end of the text
+          // Insert [cmd:name.md] references at the end of the cleaned text (trigger phrases removed)
           cleanedText = this.commandsManager.insertCommandReferences(
-            cleanedText,
+            commandDetection.textWithoutCommandRefs,
             commandDetection.matchedCommands
           );
           // Store detected commands for terminal formatting later
@@ -750,6 +750,20 @@ export class TranscriberManager extends EventEmitter {
 
             if (result.success && result.refinedPrompt) {
               improvedText = result.refinedPrompt;
+
+              // Re-insert command references if they were stripped by the LLM.
+              // The system prompt asks to preserve them, but LLMs sometimes drop them anyway.
+              // We store detected commands separately, so we can ensure they're present.
+              if (this.detectedCommands.length > 0) {
+                for (const cmd of this.detectedCommands) {
+                  const ref = `[cmd:${cmd.name}.md]`;
+                  if (!improvedText.includes(ref)) {
+                    console.log(`[TranscriberManager] Re-inserting stripped command reference: ${ref}`);
+                    improvedText += ` ${ref}`;
+                  }
+                }
+              }
+
               finalText = improvedText;
               console.log('[TranscriberManager] Transcript improved successfully');
 
