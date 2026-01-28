@@ -10,7 +10,7 @@
  * to this manager's events instead of managing their own auth state.
  */
 
-import { createClient, SupabaseClient, Session, SupportedStorage } from '@supabase/supabase-js';
+import { createClient, SupabaseClient, Session, SupportedStorage, processLock } from '@supabase/supabase-js';
 import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import fs from 'fs';
@@ -156,6 +156,11 @@ export class AuthManager extends EventEmitter {
   private simulateRevoked: boolean = false;
   private lastEmittedUserId: string | null = null;  // Dedupe sessionChanged events
 
+  // Mutex to prevent concurrent refresh attempts.
+  // Even with processLock in Supabase config, we add app-level protection
+  // to ensure only one refresh operation runs at a time.
+  private refreshInProgress: Promise<void> | null = null;
+
   constructor() {
     super();
   }
@@ -210,6 +215,10 @@ export class AuthManager extends EventEmitter {
         autoRefreshToken: true,  // SDK handles token refresh automatically
         persistSession: true,
         detectSessionInUrl: false,
+        // CRITICAL: Use processLock to prevent concurrent refresh token attempts.
+        // Without this, multiple callers (SDK auto-refresh, setSession, restoreSessionFromStorage)
+        // can race and use the same refresh token, causing "refresh_token_already_used" errors.
+        lock: processLock,
       },
       realtime: {
         transport: WebSocket as any,
@@ -312,47 +321,79 @@ export class AuthManager extends EventEmitter {
           accessTokenExpiredAgo: `${expiredAgoMinutes} minutes`,
         });
 
-        console.log('[AuthManager] Attempting manual refresh with stored refresh_token...');
+        // Use coordinated refresh to prevent concurrent attempts
+        await this.coordinatedRefresh(rawSession.refresh_token, 'restore');
+      } else {
+        console.log('[AuthManager] No stored session found - user must login');
+      }
+    } catch (err) {
+      console.warn('[AuthManager] Failed to restore session:', err);
+    }
+  }
 
-        const { data: refreshData, error: refreshError } = await this.supabase.auth.refreshSession({
-          refresh_token: rawSession.refresh_token,
-        });
+  /**
+   * Coordinated refresh - ensures only one refresh happens at a time.
+   * Multiple callers will wait for the same refresh to complete.
+   */
+  private async coordinatedRefresh(refreshToken: string, source: string): Promise<boolean> {
+    // If a refresh is already in progress, wait for it
+    if (this.refreshInProgress) {
+      console.log(`[AuthManager] Refresh already in progress, ${source} waiting...`);
+      await this.refreshInProgress;
+      // After waiting, check if we now have a session
+      return !!this.session;
+    }
 
-        if (refreshError) {
-          if (this.isTokenRevoked(refreshError)) {
-            console.log('[AuthManager] Refresh token revoked, user must re-login');
-            // Don't emit sessionChanged here - they weren't logged in yet
-          } else {
-            // Network error - SDK will retry automatically via autoRefreshToken
-            console.log('[AuthManager] Network error during restore, SDK will retry:', refreshError.message);
-          }
-          return;
-        }
+    // Start a new refresh operation
+    console.log(`[AuthManager] Starting coordinated refresh from ${source}...`);
 
-        if (refreshData.session) {
-          this.session = refreshData.session;
-          const userId = refreshData.session.user?.id ?? null;
+    // Create a promise that other callers can wait on
+    let resolveRefresh: () => void;
+    this.refreshInProgress = new Promise<void>((resolve) => {
+      resolveRefresh = resolve;
+    });
 
-          // Only emit userChanged if onAuthStateChange hasn't already done so
-          const shouldEmitUserChanged = userId !== this.lastEmittedUserId;
-          this.lastEmittedUserId = userId;
+    try {
+      const { data: refreshData, error: refreshError } = await this.supabase!.auth.refreshSession({
+        refresh_token: refreshToken,
+      });
 
-          // Coordinate with UserDataManager - use user ID for per-user directories
-          if (shouldEmitUserChanged && userId && this.userDataManager) {
-            await this.userDataManager.setCurrentUser(userId);
-            await this.userDataManager.migrateExistingData(userId);
-            this.emit('userChanged', userId);
-          }
-
-          console.log('[AuthManager] Manual refresh succeeded for user:', refreshData.session.user?.email, userId ? `(${userId})` : '', shouldEmitUserChanged ? '(new)' : '(already emitted)');
-          this.emit('sessionChanged', this.session);
-          return;
+      if (refreshError) {
+        if (this.isTokenRevoked(refreshError)) {
+          console.log(`[AuthManager] Refresh token revoked (${source}), user must re-login`);
+          return false;
+        } else {
+          // Network error - SDK will retry automatically via autoRefreshToken
+          console.log(`[AuthManager] Network error during ${source} refresh, SDK will retry:`, refreshError.message);
+          return false;
         }
       }
 
-      console.log('[AuthManager] No stored session found - user must login');
-    } catch (err) {
-      console.warn('[AuthManager] Failed to restore session:', err);
+      if (refreshData.session) {
+        this.session = refreshData.session;
+        const userId = refreshData.session.user?.id ?? null;
+
+        // Only emit userChanged if onAuthStateChange hasn't already done so
+        const shouldEmitUserChanged = userId !== this.lastEmittedUserId;
+        this.lastEmittedUserId = userId;
+
+        // Coordinate with UserDataManager - use user ID for per-user directories
+        if (shouldEmitUserChanged && userId && this.userDataManager) {
+          await this.userDataManager.setCurrentUser(userId);
+          await this.userDataManager.migrateExistingData(userId);
+          this.emit('userChanged', userId);
+        }
+
+        console.log(`[AuthManager] Refresh succeeded (${source}) for user:`, refreshData.session.user?.email, userId ? `(${userId})` : '', shouldEmitUserChanged ? '(new)' : '(already emitted)');
+        this.emit('sessionChanged', this.session);
+        return true;
+      }
+
+      return false;
+    } finally {
+      // Always clear the in-progress flag
+      this.refreshInProgress = null;
+      resolveRefresh!();
     }
   }
 
@@ -375,32 +416,25 @@ export class AuthManager extends EventEmitter {
     });
 
     if (error) {
-      console.log('[AuthManager] Access token expired, attempting refresh...');
+      console.log('[AuthManager] Access token expired, attempting coordinated refresh...');
 
-      const refreshResult = await this.supabase.auth.refreshSession({ refresh_token: refreshToken });
+      // Use coordinated refresh to prevent concurrent attempts with restoreSessionFromStorage
+      // or SDK auto-refresh
+      const success = await this.coordinatedRefresh(refreshToken, 'setSession');
 
-      if (refreshResult.error || !refreshResult.data.session) {
-        if (this.isTokenRevoked(refreshResult.error)) {
+      if (!success) {
+        if (this.isTokenRevoked({ message: 'refresh failed' })) {
           this.lastFailedToken = accessToken;
-          console.log('[AuthManager] Token revoked:', refreshResult.error?.message);
           this.clearSession();
-          return;
         }
-
-        // Network error - SDK will retry automatically via autoRefreshToken
-        console.log('[AuthManager] Network error during refresh, SDK will retry:', refreshResult.error?.message);
         return;
       }
-
-      console.log('[AuthManager] Session refreshed for user:', refreshResult.data.session.user?.email);
-      this.session = refreshResult.data.session;
     } else {
       this.lastFailedToken = null;
       this.session = data.session;
+      this.hasEverAuthenticated = true;
+      this.emit('sessionChanged', this.session);
     }
-
-    this.hasEverAuthenticated = true;
-    this.emit('sessionChanged', this.session);
   }
 
   /**
