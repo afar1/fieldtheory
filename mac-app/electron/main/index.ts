@@ -4232,6 +4232,8 @@ function setupClipboardIPCHandlers(): void {
       const isTerminal = targetApp ? isTerminalApp(targetApp.bundleId) : false;
       const isIDE = targetApp ? isIDEWithTerminal(targetApp.bundleId) : false;
 
+      console.log(`[CommandLauncher] Target app: ${targetApp?.name} (${targetApp?.bundleId}), isTerminal: ${isTerminal}, isIDE: ${isIDE}`);
+
       // Use text-based file path for terminals and IDEs with integrated terminals.
       // IDEs like Cursor/VS Code work better with file paths that can be used in their terminals.
       if (isTerminal || isIDE) {
@@ -4239,12 +4241,14 @@ function setupClipboardIPCHandlers(): void {
         const referenceText = `[run this command: ${command.name}.md]\n${command.filePath}`;
         clipboard.writeText(referenceText);
         clipboardManager?.syncClipboardHash();
+        console.log(`[CommandLauncher] Using TEXT paste mode for ${targetApp?.name}: "${referenceText}"`);
       } else {
         // For other apps: paste the .md file as an attachment.
         const filePaths = [command.filePath];
         const plistData = plist.build(filePaths);
         clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
         clipboardManager?.syncClipboardHash();
+        console.log(`[CommandLauncher] Using FILE ATTACHMENT paste mode for ${targetApp?.name}: ${command.filePath}`);
       }
 
       // Refocus the previous app and paste.
