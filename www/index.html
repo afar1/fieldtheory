@@ -73,7 +73,7 @@
       <!-- Feature 1: Local Transcription -->
       <article class="feature">
         <div class="feature-content">
-          <h2>Make your existing commands portable</h2>
+          <h2>Make your existing Cursor commands portable</h2>
           <p class="feature-problem">
             Add the directory of your current Cursor commands to make them instantly portable to all other applications.
           </p>
@@ -84,181 +84,211 @@
         </div>
         <div class="feature-visual">
 ┌─────────────────────────────────────────────────┐
-│  whisper.local                                  │
+│  .cursor/commands/                              │
 │                                                 │
-│  ┌─────────────────────────────────────────┐    │
-│  │  🎤 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   │    │
-│  └─────────────────────────────────────────┘    │
+│  ├── commit.md                                  │
+│  ├── review.md                                  │
+│  ├── test.md                                    │
+│  └── deploy.md                                  │
 │                                                 │
-│  → Audio captured                               │
-│  → Processed on-device                          │
-│  → Text stored locally                          │
+│          ↓  Field Theory                        │
 │                                                 │
 │  ════════════════════════════════════════════   │
-│  <span class="highlight">✓ Never leaves your Mac</span>                        │
-│  <span class="highlight">✓ No API costs</span>                                 │
+│  <span class="highlight">→ Available in Claude Code</span>                     │
+│  <span class="highlight">→ Available in ChatGPT</span>                         │
+│  <span class="highlight">→ Available in any text field</span>                  │
 └─────────────────────────────────────────────────┘</div>
       </article>
 
       <hr class="dotted-line">
 
-      <!-- Feature 2: Clipboard History -->
+      <!-- Feature: Priority Mic -->
       <article class="feature reversed">
         <div class="feature-content">
-          <h2>Auto-improve your prompts clean up context</h2>
+          <h2>Priority Mic</h2>
           <p class="feature-problem">
-            Think outloud and Field Theory will automatically tidy long-form prompts and context.
+            Designate your preferred microphone and Field Theory will always use it, even when macOS switches defaults.
           </p>
           <p class="feature-description">
-            lipsum
+            Plug in a USB mic or connect AirPods and macOS changes your default input. Field Theory ignores that. Your priority mic stays locked until you say otherwise.
           </p>
         </div>
         <div class="feature-visual">
 ┌─────────────────────────────────────────────────┐
-│  ⌘ + Shift + V                                  │
+│  audio inputs                                   │
 │                                                 │
-│  ┌─────────────────────────────────────────┐    │
-│  │  🔍 search clipboard...                 │    │
-│  └─────────────────────────────────────────┘    │
-│                                                 │
-│  001: https://example.com/api/v2...             │
-│  002: const data = await fetch(...              │
-│  003: "Fix the auth bug where..."               │
-│  004: Meeting notes from Tuesday                │
-│  005: SELECT * FROM users WHERE...              │
+│  ○  MacBook Pro Microphone                      │
+│  ○  AirPods Pro                                 │
+│  <span class="highlight">●  Shure MV7  ← priority</span>                       │
+│  ○  FaceTime HD Camera                          │
 │                                                 │
 │  ════════════════════════════════════════════   │
-│  <span class="highlight">↑↓ Navigate   ⏎ Paste   ⌘F Search</span>            │
+│  macOS default changed → ignored                │
+│  <span class="highlight">✓ Always uses your priority mic</span>                │
 └─────────────────────────────────────────────────┘</div>
       </article>
 
       <hr class="dotted-line">
 
-      <!-- Feature 3: Input Stacking -->
+      <!-- Feature 2: Auto-improved context -->
       <article class="feature">
         <div class="feature-content">
-          <h2>Draw and paste</h2>
+          <h2>Auto-improved context</h2>
           <p class="feature-problem">
-            Copy paste but for drawing. Freehand or draw on any screenshot to make it instantly stackable or pastable.
+            Think outloud and Field Theory will gently tidy long-form prompts and associate screenshots and commands with your prompt.
           </p>
           <p class="feature-description">
-            Lipsum
+            Humans think in abstract and concrete terms. Foundation models do better work when prompts are concrete, user questions are explicit, and reference material (like screenshots or commands) are properly embedded or labeled. 
           </p>
         </div>
         <div class="feature-visual">
 ┌─────────────────────────────────────────────────┐
-│  ⌘ + ⌥ + Space  (stacking mode)                 │
-│                                                 │
+│  before                                         │
 │  ┌─────────────────────────────────────────┐    │
-│  │  [1] 📷 screenshot.png                  │    │
-│  │  [2] 📝 error_log.txt                   │    │
-│  │  [3] 🎤 "Fix this bug, the issue is..." │    │
-│  │  [4] 📷 code_snippet.png                │    │
+│  │  "um so like the thing is broken, the   │    │
+│  │   auth I think? maybe check the token   │    │
+│  │   refresh stuff or whatever"            │    │
 │  └─────────────────────────────────────────┘    │
-│                                                 │
+│          ↓  improve                             │
+│  ┌─────────────────────────────────────────┐    │
+│  │  "The authentication flow is failing.   │    │
+│  │   Investigate the token refresh logic   │    │
+│  │   in the auth module."                  │    │
+│  └─────────────────────────────────────────┘    │
+│  after                                          │
 │  ════════════════════════════════════════════   │
-│  <span class="highlight">→ Combined prompt ready</span>                        │
-│  <span class="highlight">→ Paste to Cursor</span>                              │
+│  <span class="highlight">+ 2 screenshots attached</span>                       │
+│  <span class="highlight">+ /review command embedded</span>                      │
 └─────────────────────────────────────────────────┘</div>
       </article>
 
       <hr class="dotted-line">
 
-      <!-- Feature 4: Hot Mic -->
-      <article class="feature reversed">
-        <div class="feature-content">
-          <h2>Hot Mic</h2>
-          <p class="feature-problem">
-            Push-to-talk is one more thing to remember. You just want to think out loud.
-          </p>
-          <p class="feature-description">
-            Enable Hot Mic and Field Theory listens continuously, 
-            transcribing your thoughts as you work. Infinite voice history, 
-            searchable anytime. Every idea captured.
-          </p>
-        </div>
-        <div class="feature-visual">
-┌─────────────────────────────────────────────────┐
-│  hot_mic: <span class="highlight">● LIVE</span>                                │
-│                                                 │
-│  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   │
-│                                                 │
-│  14:32  "need to refactor the auth..."          │
-│  14:35  "maybe use a custom hook for..."        │
-│  14:38  "actually wait, the problem is"         │
-│  14:41  "the state isn't persisting..."         │
-│  14:44  "got it, need useRef instead"           │
-│                                                 │
-│  ════════════════════════════════════════════   │
-│  <span class="highlight">∞ Infinite history</span>                             │
-│  <span class="highlight">🔍 Searchable anytime</span>                          │
-└─────────────────────────────────────────────────┘</div>
-      </article>
-
-      <hr class="dotted-line">
-
-      <!-- Feature 5: Mac ↔ iPhone Sync -->
+      <!-- Feature 3: Drawing -->
       <article class="feature">
         <div class="feature-content">
-          <h2>Mac ↔ iPhone Sync</h2>
+          <h2> Copy/paste but for drawing.</h2>
           <p class="feature-problem">
-            Voice notes on your phone. Work on your Mac. No easy way to connect them.
+            Freehand a sketch or draw on a screengrab without needing to export or screenshot from Figma, Keynote, TLDraw, etc.
           </p>
           <p class="feature-description">
-            Capture voice notes on your iPhone during your commute. 
-            They appear in your Mac clipboard history automatically. 
-            End-to-end encrypted—we can't read your data even if we wanted to.
+            Drawings in Field Theory are made for fast copy/paste. It makes abstract ideas easier and faster to communicate in context. Freehand a sketch or draw on a screenshot to make it instantly stackable or pastable.
           </p>
         </div>
         <div class="feature-visual">
 ┌─────────────────────────────────────────────────┐
-│  sync                                           │
+│  drawing canvas                                 │
 │                                                 │
-│   ┌────────┐              ┌────────┐            │
-│   │ iPhone │  ─────────▶  │  Mac   │            │
-│   │   📱   │   encrypted  │   💻   │            │
-│   └────────┘              └────────┘            │
-│                                                 │
-│   "Captured on commute"   → Appears in          │
-│                              clipboard history  │
-│                                                 │
+│  ┌─────────────────────────────────────────┐    │
+│  │     ╭───╮                               │    │
+│  │     │ A │───────▶ ╭───╮                 │    │
+│  │     ╰───╯         │ B │                 │    │
+│  │        ╲          ╰───╯                 │    │
+│  │         ╲  "data flow"                  │    │
+│  │          ▼                              │    │
+│  │       ╭───╮                             │    │
+│  │       │ C │                             │    │
+│  │       ╰───╯                             │    │
+│  └─────────────────────────────────────────┘    │
 │  ════════════════════════════════════════════   │
-│  <span class="highlight">✓ End-to-end encrypted</span>                        │
-│  <span class="highlight">✓ Automatic sync</span>                               │
+│  <span class="highlight">⌘C Copy   ⌘V Paste anywhere</span>                    │
 └─────────────────────────────────────────────────┘</div>
       </article>
 
       <hr class="dotted-line">
 
-      <!-- Feature 6: Send to Cursor -->
+      <!-- Feature 4: Verbal Commands -->
       <article class="feature reversed">
         <div class="feature-content">
-          <h2>Send to Cursor</h2>
+          <h2>Verbal commands</h2>
           <p class="feature-problem">
-            Copy, switch apps, paste, switch back. The friction adds up.
+            Try saying "use the commit command" while transcribing anything. Field Theory will recognize and invoke any command in your directory.
           </p>
           <p class="feature-description">
-            On iOS, send any transcription directly to Cursor's agent dashboard 
-            with one tap. Built-in browser keeps your workflow tight. 
-            No app switching required.
+            Voice commands feel natural because they don't require you to change mediums to ensure a model runs any given sequence or macro. "Run [____] command" and the Field Theory will know and insert.
           </p>
         </div>
         <div class="feature-visual">
 ┌─────────────────────────────────────────────────┐
-│  iOS → Cursor                                   │
+│  🎤 transcribing...                             │
+│                                                 │
+│  "...and then let's clean this up,              │
+│   <span class="highlight">use the commit command</span> when you're            │
+│   done with the refactor"                       │
+│                                                 │
+│          ↓  detected                            │
 │                                                 │
 │  ┌─────────────────────────────────────────┐    │
-│  │  "Fix the TypeScript error in the       │    │
-│  │   auth module, the generics aren't      │    │
-│  │   matching up with the return type"     │    │
+│  │  📎 /commit attached                    │    │
 │  └─────────────────────────────────────────┘    │
 │                                                 │
-│          ┌──────────────────────┐               │
-│          │   Send to Cursor  →  │               │
-│          └──────────────────────┘               │
-│                                                 │
 │  ════════════════════════════════════════════   │
-│  <span class="highlight">→ One tap, no app switching</span>                    │
+│  <span class="highlight">✓ Commands recognized from speech</span>              │
+└─────────────────────────────────────────────────┘</div>
+      </article>
+
+      <hr class="dotted-line">
+
+      <!-- Feature: Stack Context -->
+      <article class="feature">
+        <div class="feature-content">
+          <h2>Stack context into any app or CLI</h2>
+          <p class="feature-problem">
+            Try stacking 7 screenshots, 3 logs, 2 commands, and 1,000 words into ChatGPT, iTerm2, Cursor, or Claude Code.
+          </p>
+          <p class="feature-description">
+            Field Theory supports input fields that are multi-modal or simple command line interfaces. All agent applications benefit from better context.
+          </p>
+        </div>
+        <div class="feature-visual">
+┌─────────────────────────────────────────────────┐
+│  stacked context                                │
+│                                                 │
+│  📷 ×7  screenshots                             │
+│  📄 ×3  error logs                              │
+│  📎 ×2  /commands                               │
+│  📝 ×1  1,000 word prompt                       │
+│                                                 │
+│          ↓  paste into                          │
+│                                                 │
+│  ┌──────────┬──────────┬──────────┬──────────┐  │
+│  │  Cursor  │  Claude  │  ChatGPT │  iTerm   │  │
+│  └──────────┴──────────┴──────────┴──────────┘  │
+│  ════════════════════════════════════════════   │
+│  <span class="highlight">✓ Works with any input field or CLI</span>           │
+└─────────────────────────────────────────────────┘</div>
+      </article>
+
+      <hr class="dotted-line">
+
+      <!-- Feature: The Librarian -->
+      <article class="feature reversed">
+        <div class="feature-content">
+          <h2>The Librarian</h2>
+          <p class="feature-problem">
+            Your day to day engineering work has a rich history.
+          </p>
+          <p class="feature-description">
+            The Librarian is easier to experience than to explain.
+          </p>
+        </div>
+        <div class="feature-visual">
+┌─────────────────────────────────────────────────┐
+│  librarian                                      │
+│                                                 │
+│  ┌─────────────────────────────────────────┐    │
+│  │  Today                                  │    │
+│  │  ├── refactored auth module             │    │
+│  │  ├── fixed token refresh bug            │    │
+│  │  └── reviewed PR #247                   │    │
+│  │                                         │    │
+│  │  This Week                              │    │
+│  │  ├── shipped v2.1 release               │    │
+│  │  ├── 47 commits across 3 repos          │    │
+│  │  └── ...                                │    │
+│  └─────────────────────────────────────────┘    │
+│  ════════════════════════════════════════════   │
+│  <span class="highlight">✓ Your engineering history, organized</span>          │
 └─────────────────────────────────────────────────┘</div>
       </article>
 
@@ -270,7 +300,7 @@
     <div class="container">
       <hr class="dotted-line">
       <h2>Pricing</h2>
-      <p class="pricing-description">Pricing was designed to give all accounts access to all application features.</p>
+      <p class="pricing-description">Field Theory is free. Pro accounts are for heavy usage</p>
       <div class="pricing-grid">
 
         <div class="pricing-card">
