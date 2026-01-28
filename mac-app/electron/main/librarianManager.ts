@@ -3211,6 +3211,9 @@ if __name__ == "__main__":
 
   /**
    * Uninstall the global state-enforced hooks.
+   * Note: We keep hook files on disk but set enabled=false in config.
+   * This allows running Claude sessions to gracefully stop (hooks check enabled flag)
+   * instead of erroring on missing files.
    */
   uninstallStateEnforcedHook(): boolean {
     try {
@@ -3218,22 +3221,22 @@ if __name__ == "__main__":
       const preToolUseHookPath = this.getPreToolUseHookPath();
       const configPath = this.getGlobalStateEnforcedConfigPath();
 
-      // Remove hook scripts
-      if (fs.existsSync(userPromptHookPath)) {
-        fs.unlinkSync(userPromptHookPath);
-      }
-      if (fs.existsSync(preToolUseHookPath)) {
-        fs.unlinkSync(preToolUseHookPath);
-      }
+      console.log('[LibrarianManager] Disconnecting hooks...');
 
-      // Disable in config (don't delete, preserve settings)
+      // Disable in config - hooks check this flag and exit silently if false
+      // This allows running Claude sessions to gracefully stop without errors
       if (fs.existsSync(configPath)) {
         const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
         config.enabled = false;
         fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+        console.log('[LibrarianManager] Set enabled=false in config.json');
+      } else {
+        // Create config with enabled=false if it doesn't exist
+        fs.writeFileSync(configPath, JSON.stringify({ enabled: false }, null, 2));
+        console.log('[LibrarianManager] Created config.json with enabled=false');
       }
 
-      // Remove from ~/.claude/settings.json
+      // Remove hook registrations from ~/.claude/settings.json (for new sessions)
       const settingsPath = this.getClaudeSettingsPath();
       if (fs.existsSync(settingsPath)) {
         const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
@@ -3270,7 +3273,7 @@ if __name__ == "__main__":
         fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
       }
 
-      console.log('[LibrarianManager] Uninstalled global state-enforced hooks');
+      console.log('[LibrarianManager] Disconnected Claude Code hooks');
       return true;
     } catch (error) {
       console.error('[LibrarianManager] Failed to uninstall state-enforced hooks:', error);
