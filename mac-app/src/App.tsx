@@ -460,24 +460,6 @@ export default function App() {
 
   return (
     <>
-      {/* DEBUG: Librarian count overlay */}
-      {librarianStatus && (
-        <div style={{
-          position: 'fixed',
-          bottom: '8px',
-          right: '8px',
-          padding: '4px 8px',
-          backgroundColor: 'rgba(0,0,0,0.8)',
-          color: librarianStatus.edits >= librarianStatus.threshold ? '#f59e0b' : '#0f0',
-          fontFamily: 'monospace',
-          fontSize: '12px',
-          borderRadius: '4px',
-          zIndex: 99999,
-          pointerEvents: 'none',
-        }}>
-          count: {librarianStatus.edits} ({librarianStatus.frequency})
-        </div>
-      )}
 
       <div style={styles.draggableRegion}></div>
       <div

@@ -345,6 +345,20 @@ export default function CommandsSettings() {
           </p>
         </div>
       </div>
+
+      {/* Keyboard shortcut notice */}
+      <div style={{
+        fontSize: '10px',
+        color: theme.textSecondary,
+        marginTop: '16px',
+        textAlign: 'center',
+        padding: '8px 12px',
+        backgroundColor: theme.isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.03)',
+        border: `1px solid ${theme.border}`,
+        borderRadius: '6px',
+      }}>
+        Use <strong style={{ color: theme.text }}>Command + Shift + K</strong> to invoke a command in any application
+      </div>
     </div>
   );
 }
