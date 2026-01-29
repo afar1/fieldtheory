@@ -6735,7 +6735,6 @@ export default function ClipboardHistory() {
                         border: 'none',
                         padding: 0,
                       }}
-                      title="Check for updates (hover 3s for release notes)"
                     >
                       Check for updates
                     </button>
@@ -6773,7 +6772,6 @@ export default function ClipboardHistory() {
                         e.currentTarget.style.backgroundColor = 'transparent';
                       }
                     }}
-                    title={showReleaseNotes ? 'Close release notes' : 'Show release notes'}
                   >
                     <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke={showReleaseNotes ? '#fff' : theme.textSecondary} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
