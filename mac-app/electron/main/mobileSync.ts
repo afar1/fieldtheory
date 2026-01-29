@@ -280,8 +280,11 @@ export class MobileSync extends EventEmitter {
   private setupTodoRealtimeSubscription(): void {
     if (!this.supabase || !this.session) return;
 
+    const userId = this.session.user.id;
     this.teardownTodoRealtimeSubscription();
 
+    // Filter by user_id server-side to reduce WAL scanning.
+    // Without this filter, Supabase scans the entire todos table.
     this.todoRealtimeChannel = this.supabase
       .channel('todos-realtime')
       .on(
@@ -290,6 +293,7 @@ export class MobileSync extends EventEmitter {
           event: 'INSERT',
           schema: 'public',
           table: 'todos',
+          filter: `user_id=eq.${userId}`,
         },
         (payload) => {
           const row = payload.new as TodoRow;
@@ -314,6 +318,7 @@ export class MobileSync extends EventEmitter {
           event: 'UPDATE',
           schema: 'public',
           table: 'todos',
+          filter: `user_id=eq.${userId}`,
         },
         (payload) => {
           const row = payload.new as TodoRow;
@@ -336,6 +341,7 @@ export class MobileSync extends EventEmitter {
           event: 'DELETE',
           schema: 'public',
           table: 'todos',
+          filter: `user_id=eq.${userId}`,
         },
         (payload) => {
           const deletedId = (payload.old as TodoRow)?.id;

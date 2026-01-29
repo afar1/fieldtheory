@@ -2073,7 +2073,6 @@ export default function ClipboardHistory() {
           setViewMode(prev => {
             // Build visible tabs array in order, then cycle backwards
             const visibleTabs: ViewMode[] = ['clipboard'];
-            if (librarianEnabled) visibleTabs.push('librarian');
             if (canShare) visibleTabs.push('team');
             if (FEATURE_HOT_MIC_ENABLED) visibleTabs.push('hotmic');
             if (tasksTabEnabled) visibleTabs.push('todo');
@@ -2088,7 +2087,6 @@ export default function ClipboardHistory() {
           setViewMode(prev => {
             // Build visible tabs array in order, then cycle forwards
             const visibleTabs: ViewMode[] = ['clipboard'];
-            if (librarianEnabled) visibleTabs.push('librarian');
             if (canShare) visibleTabs.push('team');
             if (FEATURE_HOT_MIC_ENABLED) visibleTabs.push('hotmic');
             if (tasksTabEnabled) visibleTabs.push('todo');
@@ -3553,7 +3551,7 @@ export default function ClipboardHistory() {
             overflow: 'hidden',
             transition: 'height 0.3s ease, min-height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease',
           }}>
-          {(['clipboard', ...(librarianEnabled ? ['librarian'] : []), ...(canShare ? ['team'] : []), ...(FEATURE_HOT_MIC_ENABLED ? ['hotmic'] : []), ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
+          {(['clipboard', ...(canShare ? ['team'] : []), ...(FEATURE_HOT_MIC_ENABLED ? ['hotmic'] : []), ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
             // Hot Mic tab has special styling and the fire toggle.
             const isHotMic = mode === 'hotmic';
             const isSelected = viewMode === mode && !(mode === 'team' && !authSession?.user?.email) && !showSettings;
@@ -3835,6 +3833,62 @@ export default function ClipboardHistory() {
             </button>
           )}
           
+          {/* Librarian button */}
+          {librarianEnabled && (
+            <button
+              onClick={() => {
+                setViewMode('librarian');
+                setShowSettings(false);
+              }}
+              tabIndex={0}
+              style={{
+                padding: '5px 6px',
+                fontSize: '9px',
+                fontWeight: 500,
+                backgroundColor: viewMode === 'librarian' && !showSettings ? theme.accent : 'transparent',
+                color: viewMode === 'librarian' && !showSettings ? '#fff' : theme.textSecondary,
+                border: 'none',
+                borderRadius: '3px',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+                outline: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '3px',
+                position: 'relative',
+              }}
+              onMouseEnter={(e) => {
+                if (viewMode !== 'librarian' || showSettings) {
+                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (viewMode !== 'librarian' || showSettings) {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }
+              }}
+              title="Librarian readings"
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+              </svg>
+              Librarian
+              {/* New reading indicator */}
+              {hasNewReading && viewMode !== 'librarian' && (
+                <span style={{
+                  position: 'absolute',
+                  top: '-2px',
+                  right: '-2px',
+                  width: '6px',
+                  height: '6px',
+                  borderRadius: '50%',
+                  backgroundColor: theme.info,
+                }} />
+              )}
+            </button>
+          )}
+
           {/* Feedback button */}
           <button
             onClick={() => {
@@ -6641,11 +6695,51 @@ export default function ClipboardHistory() {
                       Check for updates
                     </button>
                   )}
+                  {/* Release notes toggle button - only on hover */}
+                  <button
+                    onClick={() => {
+                      if (showReleaseNotes) {
+                        setShowReleaseNotes(false);
+                        setReleaseNotesLatestMode(false);
+                      } else {
+                        setShowReleaseNotes(true);
+                      }
+                    }}
+                    style={{
+                      width: '14px',
+                      height: '14px',
+                      padding: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: showReleaseNotes ? theme.accent : 'transparent',
+                      border: 'none',
+                      borderRadius: '3px',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!showReleaseNotes) {
+                        e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!showReleaseNotes) {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }
+                    }}
+                    title={showReleaseNotes ? 'Close release notes' : 'Show release notes'}
+                  >
+                    <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke={showReleaseNotes ? '#fff' : theme.textSecondary} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                      <line x1="3" y1="9" x2="21" y2="9" />
+                    </svg>
+                  </button>
                 </>
               ) : (
                 <>
                   {librarianStatus && (
-                    <span style={{ color: librarianStatus.edits >= librarianStatus.threshold ? '#f59e0b' : theme.textSecondary, fontSize: '9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace' }}>
+                    <span style={{ color: librarianStatus.edits >= librarianStatus.threshold ? '#f59e0b' : theme.textSecondary, fontSize: '9px', fontStyle: 'italic' }}>
                       {librarianStatus.edits}/{librarianStatus.threshold}
                     </span>
                   )}
