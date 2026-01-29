@@ -1656,10 +1656,10 @@ export class TranscriberManager extends EventEmitter {
 
     this.detectedCommands.forEach((cmd, index) => {
       const cmdNum = index + 1;
-      // Replace [cmd:name.md] with [cmd1], [cmd2], etc.
+      // Replace [cmd:name.md] with [cmd1: name], [cmd2: name], etc.
       const refPattern = new RegExp(`\\[cmd:${cmd.name}\\.md\\]`, 'gi');
-      formattedText = formattedText.replace(refPattern, `[cmd${cmdNum}]`);
-      commandPaths.push(`[cmd${cmdNum}] ${cmd.filePath}`);
+      formattedText = formattedText.replace(refPattern, `[cmd${cmdNum}: ${cmd.name}]`);
+      commandPaths.push(`[cmd${cmdNum}: ${cmd.name}] ${cmd.filePath}`);
     });
 
     // Add the commands list at the end
