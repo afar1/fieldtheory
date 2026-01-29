@@ -7,6 +7,7 @@ import { useTheme, Theme } from '../contexts/ThemeContext';
 
 interface SoundConfig {
   enabled: boolean;
+  librarianEnabled: boolean;
   recordingStart?: string;
   recordingStop?: string;
   recordingCancel?: string;
@@ -22,16 +23,19 @@ interface SoundOption {
   category: string;
 }
 
+type SoundEvent = 'recordingStart' | 'recordingStop' | 'recordingCancel' | 'windowOpen' | 'windowClose' | 'transcribing' | 'paste';
+
 export default function SoundsSettings() {
   const { theme } = useTheme();
 
-  const [soundsEnabled, setSoundsEnabled] = useState(true);
+  const [librarianSoundEnabled, setLibrarianSoundEnabled] = useState(true);
+  const [soundsEnabled, setSoundsEnabled] = useState(false);
   const [recordingStartSound, setRecordingStartSound] = useState<string | undefined>('ButtonClickDown.mp3');
   const [recordingStopSound, setRecordingStopSound] = useState<string | undefined>('ButtonClickUp.mp3');
   const [recordingCancelSound, setRecordingCancelSound] = useState<string | undefined>('AlertBonk.mp3');
   const [windowOpenSound, setWindowOpenSound] = useState<string | undefined>('WindowOpen.mp3');
   const [windowCloseSound, setWindowCloseSound] = useState<string | undefined>('WindowClose.mp3');
-  const [transcribingSound, setTranscribingSound] = useState<string | undefined>('ButtonClickUp.mp3');
+  const [transcribingSound, setTranscribingSound] = useState<string | undefined>('Beep.mp3');
   const [pasteSound, setPasteSound] = useState<string | undefined>('Click.mp3');
   const [availableSounds, setAvailableSounds] = useState<SoundOption[]>([]);
 
@@ -43,20 +47,22 @@ export default function SoundsSettings() {
     const fetchSounds = async () => {
       try {
         const defaultConfig: SoundConfig = {
-          enabled: true,
+          enabled: false,
+          librarianEnabled: true,
           recordingStart: 'ButtonClickDown.mp3',
           recordingStop: 'ButtonClickUp.mp3',
           recordingCancel: 'AlertBonk.mp3',
           windowOpen: 'WindowOpen.mp3',
           windowClose: 'WindowClose.mp3',
-          transcribing: 'ButtonClickUp.mp3',
+          transcribing: 'Beep.mp3',
           paste: 'Click.mp3',
         };
         const [soundConfig, sounds] = await Promise.all([
           window.transcribeAPI!.getSoundConfig?.() ?? defaultConfig,
           window.transcribeAPI!.getAvailableSounds?.() ?? [],
         ]);
-        setSoundsEnabled(soundConfig.enabled);
+        setLibrarianSoundEnabled(soundConfig.librarianEnabled ?? true);
+        setSoundsEnabled(soundConfig.enabled ?? false);
         setRecordingStartSound(soundConfig.recordingStart);
         setRecordingStopSound(soundConfig.recordingStop);
         setRecordingCancelSound(soundConfig.recordingCancel);
@@ -73,6 +79,17 @@ export default function SoundsSettings() {
     fetchSounds();
   }, []);
 
+  const handleLibrarianSoundChange = useCallback(async (enabled: boolean) => {
+    if (!window.transcribeAPI?.setSoundConfig) return;
+
+    setLibrarianSoundEnabled(enabled);
+    try {
+      await window.transcribeAPI.setSoundConfig({ librarianEnabled: enabled });
+    } catch (err) {
+      console.error('Failed to change librarian sound setting:', err);
+    }
+  }, []);
+
   const handleSoundsEnabledChange = useCallback(async (enabled: boolean) => {
     if (!window.transcribeAPI?.setSoundConfig) return;
 
@@ -84,16 +101,37 @@ export default function SoundsSettings() {
     }
   }, []);
 
-  const handleSoundChange = useCallback(async (event: 'recordingStart' | 'recordingStop' | 'recordingCancel' | 'windowOpen' | 'windowClose' | 'transcribing' | 'paste', soundId: string) => {
+  const handleSoundToggle = useCallback(async (event: SoundEvent, currentValue: string | undefined, defaultValue: string) => {
     if (!window.transcribeAPI?.setSoundConfig) return;
 
-    if (event === 'recordingStart') setRecordingStartSound(soundId);
-    if (event === 'recordingStop') setRecordingStopSound(soundId);
-    if (event === 'recordingCancel') setRecordingCancelSound(soundId);
-    if (event === 'windowOpen') setWindowOpenSound(soundId);
-    if (event === 'windowClose') setWindowCloseSound(soundId);
-    if (event === 'transcribing') setTranscribingSound(soundId);
-    if (event === 'paste') setPasteSound(soundId);
+    // Toggle: if has value, set to empty (disabled). If empty, set to default.
+    const newValue = currentValue ? '' : defaultValue;
+
+    if (event === 'recordingStart') setRecordingStartSound(newValue || undefined);
+    if (event === 'recordingStop') setRecordingStopSound(newValue || undefined);
+    if (event === 'recordingCancel') setRecordingCancelSound(newValue || undefined);
+    if (event === 'windowOpen') setWindowOpenSound(newValue || undefined);
+    if (event === 'windowClose') setWindowCloseSound(newValue || undefined);
+    if (event === 'transcribing') setTranscribingSound(newValue || undefined);
+    if (event === 'paste') setPasteSound(newValue || undefined);
+
+    try {
+      await window.transcribeAPI.setSoundConfig({ [event]: newValue });
+    } catch (err) {
+      console.error(`Failed to toggle ${event} sound:`, err);
+    }
+  }, []);
+
+  const handleSoundChange = useCallback(async (event: SoundEvent, soundId: string) => {
+    if (!window.transcribeAPI?.setSoundConfig) return;
+
+    if (event === 'recordingStart') setRecordingStartSound(soundId || undefined);
+    if (event === 'recordingStop') setRecordingStopSound(soundId || undefined);
+    if (event === 'recordingCancel') setRecordingCancelSound(soundId || undefined);
+    if (event === 'windowOpen') setWindowOpenSound(soundId || undefined);
+    if (event === 'windowClose') setWindowCloseSound(soundId || undefined);
+    if (event === 'transcribing') setTranscribingSound(soundId || undefined);
+    if (event === 'paste') setPasteSound(soundId || undefined);
 
     try {
       await window.transcribeAPI.setSoundConfig({ [event]: soundId });
@@ -112,61 +150,110 @@ export default function SoundsSettings() {
     }
   }, []);
 
-  const renderSoundRow = (label: string, value: string | undefined, event: 'recordingStart' | 'recordingStop' | 'recordingCancel' | 'windowOpen' | 'windowClose' | 'transcribing' | 'paste') => (
-    <div style={styles.row}>
-      <span style={styles.rowLabel}>{label}</span>
-      <div style={styles.rowControls}>
-        <select
-          value={value || ''}
-          onChange={(e) => handleSoundChange(event, e.target.value)}
-          style={styles.selectSmall}
-        >
-          <option value="">None</option>
-          {availableSounds.map((sound) => (
-            <option key={sound.id} value={sound.id}>
-              {sound.name}
-            </option>
-          ))}
-        </select>
-        <button
-          onClick={() => value && handlePreviewSound(value)}
-          style={styles.btnGhost}
-          title="Preview sound"
-        >
-          ▶
-        </button>
+  const renderSoundRow = (
+    label: string,
+    value: string | undefined,
+    event: SoundEvent,
+    defaultValue: string
+  ) => {
+    const isEnabled = Boolean(value);
+
+    return (
+      <div style={styles.row}>
+        <div style={styles.rowLeft}>
+          {/* Quick toggle checkbox */}
+          <button
+            onClick={() => handleSoundToggle(event, value, defaultValue)}
+            style={{
+              ...styles.checkbox,
+              backgroundColor: isEnabled ? theme.accent : 'transparent',
+              borderColor: isEnabled ? theme.accent : theme.border,
+            }}
+            title={isEnabled ? 'Disable sound' : 'Enable sound'}
+          >
+            {isEnabled && (
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            )}
+          </button>
+          <span style={{ ...styles.rowLabel, opacity: isEnabled ? 1 : 0.5 }}>{label}</span>
+        </div>
+        <div style={styles.rowControls}>
+          <select
+            value={value || ''}
+            onChange={(e) => handleSoundChange(event, e.target.value)}
+            style={{ ...styles.selectSmall, opacity: isEnabled ? 1 : 0.5 }}
+            disabled={!isEnabled}
+          >
+            <option value="">None</option>
+            {availableSounds.map((sound) => (
+              <option key={sound.id} value={sound.id}>
+                {sound.name}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={() => value && handlePreviewSound(value)}
+            style={{ ...styles.btnGhost, opacity: isEnabled ? 1 : 0.3 }}
+            title="Preview sound"
+            disabled={!isEnabled}
+          >
+            ▶
+          </button>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div style={styles.container}>
-      {/* Master toggle */}
+      {/* Librarian Sound Toggle */}
       <div style={styles.row}>
-        <span style={styles.rowLabel}>Enable Sounds</span>
+        <span style={styles.rowLabel}>Librarian Sound</span>
+        <button
+          onClick={() => handleLibrarianSoundChange(!librarianSoundEnabled)}
+          style={{ ...styles.toggle, backgroundColor: librarianSoundEnabled ? theme.success : '#d1d5db' }}
+          title={librarianSoundEnabled ? 'Librarian sound enabled' : 'Librarian sound disabled'}
+        >
+          <span style={{ ...styles.toggleKnob, transform: librarianSoundEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+        </button>
+      </div>
+      <p style={styles.description}>
+        Plays when a new Librarian reading is created.
+      </p>
+
+      <div style={styles.divider} />
+
+      {/* Other Sounds Toggle */}
+      <div style={styles.row}>
+        <span style={styles.rowLabel}>Other Sounds</span>
         <button
           onClick={() => handleSoundsEnabledChange(!soundsEnabled)}
           style={{ ...styles.toggle, backgroundColor: soundsEnabled ? theme.success : '#d1d5db' }}
-          title={soundsEnabled ? 'Sounds enabled' : 'Sounds disabled'}
+          title={soundsEnabled ? 'Other sounds enabled' : 'Other sounds disabled'}
         >
           <span style={{ ...styles.toggleKnob, transform: soundsEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
         </button>
       </div>
+      <p style={styles.description}>
+        Recording, transcription, window, and paste sounds.
+      </p>
 
       {soundsEnabled && (
         <>
-          <div style={styles.divider} />
+          <div style={{ ...styles.divider, margin: '8px 0' }} />
 
-          {renderSoundRow('Start Recording', recordingStartSound, 'recordingStart')}
-          {renderSoundRow('Stop Recording', recordingStopSound, 'recordingStop')}
-          {renderSoundRow('Cancel Recording', recordingCancelSound, 'recordingCancel')}
-          {renderSoundRow('Transcribing', transcribingSound, 'transcribing')}
-          {renderSoundRow('Open Window', windowOpenSound, 'windowOpen')}
-          {renderSoundRow('Close Window', windowCloseSound, 'windowClose')}
-          {renderSoundRow('Paste Item', pasteSound, 'paste')}
+          {renderSoundRow('Start Recording', recordingStartSound, 'recordingStart', 'ButtonClickDown.mp3')}
+          {renderSoundRow('Stop Recording', recordingStopSound, 'recordingStop', 'ButtonClickUp.mp3')}
+          {renderSoundRow('Cancel Recording', recordingCancelSound, 'recordingCancel', 'AlertBonk.mp3')}
+          {renderSoundRow('Transcribing', transcribingSound, 'transcribing', 'Beep.mp3')}
+          {renderSoundRow('Open Window', windowOpenSound, 'windowOpen', 'WindowOpen.mp3')}
+          {renderSoundRow('Close Window', windowCloseSound, 'windowClose', 'WindowClose.mp3')}
+          {renderSoundRow('Paste Item', pasteSound, 'paste', 'Click.mp3')}
 
           <p style={styles.note}>
-            Window open/close sounds require restart to take effect.
+            Window sounds require restart to take effect.
           </p>
         </>
       )}
@@ -185,6 +272,11 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     padding: '4px 0',
     minHeight: '32px',
   },
+  rowLeft: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
   rowLabel: {
     fontSize: '12px',
     color: theme.text,
@@ -194,6 +286,18 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
+  },
+  checkbox: {
+    width: '16px',
+    height: '16px',
+    borderRadius: '4px',
+    border: '1.5px solid',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    padding: 0,
+    flexShrink: 0,
   },
   selectSmall: {
     padding: '4px 8px',
@@ -242,6 +346,12 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     height: '1px',
     backgroundColor: theme.border,
     margin: '12px 0',
+  },
+  description: {
+    fontSize: '11px',
+    color: theme.textSecondary,
+    margin: '4px 0 0 0',
+    lineHeight: 1.4,
   },
   note: {
     fontSize: '11px',
