@@ -1772,11 +1772,11 @@ final class MessageHandler {
 
 func setupAndRun() {
     sendLog(level: "info", message: "FieldTheoryHelper started")
-    
-    // Start menu bar monitoring immediately.
-    // This allows us to detect when user clicks on the menu bar to hide Field Theory.
-    _ = MenuBarMonitor.shared.startMonitoring()
-    
+
+    // NOTE: MenuBarMonitor removed - it requires Input Monitoring permission (CGEventTap for mouse events)
+    // and is redundant since the clipboard window blur handler already hides the window when focus is lost.
+    // The blur event fires when user clicks on menu bar anyway.
+
     // Start app activation monitoring.
     // This allows us to detect when Field Theory becomes the frontmost app (e.g., via Cmd+Tab).
     _ = AppActivationMonitor.shared.startMonitoring()
