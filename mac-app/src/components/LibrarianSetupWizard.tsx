@@ -482,17 +482,33 @@ export default function LibrarianSetupWizard({ onComplete }: LibrarianSetupWizar
         </p>
       </div>
 
-      {/* Note about settings */}
-      <p style={{
+      {/* Note about About You impact */}
+      <div style={{
         fontSize: '12px',
         color: theme.textSecondary,
         textAlign: 'center',
-        marginBottom: '24px',
+        marginBottom: '16px',
         padding: '12px',
+        backgroundColor: theme.isDark ? 'rgba(99, 102, 241, 0.1)' : 'rgba(99, 102, 241, 0.05)',
+        borderRadius: '8px',
+        border: `1px solid ${theme.isDark ? 'rgba(99, 102, 241, 0.2)' : 'rgba(99, 102, 241, 0.15)'}`,
+      }}>
+        <strong style={{ color: theme.text }}>About You</strong> has a big impact on the Librarian's artifacts —
+        it shapes tone, depth, and what gets noticed.
+      </div>
+
+      {/* Note about new session */}
+      <p style={{
+        fontSize: '11px',
+        color: theme.textSecondary,
+        textAlign: 'center',
+        marginBottom: '24px',
+        padding: '10px 12px',
         backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
         borderRadius: '8px',
       }}>
-        You can always change these in Settings → Librarian.
+        Start a <strong style={{ color: theme.text }}>new Claude session</strong> after setup for changes to take effect.
+        You can always adjust these in Settings → Librarian.
       </p>
 
       <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>

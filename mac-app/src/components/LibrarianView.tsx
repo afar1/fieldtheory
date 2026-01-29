@@ -115,6 +115,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     blockedDevices: string[];
   } | null>(null);
 
+  // Mute for today state
+  const [isMutedForToday, setIsMutedForToday] = useState(false);
+  const [isMuting, setIsMuting] = useState(false);
+
   // Handle initial reading path and fullscreen from parent (auto-open flow)
   useEffect(() => {
     if (initialReadingPath) {
@@ -131,6 +135,12 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     localStorage.setItem('librarian-text-size', textSize);
   }, [textSize]);
 
+  // Check mute status on mount
+  useEffect(() => {
+    window.librarianAPI?.isMutedForToday().then((muted) => {
+      setIsMutedForToday(muted ?? false);
+    });
+  }, []);
 
   // Notify main process of immersive mode changes (affects blur-to-hide behavior)
   useEffect(() => {
@@ -1652,7 +1662,55 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                       Inspired by <span title={shareStatus?.slug || ''} style={{ cursor: shareStatus?.slug ? 'help' : 'default' }}>your work</span>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
+                    {/* Mute for today button */}
+                    <button
+                      onClick={async () => {
+                        setIsMuting(true);
+                        try {
+                          if (isMutedForToday) {
+                            await window.librarianAPI?.unmute();
+                            setIsMutedForToday(false);
+                          } else {
+                            await window.librarianAPI?.muteForToday();
+                            setIsMutedForToday(true);
+                          }
+                        } finally {
+                          setIsMuting(false);
+                        }
+                      }}
+                      disabled={isMuting}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        padding: '4px 10px',
+                        fontSize: '11px',
+                        fontWeight: 500,
+                        color: isMutedForToday ? '#f59e0b' : theme.textSecondary,
+                        backgroundColor: isMutedForToday
+                          ? (theme.isDark ? 'rgba(245, 158, 11, 0.1)' : 'rgba(245, 158, 11, 0.08)')
+                          : 'transparent',
+                        border: `1px solid ${isMutedForToday ? 'rgba(245, 158, 11, 0.4)' : theme.border}`,
+                        borderRadius: '5px',
+                        cursor: isMuting ? 'wait' : 'pointer',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      {/* Bell icon */}
+                      {isMutedForToday ? (
+                        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                          <path d="M1.414 1.414a.5.5 0 0 1 .707 0l12.728 12.728a.5.5 0 0 1-.707.707L11.34 12.05A3.994 3.994 0 0 1 8 14a3.994 3.994 0 0 1-3.34-1.95l-.47-.47-.293-.293L1.414 8.804A3.962 3.962 0 0 1 1 6.5c0-.932.32-1.79.854-2.467L1.414 3.594a.5.5 0 0 1 0-.707zM4 6.5c0-.553.132-1.074.366-1.535l7.17 7.17A2.989 2.989 0 0 1 8 13a2.99 2.99 0 0 1-2.536-1.406.5.5 0 0 0-.428-.229H4.5A.5.5 0 0 1 4 10.865V6.5z"/>
+                          <path d="M8 2a4 4 0 0 1 4 4v2.335c0 .38.1.745.287 1.065l.603.905-8.535-8.536A3.988 3.988 0 0 1 8 2zm3.5 8.865V6.5a3.5 3.5 0 0 0-7-0v1.865l7 0z"/>
+                        </svg>
+                      ) : (
+                        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                          <path d="M8 16a2 2 0 0 0 2-2H6a2 2 0 0 0 2 2zM8 1.918l-.797.161A4.002 4.002 0 0 0 4 6c0 .628-.134 2.197-.459 3.742-.16.767-.376 1.566-.663 2.258h10.244c-.287-.692-.502-1.49-.663-2.258C12.134 8.197 12 6.628 12 6a4.002 4.002 0 0 0-3.203-3.92L8 1.917zM14.22 12c.223.447.481.801.78 1H1c.299-.199.557-.553.78-1C2.68 10.2 3 6.88 3 6c0-2.42 1.72-4.44 4.005-4.901a1 1 0 1 1 1.99 0A5.002 5.002 0 0 1 13 6c0 .88.32 4.2 1.22 6z"/>
+                        </svg>
+                      )}
+                      {isMuting ? '...' : isMutedForToday ? 'Muted until tomorrow' : 'Mute for today'}
+                    </button>
+                    {/* Share button */}
                     <button
                       onClick={async () => {
                         if (shareStatus?.shared) {
@@ -1699,7 +1757,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                       </svg>
                       {isSharing ? '...' : shareStatus?.shared ? 'Shareable' : 'Not shared'}
                     </button>
-                    <span style={{ fontSize: '9px', color: '#22c55e', marginTop: '3px', height: '12px', visibility: linkCopied ? 'visible' : 'hidden' }}>Copied!</span>
+                    <span style={{ fontSize: '9px', color: '#22c55e', marginTop: '-3px', height: '12px', visibility: linkCopied ? 'visible' : 'hidden' }}>Copied!</span>
                   </div>
                 </div>
               </>
