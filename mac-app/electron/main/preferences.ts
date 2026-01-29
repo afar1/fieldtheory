@@ -107,8 +107,10 @@ interface Preferences {
   selectedLocalLLM?: string;  // Model size: '1b' or '3b'
 
   // Sound settings - optional sounds for recording actions.
-  // If soundsEnabled is false, no sounds play.
+  // soundsEnabled controls "other sounds" (recording, window, paste, etc.)
+  // librarianSoundEnabled controls the artifact discovery sound separately
   soundsEnabled?: boolean;
+  librarianSoundEnabled?: boolean; // Librarian artifact discovery sound (separate from other sounds)
   recordingStartSound?: string;  // Sound file name to play when recording starts
   recordingStopSound?: string;   // Sound file name to play when recording stops
   recordingCancelSound?: string; // Sound file name to play when recording is cancelled
@@ -192,8 +194,9 @@ const DEFAULT_PREFERENCES: Preferences = {
   improveTextHotkey: 'Command+Shift+I',
   autoImproveHotkey: 'Command+Shift+\\',
 
-  // Sound settings - enabled by default with click sounds
-  soundsEnabled: true,
+  // Sound settings - librarian sound ON by default, other sounds OFF by default
+  soundsEnabled: false,  // Other sounds (recording, window, paste) - off by default
+  librarianSoundEnabled: true,  // Librarian artifact discovery sound - on by default
   recordingStartSound: 'ButtonClickDown.mp3',
   recordingStopSound: 'ButtonClickUp.mp3',
   recordingCancelSound: 'AlertBonk.mp3',

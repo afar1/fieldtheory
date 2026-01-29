@@ -140,13 +140,24 @@ export class SoundManager {
   
   /**
    * Play a sound for a given event type, if sounds are enabled.
+   * Librarian sound (artifactDiscovery) has its own toggle, separate from other sounds.
    */
   play(event: SoundEvent): void {
-    const soundsEnabled = this.preferences.getPreference('soundsEnabled') ?? true;
+    // Librarian sound has its own toggle
+    if (event === 'artifactDiscovery') {
+      const librarianSoundEnabled = this.preferences.getPreference('librarianSoundEnabled') ?? true;
+      if (!librarianSoundEnabled) return;
+      const soundFile = this.preferences.getPreference('artifactDiscoverySound') ?? 'ArtifactDiscovery.wav';
+      if (soundFile) this.playFile(soundFile);
+      return;
+    }
+
+    // Other sounds use soundsEnabled toggle
+    const soundsEnabled = this.preferences.getPreference('soundsEnabled') ?? false;
     if (!soundsEnabled) return;
-    
+
     let soundFile: string | undefined;
-    
+
     switch (event) {
       case 'recordingStart':
         soundFile = this.preferences.getPreference('recordingStartSound');
@@ -169,9 +180,6 @@ export class SoundManager {
       case 'transcribing':
         soundFile = this.preferences.getPreference('transcribingSound');
         break;
-      case 'artifactDiscovery':
-        soundFile = this.preferences.getPreference('artifactDiscoverySound') ?? 'ArtifactDiscovery.wav';
-        break;
     }
 
     if (soundFile) {
@@ -191,6 +199,7 @@ export class SoundManager {
    */
   getConfig(): {
     enabled: boolean;
+    librarianEnabled: boolean;
     recordingStart: string | undefined;
     recordingStop: string | undefined;
     recordingCancel: string | undefined;
@@ -200,7 +209,8 @@ export class SoundManager {
     transcribing: string | undefined;
   } {
     return {
-      enabled: this.preferences.getPreference('soundsEnabled') ?? true,
+      enabled: this.preferences.getPreference('soundsEnabled') ?? false,
+      librarianEnabled: this.preferences.getPreference('librarianSoundEnabled') ?? true,
       recordingStart: this.preferences.getPreference('recordingStartSound'),
       recordingStop: this.preferences.getPreference('recordingStopSound'),
       recordingCancel: this.preferences.getPreference('recordingCancelSound'),
@@ -216,6 +226,7 @@ export class SoundManager {
    */
   async setConfig(config: {
     enabled?: boolean;
+    librarianEnabled?: boolean;
     recordingStart?: string;
     recordingStop?: string;
     recordingCancel?: string;
@@ -225,9 +236,12 @@ export class SoundManager {
     transcribing?: string;
   }): Promise<void> {
     const updates: Record<string, unknown> = {};
-    
+
     if (config.enabled !== undefined) {
       updates.soundsEnabled = config.enabled;
+    }
+    if (config.librarianEnabled !== undefined) {
+      updates.librarianSoundEnabled = config.librarianEnabled;
     }
     if (config.recordingStart !== undefined) {
       updates.recordingStartSound = config.recordingStart;
@@ -250,7 +264,7 @@ export class SoundManager {
     if (config.transcribing !== undefined) {
       updates.transcribingSound = config.transcribing;
     }
-    
+
     await this.preferences.save(updates);
     console.log('[SoundManager] Sound settings updated:', updates);
   }

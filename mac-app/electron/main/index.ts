@@ -492,11 +492,12 @@ function registerHotkeysAfterOnboarding(): void {
         } else {
           // Paste items sequentially
           for (const item of itemsToPaste) {
-            if (item.type === 'text' || item.type === 'transcript') {
-              clipboard.writeText(item.content || '');
+            if (item.content && (item.type === 'text' || item.type === 'transcript' || !item.imageData)) {
+              // Paste as text: text/transcript types, or any item with content but no image
+              clipboard.writeText(item.content);
               await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-            } else if (item.type === 'image' || item.type === 'screenshot' || item.imageData) {
-              if (!item.imageData) continue;
+            } else if (item.imageData) {
+              // Paste as image: items with image data
               if (isTerminal) {
                 const imagePath = await clipboardManager.exportImageToCache(item);
                 if (imagePath) {
