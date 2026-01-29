@@ -5300,16 +5300,31 @@ async function initTranscriberSystem(): Promise<void> {
       if (!clipboardHistoryWindow) {
         clipboardHistoryWindow = initClipboardHistoryWindow();
       }
-      const boundsToUse = restoreClipboardHistoryBounds();
-      clipboardHistoryWindow.show(boundsToUse, false, true);
+
+      // If already in immersive mode, bring window to front and notify renderer
+      if (clipboardHistoryWindow.getImmersiveMode()) {
+        clipboardHistoryWindow.getWindow()?.focus();
+        clipboardHistoryWindow.getWindow()?.webContents.send('librarian:showNewReading', reading.path);
+      } else {
+        const boundsToUse = restoreClipboardHistoryBounds();
+        clipboardHistoryWindow.show(boundsToUse, false, true);
+      }
 
       if (app.dock) {
         app.dock.bounce('informational');
       }
       clipboardHistoryWindow?.playArtifactDiscoverySound();
     } else {
-      // Just play the discovery sound if window exists
-      clipboardHistoryWindow?.playArtifactDiscoverySound();
+      // If already in immersive mode, still update the reading
+      if (clipboardHistoryWindow?.getImmersiveMode()) {
+        pendingImmersiveReading = reading.path;
+        clipboardHistoryWindow.getWindow()?.focus();
+        clipboardHistoryWindow.getWindow()?.webContents.send('librarian:showNewReading', reading.path);
+        clipboardHistoryWindow.playArtifactDiscoverySound();
+      } else {
+        // Just play the discovery sound if window exists
+        clipboardHistoryWindow?.playArtifactDiscoverySound();
+      }
     }
   });
 

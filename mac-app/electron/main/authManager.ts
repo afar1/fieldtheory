@@ -238,6 +238,13 @@ export class AuthManager extends EventEmitter {
         this.session = session;
         // Don't emit sessionChanged for token refresh - session user didn't change
       } else if (event === 'SIGNED_OUT') {
+        // Try recovery before accepting logout (SDK may have fired spuriously)
+        const recovered = await this.attemptSessionRecovery();
+        if (recovered) {
+          console.log('[AuthManager] Recovered session, ignoring spurious SIGNED_OUT');
+          return;
+        }
+
         if (this.lastEmittedUserId !== null) {
           this.session = null;
           this.lastEmittedUserId = null;
@@ -395,6 +402,31 @@ export class AuthManager extends EventEmitter {
       this.refreshInProgress = null;
       resolveRefresh!();
     }
+  }
+
+  /**
+   * Attempt to recover session when SDK fires spurious SIGNED_OUT.
+   * FileStorage preserves disk data when SDK clears memory, so we read directly from disk.
+   */
+  private async attemptSessionRecovery(): Promise<boolean> {
+    const sessionPath = path.join(app.getPath('userData'), 'supabase-session.json');
+    try {
+      if (!fs.existsSync(sessionPath)) return false;
+
+      const diskData = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
+      for (const value of Object.values(diskData)) {
+        if (typeof value === 'string') {
+          const parsed = JSON.parse(value);
+          if (parsed?.refresh_token) {
+            console.log('[AuthManager] Found disk-preserved refresh token, attempting recovery...');
+            return await this.coordinatedRefresh(parsed.refresh_token, 'recovery');
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[AuthManager] Recovery failed:', err);
+    }
+    return false;
   }
 
   /**

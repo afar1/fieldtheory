@@ -979,6 +979,7 @@ interface LibrarianAPI {
   isClaudeCodeHookInstalled: () => Promise<boolean>;
   initializeProjectStatus: (projectPath: string) => Promise<void>;
   onNewReadingAvailable: (callback: (readingPath: string) => void) => () => void;
+  onShowNewReading: (callback: (readingPath: string) => void) => () => void;
   setImmersiveMode: (immersive: boolean) => void;
   // Content guidance customization
   getDefaultContentGuidance: () => Promise<string>;
