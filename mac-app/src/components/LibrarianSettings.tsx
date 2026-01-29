@@ -761,6 +761,22 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                     )}
                   </div>
                 </div>
+
+                {/* Fresh session notice */}
+                <div style={{
+                  padding: '10px 12px',
+                  backgroundColor: theme.isDark ? 'rgba(234, 179, 8, 0.1)' : 'rgba(234, 179, 8, 0.08)',
+                  border: `1px solid ${theme.isDark ? 'rgba(234, 179, 8, 0.25)' : 'rgba(234, 179, 8, 0.2)'}`,
+                  borderRadius: '6px',
+                  marginTop: '4px',
+                }}>
+                  <div style={{ fontSize: '11px', color: theme.text, fontWeight: 500, marginBottom: '2px' }}>
+                    Changes require a fresh Claude session
+                  </div>
+                  <div style={{ fontSize: '10px', color: theme.textSecondary, lineHeight: '1.4' }}>
+                    Frequency, About You, and platform changes only take effect in new Claude Code or Cursor sessions.
+                  </div>
+                </div>
               </div>
             )}
 
