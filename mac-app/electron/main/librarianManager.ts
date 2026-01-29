@@ -23,9 +23,9 @@ export type DiscoveryFrequency = 'often' | 'sometimes' | 'rarely';
  * Uses center-biased randomness (median of 3) to feel natural.
  */
 export const DISCOVERY_CONFIG: Record<DiscoveryFrequency, { min: number; max: number; cap: number }> = {
-  often:     { min: 5,  max: 9,  cap: 10 },
-  sometimes: { min: 7,  max: 13, cap: 14 },
-  rarely:    { min: 10, max: 18, cap: 20 },
+  often:     { min: 3,  max: 7,  cap: 8 },
+  sometimes: { min: 10, max: 18, cap: 20 },
+  rarely:    { min: 25, max: 40, cap: 50 },
 };
 
 /**
