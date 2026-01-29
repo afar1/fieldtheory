@@ -1710,6 +1710,20 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           </>
         )}
 
+        {/* Keyboard shortcut notice */}
+        <div style={{
+          fontSize: '10px',
+          color: theme.textSecondary,
+          marginTop: '16px',
+          textAlign: 'center',
+          padding: '8px 12px',
+          backgroundColor: theme.isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.03)',
+          border: `1px solid ${theme.border}`,
+          borderRadius: '6px',
+        }}>
+          Tip: You can also use <strong style={{ color: theme.text }}>Command + Shift + I</strong> on any highlighted text to improve it
+        </div>
+
       </div>
         );
       })()}
@@ -2680,6 +2694,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     display: 'flex',
     alignItems: 'center',
     gap: '12px',
+    marginTop: '20px',
     marginBottom: '8px',
   },
   sectionTitle: {
