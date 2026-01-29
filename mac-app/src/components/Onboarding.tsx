@@ -119,10 +119,10 @@ function PermissionsPhase({
           styles={styles}
         />
 
-        {/* Screen Recording */}
+        {/* Screenshot Permission (macOS calls this "Screen Recording") */}
         <PermissionRow
-          label="Screen Recording"
-          description="Enables ability to take screenshots"
+          label="Screenshots"
+          description="Allows taking screenshots of your screen"
           granted={permissions.screenRecording}
           onGrant={onOpenScreenRecording}
           grantButtonText="Open Settings"
@@ -398,6 +398,8 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
   const [showNameInput, setShowNameInput] = useState(false);
   const [fullName, setFullName] = useState('');
   const [isSavingName, setIsSavingName] = useState(false);
+  // Loading state for session setup after OTP verification
+  const [isSettingUpSession, setIsSettingUpSession] = useState(false);
 
   // Load launch at login setting on mount (checks actual system state).
   useEffect(() => {
@@ -478,6 +480,10 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
       if (result?.error) {
         setError(result.error);
       } else if (result?.session) {
+        // Show loading state while setting up session
+        setIsVerifyingOtp(false);
+        setIsSettingUpSession(true);
+
         // Set session in Supabase client
         if (supabase) {
           await supabase.auth.setSession({
@@ -490,6 +496,9 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
           result.session.access_token,
           result.session.refresh_token
         );
+
+        setIsSettingUpSession(false);
+
         // Show name input for new users, skip for returning users
         if (onFinishReturning) {
           onFinishReturning();
@@ -499,6 +508,7 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
       }
     } catch (err) {
       setError('Failed to verify code. Please try again.');
+      setIsSettingUpSession(false);
     } finally {
       setIsVerifyingOtp(false);
     }
@@ -525,6 +535,21 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
     return (
       <div style={styles.phase}>
         <h1 style={styles.title}>Checking account...</h1>
+      </div>
+    );
+  }
+
+  // Show loading state while setting up session after OTP verification.
+  if (isSettingUpSession) {
+    return (
+      <div style={styles.phase}>
+        <div style={{ marginBottom: '16px' }}>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={theme.accent} strokeWidth="2" style={{ animation: 'spin 1s linear infinite' }}>
+            <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="10" />
+          </svg>
+        </div>
+        <h1 style={styles.title}>Signing in...</h1>
+        <p style={styles.subtitle}>Setting up your account</p>
       </div>
     );
   }

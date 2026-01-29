@@ -491,6 +491,17 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
+    // Block recording if no model is downloaded.
+    const modelAvailable = await this.modelManager.isModelAvailable();
+    if (!modelAvailable) {
+      console.log('[TranscriberManager] Recording blocked - no model downloaded');
+      const errorMsg = 'You must download a voice model first. Go to Settings → Transcription to download one.';
+      this.emit('error', new Error(errorMsg));
+      // Also show a visible note to the user
+      this.cursorStatusManager?.showRecordingNote(errorMsg);
+      return;
+    }
+
     // Check priority mic quota if a priority device is selected.
     // If quota exhausted, recording still works but priority mic won't be tracked.
     this.priorityMicSkippedForQuota = false;
@@ -1029,9 +1040,10 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Get whether auto-improve is enabled for transcripts.
+   * Default is true (enabled) for new users.
    */
   getAutoImprove(): boolean {
-    return this.preferences.getPreference('autoImproveTranscripts') ?? false;
+    return this.preferences.getPreference('autoImproveTranscripts') ?? true;
   }
 
   /**

@@ -589,20 +589,14 @@ export default function ClipboardHistory() {
   // App version for footer display.
   const [appVersion] = useState(() => window.updaterAPI?.getVersion?.() || '0.0.0');
   
-  // Release notes popup - show after update if version changed, or on first install.
-  const [showReleaseNotes, setShowReleaseNotes] = useState(() => {
-    const lastVersion = localStorage.getItem('lastSeenVersion');
-    const currentVersion = window.updaterAPI?.getVersion?.() || '0.0.0';
-    if (lastVersion !== currentVersion) {
-      localStorage.setItem('lastSeenVersion', currentVersion);
-      // Show on first install AND on updates.
-      return true;
-    }
-    return false;
-  });
+  // Release notes popup - only show when user explicitly requests via 3-second hover on "check for updates".
+  // Track version changes in localStorage but don't auto-show.
+  const [showReleaseNotes, setShowReleaseNotes] = useState(false);
   // Whether the popup is showing because user hovered or confirmed "uptodate" (vs. after update).
   const [releaseNotesLatestMode, setReleaseNotesLatestMode] = useState(false);
   const [versionHovered, setVersionHovered] = useState(false);
+  // Timer ref for 3-second hover to show release notes
+  const checkForUpdatesHoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   const [allTimeStats, setAllTimeStats] = useState<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>({
     stacks: 0, transcriptions: 0, screenshots: 0, improved: 0, words: 0,
@@ -630,6 +624,15 @@ export default function ClipboardHistory() {
   
   // Show in Dock - affects header padding for stoplight buttons.
   const [showInDock, setShowInDock] = useState(false);
+
+  // Cleanup release notes hover timer on unmount
+  useEffect(() => {
+    return () => {
+      if (checkForUpdatesHoverTimerRef.current) {
+        clearTimeout(checkForUpdatesHoverTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!isVisible || !window.clipboardAPI?.getAllTimeStats) return;
@@ -6504,6 +6507,34 @@ export default function ClipboardHistory() {
           </div>
         )}
 
+        {/* Release notes toggle icon - small square icon to toggle release notes popup */}
+        {showReleaseNotes && (
+          <button
+            onClick={() => {
+              setShowReleaseNotes(false);
+              setReleaseNotesLatestMode(false);
+            }}
+            style={{
+              background: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+              border: `1px solid ${theme.border}`,
+              borderRadius: '4px',
+              cursor: 'pointer',
+              padding: '3px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+            title="Hide release notes"
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={theme.text} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+          </button>
+        )}
+
         {/* Right side: update notification OR version + settings button */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', fontSize: '9px', flex: 1 }}>
           {/* Update notification (when active) or version number */}
@@ -6628,6 +6659,20 @@ export default function ClipboardHistory() {
                   ) : (
                     <button
                       onClick={() => window.updaterAPI?.checkForUpdates?.()}
+                      onMouseEnter={() => {
+                        // Start 3-second timer to show release notes
+                        checkForUpdatesHoverTimerRef.current = setTimeout(() => {
+                          setShowReleaseNotes(true);
+                          setReleaseNotesLatestMode(true);
+                        }, 3000);
+                      }}
+                      onMouseLeave={() => {
+                        // Clear timer if user moves away before 3 seconds
+                        if (checkForUpdatesHoverTimerRef.current) {
+                          clearTimeout(checkForUpdatesHoverTimerRef.current);
+                          checkForUpdatesHoverTimerRef.current = null;
+                        }
+                      }}
                       style={{
                         cursor: 'pointer',
                         color: theme.textSecondary,
@@ -6636,7 +6681,7 @@ export default function ClipboardHistory() {
                         border: 'none',
                         padding: 0,
                       }}
-                      title="Check for updates"
+                      title="Check for updates (hover 3s for release notes)"
                     >
                       Check for updates
                     </button>
