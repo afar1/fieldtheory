@@ -6794,6 +6794,46 @@ export default function ClipboardHistory() {
                       {userCallsign}
                     </span>
                   )}
+                  {/* Release notes toggle button */}
+                  <button
+                    onClick={() => {
+                      if (showReleaseNotes) {
+                        setShowReleaseNotes(false);
+                        setReleaseNotesLatestMode(false);
+                      } else {
+                        setShowReleaseNotes(true);
+                        setReleaseNotesLatestMode(true);
+                      }
+                    }}
+                    style={{
+                      width: '14px',
+                      height: '14px',
+                      padding: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: showReleaseNotes ? theme.accent : 'transparent',
+                      border: 'none',
+                      borderRadius: '3px',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!showReleaseNotes) {
+                        e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!showReleaseNotes) {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }
+                    }}
+                  >
+                    <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke={showReleaseNotes ? '#fff' : theme.textSecondary} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                      <line x1="3" y1="9" x2="21" y2="9" />
+                    </svg>
+                  </button>
                 </>
               )}
             </div>
