@@ -5309,6 +5309,13 @@ async function initTranscriberSystem(): Promise<void> {
       }
     });
 
+    // Check if muted for today - halts interruption even if existing sessions create artifacts
+    const isMuted = librarianManager!.isMutedForToday();
+    if (isMuted) {
+      console.log('[Librarian] Muted for today - skipping auto-show');
+      return;
+    }
+
     // Auto-show the window if enabled
     if (librarianManager!.isAutoShowEnabled()) {
       pendingImmersiveReading = reading.path;
