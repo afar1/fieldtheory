@@ -2399,6 +2399,13 @@ const librarianAPI = {
     return () => ipcRenderer.removeListener('librarian:newReadingAvailable', handler);
   },
 
+  // Listen for new reading to show immediately (when already in immersive mode)
+  onShowNewReading: (callback: (readingPath: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, readingPath: string) => callback(readingPath);
+    ipcRenderer.on('librarian:showNewReading', handler);
+    return () => ipcRenderer.removeListener('librarian:showNewReading', handler);
+  },
+
   // Notify main process of immersive mode changes (affects blur-to-hide behavior)
   setImmersiveMode: (immersive: boolean): void => {
     ipcRenderer.send('clipboard-history:setImmersiveMode', immersive);

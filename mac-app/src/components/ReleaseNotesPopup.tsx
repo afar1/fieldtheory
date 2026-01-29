@@ -9,6 +9,11 @@ import { useTheme } from '../contexts/ThemeContext';
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.49': [
+    'Fixed Command Launcher paste in Claude Code',
+    'Fixed spurious logouts from refresh token race condition',
+    'Improved Claude session disconnect handling',
+  ],
   '0.1.48': [
     'Librarian now supports serendipitous artifact creation',
     'Portable Commands: run markdown commands in any app (⌘⇧K)',
@@ -73,6 +78,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.49': 'Jan 28 2026',
   '0.1.48': 'Jan 19 2026',
   '0.1.47': 'Jan 18 2026',
   '0.1.46': 'Jan 17 2026',

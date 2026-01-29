@@ -1704,6 +1704,19 @@ export default function ClipboardHistory() {
     return () => unsubscribe?.();
   }, []);
 
+  // Handle new reading to show immediately (when already in immersive mode)
+  useEffect(() => {
+    const unsubscribe = window.librarianAPI?.onShowNewReading((readingPath: string) => {
+      // Update the reading being displayed in immersive mode
+      setPendingReadingPath(readingPath);
+      setShowSettings(false);
+      setViewMode('librarian');
+      setLibrarianImmersive(true);
+    });
+
+    return () => unsubscribe?.();
+  }, []);
+
   // Clear new reading indicator when user switches to Librarian tab
   useEffect(() => {
     if (viewMode === 'librarian') {
