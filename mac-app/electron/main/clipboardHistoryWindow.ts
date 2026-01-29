@@ -239,7 +239,7 @@ export class ClipboardHistoryWindow {
 
       // Play sound via renderer (instant - Web Audio API) BEFORE showing window.
       // The renderer plays it immediately with ~1ms latency.
-      if (!skipSound) {
+      if (!skipSound && this.soundManager.isEnabled()) {
         this.window.webContents.send('clipboard:playSound', 'windowOpen');
       }
 
@@ -550,10 +550,10 @@ export class ClipboardHistoryWindow {
     }
     this.isImmersiveMode = false;
 
-    // Only play sound if window is actually visible.
+    // Only play sound if window is actually visible and sounds are enabled.
     // This prevents double-play when blur event fires after direct hide() call.
     // Use renderer-based sound (Web Audio API) for instant playback.
-    if (this.window && !this.window.isDestroyed() && this.window.isVisible()) {
+    if (this.window && !this.window.isDestroyed() && this.window.isVisible() && this.soundManager.isEnabled()) {
       this.window.webContents.send('clipboard:playSound', 'windowClose');
     }
 
@@ -609,7 +609,7 @@ export class ClipboardHistoryWindow {
   playOpenSound(): void {
     // If window exists, use renderer-based sound for instant playback.
     // Otherwise fall back to main process sound.
-    if (this.window && !this.window.isDestroyed()) {
+    if (this.window && !this.window.isDestroyed() && this.soundManager.isEnabled()) {
       this.window.webContents.send('clipboard:playSound', 'windowOpen');
     } else {
       this.soundManager.play('windowOpen');
@@ -622,7 +622,7 @@ export class ClipboardHistoryWindow {
    */
   playArtifactDiscoverySound(): void {
     // Use renderer-based sound for instant playback.
-    if (this.window && !this.window.isDestroyed()) {
+    if (this.window && !this.window.isDestroyed() && this.soundManager.isEnabled()) {
       this.window.webContents.send('clipboard:playSound', 'artifactDiscovery');
     } else {
       this.soundManager.play('artifactDiscovery');
