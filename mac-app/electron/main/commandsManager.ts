@@ -575,23 +575,23 @@ export class CommandsManager extends EventEmitter {
 
     result.detected = result.matchedCommands.length > 0;
 
-    // Strip command invocation phrases from text for cleaner output.
+    // Replace the command name + "command" word with inline reference.
+    // e.g., "can you run the review command" → "can you run the [cmd:review.md]"
+    // We only replace "<name> command" or "command <name>", keeping surrounding phrases.
     if (result.detected) {
       let cleanText = text;
-      // Remove common patterns that mention commands.
-      for (const name of result.commandNames) {
+      for (const cmd of result.matchedCommands) {
+        const name = cmd.name;
         // Escape special regex characters in command name.
         const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        // Remove variations like "use the X command", "X command", "command X".
+        const ref = `[cmd:${name}.md]`;
+        // Replace the command name + "command" word with the reference in-place.
         const patterns = [
-          new RegExp(`\\b(?:use|apply|run|invoke|with)\\s+(?:the\\s+)?${escapedName}\\s+commands?\\b`, 'gi'),
-          new RegExp(`\\b${escapedName}\\s+commands?\\b`, 'gi'),
-          new RegExp(`\\bcommands?\\s+${escapedName}\\b`, 'gi'),
-          // Also handle list patterns like "commands X, Y, and Z".
-          new RegExp(`\\bcommands\\s+(?:${escapedName}(?:,\\s*|\\s+and\\s+|\\s+))+`, 'gi'),
+          new RegExp(`\\b${escapedName}\\s+commands?\\b`, 'gi'),  // "review command" → [cmd:review.md]
+          new RegExp(`\\bcommands?\\s+${escapedName}\\b`, 'gi'),  // "command review" → [cmd:review.md]
         ];
         for (const pattern of patterns) {
-          cleanText = cleanText.replace(pattern, '');
+          cleanText = cleanText.replace(pattern, ref);
         }
       }
       // Clean up extra whitespace.
@@ -794,16 +794,15 @@ End of User Commands
   /**
    * Insert inline command references into text (like [Figure A] for screenshots).
    * Format: [cmd:command-name.md]
-   * Returns the text with references inserted at the end.
+   *
+   * Note: References are now inserted in-place during detectCommands() when
+   * "X command" patterns are replaced. This method now just returns the text
+   * as-is since references are already inline.
    */
   insertCommandReferences(text: string, commands: PortableCommand[]): string {
-    if (commands.length === 0) {
-      return text;
-    }
-
-    // Add command references at the end of the text
-    const refs = commands.map(cmd => `[cmd:${cmd.name}.md]`).join(' ');
-    return `${text} ${refs}`;
+    // References are already inserted inline during detection.
+    // Just return the text (which already has [cmd:name.md] refs in-place).
+    return text;
   }
 
   /**
@@ -822,15 +821,15 @@ End of User Commands
       return text;
     }
 
-    // Replace [cmd:name.md] references with numbered [cmd1], [cmd2], etc.
+    // Replace [cmd:name.md] references with numbered [cmd1: name], [cmd2: name], etc.
     let formattedText = text;
     const commandPaths: string[] = [];
 
     commands.forEach((cmd, index) => {
       const cmdNum = index + 1;
       const refPattern = new RegExp(`\\[cmd:${cmd.name}\\.md\\]`, 'gi');
-      formattedText = formattedText.replace(refPattern, `[cmd${cmdNum}]`);
-      commandPaths.push(`[cmd${cmdNum}] ${cmd.filePath}`);
+      formattedText = formattedText.replace(refPattern, `[cmd${cmdNum}: ${cmd.name}]`);
+      commandPaths.push(`[cmd${cmdNum}: ${cmd.name}] ${cmd.filePath}`);
     });
 
     // Add the commands list at the end
