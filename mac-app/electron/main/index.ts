@@ -1727,6 +1727,21 @@ function setupLibrarianIPCHandlers(): void {
     return true;
   });
 
+  // Mute librarian for today
+  ipcMain.handle('librarian:muteForToday', (): boolean => {
+    return librarianManager?.muteForToday() ?? false;
+  });
+
+  // Check if muted for today
+  ipcMain.handle('librarian:isMutedForToday', (): boolean => {
+    return librarianManager?.isMutedForToday() ?? false;
+  });
+
+  // Unmute librarian
+  ipcMain.handle('librarian:unmute', (): boolean => {
+    return librarianManager?.unmute() ?? false;
+  });
+
   // ===========================================================================
   // Claude IPC handlers - Claude Code integration settings
   // ===========================================================================

@@ -2535,6 +2535,13 @@ const librarianAPI = {
     ipcRenderer.invoke('librarian:getShareStatus', filePath),
   updateSharedReading: (filePath: string, content: string, title: string): Promise<boolean> =>
     ipcRenderer.invoke('librarian:updateSharedReading', filePath, content, title),
+  // Mute for today
+  muteForToday: (): Promise<boolean> =>
+    ipcRenderer.invoke('librarian:muteForToday'),
+  isMutedForToday: (): Promise<boolean> =>
+    ipcRenderer.invoke('librarian:isMutedForToday'),
+  unmute: (): Promise<boolean> =>
+    ipcRenderer.invoke('librarian:unmute'),
 };
 
 type LibrarianAPI = typeof librarianAPI;

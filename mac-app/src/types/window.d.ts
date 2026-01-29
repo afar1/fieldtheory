@@ -1002,6 +1002,10 @@ interface LibrarianAPI {
   updateSharedReading: (filePath: string, content: string, title: string) => Promise<boolean>;
   // Poll status (used in ClipboardHistory)
   pollStatus?: () => Promise<{ pending: number; completed: number; pendingPath?: string } | null>;
+  // Mute for today
+  muteForToday: () => Promise<boolean>;
+  isMutedForToday: () => Promise<boolean>;
+  unmute: () => Promise<boolean>;
 }
 
 declare global {

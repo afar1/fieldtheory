@@ -2946,18 +2946,25 @@ def main():
     # Read rule_content from config (includes user expertise if set)
     rule_content = cfg.get("rule_content", DEFAULT_RULE_CONTENT)
 
-    # Read threshold from state.json (managed by app's game mechanics)
+    # Read threshold and mute status from state.json (managed by app's game mechanics)
     threshold = 7  # Default
+    muted_until = 0
     if state_path.exists():
         try:
             with open(state_path) as f:
                 state = json.load(f)
                 threshold = state.get("threshold", 7)
+                muted_until = state.get("mutedUntil", 0)
         except:
             pass
 
     if not isinstance(threshold, int) or threshold <= 0:
         threshold = 7
+
+    # Check if muted for today
+    import time
+    if muted_until and time.time() * 1000 < muted_until:
+        return  # Muted, skip artifact generation
 
     jobs_dir = central_dir / "jobs"
     artifacts_dir = central_dir / "artifacts"
@@ -3467,6 +3474,87 @@ if __name__ == "__main__":
   }
 
   // ===========================================================================
+  // Mute for Today
+  // ===========================================================================
+
+  /**
+   * Mute the Librarian until end of today (midnight local time).
+   * Updates state.json with a mutedUntil timestamp.
+   */
+  muteForToday(): boolean {
+    try {
+      const stateFile = path.join(os.homedir(), '.fieldtheory', 'librarian', 'state.json');
+
+      // Calculate midnight tonight (local time)
+      const now = new Date();
+      const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0);
+      const mutedUntil = midnight.getTime();
+
+      // Read existing state
+      let state: { count: number; threshold: number; mutedUntil?: number } = { count: 0, threshold: 7 };
+      if (fs.existsSync(stateFile)) {
+        try {
+          state = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+        } catch {
+          // Use defaults
+        }
+      }
+
+      // Add mutedUntil
+      state.mutedUntil = mutedUntil;
+      fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+      console.log(`[LibrarianManager] Muted until ${midnight.toISOString()}`);
+      return true;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to mute:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Check if the Librarian is currently muted.
+   */
+  isMutedForToday(): boolean {
+    try {
+      const stateFile = path.join(os.homedir(), '.fieldtheory', 'librarian', 'state.json');
+      if (!fs.existsSync(stateFile)) {
+        return false;
+      }
+
+      const state = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+      if (!state.mutedUntil) {
+        return false;
+      }
+
+      return Date.now() < state.mutedUntil;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to check mute status:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Unmute the Librarian (clear the mutedUntil timestamp).
+   */
+  unmute(): boolean {
+    try {
+      const stateFile = path.join(os.homedir(), '.fieldtheory', 'librarian', 'state.json');
+      if (!fs.existsSync(stateFile)) {
+        return true;
+      }
+
+      const state = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+      delete state.mutedUntil;
+      fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+      console.log('[LibrarianManager] Unmuted');
+      return true;
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to unmute:', error);
+      return false;
+    }
+  }
+
+  // ===========================================================================
   // Setup Wizard Support
   // ===========================================================================
 
@@ -3756,6 +3844,17 @@ def main():
     state_file = central_dir / "state.json"
     lock_file = central_dir / ".lock"
     seq_file = central_dir / ".seq"
+
+    # Check mute status
+    if state_file.exists():
+        try:
+            import time
+            state_data = json.loads(state_file.read_text())
+            muted_until = state_data.get("mutedUntil", 0)
+            if muted_until and time.time() * 1000 < muted_until:
+                return  # Muted, skip artifact generation
+        except:
+            pass
 
     # Ensure directories exist
     jobs_dir.mkdir(parents=True, exist_ok=True)
