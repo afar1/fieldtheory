@@ -150,8 +150,14 @@ export class OnboardingWindow {
   /**
    * Show the onboarding window.
    * If already visible, brings it to focus.
+   * Also shows the app in the Dock so user can Cmd+Tab back to it.
    */
   show(startStep: OnboardingStep = OnboardingStep.WELCOME): void {
+    // Show app in Dock during onboarding so user can Cmd+Tab back
+    if (app.dock) {
+      app.dock.show();
+    }
+
     if (this.window && !this.window.isDestroyed()) {
       // Bring to front on macOS
       this.window.show();
