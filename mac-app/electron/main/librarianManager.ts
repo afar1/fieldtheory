@@ -184,6 +184,34 @@ export class LibrarianManager extends EventEmitter {
   }
 
   /**
+   * Get the concepts index for story/lesson deduplication.
+   * Returns null if the index doesn't exist.
+   * Note: Always reads from global path since hook.py writes there (no user context).
+   */
+  getConceptsIndex(): {
+    schema_version: number;
+    description?: string;
+    indexed_at: string | null;
+    artifacts: Record<string, { title: string; stories: string[]; lessons: string[] }>;
+    stories_used: string[];
+    lessons_used: string[];
+  } | null {
+    // Hook writes to global path (no user context), so always read from there
+    const globalLibrarianDir = path.join(os.homedir(), '.fieldtheory', 'librarian');
+    const indexPath = path.join(globalLibrarianDir, 'concepts_index.json');
+    if (!fs.existsSync(indexPath)) {
+      return null;
+    }
+    try {
+      const content = fs.readFileSync(indexPath, 'utf-8');
+      return JSON.parse(content);
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to read concepts index:', error);
+      return null;
+    }
+  }
+
+  /**
    * Reinitialize for the current user. Call after setUserDataManager when user changes.
    */
   async reinitializeForUser(): Promise<void> {

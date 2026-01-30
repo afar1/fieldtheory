@@ -642,7 +642,7 @@ export class ClipboardManager extends EventEmitter {
       const image = clipboard.readImage();
       if (!image.isEmpty()) {
         const imageBuffer = image.toPNG();
-        const hash = this.hashContent(imageBuffer.toString('base64'));
+        const hash = this.hashContent(imageBuffer);
         if (hash !== this.lastContentHash) {
           this.lastContentHash = hash;
 
@@ -802,7 +802,7 @@ export class ClipboardManager extends EventEmitter {
     stackId?: string,
     source: ClipboardSource = 'mac'
   ): Promise<number> {
-    const hash = this.hashContent(imageBuffer.toString('base64'));
+    const hash = this.hashContent(imageBuffer);
     
     // Check if already exists (unless it's part of a stack - stacks can have duplicates)
     if (!stackId) {
@@ -1392,7 +1392,7 @@ export class ClipboardManager extends EventEmitter {
         }
         
         // Update lastContentHash to prevent polling from re-storing this image.
-        this.lastContentHash = this.hashContent(imageBuffer.toString('base64'));
+        this.lastContentHash = this.hashContent(imageBuffer);
         
         // Store in history (with stackId if provided)
         const id = await this.storeImage(image, imageBuffer, 'screenshot', undefined, stackId);
@@ -1412,7 +1412,7 @@ export class ClipboardManager extends EventEmitter {
           const image = nativeImage.createFromBuffer(imageBuffer);
 
           // Update lastContentHash to prevent polling from re-storing this image
-          this.lastContentHash = this.hashContent(imageBuffer.toString('base64'));
+          this.lastContentHash = this.hashContent(imageBuffer);
 
           // Store in history (with stackId if provided)
           const id = await this.storeImage(image, imageBuffer, 'screenshot', undefined, stackId);
@@ -1444,7 +1444,7 @@ export class ClipboardManager extends EventEmitter {
           const image = nativeImage.createFromBuffer(imageBuffer);
 
           // Update lastContentHash to prevent polling from re-storing this image
-          this.lastContentHash = this.hashContent(imageBuffer.toString('base64'));
+          this.lastContentHash = this.hashContent(imageBuffer);
 
           // Store in history (with stackId if provided)
           const id = await this.storeImage(image, imageBuffer, 'screenshot', undefined, stackId);
@@ -1910,7 +1910,7 @@ export class ClipboardManager extends EventEmitter {
       const imageBuffer = image.toPNG();
       
       // Update lastContentHash to prevent polling from re-storing this image
-      this.lastContentHash = this.hashContent(imageBuffer.toString('base64'));
+      this.lastContentHash = this.hashContent(imageBuffer);
       
       // Store in history with the continuous context stack ID
       const id = await this.storeImage(
@@ -1985,8 +1985,9 @@ export class ClipboardManager extends EventEmitter {
 
   /**
    * Hash content for deduplication.
+   * Accepts both strings and Buffers directly to avoid expensive base64 conversion.
    */
-  private hashContent(content: string): string {
+  private hashContent(content: string | Buffer): string {
     return crypto.createHash('sha256').update(content).digest('hex');
   }
 
@@ -2025,15 +2026,32 @@ export class ClipboardManager extends EventEmitter {
         this.lastContentHash = this.hashContent(text);
         return;
       }
-      
+
       const image = clipboard.readImage();
       if (!image.isEmpty()) {
         const imageBuffer = image.toPNG();
-        this.lastContentHash = this.hashContent(imageBuffer.toString('base64'));
+        this.lastContentHash = this.hashContent(imageBuffer);
       }
     } catch (error) {
       console.debug('[ClipboardManager] Error syncing clipboard hash:', error);
     }
+  }
+
+  /**
+   * Set the clipboard hash directly from a buffer.
+   * Use this when you already have the image buffer to avoid expensive
+   * clipboard.readImage() + toPNG() calls during paste operations.
+   */
+  setClipboardHashFromBuffer(buffer: Buffer): void {
+    this.lastContentHash = this.hashContent(buffer);
+  }
+
+  /**
+   * Set the clipboard hash directly from text content.
+   * Use this when you already have the text to avoid clipboard reads.
+   */
+  setClipboardHashFromText(text: string): void {
+    this.lastContentHash = this.hashContent(text);
   }
 
   /**

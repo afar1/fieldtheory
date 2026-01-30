@@ -9,6 +9,7 @@ import ReactMarkdown from 'react-markdown';
 import { fonts } from '../design/tokens';
 import ContentToolbar from './ContentToolbar';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
+import ConceptGraphView from './ConceptGraphView';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
 
 interface LibrarianViewProps {
@@ -119,6 +120,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const [isMutedForToday, setIsMutedForToday] = useState(false);
   const [isMuting, setIsMuting] = useState(false);
 
+  // View mode: 'reading' shows artifact content, 'graph' shows concept graph
+  const [viewMode, setViewMode] = useState<'reading' | 'graph'>('reading');
+  const [conceptsIndex, setConceptsIndex] = useState<ConceptsIndex | null>(null);
+
   // Handle initial reading path and fullscreen from parent (auto-open flow)
   useEffect(() => {
     if (initialReadingPath) {
@@ -139,6 +144,13 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     window.librarianAPI?.isMutedForToday().then((muted) => {
       setIsMutedForToday(muted ?? false);
+    });
+  }, []);
+
+  // Load concepts index for graph view
+  useEffect(() => {
+    window.librarianAPI?.getConceptsIndex().then((index) => {
+      setConceptsIndex(index);
     });
   }, []);
 
@@ -308,17 +320,27 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     try {
       if (shareStatus?.shared) {
         // Unshare
-        const success = await window.librarianAPI?.unshareReading(selectedPath);
+        const success = await Promise.race([
+          window.librarianAPI?.unshareReading(selectedPath),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 15000)),
+        ]);
         if (success) {
           setShareStatus({ shared: false });
         }
       } else {
         // Share
-        const result = await window.librarianAPI?.shareReading(selectedPath);
+        const result = await Promise.race([
+          window.librarianAPI?.shareReading(selectedPath),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 15000)),
+        ]);
         if (result) {
           setShareStatus({ shared: true, slug: result.slug, url: result.url });
+        } else {
+          console.warn('[Librarian] Share failed or timed out');
         }
       }
+    } catch (err) {
+      console.error('[Librarian] Share error:', err);
     } finally {
       setIsSharing(false);
     }
@@ -1340,6 +1362,61 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                   </span>
                 </button>
               )}
+
+              {/* Spacer */}
+              <div style={{ flex: 1 }} />
+
+              {/* View mode toggle - Reading / Graph */}
+              {!isEditing && (
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: '2px',
+                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+                    borderRadius: '6px',
+                    padding: '2px',
+                    opacity: isFullScreen && !headerHovered ? 0 : 1,
+                    transition: 'opacity 0.15s ease',
+                  }}
+                >
+                  <button
+                    onClick={() => setViewMode('reading')}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      color: viewMode === 'reading' ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
+                      backgroundColor: viewMode === 'reading'
+                        ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
+                        : 'transparent',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    Reading
+                  </button>
+                  <button
+                    onClick={() => setViewMode('graph')}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      color: viewMode === 'graph' ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
+                      backgroundColor: viewMode === 'graph'
+                        ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
+                        : 'transparent',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    Graph
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1349,13 +1426,27 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           style={{
             flex: 1,
             minHeight: 0, // Required for flex child to shrink and enable scrolling
-            overflowY: 'auto',
-            padding: isFullScreen ? '8px 32px 16px 32px' : '24px 32px',
+            overflowY: viewMode === 'graph' ? 'hidden' : 'auto',
+            padding: viewMode === 'graph' ? 0 : (isFullScreen ? '8px 32px 16px 32px' : '24px 32px'),
             display: 'flex',
             justifyContent: 'center',
           }}
         >
-        {selectedReading ? (
+        {viewMode === 'graph' ? (
+          /* Graph view - concept visualization */
+          <ConceptGraphView
+            index={conceptsIndex}
+            selectedArtifact={selectedPath || undefined}
+            onSelectArtifact={(filename) => {
+              // Find the reading with this filename and select it
+              const reading = readings.find((r) => r.path.endsWith(filename));
+              if (reading) {
+                setSelectedPath(reading.path);
+                setViewMode('reading');
+              }
+            }}
+          />
+        ) : selectedReading ? (
           <div
             style={{
               maxWidth: '600px',
@@ -1717,17 +1808,24 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                           // Already shared - unshare
                           await handleShare();
                         } else {
-                          // Not shared - share and copy link
+                          // Share and copy link
                           setIsSharing(true);
                           try {
-                            const result = await window.librarianAPI?.shareReading(selectedPath!);
+                            const result = await Promise.race([
+                              window.librarianAPI?.shareReading(selectedPath!),
+                              new Promise<null>((resolve) => setTimeout(() => resolve(null), 15000)),
+                            ]);
                             if (result) {
                               setShareStatus({ shared: true, slug: result.slug, url: result.url });
                               // Copy link to clipboard
                               await navigator.clipboard.writeText(result.url);
                               setLinkCopied(true);
                               setTimeout(() => setLinkCopied(false), 2000);
+                            } else {
+                              console.warn('[Librarian] Share failed or timed out');
                             }
+                          } catch (err) {
+                            console.error('[Librarian] Share error:', err);
                           } finally {
                             setIsSharing(false);
                           }

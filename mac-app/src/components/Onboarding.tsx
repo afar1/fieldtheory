@@ -491,11 +491,21 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
             refresh_token: result.session.refresh_token,
           });
         }
-        // Forward session to main process for sync
-        await window.clipboardAPI?.setSyncSession?.(
-          result.session.access_token,
-          result.session.refresh_token
-        );
+        // Forward session to main process
+        try {
+          await Promise.race([
+            window.clipboardAPI?.setSyncSession?.(
+              result.session.access_token,
+              result.session.refresh_token
+            ),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('Session sync timeout')), 10000)
+            ),
+          ]);
+        } catch (syncError) {
+          console.warn('[Onboarding] Session sync to main process failed, continuing:', syncError);
+          // Continue anyway - the renderer has the session, main process will recover on next sync
+        }
 
         setIsSettingUpSession(false);
 
