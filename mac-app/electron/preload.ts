@@ -2321,6 +2321,16 @@ interface WatchedDir {
   enabled: boolean;
 }
 
+// Concepts index for story/lesson deduplication
+interface ConceptsIndex {
+  schema_version: number;
+  description?: string;
+  indexed_at: string | null;
+  artifacts: Record<string, { title: string; stories: string[]; lessons: string[] }>;
+  stories_used: string[];
+  lessons_used: string[];
+}
+
 // Librarian API for reading collection
 // File-only architecture: .librarian/ directories are the single source of truth
 const librarianAPI = {
@@ -2542,6 +2552,9 @@ const librarianAPI = {
     ipcRenderer.invoke('librarian:isMutedForToday'),
   unmute: (): Promise<boolean> =>
     ipcRenderer.invoke('librarian:unmute'),
+  // Concepts index for story/lesson graph visualization
+  getConceptsIndex: (): Promise<ConceptsIndex | null> =>
+    ipcRenderer.invoke('librarian:getConceptsIndex'),
 };
 
 type LibrarianAPI = typeof librarianAPI;

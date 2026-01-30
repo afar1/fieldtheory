@@ -361,17 +361,22 @@ export class AuthManager extends EventEmitter {
     });
 
     try {
-      const { data: refreshData, error: refreshError } = await this.supabase!.auth.refreshSession({
+      const refreshPromise = this.supabase!.auth.refreshSession({
         refresh_token: refreshToken,
       });
+      const timeoutPromise = new Promise<{ data: { session: null }; error: { message: string } }>((resolve) =>
+        setTimeout(() => resolve({ data: { session: null }, error: { message: 'Refresh timeout after 15s' } }), 15000)
+      );
+
+      const { data: refreshData, error: refreshError } = await Promise.race([refreshPromise, timeoutPromise]);
 
       if (refreshError) {
         if (this.isTokenRevoked(refreshError)) {
           console.log(`[AuthManager] Refresh token revoked (${source}), user must re-login`);
           return false;
         } else {
-          // Network error - SDK will retry automatically via autoRefreshToken
-          console.log(`[AuthManager] Network error during ${source} refresh, SDK will retry:`, refreshError.message);
+          // Network error or timeout - SDK will retry automatically via autoRefreshToken
+          console.log(`[AuthManager] Error during ${source} refresh, SDK will retry:`, refreshError.message);
           return false;
         }
       }
@@ -442,10 +447,15 @@ export class AuthManager extends EventEmitter {
       return; // Skip duplicate failed token
     }
 
-    const { data, error } = await this.supabase.auth.setSession({
+    const setSessionPromise = this.supabase.auth.setSession({
       access_token: accessToken,
       refresh_token: refreshToken,
     });
+    const timeoutPromise = new Promise<{ data: { session: null }; error: { message: string } }>((resolve) =>
+      setTimeout(() => resolve({ data: { session: null }, error: { message: 'setSession timeout after 10s' } }), 10000)
+    );
+
+    const { data, error } = await Promise.race([setSessionPromise, timeoutPromise]);
 
     if (error) {
       console.log('[AuthManager] Access token expired, attempting coordinated refresh...');

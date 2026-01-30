@@ -753,29 +753,17 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     window.scenarioAPI?.isSuperAdmin().then(setIsSuperAdmin);
   }, [session?.user?.id]);
 
-  // Handle sign out.
+  // Handle sign out - app quits after successful sign out.
   const handleSignOut = async () => {
     setAuthLoading(true);
     try {
+      // Main process will quit the app after successful sign out.
+      // If sign out fails, we'll reach the finally block.
       await window.authAPI?.signOut();
-      if (supabase) {
-        await supabase.auth.signOut();
-      }
-      
-      // Supabase persists session in localStorage. When signOut() fails with
-      // "Auth session missing!", it doesn't clear storage. We must clear it
-      // manually to prevent getSession() from restoring the old session.
-      const supabaseKeys = Object.keys(localStorage).filter(k => k.startsWith('sb-'));
-      supabaseKeys.forEach(k => localStorage.removeItem(k));
-
-      // Also clear sharing unlock state to hide Team button
-      localStorage.removeItem('sharingUnlocked');
-      
-      setSyncStatus(null);
-      setSession(null);
     } catch (err) {
       console.error('Sign out error:', err);
     } finally {
+      // Only reached if sign out failed (app didn't quit)
       setAuthLoading(false);
     }
   };
@@ -2139,7 +2127,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                     disabled={authLoading}
                     style={styles.linkBtn}
                   >
-                    {authLoading ? '...' : 'Sign out'}
+                    {authLoading ? '...' : 'Sign Out & Quit'}
                   </button>
                 </div>
 
