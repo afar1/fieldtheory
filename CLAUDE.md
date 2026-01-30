@@ -238,3 +238,18 @@ This lets Claude write to `~/.fieldtheory/librarian/` without permission prompts
 - Change the `hookSpecificOutput` JSON structure - Claude Code expects this exact format
 - Move counting logic to PreToolUse - that hook fires per-tool, not per-prompt
 - Create "auto-generate" static artifacts - defeats the purpose of AI-written reflections
+
+### Developer Setup
+
+To enable auto-approval for Field Theory paths (figures, commands, librarian), run:
+
+```bash
+.claude/hooks/setup.sh
+```
+
+This installs a PreToolUse hook that auto-approves Read/Write/Edit for:
+- `~/.fieldtheory/librarian/*` - Librarian artifacts and jobs
+- `~/Library/Application Support/fieldtheory-mac/figures/*` - Screenshot figures
+- `.cursor/commands/*` - Portable commands
+
+The hook runs independently of whether the Librarian is enabled. Source: `.claude/hooks/pretool.py`
