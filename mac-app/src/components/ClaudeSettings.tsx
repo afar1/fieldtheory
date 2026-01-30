@@ -33,7 +33,6 @@ export default function ClaudeSettings() {
   const [expandedProfile, setExpandedProfile] = useState<string | null>(null);
   const [newPermission, setNewPermission] = useState('');
   const [addingPermission, setAddingPermission] = useState(false);
-  const [figuresPath, setFiguresPath] = useState<string>('');
 
   // Read permission hooks state
   const [claudeHookInstalled, setClaudeHookInstalled] = useState(false);
@@ -49,16 +48,14 @@ export default function ClaudeSettings() {
     }
 
     try {
-      const [profilesData, statusData, figuresPathData, claudeHook, cursorHook] = await Promise.all([
+      const [profilesData, statusData, claudeHook, cursorHook] = await Promise.all([
         window.claudeAPI.getAvailableProfiles(),
         window.claudeAPI.getPermissionStatus(),
-        window.claudeAPI.getFiguresPath?.() ?? Promise.resolve(''),
         window.claudeAPI.isReadPermissionHookInstalled?.() ?? Promise.resolve(false),
         window.cursorAPI?.isReadPermissionHookInstalled?.() ?? Promise.resolve(false),
       ]);
       setProfiles(profilesData);
       setStatus(statusData);
-      setFiguresPath(figuresPathData);
       setClaudeHookInstalled(claudeHook);
       setCursorHookInstalled(cursorHook);
     } catch (err) {
@@ -179,108 +176,8 @@ export default function ClaudeSettings() {
     dev: 'Dev',
   };
 
-  // Field Theory permissions - all granted together
-  const fieldTheoryPermissions = [
-    'Read(.cursor/commands/*)',
-    ...(figuresPath ? [`Read(${figuresPath}/*)`] : []),
-    'Bash(git diff *)',
-  ];
-
-  // Check if all Field Theory permissions are granted
-  const allPermissionsGranted = fieldTheoryPermissions.every(
-    perm => status?.allClaudePermissions.includes(perm)
-  );
-
-  const handleToggleAllPermissions = async () => {
-    if (!window.claudeAPI || applying) return;
-
-    setApplying(true);
-    setError(null);
-
-    try {
-      const success = allPermissionsGranted
-        ? await window.claudeAPI.removePermissions(fieldTheoryPermissions)
-        : await window.claudeAPI.addPermissions(fieldTheoryPermissions);
-      if (success) {
-        await loadData();
-      } else {
-        setError(`Failed to ${allPermissionsGranted ? 'remove' : 'add'} permissions`);
-      }
-    } catch (err) {
-      console.error('Failed to toggle permissions:', err);
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setApplying(false);
-    }
-  };
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      {/* Field Theory Permissions - Single Connect/Disconnect */}
-      <div
-        style={{
-          padding: '16px',
-          borderRadius: '8px',
-          backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
-          border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
-              Read Access
-            </span>
-            {allPermissionsGranted ? (
-              <span style={{
-                fontSize: '10px',
-                color: theme.success,
-                padding: '2px 6px',
-                backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)',
-                borderRadius: '4px',
-              }}>
-                Connected
-              </span>
-            ) : (
-              <span style={{
-                fontSize: '10px',
-                color: theme.warning,
-                padding: '2px 6px',
-                backgroundColor: theme.isDark ? 'rgba(234, 179, 8, 0.15)' : 'rgba(234, 179, 8, 0.1)',
-                borderRadius: '4px',
-              }}>
-                Setup needed
-              </span>
-            )}
-          </div>
-          <button
-            onClick={handleToggleAllPermissions}
-            disabled={applying}
-            style={{
-              padding: '4px 10px',
-              fontSize: '11px',
-              fontWeight: 500,
-              color: theme.text,
-              backgroundColor: 'transparent',
-              border: `1px solid ${theme.border}`,
-              borderRadius: '4px',
-              cursor: applying ? 'wait' : 'pointer',
-              opacity: applying ? 0.5 : 1,
-            }}
-          >
-            {applying ? '...' : allPermissionsGranted ? 'Disconnect' : 'Connect'}
-          </button>
-        </div>
-        <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '8px' }}>
-          Let Claude Code read screenshots and portable commands (does not affect Librarian)
-        </div>
-      </div>
-
       {/* Read Permission Hooks - Auto-approve without prompts */}
       <div
         style={{
