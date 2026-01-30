@@ -192,7 +192,7 @@ export default function ClaudeSettings() {
             Auto-Approve File Reads
           </div>
           <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '4px', lineHeight: '1.5' }}>
-            Skip manual approval when reading screenshots you take in Field Theory or portable commands you create
+            This feature reduces agent babysitting. It gives an agent permission to read the screenshots you take and the command directories you link.
           </div>
         </div>
 
