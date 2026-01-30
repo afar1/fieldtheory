@@ -415,6 +415,12 @@ export class ClipboardHistoryWindow {
         return;
       }
 
+      // Don't hide when sketch/draw mode is active.
+      // User may be in the middle of drawing and accidentally clicked away.
+      if (this.sketchModeActive) {
+        return;
+      }
+
       // Don't hide when scenario testing panel is active.
       // User needs to see changes in real-time while adjusting overrides.
       if (this.scenarioTestingActive) {
