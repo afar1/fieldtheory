@@ -636,14 +636,24 @@ export default function ClaudeSettings() {
       )}
 
       {/* Info Footer */}
-      <p style={{ fontSize: '10px', color: theme.textSecondary, lineHeight: '1.5', margin: 0 }}>
-        Stored in <code style={{
-          fontSize: '9px',
-          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
-          padding: '1px 4px',
-          borderRadius: '3px'
-        }}>~/.claude/settings.json</code>. Librarian write permissions are configured separately per-project.
-      </p>
+      <div style={{ fontSize: '10px', color: theme.textSecondary, lineHeight: '1.6' }}>
+        <p style={{ margin: '0 0 4px 0' }}>
+          Claude Code: <code style={{
+            fontSize: '9px',
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+            padding: '1px 4px',
+            borderRadius: '3px'
+          }}>~/.claude/settings.json</code>
+        </p>
+        <p style={{ margin: 0 }}>
+          Cursor: <code style={{
+            fontSize: '9px',
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+            padding: '1px 4px',
+            borderRadius: '3px'
+          }}>~/.cursor/hooks.json</code>
+        </p>
+      </div>
     </div>
   );
 }
