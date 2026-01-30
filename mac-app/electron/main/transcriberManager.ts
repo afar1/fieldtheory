@@ -1820,7 +1820,8 @@ export class TranscriberManager extends EventEmitter {
             : item.imageData;
           const image = nativeImage.createFromBuffer(imageBuffer);
           clipboard.writeImage(image);
-          this.clipboardManager?.syncClipboardHash();
+          // Set hash directly from the buffer (avoids expensive toPNG() call)
+          this.clipboardManager?.setClipboardHashFromBuffer(imageBuffer);
           await this.pasteText();
         }
       }

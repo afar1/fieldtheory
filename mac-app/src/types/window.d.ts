@@ -1006,6 +1006,8 @@ interface LibrarianAPI {
   muteForToday: () => Promise<boolean>;
   isMutedForToday: () => Promise<boolean>;
   unmute: () => Promise<boolean>;
+  // Concepts index for story/lesson deduplication graph
+  getConceptsIndex: () => Promise<ConceptsIndex | null>;
 }
 
 declare global {
@@ -1036,6 +1038,23 @@ declare global {
   interface WatchedDir {
     path: string;
     enabled: boolean;
+  }
+
+  /**
+   * Concepts index for story/lesson deduplication.
+   * Tracks which historical examples and lessons have been used in artifacts.
+   */
+  interface ConceptsIndex {
+    schema_version: number;
+    description?: string;
+    indexed_at: string | null;
+    artifacts: Record<string, {
+      title: string;
+      stories: string[];
+      lessons: string[];
+    }>;
+    stories_used: string[];
+    lessons_used: string[];
   }
 
   /**

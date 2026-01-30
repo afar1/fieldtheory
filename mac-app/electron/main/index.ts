@@ -1743,6 +1743,18 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager?.unmute() ?? false;
   });
 
+  // Get concepts index for story/lesson graph visualization
+  ipcMain.handle('librarian:getConceptsIndex', (): {
+    schema_version: number;
+    description?: string;
+    indexed_at: string | null;
+    artifacts: Record<string, { title: string; stories: string[]; lessons: string[] }>;
+    stories_used: string[];
+    lessons_used: string[];
+  } | null => {
+    return librarianManager?.getConceptsIndex() ?? null;
+  });
+
   // ===========================================================================
   // Claude IPC handlers - Claude Code integration settings
   // ===========================================================================
@@ -2401,6 +2413,7 @@ function setupClipboardIPCHandlers(): void {
       const isTerminal = isTerminalApp(effectiveBundleId);
 
       // Put content on clipboard first.
+      // Use optimized hash methods to avoid expensive clipboard reads after write.
       if (item.type === 'text' || item.type === 'transcript') {
         // Use improved content if available and toggle is set.
         let textContent = (item.useImprovedVersion && item.improvedContent)
@@ -2432,6 +2445,8 @@ function setupClipboardIPCHandlers(): void {
         }
 
         clipboard.writeText(textContent);
+        // Set hash directly from the text we just wrote (avoids clipboard read)
+        clipboardManager.setClipboardHashFromText(textContent);
       } else if (item.imageData) {
         if (isTerminal) {
           // For terminals: export image to file and put path on clipboard
@@ -2442,6 +2457,8 @@ function setupClipboardIPCHandlers(): void {
               ? `Figure ${item.figureLabel}: ${imagePath}`
               : imagePath;
             clipboard.writeText(figureRef);
+            // Set hash directly from the text we just wrote
+            clipboardManager.setClipboardHashFromText(figureRef);
           } else {
             console.error('[Main] Failed to export image for terminal paste');
             return;
@@ -2454,10 +2471,10 @@ function setupClipboardIPCHandlers(): void {
             : item.imageData;
           const image = nativeImage.createFromBuffer(imageBuffer);
           clipboard.writeImage(image);
+          // Set hash directly from the buffer we just wrote (avoids expensive toPNG() call)
+          clipboardManager.setClipboardHashFromBuffer(imageBuffer);
         }
       }
-
-      clipboardManager.syncClipboardHash();
 
       // Hide window first.
       if (clipboardHistoryWindow) {
@@ -2634,12 +2651,13 @@ function setupClipboardIPCHandlers(): void {
               await new Promise(resolve => setTimeout(resolve, 100));
             } else {
               // Non-terminal: paste actual image (multimodal apps can render it).
-              const imageBuffer = typeof item.imageData === 'string' 
+              const imageBuffer = typeof item.imageData === 'string'
                 ? Buffer.from(item.imageData, 'base64')
                 : item.imageData;
               const image = nativeImage.createFromBuffer(imageBuffer);
               clipboard.writeImage(image);
-              clipboardManager.syncClipboardHash();
+              // Set hash directly from the buffer (avoids expensive toPNG() call)
+              clipboardManager.setClipboardHashFromBuffer(imageBuffer);
               await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
               // Use adaptive delay for images to prevent overwhelming target apps.
               await new Promise(resolve => setTimeout(resolve, imagePasteDelay));
@@ -3266,11 +3284,8 @@ function setupClipboardIPCHandlers(): void {
         }
       });
 
-      // Hide clipboard history and show onboarding window.
-      clipboardHistoryWindow?.hide(true);
-      if (onboardingWindow) {
-        onboardingWindow.show(); // show() handles focus internally
-      }
+      // Quit the app after sign out - user must relaunch to log back in.
+      app.quit();
     }
 
     return result;
@@ -5635,6 +5650,9 @@ async function initTranscriberSystem(): Promise<void> {
     }
     if (metricsManager) {
       await metricsManager.reinitializeForUser();
+    }
+    if (quotaManager) {
+      quotaManager.reload();
     }
     if (librarianManager) {
       await librarianManager.reinitializeForUser();

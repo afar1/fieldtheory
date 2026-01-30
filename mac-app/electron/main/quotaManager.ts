@@ -91,6 +91,20 @@ export class QuotaManager extends EventEmitter {
     }
   }
 
+  /**
+   * Reload quotas from preferences.
+   * Call after user login when preferencesManager path changes.
+   */
+  reload(): void {
+    this.quotas = this.loadQuotas();
+    console.log('[QuotaManager] Reloaded quotas:', {
+      textImprove: this.quotas.textImprovementWordsUsed,
+      autoStack: this.quotas.autoStackSessionsUsed,
+      period: this.quotas.period,
+    });
+    this.emit('quotaChanged', this.getQuotas());
+  }
+
   // ---------------------------------------------------------------------------
   // Dev Overrides (Scenario Testing)
   // ---------------------------------------------------------------------------
