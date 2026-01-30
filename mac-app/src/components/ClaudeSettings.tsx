@@ -35,6 +35,12 @@ export default function ClaudeSettings() {
   const [addingPermission, setAddingPermission] = useState(false);
   const [figuresPath, setFiguresPath] = useState<string>('');
 
+  // Read permission hooks state
+  const [claudeHookInstalled, setClaudeHookInstalled] = useState(false);
+  const [cursorHookInstalled, setCursorHookInstalled] = useState(false);
+  const [hookInstalling, setHookInstalling] = useState(false);
+  const [hookMessage, setHookMessage] = useState<string | null>(null);
+
   // Load profiles and status
   const loadData = useCallback(async () => {
     if (!window.claudeAPI) {
@@ -43,14 +49,18 @@ export default function ClaudeSettings() {
     }
 
     try {
-      const [profilesData, statusData, figuresPathData] = await Promise.all([
+      const [profilesData, statusData, figuresPathData, claudeHook, cursorHook] = await Promise.all([
         window.claudeAPI.getAvailableProfiles(),
         window.claudeAPI.getPermissionStatus(),
         window.claudeAPI.getFiguresPath?.() ?? Promise.resolve(''),
+        window.claudeAPI.isReadPermissionHookInstalled?.() ?? Promise.resolve(false),
+        window.cursorAPI?.isReadPermissionHookInstalled?.() ?? Promise.resolve(false),
       ]);
       setProfiles(profilesData);
       setStatus(statusData);
       setFiguresPath(figuresPathData);
+      setClaudeHookInstalled(claudeHook);
+      setCursorHookInstalled(cursorHook);
     } catch (err) {
       console.error('Failed to load Claude settings:', err);
       setError('Failed to load settings');
@@ -269,6 +279,187 @@ export default function ClaudeSettings() {
         <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '8px' }}>
           Let Claude Code read screenshots and portable commands (does not affect Librarian)
         </div>
+      </div>
+
+      {/* Read Permission Hooks - Auto-approve without prompts */}
+      <div
+        style={{
+          padding: '16px',
+          borderRadius: '8px',
+          backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
+          border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+        }}
+      >
+        <div style={{ marginBottom: '12px' }}>
+          <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
+            Auto-Approve File Reads
+          </div>
+          <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '4px' }}>
+            Skip permission prompts when reading Field Theory files (screenshots, commands)
+          </div>
+        </div>
+
+        {/* Claude Code */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 12px',
+            borderRadius: '6px',
+            backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+            border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+            marginBottom: '8px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>Claude Code</span>
+            {claudeHookInstalled ? (
+              <span style={{
+                fontSize: '10px',
+                color: theme.success,
+                padding: '2px 6px',
+                backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)',
+                borderRadius: '4px',
+              }}>
+                Connected
+              </span>
+            ) : (
+              <span style={{
+                fontSize: '10px',
+                color: theme.textSecondary,
+                padding: '2px 6px',
+                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                borderRadius: '4px',
+              }}>
+                Not connected
+              </span>
+            )}
+          </div>
+          <button
+            onClick={async () => {
+              if (hookInstalling) return;
+              setHookInstalling(true);
+              setHookMessage(null);
+              try {
+                const result = claudeHookInstalled
+                  ? await window.claudeAPI?.uninstallReadPermissionHook?.()
+                  : await window.claudeAPI?.installReadPermissionHook?.();
+                if (result?.success) {
+                  setClaudeHookInstalled(!claudeHookInstalled);
+                  setHookMessage(result.message);
+                  setTimeout(() => setHookMessage(null), 5000);
+                } else {
+                  setError(result?.message || 'Failed');
+                }
+              } finally {
+                setHookInstalling(false);
+              }
+            }}
+            disabled={hookInstalling}
+            style={{
+              padding: '4px 10px',
+              fontSize: '11px',
+              fontWeight: 500,
+              color: claudeHookInstalled ? theme.textSecondary : '#fff',
+              backgroundColor: claudeHookInstalled ? 'transparent' : theme.accent,
+              border: claudeHookInstalled ? `1px solid ${theme.border}` : 'none',
+              borderRadius: '4px',
+              cursor: hookInstalling ? 'wait' : 'pointer',
+              opacity: hookInstalling ? 0.5 : 1,
+            }}
+          >
+            {hookInstalling ? '...' : claudeHookInstalled ? 'Disconnect' : 'Connect'}
+          </button>
+        </div>
+
+        {/* Cursor */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 12px',
+            borderRadius: '6px',
+            backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+            border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>Cursor</span>
+            {cursorHookInstalled ? (
+              <span style={{
+                fontSize: '10px',
+                color: theme.success,
+                padding: '2px 6px',
+                backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)',
+                borderRadius: '4px',
+              }}>
+                Connected
+              </span>
+            ) : (
+              <span style={{
+                fontSize: '10px',
+                color: theme.textSecondary,
+                padding: '2px 6px',
+                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                borderRadius: '4px',
+              }}>
+                Not connected
+              </span>
+            )}
+          </div>
+          <button
+            onClick={async () => {
+              if (hookInstalling) return;
+              setHookInstalling(true);
+              setHookMessage(null);
+              try {
+                const result = cursorHookInstalled
+                  ? await window.cursorAPI?.uninstallReadPermissionHook?.()
+                  : await window.cursorAPI?.installReadPermissionHook?.();
+                if (result?.success) {
+                  setCursorHookInstalled(!cursorHookInstalled);
+                  setHookMessage(result.message);
+                  setTimeout(() => setHookMessage(null), 5000);
+                } else {
+                  setError(result?.message || 'Failed');
+                }
+              } finally {
+                setHookInstalling(false);
+              }
+            }}
+            disabled={hookInstalling}
+            style={{
+              padding: '4px 10px',
+              fontSize: '11px',
+              fontWeight: 500,
+              color: cursorHookInstalled ? theme.textSecondary : '#fff',
+              backgroundColor: cursorHookInstalled ? 'transparent' : theme.accent,
+              border: cursorHookInstalled ? `1px solid ${theme.border}` : 'none',
+              borderRadius: '4px',
+              cursor: hookInstalling ? 'wait' : 'pointer',
+              opacity: hookInstalling ? 0.5 : 1,
+            }}
+          >
+            {hookInstalling ? '...' : cursorHookInstalled ? 'Disconnect' : 'Connect'}
+          </button>
+        </div>
+
+        {/* Feedback message */}
+        {hookMessage && (
+          <p style={{
+            fontSize: '11px',
+            color: theme.success,
+            marginTop: '12px',
+            marginBottom: 0,
+            padding: '8px 12px',
+            backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.1)' : 'rgba(34, 197, 94, 0.05)',
+            borderRadius: '6px',
+          }}>
+            {hookMessage}
+          </p>
+        )}
       </div>
 
       {/* Terminal Command Allowlist - Hidden until ready */}

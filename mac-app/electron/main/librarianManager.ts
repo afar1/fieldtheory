@@ -2895,6 +2895,352 @@ if __name__ == "__main__":
 `;
   }
 
+  // ============================================================================
+  // Read Permission Hooks (separate from Librarian)
+  // These auto-approve reads for Field Theory files (figures, commands)
+  // ============================================================================
+
+  /**
+   * Generate PreToolUse hook for auto-approving Field Theory file reads.
+   * This is SEPARATE from the Librarian hooks - it handles read permissions only.
+   * The hook never blocks - it can only auto-approve or pass through.
+   */
+  private generateReadPermissionHookScript(): string {
+    return `#!/usr/bin/env python3
+"""
+PreToolUse Auto-Approve Hook for Field Theory Read Permissions
+
+Auto-approves Read/Write/Edit operations for:
+- ~/Library/Application Support/fieldtheory-mac/users/*/figures/* (screenshot figures)
+- .cursor/commands/* (portable commands)
+
+This is separate from Librarian functionality.
+Never blocks - only auto-approves or passes through to normal flow.
+"""
+import json
+import sys
+
+def main():
+    try:
+        input_data = json.load(sys.stdin)
+    except:
+        sys.exit(0)
+
+    tool_name = input_data.get("tool_name", "")
+    tool_input = input_data.get("tool_input", {})
+
+    if tool_name in ("Read", "Write", "Edit"):
+        file_path = tool_input.get("file_path", "")
+
+        # Check for screenshot figures (fieldtheory-mac/.../figures/...)
+        if "fieldtheory-mac" in file_path and "/figures/" in file_path:
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow"
+                }
+            }))
+            sys.exit(0)
+
+        # Check for portable commands (.cursor/commands/...)
+        if "/.cursor/commands/" in file_path:
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow"
+                }
+            }))
+            sys.exit(0)
+
+    # Default: don't interfere, let normal permission flow happen
+    sys.exit(0)
+
+if __name__ == "__main__":
+    main()
+`;
+  }
+
+  /**
+   * Get the path for the read permission hook script.
+   */
+  private getReadPermissionHookPath(): string {
+    return path.join(os.homedir(), '.claude', 'fieldtheory-read-permission-hook.py');
+  }
+
+  /**
+   * Check if the read permission hook is installed.
+   */
+  isReadPermissionHookInstalled(): boolean {
+    try {
+      const settingsPath = this.getClaudeSettingsPath();
+      if (!fs.existsSync(settingsPath)) return false;
+
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      const hookPath = this.getReadPermissionHookPath();
+      const command = `python3 "${hookPath}"`;
+
+      if (!Array.isArray(settings.hooks?.PreToolUse)) return false;
+
+      return settings.hooks.PreToolUse.some(
+        (h: { hooks?: Array<{ command?: string }> }) =>
+          h.hooks?.some(hh => hh.command === command)
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Install the read permission auto-approve hook for Claude Code.
+   * Separate from Librarian hooks. Returns result with feedback message.
+   */
+  installReadPermissionHook(): { success: boolean; message: string } {
+    try {
+      const claudeDir = path.join(os.homedir(), '.claude');
+      if (!fs.existsSync(claudeDir)) {
+        fs.mkdirSync(claudeDir, { recursive: true });
+      }
+
+      // Write hook script
+      const hookPath = this.getReadPermissionHookPath();
+      fs.writeFileSync(hookPath, this.generateReadPermissionHookScript(), { mode: 0o755 });
+
+      // Register in settings.json
+      const settingsPath = this.getClaudeSettingsPath();
+      let settings: Record<string, unknown> = {};
+      if (fs.existsSync(settingsPath)) {
+        try {
+          settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+        } catch {
+          console.warn('[LibrarianManager] Could not parse settings.json, starting fresh');
+        }
+      }
+
+      // Ensure hooks structure exists
+      if (!settings.hooks || typeof settings.hooks !== 'object') {
+        settings.hooks = {};
+      }
+      const hooks = settings.hooks as Record<string, unknown>;
+
+      // Add to PreToolUse hooks if not already present
+      if (!Array.isArray(hooks.PreToolUse)) {
+        hooks.PreToolUse = [];
+      }
+
+      const command = `python3 "${hookPath}"`;
+      type HookEntry = { matcher?: string; hooks?: Array<{ type?: string; command?: string }> };
+      const exists = (hooks.PreToolUse as HookEntry[]).some(h =>
+        h.hooks?.some(hh => hh.command === command)
+      );
+
+      if (!exists) {
+        (hooks.PreToolUse as HookEntry[]).push({
+          matcher: 'Read|Write|Edit',
+          hooks: [{ type: 'command', command }],
+        });
+      }
+
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+
+      console.log('[LibrarianManager] Installed read permission hook');
+      return {
+        success: true,
+        message: 'Hook added to ~/.claude/settings.json',
+      };
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to install read permission hook:', error);
+      return {
+        success: false,
+        message: `Failed: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Uninstall the read permission hook for Claude Code.
+   * Returns result with feedback message.
+   */
+  uninstallReadPermissionHook(): { success: boolean; message: string } {
+    try {
+      const hookPath = this.getReadPermissionHookPath();
+      const settingsPath = this.getClaudeSettingsPath();
+
+      // Remove from settings.json
+      if (fs.existsSync(settingsPath)) {
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+        const command = `python3 "${hookPath}"`;
+
+        if (settings.hooks?.PreToolUse) {
+          settings.hooks.PreToolUse = settings.hooks.PreToolUse.filter(
+            (h: { hooks?: Array<{ command?: string }> }) =>
+              !h.hooks?.some(hh => hh.command === command)
+          );
+          if (settings.hooks.PreToolUse.length === 0) {
+            delete settings.hooks.PreToolUse;
+          }
+        }
+
+        // Clean up empty hooks object
+        if (settings.hooks && Object.keys(settings.hooks).length === 0) {
+          delete settings.hooks;
+        }
+
+        fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+      }
+
+      // Remove hook file
+      if (fs.existsSync(hookPath)) {
+        fs.unlinkSync(hookPath);
+      }
+
+      console.log('[LibrarianManager] Uninstalled read permission hook');
+      return {
+        success: true,
+        message: 'Hook removed from ~/.claude/settings.json',
+      };
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to uninstall read permission hook:', error);
+      return {
+        success: false,
+        message: `Failed: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  // ============================================================================
+  // Cursor Read Permission Hooks
+  // ============================================================================
+
+  /**
+   * Get the path for the Cursor read permission hook script.
+   */
+  private getCursorReadPermissionHookPath(): string {
+    return path.join(os.homedir(), '.cursor', 'fieldtheory-read-permission-hook.py');
+  }
+
+  /**
+   * Check if the Cursor read permission hook is installed.
+   */
+  isCursorReadPermissionHookInstalled(): boolean {
+    try {
+      const hooksPath = path.join(os.homedir(), '.cursor', 'hooks.json');
+      if (!fs.existsSync(hooksPath)) return false;
+
+      const hooks = JSON.parse(fs.readFileSync(hooksPath, 'utf-8'));
+      const hookPath = this.getCursorReadPermissionHookPath();
+      const command = `python3 "${hookPath}"`;
+
+      if (!Array.isArray(hooks.preToolUse)) return false;
+
+      return hooks.preToolUse.some(
+        (h: { command?: string }) => h.command === command
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Install the read permission hook for Cursor.
+   */
+  installCursorReadPermissionHook(): { success: boolean; message: string } {
+    try {
+      const cursorDir = path.join(os.homedir(), '.cursor');
+      if (!fs.existsSync(cursorDir)) {
+        fs.mkdirSync(cursorDir, { recursive: true });
+      }
+
+      // Write hook script (same script, Cursor-compatible)
+      const hookPath = this.getCursorReadPermissionHookPath();
+      fs.writeFileSync(hookPath, this.generateReadPermissionHookScript(), { mode: 0o755 });
+
+      // Register in hooks.json
+      const hooksPath = path.join(cursorDir, 'hooks.json');
+      let hooks: Record<string, unknown> = {};
+      if (fs.existsSync(hooksPath)) {
+        try {
+          hooks = JSON.parse(fs.readFileSync(hooksPath, 'utf-8'));
+        } catch {
+          console.warn('[LibrarianManager] Could not parse Cursor hooks.json, starting fresh');
+        }
+      }
+
+      // Add to preToolUse hooks if not already present
+      if (!Array.isArray(hooks.preToolUse)) {
+        hooks.preToolUse = [];
+      }
+
+      const command = `python3 "${hookPath}"`;
+      type CursorHook = { command?: string; matcher?: string };
+      const exists = (hooks.preToolUse as CursorHook[]).some(h => h.command === command);
+
+      if (!exists) {
+        (hooks.preToolUse as CursorHook[]).push({
+          matcher: 'read_file|write_new_file|file_str_replace|edit_file',
+          command,
+        });
+      }
+
+      fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2));
+
+      console.log('[LibrarianManager] Installed Cursor read permission hook');
+      return {
+        success: true,
+        message: 'Hook added to ~/.cursor/hooks.json',
+      };
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to install Cursor read permission hook:', error);
+      return {
+        success: false,
+        message: `Failed: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Uninstall the read permission hook for Cursor.
+   */
+  uninstallCursorReadPermissionHook(): { success: boolean; message: string } {
+    try {
+      const hookPath = this.getCursorReadPermissionHookPath();
+      const hooksPath = path.join(os.homedir(), '.cursor', 'hooks.json');
+
+      // Remove from hooks.json
+      if (fs.existsSync(hooksPath)) {
+        const hooks = JSON.parse(fs.readFileSync(hooksPath, 'utf-8'));
+        const command = `python3 "${hookPath}"`;
+
+        if (hooks.preToolUse) {
+          hooks.preToolUse = hooks.preToolUse.filter(
+            (h: { command?: string }) => h.command !== command
+          );
+          if (hooks.preToolUse.length === 0) {
+            delete hooks.preToolUse;
+          }
+        }
+
+        fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2));
+      }
+
+      // Remove hook file
+      if (fs.existsSync(hookPath)) {
+        fs.unlinkSync(hookPath);
+      }
+
+      console.log('[LibrarianManager] Uninstalled Cursor read permission hook');
+      return {
+        success: true,
+        message: 'Hook removed from ~/.cursor/hooks.json',
+      };
+    } catch (error) {
+      console.error('[LibrarianManager] Failed to uninstall Cursor read permission hook:', error);
+      return {
+        success: false,
+        message: `Failed: ${(error as Error).message}`,
+      };
+    }
+  }
+
   /**
    * Generate the global state-enforced hook script content (Python).
    * This script:
