@@ -2632,9 +2632,37 @@ const claudeAPI = {
   // Clear all managed permissions
   clearManagedPermissions: (): Promise<boolean> =>
     ipcRenderer.invoke('claude:clearManagedPermissions'),
+
+  // Read permission hooks (auto-approve Field Theory file reads)
+  isReadPermissionHookInstalled: (): Promise<boolean> =>
+    ipcRenderer.invoke('claude:isReadPermissionHookInstalled'),
+
+  installReadPermissionHook: (): Promise<{ success: boolean; message: string }> =>
+    ipcRenderer.invoke('claude:installReadPermissionHook'),
+
+  uninstallReadPermissionHook: (): Promise<{ success: boolean; message: string }> =>
+    ipcRenderer.invoke('claude:uninstallReadPermissionHook'),
 };
 
 type ClaudeAPI = typeof claudeAPI;
+
+// =============================================================================
+// Cursor API - Cursor IDE integration settings
+// =============================================================================
+
+const cursorAPI = {
+  // Read permission hooks (auto-approve Field Theory file reads)
+  isReadPermissionHookInstalled: (): Promise<boolean> =>
+    ipcRenderer.invoke('cursor:isReadPermissionHookInstalled'),
+
+  installReadPermissionHook: (): Promise<{ success: boolean; message: string }> =>
+    ipcRenderer.invoke('cursor:installReadPermissionHook'),
+
+  uninstallReadPermissionHook: (): Promise<{ success: boolean; message: string }> =>
+    ipcRenderer.invoke('cursor:uninstallReadPermissionHook'),
+};
+
+type CursorAPI = typeof cursorAPI;
 
 // =============================================================================
 // Scenario Testing API - Superadmin-only testing panel
@@ -2711,6 +2739,7 @@ contextBridge.exposeInMainWorld('socialAPI', socialAPI);
 contextBridge.exposeInMainWorld('commandsAPI', commandsAPI);
 contextBridge.exposeInMainWorld('metricsAPI', metricsAPI);
 contextBridge.exposeInMainWorld('claudeAPI', claudeAPI);
+contextBridge.exposeInMainWorld('cursorAPI', cursorAPI);
 contextBridge.exposeInMainWorld('scenarioAPI', scenarioAPI);
 
 contextBridge.exposeInMainWorld('platform', {

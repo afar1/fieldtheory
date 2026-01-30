@@ -1792,6 +1792,41 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager?.clearManagedPermissions() ?? false;
   });
 
+  // ---------------------------------------------------------------------------
+  // Read Permission Hooks (separate from Librarian)
+  // Auto-approve reads for Field Theory files (figures, commands)
+  // ---------------------------------------------------------------------------
+
+  // Check if Claude Code read permission hook is installed
+  ipcMain.handle('claude:isReadPermissionHookInstalled', (): boolean => {
+    return librarianManager?.isReadPermissionHookInstalled() ?? false;
+  });
+
+  // Install Claude Code read permission hook
+  ipcMain.handle('claude:installReadPermissionHook', (): { success: boolean; message: string } => {
+    return librarianManager?.installReadPermissionHook() ?? { success: false, message: 'Manager not ready' };
+  });
+
+  // Uninstall Claude Code read permission hook
+  ipcMain.handle('claude:uninstallReadPermissionHook', (): { success: boolean; message: string } => {
+    return librarianManager?.uninstallReadPermissionHook() ?? { success: false, message: 'Manager not ready' };
+  });
+
+  // Check if Cursor read permission hook is installed
+  ipcMain.handle('cursor:isReadPermissionHookInstalled', (): boolean => {
+    return librarianManager?.isCursorReadPermissionHookInstalled() ?? false;
+  });
+
+  // Install Cursor read permission hook
+  ipcMain.handle('cursor:installReadPermissionHook', (): { success: boolean; message: string } => {
+    return librarianManager?.installCursorReadPermissionHook() ?? { success: false, message: 'Manager not ready' };
+  });
+
+  // Uninstall Cursor read permission hook
+  ipcMain.handle('cursor:uninstallReadPermissionHook', (): { success: boolean; message: string } => {
+    return librarianManager?.uninstallCursorReadPermissionHook() ?? { success: false, message: 'Manager not ready' };
+  });
+
   // ===========================================================================
   // Metrics IPC handlers - User-visible usage stats
   // "The metrics you see are the metrics we see."

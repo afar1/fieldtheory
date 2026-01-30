@@ -1071,6 +1071,20 @@ declare global {
     addPermissions: (permissions: string[]) => Promise<boolean>;
     removePermissions: (permissions: string[]) => Promise<boolean>;
     clearManagedPermissions: () => Promise<boolean>;
+    // Read permission hooks (auto-approve Field Theory file reads)
+    isReadPermissionHookInstalled: () => Promise<boolean>;
+    installReadPermissionHook: () => Promise<{ success: boolean; message: string }>;
+    uninstallReadPermissionHook: () => Promise<{ success: boolean; message: string }>;
+  }
+
+  /**
+   * Cursor API - Cursor IDE integration settings
+   */
+  interface CursorAPI {
+    // Read permission hooks (auto-approve Field Theory file reads)
+    isReadPermissionHookInstalled: () => Promise<boolean>;
+    installReadPermissionHook: () => Promise<{ success: boolean; message: string }>;
+    uninstallReadPermissionHook: () => Promise<{ success: boolean; message: string }>;
   }
 
   /**
@@ -1235,6 +1249,7 @@ declare global {
     themeAPI?: ThemeAPI;
     librarianAPI?: LibrarianAPI;
     claudeAPI?: ClaudeAPI;
+    cursorAPI?: CursorAPI;
     metricsAPI?: MetricsAPI;
     diagnosticsAPI?: DiagnosticsAPI;
     scenarioAPI?: ScenarioAPI;
