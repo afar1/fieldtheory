@@ -1548,6 +1548,23 @@ export default function ClipboardHistory() {
       const savedSettings = localStorage.getItem('fieldTheoryShowSettings') === 'true';
       setShowSettings(savedSettings);
 
+      // Check for pending sketch to restore (user was drawing and accidentally closed)
+      try {
+        const pendingSketch = localStorage.getItem('pendingSketch');
+        if (pendingSketch) {
+          const restored = JSON.parse(pendingSketch);
+          // Only restore if less than 24 hours old and has content
+          if (restored.elements?.length > 0 && Date.now() - restored.timestamp < 24 * 60 * 60 * 1000) {
+            setViewMode('sketch');
+            setEditingSketchItem(null);
+            setSketchBackgroundImage(null);
+            return; // Skip normal view restoration
+          }
+        }
+      } catch (e) {
+        // Ignore parse errors
+      }
+
       // Restore viewMode from localStorage - ensures we return to the last viewed tab
       // even if the window was recreated or state got out of sync.
       const savedView = localStorage.getItem('fieldTheoryView');
