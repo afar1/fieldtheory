@@ -66,7 +66,24 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
     const baseData: any = {
       appState: { viewBackgroundColor: '#ffffff' },
     };
-    
+
+    // Check for pending sketch to restore (from accidental close/blur)
+    try {
+      const pending = localStorage.getItem('pendingSketch');
+      if (pending && !backgroundImage && !existingSketch) {
+        const restored = JSON.parse(pending);
+        // Only restore if less than 24 hours old
+        if (restored.elements?.length > 0 && Date.now() - restored.timestamp < 24 * 60 * 60 * 1000) {
+          return {
+            elements: restored.elements,
+            appState: restored.appState || baseData.appState,
+          };
+        }
+      }
+    } catch (e) {
+      // Ignore parse errors
+    }
+
     if (!backgroundImage) return baseData;
 
     // Use actual container dimensions instead of hardcoded values.
@@ -170,6 +187,8 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
       reader.onloadend = () => {
         const dataUrl = reader.result as string;
         const appState = excalidrawAPI.getAppState();
+        // Clear pending sketch since we're saving successfully
+        localStorage.removeItem('pendingSketch');
         // Dimensions must account for exportScale since blob is exported at that scale
         onSave({
           dataUrl,
@@ -197,9 +216,13 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
   const handleClose = useCallback(() => {
     if (hasChanges) {
       if (confirm('You have unsaved changes. Discard drawing?')) {
+        // Clear pending sketch since user explicitly discarded
+        localStorage.removeItem('pendingSketch');
         onClose();
       }
     } else {
+      // No changes, clear any stale pending sketch
+      localStorage.removeItem('pendingSketch');
       onClose();
     }
   }, [hasChanges, onClose]);
@@ -209,7 +232,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
   
   const handleChange = useCallback((elements: readonly any[], appState: any) => {
     const activeElements = elements.filter((el: any) => !el.isDeleted);
-    
+
     // Track initial element count (e.g., 1 if background image, 0 if blank).
     // User has made changes if element count differs from initial.
     if (initialElementCountRef.current === null) {
@@ -218,7 +241,20 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
     const newHasChanges = activeElements.length !== initialElementCountRef.current;
     setHasChanges(newHasChanges);
     onHasChangesChange?.(newHasChanges);
-    
+
+    // Persist sketch to localStorage for recovery if window closes unexpectedly
+    if (newHasChanges && activeElements.length > 0) {
+      try {
+        localStorage.setItem('pendingSketch', JSON.stringify({
+          elements: activeElements,
+          appState: { viewBackgroundColor: appState?.viewBackgroundColor },
+          timestamp: Date.now(),
+        }));
+      } catch (e) {
+        // Ignore storage errors (quota, etc.)
+      }
+    }
+
     if (!excalidrawAPI) return;
     
     const currentTool = appState?.activeTool?.type;
