@@ -191,8 +191,8 @@ export default function ClaudeSettings() {
           <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
             Auto-Approve File Reads
           </div>
-          <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '4px' }}>
-            Skip permission prompts when reading Field Theory files (screenshots, commands)
+          <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '4px', lineHeight: '1.5' }}>
+            Skip manual approval when reading screenshots you take in Field Theory or portable commands you create
           </div>
         </div>
 
