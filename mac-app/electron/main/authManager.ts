@@ -17,6 +17,9 @@ import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
 import { getUserDataManager, UserDataManager } from './userDataManager';
+import { createLogger } from './logger';
+
+const log = createLogger('Auth');
 
 // =============================================================================
 // FileStorage - Persists session to disk for survival across app updates
@@ -45,7 +48,7 @@ class FileStorage implements SupportedStorage {
         if (matchesPattern) {
           const parsed = JSON.parse(value);
           if (parsed?.refresh_token) {
-            console.log('[FileStorage] Found session data under key:', key);
+            log.debug('Found session data under key:', key);
             return parsed;
           }
         }
@@ -53,12 +56,12 @@ class FileStorage implements SupportedStorage {
 
       const keys = Array.from(this.storage.keys());
       if (keys.length > 0) {
-        console.log('[FileStorage] Storage keys present:', keys);
+        log.debug('Storage keys present:', keys);
       } else {
-        console.log('[FileStorage] Storage is empty');
+        log.debug('Storage is empty');
       }
     } catch (err) {
-      console.warn('[FileStorage] Failed to parse raw session:', err);
+      log.warn('Failed to parse raw session:', err);
     }
     return null;
   }
@@ -70,12 +73,12 @@ class FileStorage implements SupportedStorage {
         const parsed = JSON.parse(data);
         this.storage = new Map(Object.entries(parsed));
         const keys = Array.from(this.storage.keys());
-        console.log('[FileStorage] Loaded from disk, keys present:', keys.length > 0 ? keys : '(none)');
+        log.debug('Loaded from disk, keys present:', keys.length > 0 ? keys : '(none)');
       } else {
-        console.log('[FileStorage] No session file exists yet');
+        log.debug('No session file exists yet');
       }
     } catch (err) {
-      console.warn('[FileStorage] Failed to load session from disk:', err);
+      log.warn('Failed to load session from disk:', err);
     }
   }
 
@@ -90,7 +93,7 @@ class FileStorage implements SupportedStorage {
       // Only explicit clearStorage() should write an empty file.
       if (Object.keys(obj).length === 0) {
         if (!this.hasLoggedEmptySkip) {
-          console.log('[FileStorage] Skipping save - refusing to write empty session');
+          log.debug('Skipping save - refusing to write empty session');
           this.hasLoggedEmptySkip = true;
         }
         return;
@@ -99,7 +102,7 @@ class FileStorage implements SupportedStorage {
 
       fs.writeFileSync(this.filePath, JSON.stringify(obj, null, 2));
     } catch (err) {
-      console.warn('[FileStorage] Failed to save session to disk:', err);
+      log.warn('Failed to save session to disk:', err);
     }
   }
 
@@ -111,9 +114,9 @@ class FileStorage implements SupportedStorage {
     this.storage.clear();
     try {
       fs.writeFileSync(this.filePath, '{}');
-      console.log('[FileStorage] Storage cleared (explicit sign-out)');
+      log.info('Storage cleared (explicit sign-out)');
     } catch (err) {
-      console.warn('[FileStorage] Failed to clear storage:', err);
+      log.warn('Failed to clear storage:', err);
     }
   }
 
@@ -150,10 +153,8 @@ export class AuthManager extends EventEmitter {
   private lastFailedToken: string | null = null;
   private hasEverAuthenticated: boolean = false;
   private userDataManager: UserDataManager | null = null;
+  private cachedTier: 'free' | 'pro' = 'free';
 
-  // Debug flags for testing auth states
-  private simulateOffline: boolean = false;
-  private simulateRevoked: boolean = false;
   private lastEmittedUserId: string | null = null;  // Dedupe sessionChanged events
 
   // Mutex to prevent concurrent refresh attempts.
@@ -201,7 +202,7 @@ export class AuthManager extends EventEmitter {
     const anonKey = supabaseAnonKey || process.env.VITE_SUPABASE_ANON_KEY;
 
     if (!url || !anonKey) {
-      console.log('[AuthManager] No Supabase credentials available');
+      log.warn('No Supabase credentials available');
       return;
     }
 
@@ -231,17 +232,17 @@ export class AuthManager extends EventEmitter {
       const newUserId = session?.user?.id ?? null;
       const isNewSession = newUserId !== this.lastEmittedUserId;
 
-      console.log('[AuthManager] Auth state changed:', event, isNewSession ? '(new)' : '(duplicate)', newUserId ? `userId: ${newUserId}` : '');
+      log.debug('Auth state changed:', event, isNewSession ? '(new)' : '(duplicate)', newUserId ? `userId: ${newUserId}` : '');
 
       if (event === 'TOKEN_REFRESHED') {
-        console.log('[AuthManager] Token refreshed by SDK');
+        log.debug('Token refreshed by SDK');
         this.session = session;
         // Don't emit sessionChanged for token refresh - session user didn't change
       } else if (event === 'SIGNED_OUT') {
         // Try recovery before accepting logout (SDK may have fired spuriously)
         const recovered = await this.attemptSessionRecovery();
         if (recovered) {
-          console.log('[AuthManager] Recovered session, ignoring spurious SIGNED_OUT');
+          log.info('Recovered session, ignoring spurious SIGNED_OUT');
           return;
         }
 
@@ -273,7 +274,7 @@ export class AuthManager extends EventEmitter {
       }
     });
 
-    console.log('[AuthManager] Initialized with session storage:', userDataPath);
+    log.info('Initialized with session storage:', userDataPath);
     await this.restoreSessionFromStorage();
   }
 
@@ -287,7 +288,7 @@ export class AuthManager extends EventEmitter {
       const { data, error } = await this.supabase.auth.getSession();
 
       if (error) {
-        console.log('[AuthManager] Error getting session:', error.message);
+        log.warn('Error getting session:', error.message);
       }
 
       if (data?.session) {
@@ -306,13 +307,13 @@ export class AuthManager extends EventEmitter {
           this.emit('userChanged', userId);
         }
 
-        console.log('[AuthManager] Restored session for user:', data.session.user?.email, userId ? `(${userId})` : '', shouldEmitUserChanged ? '(new)' : '(already emitted)');
+        log.info('Restored session for user:', data.session.user?.email, userId ? `(${userId})` : '', shouldEmitUserChanged ? '(new)' : '(already emitted)');
         this.emit('sessionChanged', this.session);
         return;
       }
 
       // getSession() returned null - attempt manual refresh
-      console.log('[AuthManager] getSession() returned null, checking for stored refresh_token...');
+      log.debug('getSession() returned null, checking for stored refresh_token...');
 
       const rawSession = this.fileStorage?.getRawSessionData();
       if (rawSession?.refresh_token) {
@@ -322,7 +323,7 @@ export class AuthManager extends EventEmitter {
         const expiresAt = rawSession.expires_at || 0;
         const expiredAgoMinutes = Math.floor((now - expiresAt) / 60);
 
-        console.log('[AuthManager] Stored session diagnostic:', {
+        log.debug('Stored session diagnostic:', {
           user: rawSession.user?.email || 'unknown',
           hasRefreshToken: true,
           accessTokenExpiredAgo: `${expiredAgoMinutes} minutes`,
@@ -331,10 +332,10 @@ export class AuthManager extends EventEmitter {
         // Use coordinated refresh to prevent concurrent attempts
         await this.coordinatedRefresh(rawSession.refresh_token, 'restore');
       } else {
-        console.log('[AuthManager] No stored session found - user must login');
+        log.debug('No stored session found - user must login');
       }
     } catch (err) {
-      console.warn('[AuthManager] Failed to restore session:', err);
+      log.warn('Failed to restore session:', err);
     }
   }
 
@@ -345,14 +346,14 @@ export class AuthManager extends EventEmitter {
   private async coordinatedRefresh(refreshToken: string, source: string): Promise<boolean> {
     // If a refresh is already in progress, wait for it
     if (this.refreshInProgress) {
-      console.log(`[AuthManager] Refresh already in progress, ${source} waiting...`);
+      log.debug(`Refresh already in progress, ${source} waiting...`);
       await this.refreshInProgress;
       // After waiting, check if we now have a session
       return !!this.session;
     }
 
     // Start a new refresh operation
-    console.log(`[AuthManager] Starting coordinated refresh from ${source}...`);
+    log.debug(`Starting coordinated refresh from ${source}...`);
 
     // Create a promise that other callers can wait on
     let resolveRefresh: () => void;
@@ -361,22 +362,17 @@ export class AuthManager extends EventEmitter {
     });
 
     try {
-      const refreshPromise = this.supabase!.auth.refreshSession({
+      const { data: refreshData, error: refreshError } = await this.supabase!.auth.refreshSession({
         refresh_token: refreshToken,
       });
-      const timeoutPromise = new Promise<{ data: { session: null }; error: { message: string } }>((resolve) =>
-        setTimeout(() => resolve({ data: { session: null }, error: { message: 'Refresh timeout after 15s' } }), 15000)
-      );
-
-      const { data: refreshData, error: refreshError } = await Promise.race([refreshPromise, timeoutPromise]);
 
       if (refreshError) {
         if (this.isTokenRevoked(refreshError)) {
-          console.log(`[AuthManager] Refresh token revoked (${source}), user must re-login`);
+          log.warn(`Refresh token revoked (${source}), user must re-login`);
           return false;
         } else {
-          // Network error or timeout - SDK will retry automatically via autoRefreshToken
-          console.log(`[AuthManager] Error during ${source} refresh, SDK will retry:`, refreshError.message);
+          // Network error - SDK will retry automatically via autoRefreshToken
+          log.warn(`Error during ${source} refresh, SDK will retry:`, refreshError.message);
           return false;
         }
       }
@@ -396,7 +392,7 @@ export class AuthManager extends EventEmitter {
           this.emit('userChanged', userId);
         }
 
-        console.log(`[AuthManager] Refresh succeeded (${source}) for user:`, refreshData.session.user?.email, userId ? `(${userId})` : '', shouldEmitUserChanged ? '(new)' : '(already emitted)');
+        log.info(`Refresh succeeded (${source}) for user:`, refreshData.session.user?.email, userId ? `(${userId})` : '', shouldEmitUserChanged ? '(new)' : '(already emitted)');
         this.emit('sessionChanged', this.session);
         return true;
       }
@@ -423,13 +419,13 @@ export class AuthManager extends EventEmitter {
         if (typeof value === 'string') {
           const parsed = JSON.parse(value);
           if (parsed?.refresh_token) {
-            console.log('[AuthManager] Found disk-preserved refresh token, attempting recovery...');
+            log.debug('Found disk-preserved refresh token, attempting recovery...');
             return await this.coordinatedRefresh(parsed.refresh_token, 'recovery');
           }
         }
       }
     } catch (err) {
-      console.warn('[AuthManager] Recovery failed:', err);
+      log.warn('Recovery failed:', err);
     }
     return false;
   }
@@ -439,7 +435,7 @@ export class AuthManager extends EventEmitter {
    */
   async setSession(accessToken: string, refreshToken: string): Promise<void> {
     if (!this.supabase) {
-      console.warn('[AuthManager] Cannot set session - Supabase not initialized');
+      log.warn('Cannot set session - Supabase not initialized');
       return;
     }
 
@@ -447,18 +443,13 @@ export class AuthManager extends EventEmitter {
       return; // Skip duplicate failed token
     }
 
-    const setSessionPromise = this.supabase.auth.setSession({
+    const { data, error } = await this.supabase.auth.setSession({
       access_token: accessToken,
       refresh_token: refreshToken,
     });
-    const timeoutPromise = new Promise<{ data: { session: null }; error: { message: string } }>((resolve) =>
-      setTimeout(() => resolve({ data: { session: null }, error: { message: 'setSession timeout after 10s' } }), 10000)
-    );
-
-    const { data, error } = await Promise.race([setSessionPromise, timeoutPromise]);
 
     if (error) {
-      console.log('[AuthManager] Access token expired, attempting coordinated refresh...');
+      log.debug('Access token expired, attempting coordinated refresh...');
 
       // Use coordinated refresh to prevent concurrent attempts with restoreSessionFromStorage
       // or SDK auto-refresh
@@ -517,7 +508,7 @@ export class AuthManager extends EventEmitter {
     if (!this.session) return; // Already cleared - idempotent
 
     this.session = null;
-    console.log('[AuthManager] Session cleared');
+    log.info('Session cleared');
     this.emit('sessionChanged', null);
   }
 
@@ -570,15 +561,15 @@ export class AuthManager extends EventEmitter {
       return { error: 'Supabase not initialized' };
     }
 
-    console.log('[AuthManager] Signing up:', email);
+    log.info('Signing up:', email);
     const { error } = await this.supabase.auth.signUp({ email, password });
 
     if (error) {
-      console.error('[AuthManager] Sign up failed:', error);
+      log.error('Sign up failed:', error);
       return { error: error.message };
     }
 
-    console.log('[AuthManager] Sign up successful, verification email sent to:', email);
+    log.info('Sign up successful, verification email sent to:', email);
     return { error: null };
   }
 
@@ -587,20 +578,20 @@ export class AuthManager extends EventEmitter {
       return { error: 'Supabase not initialized', session: null };
     }
 
-    console.log('[AuthManager] Signing in with password for:', email);
+    log.info('Signing in with password for:', email);
 
     try {
       const { data, error } = await this.supabase.auth.signInWithPassword({ email, password });
 
       if (error) {
-        console.error('[AuthManager] Sign in failed:', error);
+        log.error('Sign in failed:', error);
         return { error: error.message, session: null };
       }
 
       if (data.session) {
         this.session = data.session;
         this.hasEverAuthenticated = true;
-        console.log('[AuthManager] Signed in for:', data.session.user?.email);
+        log.info('Signed in for:', data.session.user?.email);
         this.emit('sessionChanged', this.session);
         return { error: null, session: data.session };
       }
@@ -608,7 +599,7 @@ export class AuthManager extends EventEmitter {
       return { error: 'No session returned', session: null };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      console.error('[AuthManager] Sign in exception:', message);
+      log.error('Sign in exception:', message);
       return { error: message, session: null };
     }
   }
@@ -618,7 +609,7 @@ export class AuthManager extends EventEmitter {
       return { error: 'Supabase not initialized' };
     }
 
-    console.log('[AuthManager] Requesting OTP for:', email);
+    log.info('Requesting OTP for:', email);
 
     try {
       const { error } = await this.supabase.auth.signInWithOtp({
@@ -627,15 +618,15 @@ export class AuthManager extends EventEmitter {
       });
 
       if (error) {
-        console.error('[AuthManager] OTP request failed:', error);
+        log.error('OTP request failed:', error);
         return { error: error.message };
       }
 
-      console.log('[AuthManager] OTP sent to:', email);
+      log.info('OTP sent to:', email);
       return { error: null };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      console.error('[AuthManager] OTP request exception:', message);
+      log.error('OTP request exception:', message);
       return { error: message };
     }
   }
@@ -645,7 +636,7 @@ export class AuthManager extends EventEmitter {
       return { error: 'Supabase not initialized', session: null };
     }
 
-    console.log('[AuthManager] Verifying OTP for:', email);
+    log.info('Verifying OTP for:', email);
 
     try {
       const { data, error } = await this.supabase.auth.verifyOtp({
@@ -655,14 +646,14 @@ export class AuthManager extends EventEmitter {
       });
 
       if (error) {
-        console.error('[AuthManager] OTP verification failed:', error);
+        log.error('OTP verification failed:', error);
         return { error: error.message, session: null };
       }
 
       if (data.session) {
         this.session = data.session;
         this.hasEverAuthenticated = true;
-        console.log('[AuthManager] OTP verified for:', data.session.user?.email);
+        log.info('OTP verified for:', data.session.user?.email);
         this.emit('sessionChanged', this.session);
         return { error: null, session: data.session };
       }
@@ -670,7 +661,7 @@ export class AuthManager extends EventEmitter {
       return { error: 'No session returned', session: null };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      console.error('[AuthManager] OTP verification exception:', message);
+      log.error('OTP verification exception:', message);
       return { error: message, session: null };
     }
   }
@@ -680,7 +671,7 @@ export class AuthManager extends EventEmitter {
       return { error: 'Supabase not initialized' };
     }
 
-    console.log('[AuthManager] Requesting password reset for:', email);
+    log.info('Requesting password reset for:', email);
 
     try {
       const redirectUrl = this.getPasswordResetUrl();
@@ -689,7 +680,7 @@ export class AuthManager extends EventEmitter {
       });
 
       if (error) {
-        console.error('[AuthManager] Password reset email failed:', error);
+        log.error('Password reset email failed:', error);
 
         const rateLimitMatch = error.message.match(/after (\d+) seconds?/i);
         if (rateLimitMatch) {
@@ -699,11 +690,11 @@ export class AuthManager extends EventEmitter {
         return { error: error.message };
       }
 
-      console.log('[AuthManager] Password reset email sent to:', email);
+      log.info('Password reset email sent to:', email);
       return { error: null };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      console.error('[AuthManager] Password reset exception:', message);
+      log.error('Password reset exception:', message);
       return { error: message };
     }
   }
@@ -724,21 +715,21 @@ export class AuthManager extends EventEmitter {
       return { error: 'No active session - click the reset link in your email first' };
     }
 
-    console.log('[AuthManager] Updating password...');
+    log.info('Updating password...');
 
     try {
       const { error } = await this.supabase.auth.updateUser({ password: newPassword });
 
       if (error) {
-        console.error('[AuthManager] Password update failed:', error);
+        log.error('Password update failed:', error);
         return { error: error.message };
       }
 
-      console.log('[AuthManager] Password updated successfully');
+      log.info('Password updated successfully');
       return { error: null };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      console.error('[AuthManager] Password update exception:', message);
+      log.error('Password update exception:', message);
       return { error: message };
     }
   }
@@ -755,7 +746,7 @@ export class AuthManager extends EventEmitter {
       return { error: 'No active session' };
     }
 
-    console.log('[AuthManager] Updating full name...');
+    log.info('Updating full name...');
 
     try {
       const { data, error } = await this.supabase.auth.updateUser({
@@ -763,7 +754,7 @@ export class AuthManager extends EventEmitter {
       });
 
       if (error) {
-        console.error('[AuthManager] Full name update failed:', error);
+        log.error('Full name update failed:', error);
         return { error: error.message };
       }
 
@@ -772,11 +763,11 @@ export class AuthManager extends EventEmitter {
         this.session = { ...this.session, user: data.user };
       }
 
-      console.log('[AuthManager] Full name updated successfully');
+      log.info('Full name updated successfully');
       return { error: null };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      console.error('[AuthManager] Full name update exception:', message);
+      log.error('Full name update exception:', message);
       return { error: message };
     }
   }
@@ -786,20 +777,20 @@ export class AuthManager extends EventEmitter {
       return { error: 'Supabase not initialized', session: null };
     }
 
-    console.log('[AuthManager] Setting session from recovery token...');
+    log.info('Setting session from recovery token...');
 
     try {
       await this.setSession(accessToken, refreshToken);
 
       if (this.session) {
-        console.log('[AuthManager] Session established from recovery token for:', this.session.user?.email);
+        log.info('Session established from recovery token for:', this.session.user?.email);
         return { error: null, session: this.session };
       }
 
       return { error: 'No session returned', session: null };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      console.error('[AuthManager] Set session exception:', message);
+      log.error('Set session exception:', message);
       return { error: message, session: null };
     }
   }
@@ -809,7 +800,7 @@ export class AuthManager extends EventEmitter {
    * Call before requestOtp() when starting a new login flow.
    */
   prepareForNewLogin(): void {
-    console.log('[AuthManager] Clearing session for new login');
+    log.info('Clearing session for new login');
     this.fileStorage?.clearStorage();
     this.session = null;
     this.lastEmittedUserId = null;
@@ -824,7 +815,7 @@ export class AuthManager extends EventEmitter {
       const { error } = await this.supabase.auth.signOut();
 
       if (error) {
-        console.error('[AuthManager] Sign out failed:', error);
+        log.error('Sign out failed:', error);
         return { error: error.message };
       }
 
@@ -840,7 +831,7 @@ export class AuthManager extends EventEmitter {
       return { error: null };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      console.error('[AuthManager] Sign out exception:', message);
+      log.error('Sign out exception:', message);
       return { error: message };
     }
   }
@@ -858,23 +849,23 @@ export class AuthManager extends EventEmitter {
       return { error: 'No user ID' };
     }
 
-    console.log('[AuthManager] Deleting account for user:', userId);
+    log.info('Deleting account for user:', userId);
 
     try {
       const { error } = await this.supabase.rpc('delete_user');
 
       if (error) {
-        console.error('[AuthManager] Delete account failed:', error);
+        log.error('Delete account failed:', error);
         return { error: error.message };
       }
 
       this.clearSession();
       this.fileStorage?.clearStorage();
-      console.log('[AuthManager] Account deleted');
+      log.info('Account deleted');
       return { error: null };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      console.error('[AuthManager] Delete account exception:', message);
+      log.error('Delete account exception:', message);
       return { error: message };
     }
   }
@@ -935,128 +926,40 @@ export class AuthManager extends EventEmitter {
   destroy(): void {
     this.session = null;
     this.removeAllListeners();
-    console.log('[AuthManager] Destroyed');
+    log.info('Destroyed');
   }
 
   // ===========================================================================
-  // Auth State Simulator (for testing)
+  // Tier Management
   // ===========================================================================
 
   /**
-   * Simulate different auth states for testing.
-   * Only available in development mode.
+   * Fetch and cache the user's tier from the profiles table.
    */
-  async simulateState(
-    state: 'NEW_USER' | 'RETURNING_VALID' | 'RETURNING_EXPIRED' | 'OFFLINE_MODE' | 'TOKEN_REVOKED' | 'SIGNED_OUT',
-    options?: { tier?: 'free' | 'pro' }
-  ): Promise<{ success: boolean; message: string }> {
-    if (process.env.NODE_ENV !== 'development') {
-      return { success: false, message: 'Simulator only available in development mode' };
-    }
+  async fetchTier(): Promise<void> {
+    if (!this.supabase || !this.session) return;
+    try {
+      const { data } = await this.supabase
+        .from('profiles')
+        .select('tier')
+        .eq('id', this.session.user.id)
+        .single();
 
-    console.log(`[AuthManager] Simulating state: ${state}`, options || '');
-
-    switch (state) {
-      case 'NEW_USER':
-      case 'SIGNED_OUT':
-        // Clear everything - user must re-authenticate
-        this.fileStorage?.clearStorage();
-        this.session = null;
-        this.hasEverAuthenticated = state === 'SIGNED_OUT'; // SIGNED_OUT = was authenticated before
-        this.simulateOffline = false;
-        this.simulateRevoked = false;
-        this.emit('sessionChanged', null);
-        return { success: true, message: `Simulated ${state}: session cleared, showing onboarding` };
-
-      case 'RETURNING_VALID':
-        // Create a mock valid session
-        const mockSession = this.createMockSession(options?.tier || 'free', false);
-        this.session = mockSession;
-        this.hasEverAuthenticated = true;
-        this.simulateOffline = false;
-        this.simulateRevoked = false;
-        this.emit('sessionChanged', mockSession);
-        return { success: true, message: `Simulated RETURNING_VALID: ${options?.tier || 'free'} user with valid session` };
-
-      case 'RETURNING_EXPIRED':
-        // Create an expired session - SDK will attempt refresh
-        const expiredSession = this.createMockSession(options?.tier || 'free', true);
-        this.session = null; // Expired = no in-memory session
-        this.hasEverAuthenticated = true;
-        this.simulateOffline = false;
-        this.simulateRevoked = false;
-        // Store in file storage so SDK can attempt refresh
-        if (this.fileStorage) {
-          const sessionKey = 'sb-session';
-          await this.fileStorage.setItem(sessionKey, JSON.stringify(expiredSession));
-        }
-        this.emit('sessionChanged', null);
-        return { success: true, message: 'Simulated RETURNING_EXPIRED: session expired, SDK will attempt refresh' };
-
-      case 'OFFLINE_MODE':
-        // Keep current session, simulate network failure
-        this.simulateOffline = true;
-        this.simulateRevoked = false;
-        return { success: true, message: 'Simulated OFFLINE_MODE: network requests will fail' };
-
-      case 'TOKEN_REVOKED':
-        // Next refresh will return revoked error
-        this.simulateRevoked = true;
-        this.simulateOffline = false;
-        return { success: true, message: 'Simulated TOKEN_REVOKED: next refresh will fail with revoked error' };
-
-      default:
-        return { success: false, message: `Unknown state: ${state}` };
+      const newTier = data?.tier || 'free';
+      if (newTier !== this.cachedTier) {
+        this.cachedTier = newTier;
+        this.emit('tierChanged', newTier);
+      }
+    } catch (err) {
+      // Keep existing tier on error
+      log.warn('Failed to fetch tier:', err);
     }
   }
 
   /**
-   * Reset simulator flags.
+   * Get the cached user tier.
    */
-  resetSimulator(): void {
-    this.simulateOffline = false;
-    this.simulateRevoked = false;
-    console.log('[AuthManager] Simulator reset');
-  }
-
-  /**
-   * Create a mock session for testing.
-   */
-  private createMockSession(tier: 'free' | 'pro', expired: boolean): Session {
-    const now = Math.floor(Date.now() / 1000);
-    const expiresAt = expired ? now - 3600 : now + 3600; // -1hr or +1hr
-
-    return {
-      access_token: `mock_access_token_${Date.now()}`,
-      refresh_token: `mock_refresh_token_${Date.now()}`,
-      expires_at: expiresAt,
-      expires_in: expired ? -3600 : 3600,
-      token_type: 'bearer',
-      user: {
-        id: 'mock-user-id-12345',
-        aud: 'authenticated',
-        role: 'authenticated',
-        email: `test-${tier}@example.com`,
-        email_confirmed_at: new Date().toISOString(),
-        phone: '',
-        confirmed_at: new Date().toISOString(),
-        last_sign_in_at: new Date().toISOString(),
-        app_metadata: { provider: 'email', providers: ['email'] },
-        user_metadata: { tier },
-        identities: [],
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      },
-    };
-  }
-
-  /**
-   * Get current simulator state (for debugging).
-   */
-  getSimulatorState(): { offline: boolean; revoked: boolean } {
-    return {
-      offline: this.simulateOffline,
-      revoked: this.simulateRevoked,
-    };
+  getTier(): 'free' | 'pro' {
+    return this.cachedTier;
   }
 }

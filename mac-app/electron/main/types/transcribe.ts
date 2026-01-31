@@ -65,6 +65,7 @@ export interface AutoImproveStats {
  */
 export interface SoundConfig {
   enabled: boolean;
+  librarianEnabled: boolean;
   recordingStart: string | undefined;
   recordingStop: string | undefined;
   recordingCancel: string | undefined;

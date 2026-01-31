@@ -102,23 +102,11 @@ interface Preferences {
     outputTokens: number;
   };
 
-  // Local LLM settings - use downloaded model instead of API for transcript improvement
-  useLocalLLM?: boolean;
-  selectedLocalLLM?: string;  // Model size: '1b' or '3b'
-
   // Sound settings - optional sounds for recording actions.
   // soundsEnabled controls "other sounds" (recording, window, paste, etc.)
   // librarianSoundEnabled controls the artifact discovery sound separately
   soundsEnabled?: boolean;
   librarianSoundEnabled?: boolean; // Librarian artifact discovery sound (separate from other sounds)
-  recordingStartSound?: string;  // Sound file name to play when recording starts
-  recordingStopSound?: string;   // Sound file name to play when recording stops
-  recordingCancelSound?: string; // Sound file name to play when recording is cancelled
-  windowOpenSound?: string;      // Sound file name to play when window opens
-  windowCloseSound?: string;     // Sound file name to play when window closes
-  pasteSound?: string;           // Sound file name to play when pasting
-  transcribingSound?: string;    // Sound file name to play when transcribing starts
-  artifactDiscoverySound?: string; // Sound file name to play when artifact/reading is created
   
   // Permission banner settings - hide banner prompting for Screen Recording permission.
   hideScreenRecordingBanner?: boolean;
@@ -128,15 +116,7 @@ interface Preferences {
   
   // Hide status text labels - show only colored dots (red/purple/green).
   hideStatusLabels?: boolean;
-  
-  // Progressive label hiding - counts shown before labels auto-hide.
-  transcribingLabelShownCount?: number;
-  sayAnythingLabelShownCount?: number;
-  labelsExplicitlyEnabled?: boolean;
-  
-  // Tasks tab - experimental feature, hidden by default.
-  tasksTabEnabled?: boolean;
-  
+
   // Local quota tracking for anonymous users.
   localQuotas?: LocalQuotas;
   
@@ -160,20 +140,6 @@ interface Preferences {
   // Data retention - how long to keep clipboard history items.
   // Values: 2, 7, 30, 90 (days) or -1 (never delete)
   dataRetentionDays?: number;
-
-  // Dev/testing overrides (superadmin only) - persists until manually cleared.
-  devOverrides?: {
-    tier?: 'free' | 'pro';
-    quotaPercentages?: {
-      priorityMic?: number;   // 0-100
-      autoStack?: number;     // 0-100
-      textImprove?: number;   // 0-100
-    };
-    authState?: 'logged_out' | 'offline';
-  };
-
-  // Scenario testing panel position.
-  scenarioTestingBounds?: { x: number; y: number };
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
@@ -197,27 +163,13 @@ const DEFAULT_PREFERENCES: Preferences = {
   // Sound settings - librarian sound ON by default, other sounds OFF by default
   soundsEnabled: false,  // Other sounds (recording, window, paste) - off by default
   librarianSoundEnabled: true,  // Librarian artifact discovery sound - on by default
-  recordingStartSound: 'ButtonClickDown.mp3',
-  recordingStopSound: 'ButtonClickUp.mp3',
-  recordingCancelSound: 'AlertBonk.mp3',
-  windowOpenSound: 'WindowOpen.mp3',
-  windowCloseSound: 'WindowClose.mp3',
-  pasteSound: 'Click.mp3',
-  transcribingSound: 'Beep.mp3',
   
   // Cursor status indicator - enabled by default
   cursorStatusEnabled: true,
   
   // Hide status text labels - show only colored dots (red/purple/green). Disabled by default.
   hideStatusLabels: false,
-  
-  transcribingLabelShownCount: 0,
-  sayAnythingLabelShownCount: 0,
-  labelsExplicitlyEnabled: false,
-  
-  // Tasks tab - experimental feature, hidden by default.
-  tasksTabEnabled: false,
-  
+
   // Show in Dock - disabled by default (panel mode). WIP feature.
   showInDock: false,
 
