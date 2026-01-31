@@ -748,24 +748,22 @@ export class TranscriberManager extends EventEmitter {
 
               finalText = improvedText;
 
-              // Track auto-improve usage stats (only for API calls with usage data)
-              if (result.usage) {
-                const currentPrefs = this.preferences.get();
-                const currentStats = currentPrefs.autoImproveStats || {
-                  wordsImproved: 0,
-                  apiCalls: 0,
-                  inputTokens: 0,
-                  outputTokens: 0,
-                };
-                await this.preferences.save({
-                  autoImproveStats: {
-                    wordsImproved: currentStats.wordsImproved + (result.wordCount || wordCount),
-                    apiCalls: currentStats.apiCalls + 1,
-                    inputTokens: currentStats.inputTokens + result.usage.inputTokens,
-                    outputTokens: currentStats.outputTokens + result.usage.outputTokens,
-                  },
-                });
-              }
+              // Track auto-improve usage stats (always, using 0 for tokens if not available)
+              const currentPrefs = this.preferences.get();
+              const currentStats = currentPrefs.autoImproveStats || {
+                wordsImproved: 0,
+                apiCalls: 0,
+                inputTokens: 0,
+                outputTokens: 0,
+              };
+              await this.preferences.save({
+                autoImproveStats: {
+                  wordsImproved: currentStats.wordsImproved + (result.wordCount || wordCount),
+                  apiCalls: currentStats.apiCalls + 1,
+                  inputTokens: currentStats.inputTokens + (result.usage?.inputTokens || 0),
+                  outputTokens: currentStats.outputTokens + (result.usage?.outputTokens || 0),
+                },
+              });
 
               // Track quota and metrics for words improved
               const improvedWordCount = result.wordCount || wordCount;
