@@ -3,6 +3,9 @@ import fs from 'fs/promises';
 import { createWriteStream } from 'fs';
 import path from 'path';
 import https from 'https';
+import { createLogger } from './logger';
+
+const log = createLogger('Model');
 
 /**
  * Available Whisper model sizes.
@@ -173,26 +176,13 @@ export class ModelManager {
       const minSize = modelInfo.sizeBytes * 0.5;
       
       if (stats.size < minSize) {
-        console.warn(`[ModelManager] Model ${size} too small: ${fileSizeMB.toFixed(2)}MB (min ${(minSize / 1024 / 1024).toFixed(0)}MB)`);
         return false;
       }
 
-      // Only log model found once per size
-      if (!this.loggedModelStatus.has(size)) {
-        console.log(`[ModelManager] Model ${size} found: ${fileSizeMB.toFixed(2)}MB at ${modelPath}`);
-        this.loggedModelStatus.add(size);
-      }
+      this.loggedModelStatus.add(size);
       return true;
     } catch (error: any) {
-      // Only log model not found once per size
-      if (!this.loggedModelStatus.has(size)) {
-        if (error.code === 'ENOENT') {
-          console.log(`[ModelManager] Model ${size} not found at: ${modelPath}`);
-        } else {
-          console.warn(`[ModelManager] Model ${size} check failed:`, error.message);
-        }
-        this.loggedModelStatus.add(size);
-      }
+      this.loggedModelStatus.add(size);
       return false;
     }
   }
@@ -219,7 +209,6 @@ export class ModelManager {
   ): Promise<void> {
     // Prevent duplicate downloads of the same model.
     if (this.downloadingModels.has(size)) {
-      console.log(`[ModelManager] Model ${size} download already in progress, skipping`);
       return;
     }
 
@@ -231,20 +220,17 @@ export class ModelManager {
     
     // Check if already downloaded
     if (await this.isModelAvailableForSize(size)) {
-      console.log(`[ModelManager] Model ${size} already downloaded`);
       return;
     }
 
-    console.log(`[ModelManager] Starting download of ${size} model...`);
     this.downloadingModels.add(size);
     
     try {
       // Download with redirect handling
       await this.downloadWithRedirects(modelInfo.url, modelPath, onProgress);
-      
+
       // Verify download
       if (await this.isModelAvailableForSize(size)) {
-        console.log(`[ModelManager] Model ${size} downloaded successfully`);
         this.invalidateCache();
       } else {
         throw new Error(`Downloaded file validation failed for ${size} model`);
@@ -273,8 +259,7 @@ export class ModelManager {
         const statusCode = response.statusCode || 0;
         if (statusCode >= 300 && statusCode < 400 && response.headers.location) {
           const redirectUrl = response.headers.location;
-          console.log(`[ModelManager] Following redirect to: ${redirectUrl}`);
-          
+
           // Clean up current response
           response.destroy();
           
@@ -352,7 +337,6 @@ export class ModelManager {
     try {
       const modelPath = this.getModelPathForSize(size);
       await fs.unlink(modelPath);
-      console.log(`[ModelManager] Deleted model ${size}`);
       this.invalidateCache();
       return true;
     } catch (error: any) {

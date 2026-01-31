@@ -1,4 +1,7 @@
 import { globalShortcut } from 'electron';
+import { createLogger } from './logger';
+
+const log = createLogger('Hotkey');
 
 /**
  * All hotkey identifiers in the app.
@@ -166,7 +169,6 @@ export class HotkeyManager {
   private callbacks: Map<HotkeyId, HotkeyCallback> = new Map();
 
   constructor() {
-    console.log('[HotkeyManager] Initialized');
   }
 
   /**
@@ -218,7 +220,6 @@ export class HotkeyManager {
    */
   register(id: HotkeyId, key: string, callback: HotkeyCallback): HotkeyResult {
     if (!key || key.trim() === '') {
-      console.log(`[HotkeyManager] Skipping registration for ${id}: empty key`);
       return { success: true }; // Empty key = intentionally disabled
     }
 
@@ -227,7 +228,6 @@ export class HotkeyManager {
     // Check for internal conflicts
     const conflict = this.checkConflict(normalizedKey, id);
     if (conflict) {
-      console.warn(`[HotkeyManager] Conflict: ${id} key "${normalizedKey}" already used by ${conflict}`);
       return {
         success: false,
         error: `Hotkey already used by ${HOTKEY_CONFIGS[conflict].description}`,
@@ -245,7 +245,7 @@ export class HotkeyManager {
       const registered = globalShortcut.register(normalizedKey, callback);
 
       if (!registered) {
-        console.error(`[HotkeyManager] Failed to register ${id}: "${normalizedKey}" - may be in use by another app`);
+        log.error(`Failed to register ${id}: "${normalizedKey}" - may be in use by another app`);
         return {
           success: false,
           error: 'Hotkey may be in use by another application',
@@ -256,10 +256,9 @@ export class HotkeyManager {
       this.registeredHotkeys.set(id, { id, key: normalizedKey, callback });
       this.callbacks.set(id, callback);
 
-      console.log(`[HotkeyManager] Registered ${id}: "${normalizedKey}"`);
       return { success: true };
     } catch (error) {
-      console.error(`[HotkeyManager] Exception registering ${id}:`, error);
+      log.error(`Exception registering ${id}:`, error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
@@ -280,10 +279,9 @@ export class HotkeyManager {
       globalShortcut.unregister(registered.key);
       this.registeredHotkeys.delete(id);
       // Keep callback for potential re-registration
-      console.log(`[HotkeyManager] Unregistered ${id}: "${registered.key}"`);
       return true;
     } catch (error) {
-      console.error(`[HotkeyManager] Exception unregistering ${id}:`, error);
+      log.error(`Exception unregistering ${id}:`, error);
       return false;
     }
   }
@@ -305,7 +303,6 @@ export class HotkeyManager {
     // If clearing the hotkey
     if (!newKey || newKey.trim() === '') {
       this.unregister(id);
-      console.log(`[HotkeyManager] Cleared ${id}`);
       return { success: true };
     }
 
@@ -344,7 +341,6 @@ export class HotkeyManager {
 
       // Success - update state
       this.registeredHotkeys.set(id, { id, key: normalizedKey, callback: existingCallback });
-      console.log(`[HotkeyManager] Changed ${id}: "${oldRegistered?.key || 'none'}" -> "${normalizedKey}"`);
       return { success: true };
     } catch (error) {
       // Failed - try to restore old key
@@ -407,7 +403,6 @@ export class HotkeyManager {
    * Call this on app quit.
    */
   unregisterAll(): void {
-    console.log('[HotkeyManager] Unregistering all hotkeys');
     for (const id of this.registeredHotkeys.keys()) {
       this.unregister(id);
     }

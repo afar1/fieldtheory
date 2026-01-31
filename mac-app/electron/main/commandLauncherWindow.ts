@@ -1,10 +1,10 @@
 /**
  * Command Launcher Window
- * 
+ *
  * A small, centered popup window for quickly searching and invoking
  * portable commands. Appears on Cmd+Shift+K, disappears on selection
  * or Escape/blur.
- * 
+ *
  * Design:
  * - Frameless, transparent window with dark background
  * - Starts small (just input field), expands when results appear
@@ -18,6 +18,9 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type { NativeHelper, FrontmostAppInfo } from './nativeHelper';
+import { createLogger } from './logger';
+
+const log = createLogger('CommandLauncher');
 
 const execFileAsync = promisify(execFile);
 
@@ -135,8 +138,6 @@ export class CommandLauncherWindow {
       y = Math.round(display.bounds.y + (display.bounds.height - this.WINDOW_HEIGHT_EXPANDED) / 2 - 50);
     }
 
-    console.log(`[CommandLauncher] Setting bounds: x=${x}, y=${y}, w=${this.WINDOW_WIDTH}, h=${this.WINDOW_HEIGHT_COLLAPSED}`);
-
     this.window!.setBounds({
       x,
       y,
@@ -144,12 +145,10 @@ export class CommandLauncherWindow {
       height: this.WINDOW_HEIGHT_COLLAPSED,
     });
 
-    console.log('[CommandLauncher] Showing window...');
     this.window!.show();
     this.window!.moveTop(); // Ensure we're at top of window stack (above immersive clipboard)
     this.window!.focus();
     this._isShowing = false; // Window is now visible, clear the showing flag
-    console.log('[CommandLauncher] Window shown, isVisible:', this.window!.isVisible());
 
     // Tell renderer to reset state.
     this.window!.webContents.send('command-launcher:reset');
@@ -182,15 +181,14 @@ export class CommandLauncherWindow {
   private async activatePreviousApp(bundleId: string): Promise<void> {
     try {
       if (bundleId.includes('"') || bundleId.includes("'")) {
-        console.error('[CommandLauncher] Invalid bundleId contains quotes:', bundleId);
+        log.error('Invalid bundleId contains quotes:', bundleId);
         app.hide();
         return;
       }
       const script = `tell application id "${bundleId}"\n  activate\nend tell`;
       await execFileAsync('osascript', ['-e', script]);
-      console.log(`[CommandLauncher] Activated previous app: ${bundleId}`);
     } catch (error) {
-      console.error('[CommandLauncher] Failed to activate previous app:', error);
+      log.error('Failed to activate previous app:', error);
       app.hide(); // Fallback
     }
   }
@@ -247,7 +245,6 @@ export class CommandLauncherWindow {
 
     // Hide on blur (clicking away).
     this.window.on('blur', () => {
-      console.log('[CommandLauncher] Window blurred, hiding');
       this.hide();
     });
 
@@ -262,7 +259,6 @@ export class CommandLauncherWindow {
       this.window.loadURL(`${url}command-launcher.html`);
     } else {
       const htmlPath = path.join(app.getAppPath(), 'dist', 'command-launcher.html');
-      console.log('[CommandLauncher] Loading HTML from:', htmlPath);
       this.window.loadFile(htmlPath);
     }
   }
