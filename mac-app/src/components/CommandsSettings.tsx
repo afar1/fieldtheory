@@ -18,6 +18,7 @@ type PortableCommandInfo = {
 type WatchedDir = {
   path: string;
   enabled: boolean;
+  mobileSyncEnabled: boolean;
 };
 
 export default function CommandsSettings() {
@@ -35,6 +36,10 @@ export default function CommandsSettings() {
 
   // Path input for adding new directories.
   const [newPath, setNewPath] = useState('');
+
+  // Mobile sync state.
+  const [syncingDir, setSyncingDir] = useState<string | null>(null);
+  const [remoteCount, setRemoteCount] = useState<number>(0);
 
   // Count commands per directory.
   const commandCountsByDir = useMemo(() => {
@@ -55,9 +60,11 @@ export default function CommandsSettings() {
     Promise.all([
       window.commandsAPI.getWatchedDirs(),
       window.commandsAPI.getCommands(),
-    ]).then(([dirs, cmds]) => {
+      window.commandsAPI.getRemoteCommandCount(),
+    ]).then(([dirs, cmds, count]) => {
       setWatchedDirs(dirs || []);
       setCommands(cmds);
+      setRemoteCount(count);
       setLoading(false);
     }).catch((err) => {
       console.error('Failed to load commands settings:', err);
@@ -120,11 +127,39 @@ export default function CommandsSettings() {
         // Refresh commands
         const cmds = await window.commandsAPI.getCommands();
         setCommands(cmds);
+        // Update remote count
+        const count = await window.commandsAPI.getRemoteCommandCount();
+        setRemoteCount(count);
       } else {
         setError('Failed to remove directory');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
+    }
+  }, []);
+
+  // Handle toggling mobile sync for a directory.
+  const handleToggleMobileSync = useCallback(async (dirPath: string, enabled: boolean) => {
+    if (!window.commandsAPI) return;
+
+    setSyncingDir(dirPath);
+    setError(null);
+    try {
+      const success = await window.commandsAPI.setMobileSync(dirPath, enabled);
+      if (success) {
+        setWatchedDirs((prev) => prev.map((d) =>
+          d.path === dirPath ? { ...d, mobileSyncEnabled: enabled } : d
+        ));
+        // Update remote count after sync
+        const count = await window.commandsAPI.getRemoteCommandCount();
+        setRemoteCount(count);
+      } else {
+        setError('Failed to update mobile sync setting');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setSyncingDir(null);
     }
   }, []);
 
@@ -192,54 +227,103 @@ export default function CommandsSettings() {
             }}>
               {watchedDirs.map((dir, index) => {
                 const count = commandCountsByDir[dir.path] || 0;
+                const isSyncing = syncingDir === dir.path;
                 return (
                   <div
                     key={dir.path}
                     style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
                       padding: '8px 12px',
                       borderBottom: index < watchedDirs.length - 1
                         ? `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`
                         : 'none',
                     }}
                   >
-                    <div style={{ flex: 1, minWidth: 0, marginRight: '8px' }}>
-                      <code style={{
-                        fontSize: '12px',
-                        fontFamily: 'monospace',
-                        color: theme.text,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        display: 'block',
-                      }}>
-                        {formatPath(dir.path)}
-                      </code>
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                    }}>
+                      <div style={{ flex: 1, minWidth: 0, marginRight: '8px' }}>
+                        <code style={{
+                          fontSize: '12px',
+                          fontFamily: 'monospace',
+                          color: theme.text,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          display: 'block',
+                        }}>
+                          {formatPath(dir.path)}
+                        </code>
+                        <span style={{
+                          fontSize: '11px',
+                          color: theme.textSecondary,
+                        }}>
+                          {count} command{count !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handleRemoveDirectory(dir.path)}
+                        style={{
+                          padding: '4px 8px',
+                          fontSize: '11px',
+                          fontWeight: 500,
+                          color: theme.error,
+                          backgroundColor: 'transparent',
+                          border: `1px solid ${theme.isDark ? 'rgba(248,113,113,0.3)' : '#fecaca'}`,
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          flexShrink: 0,
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                    {/* Mobile sync toggle */}
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      marginTop: '6px',
+                      paddingTop: '6px',
+                      borderTop: `1px dashed ${theme.isDark ? theme.border : '#e5e7eb'}`,
+                    }}>
                       <span style={{
                         fontSize: '11px',
                         color: theme.textSecondary,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
                       }}>
-                        {count} command{count !== 1 ? 's' : ''}
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
+                          <line x1="12" y1="18" x2="12" y2="18"/>
+                        </svg>
+                        Available on mobile
                       </span>
+                      <button
+                        onClick={() => handleToggleMobileSync(dir.path, !dir.mobileSyncEnabled)}
+                        disabled={isSyncing}
+                        style={{
+                          padding: '3px 8px',
+                          fontSize: '10px',
+                          fontWeight: 500,
+                          color: dir.mobileSyncEnabled ? '#fff' : theme.textSecondary,
+                          backgroundColor: dir.mobileSyncEnabled
+                            ? (theme.isDark ? '#059669' : '#10b981')
+                            : 'transparent',
+                          border: dir.mobileSyncEnabled
+                            ? 'none'
+                            : `1px solid ${theme.border}`,
+                          borderRadius: '4px',
+                          cursor: isSyncing ? 'not-allowed' : 'pointer',
+                          opacity: isSyncing ? 0.6 : 1,
+                          minWidth: '50px',
+                        }}
+                      >
+                        {isSyncing ? '...' : dir.mobileSyncEnabled ? 'On' : 'Off'}
+                      </button>
                     </div>
-                    <button
-                      onClick={() => handleRemoveDirectory(dir.path)}
-                      style={{
-                        padding: '4px 8px',
-                        fontSize: '11px',
-                        fontWeight: 500,
-                        color: theme.error,
-                        backgroundColor: 'transparent',
-                        border: `1px solid ${theme.isDark ? 'rgba(248,113,113,0.3)' : '#fecaca'}`,
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        flexShrink: 0,
-                      }}
-                    >
-                      Remove
-                    </button>
                   </div>
                 );
               })}
@@ -323,6 +407,31 @@ export default function CommandsSettings() {
           }}>
             View and edit commands in the <strong>Commands</strong> tab.
           </p>
+        )}
+
+        {/* Mobile sync status */}
+        {remoteCount > 0 && (
+          <div style={{
+            marginTop: '12px',
+            padding: '8px 12px',
+            backgroundColor: theme.isDark ? 'rgba(16, 185, 129, 0.1)' : '#ecfdf5',
+            borderRadius: '6px',
+            border: `1px solid ${theme.isDark ? 'rgba(16, 185, 129, 0.3)' : '#a7f3d0'}`,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+          }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={theme.isDark ? '#34d399' : '#059669'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
+              <line x1="12" y1="18" x2="12" y2="18"/>
+            </svg>
+            <span style={{
+              fontSize: '12px',
+              color: theme.isDark ? '#34d399' : '#059669',
+            }}>
+              <strong>{remoteCount}</strong> command{remoteCount !== 1 ? 's' : ''} synced to mobile
+            </span>
+          </div>
         )}
 
         {/* Usage instructions */}
