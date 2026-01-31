@@ -5073,6 +5073,11 @@ if (!gotTheLock) {
     setupOnboardingIPCHandlers();
     setupDisplayListeners();
 
+    // Todo IPC handlers (minimal - just auth check for now)
+    ipcMain.handle('todo:isAuthenticated', () => {
+      return authManager?.isAuthenticated() ?? false;
+    });
+
     // Set up macOS app menu with standard items (required for Cmd+H, Cmd+Q, etc.)
     if (process.platform === 'darwin') {
       const template: Electron.MenuItemConstructorOptions[] = [
