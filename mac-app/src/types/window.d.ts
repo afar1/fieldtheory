@@ -829,6 +829,26 @@ interface CommandWithContent extends PortableCommandInfo {
 interface CommandsWatchedDir {
   path: string;
   enabled: boolean;
+  mobileSyncEnabled: boolean;
+}
+
+/**
+ * Result of a mobile sync operation.
+ */
+interface CommandSyncResult {
+  success: boolean;
+  uploaded: number;
+  updated: number;
+  deleted: number;
+  errors: string[];
+}
+
+/**
+ * Mobile sync status.
+ */
+interface MobileSyncStatus {
+  ready: boolean;
+  lastSyncAt: number | null;
 }
 
 /**
@@ -867,6 +887,12 @@ interface CommandsAPI {
   launcherResize?: (height: number) => void;
   launcherClose?: () => void;
   onLauncherReset?: (callback: () => void) => () => void;
+
+  // Mobile sync operations
+  setMobileSync: (dirPath: string, enabled: boolean) => Promise<boolean>;
+  getMobileSyncStatus: () => Promise<MobileSyncStatus>;
+  syncToMobile: () => Promise<CommandSyncResult>;
+  getRemoteCommandCount: () => Promise<number>;
 }
 
 /**

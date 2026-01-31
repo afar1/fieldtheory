@@ -18,6 +18,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { app } from 'electron';
 import { EventEmitter } from 'events';
 import { UserDataManager } from './userDataManager';
@@ -30,6 +31,8 @@ const log = createLogger('Commands');
  */
 interface CommandsSettings {
   watchedDirs: string[];
+  /** Directories with mobile sync enabled (paths) */
+  mobileSyncDirs: string[];
 }
 
 /**
@@ -38,6 +41,19 @@ interface CommandsSettings {
 export interface WatchedDir {
   path: string;
   enabled: boolean;
+  /** Whether this directory's commands are synced to mobile */
+  mobileSyncEnabled: boolean;
+}
+
+/**
+ * Command ready to be synced to Supabase.
+ */
+export interface SyncableCommand {
+  name: string;
+  displayName: string;
+  content: string;
+  sourcePath: string;
+  contentHash: string;
 }
 
 /**
@@ -92,7 +108,7 @@ export interface CommandsManagerEvents {
  * Now supports multiple directories and full CRUD operations.
  */
 export class CommandsManager extends EventEmitter {
-  private settings: CommandsSettings = { watchedDirs: [] };
+  private settings: CommandsSettings = { watchedDirs: [], mobileSyncDirs: [] };
   private settingsPath: string;
   private commands: Map<string, PortableCommand> = new Map();
   private watchers: Map<string, AbortController> = new Map();
@@ -164,13 +180,14 @@ export class CommandsManager extends EventEmitter {
    * Load settings from JSON file.
    */
   private loadSettings(): void {
-    const defaults: CommandsSettings = { watchedDirs: [] };
+    const defaults: CommandsSettings = { watchedDirs: [], mobileSyncDirs: [] };
 
     try {
       if (fs.existsSync(this.settingsPath)) {
         const data = JSON.parse(fs.readFileSync(this.settingsPath, 'utf-8'));
         this.settings = {
           watchedDirs: data.watchedDirs || defaults.watchedDirs,
+          mobileSyncDirs: data.mobileSyncDirs || defaults.mobileSyncDirs,
         };
       } else {
         this.settings = defaults;
@@ -957,6 +974,7 @@ End of User Commands
     return this.settings.watchedDirs.map(dirPath => ({
       path: dirPath,
       enabled: true,
+      mobileSyncEnabled: this.settings.mobileSyncDirs.includes(dirPath),
     }));
   }
 
@@ -1171,6 +1189,135 @@ End of User Commands
       return newFilePath;
     } catch (error) {
       log.error(`Error renaming command ${oldFilePath}:`, error);
+      return null;
+    }
+  }
+
+  // =========================================================================
+  // Mobile Sync Operations
+  // =========================================================================
+
+  /**
+   * Enable or disable mobile sync for a watched directory.
+   * When enabled, commands from this directory will be synced to Supabase
+   * and available for voice invocation on mobile.
+   */
+  setMobileSyncEnabled(dirPath: string, enabled: boolean): boolean {
+    const normalizedPath = this.normalizePath(dirPath);
+
+    // Check if this directory is watched
+    if (!this.settings.watchedDirs.includes(normalizedPath)) {
+      log.warn(`Cannot set mobile sync: ${normalizedPath} is not a watched directory`);
+      return false;
+    }
+
+    const isCurrentlyEnabled = this.settings.mobileSyncDirs.includes(normalizedPath);
+
+    if (enabled && !isCurrentlyEnabled) {
+      // Enable mobile sync
+      this.settings.mobileSyncDirs.push(normalizedPath);
+      this.saveSettings();
+      log.info(`Mobile sync enabled for: ${normalizedPath}`);
+      this.emit('mobileSyncChanged', normalizedPath, true);
+      return true;
+    } else if (!enabled && isCurrentlyEnabled) {
+      // Disable mobile sync
+      const index = this.settings.mobileSyncDirs.indexOf(normalizedPath);
+      this.settings.mobileSyncDirs.splice(index, 1);
+      this.saveSettings();
+      log.info(`Mobile sync disabled for: ${normalizedPath}`);
+      this.emit('mobileSyncChanged', normalizedPath, false);
+      return true;
+    }
+
+    return false; // No change needed
+  }
+
+  /**
+   * Check if mobile sync is enabled for a directory.
+   */
+  isMobileSyncEnabled(dirPath: string): boolean {
+    const normalizedPath = this.normalizePath(dirPath);
+    return this.settings.mobileSyncDirs.includes(normalizedPath);
+  }
+
+  /**
+   * Get all directories with mobile sync enabled.
+   */
+  getMobileSyncDirs(): string[] {
+    return [...this.settings.mobileSyncDirs];
+  }
+
+  /**
+   * Compute SHA256 hash of content for change detection.
+   */
+  private computeContentHash(content: string): string {
+    return crypto.createHash('sha256').update(content, 'utf8').digest('hex');
+  }
+
+  /**
+   * Get all commands from mobile-sync-enabled directories, ready for Supabase sync.
+   * Returns commands with their full content and metadata.
+   */
+  async getCommandsForMobileSync(): Promise<SyncableCommand[]> {
+    const syncableCommands: SyncableCommand[] = [];
+
+    // Only include commands from directories with mobile sync enabled
+    for (const command of this.commands.values()) {
+      // Check if this command's directory has mobile sync enabled
+      const commandDir = path.dirname(command.filePath);
+      const isMobileSynced = this.settings.mobileSyncDirs.some(syncDir =>
+        commandDir.startsWith(syncDir)
+      );
+
+      if (!isMobileSynced) {
+        continue;
+      }
+
+      try {
+        // Load the command content
+        const content = fs.readFileSync(command.filePath, 'utf-8');
+        const contentHash = this.computeContentHash(content);
+
+        syncableCommands.push({
+          name: command.name,
+          displayName: command.displayName,
+          content,
+          sourcePath: command.filePath,
+          contentHash,
+        });
+      } catch (error) {
+        log.error(`Error reading command for mobile sync: ${command.filePath}`, error);
+      }
+    }
+
+    log.info(`Prepared ${syncableCommands.length} commands for mobile sync`);
+    return syncableCommands;
+  }
+
+  /**
+   * Get a single command with content by name.
+   * Used for fetching command content when needed.
+   */
+  async getCommandWithContent(name: string): Promise<SyncableCommand | null> {
+    const command = this.commands.get(name.toLowerCase());
+    if (!command) {
+      return null;
+    }
+
+    try {
+      const content = fs.readFileSync(command.filePath, 'utf-8');
+      const contentHash = this.computeContentHash(content);
+
+      return {
+        name: command.name,
+        displayName: command.displayName,
+        content,
+        sourcePath: command.filePath,
+        contentHash,
+      };
+    } catch (error) {
+      log.error(`Error reading command content: ${command.filePath}`, error);
       return null;
     }
   }
