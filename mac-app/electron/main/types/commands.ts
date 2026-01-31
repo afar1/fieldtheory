@@ -37,6 +37,12 @@ export const CommandsIPCChannels = {
   CREATE_COMMAND: 'commands:createCommand',
   DELETE_COMMAND: 'commands:deleteCommand',
   RENAME_COMMAND: 'commands:renameCommand',
+
+  // Mobile sync operations
+  SET_MOBILE_SYNC: 'commands:setMobileSync',
+  GET_MOBILE_SYNC_STATUS: 'commands:getMobileSyncStatus',
+  SYNC_TO_MOBILE: 'commands:syncToMobile',
+  GET_REMOTE_COMMAND_COUNT: 'commands:getRemoteCommandCount',
 } as const;
 
 /**
@@ -54,6 +60,19 @@ export interface PortableCommandInfo {
 export interface WatchedDir {
   path: string;
   enabled: boolean;
+  /** Whether this directory's commands are synced to mobile */
+  mobileSyncEnabled: boolean;
+}
+
+/**
+ * Result of a mobile sync operation.
+ */
+export interface CommandSyncResult {
+  success: boolean;
+  uploaded: number;
+  updated: number;
+  deleted: number;
+  errors: string[];
 }
 
 /**
