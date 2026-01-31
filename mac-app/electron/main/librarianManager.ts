@@ -5,6 +5,9 @@ import os from 'os';
 import { EventEmitter } from 'events';
 import * as chokidar from 'chokidar';
 import { UserDataManager } from './userDataManager';
+import { createLogger } from './logger';
+
+const log = createLogger('Librarian');
 
 /**
  * Auto-run frequency for generating readings.
@@ -143,8 +146,6 @@ export class LibrarianManager extends EventEmitter {
 
     // Log current status for all projects with .librarian directories
     this.logAllProjectStatuses();
-
-    console.log('[LibrarianManager] Initialized (file-only mode)');
   }
 
   /**
@@ -161,7 +162,6 @@ export class LibrarianManager extends EventEmitter {
     if (this.userDataManager?.isLoggedIn()) {
       this.settingsPath = this.userDataManager.getUserDataPath('librarian-settings.json');
       this.indexPath = this.userDataManager.getUserDataPath('librarian-index.json');
-      console.log('[LibrarianManager] Using user-specific paths:', this.settingsPath);
     }
   }
 
@@ -206,7 +206,7 @@ export class LibrarianManager extends EventEmitter {
       const content = fs.readFileSync(indexPath, 'utf-8');
       return JSON.parse(content);
     } catch (error) {
-      console.error('[LibrarianManager] Failed to read concepts index:', error);
+      log.error('Failed to read concepts index:', error);
       return null;
     }
   }
@@ -233,16 +233,12 @@ export class LibrarianManager extends EventEmitter {
 
     // Sync user's settings to global config for hooks
     this.syncToGlobalConfig(false);
-
-    console.log('[LibrarianManager] Reinitialized for user');
   }
 
   /**
    * Clear state on logout.
    */
   async onUserLoggedOut(): Promise<void> {
-    console.log('[LibrarianManager] User logged out, clearing state');
-
     // Stop watchers
     for (const watcher of this.watchers.values()) {
       await watcher.close();
@@ -257,9 +253,8 @@ export class LibrarianManager extends EventEmitter {
         const config = JSON.parse(fs.readFileSync(globalConfigPath, 'utf-8'));
         config.enabled = false;
         fs.writeFileSync(globalConfigPath, JSON.stringify(config, null, 2));
-        console.log('[LibrarianManager] Disabled hooks in global config');
       } catch (error) {
-        console.error('[LibrarianManager] Failed to disable hooks in global config:', error);
+        log.error('Failed to disable hooks in global config:', error);
       }
     }
   }
@@ -321,7 +316,6 @@ export class LibrarianManager extends EventEmitter {
         // Migration: convert autoRunFrequency to enabled
         if (enabled === undefined && data.autoRunFrequency !== undefined) {
           enabled = data.autoRunFrequency !== 'off';
-          console.log('[LibrarianManager] Migrated autoRunFrequency to enabled:', enabled);
         }
 
         return {
@@ -339,7 +333,7 @@ export class LibrarianManager extends EventEmitter {
         };
       }
     } catch (error) {
-      console.warn('[LibrarianManager] Failed to load settings, using defaults:', error);
+      log.warn('Failed to load settings, using defaults:', error);
     }
 
     return defaults;
@@ -352,7 +346,7 @@ export class LibrarianManager extends EventEmitter {
     try {
       fs.writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2));
     } catch (error) {
-      console.error('[LibrarianManager] Failed to save settings:', error);
+      log.error('Failed to save settings:', error);
     }
   }
 
@@ -378,11 +372,10 @@ export class LibrarianManager extends EventEmitter {
               mtime: meta.mtime,
             });
           }
-          console.log(`[LibrarianManager] Loaded ${this.cache.size} readings from index`);
         }
       }
     } catch (error) {
-      console.warn('[LibrarianManager] Index corrupted or invalid, starting fresh:', error);
+      log.warn('Index corrupted or invalid, starting fresh:', error);
       this.cache.clear();
     }
   }
@@ -407,7 +400,7 @@ export class LibrarianManager extends EventEmitter {
       }
       fs.writeFileSync(this.indexPath, JSON.stringify(index, null, 2));
     } catch (error) {
-      console.error('[LibrarianManager] Failed to save index:', error);
+      log.error('Failed to save index:', error);
     }
   }
 
@@ -425,11 +418,8 @@ export class LibrarianManager extends EventEmitter {
 
     // Check if we've already migrated
     if (fs.existsSync(this.settingsPath)) {
-      console.log('[LibrarianManager] Already migrated, skipping');
       return;
     }
-
-    console.log('[LibrarianManager] Migrating from old database...');
 
     try {
       // Dynamic import to avoid requiring better-sqlite3 if not needed
@@ -445,7 +435,7 @@ export class LibrarianManager extends EventEmitter {
           watchedDirs.push(row.path);
         }
       } catch {
-        console.warn('[LibrarianManager] Could not read watched_dirs');
+        // Could not read watched_dirs
       }
 
       // Extract settings
@@ -461,7 +451,7 @@ export class LibrarianManager extends EventEmitter {
           autoShowEnabled = false;
         }
       } catch {
-        console.warn('[LibrarianManager] Could not read settings');
+        // Could not read settings
       }
 
       db.close();
@@ -478,28 +468,22 @@ export class LibrarianManager extends EventEmitter {
       };
       fs.writeFileSync(this.settingsPath, JSON.stringify(settings, null, 2));
 
-      console.log(`[LibrarianManager] Migrated ${watchedDirs.length} watched directories`);
-
       // Clean up old files
       try {
         fs.unlinkSync(this.oldDbPath);
-        console.log('[LibrarianManager] Deleted old database');
       } catch {
-        console.warn('[LibrarianManager] Could not delete old database');
+        // Could not delete old database
       }
 
       if (fs.existsSync(this.oldLibrarianDir)) {
         try {
           fs.rmSync(this.oldLibrarianDir, { recursive: true });
-          console.log('[LibrarianManager] Deleted old librarian directory');
         } catch {
-          console.warn('[LibrarianManager] Could not delete old librarian directory');
+          // Could not delete old librarian directory
         }
       }
-
-      console.log('[LibrarianManager] Migration complete');
     } catch (error) {
-      console.error('[LibrarianManager] Migration failed:', error);
+      log.error('Migration failed:', error);
     }
   }
 
@@ -562,7 +546,7 @@ export class LibrarianManager extends EventEmitter {
         mtime: Math.floor(stats.mtimeMs),
       };
     } catch (error) {
-      console.error(`[LibrarianManager] Error parsing file ${filePath}:`, error);
+      log.error(`Error parsing file ${filePath}:`, error);
       return null;
     }
   }
@@ -580,7 +564,6 @@ export class LibrarianManager extends EventEmitter {
     const normalizedDir = this.normalizePath(dirPath);
 
     if (!fs.existsSync(normalizedDir)) {
-      console.warn(`[LibrarianManager] Directory not found: ${normalizedDir}`);
       return false;
     }
 
@@ -608,18 +591,11 @@ export class LibrarianManager extends EventEmitter {
           // Parse and cache
           const meta = this.parseFileMetadata(fullPath);
           if (meta) {
-            const isNew = !this.cache.has(fullPath);
             this.cache.set(fullPath, meta);
             hasChanges = true;
-
-            if (isNew) {
-              console.log(`[LibrarianManager] Added: ${meta.title}`);
-            } else {
-              console.log(`[LibrarianManager] Updated: ${meta.title}`);
-            }
           }
         } catch (error) {
-          console.error(`[LibrarianManager] Error processing ${file}:`, error);
+          log.error(`Error processing ${file}:`, error);
         }
       }
 
@@ -628,7 +604,6 @@ export class LibrarianManager extends EventEmitter {
         if (cachedPath.startsWith(normalizedDir + path.sep) && !seenPaths.has(cachedPath)) {
           this.cache.delete(cachedPath);
           hasChanges = true;
-          console.log(`[LibrarianManager] Removed: ${cachedPath}`);
         }
       }
 
@@ -667,11 +642,9 @@ export class LibrarianManager extends EventEmitter {
     }
 
     if (!fs.existsSync(normalizedDir)) {
-      console.warn(`[LibrarianManager] Directory not found: ${normalizedDir}`);
       return;
     }
 
-    console.log(`[LibrarianManager] Watching: ${normalizedDir}`);
     this.scanDirectory(normalizedDir);
 
     // Watch for .md files in the directory using chokidar
@@ -686,28 +659,24 @@ export class LibrarianManager extends EventEmitter {
     });
 
     watcher.on('ready', () => {
-      console.log(`[LibrarianManager] Watcher ready: ${normalizedDir}`);
       // Reconciliation scan to catch files created during initialization
       this.scanForNewReadings(normalizedDir);
     });
 
     watcher.on('add', (filePath) => {
-      console.log(`[LibrarianManager] File added: ${filePath}`);
       this.handleFileChange(filePath, true);
     });
 
     watcher.on('change', (filePath) => {
-      console.log(`[LibrarianManager] File changed: ${filePath}`);
       this.handleFileChange(filePath, false);
     });
 
     watcher.on('unlink', (filePath) => {
-      console.log(`[LibrarianManager] File removed: ${filePath}`);
       this.handleFileDelete(filePath);
     });
 
     watcher.on('error', (error) => {
-      console.error(`[LibrarianManager] Watcher error:`, error);
+      log.error('Watcher error:', error);
     });
 
     this.watchers.set(normalizedDir, watcher);
@@ -741,11 +710,10 @@ export class LibrarianManager extends EventEmitter {
       const content = fs.readFileSync(normalizedPath, 'utf-8');
       const reading: Reading = { ...meta, content };
       this.emit('reading-added', reading);
-      console.log(`[LibrarianManager] New artifact: ${meta.title}`);
+      log.info(`New artifact: ${meta.title}`);
     } else if (isUpdated) {
       // Existing file was modified - just update UI, no auto-show
       this.emit('reading-updated', meta);
-      console.log(`[LibrarianManager] Updated reading: ${meta.title}`);
     }
   }
 
@@ -755,11 +723,9 @@ export class LibrarianManager extends EventEmitter {
   private handleFileDelete(filePath: string): void {
     const normalizedPath = this.normalizePath(filePath);
     if (this.cache.has(normalizedPath)) {
-      const meta = this.cache.get(normalizedPath);
       this.cache.delete(normalizedPath);
       this.saveIndex();
       this.emit('reading-removed', normalizedPath);
-      console.log(`[LibrarianManager] Removed reading: ${meta?.title || normalizedPath}`);
     }
   }
 
@@ -789,7 +755,7 @@ export class LibrarianManager extends EventEmitter {
         const content = fs.readFileSync(fullPath, 'utf-8');
         const reading: Reading = { ...meta, content };
         this.emit('reading-added', reading);
-        console.log(`[LibrarianManager] Reconciliation found artifact: ${meta.title}`);
+        log.info(`Reconciliation found artifact: ${meta.title}`);
       }
     }
 
@@ -807,7 +773,6 @@ export class LibrarianManager extends EventEmitter {
     if (watcher) {
       watcher.close();
       this.watchers.delete(normalizedDir);
-      console.log(`[LibrarianManager] Stopped watching: ${normalizedDir}`);
     }
   }
 
@@ -853,12 +818,11 @@ export class LibrarianManager extends EventEmitter {
       const discovered: string[] = JSON.parse(fs.readFileSync(discoveryFile, 'utf-8'));
       for (const dirPath of discovered) {
         if (!this.settings.watchedDirs.includes(dirPath)) {
-          console.log(`[LibrarianManager] Auto-adding discovered directory: ${dirPath}`);
           this.addWatchedDir(dirPath);
         }
       }
     } catch (error) {
-      console.error('[LibrarianManager] Error processing discovery file:', error);
+      log.error('Error processing discovery file:', error);
     }
   }
 
@@ -888,7 +852,7 @@ export class LibrarianManager extends EventEmitter {
       const content = fs.readFileSync(normalizedPath, 'utf-8');
       return { ...meta, content };
     } catch (error) {
-      console.error(`[LibrarianManager] Error reading file ${normalizedPath}:`, error);
+      log.error(`Error reading file ${normalizedPath}:`, error);
       return null;
     }
   }
@@ -911,7 +875,6 @@ export class LibrarianManager extends EventEmitter {
 
     try {
       fs.writeFileSync(normalizedPath, content, 'utf-8');
-      console.log(`[LibrarianManager] Saved reading: ${normalizedPath}`);
 
       // Re-parse metadata since content may have changed title/context
       const meta = this.parseFileMetadata(normalizedPath);
@@ -924,7 +887,7 @@ export class LibrarianManager extends EventEmitter {
 
       return true;
     } catch (error) {
-      console.error(`[LibrarianManager] Error saving file ${normalizedPath}:`, error);
+      log.error(`Error saving file ${normalizedPath}:`, error);
       return false;
     }
   }
@@ -939,13 +902,11 @@ export class LibrarianManager extends EventEmitter {
     try {
       // Check if file exists
       if (!fs.existsSync(normalizedPath)) {
-        console.warn(`[LibrarianManager] File not found for deletion: ${normalizedPath}`);
         return false;
       }
 
       // Delete the file
       fs.unlinkSync(normalizedPath);
-      console.log(`[LibrarianManager] Deleted reading: ${normalizedPath}`);
 
       // Remove from cache
       this.cache.delete(normalizedPath);
@@ -956,7 +917,7 @@ export class LibrarianManager extends EventEmitter {
 
       return true;
     } catch (error) {
-      console.error(`[LibrarianManager] Error deleting file ${normalizedPath}:`, error);
+      log.error(`Error deleting file ${normalizedPath}:`, error);
       return false;
     }
   }
@@ -985,13 +946,11 @@ export class LibrarianManager extends EventEmitter {
 
     // Check if directory exists
     if (!fs.existsSync(normalizedPath)) {
-      console.warn(`[LibrarianManager] Directory not found: ${normalizedPath}`);
       return null;
     }
 
     // Check if already watched
     if (this.settings.watchedDirs.includes(normalizedPath)) {
-      console.log(`[LibrarianManager] Already watching: ${normalizedPath}`);
       return null;
     }
 
@@ -1002,7 +961,6 @@ export class LibrarianManager extends EventEmitter {
     // Start watching
     this.watchDirectory(normalizedPath);
 
-    console.log(`[LibrarianManager] Added watched directory: ${normalizedPath}`);
     return { path: normalizedPath, enabled: true };
   }
 
@@ -1037,7 +995,6 @@ export class LibrarianManager extends EventEmitter {
       this.saveIndex();
     }
 
-    console.log(`[LibrarianManager] Removed watched directory: ${normalizedPath} (${removedCount} readings removed from cache)`);
     return true;
   }
 
@@ -1075,7 +1032,6 @@ export class LibrarianManager extends EventEmitter {
     }
 
     const success = this.syncClaudeMd();
-    console.log(`[LibrarianManager] Enabled set to: ${enabled}`);
     return success;
   }
 
@@ -1092,7 +1048,6 @@ export class LibrarianManager extends EventEmitter {
   setSetupComplete(complete: boolean): void {
     this.settings.librarianSetupComplete = complete;
     this.saveSettings();
-    console.log(`[LibrarianManager] Setup complete set to: ${complete}`);
   }
 
   // ===========================================================================
@@ -1133,7 +1088,6 @@ export class LibrarianManager extends EventEmitter {
       }
     }
 
-    console.log(`[LibrarianManager] State-enforced threshold set to: ${threshold}`);
     return true;
   }
 
@@ -1163,7 +1117,6 @@ export class LibrarianManager extends EventEmitter {
     // Sync to global config (no threshold recalculation)
     this.syncToGlobalConfig(false);
 
-    console.log(`[LibrarianManager] Custom rule content ${content ? 'set' : 'cleared'}`);
     return true;
   }
 
@@ -1188,7 +1141,6 @@ export class LibrarianManager extends EventEmitter {
     // Sync to global config with threshold recalculation
     this.syncToGlobalConfig(true);
 
-    console.log(`[LibrarianManager] Discovery frequency set to: ${frequency}`);
     return true;
   }
 
@@ -1213,7 +1165,6 @@ export class LibrarianManager extends EventEmitter {
     this.settings.userExpertiseContext = trimmed;
     this.saveSettings();
     this.syncToGlobalConfig(false);
-    console.log(`[LibrarianManager] User expertise context ${trimmed ? 'set' : 'cleared'}`);
     return true;
   }
 
@@ -1275,8 +1226,6 @@ export class LibrarianManager extends EventEmitter {
     // Clean up any legacy duplicate hooks and regenerate if needed
     this.cleanupLegacyHooks();
     this.ensureHookUpToDate();
-
-    console.log('[LibrarianManager] Synced user preferences to global config');
   }
 
   /**
@@ -1311,7 +1260,6 @@ export class LibrarianManager extends EventEmitter {
         );
         if (settings.hooks.UserPromptSubmit.length < before) {
           modified = true;
-          console.log(`[LibrarianManager] Cleaned up ${before - settings.hooks.UserPromptSubmit.length} legacy UserPromptSubmit hook(s)`);
         }
         if (settings.hooks.UserPromptSubmit.length === 0) {
           delete settings.hooks.UserPromptSubmit;
@@ -1325,7 +1273,6 @@ export class LibrarianManager extends EventEmitter {
         );
         if (settings.hooks.PreToolUse.length < before) {
           modified = true;
-          console.log(`[LibrarianManager] Cleaned up ${before - settings.hooks.PreToolUse.length} legacy PreToolUse hook(s)`);
         }
         if (settings.hooks.PreToolUse.length === 0) {
           delete settings.hooks.PreToolUse;
@@ -1336,7 +1283,7 @@ export class LibrarianManager extends EventEmitter {
         fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
       }
     } catch (error) {
-      console.error('[LibrarianManager] Failed to cleanup legacy hooks:', error);
+      log.error('Failed to cleanup legacy hooks:', error);
     }
   }
 
@@ -1364,10 +1311,9 @@ export class LibrarianManager extends EventEmitter {
         if (currentVersion !== this.HOOK_VERSION) {
           // Regenerate hook with new template
           fs.writeFileSync(hookPath, hookScript, { mode: 0o755 });
-          console.log(`[LibrarianManager] Regenerated ${path.basename(hookPath)} to v${this.HOOK_VERSION}`);
         }
       } catch (error) {
-        console.error(`[LibrarianManager] Failed to check hook version at ${hookPath}:`, error);
+        log.error(`Failed to check hook version at ${hookPath}:`, error);
       }
     }
 
@@ -1382,10 +1328,9 @@ export class LibrarianManager extends EventEmitter {
         if (currentVersion !== this.HOOK_VERSION) {
           // Regenerate Cursor pretool with new template
           fs.writeFileSync(cursorPreToolPath, this.generateCursorPreToolScript(), { mode: 0o755 });
-          console.log(`[LibrarianManager] Regenerated cursor-pretool.py to v${this.HOOK_VERSION}`);
         }
       } catch (error) {
-        console.error('[LibrarianManager] Failed to check Cursor pretool version:', error);
+        log.error('Failed to check Cursor pretool version:', error);
       }
     }
   }
@@ -1439,7 +1384,6 @@ export class LibrarianManager extends EventEmitter {
       // Ignore errors updating status file
     }
 
-    console.log(`[LibrarianManager] Auto-run frequency set to: ${frequency}`);
     return success;
   }
 
@@ -1534,7 +1478,6 @@ Tone mapping (light → dark):
 
     // Update CLAUDE.md with new guidance
     const success = this.syncClaudeMd();
-    console.log(`[LibrarianManager] Content guidance ${normalizedGuidance ? 'customized' : 'reset to default'}`);
     return success;
   }
 
@@ -1550,7 +1493,6 @@ Tone mapping (light → dark):
    */
   resyncClaudeMd(): boolean {
     const success = this.syncClaudeMd();
-    console.log(`[LibrarianManager] Re-synced CLAUDE.md`);
     return success;
   }
 
@@ -1808,10 +1750,9 @@ You may find the reading changes what you think matters about the task.
       }
 
       fs.writeFileSync(commandPath, content.trim() + '\n');
-      console.log(`[LibrarianManager] Wrote Librarian command file to ${commandPath}`);
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to write command file:', error);
+      log.error('Failed to write command file:', error);
       return false;
     }
   }
@@ -1854,7 +1795,7 @@ ${this.CLAUDE_MD_END_MARKER}`;
   private writeLibrarianSection(): boolean {
     // First write the command file (single source of truth)
     if (!this.writeLibrarianCommandFile()) {
-      console.error('[LibrarianManager] Failed to write command file, aborting CLAUDE.md update');
+      log.error('Failed to write command file, aborting CLAUDE.md update');
       return false;
     }
 
@@ -1885,10 +1826,9 @@ ${this.CLAUDE_MD_END_MARKER}`;
       }
       fs.writeFileSync(claudeMdPath, content.trim() + '\n');
 
-      console.log(`[LibrarianManager] Wrote Librarian section to ~/.claude/CLAUDE.md (references ${this.getLibrarianCommandPath()})`);
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to write CLAUDE.md:', error);
+      log.error('Failed to write CLAUDE.md:', error);
       return false;
     }
   }
@@ -1915,10 +1855,9 @@ ${this.CLAUDE_MD_END_MARKER}`;
 
       fs.writeFileSync(claudeMdPath, content.trim() + '\n');
 
-      console.log(`[LibrarianManager] Removed Librarian section from ~/.claude/CLAUDE.md`);
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to remove from CLAUDE.md:', error);
+      log.error('Failed to remove from CLAUDE.md:', error);
       return false;
     }
   }
@@ -1966,10 +1905,9 @@ ${this.CLAUDE_MD_END_MARKER}`;
       }
       fs.writeFileSync(claudeMdPath, content.trim() + '\n');
 
-      console.log(`[LibrarianManager] Updated ~/.claude/CLAUDE.md`);
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to update CLAUDE.md:', error);
+      log.error('Failed to update CLAUDE.md:', error);
       return false;
     }
   }
@@ -2014,7 +1952,6 @@ ${this.CLAUDE_MD_END_MARKER}`;
         fs.mkdirSync(claudeDir, { recursive: true });
       }
       fs.writeFileSync(statusPath, JSON.stringify(defaultStatus, null, 2));
-      console.log('[LibrarianManager] Created global status file');
     }
   }
 
@@ -2149,7 +2086,6 @@ ${this.CLAUDE_MD_END_MARKER}`;
       // Ignore errors updating status file
     }
 
-    console.log(`[LibrarianManager] Custom threshold set to: ${threshold ?? 'auto (frequency-based)'}`);
     return true;
   }
 
@@ -2206,7 +2142,7 @@ ${this.CLAUDE_MD_END_MARKER}`;
       const permissionToCheck = this.getScreenshotPermission();
       return allow.includes(permissionToCheck);
     } catch (error) {
-      console.error('[LibrarianManager] Error checking screenshot permission:', error);
+      log.error('Error checking screenshot permission:', error);
       return false;
     }
   }
@@ -2231,7 +2167,7 @@ ${this.CLAUDE_MD_END_MARKER}`;
         try {
           settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
         } catch {
-          console.warn('[LibrarianManager] Could not parse existing settings.json, starting fresh');
+          // Could not parse existing settings.json, starting fresh
         }
       }
 
@@ -2249,7 +2185,6 @@ ${this.CLAUDE_MD_END_MARKER}`;
 
       // Check if already present
       if (allowList.includes(permissionToAdd)) {
-        console.log('[LibrarianManager] Screenshot permission already enabled');
         return true;
       }
 
@@ -2258,10 +2193,9 @@ ${this.CLAUDE_MD_END_MARKER}`;
 
       // Write back
       fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-      console.log('[LibrarianManager] Screenshot permission enabled successfully');
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to enable screenshot permission:', error);
+      log.error('Failed to enable screenshot permission:', error);
       return false;
     }
   }
@@ -2343,7 +2277,7 @@ ${this.CLAUDE_MD_END_MARKER}`;
         profile: typeof manifest.profile === 'string' ? manifest.profile : null,
       };
     } catch (error) {
-      console.error('[LibrarianManager] Error reading permission manifest:', error);
+      log.error('Error reading permission manifest:', error);
       return { permissions: [], profile: null };
     }
   }
@@ -2363,7 +2297,7 @@ ${this.CLAUDE_MD_END_MARKER}`;
       fs.writeFileSync(manifestPath, JSON.stringify({ permissions, profile }, null, 2));
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Error writing permission manifest:', error);
+      log.error('Error writing permission manifest:', error);
       return false;
     }
   }
@@ -2385,7 +2319,7 @@ ${this.CLAUDE_MD_END_MARKER}`;
 
       return Array.isArray(allow) ? [...allow] : [];
     } catch (error) {
-      console.error('[LibrarianManager] Error reading Claude permissions:', error);
+      log.error('Error reading Claude permissions:', error);
       return [];
     }
   }
@@ -2441,7 +2375,7 @@ ${this.CLAUDE_MD_END_MARKER}`;
         try {
           settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
         } catch {
-          console.warn('[LibrarianManager] Could not parse settings.json, starting fresh');
+          // Could not parse settings.json, starting fresh
         }
       }
 
@@ -2474,10 +2408,9 @@ ${this.CLAUDE_MD_END_MARKER}`;
       // Update manifest (keep existing profile if set)
       this.writePermissionManifest(newManaged, manifest.profile);
 
-      console.log(`[LibrarianManager] Added ${permissionsToAdd.length} permissions`);
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to add permissions:', error);
+      log.error('Failed to add permissions:', error);
       return false;
     }
   }
@@ -2523,10 +2456,9 @@ ${this.CLAUDE_MD_END_MARKER}`;
       // Write settings
       fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 
-      console.log(`[LibrarianManager] Removed ${toRemove.length} permissions`);
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to remove permissions:', error);
+      log.error('Failed to remove permissions:', error);
       return false;
     }
   }
@@ -2540,7 +2472,7 @@ ${this.CLAUDE_MD_END_MARKER}`;
     const profile = profiles[profileId];
 
     if (!profile) {
-      console.error(`[LibrarianManager] Unknown profile: ${profileId}`);
+      log.error(`Unknown profile: ${profileId}`);
       return false;
     }
 
@@ -2562,7 +2494,7 @@ ${this.CLAUDE_MD_END_MARKER}`;
 
       return success;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to apply profile:', error);
+      log.error('Failed to apply profile:', error);
       return false;
     }
   }
@@ -2663,7 +2595,6 @@ exit 0
       // 2. Write hook script
       const scriptPath = this.getHookScriptPath();
       fs.writeFileSync(scriptPath, this.generateHookScript(), { mode: 0o755 });
-      console.log(`[LibrarianManager] Created hook script at ${scriptPath}`);
 
       // 3. Update Claude Code settings.json
       const settingsPath = this.getClaudeSettingsPath();
@@ -2673,7 +2604,7 @@ exit 0
         try {
           settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
         } catch {
-          console.warn('[LibrarianManager] Could not parse existing settings.json, starting fresh');
+          // Could not parse existing settings.json, starting fresh
         }
       }
 
@@ -2717,15 +2648,13 @@ exit 0
       // Remove old increment script file if it exists
       if (fs.existsSync(oldIncrementScript)) {
         fs.unlinkSync(oldIncrementScript);
-        console.log('[LibrarianManager] Removed old increment script');
       }
 
       fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-      console.log('[LibrarianManager] Installed Claude Code hook');
 
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to install hook:', error);
+      log.error('Failed to install hook:', error);
       return false;
     }
   }
@@ -2742,14 +2671,12 @@ exit 0
       // Remove hook script
       if (fs.existsSync(scriptPath)) {
         fs.unlinkSync(scriptPath);
-        console.log('[LibrarianManager] Removed hook script');
       }
 
       // Also remove old increment script if it exists (cleanup from previous version)
       const oldIncrementScript = path.join(os.homedir(), '.claude', 'librarian-increment.sh');
       if (fs.existsSync(oldIncrementScript)) {
         fs.unlinkSync(oldIncrementScript);
-        console.log('[LibrarianManager] Removed old increment script');
       }
 
       // Update settings.json
@@ -2786,10 +2713,9 @@ exit 0
         fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
       }
 
-      console.log('[LibrarianManager] Uninstalled Claude Code hook');
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to uninstall hook:', error);
+      log.error('Failed to uninstall hook:', error);
       return false;
     }
   }
@@ -2865,14 +2791,12 @@ exit 0
     // Create directory if it doesn't exist
     if (!fs.existsSync(artifactsDir)) {
       fs.mkdirSync(artifactsDir, { recursive: true });
-      console.log('[LibrarianManager] Created central artifacts directory:', artifactsDir);
     }
 
     // Add to watched dirs if not already present
     if (!this.settings.watchedDirs.includes(artifactsDir)) {
       this.settings.watchedDirs.push(artifactsDir);
       this.saveSettings();
-      console.log('[LibrarianManager] Auto-added central artifacts directory to watched dirs:', artifactsDir);
     }
   }
 
@@ -3040,7 +2964,7 @@ if __name__ == "__main__":
         try {
           settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
         } catch {
-          console.warn('[LibrarianManager] Could not parse settings.json, starting fresh');
+          // Could not parse settings.json, starting fresh
         }
       }
 
@@ -3070,13 +2994,12 @@ if __name__ == "__main__":
 
       fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 
-      console.log('[LibrarianManager] Installed read permission hook');
       return {
         success: true,
         message: 'Hook added to ~/.claude/settings.json',
       };
     } catch (error) {
-      console.error('[LibrarianManager] Failed to install read permission hook:', error);
+      log.error('Failed to install read permission hook:', error);
       return {
         success: false,
         message: `Failed: ${(error as Error).message}`,
@@ -3121,13 +3044,12 @@ if __name__ == "__main__":
         fs.unlinkSync(hookPath);
       }
 
-      console.log('[LibrarianManager] Uninstalled read permission hook');
       return {
         success: true,
         message: 'Hook removed from ~/.claude/settings.json',
       };
     } catch (error) {
-      console.error('[LibrarianManager] Failed to uninstall read permission hook:', error);
+      log.error('Failed to uninstall read permission hook:', error);
       return {
         success: false,
         message: `Failed: ${(error as Error).message}`,
@@ -3189,7 +3111,7 @@ if __name__ == "__main__":
         try {
           hooks = JSON.parse(fs.readFileSync(hooksPath, 'utf-8'));
         } catch {
-          console.warn('[LibrarianManager] Could not parse Cursor hooks.json, starting fresh');
+          // Could not parse Cursor hooks.json, starting fresh
         }
       }
 
@@ -3211,13 +3133,12 @@ if __name__ == "__main__":
 
       fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2));
 
-      console.log('[LibrarianManager] Installed Cursor read permission hook');
       return {
         success: true,
         message: 'Hook added to ~/.cursor/hooks.json',
       };
     } catch (error) {
-      console.error('[LibrarianManager] Failed to install Cursor read permission hook:', error);
+      log.error('Failed to install Cursor read permission hook:', error);
       return {
         success: false,
         message: `Failed: ${(error as Error).message}`,
@@ -3255,13 +3176,12 @@ if __name__ == "__main__":
         fs.unlinkSync(hookPath);
       }
 
-      console.log('[LibrarianManager] Uninstalled Cursor read permission hook');
       return {
         success: true,
         message: 'Hook removed from ~/.cursor/hooks.json',
       };
     } catch (error) {
-      console.error('[LibrarianManager] Failed to uninstall Cursor read permission hook:', error);
+      log.error('Failed to uninstall Cursor read permission hook:', error);
       return {
         success: false,
         message: `Failed: ${(error as Error).message}`,
@@ -3489,7 +3409,7 @@ if __name__ == "__main__":
         try {
           settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
         } catch {
-          console.warn('[LibrarianManager] Could not parse existing settings.json, starting fresh');
+          // Could not parse existing settings.json, starting fresh
         }
       }
 
@@ -3515,25 +3435,15 @@ if __name__ == "__main__":
       };
 
       if (Array.isArray(hooks['UserPromptSubmit'])) {
-        const before = (hooks['UserPromptSubmit'] as HookEntry[]).length;
         hooks['UserPromptSubmit'] = (hooks['UserPromptSubmit'] as HookEntry[]).filter(
           h => !h.hooks?.some(hh => isLegacyHook(hh.command))
         );
-        const removed = before - (hooks['UserPromptSubmit'] as HookEntry[]).length;
-        if (removed > 0) {
-          console.log(`[LibrarianManager] Cleaned up ${removed} legacy UserPromptSubmit hook(s)`);
-        }
       }
 
       if (Array.isArray(hooks['PreToolUse'])) {
-        const before = (hooks['PreToolUse'] as HookEntry[]).length;
         hooks['PreToolUse'] = (hooks['PreToolUse'] as HookEntry[]).filter(
           h => !h.hooks?.some(hh => isLegacyHook(hh.command))
         );
-        const removed = before - (hooks['PreToolUse'] as HookEntry[]).length;
-        if (removed > 0) {
-          console.log(`[LibrarianManager] Cleaned up ${removed} legacy PreToolUse hook(s)`);
-        }
       }
 
       // Check if UserPromptSubmit hook already exists
@@ -3582,10 +3492,10 @@ if __name__ == "__main__":
       const globalArtifactsDir = path.join(os.homedir(), '.fieldtheory', 'librarian', 'artifacts');
       this.addWatchedDir(globalArtifactsDir);
 
-      console.log('[LibrarianManager] Installed global state-enforced hooks (UserPromptSubmit + PreToolUse)');
+      log.info('Installed global state-enforced hooks');
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to install state-enforced hook:', error);
+      log.error('Failed to install state-enforced hook:', error);
       return false;
     }
   }
@@ -3602,19 +3512,15 @@ if __name__ == "__main__":
       const preToolUseHookPath = this.getPreToolUseHookPath();
       const configPath = this.getGlobalStateEnforcedConfigPath();
 
-      console.log('[LibrarianManager] Disconnecting hooks...');
-
       // Disable in config - hooks check this flag and exit silently if false
       // This allows running Claude sessions to gracefully stop without errors
       if (fs.existsSync(configPath)) {
         const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
         config.enabled = false;
         fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-        console.log('[LibrarianManager] Set enabled=false in config.json');
       } else {
         // Create config with enabled=false if it doesn't exist
         fs.writeFileSync(configPath, JSON.stringify({ enabled: false }, null, 2));
-        console.log('[LibrarianManager] Created config.json with enabled=false');
       }
 
       // Remove hook registrations from ~/.claude/settings.json (for new sessions)
@@ -3654,10 +3560,9 @@ if __name__ == "__main__":
         fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
       }
 
-      console.log('[LibrarianManager] Disconnected Claude Code hooks');
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to uninstall state-enforced hooks:', error);
+      log.error('Failed to uninstall state-enforced hooks:', error);
       return false;
     }
   }
@@ -3723,16 +3628,8 @@ if __name__ == "__main__":
   /**
    * Log the current global status (for dev visibility).
    */
-  private logStatus(action: string): void {
-    const statusFile = this.getGlobalStatusPath();
-    if (!fs.existsSync(statusFile)) return;
-
-    try {
-      const status = JSON.parse(fs.readFileSync(statusFile, 'utf-8'));
-      console.log(`[Librarian] ${action}: prompts=${status.promptsSinceReading}/${status.nextThreshold}, lastReading=${status.lastReading || 'null'}`);
-    } catch {
-      // Ignore errors in logging
-    }
+  private logStatus(_action: string): void {
+    // Status logging disabled for cleaner output
   }
 
   /**
@@ -3745,12 +3642,9 @@ if __name__ == "__main__":
       const stateFile = path.join(os.homedir(), '.fieldtheory', 'librarian', 'state.json');
       const frequency = this.settings.discoveryFrequency || 'sometimes';
 
-      console.log(`[LibrarianManager] getEditStatus reading from: ${stateFile}`);
-
       if (fs.existsSync(stateFile)) {
         const raw = fs.readFileSync(stateFile, 'utf-8');
         const state = JSON.parse(raw);
-        console.log(`[LibrarianManager] getEditStatus raw: ${raw.trim()}`);
         return {
           edits: state.count || 0,
           threshold: state.threshold || 7,
@@ -3758,13 +3652,12 @@ if __name__ == "__main__":
         };
       }
 
-      console.log(`[LibrarianManager] getEditStatus: state file not found, initializing`);
       // Initialize global state file
       const initialState = { count: 0, threshold: this.pickNextDiscoveryThreshold() };
       fs.writeFileSync(stateFile, JSON.stringify(initialState, null, 2));
       return { edits: 0, threshold: initialState.threshold, frequency };
     } catch (error) {
-      console.error('[LibrarianManager] Failed to get edit status:', error);
+      log.error('Failed to get edit status:', error);
       return null;
     }
   }
@@ -3783,7 +3676,7 @@ if __name__ == "__main__":
         threshold: status.nextThreshold || 5,
       };
     } catch (error) {
-      console.error('[LibrarianManager] Failed to get counter status:', error);
+      log.error('Failed to get counter status:', error);
       return { edits: 0, threshold: 5 };
     }
   }
@@ -3823,9 +3716,8 @@ if __name__ == "__main__":
       const stateFile = path.join(os.homedir(), '.fieldtheory', 'librarian', 'state.json');
       const newState = { count: 0, threshold: newThreshold };
       fs.writeFileSync(stateFile, JSON.stringify(newState, null, 2));
-      console.log(`[LibrarianManager] Reset counter, new threshold: ${newThreshold}`);
     } catch (error) {
-      console.error('[LibrarianManager] Failed to reset counter:', error);
+      log.error('Failed to reset counter:', error);
     }
   }
 
@@ -3839,10 +3731,9 @@ if __name__ == "__main__":
       const stateFile = path.join(os.homedir(), '.fieldtheory', 'librarian', 'state.json');
       const newState = { count: 0, threshold: this.pickNextDiscoveryThreshold() };
       fs.writeFileSync(stateFile, JSON.stringify(newState, null, 2));
-      console.log('[LibrarianManager] Reset global counter');
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to reset counter:', error);
+      log.error('Failed to reset counter:', error);
       return false;
     }
   }
@@ -3877,10 +3768,9 @@ if __name__ == "__main__":
       // Add mutedUntil
       state.mutedUntil = mutedUntil;
       fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
-      console.log(`[LibrarianManager] Muted until ${midnight.toISOString()}`);
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to mute:', error);
+      log.error('Failed to mute:', error);
       return false;
     }
   }
@@ -3902,7 +3792,7 @@ if __name__ == "__main__":
 
       return Date.now() < state.mutedUntil;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to check mute status:', error);
+      log.error('Failed to check mute status:', error);
       return false;
     }
   }
@@ -3920,10 +3810,9 @@ if __name__ == "__main__":
       const state = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
       delete state.mutedUntil;
       fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
-      console.log('[LibrarianManager] Unmuted');
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to unmute:', error);
+      log.error('Failed to unmute:', error);
       return false;
     }
   }
@@ -3944,9 +3833,8 @@ if __name__ == "__main__":
     if (!fs.existsSync(normalizedPath)) {
       try {
         fs.mkdirSync(normalizedPath, { recursive: true });
-        console.log(`[LibrarianManager] Created directory: ${normalizedPath}`);
       } catch (error) {
-        console.error(`[LibrarianManager] Failed to create directory ${normalizedPath}:`, error);
+        log.error(`Failed to create directory ${normalizedPath}:`, error);
         return false;
       }
     }
@@ -3959,7 +3847,6 @@ if __name__ == "__main__":
 
     // Don't overwrite existing welcome artifact
     if (fs.existsSync(filePath)) {
-      console.log(`[LibrarianManager] Welcome artifact already exists: ${filePath}`);
       return true;
     }
 
@@ -3992,7 +3879,6 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
 
     try {
       fs.writeFileSync(filePath, content, 'utf-8');
-      console.log(`[LibrarianManager] Created welcome artifact: ${filePath}`);
 
       // If this directory is watched, the watcher will pick it up
       // If not, add it to the cache manually for immediate visibility
@@ -4007,7 +3893,7 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
 
       return true;
     } catch (error) {
-      console.error(`[LibrarianManager] Failed to create welcome artifact:`, error);
+      log.error('Failed to create welcome artifact:', error);
       return false;
     }
   }
@@ -4020,12 +3906,10 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
    * Stop all watchers.
    */
   destroy(): void {
-    for (const [dirPath, watcher] of this.watchers) {
+    for (const [, watcher] of this.watchers) {
       watcher.close();
-      console.log(`[LibrarianManager] Stopped watching: ${dirPath}`);
     }
     this.watchers.clear();
-    console.log('[LibrarianManager] Destroyed');
   }
 
   // ===========================================================================
@@ -4115,7 +3999,6 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
 
     // Deduplicate and sort by path
     const unique = [...new Set(discovered)].sort();
-    console.log(`[LibrarianManager] Discovered ${unique.length} .librarian directories with readings`);
 
     return unique;
   }
@@ -4499,7 +4382,7 @@ if __name__ == "__main__":
         try {
           cursorConfig = JSON.parse(fs.readFileSync(cursorConfigPath, 'utf-8'));
         } catch {
-          console.warn('[LibrarianManager] Could not parse existing Cursor hooks.json, starting fresh');
+          // Could not parse existing Cursor hooks.json, starting fresh
         }
       }
 
@@ -4561,15 +4444,14 @@ if __name__ == "__main__":
         }
 
         fs.writeFileSync(cursorCliConfigPath, JSON.stringify(cliConfig, null, 2));
-        console.log('[LibrarianManager] Added librarian paths to Cursor permissions');
-      } catch (error) {
-        console.warn('[LibrarianManager] Could not update Cursor cli-config.json:', error);
+      } catch {
+        // Could not update Cursor cli-config.json
       }
 
-      console.log('[LibrarianManager] Installed Cursor hooks (beforeSubmitPrompt + preToolUse deny pattern)');
+      log.info('Installed Cursor hooks');
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to install Cursor hooks:', error);
+      log.error('Failed to install Cursor hooks:', error);
       return false;
     }
   }
@@ -4641,17 +4523,15 @@ if __name__ == "__main__":
             );
 
             fs.writeFileSync(cursorCliConfigPath, JSON.stringify(cliConfig, null, 2));
-            console.log('[LibrarianManager] Removed librarian paths from Cursor permissions');
           }
         }
-      } catch (error) {
-        console.warn('[LibrarianManager] Could not update Cursor cli-config.json:', error);
+      } catch {
+        // Could not update Cursor cli-config.json
       }
 
-      console.log('[LibrarianManager] Uninstalled Cursor hooks');
       return true;
     } catch (error) {
-      console.error('[LibrarianManager] Failed to uninstall Cursor hooks:', error);
+      log.error('Failed to uninstall Cursor hooks:', error);
       return false;
     }
   }

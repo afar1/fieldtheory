@@ -5,6 +5,9 @@ import { AudioManager } from './audioManager';
 import { QuotaManager } from './quotaManager';
 import { TranscriberManager } from './transcriberManager';
 import type { PreferencesManager } from './preferences';
+import { createLogger } from './logger';
+
+const log = createLogger('Tray');
 
 /**
  * TrayManager creates and manages the menu bar icon and context menu.
@@ -127,7 +130,6 @@ export class TrayManager {
    */
   init(showWindowCallback?: () => void, checkForUpdatesCallback?: () => void, startRecordingCallback?: () => void, takeScreenshotCallback?: () => void, takeFullScreenCallback?: () => void, takeActiveWindowCallback?: () => void, showMainWindowCallback?: () => void): void {
     if (process.platform !== 'darwin') {
-      console.log('[TrayManager] Not on macOS, skipping tray creation');
       return;
     }
 
@@ -149,8 +151,6 @@ export class TrayManager {
     });
 
     this.updateTray(this.audioManager.getState());
-
-    console.log('[TrayManager] Initialized');
   }
 
   /**
@@ -203,7 +203,7 @@ export class TrayManager {
         this.tray.setImage(icon);
       }
     } catch (error) {
-      console.warn('[TrayManager] Failed to load icon:', iconPath);
+      log.error('Failed to load icon:', iconPath);
     }
 
     // --- Update tooltip and title ---

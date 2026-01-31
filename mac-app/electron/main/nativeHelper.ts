@@ -7,6 +7,9 @@ import {
   HelperOutgoingMessage,
   HelperIncomingCommand,
 } from './types/audio';
+import { createLogger } from './logger';
+
+const log = createLogger('Native');
 
 const DEBOUNCE_DELAY_MS = 200;
 
@@ -105,17 +108,14 @@ export class NativeHelper extends EventEmitter {
    */
   start(): void {
     if (process.platform !== 'darwin') {
-      console.log('[NativeHelper] Not on macOS, skipping helper start');
       return;
     }
 
     if (this.child) {
-      console.warn('[NativeHelper] Helper already running');
       return;
     }
 
     const helperPath = this.getHelperPath();
-    console.log('[NativeHelper] Starting helper at:', helperPath);
 
     try {
       this.child = spawn(helperPath, [], {
@@ -132,28 +132,27 @@ export class NativeHelper extends EventEmitter {
       });
 
       this.child.stderr.on('data', (data: Buffer) => {
-        console.error('[NativeHelper stderr]', data.toString().trim());
+        log.error('Helper stderr:', data.toString().trim());
       });
 
       this.child.on('exit', (code, signal) => {
-        console.warn('[NativeHelper] Process exited', { code, signal });
         this.isRunning = false;
         this.isReady = false;
         this.child = null;
 
         if (code !== 0 && code !== null) {
-          console.log('[NativeHelper] Will attempt restart in 5 seconds...');
+          log.error('Helper exited with code', code, 'signal', signal);
           setTimeout(() => this.start(), 5000);
         }
       });
 
       this.child.on('error', (error) => {
-        console.error('[NativeHelper] Failed to spawn helper:', error);
+        log.error('Failed to spawn helper:', error);
         this.isRunning = false;
         this.child = null;
       });
     } catch (error) {
-      console.error('[NativeHelper] Exception spawning helper:', error);
+      log.error('Exception spawning helper:', error);
       this.isRunning = false;
     }
   }
@@ -195,7 +194,7 @@ export class NativeHelper extends EventEmitter {
     }
     
     if (!this.isReady) {
-      console.warn('[NativeHelper] Helper did not become ready within timeout');
+      log.error('Helper did not become ready within timeout');
     } else {
       // Give Swift a moment to fully initialize its stdin reading loop after first message
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -302,16 +301,14 @@ export class NativeHelper extends EventEmitter {
     await this.waitForReady();
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        console.error('[NativeHelper] stopRecording timeout - no response received');
+        log.error('stopRecording timeout - no response received');
         reject(new Error('stopRecording timed out'));
       }, 10000); // Increased timeout to 10 seconds
 
       const handler = (msg: HelperOutgoingMessage) => {
-        console.log('[NativeHelper] Received message in stopRecording handler:', msg.type);
         if (msg.type === 'recordingStopped') {
           clearTimeout(timeout);
           this.removeListener('message', handler);
-          console.log('[NativeHelper] Recording stopped, file path:', msg.filePath);
           resolve(msg.filePath);
         } else if (msg.type === 'error') {
           clearTimeout(timeout);
@@ -321,7 +318,6 @@ export class NativeHelper extends EventEmitter {
       };
 
       this.once('message', handler);
-      console.log('[NativeHelper] Sending stopRecording command');
       this.send({ type: 'stopRecording' });
     });
   }
@@ -408,7 +404,6 @@ export class NativeHelper extends EventEmitter {
    */
   async preloadSounds(soundPaths: string[]): Promise<number> {
     if (!this.child || !this.child.stdin.writable) {
-      console.warn('[NativeHelper] Cannot preload sounds - helper not running');
       return 0;
     }
 
@@ -417,7 +412,6 @@ export class NativeHelper extends EventEmitter {
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
         cleanup();
-        console.warn('[NativeHelper] preloadSounds timed out');
         resolve(0);
       }, 5000);
 
@@ -444,7 +438,6 @@ export class NativeHelper extends EventEmitter {
    */
   playSound(soundPath: string): void {
     if (!this.child || !this.child.stdin.writable) {
-      console.warn('[NativeHelper] Cannot play sound - helper not running');
       return;
     }
 
@@ -490,12 +483,9 @@ export class NativeHelper extends EventEmitter {
 
       try {
         const msg = JSON.parse(line) as HelperOutgoingMessage;
-        if (msg.type !== 'log' || msg.level !== 'debug') {
-          console.log('[NativeHelper] Parsed message:', msg.type, msg);
-        }
         this.handleMessage(msg);
       } catch (err) {
-        console.error('[NativeHelper] Failed to parse JSON from helper. Line:', line.substring(0, 200), 'Error:', err);
+        log.error('Failed to parse JSON from helper. Line:', line.substring(0, 200), 'Error:', err);
       }
     }
   }
@@ -514,15 +504,11 @@ export class NativeHelper extends EventEmitter {
         break;
 
       case 'log':
-        const level = msg.level || 'info';
-        if (level === 'debug' && !process.env.DEBUG_NATIVE_HELPER) {
-          break;
-        }
-        console.log(`[NativeHelper ${level}]`, msg.message);
+        // Silently ignore helper log messages
         break;
 
       case 'error':
-        console.error('[NativeHelper error]', msg.message);
+        log.error('Helper error:', msg.message);
         if (this.listenerCount('error') > 0) {
           this.emit('error', new Error(msg.message));
         }
@@ -532,7 +518,6 @@ export class NativeHelper extends EventEmitter {
       case 'recordingStarted':
       case 'recordingStopped':
       case 'recordingCancelled':
-        console.log(`[NativeHelper] Emitting message event: ${msg.type}`, msg);
         this.emit('message', msg);
         break;
 
@@ -576,7 +561,7 @@ export class NativeHelper extends EventEmitter {
         break;
 
       default:
-        console.warn('[NativeHelper] Unknown message type:', msg.type);
+        break;
     }
   }
 
@@ -631,28 +616,24 @@ export class NativeHelper extends EventEmitter {
    */
   private send(command: HelperIncomingCommand): void {
     if (!this.child || !this.child.stdin.writable) {
-      console.warn('[NativeHelper] Cannot send command - helper not running');
       return;
     }
 
     try {
       const json = JSON.stringify(command);
-      if (process.env.DEBUG_NATIVE_HELPER) {
-        console.log('[NativeHelper] Sending command:', json);
-      }
       const success = this.child.stdin.write(json + '\n');
-      
+
       if (!success) {
         this.child.stdin.once('drain', () => {});
       }
     } catch (error: unknown) {
       const isEPIPE = error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'EPIPE';
       if (isEPIPE) {
-        console.warn('[NativeHelper] Broken pipe - helper process may have exited');
+        log.error('Broken pipe - helper process may have exited');
         this.isRunning = false;
         this.child = null;
       } else {
-        console.error('[NativeHelper] Error sending command:', error, 'Command was:', command);
+        log.error('Error sending command:', error, 'Command was:', command);
       }
     }
   }

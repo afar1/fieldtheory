@@ -3,6 +3,7 @@ import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
+import { createLogger } from './logger';
 import crypto from 'crypto';
 import { NativeHelper } from './nativeHelper';
 import { AudioManager } from './audioManager';
@@ -47,6 +48,8 @@ import { LibrarianManager, Reading, ReadingMeta, WatchedDir } from './librarianM
 import { MetricsManager, UserMetrics } from './metricsManager';
 import { MESSAGES } from './messages';
 
+const log = createLogger('Main');
+
 // Load environment variables from .env.local for Supabase credentials.
 // In development, the file is in the mac-app directory.
 // In production, we use the bundled values or fall back to hardcoded ones.
@@ -73,8 +76,6 @@ function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
     path.join(app.getAppPath(), '../.env.local'), // Production: next to app bundle
   ];
   
-  console.log('[Main] Looking for .env.local in:', envPaths);
-
   for (const envPath of envPaths) {
     try {
       if (fs.existsSync(envPath)) {
@@ -93,7 +94,6 @@ function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
         }
         
         if (env.VITE_SUPABASE_URL && env.VITE_SUPABASE_ANON_KEY) {
-          console.log('[Main] Loaded Supabase credentials from:', envPath);
           return {
             supabaseUrl: env.VITE_SUPABASE_URL,
             supabaseAnonKey: env.VITE_SUPABASE_ANON_KEY,
@@ -106,7 +106,6 @@ function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
   }
 
   // Production fallback - anon key is public by design, protected by RLS.
-  console.log('[Main] Using production Supabase credentials');
   return {
     supabaseUrl: 'https://FIELD_THEORY_SUPABASE_URL.example',
     supabaseAnonKey: 'FIELD_THEORY_SUPABASE_PUBLISHABLE_KEY',
@@ -154,12 +153,8 @@ let metricsManager: MetricsManager | null = null;
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
 
 // Consolidated user state logging - single line showing auth/tier state
-function logUserState(context: string) {
-  const session = authManager?.getSession();
-  const tier = quotaManager?.getCachedTier() ?? 'unknown';
-  const email = session?.user?.email ?? 'none';
-  const hasSession = !!session;
-  console.log(`[UserState] ${context}: authenticated=${hasSession} tier=${tier} email=${email}`);
+function logUserState(_context: string) {
+  // Silenced for production - enable for debugging auth issues
 }
 
 // Track pending reading to show in immersive mode. Renderer polls for this.
@@ -180,8 +175,6 @@ function migrateFromLegacyPaths(): void {
     return;
   }
 
-  console.log('[Migration] Checking for legacy data to migrate...');
-
   const homeDir = app.getPath('home');
   const legacyPaths = [
     path.join(homeDir, 'Library', 'Application Support', 'littleai-mac'),
@@ -195,18 +188,15 @@ function migrateFromLegacyPaths(): void {
       continue;
     }
 
-    console.log(`[Migration] Found legacy path: ${legacyPath}`);
-
     // Migrate figures directory
     const legacyFigures = path.join(legacyPath, 'figures');
     const newFigures = path.join(newUserData, 'figures');
     if (fs.existsSync(legacyFigures) && !fs.existsSync(newFigures)) {
       try {
         fs.renameSync(legacyFigures, newFigures);
-        console.log(`[Migration] Moved figures from ${legacyFigures}`);
         migrated = true;
       } catch (err) {
-        console.error(`[Migration] Failed to move figures: ${err}`);
+        log.error(`Failed to move figures: ${err}`);
       }
     }
 
@@ -216,10 +206,9 @@ function migrateFromLegacyPaths(): void {
     if (fs.existsSync(legacyDb) && !fs.existsSync(newDb)) {
       try {
         fs.copyFileSync(legacyDb, newDb);
-        console.log(`[Migration] Copied clipboard.db from ${legacyDb}`);
         migrated = true;
       } catch (err) {
-        console.error(`[Migration] Failed to copy clipboard.db: ${err}`);
+        log.error(`Failed to copy clipboard.db: ${err}`);
       }
     }
 
@@ -229,10 +218,9 @@ function migrateFromLegacyPaths(): void {
     if (fs.existsSync(legacyPrefs) && !fs.existsSync(newPrefs)) {
       try {
         fs.copyFileSync(legacyPrefs, newPrefs);
-        console.log(`[Migration] Copied preferences.json from ${legacyPrefs}`);
         migrated = true;
       } catch (err) {
-        console.error(`[Migration] Failed to copy preferences.json: ${err}`);
+        log.error(`Failed to copy preferences.json: ${err}`);
       }
     }
   }
@@ -240,13 +228,8 @@ function migrateFromLegacyPaths(): void {
   // Write migration marker (even if nothing was migrated, to avoid checking every launch)
   try {
     fs.writeFileSync(migrationMarker, `Migration completed at ${new Date().toISOString()}\n`);
-    if (migrated) {
-      console.log('[Migration] Data migration complete');
-    } else {
-      console.log('[Migration] No legacy data found to migrate');
-    }
   } catch (err) {
-    console.error(`[Migration] Failed to write migration marker: ${err}`);
+    log.error(`Failed to write migration marker: ${err}`);
   }
 }
 
@@ -257,7 +240,6 @@ function migrateFromLegacyPaths(): void {
  */
 function registerHotkeysAfterOnboarding(): void {
   if (!clipboardManager || !preferencesManager) {
-    console.warn('[Main] Cannot register hotkeys: managers not initialized');
     return;
   }
 
@@ -379,7 +361,6 @@ function registerHotkeysAfterOnboarding(): void {
       lastSuperPasteTime = now;
 
       if (!clipboardManager) {
-        console.error('[Main] Super Paste: clipboardManager not available');
         return;
       }
 
@@ -436,7 +417,7 @@ function registerHotkeysAfterOnboarding(): void {
         const { isTerminalApp } = require('./clipboardManager');
         isTerminal = isTerminalApp(bundleId);
       } catch (e) {
-        console.error('[Main] Super Paste: failed to get frontmost app:', e);
+        log.error('Super Paste: failed to get frontmost app:', e);
       }
 
       try {
@@ -510,7 +491,7 @@ function registerHotkeysAfterOnboarding(): void {
         }
 
       } catch (error) {
-        console.error('[Main] Super Paste: error during paste:', error);
+        log.error('Super Paste: error during paste:', error);
       }
   });
 
@@ -518,7 +499,6 @@ function registerHotkeysAfterOnboarding(): void {
   const autoImproveHotkey = prefs.autoImproveHotkey || 'Command+Shift+\\';
   hotkeyManager.register('autoImprove', autoImproveHotkey, async () => {
     if (!transcriberManager) {
-      console.error('[Main] Auto-improve toggle: transcriberManager not available');
       return;
     }
 
@@ -553,7 +533,6 @@ function registerHotkeysAfterOnboarding(): void {
         if (commandLauncherWindow) {
           // If immersive view is open, dismiss it first to avoid z-order conflicts
           if (clipboardHistoryWindow?.getImmersiveMode()) {
-            console.log('[Main] Dismissing immersive view before showing command launcher');
             clipboardHistoryWindow.hide();
           }
           await commandLauncherWindow.show();
@@ -596,7 +575,6 @@ async function handleImproveSelectedText(): Promise<void> {
 
     // If nothing selected, abort silently.
     if (!selectedText || selectedText.trim().length === 0) {
-      console.log('[ImproveText] No text selected, aborting');
       return;
     }
 
@@ -610,7 +588,7 @@ async function handleImproveSelectedText(): Promise<void> {
     const result = await improveTranscript(selectedText, accessToken);
 
     if (!result.success || !result.refinedPrompt) {
-      console.error('[ImproveText] Improvement failed:', result.error);
+      log.error('Improvement failed:', result.error);
       cursorStatusManager?.setState('idle');
       return;
     }
@@ -648,9 +626,8 @@ async function handleImproveSelectedText(): Promise<void> {
       });
     }
 
-    console.log('[ImproveText] Text improved and pasted successfully');
   } catch (error) {
-    console.error('[ImproveText] Error:', error);
+    log.error('ImproveText error:', error);
     cursorStatusManager?.setState('idle');
   }
 }
@@ -717,7 +694,7 @@ function createWindow(): void {
             y: bounds.y,
           },
         }).catch((error) => {
-          console.error('[Main] Failed to save window state:', error);
+          log.error('Failed to save window state:', error);
         });
       }
     }, 500); // Debounce saves to avoid excessive disk writes
@@ -736,22 +713,11 @@ function createWindow(): void {
     // Use loadURL with file:// protocol to properly support ES modules
     const htmlPath = path.join(app.getAppPath(), 'dist', 'index.html');
     const fileUrl = `file://${htmlPath}`;
-    console.log('[Main] Loading HTML from:', fileUrl);
     mainWindow.loadURL(fileUrl);
-    
+
     // Add error handlers to debug loading issues
     mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
-      console.error('[Main] Failed to load:', errorCode, errorDescription, validatedURL);
-    });
-    
-    mainWindow.webContents.once('did-finish-load', () => {
-      console.log('[Main] Window content loaded successfully');
-      // Log any console messages from renderer for debugging
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
-          console.log(`[Renderer ${level}]:`, message);
-        });
-      }
+      log.error('Failed to load:', errorCode, errorDescription, validatedURL);
     });
   }
 
@@ -820,7 +786,7 @@ function handleDisplayRemoved(_event: Electron.Event, removedDisplay: Electron.D
         displayConfig,
       },
     }).catch((err) => {
-      console.error('[ClipboardHistoryWindow] Failed to update bounds:', err);
+      log.error('Failed to update clipboard history bounds:', err);
     });
     
     // Reposition window immediately.
@@ -900,7 +866,6 @@ function restoreClipboardHistoryBounds(): { x: number; y: number; width: number;
       };
     } else {
       // Display not found - fall back to primary display centered.
-      console.log('[ClipboardHistoryWindow] Saved display not found, using primary display');
       const primaryDisplay = screen.getPrimaryDisplay();
       const primaryBounds = primaryDisplay.bounds;
       return {
@@ -991,19 +956,15 @@ function showSettingsInClipboardWindow(): void {
  * Called from app 'activate' event handler.
  */
 function showClipboardHistoryOnActivate(): void {
-  console.log('[Main] showClipboardHistoryOnActivate called');
-
   // Don't show clipboard history if onboarding is not complete.
   const prefs = preferencesManager?.get();
   if (!prefs?.onboardingComplete) {
-    console.log('[Main] showClipboardHistoryOnActivate: blocked (onboarding incomplete)');
     return;
   }
 
   // Don't show clipboard history if the command launcher is visible OR showing.
   // Using isShowingOrVisible() closes the TOCTTOU race window during async show().
   if (commandLauncherWindow?.isShowingOrVisible()) {
-    console.log('[Main] showClipboardHistoryOnActivate: blocked (command launcher showing/visible)');
     return;
   }
 
@@ -1014,11 +975,9 @@ function showClipboardHistoryOnActivate(): void {
   // If clipboard history is already visible (e.g., immersive mode), don't call show().
   // Calling show() triggers moveTop() which would steal focus from other windows.
   if (clipboardHistoryWindow.isVisible()) {
-    console.log('[Main] showClipboardHistoryOnActivate: blocked (clipboard already visible)');
     return;
   }
 
-  console.log('[Main] showClipboardHistoryOnActivate: showing clipboard window');
   // Show the clipboard window when app is activated (e.g., Dock icon click).
   const boundsToUse = restoreClipboardHistoryBounds();
   clipboardHistoryWindow.show(boundsToUse);
@@ -1366,7 +1325,7 @@ function setupLibrarianIPCHandlers(): void {
       await shell.openPath(filePath);
       return true;
     } catch (error) {
-      console.error('[Librarian] Failed to open file:', error);
+      log.error('Librarian failed to open file:', error);
       return false;
     }
   });
@@ -1379,7 +1338,7 @@ function setupLibrarianIPCHandlers(): void {
       }
       return null;
     } catch (error) {
-      console.error('[Librarian] Failed to read file:', error);
+      log.error('Librarian failed to read file:', error);
       return null;
     }
   });
@@ -1393,10 +1352,9 @@ function setupLibrarianIPCHandlers(): void {
         fs.mkdirSync(dir, { recursive: true });
       }
       fs.writeFileSync(filePath, content);
-      console.log(`[Librarian] Wrote config file: ${filePath}`);
       return true;
     } catch (error) {
-      console.error('[Librarian] Failed to write file:', error);
+      log.error('Librarian failed to write file:', error);
       return false;
     }
   });
@@ -1492,9 +1450,6 @@ function setupLibrarianIPCHandlers(): void {
 
     // Get and clear pending immersive reading
     const p = pendingImmersiveReading;
-    if (p) {
-      console.log(`[Librarian] pollStatus returning pending: ${p}`);
-    }
     pendingImmersiveReading = null;
 
     return {
@@ -1512,20 +1467,17 @@ function setupLibrarianIPCHandlers(): void {
   // Share a reading publicly
   ipcMain.handle('librarian:shareReading', async (_event, filePath: string): Promise<{ slug: string; url: string } | null> => {
     if (!authManager?.isAuthenticated()) {
-      console.log('[Librarian] Share failed: not authenticated');
       return null;
     }
 
     const reading = librarianManager?.getReading(filePath);
     if (!reading) {
-      console.log('[Librarian] Share failed: reading not found');
       return null;
     }
 
     const supabase = authManager.getSupabaseClient();
     const session = authManager.getSession();
     if (!supabase || !session?.user?.id) {
-      console.log('[Librarian] Share failed: no supabase client or session');
       return null;
     }
 
@@ -1563,7 +1515,6 @@ function setupLibrarianIPCHandlers(): void {
           .eq('source_path', filePath)
           .eq('user_id', session.user.id);
       }
-      console.log('[Librarian] Reading re-shared:', existing.slug);
       return {
         slug: existing.slug,
         url: `https://librarian.fieldtheory.dev/${existing.slug}`,
@@ -1600,7 +1551,6 @@ function setupLibrarianIPCHandlers(): void {
         .single();
 
       if (!error && data) {
-        console.log('[Librarian] Reading shared:', slug);
         metricsManager?.recordLibrarianArtifactShared();
         return {
           slug: data.slug,
@@ -1610,15 +1560,14 @@ function setupLibrarianIPCHandlers(): void {
 
       // If unique constraint violation, try again with new suffix
       if (error?.code === '23505') {
-        console.log('[Librarian] Slug collision, retrying...');
         continue;
       }
 
-      console.error('[Librarian] Share failed:', error);
+      log.error('Librarian share failed:', error);
       return null;
     }
 
-    console.error('[Librarian] Share failed: max retries exceeded');
+    log.error('Librarian share failed: max retries exceeded');
     return null;
   });
 
@@ -1637,11 +1586,10 @@ function setupLibrarianIPCHandlers(): void {
       .eq('user_id', session.user.id);
 
     if (error) {
-      console.error('[Librarian] Unshare failed:', error);
+      log.error('Librarian unshare failed:', error);
       return false;
     }
 
-    console.log('[Librarian] Reading unshared:', filePath);
     return true;
   });
 
@@ -1708,11 +1656,10 @@ function setupLibrarianIPCHandlers(): void {
       .eq('is_public', true);
 
     if (error) {
-      console.error('[Librarian] Update shared reading failed:', error);
+      log.error('Librarian update shared reading failed:', error);
       return false;
     }
 
-    console.log('[Librarian] Shared reading updated:', filePath);
     return true;
   });
 
@@ -1910,7 +1857,6 @@ function setupTranscribeIPCHandlers(): void {
 
   ipcMain.handle(TranscribeIPCChannels.TOGGLE_RECORDING, () => {
     if (!transcriberManager) {
-      console.error('[Main] toggleRecording: transcriberManager not initialized');
       return;
     }
     transcriberManager.toggleRecording();
@@ -2261,7 +2207,6 @@ function setupClipboardIPCHandlers(): void {
       const image = nativeImage.createFromBuffer(imageBuffer);
       
       if (image.isEmpty()) {
-        console.error('[Main] Failed to create image from sketch data');
         return -1;
       }
       
@@ -2284,7 +2229,7 @@ function setupClipboardIPCHandlers(): void {
       
       return id;
     } catch (error) {
-      console.error('[Main] Failed to save sketch:', error);
+      log.error('Failed to save sketch:', error);
       return -1;
     }
   });
@@ -2376,18 +2321,14 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle(ClipboardIPCChannels.PASTE_ITEM, async (_event, id: number, targetBundleId?: string) => {
-    console.log('[Main] PASTE_ITEM called - id:', id, 'targetBundleId:', targetBundleId);
     try {
       if (!clipboardManager) {
-        console.error('[Main] pasteItem: clipboardManager not initialized');
         return;
       }
       const item = clipboardManager.getItem(id);
       if (!item) {
-        console.error('[Main] pasteItem: item not found', id);
         return;
       }
-      console.log('[Main] Found item:', item.type, 'figureLabel:', item.figureLabel);
 
       // Determine the target bundle ID for terminal detection
       let effectiveBundleId: string | null = targetBundleId || null;
@@ -2448,7 +2389,7 @@ function setupClipboardIPCHandlers(): void {
             // Set hash directly from the text we just wrote
             clipboardManager.setClipboardHashFromText(figureRef);
           } else {
-            console.error('[Main] Failed to export image for terminal paste');
+            log.error('Failed to export image for terminal paste');
             return;
           }
         } else {
@@ -2485,7 +2426,7 @@ function setupClipboardIPCHandlers(): void {
       // Record paste metric
       metricsManager?.recordPaste();
     } catch (error) {
-      console.error('[Main] pasteItem error:', error);
+      log.error('pasteItem error:', error);
     }
   });
 
@@ -2493,12 +2434,10 @@ function setupClipboardIPCHandlers(): void {
   ipcMain.handle(ClipboardIPCChannels.COPY_ITEM, async (_event, id: number) => {
     try {
       if (!clipboardManager) {
-        console.error('[Main] copyItem: clipboardManager not initialized');
         return;
       }
       const item = clipboardManager.getItem(id);
       if (!item) {
-        console.error('[Main] copyItem: item not found', id);
         return;
       }
       
@@ -2515,20 +2454,17 @@ function setupClipboardIPCHandlers(): void {
       }
       
       clipboardManager.syncClipboardHash();
-      console.log('[Main] copyItem: copied item', id, 'to clipboard');
     } catch (error) {
-      console.error('[Main] copyItem error:', error);
+      log.error('copyItem error:', error);
     }
   });
 
   ipcMain.handle(ClipboardIPCChannels.PASTE_STACK, async (_event, ids: number[]) => {
     try {
       if (!clipboardManager) {
-        console.error('[Main] pasteStack: clipboardManager not initialized');
         return;
       }
       if (!ids || ids.length === 0) {
-        console.error('[Main] pasteStack: no item IDs provided');
         return;
       }
       
@@ -2538,7 +2474,6 @@ function setupClipboardIPCHandlers(): void {
         .filter((item): item is ClipboardItem => item !== null);
       
       if (items.length === 0) {
-        console.error('[Main] pasteStack: no valid items found');
         return;
       }
       
@@ -2652,7 +2587,7 @@ function setupClipboardIPCHandlers(): void {
             }
           }
         } catch (itemError) {
-          console.error('[Main] pasteStack: failed to paste item', item.id, itemError);
+          log.error('pasteStack: failed to paste item', item.id, itemError);
           // Continue with next item even if this one fails
         }
       }
@@ -2660,7 +2595,7 @@ function setupClipboardIPCHandlers(): void {
       // Record stack paste metrics
       metricsManager?.recordStackPasted(items.length);
     } catch (error) {
-      console.error('[Main] pasteStack error:', error);
+      log.error('pasteStack error:', error);
     }
   });
 
@@ -2668,7 +2603,6 @@ function setupClipboardIPCHandlers(): void {
   ipcMain.handle(ClipboardIPCChannels.PASTE_TEXT, async (_event, text: string, targetBundleId?: string) => {
     try {
       if (!text) {
-        console.error('[Main] pasteText: no text provided');
         return;
       }
       
@@ -2694,7 +2628,7 @@ function setupClipboardIPCHandlers(): void {
         await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
       }
     } catch (error) {
-      console.error('[Main] pasteText error:', error);
+      log.error('pasteText error:', error);
     }
   });
 
@@ -2781,7 +2715,6 @@ function setupClipboardIPCHandlers(): void {
 
   // Relaunch the app
   ipcMain.on('electron:relaunch', () => {
-    console.log('[Main] Relaunch requested');
     // Close all windows first
     BrowserWindow.getAllWindows().forEach(window => {
       if (!window.isDestroyed()) {
@@ -2851,7 +2784,6 @@ function setupClipboardIPCHandlers(): void {
   ipcMain.handle(ClipboardIPCChannels.UPDATE_STACK_ID, async (_event, itemIds: number[], stackId: string | null) => {
     try {
       if (!clipboardManager) {
-        console.error('[Main] updateStackId: clipboardManager not initialized');
         return;
       }
       // Check if this creates a new stack (for metrics)
@@ -2864,7 +2796,7 @@ function setupClipboardIPCHandlers(): void {
         metricsManager?.recordStackCreated();
       }
     } catch (error) {
-      console.error('[Main] updateStackId error:', error);
+      log.error('updateStackId error:', error);
     }
   });
 
@@ -2874,13 +2806,11 @@ function setupClipboardIPCHandlers(): void {
   ipcMain.handle(ClipboardIPCChannels.START_DRAG, async (event, stackId: string) => {
     try {
       if (!clipboardManager) {
-        console.error('[Main] startDrag: clipboardManager not initialized');
         return;
       }
 
       const items = clipboardManager.queryItemsByStackId(stackId);
       if (items.length === 0) {
-        console.error('[Main] startDrag: no items found for stack', stackId);
         return;
       }
 
@@ -2897,7 +2827,7 @@ function setupClipboardIPCHandlers(): void {
             tempFiles.push(tempPath);
             dragTempFiles.push(tempPath); // Track for cleanup
           } catch (writeError) {
-            console.error('[Main] startDrag: failed to write temp image', item.id, writeError);
+            log.error('startDrag: failed to write temp image', item.id, writeError);
           }
         }
         if (item.content) {
@@ -2913,7 +2843,7 @@ function setupClipboardIPCHandlers(): void {
           tempFiles.push(textTempPath);
           dragTempFiles.push(textTempPath);
         } catch (writeError) {
-          console.error('[Main] startDrag: failed to write temp text file', writeError);
+          log.error('startDrag: failed to write temp text file', writeError);
         }
       }
 
@@ -2924,11 +2854,9 @@ function setupClipboardIPCHandlers(): void {
           files: tempFiles,   // All files for multi-file drag
           icon: tempFiles[0], // Use first image as icon
         });
-      } else {
-        console.warn('[Main] startDrag: no files to drag for stack', stackId);
       }
     } catch (error) {
-      console.error('[Main] startDrag error:', error);
+      log.error('startDrag error:', error);
     }
   });
 
@@ -2945,7 +2873,7 @@ function setupClipboardIPCHandlers(): void {
       clipboardManager.saveImprovedContent(itemId, improvedContent);
       return { success: true };
     } catch (error) {
-      console.error('[Main] saveImprovedContent error:', error);
+      log.error('saveImprovedContent error:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to save improved content',
@@ -2962,7 +2890,7 @@ function setupClipboardIPCHandlers(): void {
       clipboardManager.clearImprovedContent(itemId);
       return { success: true };
     } catch (error) {
-      console.error('[Main] clearImprovedContent error:', error);
+      log.error('clearImprovedContent error:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to clear improved content',
@@ -2979,7 +2907,7 @@ function setupClipboardIPCHandlers(): void {
       clipboardManager.setUseImprovedVersion(itemId, useImproved);
       return { success: true };
     } catch (error) {
-      console.error('[Main] setUseImprovedVersion error:', error);
+      log.error('setUseImprovedVersion error:', error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Failed to set use improved version',
@@ -3014,7 +2942,6 @@ function setupClipboardIPCHandlers(): void {
 
   ipcMain.handle(ClipboardIPCChannels.SET_SYNC_SESSION, async (_event, accessToken: string, refreshToken: string) => {
     if (!authManager) {
-      console.warn('[Main] setSyncSession: authManager not initialized');
       return false;
     }
     await authManager.setSession(accessToken, refreshToken);
@@ -3041,7 +2968,6 @@ function setupClipboardIPCHandlers(): void {
     // Only return tokens if session is not expired.
     const now = Math.floor(Date.now() / 1000);
     if (session.expires_at && session.expires_at <= now) {
-      console.log('[Main] getSyncSession: Session expired, not returning tokens');
       return null;
     }
     return {
@@ -3202,7 +3128,7 @@ function setupClipboardIPCHandlers(): void {
       const result = await response.json() as { error?: string; success?: boolean };
 
       if (!response.ok) {
-        console.error('[Main] Delete account failed:', result);
+        log.error('Delete account failed:', result);
         return { error: result.error || 'Failed to delete account' };
       }
 
@@ -3242,7 +3168,7 @@ function setupClipboardIPCHandlers(): void {
 
       return { error: null };
     } catch (err) {
-      console.error('[Main] Delete account error:', err);
+      log.error('Delete account error:', err);
       return { error: 'Failed to connect to server' };
     }
   });
@@ -3599,7 +3525,6 @@ function setupClipboardIPCHandlers(): void {
       return false;
     }
     await preferencesManager.save({ wordSubstitutions: substitutions });
-    console.log(`[Main] Word substitutions updated: ${substitutions.length} pairs`);
     return true;
   });
 
@@ -3619,7 +3544,6 @@ function setupClipboardIPCHandlers(): void {
       return false;
     }
     await preferencesManager.save({ dataRetentionDays: days });
-    console.log(`[Main] Data retention set to: ${days === -1 ? 'never' : days + ' days'}`);
     
     // Trigger immediate cleanup with new retention setting.
     if (clipboardManager && days !== -1) {
@@ -3703,12 +3627,11 @@ function setupClipboardIPCHandlers(): void {
         .single();
       
       if (error) {
-        console.error('[Main] Failed to fetch tier:', error);
+        log.error('Failed to fetch tier:', error);
         return { tier: quotaManager?.getCachedTier() || 'free', error: error.message };
       }
       
       const tier = data?.tier || 'free';
-      console.log('[Main] Refreshed tier from server:', tier);
       
       if (quotaManager) {
         await quotaManager.setCachedTier(tier);
@@ -3722,7 +3645,7 @@ function setupClipboardIPCHandlers(): void {
 
       return { tier, error: null };
     } catch (err) {
-      console.error('[Main] Error refreshing tier:', err);
+      log.error('Error refreshing tier:', err);
       return { tier: quotaManager?.getCachedTier() || 'free', error: String(err) };
     }
   });
@@ -3766,7 +3689,7 @@ function setupClipboardIPCHandlers(): void {
       await preferencesManager.save({ commandsDirectory: directoryPath || undefined });
       return { success: true };
     } catch (error) {
-      console.error('[Main] Failed to set commands directory:', error);
+      log.error('Failed to set commands directory:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
   });
@@ -3937,7 +3860,6 @@ function setupClipboardIPCHandlers(): void {
       const isTerminal = targetApp ? isTerminalApp(targetApp.bundleId) : false;
       const isIDE = targetApp ? isIDEWithTerminal(targetApp.bundleId) : false;
 
-      console.log(`[CommandLauncher] Target app: ${targetApp?.name} (${targetApp?.bundleId}), isTerminal: ${isTerminal}, isIDE: ${isIDE}`);
 
       // Use text-based file path for terminals and IDEs with integrated terminals.
       // IDEs like Cursor/VS Code work better with file paths that can be used in their terminals.
@@ -3946,14 +3868,12 @@ function setupClipboardIPCHandlers(): void {
         const referenceText = `[run this command: ${command.name}.md]\n${command.filePath}`;
         clipboard.writeText(referenceText);
         clipboardManager?.syncClipboardHash();
-        console.log(`[CommandLauncher] Using TEXT paste mode for ${targetApp?.name}: "${referenceText}"`);
       } else {
         // For other apps: paste the .md file as an attachment.
         const filePaths = [command.filePath];
         const plistData = plist.build(filePaths);
         clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
         clipboardManager?.syncClipboardHash();
-        console.log(`[CommandLauncher] Using FILE ATTACHMENT paste mode for ${targetApp?.name}: ${command.filePath}`);
       }
 
       // Refocus the previous app and paste.
@@ -3964,11 +3884,10 @@ function setupClipboardIPCHandlers(): void {
 
       await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
 
-      console.log(`[CommandLauncher] Invoked command: ${command.name} (terminal: ${isTerminal}, ide: ${isIDE})`);
       metricsManager?.recordCommandExecuted();
       return { success: true };
     } catch (error) {
-      console.error('[CommandLauncher] Error invoking command:', error);
+      log.error('Error invoking command:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
   });
@@ -4186,7 +4105,6 @@ function setupOnboardingIPCHandlers(): void {
     await preferencesManager.save({ onboardingComplete: true });
 
     // Register hotkeys now that onboarding is complete
-    console.log('[Main] Onboarding complete, registering hotkeys');
     registerHotkeysAfterOnboarding();
 
     // Refresh tray menu to show full options
@@ -4244,7 +4162,6 @@ function setupOnboardingIPCHandlers(): void {
 
     // Unregister hotkeys - they shouldn't work during onboarding.
     globalShortcut.unregisterAll();
-    console.log('[Main] Unregistered all hotkeys for onboarding reset');
 
     // Hide clipboard history window if visible.
     if (clipboardHistoryWindow?.isVisible()) {
@@ -4266,7 +4183,6 @@ function setupOnboardingIPCHandlers(): void {
     onboardingWindow = createOnboardingWindow();
     onboardingWindow.show(OnboardingStep.WELCOME);
 
-    console.log('[Main] Onboarding reset - showing wizard from start');
     return true;
   });
 
@@ -4285,7 +4201,7 @@ async function checkPermissions(): Promise<{ accessibilityGranted: boolean }> {
   try {
     return await nativeHelper.checkPermissions();
   } catch (error) {
-    console.error('[Main] Failed to check permissions:', error);
+    log.error('Failed to check permissions:', error);
     return { accessibilityGranted: false };
   }
 }
@@ -4451,7 +4367,6 @@ function broadcastTranscribeEvents(): void {
       }
     });
     
-    console.log(`[Main] Quota exhausted: ${featureName} (${used}/${limit})`);
   });
   
   // Handle stacking disabled during recording - screenshot taken but quota exhausted.
@@ -4459,7 +4374,6 @@ function broadcastTranscribeEvents(): void {
     if (cursorStatusManager) {
       cursorStatusManager.showNoTargetError(data.message);
     }
-    console.log(`[Main] Stacking disabled: ${data.message}`);
   });
 
 }
@@ -4484,7 +4398,6 @@ function broadcastStateChanged(): void {
  * This sets up the native helper, audio manager, and tray integration.
  */
 async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<void> {
-  console.log('[Main] Initializing audio system...');
 
   // Initialize preferences manager first to load saved priority device
   if (!preferencesManager) {
@@ -4573,8 +4486,6 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   const startRecordingCallback = () => {
     if (transcriberManager) {
       transcriberManager.toggleRecording();
-    } else {
-      console.warn('[TrayManager] TranscriberManager not ready yet');
     }
   };
 
@@ -4592,8 +4503,6 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
           }
         });
       }
-    } else {
-      console.warn('[TrayManager] ClipboardManager not ready yet');
     }
   };
 
@@ -4611,8 +4520,6 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
           }
         });
       }
-    } else {
-      console.warn('[TrayManager] ClipboardManager not ready yet');
     }
   };
 
@@ -4630,8 +4537,6 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
           }
         });
       }
-    } else {
-      console.warn('[TrayManager] ClipboardManager not ready yet');
     }
   };
 
@@ -4660,17 +4565,14 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
     }
   });
 
-  console.log('[Main] Audio system initialized');
 }
 
 /**
  * Initialize the transcription system.
  */
 async function initTranscriberSystem(): Promise<void> {
-  console.log('[Main] Initializing transcription system...');
-
   if (!nativeHelper) {
-    console.error('[Main] Cannot initialize transcriber - nativeHelper not available');
+    log.error('Cannot initialize transcriber - nativeHelper not available');
     return;
   }
 
@@ -4750,7 +4652,6 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Broadcast artifact-added events to all windows and auto-show if enabled
   librarianManager.on('reading-added', async (reading: Reading) => {
-    console.log(`[Librarian] artifact-added event: ${reading.title}`);
 
     // Record librarian artifact created metric
     metricsManager?.recordLibrarianArtifactCreated();
@@ -4768,7 +4669,6 @@ async function initTranscriberSystem(): Promise<void> {
     // Check if muted for today - halts interruption even if existing sessions create artifacts
     const isMuted = librarianManager!.isMutedForToday();
     if (isMuted) {
-      console.log('[Librarian] Muted for today - skipping auto-show');
       return;
     }
 
@@ -4849,7 +4749,6 @@ async function initTranscriberSystem(): Promise<void> {
     if (!quotas.priorityMic.allowed && audioManager) {
       const audioState = audioManager.getState();
       if (audioState.priorityDeviceId) {
-        console.log('[Quota] Priority mic quota exhausted, auto-selecting none');
         audioManager.setPriorityDevice(null);
       }
     }
@@ -4882,7 +4781,6 @@ async function initTranscriberSystem(): Promise<void> {
 
     // Preload all sounds once (shared cache in native helper).
     transcriberSoundManager.preloadAllSounds().catch((err) => {
-      console.warn('[Main] Failed to preload sounds:', err);
     });
   }
 
@@ -4933,7 +4831,6 @@ async function initTranscriberSystem(): Promise<void> {
     const watchedDirs = commandsManager.getWatchedDirs();
     if (watchedDirs.length === 0) {
       // Migrate: add legacy directory as first watched directory
-      console.log(`[Main] Migrating legacy commands directory to multi-directory system: ${savedCommandsDir}`);
       await commandsManager.addWatchedDir(savedCommandsDir);
       // Only set legacy directoryPath during migration (when no watchedDirs exist yet)
       // DO NOT call setDirectory when watchedDirs already has entries - it clears all commands!
@@ -5019,14 +4916,9 @@ async function initTranscriberSystem(): Promise<void> {
   // Register event handlers BEFORE authManager.init().
   // init() restores session and may emit 'userChanged' synchronously.
   authManager.on('userChanged', async (userId: string) => {
-    console.log(`[Main] userChanged event received for: ${userId}`);
-
     // Reinitialize all managers with user-specific data
     if (preferencesManager) {
-      console.log('[Main] Reloading preferences in userChanged handler...');
       await preferencesManager.load();
-      // Log which path was used (access private field for debugging)
-      console.log('[Main] Preferences reloaded from:', (preferencesManager as unknown as { prefsPath: string }).prefsPath);
 
       // Reload hotkeys from freshly loaded preferences
       const prefs = preferencesManager.get();
@@ -5036,11 +4928,6 @@ async function initTranscriberSystem(): Promise<void> {
           prefs.clipboardHistoryHotkey,
           prefs.clipboardDesktopScreenshotHotkey
         );
-        console.log('[Main] Clipboard hotkeys reloaded:', {
-          screenshot: prefs.clipboardScreenshotHotkey,
-          history: prefs.clipboardHistoryHotkey,
-          fullScreen: prefs.clipboardDesktopScreenshotHotkey,
-        });
       }
     }
     if (clipboardManager) {
@@ -5058,14 +4945,10 @@ async function initTranscriberSystem(): Promise<void> {
     if (commandsManager) {
       await commandsManager.reinitializeForUser();
     }
-
-    console.log('[Main] All managers reinitialized for user:', userId);
   });
 
   // Listen for logout to clear manager state.
   authManager.on('userLoggedOut', async () => {
-    console.log('[Main] User logged out, clearing manager state...');
-
     if (preferencesManager) {
       preferencesManager.reset();
     }
@@ -5081,8 +4964,6 @@ async function initTranscriberSystem(): Promise<void> {
     if (commandsManager) {
       commandsManager.onUserLoggedOut();
     }
-
-    console.log('[Main] All managers cleared for logout');
   });
 
   // Listen for session changes (login/logout, token refresh)
@@ -5099,11 +4980,8 @@ async function initTranscriberSystem(): Promise<void> {
   // Now safe to init AuthManager - handlers are registered
   await authManager.init(envVars.supabaseUrl, envVars.supabaseAnonKey);
 
-  // The userChanged handler (line 5551) handles preference reloading when session is restored.
+  // The userChanged handler handles preference reloading when session is restored.
   // Don't call load() again here - it would race with the async handler.
-  if (authManager.isAuthenticated()) {
-    console.log('[Main] Session restored for user');
-  }
 
   // Configure prompt engineer with Supabase URL for Edge Function calls.
   if (envVars.supabaseUrl) {
@@ -5132,8 +5010,6 @@ async function initTranscriberSystem(): Promise<void> {
   // NOTE: Super Paste (Cmd+Shift+V) hotkeys
   // are now registered in registerHotkeysAfterOnboarding() to avoid permission
   // prompts during onboarding.
-
-  console.log('[Main] Transcription system initialized');
 }
 
 /**
@@ -5141,7 +5017,6 @@ async function initTranscriberSystem(): Promise<void> {
  */
 async function initClipboardCallbacks(): Promise<void> {
   if (!clipboardManager) {
-    console.error('[Main] Cannot initialize clipboard callbacks - clipboardManager not available');
     return;
   }
 
@@ -5157,7 +5032,6 @@ async function initClipboardCallbacks(): Promise<void> {
     // This enables any clipboard copy (text, images, screenshots) to participate in auto-stacking.
     if (item && transcriberManager && transcriberManager.getStatus() === 'recording') {
       transcriberManager.addToStack(id);
-      console.log(`[Main] Added clipboard ${item.type} ${id} to recording stack`);
     }
 
     BrowserWindow.getAllWindows().forEach((window) => {
@@ -5166,8 +5040,6 @@ async function initClipboardCallbacks(): Promise<void> {
       }
     });
   });
-
-  console.log('[Main] Clipboard callbacks initialized');
 }
 
 // Prevent multiple instances of the app.
@@ -5191,8 +5063,6 @@ if (process.defaultApp) {
  * - fieldtheory://librarian/import?file=/path/to/reading.md&fullscreen=true - Import a reading and show it
  */
 async function handleProtocolUrl(url: string): Promise<void> {
-  console.log('[Main] Handling protocol URL:', url);
-
   try {
     const parsed = new URL(url);
 
@@ -5201,23 +5071,18 @@ async function handleProtocolUrl(url: string): Promise<void> {
       const fullscreen = parsed.searchParams.get('fullscreen') === 'true';
 
       if (!filePath) {
-        console.warn('[Main] No file path in librarian import URL');
         return;
       }
 
       // Decode the file path (it may be URL-encoded)
       const decodedPath = decodeURIComponent(filePath);
-      console.log('[Main] Opening reading from:', decodedPath, fullscreen ? '(fullscreen)' : '');
 
       // Read the file directly - in file-only architecture, readings are on disk
       if (librarianManager) {
         const reading = librarianManager.getReading(decodedPath);
         if (reading) {
-          console.log('[Main] Found reading:', reading.title);
           // Send the reading path to the renderer to display it
           clipboardHistoryWindow?.getWindow()?.webContents.send('librarian:showReading', reading.path);
-        } else {
-          console.warn('[Main] Reading not found:', decodedPath);
         }
       }
 
@@ -5232,7 +5097,7 @@ async function handleProtocolUrl(url: string): Promise<void> {
       }
     }
   } catch (error) {
-    console.error('[Main] Error handling protocol URL:', error);
+    log.error('Error handling protocol URL:', error);
   }
 }
 
@@ -5264,7 +5129,7 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(async () => {
-    console.log('[Main] App ready');
+    log.info('App ready');
 
     // Migrate data from legacy app directories (littleai-mac, Oscar) if needed.
     migrateFromLegacyPaths();
@@ -5353,7 +5218,6 @@ if (!gotTheLock) {
     // Only in unpackaged (development) builds.
     if (!app.isPackaged) {
       globalShortcut.register('Command+Shift+O', async () => {
-        console.log('[Main] Reset onboarding shortcut triggered (dev mode)');
         if (!preferencesManager) return;
 
         await preferencesManager.save({
@@ -5374,16 +5238,12 @@ if (!gotTheLock) {
         onboardingWindow = createOnboardingWindow();
         onboardingWindow.show(OnboardingStep.WELCOME);
       });
-      console.log('[Main] Registered reset onboarding hotkey (dev mode only)');
     }
 
     // Manual update check function for tray menu.
     function checkForUpdatesManual(): void {
-      console.log('[Updater] Manual update check triggered');
-      console.log('[Updater] Feed URL config:', { provider: 'github', owner: 'afar1', repo: 'field-releases' });
-      console.log('[Updater] Current app version:', app.getVersion());
       autoUpdater.checkForUpdates().catch((err) => {
-        console.error('[Updater] Check failed:', err);
+        log.error('Update check failed:', err);
       });
     }
 
@@ -5429,24 +5289,20 @@ if (!gotTheLock) {
     }
 
     // Check for updates on startup and periodically (production only).
-    // DEBUG: Force update check even in dev mode for testing
     {
       // Initial check after 5s delay to not block UI.
       setTimeout(() => {
-        console.log('[Updater] Checking for updates on startup...');
         autoUpdater.checkForUpdates();
       }, 5000);
 
       // Periodic check every 30 minutes.
       setInterval(() => {
-        console.log('[Updater] Periodic update check...');
         autoUpdater.checkForUpdates();
       }, 30 * 60 * 1000);
     }
 
     // Auto-updater event handlers - send to renderer for in-app notification UI.
     autoUpdater.on('checking-for-update', () => {
-      console.log('[Updater] Checking for updates...');
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send('updater:checkingForUpdate');
@@ -5455,7 +5311,6 @@ if (!gotTheLock) {
     });
 
     autoUpdater.on('update-available', (info) => {
-      console.log('[Updater] Update available:', info.version);
       pendingUpdateInfo = { status: 'available', version: info.version };
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
@@ -5464,8 +5319,7 @@ if (!gotTheLock) {
       });
     });
 
-    autoUpdater.on('update-not-available', (info) => {
-      console.log('[Updater] No update available. Current:', app.getVersion(), 'Latest:', info.version);
+    autoUpdater.on('update-not-available', (_info) => {
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send('updater:updateNotAvailable');
@@ -5474,8 +5328,7 @@ if (!gotTheLock) {
     });
 
     autoUpdater.on('error', (err) => {
-      console.error('[Updater] Error:', err.message);
-      console.error('[Updater] Full error:', err);
+      log.error('Updater error:', err);
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send('updater:error', err.message);
@@ -5485,7 +5338,6 @@ if (!gotTheLock) {
 
     autoUpdater.on('download-progress', (progress) => {
       const percent = Math.round(progress.percent);
-      console.log(`[Updater] Download progress: ${percent}%`);
       if (pendingUpdateInfo) {
         pendingUpdateInfo.status = 'downloading';
       }
@@ -5497,7 +5349,6 @@ if (!gotTheLock) {
     });
 
     autoUpdater.on('update-downloaded', (info) => {
-      console.log('[Updater] Update downloaded:', info.version);
       pendingUpdateInfo = { status: 'ready', version: info.version };
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
@@ -5517,7 +5368,6 @@ if (!gotTheLock) {
         autoUpdater.checkForUpdates();
       } else {
         // In dev mode, simulate "up to date" response
-        console.log('[Updater] Dev mode: simulating update check complete (up to date)');
         BrowserWindow.getAllWindows().forEach((window) => {
           if (!window.isDestroyed()) {
             window.webContents.send('updater:updateNotAvailable');
@@ -5575,38 +5425,17 @@ if (!gotTheLock) {
       modelDownloaded &&
       isAuthenticated;
 
-    // Log startup state for debugging
-    console.log('[Main] Startup requirements check:');
-    console.log(`  - Microphone: ${micStatus}`);
-    console.log(`  - Accessibility: ${accessibilityStatus}`);
-    console.log(`  - Screen Recording: ${screenStatus}`);
-    console.log(`  - Model Downloaded: ${modelDownloaded}`);
-    console.log(`  - Authenticated: ${isAuthenticated}`);
-    console.log(`  - onboardingComplete: ${prefs?.onboardingComplete ?? 'undefined'}`);
-    console.log(`  - isFullyReady: ${isFullyReady}`);
-
     if (isFullyReady) {
       // All requirements met - mark onboarding complete and allow app access
       if (!prefs?.onboardingComplete) {
-        console.log('[Main] All requirements met, marking onboarding complete');
         await preferencesManager?.save({ onboardingComplete: true });
       }
-      console.log('[Main] All requirements met, registering hotkeys');
       registerHotkeysAfterOnboarding();
-
-      // Log Librarian status at end of startup (user wants this visible without scrolling)
-      if (librarianManager) {
-        const readings = librarianManager.getReadings();
-        const watchedDirs = librarianManager.getWatchedDirs();
-        console.log(`[Librarian] Ready: ${readings.length} readings from ${watchedDirs.length} watched directories`);
-      }
     } else {
       // Missing requirements - force onboarding flow
-      console.log('[Main] Missing requirements, showing onboarding wizard');
 
       // Reset onboarding state if it was previously complete
       if (prefs?.onboardingComplete) {
-        console.log('[Main] Resetting onboarding state due to missing requirements');
         await preferencesManager?.save({ onboardingComplete: false });
 
         // Refresh tray menu to show onboarding-only options
@@ -5630,11 +5459,9 @@ if (!gotTheLock) {
       if (hasAllPermissionsAndModel && !isAuthenticated) {
         // Only auth is missing - go straight to account phase
         startStep = 2; // account phase
-        console.log('[Main] Only auth missing, starting at account phase');
       } else if (hasAllPermissions && !modelDownloaded) {
         // Only model is missing - go straight to model download phase
         startStep = OnboardingStep.MODEL_DOWNLOAD;
-        console.log('[Main] Only model missing, starting at model download phase');
       } else {
         // Other requirements missing - use saved step or start from beginning
         startStep = prefs?.onboardingStep ?? OnboardingStep.WELCOME;
@@ -5663,14 +5490,8 @@ if (!gotTheLock) {
 
       // Check if permissions are revoked
       if (!hasAllPermissions) {
-        console.log('[Main] Permission revoked, forcing onboarding flow');
-        console.log(`  - Microphone: ${mic}`);
-        console.log(`  - Accessibility: ${accessibility}`);
-        console.log(`  - Screen Recording: ${screen}`);
-
         // Unregister all hotkeys - they shouldn't work without permissions
         globalShortcut.unregisterAll();
-        console.log('[Main] Unregistered all hotkeys due to permission revocation');
 
         // Reset onboarding state
         await preferencesManager?.save({ onboardingComplete: false });
@@ -5698,11 +5519,8 @@ if (!gotTheLock) {
       // Existing users who temporarily lose auth (network issues, token expired) should
       // continue using local features. AuthManager will retry token refresh automatically.
       if (!authenticated && !hasEverAuthenticated) {
-        console.log('[Main] New user needs to log in, showing onboarding account phase');
-
         // Unregister all hotkeys - app requires login for new users
         globalShortcut.unregisterAll();
-        console.log('[Main] Unregistered all hotkeys for new user');
 
         // Reset onboarding state
         await preferencesManager?.save({ onboardingComplete: false });
@@ -5742,7 +5560,7 @@ if (!gotTheLock) {
   });
 
   app.on('before-quit', () => {
-    console.log('[Main] App quitting, cleaning up...');
+    log.info('App quitting, cleaning up...');
 
     if (feedbackManager) {
       feedbackManager.destroy();

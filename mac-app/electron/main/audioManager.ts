@@ -1,6 +1,9 @@
 import { EventEmitter } from 'events';
 import { AudioDevice, AudioState, TransportType } from './types/audio';
 import { NativeHelper } from './nativeHelper';
+import { createLogger } from './logger';
+
+const log = createLogger('Audio');
 
 /**
  * AudioManager handles all audio device state and implements the priority policy.
@@ -82,7 +85,7 @@ export class AudioManager extends EventEmitter {
     });
 
     this.helper.on('error', (error: Error) => {
-      console.error('[AudioManager] Helper error:', error);
+      log.error('Helper error:', error);
     });
 
     // Fetch initial device list and default input.
@@ -93,15 +96,13 @@ export class AudioManager extends EventEmitter {
       if (this.savedPriorityDeviceId) {
         const deviceExists = this.devices.some(d => d.id === this.savedPriorityDeviceId);
         if (deviceExists) {
-          console.log('[AudioManager] Restoring saved priority device:', this.savedPriorityDeviceId);
           await this.setPriorityDevice(this.savedPriorityDeviceId);
         } else {
-          console.log('[AudioManager] Saved priority device no longer exists, clearing');
           this.savedPriorityDeviceId = null;
         }
       }
     } catch (error) {
-      console.error('[AudioManager] Failed to fetch initial state:', error);
+      log.error('Failed to fetch initial state:', error);
     }
 
     // Start monitoring for CoreAudio changes.
@@ -109,8 +110,6 @@ export class AudioManager extends EventEmitter {
 
     // Emit initial state to subscribers.
     this.emitStateChanged();
-
-    console.log('[AudioManager] Initialized with state:', this.getState());
   }
 
   /**
@@ -131,7 +130,6 @@ export class AudioManager extends EventEmitter {
    * Set which device should be prioritized (user selection).
    */
   async setPriorityDevice(deviceId: string | null): Promise<void> {
-    console.log('[AudioManager] setPriorityDevice:', deviceId);
     const wasLocked = this.priorityDeviceId !== null;
     this.priorityDeviceId = deviceId;
 
@@ -140,7 +138,6 @@ export class AudioManager extends EventEmitter {
       const device = this.devices.find(d => d.id === deviceId);
       if (device) {
         this.favoriteDeviceName = device.name;
-        console.log('[AudioManager] Saved favorite device name:', device.name);
         if (this.onFavoriteChanged) {
           this.onFavoriteChanged(device.name);
         }
@@ -148,7 +145,6 @@ export class AudioManager extends EventEmitter {
 
       if (!this.priorityMode) {
         this.priorityMode = true;
-        console.log('[AudioManager] Auto-enabled priority mode for device:', deviceId);
       }
       this.userOverrideId = null;
       await this.enforcePriority();
@@ -170,7 +166,6 @@ export class AudioManager extends EventEmitter {
       if (this.priorityMode) {
         this.priorityMode = false;
         this.userOverrideId = null;
-        console.log('[AudioManager] Auto-disabled priority mode (no device selected)');
       }
     }
 
@@ -184,7 +179,6 @@ export class AudioManager extends EventEmitter {
   private startPriorityMicTimer(): void {
     if (this.priorityMicTimer) return; // Already running
 
-    console.log('[AudioManager] Starting priority mic minute timer');
     this.priorityMicTimer = setInterval(() => {
       if (this.priorityDeviceId) {
         this.emit('priorityMicMinute');
@@ -197,7 +191,6 @@ export class AudioManager extends EventEmitter {
    */
   private stopPriorityMicTimer(): void {
     if (this.priorityMicTimer) {
-      console.log('[AudioManager] Stopping priority mic minute timer');
       clearInterval(this.priorityMicTimer);
       this.priorityMicTimer = null;
     }
@@ -208,8 +201,6 @@ export class AudioManager extends EventEmitter {
    * When enabled, we'll actively maintain the priority device as the default input.
    */
   async setPriorityMode(enabled: boolean): Promise<void> {
-    console.log('[AudioManager] setPriorityMode:', enabled);
-
     this.priorityMode = enabled;
 
     if (!enabled) {
@@ -231,7 +222,6 @@ export class AudioManager extends EventEmitter {
    * Call this when the user explicitly wants to "reset" to the priority device.
    */
   async clearUserOverride(): Promise<void> {
-    console.log('[AudioManager] clearUserOverride');
     this.userOverrideId = null;
 
     if (this.priorityMode && this.priorityDeviceId) {
@@ -254,12 +244,11 @@ export class AudioManager extends EventEmitter {
       if (this.priorityDeviceId) {
         const stillExists = devices.some((d) => d.id === this.priorityDeviceId);
         if (!stillExists) {
-          console.log('[AudioManager] Priority device removed, clearing selection');
           this.priorityDeviceId = null;
         }
       }
     } catch (error) {
-      console.error('[AudioManager] Failed to refresh devices:', error);
+      log.error('Failed to refresh devices:', error);
     }
   }
 
@@ -269,15 +258,12 @@ export class AudioManager extends EventEmitter {
    * Also handles wake-from-sleep recovery and favorite device auto-reconnect.
    */
   private async handleDevicesChanged(devices: AudioDevice[]): Promise<void> {
-    console.log('[AudioManager] Devices changed, count:', devices.length);
-
     this.devices = devices;
 
     // If the priority device was removed, clear it (but keep favorite name for reconnect).
     if (this.priorityDeviceId) {
       const stillExists = devices.some((d) => d.id === this.priorityDeviceId);
       if (!stillExists) {
-        console.log('[AudioManager] Priority device removed, will auto-reconnect if it reappears');
         this.priorityDeviceId = null;
         // Don't clear favoriteDeviceName - we want to reconnect when it comes back
       }
@@ -288,7 +274,6 @@ export class AudioManager extends EventEmitter {
     if (!this.priorityDeviceId && this.favoriteDeviceName) {
       const favoriteDevice = devices.find(d => d.name === this.favoriteDeviceName && d.isInput);
       if (favoriteDevice) {
-        console.log('[AudioManager] Favorite device reconnected, auto-selecting:', this.favoriteDeviceName);
         this.priorityDeviceId = favoriteDevice.id;
         this.priorityMode = true;
         this.startPriorityMicTimer();
@@ -312,8 +297,6 @@ export class AudioManager extends EventEmitter {
    * When priority mode is locked, always restore the priority device.
    */
   private async handleDefaultInputChanged(deviceId: string | null): Promise<void> {
-    console.log('[AudioManager] Default input changed to:', deviceId);
-
     this.defaultInputId = deviceId;
 
     // If priority mode is off, just update state and emit.
@@ -330,7 +313,6 @@ export class AudioManager extends EventEmitter {
 
     // While locked, always restore the priority device if it changed away.
     if (this.priorityDeviceId && deviceId !== this.priorityDeviceId) {
-      console.log('[AudioManager] Non-priority device became default while locked, restoring priority');
       // Clear any user override since we're enforcing
       this.userOverrideId = null;
       await this.enforcePriority();
@@ -363,26 +345,22 @@ export class AudioManager extends EventEmitter {
 
     // If no priority device is selected, nothing to enforce.
     if (!this.priorityDeviceId) {
-      console.log('[AudioManager] No priority device selected');
       return;
     }
 
     // Find the priority device.
     const priorityDevice = this.devices.find((d) => d.id === this.priorityDeviceId);
     if (!priorityDevice) {
-      console.log('[AudioManager] Priority device not found');
       return;
     }
 
     // If priority device is already the default, nothing to do.
     if (this.defaultInputId === this.priorityDeviceId) {
-      console.log('[AudioManager] Priority device already default');
       return;
     }
 
     // Set priority device as the default input.
     // When locked, we always enforce - ignore auto-switches from macOS.
-    console.log('[AudioManager] Enforcing priority device as default input:', priorityDevice.name);
 
     // Mark that we're setting the default to avoid treating it as user override.
     this.isSettingDefaultInput = true;
@@ -405,7 +383,7 @@ export class AudioManager extends EventEmitter {
     try {
       this.defaultInputId = await this.helper.getDefaultInput();
     } catch (error) {
-      console.error('[AudioManager] Failed to refresh default input:', error);
+      log.error('Failed to refresh default input:', error);
     }
   }
 

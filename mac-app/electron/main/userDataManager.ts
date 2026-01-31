@@ -25,6 +25,9 @@ import { EventEmitter } from 'events';
 import fs from 'fs-extra';
 import path from 'path';
 import os from 'os';
+import { createLogger } from './logger';
+
+const log = createLogger('UserData');
 
 export class UserDataManager extends EventEmitter {
   private currentCallsign: string | null = null;
@@ -94,8 +97,6 @@ export class UserDataManager extends EventEmitter {
       throw new Error('Invalid callsign');
     }
 
-    console.log(`[UserDataManager] Setting current user: ${callsign}`);
-
     // Store previous callsign for comparison
     const previousCallsign = this.currentCallsign;
     this.currentCallsign = callsign;
@@ -111,8 +112,6 @@ export class UserDataManager extends EventEmitter {
     const currentUserFile = path.join(this.baseUserDataPath, 'current-user.json');
     await fs.writeJson(currentUserFile, { callsign }, { spaces: 2 });
 
-    console.log(`[UserDataManager] User directories ready: ${userDataDir}`);
-
     // Emit event for other managers to reload data
     if (previousCallsign !== callsign) {
       this.emit('user-changed', callsign);
@@ -123,8 +122,6 @@ export class UserDataManager extends EventEmitter {
    * Clear the current user. Called on logout.
    */
   async clearCurrentUser(): Promise<void> {
-    console.log(`[UserDataManager] Clearing current user: ${this.currentCallsign}`);
-
     this.currentCallsign = null;
 
     // Remove current user file
@@ -147,7 +144,6 @@ export class UserDataManager extends EventEmitter {
       const data = await fs.readJson(currentUserFile);
       if (data?.callsign) {
         this.currentCallsign = data.callsign;
-        console.log(`[UserDataManager] Restored current user: ${this.currentCallsign}`);
         return this.currentCallsign;
       }
     } catch {
@@ -171,7 +167,6 @@ export class UserDataManager extends EventEmitter {
 
     // Skip if user directory already exists
     if (await fs.pathExists(userDir)) {
-      console.log(`[UserDataManager] User directory exists, skipping migration`);
       return;
     }
 
@@ -187,7 +182,6 @@ export class UserDataManager extends EventEmitter {
     }
 
     if (existingUsers.length > 0) {
-      console.log(`[UserDataManager] Other users exist (${existingUsers.length}), starting fresh for ${callsign}`);
       await fs.ensureDir(userDir);
       return;
     }
@@ -197,12 +191,9 @@ export class UserDataManager extends EventEmitter {
     const hasLegacyData = await fs.pathExists(legacyPrefs);
 
     if (!hasLegacyData) {
-      console.log(`[UserDataManager] No legacy data to migrate`);
       await fs.ensureDir(userDir);
       return;
     }
-
-    console.log(`[UserDataManager] Migrating legacy data to ${callsign}`);
 
     // Files to migrate from Application Support
     const filesToMigrate = [
@@ -224,9 +215,8 @@ export class UserDataManager extends EventEmitter {
       if (await fs.pathExists(src)) {
         try {
           await fs.move(src, dst);
-          console.log(`[UserDataManager] Migrated: ${file}`);
         } catch (err) {
-          console.error(`[UserDataManager] Failed to migrate ${file}:`, err);
+          log.error(`Failed to migrate ${file}:`, err);
         }
       }
     }
@@ -237,9 +227,8 @@ export class UserDataManager extends EventEmitter {
     if (await fs.pathExists(figuresSrc)) {
       try {
         await fs.move(figuresSrc, figuresDst);
-        console.log(`[UserDataManager] Migrated: figures/`);
       } catch (err) {
-        console.error(`[UserDataManager] Failed to migrate figures/:`, err);
+        log.error('Failed to migrate figures/', err);
       }
     }
 
@@ -250,9 +239,8 @@ export class UserDataManager extends EventEmitter {
       try {
         await fs.ensureDir(path.dirname(librarianDst));
         await fs.move(librarianSrc, librarianDst);
-        console.log(`[UserDataManager] Migrated: ~/.fieldtheory/librarian/`);
       } catch (err) {
-        console.error(`[UserDataManager] Failed to migrate librarian/:`, err);
+        log.error('Failed to migrate librarian/', err);
       }
     }
 
@@ -263,13 +251,10 @@ export class UserDataManager extends EventEmitter {
       try {
         await fs.ensureDir(path.dirname(commandsDst));
         await fs.move(commandsSrc, commandsDst);
-        console.log(`[UserDataManager] Migrated: ~/.fieldtheory/commands/`);
       } catch (err) {
-        console.error(`[UserDataManager] Failed to migrate commands/:`, err);
+        log.error('Failed to migrate commands/', err);
       }
     }
-
-    console.log(`[UserDataManager] Migration complete for ${callsign}`);
   }
 }
 

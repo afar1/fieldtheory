@@ -6,6 +6,9 @@
  */
 
 import { LocalLLMManager } from './localLLMManager';
+import { createLogger } from './logger';
+
+const log = createLogger('PromptEngineer');
 
 // Supabase URL for Edge Functions (set from environment)
 let supabaseUrl: string | null = null;
@@ -19,7 +22,6 @@ let useLocalLLM: boolean = false;
  */
 export function setSupabaseUrl(url: string): void {
   supabaseUrl = url;
-  console.log('[PromptEngineer] Supabase URL configured');
 }
 
 /**
@@ -34,7 +36,6 @@ export function setLocalLLMManager(manager: LocalLLMManager): void {
  */
 export function setUseLocalLLM(useLocal: boolean): void {
   useLocalLLM = useLocal;
-  console.log('[PromptEngineer] Use local LLM:', useLocal);
 }
 
 /**
@@ -109,8 +110,6 @@ async function tryLocalLLM(rawTranscript: string): Promise<EngineerResult | null
     return null;
   }
 
-  console.log('[PromptEngineer] Using local LLM for transcript improvement');
-
   // For local models, use generous output limit since user isn't paying per token.
   // The real constraint is the context window (16K tokens configured in localLLMManager).
   // Transcript cleanup typically produces similar or shorter output than input.
@@ -131,7 +130,7 @@ async function tryLocalLLM(rawTranscript: string): Promise<EngineerResult | null
     };
   }
 
-  console.error('[PromptEngineer] Local LLM failed:', result.error);
+  log.error('Local LLM failed:', result.error);
   return {
     success: false,
     error: result.error || 'Local LLM failed',
@@ -178,7 +177,6 @@ export async function improveTranscript(
     // Try local as fallback
     const localResult = await tryLocalLLM(rawTranscript);
     if (localResult) {
-      console.log('[PromptEngineer] No Supabase URL, using local LLM fallback');
       return localResult;
     }
     return {
@@ -191,7 +189,6 @@ export async function improveTranscript(
     // Try local as fallback
     const localResult = await tryLocalLLM(rawTranscript);
     if (localResult) {
-      console.log('[PromptEngineer] No auth token, using local LLM fallback');
       return localResult;
     }
     return {
@@ -201,7 +198,6 @@ export async function improveTranscript(
   }
 
   try {
-    console.log('[PromptEngineer] Calling Edge Function:', `${supabaseUrl}/functions/v1/improve-text`);
     const response = await fetch(`${supabaseUrl}/functions/v1/improve-text`, {
       method: 'POST',
       headers: {
@@ -214,7 +210,6 @@ export async function improveTranscript(
     if (response.status === 429) {
       // Quota exceeded
       const data = await response.json() as { showMessage?: boolean };
-      console.log('[PromptEngineer] Quota exceeded:', data);
       return {
         success: false,
         error: 'Text improvement quota exceeded for this month.',
@@ -225,12 +220,11 @@ export async function improveTranscript(
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[PromptEngineer] Edge function error:', response.status, errorText);
+      log.error('Edge function error:', response.status, errorText);
 
       // Try local fallback on server error
       const localResult = await tryLocalLLM(rawTranscript);
       if (localResult) {
-        console.log('[PromptEngineer] Server error, using local LLM fallback');
         return localResult;
       }
 
@@ -254,8 +248,6 @@ export async function improveTranscript(
       };
     }
 
-    console.log('[PromptEngineer] Edge Function success, tokens:', data.inputTokens, '/', data.outputTokens);
-
     return {
       success: true,
       refinedPrompt: data.improvedText.trim(),
@@ -268,11 +260,8 @@ export async function improveTranscript(
 
   } catch (error) {
     // Network error - try local LLM as fallback
-    console.error('[PromptEngineer] Network error, checking for local fallback:', error);
-
     const localResult = await tryLocalLLM(rawTranscript);
     if (localResult) {
-      console.log('[PromptEngineer] Network unavailable, using local LLM fallback');
       return localResult;
     }
 

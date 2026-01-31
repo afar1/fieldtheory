@@ -21,6 +21,9 @@ import path from 'path';
 import { app } from 'electron';
 import { EventEmitter } from 'events';
 import { UserDataManager } from './userDataManager';
+import { createLogger } from './logger';
+
+const log = createLogger('Commands');
 
 /**
  * Settings stored in JSON file.
@@ -123,7 +126,6 @@ export class CommandsManager extends EventEmitter {
   private updateSettingsPath(): void {
     if (this.userDataManager?.isLoggedIn()) {
       this.settingsPath = this.userDataManager.getUserDataPath('commands-settings.json');
-      console.log('[CommandsManager] Using user-specific path:', this.settingsPath);
     }
   }
 
@@ -144,16 +146,12 @@ export class CommandsManager extends EventEmitter {
 
     // Rescan all directories
     await this.initialize();
-
-    console.log('[CommandsManager] Reinitialized for user');
   }
 
   /**
    * Clear state on logout.
    */
   onUserLoggedOut(): void {
-    console.log('[CommandsManager] User logged out, clearing state');
-
     // Stop watchers
     for (const abort of this.watchers.values()) {
       abort.abort();
@@ -178,7 +176,7 @@ export class CommandsManager extends EventEmitter {
         this.settings = defaults;
       }
     } catch (error) {
-      console.error('[CommandsManager] Error loading settings:', error);
+      log.error('Error loading settings:', error);
       this.settings = defaults;
     }
   }
@@ -196,7 +194,7 @@ export class CommandsManager extends EventEmitter {
 
       fs.writeFileSync(this.settingsPath, JSON.stringify(this.settings, null, 2));
     } catch (error) {
-      console.error('[CommandsManager] Error saving settings:', error);
+      log.error('Error saving settings:', error);
     }
   }
 
@@ -211,7 +209,6 @@ export class CommandsManager extends EventEmitter {
     }
 
     this.emit('commandsChanged', this.getCommands());
-    console.log(`[CommandsManager] Initialized with ${this.settings.watchedDirs.length} directories, ${this.commands.size} commands`);
   }
 
   /**
@@ -233,7 +230,6 @@ export class CommandsManager extends EventEmitter {
     try {
       if (!fs.existsSync(defaultDir)) {
         fs.mkdirSync(defaultDir, { recursive: true });
-        console.log(`[CommandsManager] Created default directory: ${defaultDir}`);
       }
 
       // Add to watched directories
@@ -243,7 +239,7 @@ export class CommandsManager extends EventEmitter {
       }
       return defaultDir; // Already exists and is watched
     } catch (error) {
-      console.error('[CommandsManager] Error creating default directory:', error);
+      log.error('Error creating default directory:', error);
       return null;
     }
   }
@@ -279,20 +275,19 @@ export class CommandsManager extends EventEmitter {
       try {
         await this.scanDirectory();
       } catch (error) {
-        console.error('[CommandsManager] Error scanning directory:', error);
+        log.error('Error scanning directory:', error);
       }
 
       // Start watching in a try-catch - don't let watcher issues crash the app
       try {
         this.startWatching();
       } catch (error) {
-        console.warn('[CommandsManager] Could not start file watcher (non-fatal):', error);
+        // Non-fatal: commands will still work, just won't auto-refresh
       }
     }
 
     this.emit('directoryChanged', directoryPath);
     this.emit('commandsChanged', this.getCommands());
-    console.log(`[CommandsManager] Directory set to: ${directoryPath || '(none)'}`);
   }
 
   /**
@@ -353,22 +348,18 @@ export class CommandsManager extends EventEmitter {
       try {
         // Check if directory exists
         if (!fs.existsSync(dirPath)) {
-          console.warn(`[CommandsManager] Directory does not exist: ${dirPath}`);
           return;
         }
 
         const stats = fs.statSync(dirPath);
         if (!stats.isDirectory()) {
-          console.warn(`[CommandsManager] Path is not a directory: ${dirPath}`);
           return;
         }
 
         // Recursively scan for markdown files
         await this.scanDirectoryRecursive(dirPath);
-
-        console.log(`[CommandsManager] Scanned ${dirPath}`);
       } catch (error) {
-        console.error(`[CommandsManager] Error scanning directory ${dirPath}:`, error);
+        log.error(`Error scanning directory ${dirPath}:`, error);
       }
       return;
     }
@@ -379,22 +370,18 @@ export class CommandsManager extends EventEmitter {
     try {
       // Check if directory exists
       if (!fs.existsSync(this.directoryPath)) {
-        console.warn(`[CommandsManager] Directory does not exist: ${this.directoryPath}`);
         return;
       }
 
       const stats = fs.statSync(this.directoryPath);
       if (!stats.isDirectory()) {
-        console.warn(`[CommandsManager] Path is not a directory: ${this.directoryPath}`);
         return;
       }
 
       // Recursively scan for markdown files
       await this.scanDirectoryRecursive(this.directoryPath);
-
-      console.log(`[CommandsManager] Found ${this.commands.size} commands in ${this.directoryPath}`);
     } catch (error) {
-      console.error('[CommandsManager] Error scanning directory:', error);
+      log.error('Error scanning directory:', error);
     }
   }
 
@@ -423,7 +410,7 @@ export class CommandsManager extends EventEmitter {
         }
       }
     } catch (error) {
-      console.error(`[CommandsManager] Error scanning ${dirPath}:`, error);
+      log.error(`Error scanning ${dirPath}:`, error);
     }
   }
 
@@ -455,7 +442,7 @@ export class CommandsManager extends EventEmitter {
         lastModified: stats.mtimeMs,
       };
     } catch (error) {
-      console.error(`[CommandsManager] Error creating command from ${filePath}:`, error);
+      log.error(`Error creating command from ${filePath}:`, error);
       return null;
     }
   }
@@ -479,27 +466,21 @@ export class CommandsManager extends EventEmitter {
         async (eventType, filename) => {
           try {
             if (filename && this.isMarkdownFile(filename)) {
-              console.log(`[CommandsManager] File changed: ${filename}`);
               // Rescan the directory to update commands
               this.commands.clear();
               await this.scanDirectory();
               this.emit('commandsChanged', this.getCommands());
             }
           } catch (error) {
-            console.error('[CommandsManager] Error handling file change:', error);
+            log.error('Error handling file change:', error);
           }
         }
       );
 
-      // Handle watcher errors gracefully
-      watcher.on('error', (error) => {
-        console.warn('[CommandsManager] File watcher error (non-fatal):', error);
-        // Don't crash - the commands will still work, just won't auto-refresh
-      });
-      
-      console.log(`[CommandsManager] Watching directory: ${this.directoryPath}`);
+      // Handle watcher errors gracefully - don't crash, commands still work
+      watcher.on('error', () => {});
     } catch (error) {
-      console.error('[CommandsManager] Error starting directory watch:', error);
+      log.error('Error starting directory watch:', error);
     }
   }
 
@@ -730,19 +711,18 @@ export class CommandsManager extends EventEmitter {
     try {
       // Check if file still exists
       if (!fs.existsSync(command.filePath)) {
-        console.warn(`[CommandsManager] Command file no longer exists: ${command.filePath}`);
         return null;
       }
 
       const content = fs.readFileSync(command.filePath, 'utf-8');
-      
+
       return {
         name: command.name,
         content,
         filePath: command.filePath,
       };
     } catch (error) {
-      console.error(`[CommandsManager] Error loading command ${command.name}:`, error);
+      log.error(`Error loading command ${command.name}:`, error);
       return null;
     }
   }
@@ -939,23 +919,19 @@ End of User Commands
         async (eventType, filename) => {
           try {
             if (filename && this.isMarkdownFile(filename)) {
-              console.log(`[CommandsManager] File changed: ${filename} in ${dirPath}`);
               // Rescan all directories to update commands
               await this.refresh();
             }
           } catch (error) {
-            console.error('[CommandsManager] Error handling file change:', error);
+            log.error('Error handling file change:', error);
           }
         }
       );
 
-      watcher.on('error', (error) => {
-        console.warn(`[CommandsManager] File watcher error for ${dirPath} (non-fatal):`, error);
-      });
-
-      console.log(`[CommandsManager] Watching directory: ${dirPath}`);
+      // Handle watcher errors gracefully - don't crash, commands still work
+      watcher.on('error', () => {});
     } catch (error) {
-      console.error(`[CommandsManager] Error starting directory watch for ${dirPath}:`, error);
+      log.error(`Error starting directory watch for ${dirPath}:`, error);
     }
   }
 
@@ -971,7 +947,6 @@ End of User Commands
         // Ignore abort errors
       }
       this.watchers.delete(dirPath);
-      console.log(`[CommandsManager] Stopped watching: ${dirPath}`);
     }
   }
 
@@ -995,13 +970,11 @@ End of User Commands
 
     // Check if directory exists
     if (!fs.existsSync(normalizedPath)) {
-      console.warn(`[CommandsManager] Directory does not exist: ${normalizedPath}`);
       return null;
     }
 
     // Check if already watched
     if (this.settings.watchedDirs.includes(normalizedPath)) {
-      console.log(`[CommandsManager] Already watching: ${normalizedPath}`);
       return null;
     }
 
@@ -1017,8 +990,6 @@ End of User Commands
 
     // Emit change
     this.emit('commandsChanged', this.getCommands());
-
-    console.log(`[CommandsManager] Added watched directory: ${normalizedPath}`);
 
     return { path: normalizedPath, enabled: true };
   }
@@ -1052,7 +1023,6 @@ End of User Commands
     // Emit change
     this.emit('commandsChanged', this.getCommands());
 
-    console.log(`[CommandsManager] Removed watched directory: ${normalizedPath}`);
     return true;
   }
 
@@ -1085,7 +1055,7 @@ End of User Commands
         content,
       };
     } catch (error) {
-      console.error(`[CommandsManager] Error getting command by path ${filePath}:`, error);
+      log.error(`Error getting command by path ${filePath}:`, error);
       return null;
     }
   }
@@ -1096,10 +1066,10 @@ End of User Commands
   saveCommand(filePath: string, content: string): boolean {
     try {
       fs.writeFileSync(filePath, content, 'utf-8');
-      console.log(`[CommandsManager] Saved command: ${filePath}`);
+      log.info(`Saved command: ${filePath}`);
       return true;
     } catch (error) {
-      console.error(`[CommandsManager] Error saving command ${filePath}:`, error);
+      log.error(`Error saving command ${filePath}:`, error);
       return false;
     }
   }
@@ -1116,7 +1086,6 @@ End of User Commands
 
       // Check if file already exists
       if (fs.existsSync(filePath)) {
-        console.warn(`[CommandsManager] Command already exists: ${filePath}`);
         return null;
       }
 
@@ -1130,10 +1099,10 @@ End of User Commands
         this.emit('commandsChanged', this.getCommands());
       }
 
-      console.log(`[CommandsManager] Created command: ${filePath}`);
+      log.info(`Created command: ${filePath}`);
       return { path: filePath, name: fileName.replace('.md', '') };
     } catch (error) {
-      console.error(`[CommandsManager] Error creating command:`, error);
+      log.error('Error creating command:', error);
       return null;
     }
   }
@@ -1156,10 +1125,10 @@ End of User Commands
         this.emit('commandsChanged', this.getCommands());
       }
 
-      console.log(`[CommandsManager] Deleted command: ${filePath}`);
+      log.info(`Deleted command: ${filePath}`);
       return true;
     } catch (error) {
-      console.error(`[CommandsManager] Error deleting command ${filePath}:`, error);
+      log.error(`Error deleting command ${filePath}:`, error);
       return false;
     }
   }
@@ -1181,7 +1150,6 @@ End of User Commands
 
       // Check if target file already exists
       if (fs.existsSync(newFilePath)) {
-        console.warn(`[CommandsManager] File already exists: ${newFilePath}`);
         return null;
       }
 
@@ -1199,10 +1167,10 @@ End of User Commands
         this.emit('commandsChanged', this.getCommands());
       }
 
-      console.log(`[CommandsManager] Renamed command: ${oldFilePath} -> ${newFilePath}`);
+      log.info(`Renamed command: ${oldFilePath} -> ${newFilePath}`);
       return newFilePath;
     } catch (error) {
-      console.error(`[CommandsManager] Error renaming command ${oldFilePath}:`, error);
+      log.error(`Error renaming command ${oldFilePath}:`, error);
       return null;
     }
   }

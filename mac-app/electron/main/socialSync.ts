@@ -13,6 +13,9 @@ import { ClipboardManager, ClipboardItem as LocalClipboardItem } from './clipboa
 import { AuthManager } from './authManager';
 import { EventEmitter } from 'events';
 import crypto from 'crypto';
+import { createLogger } from './logger';
+
+const log = createLogger('Social');
 
 // =============================================================================
 // Types
@@ -277,7 +280,7 @@ export class SocialSync extends EventEmitter {
       )
       .subscribe((status, err) => {
         if (err) {
-          console.error('[SocialSync] Realtime subscription error:', err);
+          log.error('Realtime subscription error:', err);
         }
 
         // Handle different states.
@@ -288,7 +291,7 @@ export class SocialSync extends EventEmitter {
             }
           }, 3000);
         } else if (status === 'CHANNEL_ERROR') {
-          console.error('[SocialSync] Realtime channel error, retrying in 5 seconds...');
+          log.error('Realtime channel error, retrying in 5 seconds...');
           setTimeout(() => {
             if (this.isAuthenticated()) {
               this.setupRealtimeSubscription();
@@ -363,13 +366,11 @@ export class SocialSync extends EventEmitter {
         .order('created_at', { ascending: true });
       
       if (error) {
-        console.error('[SocialSync] Polling failed:', error);
+        log.error('Polling failed:', error);
         return;
       }
-      
+
       if (data && data.length > 0) {
-        console.log('[SocialSync] Polling found', data.length, 'new message(s)');
-        
         // Update lastPolledAt to the latest message timestamp.
         const lastMessage = data[data.length - 1];
         this.lastPolledAt = lastMessage.created_at;
@@ -381,7 +382,7 @@ export class SocialSync extends EventEmitter {
         }
       }
     } catch (err) {
-      console.error('[SocialSync] Polling error:', err);
+      log.error('Polling error:', err);
     }
   }
 
@@ -422,7 +423,7 @@ export class SocialSync extends EventEmitter {
       this.profileCache.set(userId, profile);
       return profile;
     } catch (err) {
-      console.error('[SocialSync] Failed to get profile:', err);
+      log.error('Failed to get profile:', err);
       return null;
     }
   }
@@ -458,7 +459,7 @@ export class SocialSync extends EventEmitter {
       if (error || !data) return null;
       return data.id;
     } catch (err) {
-      console.error('[SocialSync] Failed to get admin user:', err);
+      log.error('Failed to get admin user:', err);
       return null;
     }
   }
@@ -498,7 +499,7 @@ export class SocialSync extends EventEmitter {
         .eq('id', userId);
 
       if (error) {
-        console.error('[SocialSync] Failed to set hot mic:', error);
+        log.error('Failed to set hot mic:', error);
         return false;
       }
 
@@ -508,10 +509,9 @@ export class SocialSync extends EventEmitter {
         cached.hotMicEnabled = enabled;
       }
 
-      console.log('[SocialSync] Hot mic set to:', enabled);
       return true;
     } catch (err) {
-      console.error('[SocialSync] Failed to set hot mic:', err);
+      log.error('Failed to set hot mic:', err);
       return false;
     }
   }
@@ -538,7 +538,7 @@ export class SocialSync extends EventEmitter {
           imageUrl = data.signedUrl;
         }
       } catch (err) {
-        console.error('[SocialSync] Failed to create signed URL:', err);
+        log.error('Failed to create signed URL:', err);
       }
     }
 
@@ -581,10 +581,7 @@ export class SocialSync extends EventEmitter {
    * Send a DM with a clipboard item.
    */
   async sendDM(recipientUserId: string, localItemId: number): Promise<Message | null> {
-    if (!this.isAuthenticated()) {
-      console.warn('[SocialSync] Not authenticated, cannot send DM');
-      return null;
-    }
+    if (!this.isAuthenticated()) return null;
 
     const userId = this.getUserId();
     if (!userId) return null;
@@ -592,7 +589,7 @@ export class SocialSync extends EventEmitter {
     // Get the local clipboard item.
     const localItem = this.clipboardManager.getItem(localItemId);
     if (!localItem) {
-      console.error('[SocialSync] Local item not found:', localItemId);
+      log.error('Local item not found:', localItemId);
       return null;
     }
 
@@ -615,7 +612,7 @@ export class SocialSync extends EventEmitter {
           });
 
         if (uploadError) {
-          console.error('[SocialSync] Image upload failed:', uploadError);
+          log.error('Image upload failed:', uploadError);
           imagePath = null;
         }
       }
@@ -638,14 +635,13 @@ export class SocialSync extends EventEmitter {
         .single();
 
       if (error) {
-        console.error('[SocialSync] Send DM failed:', error);
+        log.error('Send DM failed:', error);
         return null;
       }
 
-      console.log('[SocialSync] DM sent:', data.id);
       return this.rowToMessage(data as MessageRow);
     } catch (err) {
-      console.error('[SocialSync] Failed to send DM:', err);
+      log.error('Failed to send DM:', err);
       return null;
     }
   }
@@ -675,13 +671,13 @@ export class SocialSync extends EventEmitter {
         .single();
 
       if (error) {
-        console.error('[SocialSync] Send text DM failed:', error);
+        log.error('Send text DM failed:', error);
         return null;
       }
 
       return this.rowToMessage(data as MessageRow);
     } catch (err) {
-      console.error('[SocialSync] Failed to send text DM:', err);
+      log.error('Failed to send text DM:', err);
       return null;
     }
   }
@@ -715,7 +711,7 @@ export class SocialSync extends EventEmitter {
         });
 
       if (uploadError) {
-        console.error('[SocialSync] Image reply upload failed:', uploadError);
+        log.error('Image reply upload failed:', uploadError);
         return null;
       }
 
@@ -737,13 +733,13 @@ export class SocialSync extends EventEmitter {
         .single();
 
       if (error) {
-        console.error('[SocialSync] Send image reply failed:', error);
+        log.error('Send image reply failed:', error);
         return null;
       }
 
       return this.rowToMessage(data as MessageRow);
     } catch (err) {
-      console.error('[SocialSync] Failed to send image reply:', err);
+      log.error('Failed to send image reply:', err);
       return null;
     }
   }
@@ -766,7 +762,7 @@ export class SocialSync extends EventEmitter {
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('[SocialSync] Get conversations failed:', error);
+        log.error('Get conversations failed:', error);
         return [];
       }
 
@@ -826,7 +822,7 @@ export class SocialSync extends EventEmitter {
 
       return conversations;
     } catch (err) {
-      console.error('[SocialSync] Failed to get conversations:', err);
+      log.error('Failed to get conversations:', err);
       return [];
     }
   }
@@ -851,7 +847,7 @@ export class SocialSync extends EventEmitter {
         .order('created_at', { ascending: true });
 
       if (error) {
-        console.error('[SocialSync] Get DMs failed:', error);
+        log.error('Get DMs failed:', error);
         return [];
       }
 
@@ -862,7 +858,7 @@ export class SocialSync extends EventEmitter {
 
       return messages;
     } catch (err) {
-      console.error('[SocialSync] Failed to get DMs:', err);
+      log.error('Failed to get DMs:', err);
       return [];
     }
   }
@@ -884,13 +880,13 @@ export class SocialSync extends EventEmitter {
         .eq('recipient_user_id', userId);
 
       if (error) {
-        console.error('[SocialSync] Mark as read failed:', error);
+        log.error('Mark as read failed:', error);
         return false;
       }
 
       return true;
     } catch (err) {
-      console.error('[SocialSync] Failed to mark as read:', err);
+      log.error('Failed to mark as read:', err);
       return false;
     }
   }
@@ -912,13 +908,13 @@ export class SocialSync extends EventEmitter {
         .eq('recipient_user_id', userId);
 
       if (error) {
-        console.error('[SocialSync] Batch mark as read failed:', error);
+        log.error('Batch mark as read failed:', error);
         return false;
       }
 
       return true;
     } catch (err) {
-      console.error('[SocialSync] Failed to batch mark as read:', err);
+      log.error('Failed to batch mark as read:', err);
       return false;
     }
   }
@@ -928,33 +924,11 @@ export class SocialSync extends EventEmitter {
    * Called when user views the feedback tab.
    */
   async markAllFeedbackAsRead(): Promise<boolean> {
-    console.log('[FeedbackDot] markAllFeedbackAsRead called');
-    if (!this.supabase) {
-      console.warn('[SocialSync] markAllFeedbackAsRead: no supabase client');
-      return false;
-    }
+    if (!this.supabase) return false;
     const userId = this.getUserId();
-    if (!userId) {
-      console.warn('[SocialSync] markAllFeedbackAsRead: no userId');
-      return false;
-    }
+    if (!userId) return false;
 
     try {
-      // First check how many unread messages exist
-      const { count: unreadCount } = await this.supabase
-        .from('messages')
-        .select('*', { count: 'exact', head: true })
-        .eq('type', 'feedback')
-        .eq('recipient_user_id', userId)
-        .is('read_at', null);
-
-      console.log('[SocialSync] markAllFeedbackAsRead: found', unreadCount, 'unread feedback messages for user', userId);
-
-      if (!unreadCount || unreadCount === 0) {
-        console.log('[SocialSync] markAllFeedbackAsRead: no unread messages to mark');
-        return true;
-      }
-
       const { error } = await this.supabase
         .from('messages')
         .update({ read_at: new Date().toISOString() })
@@ -963,14 +937,13 @@ export class SocialSync extends EventEmitter {
         .is('read_at', null);
 
       if (error) {
-        console.error('[SocialSync] markAllFeedbackAsRead failed:', error);
+        log.error('markAllFeedbackAsRead failed:', error);
         return false;
       }
 
-      console.log('[SocialSync] markAllFeedbackAsRead: successfully marked', unreadCount, 'messages as read');
       return true;
     } catch (err) {
-      console.error('[SocialSync] markAllFeedbackAsRead exception:', err);
+      log.error('markAllFeedbackAsRead exception:', err);
       return false;
     }
   }
@@ -1009,21 +982,17 @@ export class SocialSync extends EventEmitter {
     try {
       // Check for unread feedback where user is recipient (admin gets notifications from users,
       // users get notifications from admin responses).
-      const { count, data, error } = await this.supabase!
+      const { count, error } = await this.supabase!
         .from('messages')
-        .select('id, parent_message_id, sender_user_id, created_at', { count: 'exact' })
+        .select('id', { count: 'exact', head: true })
         .eq('type', 'feedback')
         .eq('recipient_user_id', userId)
         .is('read_at', null);
 
-      console.log('[FeedbackDot] hasUnreadFeedback query: userId=', userId, 'count=', count, 'error=', error);
-      if (data && data.length > 0) {
-        console.log('[FeedbackDot] Unread messages:', data.map(m => ({ id: m.id, parent: m.parent_message_id, sender: m.sender_user_id })));
-      }
       if (error) return false;
       return (count || 0) > 0;
     } catch (err) {
-      console.error('[FeedbackDot] hasUnreadFeedback exception:', err);
+      log.error('hasUnreadFeedback exception:', err);
       return false;
     }
   }
@@ -1038,7 +1007,7 @@ export class SocialSync extends EventEmitter {
   async submitFeedback(localItemId: number): Promise<Message | null> {
     const adminUserId = await this.getAdminUserId();
     if (!adminUserId) {
-      console.error('[SocialSync] No admin user found');
+      log.error('No admin user found');
       return null;
     }
 
@@ -1049,7 +1018,7 @@ export class SocialSync extends EventEmitter {
     // Get the local clipboard item.
     const localItem = this.clipboardManager.getItem(localItemId);
     if (!localItem) {
-      console.error('[SocialSync] Local item not found:', localItemId);
+      log.error('Local item not found:', localItemId);
       return null;
     }
 
@@ -1071,7 +1040,7 @@ export class SocialSync extends EventEmitter {
           });
 
         if (uploadError) {
-          console.error('[SocialSync] Image upload failed:', uploadError);
+          log.error('Image upload failed:', uploadError);
           imagePath = null;
         }
       }
@@ -1094,17 +1063,16 @@ export class SocialSync extends EventEmitter {
         .single();
 
       if (error) {
-        console.error('[SocialSync] Submit feedback failed:', error);
+        log.error('Submit feedback failed:', error);
         return null;
       }
 
       // Log the creation.
       await this.logActivity(data.id, 'created');
 
-      console.log('[SocialSync] Feedback submitted:', data.id);
       return this.rowToMessage(data as MessageRow);
     } catch (err) {
-      console.error('[SocialSync] Failed to submit feedback:', err);
+      log.error('Failed to submit feedback:', err);
       return null;
     }
   }
@@ -1115,7 +1083,7 @@ export class SocialSync extends EventEmitter {
   async submitTextFeedback(text: string): Promise<Message | null> {
     const adminUserId = await this.getAdminUserId();
     if (!adminUserId) {
-      console.error('[SocialSync] No admin user found');
+      log.error('No admin user found');
       return null;
     }
 
@@ -1140,17 +1108,16 @@ export class SocialSync extends EventEmitter {
         .single();
 
       if (error) {
-        console.error('[SocialSync] Submit text feedback failed:', error);
+        log.error('Submit text feedback failed:', error);
         return null;
       }
 
       // Log the creation.
       await this.logActivity(data.id, 'created');
 
-      console.log('[SocialSync] Text feedback submitted:', data.id);
       return this.rowToMessage(data as MessageRow);
     } catch (err) {
-      console.error('[SocialSync] Failed to submit text feedback:', err);
+      log.error('Failed to submit text feedback:', err);
       return null;
     }
   }
@@ -1162,7 +1129,7 @@ export class SocialSync extends EventEmitter {
   async submitImageFeedback(imageBase64: string, caption?: string, sourceAppName?: string): Promise<Message | null> {
     const adminUserId = await this.getAdminUserId();
     if (!adminUserId) {
-      console.error('[SocialSync] No admin user found');
+      log.error('No admin user found');
       return null;
     }
 
@@ -1185,7 +1152,7 @@ export class SocialSync extends EventEmitter {
         });
 
       if (uploadError) {
-        console.error('[SocialSync] Image feedback upload failed:', uploadError);
+        log.error('Image feedback upload failed:', uploadError);
         return null;
       }
 
@@ -1209,17 +1176,16 @@ export class SocialSync extends EventEmitter {
         .single();
 
       if (error) {
-        console.error('[SocialSync] Submit image feedback failed:', error);
+        log.error('Submit image feedback failed:', error);
         return null;
       }
 
       // Log the creation.
       await this.logActivity(data.id, 'created');
 
-      console.log('[SocialSync] Image feedback submitted:', data.id);
       return this.rowToMessage(data as MessageRow);
     } catch (err) {
-      console.error('[SocialSync] Failed to submit image feedback:', err);
+      log.error('Failed to submit image feedback:', err);
       return null;
     }
   }
@@ -1242,7 +1208,7 @@ export class SocialSync extends EventEmitter {
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('[SocialSync] Get my feedback failed:', error);
+        log.error('Get my feedback failed:', error);
         return [];
       }
 
@@ -1253,7 +1219,7 @@ export class SocialSync extends EventEmitter {
 
       return messages;
     } catch (err) {
-      console.error('[SocialSync] Failed to get my feedback:', err);
+      log.error('Failed to get my feedback:', err);
       return [];
     }
   }
@@ -1265,10 +1231,7 @@ export class SocialSync extends EventEmitter {
     if (!this.isAuthenticated()) return [];
     
     const isAdmin = await this.isCurrentUserAdmin();
-    if (!isAdmin) {
-      console.warn('[SocialSync] Only admins can get all feedback');
-      return [];
-    }
+    if (!isAdmin) return [];
 
     try {
       const { data, error } = await this.supabase!
@@ -1279,7 +1242,7 @@ export class SocialSync extends EventEmitter {
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('[SocialSync] Get all feedback failed:', error);
+        log.error('Get all feedback failed:', error);
         return [];
       }
 
@@ -1290,7 +1253,7 @@ export class SocialSync extends EventEmitter {
 
       return messages;
     } catch (err) {
-      console.error('[SocialSync] Failed to get all feedback:', err);
+      log.error('Failed to get all feedback:', err);
       return [];
     }
   }
@@ -1309,7 +1272,7 @@ export class SocialSync extends EventEmitter {
         .order('created_at', { ascending: true });
 
       if (error) {
-        console.error('[SocialSync] Get feedback replies failed:', error);
+        log.error('Get feedback replies failed:', error);
         return [];
       }
 
@@ -1320,7 +1283,7 @@ export class SocialSync extends EventEmitter {
 
       return messages;
     } catch (err) {
-      console.error('[SocialSync] Failed to get feedback replies:', err);
+      log.error('Failed to get feedback replies:', err);
       return [];
     }
   }
@@ -1346,10 +1309,7 @@ export class SocialSync extends EventEmitter {
       // Only admin can archive.
       if (status === 'archived') {
         const isAdmin = await this.isCurrentUserAdmin();
-        if (!isAdmin) {
-          console.warn('[SocialSync] Only admins can archive feedback');
-          return false;
-        }
+        if (!isAdmin) return false;
       }
 
       // Update status.
@@ -1359,17 +1319,16 @@ export class SocialSync extends EventEmitter {
         .eq('id', feedbackId);
 
       if (error) {
-        console.error('[SocialSync] Update feedback status failed:', error);
+        log.error('Update feedback status failed:', error);
         return false;
       }
 
       // Log the change.
       await this.logActivity(feedbackId, 'status_changed', current.feedback_status, status);
 
-      console.log('[SocialSync] Feedback status updated:', feedbackId, status);
       return true;
     } catch (err) {
-      console.error('[SocialSync] Failed to update feedback status:', err);
+      log.error('Failed to update feedback status:', err);
       return false;
     }
   }
@@ -1396,7 +1355,7 @@ export class SocialSync extends EventEmitter {
         new_status: newStatus || null,
       });
     } catch (err) {
-      console.error('[SocialSync] Failed to log activity:', err);
+      log.error('Failed to log activity:', err);
     }
   }
 
@@ -1414,7 +1373,7 @@ export class SocialSync extends EventEmitter {
         .order('created_at', { ascending: true });
 
       if (error) {
-        console.error('[SocialSync] Get activity log failed:', error);
+        log.error('Get activity log failed:', error);
         return [];
       }
 
@@ -1435,7 +1394,7 @@ export class SocialSync extends EventEmitter {
 
       return entries;
     } catch (err) {
-      console.error('[SocialSync] Failed to get activity log:', err);
+      log.error('Failed to get activity log:', err);
       return [];
     }
   }
@@ -1460,7 +1419,7 @@ export class SocialSync extends EventEmitter {
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('[SocialSync] Get contacts failed:', error);
+        log.error('Get contacts failed:', error);
         return [];
       }
 
@@ -1496,7 +1455,7 @@ export class SocialSync extends EventEmitter {
 
       return contacts;
     } catch (err) {
-      console.error('[SocialSync] Failed to get contacts:', err);
+      log.error('Failed to get contacts:', err);
       return [];
     }
   }
@@ -1579,14 +1538,13 @@ export class SocialSync extends EventEmitter {
         if (error.code === '23505') {
           return { success: false, error: 'This person is already in your contacts' };
         }
-        console.error('[SocialSync] Add friend failed:', error);
+        log.error('Add friend failed:', error);
         return { success: false, error: error.message };
       }
 
-      console.log('[SocialSync] Friend added:', email);
       return { success: true };
     } catch (err) {
-      console.error('[SocialSync] Failed to add friend:', err);
+      log.error('Failed to add friend:', err);
       return { success: false, error: 'Failed to add friend' };
     }
   }
@@ -1631,7 +1589,7 @@ export class SocialSync extends EventEmitter {
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.error('[SocialSync] Get pending invites failed:', error);
+        log.error('Get pending invites failed:', error);
         return [];
       }
 
@@ -1657,7 +1615,7 @@ export class SocialSync extends EventEmitter {
 
       return invites;
     } catch (err) {
-      console.error('[SocialSync] Failed to get pending invites:', err);
+      log.error('Failed to get pending invites:', err);
       return [];
     }
   }
@@ -1687,11 +1645,10 @@ export class SocialSync extends EventEmitter {
           .or(`contact_user_id.eq.${userId},contact_email.ilike.${userEmail?.toLowerCase() || ''}`);
 
         if (error) {
-          console.error('[SocialSync] Accept invite failed:', error);
+          log.error('Accept invite failed:', error);
           return false;
         }
 
-        console.log('[SocialSync] Invite accepted:', contactId);
         return true;
       } else {
         // Reject: delete the contact row.
@@ -1702,15 +1659,14 @@ export class SocialSync extends EventEmitter {
           .or(`contact_user_id.eq.${userId},contact_email.ilike.${userEmail?.toLowerCase() || ''}`);
 
         if (error) {
-          console.error('[SocialSync] Reject invite failed:', error);
+          log.error('Reject invite failed:', error);
           return false;
         }
 
-        console.log('[SocialSync] Invite rejected:', contactId);
         return true;
       }
     } catch (err) {
-      console.error('[SocialSync] Failed to respond to invite:', err);
+      log.error('Failed to respond to invite:', err);
       return false;
     }
   }
@@ -1734,14 +1690,13 @@ export class SocialSync extends EventEmitter {
         .or(`owner_user_id.eq.${userId},contact_user_id.eq.${userId},contact_email.ilike.${userEmail?.toLowerCase() || ''}`);
 
       if (error) {
-        console.error('[SocialSync] Remove friend failed:', error);
+        log.error('Remove friend failed:', error);
         return false;
       }
 
-      console.log('[SocialSync] Friend removed:', contactId);
       return true;
     } catch (err) {
-      console.error('[SocialSync] Failed to remove friend:', err);
+      log.error('Failed to remove friend:', err);
       return false;
     }
   }
@@ -1759,7 +1714,6 @@ export class SocialSync extends EventEmitter {
     this.authManager.removeListener('sessionChanged', this.boundHandleSessionChanged);
     this.profileCache.clear();
     this.removeAllListeners();
-    console.log('[SocialSync] Destroyed');
   }
 }
 

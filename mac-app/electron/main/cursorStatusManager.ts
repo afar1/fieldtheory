@@ -2,6 +2,9 @@ import { BrowserWindow, screen, app, ipcMain } from 'electron';
 import { EventEmitter } from 'events';
 import path from 'path';
 import { MESSAGES } from './messages';
+import { createLogger } from './logger';
+
+const log = createLogger('CursorStatus');
 
 /**
  * Status states for the cursor indicator.
@@ -199,10 +202,6 @@ export class CursorStatusManager extends EventEmitter {
    * When transitioning from transcribing to idle, briefly shows 'done' state first.
    */
   setState(state: CursorStatusState): void {
-    const prevState = this.state;
-    const windowExists = this.window !== null && !this.window?.isDestroyed();
-    const windowVisible = windowExists && this.window?.isVisible();
-    console.log(`[CursorStatus] setState: ${prevState} -> ${state} | window: ${windowExists ? (windowVisible ? 'visible' : 'hidden') : 'none'} | enabled: ${this.enabled}`);
 
     // Clear any pending timeouts
     if (this.doneTimeout) {
@@ -441,21 +440,17 @@ export class CursorStatusManager extends EventEmitter {
    *                    Used by showCriticalMessage() to ensure important notifications always display.
    */
   private show(forceShow: boolean = false): void {
-    console.log(`[CursorStatus] show() called | forceShow: ${forceShow} | enabled: ${this.enabled} | state: ${this.state}`);
     if (!this.enabled && !forceShow) {
-      console.log('[CursorStatus] show() skipped - disabled and not forced');
       return;
     }
 
     if (!this.window || this.window.isDestroyed()) {
-      console.log('[CursorStatus] show() creating new window');
       this.createWindow();
     }
 
     if (this.window) {
       this.window.showInactive();
       this.startTracking();
-      console.log(`[CursorStatus] show() complete - window visible: ${this.window.isVisible()}`);
     }
   }
 
@@ -463,12 +458,10 @@ export class CursorStatusManager extends EventEmitter {
    * Hide the overlay and stop tracking.
    */
   private hide(): void {
-    console.log(`[CursorStatus] hide() called | state: ${this.state} | window exists: ${this.window !== null && !this.window?.isDestroyed()}`);
     this.stopTracking();
 
     if (this.window && !this.window.isDestroyed()) {
       this.window.hide();
-      console.log('[CursorStatus] hide() complete - window hidden');
     }
   }
 

@@ -21,6 +21,9 @@ import path from 'path';
 import { AuthManager } from './authManager';
 import { Session } from '@supabase/supabase-js';
 import { UserDataManager } from './userDataManager';
+import { createLogger } from './logger';
+
+const log = createLogger('Metrics');
 
 // =============================================================================
 // Types
@@ -135,7 +138,6 @@ export class MetricsManager {
   private updateLocalPath(): void {
     if (this.userDataManager?.isLoggedIn()) {
       this.localPath = this.userDataManager.getUserDataPath('user-metrics.json');
-      console.log('[MetricsManager] Using user-specific path:', this.localPath);
     } else {
       this.localPath = path.join(app.getPath('userData'), 'user-metrics.json');
     }
@@ -147,14 +149,12 @@ export class MetricsManager {
   async reinitializeForUser(): Promise<void> {
     this.updateLocalPath();
     await this.loadFromDisk();
-    console.log('[MetricsManager] Reinitialized for user');
   }
 
   /**
    * Reset metrics on logout.
    */
   reset(): void {
-    console.log('[MetricsManager] Resetting metrics (user logged out)');
     this.storage = {
       metrics: { ...MetricsManager.DEFAULT_METRICS },
       lastSyncedAt: null,
@@ -168,7 +168,6 @@ export class MetricsManager {
   async init(): Promise<void> {
     await this.loadFromDisk();
     this.startSyncInterval();
-    console.log('[MetricsManager] Initialized');
   }
 
   // ===========================================================================
@@ -187,10 +186,8 @@ export class MetricsManager {
         lastSyncedAt: parsed.lastSyncedAt || null,
         pendingSync: parsed.pendingSync || false,
       };
-      console.log('[MetricsManager] Loaded metrics from disk');
-    } catch (error) {
+    } catch {
       // File doesn't exist or is invalid, use defaults
-      console.log('[MetricsManager] Using default metrics');
     }
   }
 
@@ -205,7 +202,7 @@ export class MetricsManager {
 
       await fs.writeFile(this.localPath, JSON.stringify(this.storage, null, 2), 'utf-8');
     } catch (error) {
-      console.error('[MetricsManager] Failed to save metrics:', error);
+      log.error('Failed to save metrics:', error);
     }
   }
 
@@ -330,7 +327,7 @@ export class MetricsManager {
     if (session && this.storage.pendingSync) {
       // User logged in and we have pending changes - sync
       this.syncToSupabase().catch((err) => {
-        console.error('[MetricsManager] Sync on session change failed:', err);
+        log.error('Sync on session change failed:', err);
       });
     }
   }
@@ -344,7 +341,7 @@ export class MetricsManager {
     this.syncInterval = setInterval(() => {
       if (this.storage.pendingSync && this.authManager.isAuthenticated()) {
         this.syncToSupabase().catch((err) => {
-          console.error('[MetricsManager] Periodic sync failed:', err);
+          log.error('Periodic sync failed:', err);
         });
       }
     }, MetricsManager.SYNC_INTERVAL_MS);
@@ -376,10 +373,9 @@ export class MetricsManager {
       if (error) {
         // Table might not exist yet - that's OK
         if (error.code === '42P01') {
-          console.log('[MetricsManager] user_metrics table not found - sync skipped');
           return false;
         }
-        console.error('[MetricsManager] Sync failed:', error);
+        log.error('Sync failed:', error);
         return false;
       }
 
@@ -387,10 +383,9 @@ export class MetricsManager {
       this.storage.pendingSync = false;
       await this.saveToDisk();
 
-      console.log('[MetricsManager] Synced to Supabase');
       return true;
     } catch (err) {
-      console.error('[MetricsManager] Sync error:', err);
+      log.error('Sync error:', err);
       return false;
     }
   }
@@ -423,7 +418,7 @@ export class MetricsManager {
           // Table doesn't exist yet - that's OK
           return false;
         }
-        console.error('[MetricsManager] Fetch failed:', error);
+        log.error('Fetch failed:', error);
         return false;
       }
 
@@ -437,12 +432,11 @@ export class MetricsManager {
           }
         }
         await this.saveToDisk();
-        console.log('[MetricsManager] Merged with Supabase data');
       }
 
       return true;
     } catch (err) {
-      console.error('[MetricsManager] Fetch error:', err);
+      log.error('Fetch error:', err);
       return false;
     }
   }
@@ -467,7 +461,6 @@ export class MetricsManager {
 
     await this.saveToDisk();
     this.authManager.removeListener('sessionChanged', this.boundHandleSessionChanged);
-    console.log('[MetricsManager] Shutdown complete');
   }
 
   /**
@@ -479,6 +472,5 @@ export class MetricsManager {
       this.syncInterval = null;
     }
     this.authManager.removeListener('sessionChanged', this.boundHandleSessionChanged);
-    console.log('[MetricsManager] Destroyed');
   }
 }
