@@ -262,17 +262,6 @@ interface ClipboardAPI {
   updateStackId?: (itemIds: number[], stackId: string | null) => Promise<void>;
   startDrag?: (stackId: string) => Promise<void>;
 
-  // Local LLM model management
-  getLocalLLMModels?: () => Promise<Record<string, { name: string; filename: string; sizeBytes: number; description: string }>>;
-  getLocalLLMStatus?: () => Promise<Record<string, boolean>>;
-  getLocalLLMSelected?: () => Promise<string>;
-  setLocalLLMSelected?: (model: string) => Promise<{ success: boolean; error?: string }>;
-  downloadLocalLLM?: (model: string) => Promise<{ success: boolean; error?: string }>;
-  deleteLocalLLM?: (model: string) => Promise<{ success: boolean; error?: string }>;
-  getUseLocalLLM?: () => Promise<boolean>;
-  setUseLocalLLM?: (useLocal: boolean) => Promise<{ success: boolean; error?: string }>;
-  onLocalLLMDownloadProgress?: (callback: (data: { model: string; downloaded: number; total: number }) => void) => () => void;
-
   // Improved content management - store/clear improved versions of transcriptions
   saveImprovedContent?: (itemId: number, improvedContent: string) => Promise<{ success: boolean; error?: string }>;
   clearImprovedContent?: (itemId: number) => Promise<{ success: boolean; error?: string }>;
@@ -308,13 +297,9 @@ interface ClipboardAPI {
 
   getSoundsEnabled?: () => Promise<boolean>;
   setSoundsEnabled?: (enabled: boolean) => Promise<boolean>;
-  getTasksTabEnabled?: () => Promise<boolean>;
-  setTasksTabEnabled?: (enabled: boolean) => Promise<boolean>;
-  
   // Show in Dock and Cmd+Tab
   getShowInDock?: () => Promise<boolean>;
   setShowInDock?: (show: boolean) => Promise<boolean>;
-  onTasksTabToggled?: (callback: (enabled: boolean) => void) => () => void;
 
   // Launch at login
   getLaunchAtLogin?: () => Promise<boolean>;
@@ -465,8 +450,6 @@ interface TodoAPI {
   deleteTodo: (id: string) => Promise<boolean>;
   deleteTodos: (ids: string[]) => Promise<boolean>;
   completeTodos: (ids: string[]) => Promise<boolean>;
-  getHotkey: () => Promise<string>;
-  setHotkey: (hotkey: string) => Promise<boolean>;
   onTodosChanged: (callback: (todos: Todo[]) => void) => () => void;
   onShowTodos: (callback: () => void) => () => void;
   onTodoAdded?: (callback: (todo: Todo) => void) => () => void;
@@ -485,7 +468,6 @@ interface AuthAPI {
   verifyOtp: (email: string, token: string) => Promise<{ error: string | null; session: any | null }>;
   signOut: () => Promise<{ error: string | null }>;
   getSession: () => Promise<any | null>;
-  isSuperAdmin: () => Promise<boolean>;
   // Password authentication methods
   signUp?: (email: string, password: string) => Promise<{ error: string | null }>;
   signInWithPassword?: (email: string, password: string) => Promise<{ error: string | null; session: any | null }>;
@@ -1144,37 +1126,6 @@ declare global {
     fetchFromSupabase: () => Promise<boolean>;
   }
 
-  /**
-   * Dev overrides for scenario testing (superadmin only).
-   * Allows simulating different app states for testing.
-   */
-  interface DevOverrides {
-    tier?: 'free' | 'pro';
-    quotaPercentages?: {
-      priorityMic?: number;   // 0-100
-      autoStack?: number;     // 0-100
-      textImprove?: number;   // 0-100
-    };
-    authState?: 'logged_out' | 'offline';
-  }
-
-  /**
-   * Scenario Testing API - Superadmin-only testing panel.
-   * Allows simulating different tier, quota, and auth states.
-   */
-  interface ScenarioAPI {
-    isSuperAdmin: () => Promise<boolean>;
-    showPanel: () => Promise<boolean>;
-    hidePanel: () => Promise<void>;
-    getOverrides: () => Promise<DevOverrides | null>;
-    setTierOverride: (tier: 'free' | 'pro' | null) => Promise<boolean>;
-    setQuotaOverride: (feature: 'priorityMic' | 'autoStack' | 'textImprove', percentage: number | null) => Promise<boolean>;
-    setAuthStateOverride: (state: 'logged_out' | 'offline' | null) => Promise<boolean>;
-    resetAll: () => Promise<boolean>;
-    hasActiveOverrides: () => Promise<boolean>;
-    onOverridesChanged: (callback: (overrides: DevOverrides | null) => void) => () => void;
-  }
-
   // =============================================================================
   // Narration API - STUB TYPES (feature disabled via FEATURE_NARRATION_ENABLED)
   // These types exist only to satisfy TypeScript for feature-flagged code
@@ -1272,7 +1223,6 @@ declare global {
     cursorAPI?: CursorAPI;
     metricsAPI?: MetricsAPI;
     diagnosticsAPI?: DiagnosticsAPI;
-    scenarioAPI?: ScenarioAPI;
     narrationAPI?: NarrationAPI;  // Stub - feature disabled
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;

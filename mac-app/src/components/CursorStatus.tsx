@@ -413,11 +413,11 @@ export default function CursorStatus() {
   //    - "Say anything" shows for first 2 recordings, then hides
   //    - "Transcribing..." shows for first 3 transcriptions, then hides
   // After thresholds, only the colored dots remain (stacks are the core mechanic).
-  const showLabel = state === 'paste-failed' || state === 'confirmation' || 
+  const showLabel = state === 'paste-failed' || state === 'confirmation' || state === 'done' ||
     (state === 'recording' && tutorialHint) ||  // Always show tutorial hints
     (!hideLabels && (
       // "Say anything" during recording - respects progressive threshold
-      (state === 'recording' && showRecordingText && showSayAnythingLabel) || 
+      (state === 'recording' && showRecordingText && showSayAnythingLabel) ||
       // "Transcribing..." - respects progressive threshold
       (state === 'transcribing' && textVisible && showTranscribingLabel) ||
       // "improving..." - always show when improving (it's a new feature)

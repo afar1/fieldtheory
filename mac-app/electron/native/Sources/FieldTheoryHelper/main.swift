@@ -1128,14 +1128,43 @@ final class AppActivationMonitor {
     /// Stop monitoring.
     func stopMonitoring() {
         guard isMonitoring else { return }
-        
+
         if let observer = observer {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
             self.observer = nil
         }
-        
+
         isMonitoring = false
         sendLog(level: "info", message: "App activation monitoring stopped")
+    }
+
+    /// Broadcast the current frontmost app immediately.
+    /// Call this after startMonitoring() to provide initial state to Electron.
+    func broadcastCurrentFrontmostApp() {
+        guard let frontApp = NSWorkspace.shared.frontmostApplication else {
+            sendLog(level: "debug", message: "broadcastCurrentFrontmostApp: No frontmost app")
+            return
+        }
+
+        let pid = frontApp.processIdentifier
+        let bundleId = frontApp.bundleIdentifier
+        let appName = frontApp.localizedName
+
+        // Skip if Field Theory itself is frontmost (user just launched it).
+        let parentPid = getppid()
+        if pid == parentPid {
+            sendLog(level: "debug", message: "broadcastCurrentFrontmostApp: Skipping self")
+            return
+        }
+
+        let windowBounds = getWindowBoundsForApp(pid: pid)
+        let message = FrontmostAppChangedMessage(
+            bundleId: bundleId,
+            name: appName,
+            windowBounds: windowBounds
+        )
+        sendJSON(message)
+        sendLog(level: "info", message: "broadcastCurrentFrontmostApp: \(appName ?? "unknown")")
     }
     
     /// Handle app activation notification.
@@ -1780,6 +1809,10 @@ func setupAndRun() {
     // Start app activation monitoring.
     // This allows us to detect when Field Theory becomes the frontmost app (e.g., via Cmd+Tab).
     _ = AppActivationMonitor.shared.startMonitoring()
+
+    // Broadcast the current frontmost app immediately so Electron has initial state.
+    // This fixes Command Launcher paste failing on first use after restart.
+    AppActivationMonitor.shared.broadcastCurrentFrontmostApp()
     
     let handler = MessageHandler()
     
