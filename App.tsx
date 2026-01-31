@@ -34,6 +34,7 @@ import { PullToCreate } from './components/PullToCreate';
 import { TranscriptItem } from './components/TranscriptItem';
 import { SketchCanvas } from './components/SketchCanvas';
 import { SketchList } from './components/SketchList';
+import { CommandsList } from './components/CommandsList';
 import { StorageService } from './services/storage';
 import { SketchStorageService } from './services/sketchStorage';
 import { syncAllPendingSketches } from './services/sketchSync';
@@ -1403,6 +1404,9 @@ export default function App() {
             onCreateModeChange={handleObservationCreateModeChange}
           />
         </View>
+        <View key="commands" style={styles.pageContainer}>
+          <CommandsList />
+        </View>
         </PagerView>
 
       {/* BOTTOM BAR - Changes based on mode (create > selection > normal) */}
@@ -1526,8 +1530,8 @@ export default function App() {
             </TouchableOpacity>
 
             {/* Shared Fields Tab - always visible, prompts for login if not authenticated */}
-            <TouchableOpacity 
-              style={styles.tabButton} 
+            <TouchableOpacity
+              style={styles.tabButton}
               onPress={() => {
                 if (!session) {
                   Alert.alert(
@@ -1535,7 +1539,7 @@ export default function App() {
                     'You need to log in to access shared fields. Go to Settings to sign in.',
                     [
                       { text: 'Cancel', style: 'cancel' },
-                      { text: 'Settings', onPress: () => pagerRef.current?.setPageWithoutAnimation(5) },
+                      { text: 'Settings', onPress: () => setShowSettings(true) },
                     ]
                   );
                 } else {
@@ -1609,20 +1613,35 @@ export default function App() {
 
             {/* Observations Tab */}
             {settings.showObservations && (
-              <TouchableOpacity 
-                style={styles.tabButton} 
+              <TouchableOpacity
+                style={styles.tabButton}
                 onPress={() => pagerRef.current?.setPageWithoutAnimation(3)}
               >
-                <Feather 
-                  name="eye" 
-                  size={22} 
-                  color={pageIndex === 3 ? '#007AFF' : '#9CA3AF'} 
+                <Feather
+                  name="eye"
+                  size={22}
+                  color={pageIndex === 3 ? '#007AFF' : '#9CA3AF'}
                 />
                 <Text style={[styles.tabLabel, pageIndex === 3 && styles.tabLabelActive]}>
                   Notes
                 </Text>
               </TouchableOpacity>
             )}
+
+            {/* Commands Tab - Portable commands synced from Mac */}
+            <TouchableOpacity
+              style={styles.tabButton}
+              onPress={() => pagerRef.current?.setPageWithoutAnimation(4)}
+            >
+              <Feather
+                name="command"
+                size={22}
+                color={pageIndex === 4 ? '#007AFF' : '#9CA3AF'}
+              />
+              <Text style={[styles.tabLabel, pageIndex === 4 && styles.tabLabelActive]}>
+                Commands
+              </Text>
+            </TouchableOpacity>
 
             {/* Settings Tab */}
             <TouchableOpacity 
