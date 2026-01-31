@@ -7,15 +7,13 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo, Suspense } from 'react';
 import SettingsPanel from './SettingsPanel';
 import TodoView from './TodoView';
-import SharedContextView from './SharedContextView';
-import DMsView from './DMsView';
-import HotMicView from './HotMicView';
+import FeedbackView from './FeedbackView';
 import CommandsView from './CommandsView';
 import ReleaseNotesPopup from './ReleaseNotesPopup';
 import LibrarianView from './LibrarianView';
 import DebugConsole from './DebugConsole';
 import type { SketchViewHandle } from './SketchView';
-import { FEATURE_HOT_MIC_ENABLED, FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
+import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { rendererSoundManager } from '../utils/rendererSoundManager';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
@@ -250,28 +248,12 @@ export default function ClipboardHistory() {
     }
     
     const saved = localStorage.getItem('fieldTheoryView');
-    if (saved === 'clipboard' || saved === 'team' || saved === 'hotmic' || saved === 'todo' || saved === 'feedback' || saved === 'commands' || saved === 'librarian') {
+    if (saved === 'clipboard' || saved === 'todo' || saved === 'feedback' || saved === 'commands' || saved === 'librarian') {
       return saved;
     }
     return 'clipboard';
   });
-  
-  // Lazy mount SharedContextView: once shown, keep mounted (hidden via CSS) to preserve state.
-  const [hasShownTeamView, setHasShownTeamView] = useState(() => {
-    const saved = localStorage.getItem('fieldTheoryView');
-    return saved === 'team';
-  });
-  
-  if (viewMode === 'team' && !hasShownTeamView) {
-    setHasShownTeamView(true);
-  }
-  
-  // Team members drawer state (for Shared Fields view).
-  const [showTeamMembers, setShowTeamMembers] = useState(() => {
-    const saved = localStorage.getItem('teamMembersVisible');
-    return saved === 'true';
-  });
-  
+
   const [editingSketchItem, setEditingSketchItem] = useState<ClipboardItem | null>(null);
   const [sketchBackgroundImage, setSketchBackgroundImage] = useState<{
     dataUrl: string;
@@ -556,20 +538,8 @@ export default function ClipboardHistory() {
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
   const [priorityDeviceId, setPriorityDeviceId] = useState<string | null>(null);
   const [showMicDropdown, setShowMicDropdown] = useState(false);
-  
-  // Hot Mic state - when enabled, incoming DMs auto-open preview.
-  const [hotMicEnabled, setHotMicEnabled] = useState(false);
-  const [hotMicMessage, setHotMicMessage] = useState<{
-    id: string;
-    senderEmail: string | null;
-    senderName: string | null;
-    contentType: 'text' | 'image' | 'stack';
-    contentText: string | null;
-    imageUrl: string | null;
-  } | null>(null);
-  const [hasUnreadDMs, setHasUnreadDMs] = useState(false);
+
   const [hasUnreadFeedback, setHasUnreadFeedback] = useState(false);
-  const [hasUnreadShared, setHasUnreadShared] = useState(false);
   const [sketchHasChanges, setSketchHasChanges] = useState(false);
   const [lastSeenItemId, setLastSeenItemId] = useState<number | string | null>(() => {
     try {
@@ -847,13 +817,10 @@ export default function ClipboardHistory() {
     return cleanup;
   }, []);
   
-  // Load Hot Mic state, check unread, and listen for incoming messages.
+  // Check for unread feedback and listen for incoming messages.
   useEffect(() => {
     if (!window.socialAPI) return;
-    
-    // Load initial hot mic state and unread counts.
-    window.socialAPI.getHotMic().then(setHotMicEnabled);
-    window.socialAPI.hasUnread().then(setHasUnreadDMs);
+
     // Check current view to avoid race condition where async query overwrites cleared state.
     window.socialAPI.hasUnreadFeedback?.().then(hasUnread => {
       const currentView = localStorage.getItem('fieldTheoryView');
@@ -863,61 +830,21 @@ export default function ClipboardHistory() {
         setHasUnreadFeedback(true);
       }
     });
-    
-    // Listen for incoming messages for Hot Mic and notifications.
+
+    // Listen for incoming feedback messages.
     const unsubscribe = window.socialAPI.onMessageReceived(async (message) => {
-      // Update unread indicators (skip if viewing that section).
       const currentView = localStorage.getItem('fieldTheoryView');
       if (message.type === 'feedback') {
         if (currentView !== 'feedback') {
           console.log('[FeedbackDot] New feedback message received - setting hasUnreadFeedback to TRUE');
           setHasUnreadFeedback(true);
         }
-      } else {
-        if (currentView !== 'hotmic') setHasUnreadDMs(true);
-      }
-      
-      // Only show Hot Mic overlay for DMs when not already viewing Hot Mic.
-      if (message.type !== 'dm') return;
-      if (currentView === 'hotmic') return;
-      
-      // Check if Hot Mic is enabled.
-      if (!window.socialAPI) return;
-      const hotMicOn = await window.socialAPI.getHotMic();
-      if (!hotMicOn) return;
-      
-      // Don't interrupt if recording.
-      if (isRecording) return;
-      
-      // Show the Hot Mic preview.
-      setHotMicMessage({
-        id: message.id,
-        senderEmail: message.senderEmail,
-        senderName: message.senderName,
-        contentType: message.contentType,
-        contentText: message.contentText,
-        imageUrl: message.imageUrl,
-      });
-    });
-    
-    return unsubscribe;
-  }, [isRecording]);
-  
-  // Listen for new shared team items.
-  useEffect(() => {
-    if (!window.sharedClipboardAPI?.onTeamItemAdded) return;
-    
-    const unsubscribe = window.sharedClipboardAPI.onTeamItemAdded(() => {
-      // Only set unread if not currently viewing team.
-      const currentView = localStorage.getItem('fieldTheoryView');
-      if (currentView !== 'team') {
-        setHasUnreadShared(true);
       }
     });
-    
+
     return unsubscribe;
   }, []);
-  
+
   // Close mic dropdown when clicking outside.
   useEffect(() => {
     if (!showMicDropdown) return;
@@ -1349,14 +1276,6 @@ export default function ClipboardHistory() {
       console.log('[FeedbackDot] Entering feedback view - setting hasUnreadFeedback to FALSE');
       setHasUnreadFeedback(false);
     }
-    // Clear unread indicator when entering hot mic view.
-    if (viewMode === 'hotmic') {
-      setHasUnreadDMs(false);
-    }
-    // Clear unread indicator when entering team/shared fields view.
-    if (viewMode === 'team') {
-      setHasUnreadShared(false);
-    }
     // Notify main process of sketch mode changes so it can skip auto-paste into Excalidraw.
     window.clipboardAPI?.setSketchMode?.(viewMode === 'sketch');
 
@@ -1453,11 +1372,9 @@ export default function ClipboardHistory() {
         // Main process handles all session clearing and will emit events via IPC.
         if (event === 'SIGNED_OUT') {
           console.log('[FeedbackDot] User signed out - setting hasUnreadFeedback to FALSE');
-          // Clear unread indicators when signing out.
-          setHasUnreadDMs(false);
+          // Clear unread indicator when signing out.
           setHasUnreadFeedback(false);
-          setHasUnreadShared(false);
-          // Also reset sharing unlock to hide Team button.
+          // Also reset sharing unlock.
           setSharingUnlocked(false);
           // Switch to clipboard view if on a view that requires auth.
           setViewMode('clipboard');
@@ -1568,9 +1485,8 @@ export default function ClipboardHistory() {
       // Restore viewMode from localStorage - ensures we return to the last viewed tab
       // even if the window was recreated or state got out of sync.
       const savedView = localStorage.getItem('fieldTheoryView');
-      if (savedView === 'clipboard' || savedView === 'team' || savedView === 'hotmic' ||
-          savedView === 'todo' || savedView === 'feedback' || savedView === 'commands' ||
-          savedView === 'librarian') {
+      if (savedView === 'clipboard' || savedView === 'todo' || savedView === 'feedback' ||
+          savedView === 'commands' || savedView === 'librarian') {
         setViewMode(savedView);
       }
     });
@@ -2093,8 +2009,6 @@ export default function ClipboardHistory() {
           setViewMode(prev => {
             // Build visible tabs array in order, then cycle backwards
             const visibleTabs: ViewMode[] = ['clipboard'];
-            if (canShare) visibleTabs.push('team');
-            if (FEATURE_HOT_MIC_ENABLED) visibleTabs.push('hotmic');
             if (tasksTabEnabled) visibleTabs.push('todo');
 
             const currentIndex = visibleTabs.indexOf(prev);
@@ -2107,8 +2021,6 @@ export default function ClipboardHistory() {
           setViewMode(prev => {
             // Build visible tabs array in order, then cycle forwards
             const visibleTabs: ViewMode[] = ['clipboard'];
-            if (canShare) visibleTabs.push('team');
-            if (FEATURE_HOT_MIC_ENABLED) visibleTabs.push('hotmic');
             if (tasksTabEnabled) visibleTabs.push('todo');
 
             const currentIndex = visibleTabs.indexOf(prev);
@@ -2289,23 +2201,6 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // H - Toggle Hot Mic on/off.
-      if (key === 'h' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
-        // Skip if typing in input
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
-        e.preventDefault();
-        
-        (async () => {
-          if (!window.socialAPI) return;
-          const newState = !hotMicEnabled;
-          const success = await window.socialAPI.setHotMic(newState);
-          if (success) {
-            setHotMicEnabled(newState);
-          }
-        })();
-        return;
-      }
-      
       // X - Toggle selection on current item (Gmail-style)
       if (key === 'x' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         // Skip if typing in input
@@ -2368,10 +2263,6 @@ export default function ClipboardHistory() {
           localStorage.setItem('sharingUnlocked', String(newValue));
         } catch {
           // Ignore storage errors.
-        }
-        // If disabling sharing while on team view, switch to clipboard view.
-        if (!newValue && viewMode === 'team') {
-          setViewMode('clipboard');
         }
         showFeedback(newValue ? 'sharing enabled' : 'sharing disabled');
         return;
@@ -2828,30 +2719,10 @@ export default function ClipboardHistory() {
             targetAppIndex: nextIndex,
           }));
           window.clipboardAPI?.setTargetApp(newApp);
-        } else if (hasShift) {
-          setShowSettings(false);
-          setViewMode(prev => {
-            // Cycle backwards: clipboard -> (hotmic if enabled) -> (team if unlocked) -> clipboard
-            // Skip team view if sharing is not unlocked.
-            if (prev === 'clipboard') {
-              if (FEATURE_HOT_MIC_ENABLED) return 'hotmic';
-              if (canShare) return 'team';
-              return 'clipboard';
-            }
-            if (prev === 'hotmic') return canShare ? 'team' : 'clipboard';
-            if (prev === 'team') return 'clipboard';
-            return 'clipboard';
-          });
         } else {
+          // No cycling - just stay on clipboard
           setShowSettings(false);
-          setViewMode(prev => {
-            // Cycle forwards: clipboard -> (team if unlocked) -> (hotmic if enabled) -> clipboard
-            // Skip team view if sharing is not unlocked.
-            if (prev === 'clipboard') return canShare ? 'team' : (FEATURE_HOT_MIC_ENABLED ? 'hotmic' : 'clipboard');
-            if (prev === 'team') return FEATURE_HOT_MIC_ENABLED ? 'hotmic' : 'clipboard';
-            if (prev === 'hotmic') return 'clipboard';
-            return 'clipboard';
-          });
+          setViewMode('clipboard');
         }
         return;
       }
@@ -3349,14 +3220,14 @@ export default function ClipboardHistory() {
         {!showSettings && viewMode !== 'commands' && viewMode !== 'feedback' && viewMode !== 'librarian' && !authSession?.user?.email && (
           <button
             onClick={() => {
-              setViewMode('team');
-              setShowSettings(false);
+              setSettingsSection('account');
+              setShowSettings(true);
             }}
             style={{
               fontSize: '10px',
-              color: viewMode === 'team' ? '#fff' : theme.textSecondary,
-              backgroundColor: viewMode === 'team' ? theme.accent : 'transparent',
-              border: `1px solid ${viewMode === 'team' ? theme.accent : theme.border}`,
+              color: theme.textSecondary,
+              backgroundColor: 'transparent',
+              border: `1px solid ${theme.border}`,
               borderRadius: '4px',
               padding: '2px 8px',
               cursor: 'pointer',
@@ -3571,16 +3442,10 @@ export default function ClipboardHistory() {
             overflow: 'hidden',
             transition: 'height 0.3s ease, min-height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease',
           }}>
-          {(['clipboard', ...(canShare ? ['team'] : []), ...(FEATURE_HOT_MIC_ENABLED ? ['hotmic'] : []), ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
-            // Hot Mic tab has special styling and the fire toggle.
-            const isHotMic = mode === 'hotmic';
-            const isSelected = viewMode === mode && !(mode === 'team' && !authSession?.user?.email) && !showSettings;
+          {(['clipboard', ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
+            const isSelected = viewMode === mode && !showSettings;
+            const bgColor = isSelected ? theme.accent : 'transparent';
 
-            // Hot Mic: red when selected AND enabled, otherwise normal accent.
-            const bgColor = isSelected
-              ? (isHotMic && hotMicEnabled ? theme.error : (mode === 'team' ? (theme.isDark ? '#8b5cf6' : '#7c3aed') : theme.accent))
-              : 'transparent';
-            
             return (
               <button
                 key={mode}
@@ -3591,7 +3456,7 @@ export default function ClipboardHistory() {
                 tabIndex={0}
                 style={{
                   position: 'relative',
-                  padding: isHotMic ? '6px 8px 6px 6px' : '6px 8px',
+                  padding: '6px 8px',
                   fontSize: '11px',
                   fontWeight: 400,
                   backgroundColor: bgColor,
@@ -3616,59 +3481,7 @@ export default function ClipboardHistory() {
                   }
                 }}
               >
-                {/* Hot Mic fire toggle - clickable independently, on the left */}
-                {isHotMic && (
-                  <span
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const newState = !hotMicEnabled;
-                      window.socialAPI?.setHotMic(newState).then(success => {
-                        if (success) setHotMicEnabled(newState);
-                      });
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.transform = 'scale(1.2)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.transform = 'scale(1)';
-                    }}
-                    style={{
-                      cursor: 'pointer',
-                      fontSize: '11px',
-                      transition: 'all 0.15s ease',
-                      filter: hotMicEnabled ? 'none' : 'grayscale(100%) opacity(0.5)',
-                    }}
-                    title={hotMicEnabled ? 'Hot Mic is ON - click to turn off' : 'Hot Mic is OFF - click to turn on'}
-                  >
-                    🔥
-                  </span>
-                )}
                 {TAB_LABELS[mode]}
-                
-                {/* Unread indicator for Hot Mic tab - only when authenticated */}
-                {isHotMic && hasUnreadDMs && viewMode !== 'hotmic' && authSession?.user?.email && (
-                  <span style={{
-                    position: 'absolute',
-                    top: '-2px',
-                    right: '-2px',
-                    width: '6px',
-                    height: '6px',
-                    borderRadius: '50%',
-                    backgroundColor: theme.info,
-                  }} />
-                )}
-                {/* Unread indicator for Shared Fields tab - only when authenticated */}
-                {mode === 'team' && hasUnreadShared && viewMode !== 'team' && authSession?.user?.email && (
-                  <span style={{
-                    position: 'absolute',
-                    top: '-2px',
-                    right: '-2px',
-                    width: '6px',
-                    height: '6px',
-                    borderRadius: '50%',
-                    backgroundColor: theme.info,
-                  }} />
-                )}
                 {/* New reading indicator for Librarian tab */}
                 {mode === 'librarian' && hasNewReading && viewMode !== 'librarian' && (
                   <span style={{
@@ -3806,51 +3619,6 @@ export default function ClipboardHistory() {
                 </div>
               )}
             </div>
-          )}
-          
-          {/* Team button - only visible in shared fields view */}
-          {viewMode === 'team' && (
-            <button
-              onClick={() => {
-                setShowTeamMembers(!showTeamMembers);
-                localStorage.setItem('teamMembersVisible', String(!showTeamMembers));
-              }}
-              tabIndex={0}
-              style={{
-                padding: '5px 6px',
-                fontSize: '9px',
-                fontWeight: 500,
-                backgroundColor: showTeamMembers ? theme.accent : 'transparent',
-                color: showTeamMembers ? '#fff' : theme.textSecondary,
-                border: 'none',
-                borderRadius: '3px',
-                cursor: 'pointer',
-                transition: 'all 0.15s ease',
-                outline: 'none',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '3px',
-              }}
-              onMouseEnter={(e) => {
-                if (!showTeamMembers) {
-                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!showTeamMembers) {
-                  e.currentTarget.style.backgroundColor = 'transparent';
-                }
-              }}
-              title="Team Members"
-            >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                <circle cx="9" cy="7" r="4" />
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-              </svg>
-              Team
-            </button>
           )}
           
           {/* Librarian button */}
@@ -4204,53 +3972,11 @@ export default function ClipboardHistory() {
         </div>
       )}
 
-      {/* SharedContextView uses "lazy mount then keep mounted" pattern:
-          - First mount happens when user first visits the team tab (hasShownTeamView becomes true)
-          - After that, it stays mounted but hidden via CSS when not active
-          - This prevents both: early mount issues AND remount flash on tab switch */}
-      {hasShownTeamView && (
-        <div style={{ 
-          display: viewMode === 'team' && !showSettings ? 'flex' : 'none',
-          flex: 1,
-          flexDirection: 'column',
-          overflow: 'hidden',
-        }}>
-          <SharedContextView
-            onOpenSketch={(imageDataUrl, width, height) => {
-              setSketchBackgroundImage({
-                dataUrl: imageDataUrl,
-                width,
-                height,
-              });
-              setViewMode('sketch');
-            }}
-            onSubmitFeedback={async (text, imageBase64, sourceAppName) => {
-              if (!window.socialAPI) return;
-              let result;
-              if (imageBase64) {
-                result = await window.socialAPI.submitImageFeedback(imageBase64, text || undefined, sourceAppName);
-              } else if (text) {
-                result = await window.socialAPI.submitTextFeedback(text);
-              }
-              if (result) {
-                showFeedback('sent as feedback');
-              }
-            }}
-            showMembers={showTeamMembers}
-            onToggleMembers={() => {
-              setShowTeamMembers(!showTeamMembers);
-              localStorage.setItem('teamMembersVisible', String(!showTeamMembers));
-            }}
-          />
-        </div>
-      )}
-
-      {/* Conditionally show Settings, Todo View, DMs View, or Clipboard History */}
+      {/* Conditionally show Settings, Todo View, Feedback View, or Clipboard History */}
       {showSettings ? (
         <SettingsPanel
           onNavigateToSignIn={() => {
-            setShowSettings(false);
-            setViewMode('team');
+            setSettingsSection('account');
           }}
           onNavigateToFeedback={() => {
             setShowSettings(false);
@@ -4272,73 +3998,10 @@ export default function ClipboardHistory() {
           initialFullScreen={librarianImmersive}
           onInitialReadingConsumed={() => setPendingReadingPath(null)}
         />
-      ) : viewMode === 'team' ? (
-        null
-      ) : viewMode === 'hotmic' ? (
-        // Hot Mic requires authentication. Show loading while session initializes to prevent flicker.
-        !sessionInitialized ? (
-          <div style={{
-            flex: 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: theme.textSecondary,
-            fontSize: '12px',
-          }}>
-            Loading...
-          </div>
-        ) : !authSession?.user?.email ? (
-          <div style={{
-            flex: 1,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '40px',
-            textAlign: 'center',
-          }}>
-            <div style={{
-              fontSize: '32px',
-              marginBottom: '16px',
-              filter: 'grayscale(100%) opacity(0.5)',
-            }}>🔥</div>
-            <h3 style={{ margin: '0 0 8px 0', fontSize: '14px', color: theme.text }}>
-              Sign in to use Hot Mic
-            </h3>
-            <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: theme.textSecondary }}>
-              Send and receive messages with your team in real time.
-            </p>
-            <button
-              onClick={() => setViewMode('team')}
-              style={{
-                padding: '8px 16px',
-                fontSize: '12px',
-                fontWeight: 500,
-                backgroundColor: theme.accent,
-                color: '#fff',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-              }}
-            >
-              Sign in
-            </button>
-          </div>
-        ) : (
-          <HotMicView 
-            hotMicEnabled={hotMicEnabled}
-            onHotMicToggle={() => {
-              const newState = !hotMicEnabled;
-              window.socialAPI?.setHotMic(newState).then(success => {
-                if (success) setHotMicEnabled(newState);
-              });
-            }}
-          />
-        )
       ) : viewMode === 'feedback' ? (
         // Feedback view - rendered inline for authenticated users, sign-in prompt for others
         sessionInitialized && authSession?.user?.email ? (
-          <DMsView feedbackOnly={true} onSwitchToClipboard={() => setViewMode('clipboard')} />
+          <FeedbackView onSwitchToClipboard={() => setViewMode('clipboard')} />
         ) : sessionInitialized ? (
           <div style={{
             flex: 1,
@@ -4361,7 +4024,10 @@ export default function ClipboardHistory() {
               Share ideas, report issues, or ask questions.
             </p>
             <button
-              onClick={() => setViewMode('team')}
+              onClick={() => {
+                setSettingsSection('account');
+                setShowSettings(true);
+              }}
               style={{
                 padding: '8px 16px',
                 fontSize: '12px',
@@ -6915,7 +6581,8 @@ export default function ClipboardHistory() {
               <button
                 onClick={() => {
                   setShowSignInPrompt(false);
-                  setViewMode('team'); // Navigate to team view which shows sign-in form.
+                  setSettingsSection('account');
+                  setShowSettings(true);
                 }}
                 style={{
                   padding: '8px 16px',
@@ -7252,134 +6919,6 @@ export default function ClipboardHistory() {
         </div>
       )}
 
-      {/* Hot Mic Preview - Shows incoming DM when Hot Mic is enabled */}
-      {hotMicMessage && (
-        <div
-          onClick={() => setHotMicMessage(null)}
-          onKeyDown={(e) => {
-            if (e.key === ' ' || e.key === 'Escape') {
-              e.preventDefault();
-              setHotMicMessage(null);
-            } else if (e.key === 'h' || e.key === 'H') {
-              e.preventDefault();
-              // Toggle Hot Mic off.
-              window.socialAPI?.setHotMic(false).then(success => {
-                if (success) {
-                  setHotMicEnabled(false);
-                  setHotMicMessage(null);
-                }
-              });
-            }
-          }}
-          tabIndex={0}
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.6)',
-            backdropFilter: 'blur(8px)',
-            WebkitBackdropFilter: 'blur(8px)',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 10010,
-            outline: 'none',
-          }}
-          ref={(el) => el?.focus()}
-        >
-          {/* Sender info at top */}
-          <div style={{
-            fontSize: '12px',
-            color: '#fff',
-            marginBottom: '16px',
-            opacity: 0.8,
-          }}>
-            From: {hotMicMessage.senderName || hotMicMessage.senderEmail || 'Unknown'}
-          </div>
-
-          {/* Content */}
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              backgroundColor: theme.bg,
-              borderRadius: '12px',
-              padding: '24px',
-              maxWidth: '80%',
-              maxHeight: '60%',
-              overflow: 'auto',
-              boxShadow: '0 12px 48px rgba(0, 0, 0, 0.4)',
-            }}
-          >
-            {hotMicMessage.contentType === 'image' && hotMicMessage.imageUrl && (
-              <img
-                src={hotMicMessage.imageUrl}
-                alt="DM Image"
-                style={{
-                  maxWidth: '100%',
-                  maxHeight: '400px',
-                  borderRadius: '8px',
-                }}
-                onError={(e) => { e.currentTarget.style.display = 'none'; }}
-              />
-            )}
-            {hotMicMessage.contentText && (
-              <div style={{
-                fontSize: '16px',
-                color: theme.text,
-                whiteSpace: 'pre-wrap',
-                lineHeight: 1.5,
-              }}>
-                {hotMicMessage.contentText}
-              </div>
-            )}
-          </div>
-
-          {/* Hot Mic toggle hint at bottom */}
-          <div style={{
-            marginTop: '24px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
-            fontSize: '11px',
-            color: 'rgba(255, 255, 255, 0.6)',
-          }}>
-            <span style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: '18px',
-              height: '18px',
-              backgroundColor: 'rgba(255, 255, 255, 0.15)',
-              borderRadius: '4px',
-              fontSize: '10px',
-              fontWeight: 500,
-            }}>
-              H
-            </span>
-            <span>to toggle Hot Mic on/off</span>
-            <span style={{ margin: '0 8px', opacity: 0.4 }}>•</span>
-            <span style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              minWidth: '18px',
-              height: '18px',
-              padding: '0 4px',
-              backgroundColor: 'rgba(255, 255, 255, 0.15)',
-              borderRadius: '4px',
-              fontSize: '9px',
-              fontWeight: 500,
-            }}>
-              space
-            </span>
-            <span>to dismiss</span>
-          </div>
-        </div>
-      )}
-
       {/* Preview modal - Quick Look style for images and text */}
       {preview && (
         <div
@@ -7479,11 +7018,6 @@ export default function ClipboardHistory() {
                     }
                     dismissPreview();
                   }},
-                  // Message option removed - not currently supported in preview
-                  // { label: 'message', key: 'm', action: async () => {
-                  //   dismissPreview();
-                  //   setViewMode('hotmic');
-                  // }},
                   { label: 'feedback', key: 'f', action: async () => {
                     const selectedRow = listRows[selectedIndex];
                     const itemId = selectedRow?.type === 'item' 
