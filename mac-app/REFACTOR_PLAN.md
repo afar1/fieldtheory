@@ -1,6 +1,6 @@
 # Mac App Refactoring Plan
 
-**Status:** Phase 1-5 Complete
+**Status:** Phase 0-6 Complete
 **Created:** 2026-01-31
 **Updated:** 2026-01-31
 **Net Target:** ~9,000 lines removed
@@ -193,16 +193,16 @@ hideStatusLabels (simple on/off)
 ---
 
 ## Phase 6: Logging Cleanup
-**Status:** Pending
-**Lines Removed:** ~700
+**Status:** ✅ Complete
+**Lines Removed:** ~785 console statements
 
-By this phase, logger utility exists and major refactoring is done.
+Cleaned up all main process files to use structured logger.
 
 ### Tasks
-- [ ] Audit remaining files for console.log statements
-- [ ] Remove all non-essential logs
-- [ ] Ensure all remaining logs use new logger
-- [ ] Verify clean output during normal operation
+- [x] Audit remaining files for console.log statements
+- [x] Remove all non-essential logs
+- [x] Ensure all remaining logs use new logger
+- [x] Verify clean output during normal operation
 
 ### Target Output
 ```

@@ -3,6 +3,9 @@ import path from 'path';
 import { exec } from 'child_process';
 import { PreferencesManager } from './preferences';
 import { NativeHelper } from './nativeHelper';
+import { createLogger } from './logger';
+
+const log = createLogger('Sound');
 
 /**
  * Available sound options that users can choose from.
@@ -100,15 +103,13 @@ export class SoundManager {
    */
   async preloadAllSounds(): Promise<void> {
     if (!this.nativeHelper) {
-      console.warn('[SoundManager] No native helper - sounds will use fallback (afplay)');
       return;
     }
 
     const allSounds = getAllSounds();
     const soundPaths = allSounds.map(s => path.join(this.soundsDir, s.id));
 
-    const count = await this.nativeHelper.preloadSounds(soundPaths);
-    console.log(`[SoundManager] Preloaded ${count}/${soundPaths.length} sounds via native helper`);
+    await this.nativeHelper.preloadSounds(soundPaths);
   }
 
   /**
@@ -120,20 +121,14 @@ export class SoundManager {
     if (!soundFile) return;
 
     const soundPath = path.join(this.soundsDir, soundFile);
-    const startTime = performance.now();
 
     if (this.nativeHelper) {
       // Fast path: native NSSound playback (~1-5ms)
-      console.log(`[SoundManager] Playing via native: ${soundFile}`);
       this.nativeHelper.playSound(soundPath);
-      console.log(`[SoundManager] playSound() returned in ${(performance.now() - startTime).toFixed(2)}ms`);
     } else {
       // Fallback: exec afplay (slower, ~50-100ms)
-      console.log(`[SoundManager] Playing via afplay (no native helper): ${soundFile}`);
-      exec(`afplay "${soundPath}"`, (error) => {
-        if (error) {
-          console.warn(`[SoundManager] Failed to play sound ${soundFile}:`, error.message);
-        }
+      exec(`afplay "${soundPath}"`, () => {
+        // Ignore errors - sound playback is non-critical
       });
     }
   }
@@ -266,7 +261,6 @@ export class SoundManager {
     }
 
     await this.preferences.save(updates);
-    console.log('[SoundManager] Sound settings updated:', updates);
   }
   
   /**

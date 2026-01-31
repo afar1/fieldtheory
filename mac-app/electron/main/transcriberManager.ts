@@ -19,6 +19,9 @@ import { improveTranscript } from './promptEngineer';
 import { CommandsManager } from './commandsManager';
 import { MESSAGES } from './messages';
 import * as plist from 'plist';
+import { createLogger } from './logger';
+
+const log = createLogger('Transcriber');
 
 // Feature flag for live transcript improvement.
 // When enabled, users can trigger AI improvement by ending recording with a different hotkey than started.
@@ -221,8 +224,6 @@ export class TranscriberManager extends EventEmitter {
    * Loads preferences and registers the global hotkey.
    */
   async init(): Promise<void> {
-    console.log('[TranscriberManager] Initializing...');
-
     // Load preferences
     await this.preferences.load();
     this.hotkey = this.preferences.getPreference('transcriptionHotkey');
@@ -233,12 +234,10 @@ export class TranscriberManager extends EventEmitter {
     const validModels: ModelSize[] = ['small', 'medium'];
     let selectedModel = this.preferences.getPreference('selectedModel');
     if (!validModels.includes(selectedModel)) {
-      console.log(`[TranscriberManager] Invalid model "${selectedModel}", migrating to "small"`);
       selectedModel = 'small';
       await this.preferences.save({ selectedModel: 'small' });
     }
     this.modelManager.setSelectedModel(selectedModel);
-    console.log(`[TranscriberManager] Using model: ${selectedModel}`);
 
     // Overlay style hardcoded to 'rectangle' (cursor status indicator is primary UI)
     this.overlay.setOverlayStyle('rectangle');
@@ -266,8 +265,6 @@ export class TranscriberManager extends EventEmitter {
    * Re-reads hotkeys from preferences to pick up any changes (e.g., after user login).
    */
   reRegisterHotkeys(): void {
-    console.log('[TranscriberManager] Re-registering hotkeys');
-
     // Re-read hotkeys from preferences to pick up changes after user login
     this.hotkey = this.preferences.getPreference('transcriptionHotkey');
     this.secondaryHotkey = this.preferences.getPreference('transcriptionSecondaryHotkey') || null;
@@ -323,7 +320,6 @@ export class TranscriberManager extends EventEmitter {
       }
       parts.push(baseKey);
       const normalized = parts.join('+');
-      console.log(`[TranscriberManager] Normalized hotkey: ${hotkey} → ${normalized}`);
       return normalized;
     }
 
@@ -344,7 +340,7 @@ export class TranscriberManager extends EventEmitter {
     });
 
     if (!result.success) {
-      console.error(`[TranscriberManager] Failed to register hotkey: ${normalizedHotkey}`);
+      log.error(`Failed to register hotkey: ${normalizedHotkey}`);
 
       // Provide helpful error message
       let errorMessage = `Failed to register hotkey: ${hotkey}`;
@@ -362,7 +358,6 @@ export class TranscriberManager extends EventEmitter {
 
     this.hotkey = hotkey;
     this.registeredHotkey = normalizedHotkey;
-    console.log(`[TranscriberManager] Registered transcription hotkey: ${hotkey} (normalized to ${normalizedHotkey})`);
     return true;
   }
 
@@ -400,7 +395,7 @@ export class TranscriberManager extends EventEmitter {
     });
 
     if (!result.success) {
-      console.error(`[TranscriberManager] Failed to register secondary hotkey: ${normalizedHotkey}`);
+      log.error(`Failed to register secondary hotkey: ${normalizedHotkey}`);
       let errorMessage = `Failed to register secondary hotkey: ${hotkey}`;
       if (result.conflictWith) {
         errorMessage += `. Conflicts with ${result.conflictWith}. Please choose a different hotkey.`;
@@ -415,7 +410,6 @@ export class TranscriberManager extends EventEmitter {
 
     this.secondaryHotkey = hotkey;
     this.registeredSecondaryHotkey = normalizedHotkey;
-    console.log(`[TranscriberManager] Registered secondary transcription hotkey: ${hotkey} (normalized to ${normalizedHotkey})`);
     return true;
   }
 
@@ -431,7 +425,6 @@ export class TranscriberManager extends EventEmitter {
       this.registeredSecondaryHotkey = null;
       this.secondaryHotkey = null;
       await this.preferences.save({ transcriptionSecondaryHotkey: undefined });
-      console.log('[TranscriberManager] Secondary hotkey disabled');
       return true;
     }
 
@@ -480,21 +473,18 @@ export class TranscriberManager extends EventEmitter {
    */
   private async startRecording(): Promise<void> {
     if (this.status !== 'idle') {
-      console.warn('[TranscriberManager] Cannot start recording - not idle');
       return;
     }
 
     // Block recording until onboarding is complete.
     const onboardingComplete = this.preferences.getPreference('onboardingComplete');
     if (!onboardingComplete) {
-      console.log('[TranscriberManager] Recording blocked - onboarding not complete');
       return;
     }
 
     // Block recording if no model is downloaded.
     const modelAvailable = await this.modelManager.isModelAvailable();
     if (!modelAvailable) {
-      console.log('[TranscriberManager] Recording blocked - no model downloaded');
       const errorMsg = 'You must download a voice model first. Go to Settings → Transcription to download one.';
       this.emit('error', new Error(errorMsg));
       // Also show a visible note to the user
@@ -511,7 +501,6 @@ export class TranscriberManager extends EventEmitter {
       if (state.priorityDeviceId) {
         const quotaCheck = this.quotaManager.checkQuota('priorityMic');
         if (!quotaCheck.allowed) {
-          console.log('[TranscriberManager] Priority mic quota exhausted, falling back to regular mic');
           this.priorityMicSkippedForQuota = true;
           // Show note but don't block recording - graceful degradation
           this.cursorStatusManager?.showRecordingNote(
@@ -547,9 +536,9 @@ export class TranscriberManager extends EventEmitter {
       this.soundManager.play('recordingStart');
       
       await this.nativeHelper.startRecording();
-      console.log('[TranscriberManager] Recording started');
+      log.info('Recording started');
     } catch (error) {
-      console.error('[TranscriberManager] Failed to start recording:', error);
+      log.error('Failed to start recording:', error);
       this.setStatus('idle');
       this.overlay.dismiss();
       this.unregisterAbandonHotkey();
@@ -563,7 +552,6 @@ export class TranscriberManager extends EventEmitter {
    */
   private async stopRecordingAndTranscribe(shouldImprove: boolean = false): Promise<void> {
     if (this.status !== 'recording') {
-      console.warn('[TranscriberManager] Cannot stop recording - not recording');
       return;
     }
 
@@ -576,18 +564,14 @@ export class TranscriberManager extends EventEmitter {
       
       // Stop recording and get WAV file path
       const wavPath = await this.nativeHelper.stopRecording();
-      console.log('[TranscriberManager] Recording stopped, file:', wavPath);
-      
+
       // Track priority mic usage if a priority device was selected during recording.
       await this.trackPriorityMicUsage();
 
       // Check if model is available
       const selectedModel = this.modelManager.getSelectedModel();
-      console.log(`[TranscriberManager] Checking model availability for: ${selectedModel}`);
       const modelAvailable = await this.modelManager.isModelAvailable();
-      console.log('[TranscriberManager] Model available:', modelAvailable);
       if (!modelAvailable) {
-        console.log(`[TranscriberManager] Model "${selectedModel}" not available, emitting error`);
         this.setStatus('idle');
         this.handleOverlayAfterTranscription();
         this.emit('error', new Error(`Model "${selectedModel}" not available. Please download the model first.`));
@@ -595,18 +579,15 @@ export class TranscriberManager extends EventEmitter {
       }
 
       // Switch to transcribing state
-      console.log('[TranscriberManager] Starting transcription...');
       this.setStatus('transcribing');
       this.overlay.showTranscribing();
-      
+
       // Transcribe
       const text = await this.transcribe(wavPath);
-      console.log('[TranscriberManager] Transcription result:', text?.substring(0, 100) || '(empty)');
       
       // Check for silence (empty or whitespace-only text)
       const trimmedText = text ? text.trim() : '';
       if (trimmedText.length === 0) {
-        console.log('[TranscriberManager] Silence detected - no paste');
         // Still stack screenshots if any were taken during recording (no audio).
         await this.stackScreenshotsIfAny();
         this.setStatus('idle');
@@ -629,7 +610,6 @@ export class TranscriberManager extends EventEmitter {
       
       // If nothing remains after stripping brackets, treat as silence.
       if (cleanedText.length === 0) {
-        console.log('[TranscriberManager] Only bracketed content detected:', trimmedText);
         // Still stack screenshots if any were taken during recording (no audio).
         await this.stackScreenshotsIfAny();
         this.setStatus('idle');
@@ -656,7 +636,6 @@ export class TranscriberManager extends EventEmitter {
             name: cmd.name,
             filePath: cmd.filePath,
           }));
-          console.log(`[TranscriberManager] Detected commands: ${this.detectedCommands.map(c => c.name).join(', ')}`);
           // Emit event for each verbal command detected (for metrics tracking)
           this.detectedCommands.forEach(() => this.emit('verbalCommand'));
         }
@@ -691,8 +670,7 @@ export class TranscriberManager extends EventEmitter {
                 // Quota exhausted - don't auto-stack. Remove screenshots from stack so only
                 // transcript is pasted. Screenshots are saved separately in Field Theory.
                 canAutoStack = false;
-                console.log('[TranscriberManager] Auto-stack quota exhausted, removing screenshots from paste stack');
-                
+
                 // Keep only the transcript (just added), remove all screenshots.
                 this.currentStack = [itemId];
                 this.screenshotMetadata = [];
@@ -704,7 +682,6 @@ export class TranscriberManager extends EventEmitter {
             if (canAutoStack) {
               const stackId = crypto.randomUUID();
               this.clipboardManager.updateStackId(this.currentStack, stackId);
-              console.log(`[TranscriberManager] Auto-stacked ${this.currentStack.length} items (stackId: ${stackId})`);
 
               // Emit event for metrics tracking
               this.emit('autostackCreated');
@@ -737,9 +714,6 @@ export class TranscriberManager extends EventEmitter {
         const minWords = this.getAutoImproveMinWords();
         if (wordCount >= minWords) {
           shouldTriggerImprovement = true;
-          console.log(`[TranscriberManager] Auto-improve triggered: ${wordCount} words >= ${minWords} minimum`);
-        } else {
-          console.log(`[TranscriberManager] Auto-improve skipped: ${wordCount} words < ${minWords} minimum`);
         }
       }
 
@@ -751,12 +725,11 @@ export class TranscriberManager extends EventEmitter {
         if (useLocalLLM || accessToken) {
           // Bail silently if no text to improve
           if (!cleanedText || cleanedText.trim().length === 0) {
-            console.log('[TranscriberManager] No text to improve, skipping silently');
+            // No text to improve - skip silently
           } else {
             // Show improving state.
             this.cursorStatusManager?.setState('improving');
 
-            console.log(`[TranscriberManager] Running AI improvement on transcript (mode: ${useLocalLLM ? 'local' : 'cloud'})...`);
             const result = await improveTranscript(cleanedText, accessToken);
 
             if (result.success && result.refinedPrompt) {
@@ -769,14 +742,12 @@ export class TranscriberManager extends EventEmitter {
                 for (const cmd of this.detectedCommands) {
                   const ref = `[cmd:${cmd.name}.md]`;
                   if (!improvedText.includes(ref)) {
-                    console.log(`[TranscriberManager] Re-inserting stripped command reference: ${ref}`);
                     improvedText += ` ${ref}`;
                   }
                 }
               }
 
               finalText = improvedText;
-              console.log('[TranscriberManager] Transcript improved successfully');
 
               // Track auto-improve usage stats (only for API calls with usage data)
               if (result.usage) {
@@ -810,19 +781,17 @@ export class TranscriberManager extends EventEmitter {
               }
             } else if (result.quotaExceeded) {
               // Quota exceeded - show message once per billing period, then fail silently
-              console.log('[TranscriberManager] Text improve quota exceeded');
               if (result.showQuotaMessage && !this.hasShownQuotaMessageThisPeriod) {
                 this.hasShownQuotaMessageThisPeriod = true;
                 this.cursorStatusManager?.showCriticalMessage(MESSAGES.critical.improvementQuotaExhausted);
               }
               // Use raw transcript (already in finalText)
             } else {
-              console.error('[TranscriberManager] Improvement failed:', result.error);
+              log.error('Improvement failed:', result.error);
               // Fail silently - don't show error message, just fall back to original transcript
             }
           }
         } else {
-          console.log('[TranscriberManager] No improvement method available (not signed in, no local model)');
           this.cursorStatusManager?.showCriticalMessage(MESSAGES.critical.noLlmConfigured);
           // Skip paste-failed notification since we're showing the config message
           this.skipNextPasteFailedNotification = true;
@@ -849,13 +818,12 @@ export class TranscriberManager extends EventEmitter {
       if (hasTextInput) {
         this.emit('paste-success', cleanedText);
       } else if (!this.skipNextPasteFailedNotification) {
-        console.log('[TranscriberManager] Accessibility: no text input - showing fallback UI');
         this.emit('paste-failed', 'No text input focused', cleanedText);
       }
       // Reset the skip flag
       this.skipNextPasteFailedNotification = false;
     } catch (error) {
-      console.error('[TranscriberManager] Transcription failed:', error);
+      log.error('Transcription failed:', error);
       this.setStatus('idle');
       this.handleOverlayAfterTranscription();
       this.emit('error', error as Error);
@@ -879,7 +847,6 @@ export class TranscriberManager extends EventEmitter {
     }
 
     try {
-      console.log('[TranscriberManager] Cancelling recording (abandon hotkey pressed)');
       // Note: Cancel sound removed to avoid audio feedback on abandoned recordings.
       await this.nativeHelper.cancelRecording();
       this.setStatus('idle');
@@ -889,7 +856,7 @@ export class TranscriberManager extends EventEmitter {
       this.overlay.showStatus(MESSAGES.overlay.cancelled);
       this.unregisterAbandonHotkey();
     } catch (error) {
-      console.error('[TranscriberManager] Failed to cancel recording:', error);
+      log.error('Failed to cancel recording:', error);
       this.setStatus('idle');
       this.hasAudioContent = false;
       this.currentStack = [];
@@ -920,7 +887,6 @@ export class TranscriberManager extends EventEmitter {
       }
       
       if (this.clipboardHistoryVisibilityChecker?.()) {
-        console.log(`[TranscriberManager] ${abandonHotkey}: dismissing clipboard history (recording continues)`);
         this.emit('dismiss-clipboard-history');
         return;
       }
@@ -928,7 +894,6 @@ export class TranscriberManager extends EventEmitter {
       
       if (confirmationEnabled && this.hasAudioContent) {
         // Show confirmation dialog.
-        console.log('[TranscriberManager] Showing abandon confirmation (audio content detected)');
         this.pendingAbandonConfirmation = true;
         this.overlay.showConfirmation();
         this.emit('confirmation-show');
@@ -941,9 +906,8 @@ export class TranscriberManager extends EventEmitter {
     
     if (registered) {
       this.abandonHotkeyRegistered = true;
-      console.log(`[TranscriberManager] Abandon hotkey (${abandonHotkey}) registered for cancel`);
     } else {
-      console.warn(`[TranscriberManager] Failed to register abandon hotkey: ${abandonHotkey}`);
+      log.error(`Failed to register abandon hotkey: ${abandonHotkey}`);
     }
   }
   
@@ -958,7 +922,6 @@ export class TranscriberManager extends EventEmitter {
     globalShortcut.unregister(this.registeredAbandonHotkey);
     this.abandonHotkeyRegistered = false;
     this.pendingAbandonConfirmation = false;
-    console.log(`[TranscriberManager] Abandon hotkey (${this.registeredAbandonHotkey}) unregistered`);
   }
   
   /**
@@ -971,7 +934,6 @@ export class TranscriberManager extends EventEmitter {
     }
     globalShortcut.unregister(this.registeredAbandonHotkey);
     this.abandonHotkeyRegistered = false;
-    console.log(`[TranscriberManager] Abandon hotkey paused for screenshot`);
   }
   
   /**
@@ -985,7 +947,6 @@ export class TranscriberManager extends EventEmitter {
       return; // Already registered
     }
     this.registerAbandonHotkey();
-    console.log(`[TranscriberManager] Abandon hotkey resumed after screenshot`);
   }
   
   /**
@@ -1003,8 +964,7 @@ export class TranscriberManager extends EventEmitter {
     if (this.status === 'recording') {
       this.registerAbandonHotkey();
     }
-    
-    console.log(`[TranscriberManager] Abandon hotkey changed to: ${hotkey}`);
+
     return true;
   }
   
@@ -1020,7 +980,6 @@ export class TranscriberManager extends EventEmitter {
    */
   async setAbandonConfirmation(enabled: boolean): Promise<void> {
     await this.preferences.save({ abandonRecordingConfirmation: enabled });
-    console.log(`[TranscriberManager] Abandon confirmation ${enabled ? 'enabled' : 'disabled'}`);
   }
   
   /**
@@ -1035,7 +994,6 @@ export class TranscriberManager extends EventEmitter {
    */
   async setAutoImprove(enabled: boolean): Promise<void> {
     await this.preferences.save({ autoImproveTranscripts: enabled });
-    console.log(`[TranscriberManager] Auto-improve ${enabled ? 'enabled' : 'disabled'}`);
   }
 
   /**
@@ -1054,7 +1012,6 @@ export class TranscriberManager extends EventEmitter {
     // Clamp to valid range: 0-500
     const clamped = Math.max(0, Math.min(500, minWords));
     await this.preferences.save({ autoImproveMinWords: clamped });
-    console.log(`[TranscriberManager] Auto-improve min words set to ${clamped}`);
   }
 
   /**
@@ -1079,7 +1036,6 @@ export class TranscriberManager extends EventEmitter {
 
     // Skip tracking if quota was exhausted at start of recording
     if (this.priorityMicSkippedForQuota) {
-      console.log('[TranscriberManager] Skipping priority mic tracking (quota exhausted)');
       return;
     }
 
@@ -1089,7 +1045,6 @@ export class TranscriberManager extends EventEmitter {
     const recordingDurationSeconds = Math.floor((Date.now() - this.recordingStartTime) / 1000);
     if (recordingDurationSeconds > 0) {
       await this.quotaManager.incrementPriorityMic(recordingDurationSeconds);
-      console.log(`[TranscriberManager] Tracked ${recordingDurationSeconds}s of priority mic usage`);
     }
   }
 
@@ -1104,12 +1059,10 @@ export class TranscriberManager extends EventEmitter {
     // Only count as auto-stack session if there are 2+ screenshots
     // Single image + transcript is always free
     if (this.screenshotMetadata.length < 2) {
-      console.log('[TranscriberManager] Single image stack - free, not counting against quota');
       return;
     }
 
     await this.quotaManager.incrementAutoStack();
-    console.log(`[TranscriberManager] Tracked 1 auto-stack session (${this.screenshotMetadata.length} images)`);
   }
 
   /**
@@ -1135,8 +1088,6 @@ export class TranscriberManager extends EventEmitter {
       if (!needTimestamps) {
         args.push('--no-timestamps');
       }
-
-      console.log('[TranscriberManager] Running:', whisperPath, args.join(' '));
 
       // Disable colors in whisper-cli output
       this.whisperProcess = spawn(whisperPath, args, {
@@ -1210,11 +1161,8 @@ export class TranscriberManager extends EventEmitter {
     try {
       // Use AppleScript to send Command+V
       await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-      console.log('[TranscriberManager] Text pasted successfully');
     } catch (error) {
       // If paste fails (e.g., no input field selected), text is still in clipboard.
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      console.warn('[TranscriberManager] Failed to paste text (no input field selected):', errorMsg);
       this.emit('paste-failed', 'No active input field found - copied to clipboard', this.lastTranscription);
     }
   }
@@ -1279,7 +1227,6 @@ export class TranscriberManager extends EventEmitter {
   async setSelectedModel(size: ModelSize): Promise<void> {
     this.modelManager.setSelectedModel(size);
     await this.preferences.save({ selectedModel: size });
-    console.log(`[TranscriberManager] Model changed to: ${size}`);
   }
 
   /**
@@ -1317,7 +1264,6 @@ export class TranscriberManager extends EventEmitter {
         if (!quotaCheck.allowed) {
           // Quota exhausted - don't stack, emit upgrade prompt.
           canAutoStack = false;
-          console.log('[TranscriberManager] Auto-stack quota exhausted, screenshots saved separately');
           this.emit('quotaExhausted', quotaCheck);
         }
       }
@@ -1325,7 +1271,6 @@ export class TranscriberManager extends EventEmitter {
       if (canAutoStack) {
         const stackId = crypto.randomUUID();
         this.clipboardManager.updateStackId(this.currentStack, stackId);
-        console.log(`[TranscriberManager] Stacked ${this.currentStack.length} screenshots (no audio, stackId: ${stackId})`);
 
         // Emit event for metrics tracking
         this.emit('autostackCreated');
@@ -1360,7 +1305,6 @@ export class TranscriberManager extends EventEmitter {
       if (existingScreenshots >= 1) {
         const quotaCheck = this.quotaManager.checkQuota('autoStack');
         if (!quotaCheck.allowed) {
-          console.log(`[TranscriberManager] Auto-stack quota exhausted, screenshot ${itemId} saved separately (${existingScreenshots} already stacked)`);
           // Show cursor message with limit info, but only once per session.
           if (this.cursorStatusManager && !this.autoStackLimitShownThisSession) {
             this.cursorStatusManager.showRecordingNote(
@@ -1402,8 +1346,6 @@ export class TranscriberManager extends EventEmitter {
 
         // Update the item in the database with the figure label and unique ID.
         this.clipboardManager.updateFigureLabel(itemId, figureLabel, figureId);
-
-        console.log(`[TranscriberManager] Screenshot ${itemId} labeled as Figure ${figureLabel} (${figureId}) at ${this.formatTimestamp(capturedAtMs)}`);
 
         // Show warning when reaching 10 screenshots during recording.
         if (this.screenshotMetadata.length === 10 && this.cursorStatusManager) {
@@ -1474,12 +1416,9 @@ export class TranscriberManager extends EventEmitter {
     
     // If no segments parsed, fall back to appending figure references at the end.
     if (segments.length === 0) {
-      console.log('[TranscriberManager] No timestamped segments parsed, using fallback figure insertion');
       const stripped = output.replace(/\[\d{2}:\d{2}:\d{2}(?:\.\d{3})?\s*-->\s*\d{2}:\d{2}:\d{2}(?:\.\d{3})?\]/g, '');
       return this.insertFigureReferences(stripped.trim());
     }
-
-    console.log(`[TranscriberManager] Parsed ${segments.length} timestamped segments with ${this.screenshotMetadata.length} screenshots`);
     
     // Sort screenshots by capture time.
     const sortedScreenshots = [...this.screenshotMetadata].sort(
@@ -1545,8 +1484,6 @@ export class TranscriberManager extends EventEmitter {
       resultParts.push(segmentText);
     }
 
-    console.log(`[TranscriberManager] Added ${totalFiguresAdded} inline figure references across ${segments.length} segments`);
-
     return resultParts.join(' ').trim();
   }
   
@@ -1578,9 +1515,7 @@ export class TranscriberManager extends EventEmitter {
     
     // Append figure references at the end as a fallback.
     const figureRefs = sortedMetadata.map(meta => `[Figure ${meta.figureLabel}]`).join(' ');
-    
-    console.log(`[TranscriberManager] Added figure references (fallback): ${figureRefs}`);
-    
+
     return `${text} ${figureRefs}`;
   }
 
@@ -1612,11 +1547,7 @@ export class TranscriberManager extends EventEmitter {
         totalReplacements += matches.length;
       }
     }
-    
-    if (totalReplacements > 0) {
-      console.log(`[TranscriberManager] Applied ${totalReplacements} word substitution(s)`);
-    }
-    
+
     return result;
   }
 
@@ -1640,8 +1571,7 @@ export class TranscriberManager extends EventEmitter {
       `;
       const { stdout } = await execAsync(`osascript -e '${script}'`);
       return stdout.trim() || null;
-    } catch (error) {
-      console.error('[TranscriberManager] Failed to get frontmost app:', error);
+    } catch {
       return null;
     }
   }
@@ -1725,7 +1655,6 @@ export class TranscriberManager extends EventEmitter {
 
     // Skip paste if draw canvas is open - user can manually Cmd+V if needed.
     if (sketchModeActive) {
-      console.log('[TranscriberManager] Sketch mode active, skipping auto-paste');
       this.clearStack();
       return;
     }
@@ -1734,7 +1663,6 @@ export class TranscriberManager extends EventEmitter {
     // Content is still in clipboard, user can Cmd+V manually in their target app.
     const frontmostBundleId = await this.getFrontmostAppBundleId();
     if (frontmostBundleId === 'com.fieldtheory.app' || frontmostBundleId === 'com.fieldtheory.experimental') {
-      console.log('[TranscriberManager] Field Theory is frontmost, skipping auto-paste (text in clipboard)');
       this.emit('paste-failed', 'Field Theory has focus - press Cmd+V in your target app', this.lastTranscription);
       if (clearAfter) {
         this.clearStack();
@@ -1752,7 +1680,6 @@ export class TranscriberManager extends EventEmitter {
 
     // Detect if frontmost app is a terminal/CLI
     const isTerminal = isTerminalApp(frontmostBundleId);
-    console.log('[TranscriberManager] Frontmost app is terminal:', isTerminal);
 
     // Check if we have a transcript with figures
     const hasTranscriptWithFigures =
@@ -1797,7 +1724,6 @@ export class TranscriberManager extends EventEmitter {
           clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
           this.clipboardManager?.syncClipboardHash();
           await this.pasteText();
-          console.log(`[TranscriberManager] Pasted ${filePaths.length} command file(s) as attachments`);
         }
       } else if (item.imageData) {
         if (isTerminal) {

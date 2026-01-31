@@ -8,6 +8,9 @@ import { promisify } from 'util';
 import crypto from 'crypto';
 import { EventEmitter } from 'events';
 import { UserDataManager } from './userDataManager';
+import { createLogger } from './logger';
+
+const log = createLogger('Clipboard');
 
 const execAsync = promisify(exec);
 
@@ -305,7 +308,6 @@ export class ClipboardManager extends EventEmitter {
    */
   async reinitializeForUser(): Promise<void> {
     if (!this.userDataManager?.isLoggedIn()) {
-      console.log('[ClipboardManager] No user logged in, skipping reinitialize');
       return;
     }
 
@@ -317,7 +319,6 @@ export class ClipboardManager extends EventEmitter {
 
     // Get new path for current user
     this.dbPath = this.userDataManager.getUserDataPath('clipboard.db');
-    console.log('[ClipboardManager] Reinitializing database for user:', this.dbPath);
 
     // Ensure directory exists
     const dir = path.dirname(this.dbPath);
@@ -338,8 +339,6 @@ export class ClipboardManager extends EventEmitter {
    * Clear state on logout. Closes database and resets state.
    */
   onUserLoggedOut(): void {
-    console.log('[ClipboardManager] User logged out, clearing state');
-
     // Stop polling to prevent database access errors
     this.stopPolling();
 
@@ -538,8 +537,6 @@ export class ClipboardManager extends EventEmitter {
         INSERT INTO clipboard_fts(rowid, content) VALUES (new.id, new.content);
       END;
     `);
-
-    console.log('[ClipboardManager] Database initialized');
   }
 
   /**
@@ -569,11 +566,8 @@ export class ClipboardManager extends EventEmitter {
       this.db
         .prepare('INSERT INTO migrations (name, applied_at) VALUES (?, ?)')
         .run(name, Date.now());
-      console.log(`[ClipboardManager] Migration applied: ${name}`);
     } catch (error) {
-      // If migration fails (e.g., column already exists), log and continue
-      console.warn(`[ClipboardManager] Migration ${name} may have already been applied:`, error);
-      // Still mark as applied to avoid retrying
+      // If migration fails (e.g., column already exists), still mark as applied to avoid retrying
       this.db
         .prepare('INSERT OR IGNORE INTO migrations (name, applied_at) VALUES (?, ?)')
         .run(name, Date.now());
@@ -591,8 +585,6 @@ export class ClipboardManager extends EventEmitter {
     this.pollInterval = setInterval(() => {
       this.checkClipboard();
     }, 500);
-
-    console.log('[ClipboardManager] Started polling clipboard');
   }
 
   /**
@@ -602,7 +594,6 @@ export class ClipboardManager extends EventEmitter {
     if (this.pollInterval) {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
-      console.log('[ClipboardManager] Stopped polling clipboard');
     }
   }
 
@@ -660,7 +651,6 @@ export class ClipboardManager extends EventEmitter {
       }
     } catch (error) {
       // Silently handle errors (clipboard might be locked)
-      console.debug('[ClipboardManager] Error checking clipboard:', error);
     }
   }
 
@@ -1093,7 +1083,6 @@ export class ClipboardManager extends EventEmitter {
    */
   clearAll(): void {
     this.db.exec('DELETE FROM clipboard_items');
-    console.log('[ClipboardManager] Cleared all clipboard history');
   }
 
   // =========================================================================
@@ -1223,7 +1212,7 @@ export class ClipboardManager extends EventEmitter {
     this.db
       .prepare(`UPDATE clipboard_items SET stack_id = ? WHERE id IN (${placeholders})`)
       .run(stackId, ...itemIds);
-    
+
     // Increment cumulative stacks counter if this is a new stack.
     if (isNewStack) {
       this.db.prepare(`
@@ -1231,8 +1220,6 @@ export class ClipboardManager extends EventEmitter {
         ON CONFLICT(key) DO UPDATE SET value = value + 1
       `).run();
     }
-    
-    console.log(`[ClipboardManager] Updated stack_id for ${itemIds.length} items to: ${stackId}`);
   }
 
   /**
@@ -1257,7 +1244,6 @@ export class ClipboardManager extends EventEmitter {
     const id = figureId || this.generateFigureId();
     const stmt = this.db.prepare('UPDATE clipboard_items SET figure_label = ?, figure_id = ? WHERE id = ?');
     stmt.run(figureLabel, id, itemId);
-    console.log(`[ClipboardManager] Updated figure for item ${itemId}: Figure ${figureLabel} (${id})`);
   }
 
   /**
@@ -1283,7 +1269,6 @@ export class ClipboardManager extends EventEmitter {
   saveImprovedContent(itemId: number, improvedContent: string): void {
     const stmt = this.db.prepare('UPDATE clipboard_items SET improved_content = ? WHERE id = ?');
     stmt.run(improvedContent, itemId);
-    console.log(`[ClipboardManager] Saved improved content for item ${itemId}`);
   }
 
   /**
@@ -1293,7 +1278,6 @@ export class ClipboardManager extends EventEmitter {
   clearImprovedContent(itemId: number): void {
     const stmt = this.db.prepare('UPDATE clipboard_items SET improved_content = NULL WHERE id = ?');
     stmt.run(itemId);
-    console.log(`[ClipboardManager] Cleared improved content for item ${itemId}`);
   }
 
   /**
@@ -1303,7 +1287,6 @@ export class ClipboardManager extends EventEmitter {
   setUseImprovedVersion(itemId: number, useImproved: boolean): void {
     const stmt = this.db.prepare('UPDATE clipboard_items SET use_improved_version = ? WHERE id = ?');
     stmt.run(useImproved ? 1 : 0, itemId);
-    console.log(`[ClipboardManager] Set use_improved_version=${useImproved} for item ${itemId}`);
   }
 
   /**
@@ -1319,11 +1302,7 @@ export class ClipboardManager extends EventEmitter {
     stackId?: string
   ): Promise<number> {
     const { region = false, fullScreen = false, activeWindow = false, saveToDesktop = false, figureLabel, figureId } = options;
-    
-    // Debug: Log screen recording permission status to diagnose Tahoe issues.
-    const screenPermission = systemPreferences.getMediaAccessStatus('screen');
-    console.log('[ClipboardManager] Attempting screenshot, screen permission:', screenPermission);
-    
+
     // Set flag to prevent polling from picking up the screenshot while we're capturing it.
     this.screenshotInProgress = true;
     
@@ -1374,7 +1353,6 @@ export class ClipboardManager extends EventEmitter {
             clipboard.writeImage(image);
             imageBuffer = image.toPNG();
           } catch (error) {
-            console.warn('[ClipboardManager] Failed to read desktop screenshot or capture was cancelled');
             this.screenshotInProgress = false;
             this.emit('screenshotEnd');
             return -1;
@@ -1383,7 +1361,6 @@ export class ClipboardManager extends EventEmitter {
           // Read from clipboard
           image = clipboard.readImage();
           if (image.isEmpty()) {
-            console.warn('[ClipboardManager] Screenshot capture cancelled or failed');
             this.screenshotInProgress = false;
             this.emit('screenshotEnd');
             return -1;
@@ -1466,13 +1443,12 @@ export class ClipboardManager extends EventEmitter {
         }
       } else {
         // Fallback to region mode if no specific mode selected
-        console.warn('[ClipboardManager] No capture mode specified, defaulting to region mode');
         this.screenshotInProgress = false;
         this.emit('screenshotEnd');
         return -1;
       }
     } catch (error) {
-      console.error('[ClipboardManager] Screenshot capture failed:', error);
+      log.error('Screenshot capture failed:', error);
       this.screenshotInProgress = false;
       this.emit('screenshotEnd');
       return -1;
@@ -1562,7 +1538,7 @@ export class ClipboardManager extends EventEmitter {
     const wrappedCallback = () => {
       const result = callback();
       if (result instanceof Promise) {
-        result.catch(err => console.error('[ClipboardManager] Screenshot callback error:', err));
+        result.catch(err => log.error('Screenshot callback error:', err));
       }
     };
 
@@ -1584,7 +1560,7 @@ export class ClipboardManager extends EventEmitter {
     const wrappedCallback = () => {
       const result = callback();
       if (result instanceof Promise) {
-        result.catch(err => console.error('[ClipboardManager] Full screen screenshot callback error:', err));
+        result.catch(err => log.error('Full screen screenshot callback error:', err));
       }
     };
 
@@ -1605,7 +1581,7 @@ export class ClipboardManager extends EventEmitter {
     const wrappedCallback = () => {
       const result = callback();
       if (result instanceof Promise) {
-        result.catch(err => console.error('[ClipboardManager] Active window screenshot callback error:', err));
+        result.catch(err => log.error('Active window screenshot callback error:', err));
       }
     };
 
@@ -1661,8 +1637,6 @@ export class ClipboardManager extends EventEmitter {
       hotkeyManager.unregister('continuousContext');
       this.continuousContextHotkeyRegistered = false;
     }
-
-    console.log(`[ClipboardManager] Continuous Context ${enabled ? 'enabled' : 'disabled'}`);
   }
 
   /**
@@ -1713,7 +1687,6 @@ export class ClipboardManager extends EventEmitter {
    */
   registerContinuousContextHotkey(callback: () => void): boolean {
     if (!this.continuousContextEnabled) {
-      console.log('[ClipboardManager] Continuous Context disabled, not registering hotkey');
       return false;
     }
 
@@ -1733,12 +1706,9 @@ export class ClipboardManager extends EventEmitter {
    */
   async startContinuousContext(): Promise<void> {
     if (this.continuousContextActive) {
-      console.log('[ClipboardManager] Continuous context already active');
       return;
     }
 
-    console.log('[ClipboardManager] Starting continuous context mode');
-    
     // Generate a new stack ID for this session
     this.continuousContextStackId = crypto.randomUUID();
     this.continuousContextActive = true;
@@ -1748,13 +1718,9 @@ export class ClipboardManager extends EventEmitter {
     // This allows user to exit even when not in the screenshot selection UI.
     if (!this.continuousContextEscapeRegistered) {
       const registered = globalShortcut.register('Escape', () => {
-        console.log('[ClipboardManager] Escape pressed - stopping continuous context');
         this.stopContinuousContext();
       });
       this.continuousContextEscapeRegistered = registered;
-      if (registered) {
-        console.log('[ClipboardManager] Registered Escape key for continuous context');
-      }
     }
 
     this.emit('continuousContextChanged', this.getContinuousContextState());
@@ -1772,13 +1738,10 @@ export class ClipboardManager extends EventEmitter {
       return;
     }
 
-    console.log(`[ClipboardManager] Stopping continuous context mode. Screenshots taken: ${this.continuousContextScreenshotCount}`);
-    
     // Unregister the global Escape key we registered for continuous context.
     if (this.continuousContextEscapeRegistered) {
       globalShortcut.unregister('Escape');
       this.continuousContextEscapeRegistered = false;
-      console.log('[ClipboardManager] Unregistered Escape key for continuous context');
     }
     
     // Kill any running screencapture process
@@ -1846,17 +1809,15 @@ export class ClipboardManager extends EventEmitter {
     if (this.isCommandKeyPressed()) {
       if (!this.continuousContextPausedForCommand) {
         this.continuousContextPausedForCommand = true;
-        console.log('[ClipboardManager] Command key held - pausing continuous screenshots');
       }
       // Check again after a short delay
       setTimeout(() => this.captureContinuousScreenshot(), 100);
       return;
     }
-    
-    // Resume logging if we were paused
+
+    // Resume if we were paused
     if (this.continuousContextPausedForCommand) {
       this.continuousContextPausedForCommand = false;
-      console.log('[ClipboardManager] Command key released - resuming continuous screenshots');
     }
 
     try {
@@ -1898,7 +1859,6 @@ export class ClipboardManager extends EventEmitter {
       // Read from clipboard
       const image = clipboard.readImage();
       if (image.isEmpty()) {
-        console.warn('[ClipboardManager] Continuous context: screenshot capture cancelled or failed');
         // Still continue if mode is active - maybe user just cancelled this one
         if (this.continuousContextActive) {
           // Small delay before trying again
@@ -1923,8 +1883,7 @@ export class ClipboardManager extends EventEmitter {
       
       if (id > 0) {
         this.continuousContextScreenshotCount++;
-        console.log(`[ClipboardManager] Continuous context: screenshot ${this.continuousContextScreenshotCount} stored (id: ${id})`);
-        
+
         // Emit events
         this.emit('continuousContextScreenshot', id);
         this.emit('continuousContextChanged', this.getContinuousContextState());
@@ -1940,7 +1899,7 @@ export class ClipboardManager extends EventEmitter {
         setTimeout(() => this.captureContinuousScreenshot(), 200);
       }
     } catch (error) {
-      console.error('[ClipboardManager] Continuous context screenshot failed:', error);
+      log.error('Continuous context screenshot failed:', error);
       // If error occurs, stop the mode
       this.stopContinuousContext();
     }
@@ -2014,7 +1973,7 @@ export class ClipboardManager extends EventEmitter {
 
       return thumbnail.toPNG();
     } catch (error) {
-      console.error('[ClipboardManager] Failed to generate thumbnail:', error);
+      log.error('Failed to generate thumbnail:', error);
       return null;
     }
   }
@@ -2033,7 +1992,7 @@ export class ClipboardManager extends EventEmitter {
         this.lastContentHash = this.hashContent(imageBuffer);
       }
     } catch (error) {
-      console.debug('[ClipboardManager] Error syncing clipboard hash:', error);
+      // Silently handle errors
     }
   }
 
@@ -2087,20 +2046,13 @@ export class ClipboardManager extends EventEmitter {
   applyDataRetention(days: number): void {
     if (days === -1) {
       // Never delete - no action needed.
-      console.log('[ClipboardManager] Data retention: never delete');
       return;
     }
 
     if (!this._db) return;
 
     const cutoffTime = Date.now() - days * 24 * 60 * 60 * 1000;
-    const result = this.db.prepare('DELETE FROM clipboard_items WHERE created_at < ?').run(cutoffTime);
-
-    if (result.changes > 0) {
-      console.log(`[ClipboardManager] Data retention: deleted ${result.changes} items older than ${days} days`);
-    } else {
-      console.log(`[ClipboardManager] Data retention: no items older than ${days} days`);
-    }
+    this.db.prepare('DELETE FROM clipboard_items WHERE created_at < ?').run(cutoffTime);
   }
 
   /**
@@ -2110,7 +2062,6 @@ export class ClipboardManager extends EventEmitter {
    */
   async exportImageToCache(item: ClipboardItem): Promise<string | null> {
     if (!item.imageData) {
-      console.warn('[ClipboardManager] Cannot export item without image data');
       return null;
     }
 
@@ -2154,10 +2105,9 @@ export class ClipboardManager extends EventEmitter {
         : item.imageData;
 
       fs.writeFileSync(filePath, imageBuffer);
-      console.log('[ClipboardManager] Exported image to:', filePath);
       return filePath;
     } catch (error) {
-      console.error('[ClipboardManager] Failed to export image:', error);
+      log.error('Failed to export image:', error);
       return null;
     }
   }
@@ -2193,7 +2143,6 @@ export class ClipboardManager extends EventEmitter {
       this.db.close();
       this.db = null;
     }
-    console.log('[ClipboardManager] Destroyed');
   }
 }
 

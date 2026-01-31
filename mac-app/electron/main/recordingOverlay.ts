@@ -1,6 +1,9 @@
 import { app, BrowserWindow, screen, ipcMain } from 'electron';
 import { EventEmitter } from 'events';
 import path from 'path';
+import { createLogger } from './logger';
+
+const log = createLogger('RecordingOverlay');
 
 // Overlay style is now fixed to 'rectangle' only (dot indicator was removed)
 type OverlayStyle = 'rectangle';
@@ -62,7 +65,6 @@ export class RecordingOverlay extends EventEmitter {
    * Note: When visuallyDisabled is true, the cursor status widget handles the UI.
    */
   showRecording(): void {
-    console.log('[RecordingOverlay] showRecording() called');
     
     // Skip window display when cursor status widget handles the UI
     if (this.visuallyDisabled) {
@@ -111,7 +113,6 @@ export class RecordingOverlay extends EventEmitter {
     
     // Show immediately without stealing focus
     this.window.showInactive();
-    console.log('[RecordingOverlay] Window shown (inactive)');
 
     // Load overlay HTML
     const startUrl = process.env.ELECTRON_START_URL;
@@ -119,7 +120,6 @@ export class RecordingOverlay extends EventEmitter {
       this.window.loadURL(`${startUrl}overlay.html`);
     } else {
       const htmlPath = path.join(app.getAppPath(), 'dist', 'overlay.html');
-      console.log('[RecordingOverlay] Loading HTML from:', htmlPath);
       this.window.loadFile(htmlPath);
     }
 
@@ -128,11 +128,10 @@ export class RecordingOverlay extends EventEmitter {
     });
 
     this.window.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-      console.error('[RecordingOverlay] Load failed:', errorCode, errorDescription);
+      log.error('Load failed:', errorCode, errorDescription);
     });
 
     this.window.webContents.once('did-finish-load', () => {
-      console.log('[RecordingOverlay] Content loaded');
       this.sendState('recording');
       this.sendStyle(this.overlayStyle);
     });
@@ -211,7 +210,6 @@ export class RecordingOverlay extends EventEmitter {
    */
   showConfirmation(): void {
     this.isShowingConfirmation = true;
-    console.log('[RecordingOverlay] Showing abandon confirmation');
     
     // Cursor status widget handles the UI when visuallyDisabled
     if (this.visuallyDisabled) {
@@ -264,9 +262,8 @@ export class RecordingOverlay extends EventEmitter {
       width,
       height,
     });
-    
+
     this.sendState('recording');
-    console.log('[RecordingOverlay] Hiding abandon confirmation');
   }
   
   /**

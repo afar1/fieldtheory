@@ -4,6 +4,9 @@ import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { PreferencesManager } from './preferences';
 import { SoundManager } from './soundManager';
+import { createLogger } from './logger';
+
+const log = createLogger('ClipboardHistory');
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -301,7 +304,6 @@ export class ClipboardHistoryWindow {
     if (this.window && !this.window.isDestroyed()) {
       return; // Already preloaded
     }
-    console.log('[ClipboardHistoryWindow] Preloading window in background...');
     this.createWindow(savedBounds, false, true);
   }
 
@@ -427,7 +429,6 @@ export class ClipboardHistoryWindow {
         return;
       }
 
-      console.log('[ClipboardHistoryWindow] Window lost focus, hiding');
       // Alfred-style: hide when clicking away.
       this.hide(!this.isRecordingActive);
     });
@@ -441,7 +442,7 @@ export class ClipboardHistoryWindow {
     });
 
     this.window.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-      console.error('[ClipboardHistoryWindow] Load failed:', errorCode, errorDescription);
+      log.error('Load failed:', errorCode, errorDescription);
     });
 
     // Enable native context menu for text selection (Copy, Look Up, etc.)
@@ -482,9 +483,8 @@ export class ClipboardHistoryWindow {
     });
 
     // Show window only after content loads to avoid blank screen.
-    // If preloadOnly, just log and keep window hidden for instant later use.
+    // If preloadOnly, keep window hidden for instant later use.
     this.window.webContents.once('did-finish-load', () => {
-      console.log('[ClipboardHistoryWindow] Content loaded' + (preloadOnly ? ' (preload complete)' : ''));
       if (preloadOnly) {
         // Preload complete - window stays hidden but ready for instant show()
         return;
@@ -510,11 +510,10 @@ export class ClipboardHistoryWindow {
       this.window.loadURL(`${url}clipboard-history.html`);
     } else {
       const htmlPath = path.join(app.getAppPath(), 'dist', 'clipboard-history.html');
-      console.log('[ClipboardHistoryWindow] Loading HTML from:', htmlPath);
       this.window.loadFile(htmlPath);
-      
+
       this.window.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
-        console.error('[ClipboardHistoryWindow] Failed to load:', errorCode, errorDescription, validatedURL);
+        log.error('Failed to load:', errorCode, errorDescription, validatedURL);
       });
     }
   }
@@ -739,9 +738,7 @@ export class ClipboardHistoryWindow {
    * When active, window will not auto-hide on blur and behaves like a normal window.
    */
   setImmersiveMode(immersive: boolean): void {
-    const wasImmersive = this.isImmersiveMode;
     this.isImmersiveMode = immersive;
-    console.log(`[ClipboardHistoryWindow] Immersive mode: ${wasImmersive} → ${immersive}`);
 
     // Dock stays hidden - panel mode is the only mode now.
     // Don't show dock when entering immersive mode.
@@ -771,7 +768,6 @@ export class ClipboardHistoryWindow {
    */
   setScenarioTestingActive(active: boolean): void {
     this.scenarioTestingActive = active;
-    console.log(`[ClipboardHistoryWindow] Scenario testing active: ${active}`);
   }
 
   /**
@@ -869,7 +865,6 @@ export class ClipboardHistoryWindow {
       if (bundleId && name) {
         // Skip if this is the Electron app itself
         if (isElectronApp(bundleId, name)) {
-          console.log('[ClipboardHistoryWindow] Frontmost app is Electron app, skipping');
           return null;
         }
         
@@ -887,7 +882,7 @@ export class ClipboardHistoryWindow {
         return this.previousApp;
       }
     } catch (error) {
-      console.error('[ClipboardHistoryWindow] Failed to get frontmost app:', error);
+      log.error('Failed to get frontmost app:', error);
     }
     return null;
   }
@@ -912,13 +907,12 @@ export class ClipboardHistoryWindow {
         this.previousApp = { bundleId, name };
         // Reset selected target when opening window fresh.
         this.selectedTargetApp = null;
-        console.log(`[ClipboardHistoryWindow] Captured previous app: ${name} (${bundleId})`);
         
         // Send updated target app info to renderer (in case window already shown).
         this.sendTargetAppInfo();
       }
     } catch (error) {
-      console.error('[ClipboardHistoryWindow] Failed to capture previous app:', error);
+      log.error('Failed to capture previous app:', error);
     }
   }
 
@@ -1033,7 +1027,7 @@ export class ClipboardHistoryWindow {
       
       return apps;
     } catch (error) {
-      console.error('[ClipboardHistoryWindow] Failed to get running apps:', error);
+      log.error('Failed to get running apps:', error);
       // Return cached data if available, even if stale
       if (this.runningAppsCache) {
         return this.runningAppsCache.apps;
@@ -1058,7 +1052,7 @@ export class ClipboardHistoryWindow {
     try {
       // Validate bundleId doesn't contain quotes (bundle IDs shouldn't have them anyway)
       if (bundleId.includes('"') || bundleId.includes("'")) {
-        console.error('[ClipboardHistoryWindow] Invalid bundleId contains quotes:', bundleId);
+        log.error('Invalid bundleId contains quotes:', bundleId);
         return false;
       }
       // Use execFile with array arguments to avoid shell interpretation
@@ -1067,7 +1061,7 @@ export class ClipboardHistoryWindow {
       await execFileAsync('osascript', ['-e', script]);
       return true;
     } catch (error) {
-      console.error('[ClipboardHistoryWindow] Failed to activate app:', error);
+      log.error('Failed to activate app:', error);
       return false;
     }
   }
@@ -1081,7 +1075,7 @@ export class ClipboardHistoryWindow {
     try {
       // Validate bundleId doesn't contain quotes (bundle IDs shouldn't have them anyway)
       if (bundleId.includes('"') || bundleId.includes("'")) {
-        console.error('[ClipboardHistoryWindow] Invalid bundleId contains quotes:', bundleId);
+        log.error('Invalid bundleId for paste:', bundleId);
         return false;
       }
       // Small delay after hiding our window to ensure focus transfer.
@@ -1093,7 +1087,7 @@ export class ClipboardHistoryWindow {
       await execFileAsync('osascript', ['-e', script]);
       return true;
     } catch (error) {
-      console.error('[ClipboardHistoryWindow] Failed to paste to app:', error);
+      log.error('Failed to paste to app:', error);
       return false;
     }
   }

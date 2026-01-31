@@ -1,6 +1,9 @@
 import { app, BrowserWindow, screen, systemPreferences, shell, desktopCapturer, dialog } from 'electron';
 import path from 'path';
 import type { PreferencesManager } from './preferences';
+import { createLogger } from './logger';
+
+const log = createLogger('Onboarding');
 
 /**
  * Onboarding step identifiers.
@@ -134,16 +137,13 @@ export class OnboardingWindow {
   async triggerScreenRecordingPrompt(): Promise<void> {
     try {
       // Attempting to get screen sources triggers macOS to add the app to the list.
-      console.log('[Onboarding] Triggering screen capture to add app to permissions list...');
-      const sources = await desktopCapturer.getSources({ types: ['screen'] });
-      console.log('[Onboarding] Screen capture returned', sources.length, 'sources');
-      
+      await desktopCapturer.getSources({ types: ['screen'] });
+
       // Small delay to give macOS time to update the permissions list.
       // Without this, opening System Settings immediately may not show the app.
       await new Promise(resolve => setTimeout(resolve, 500));
     } catch (error) {
       // Expected to fail if permission not granted - that's fine.
-      console.log('[Onboarding] Screen capture triggered (may have failed, which is expected):', error);
     }
   }
 
@@ -223,7 +223,6 @@ export class OnboardingWindow {
       }
 
       if (!this.preferencesManager) {
-        console.warn('[Onboarding] No preferencesManager set, allowing window close');
         return;
       }
 
