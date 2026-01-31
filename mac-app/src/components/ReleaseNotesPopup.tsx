@@ -9,6 +9,11 @@ import { useTheme } from '../contexts/ThemeContext';
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.53': [
+    'Major cleanup: removed unused features (Local LLM, Team/Shared Clipboard, DMs)',
+    'Simplified sound settings and cursor status labels',
+    'Improved logging with structured logger utility',
+  ],
   '0.1.51': [
     'Sound settings redesigned: Librarian sound on by default, quick toggles',
     'Librarian tab moved to secondary position for cleaner navigation',
@@ -84,6 +89,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.53': 'Jan 30 2026',
   '0.1.51': 'Jan 29 2026',
   '0.1.50': 'Jan 28 2026',
   '0.1.48': 'Jan 19 2026',

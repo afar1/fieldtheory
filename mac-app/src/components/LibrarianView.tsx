@@ -385,7 +385,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   }, []);
 
   // Check if current reading is being narrated
-  const isNarrating = selectedPath && narrationStatus.currentReadingPath === selectedPath;
+  const isNarrating = !!(selectedPath && narrationStatus.currentReadingPath === selectedPath);
   const isGenerating = narrationStatus.playbackStatus === 'generating' && isNarrating;
   const isPlaying = narrationStatus.playbackStatus === 'playing' && isNarrating;
 
@@ -1553,7 +1553,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                   p: ({ children, node }) => {
                     // Check if this paragraph contains braille art (U+2800-U+28FF)
                     // Extract text from the AST node for reliable detection
-                    const extractText = (n: typeof node): string => {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const extractText = (n: any): string => {
                       if (!n) return '';
                       if (n.type === 'text' && 'value' in n) return n.value as string;
                       if ('children' in n && Array.isArray(n.children)) {

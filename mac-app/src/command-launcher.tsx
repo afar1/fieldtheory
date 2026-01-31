@@ -325,10 +325,9 @@ function CommandLauncher() {
   // Load hotkeys from preferences.
   const loadHotkeys = useCallback(async () => {
     try {
-      const [clipboardHotkeys, transcriptionHotkey, tasksHotkey] = await Promise.all([
+      const [clipboardHotkeys, transcriptionHotkey] = await Promise.all([
         clipboardAPI.getHotkeys?.() ?? {},
         transcribeAPI.getHotkey?.() ?? DEFAULT_HOTKEYS.transcription,
-        todoAPI.getHotkey?.() ?? DEFAULT_HOTKEYS.tasks,
       ]);
 
       setHotkeys({
@@ -337,7 +336,7 @@ function CommandLauncher() {
         activeWindow: clipboardHotkeys.activeWindow || DEFAULT_HOTKEYS.activeWindow,
         history: clipboardHotkeys.history || DEFAULT_HOTKEYS.history,
         transcription: transcriptionHotkey as string || DEFAULT_HOTKEYS.transcription,
-        tasks: tasksHotkey as string || DEFAULT_HOTKEYS.tasks,
+        tasks: DEFAULT_HOTKEYS.tasks,
         superPaste: DEFAULT_HOTKEYS.superPaste,
       });
     } catch (err) {

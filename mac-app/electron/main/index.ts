@@ -324,28 +324,8 @@ function registerHotkeysAfterOnboarding(): void {
     }
   });
 
-  // Register TODO hotkey (Tasks tab toggle) - now customizable via HotkeyManager
-  const hotkeyManager = getHotkeyManager();
-  const todoHotkey = prefs.todoHotkey || 'Command+Shift+T';
-  let lastTodoToggleAt = 0;
-
-  hotkeyManager.register('todo', todoHotkey, async () => {
-    const now = Date.now();
-    if (now - lastTodoToggleAt < 250) return;
-    lastTodoToggleAt = now;
-
-    if (!preferencesManager) return;
-
-    const currentValue = preferencesManager.getPreference('tasksTabEnabled') ?? false;
-    const newValue = !currentValue;
-    await preferencesManager.save({ tasksTabEnabled: newValue });
-
-    if (clipboardHistoryWindow) {
-      clipboardHistoryWindow.getWindow()?.webContents.send('clipboard:tasksTabToggled', newValue);
-    }
-  });
-
   // Register Super Paste hotkey - now customizable via HotkeyManager
+  const hotkeyManager = getHotkeyManager();
   // If there's an active stack in TranscriberManager (transcript + screenshots), paste the full stack.
   // Otherwise, paste the most recent item from clipboard history.
   const superPasteHotkey = prefs.superPasteHotkey || 'Command+Shift+V';
@@ -3391,12 +3371,6 @@ function setupClipboardIPCHandlers(): void {
     }
     await preferencesManager.save({ hideStatusLabels: hide });
     cursorStatusManager?.setHideLabels(hide);
-    
-    // User explicitly enabled labels - bypass progressive hiding.
-    if (!hide) {
-      await preferencesManager.save({ labelsExplicitlyEnabled: true });
-      cursorStatusManager?.setLabelsExplicitlyEnabled(true);
-    }
     return true;
   });
   
@@ -3490,22 +3464,6 @@ function setupClipboardIPCHandlers(): void {
       return false;
     }
     await preferencesManager.save({ soundsEnabled: enabled });
-    return true;
-  });
-
-  // Tasks tab - experimental feature toggle.
-  ipcMain.handle('clipboard:getTasksTabEnabled', async () => {
-    if (!preferencesManager) {
-      return false;
-    }
-    return preferencesManager.getPreference('tasksTabEnabled') ?? false;
-  });
-
-  ipcMain.handle('clipboard:setTasksTabEnabled', async (_event, enabled: boolean) => {
-    if (!preferencesManager) {
-      return false;
-    }
-    await preferencesManager.save({ tasksTabEnabled: enabled });
     return true;
   });
 
@@ -4222,30 +4180,10 @@ function broadcastTranscribeEvents(): void {
     // Update clipboard history window's recording state
     // This ensures blur event doesn't hide the app when recording is active
     clipboardHistoryWindow?.setRecordingActive(status === 'recording');
-    
-    // Update cursor status indicator and increment progressive label counts.
+
+    // Update cursor status indicator.
     if (cursorStatusManager) {
       cursorStatusManager.setState(status as CursorStatusState);
-      
-      // Increment label counts (labels auto-hide after thresholds).
-      if (preferencesManager) {
-        const hideLabels = preferencesManager.getPreference('hideStatusLabels') ?? false;
-        if (!hideLabels) {
-          if (status === 'recording') {
-            const currentCount = preferencesManager.getPreference('sayAnythingLabelShownCount') ?? 0;
-            if (currentCount < 2) {
-              const newCount = cursorStatusManager.incrementLabelCount('sayAnything');
-              preferencesManager.save({ sayAnythingLabelShownCount: newCount });
-            }
-          } else if (status === 'transcribing') {
-            const currentCount = preferencesManager.getPreference('transcribingLabelShownCount') ?? 0;
-            if (currentCount < 3) {
-              const newCount = cursorStatusManager.incrementLabelCount('transcribing');
-              preferencesManager.save({ transcribingLabelShownCount: newCount });
-            }
-          }
-        }
-      }
     }
     
     // Force Dock visibility when showInDock is enabled.
@@ -4761,13 +4699,6 @@ async function initTranscriberSystem(): Promise<void> {
   const hideStatusLabels = preferencesManager.getPreference('hideStatusLabels') ?? false;
   cursorStatusManager.setHideLabels(hideStatusLabels);
 
-  // Load progressive label hiding state.
-  const transcribingCount = preferencesManager.getPreference('transcribingLabelShownCount') ?? 0;
-  const sayAnythingCount = preferencesManager.getPreference('sayAnythingLabelShownCount') ?? 0;
-  const labelsExplicitlyEnabled = preferencesManager.getPreference('labelsExplicitlyEnabled') ?? false;
-  cursorStatusManager.setLabelCounts(transcribingCount, sayAnythingCount);
-  cursorStatusManager.setLabelsExplicitlyEnabled(labelsExplicitlyEnabled);
-
   // Now create transcriberManager with cursorStatusManager.
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
   await transcriberManager.init();
@@ -5252,13 +5183,10 @@ if (!gotTheLock) {
     await initClipboardCallbacks();
 
     // Preload clipboard history window for instant first open.
-    // Only if onboarding is complete (user has set up the app).
-    const currentPrefs = preferencesManager?.get();
-    if (currentPrefs?.onboardingComplete) {
-      clipboardHistoryWindow = initClipboardHistoryWindow();
-      const boundsToUse = restoreClipboardHistoryBounds();
-      clipboardHistoryWindow.preload(boundsToUse);
-    }
+    // Always preload - even before onboarding completes, user may trigger hotkey.
+    clipboardHistoryWindow = initClipboardHistoryWindow();
+    const boundsToUse = restoreClipboardHistoryBounds();
+    clipboardHistoryWindow.preload(boundsToUse);
 
     // Update tray manager with current hotkeys for menu display
     if (trayManager && clipboardManager && transcriberManager) {
