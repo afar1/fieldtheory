@@ -174,9 +174,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   const [continuousContextEnabled, setContinuousContextEnabled] = useState(false);
   const [continuousContextHotkey, setContinuousContextHotkey] = useState('Shift+Command+4');
 
-  // Todo hotkey configuration
-  const [todoHotkey, setTodoHotkey] = useState('Command+Shift+T');
-
   // Additional hotkeys (SuperPaste, CommandLauncher, ImproveText, AutoImprove)
   const [superPasteHotkey, setSuperPasteHotkey] = useState('Command+Shift+V');
   const [commandLauncherHotkey, setCommandLauncherHotkey] = useState('Command+Shift+K');
@@ -208,9 +205,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   const [nameInput, setNameInput] = useState('');
   const [savingName, setSavingName] = useState(false);
 
-  // Superadmin state - for scenario testing panel access
-  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
-
   // Auto-improve transcripts state
   const [autoImprove, setAutoImprove] = useState(false);
   const [autoImproveMinWords, setAutoImproveMinWords] = useState(70);
@@ -222,24 +216,13 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   }>({ wordsImproved: 0, apiCalls: 0, inputTokens: 0, outputTokens: 0 });
   const [isResettingStats, setIsResettingStats] = useState(false);
 
-  // Local LLM state
-  const [useLocalLLM, setUseLocalLLM] = useState(false);
-  const [localLLMModels, setLocalLLMModels] = useState<Record<string, { name: string; filename: string; sizeBytes: number; description: string }>>({});
-  const [localLLMStatus, setLocalLLMStatus] = useState<Record<string, boolean>>({});
-  const [selectedLocalLLM, setSelectedLocalLLM] = useState<string>('llama-3.2-1b');
-  const [downloadingLocalLLM, setDownloadingLocalLLM] = useState<string | null>(null);
-  const [localLLMProgress, setLocalLLMProgress] = useState<{ downloaded: number; total: number } | null>(null);
-
   // Permission banner state - whether to show reminders for missing permissions.
   const [showPermissionReminders, setShowPermissionReminders] = useState(true);
   
   // Hide status labels - show only colored dots.
   const [hideStatusLabels, setHideStatusLabels] = useState(false);
   
-  
-  // Tasks tab - experimental feature.
-  const [tasksTabEnabled, setTasksTabEnabled] = useState(false);
-  
+
   // Show in Dock - whether app appears in Dock and Cmd+Tab.
   const [showInDock, setShowInDock] = useState(false);
 
@@ -326,25 +309,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         if (stats) setAutoImproveStats(stats);
       });
 
-      // Load local LLM settings
-      window.clipboardAPI?.getLocalLLMModels?.().then(models => {
-        setLocalLLMModels(models);
-      });
-      window.clipboardAPI?.getLocalLLMStatus?.().then(status => {
-        setLocalLLMStatus(status);
-      });
-      window.clipboardAPI?.getLocalLLMSelected?.().then(model => {
-        setSelectedLocalLLM(model);
-      });
-      window.clipboardAPI?.getUseLocalLLM?.().then(useLocal => {
-        setUseLocalLLM(useLocal);
-      });
-
-      // Subscribe to download progress
-      const unsubProgress = window.clipboardAPI?.onLocalLLMDownloadProgress?.((data) => {
-        setLocalLLMProgress({ downloaded: data.downloaded, total: data.total });
-      });
-
       // Load permission banner setting
       window.clipboardAPI.getHideScreenRecordingBanner?.().then(hide => {
         setShowPermissionReminders(!hide);
@@ -355,11 +319,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         setHideStatusLabels(hide);
       });
       
-      
-      // Load tasks tab enabled setting
-      window.clipboardAPI.getTasksTabEnabled?.().then(enabled => {
-        setTasksTabEnabled(enabled);
-      });
 
       // Load word substitutions
       window.clipboardAPI.getWordSubstitutions?.().then(subs => {
@@ -382,15 +341,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       });
     }
     
-    // Load todo hotkey
-    if (window.todoAPI) {
-      window.todoAPI.getHotkey().then(hotkey => {
-        if (hotkey) {
-          setTodoHotkey(hotkey);
-        }
-      });
-    }
-
     // Load additional hotkeys (SuperPaste, CommandLauncher)
     if (window.hotkeyAPI) {
       window.hotkeyAPI.getHotkey('superPaste').then(hotkey => {
@@ -515,65 +465,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       console.error('Failed to reset auto-improve stats:', err);
     } finally {
       setIsResettingStats(false);
-    }
-  };
-
-  // Handler for toggling use local LLM
-  const handleUseLocalLLMChange = async (useLocal: boolean) => {
-    if (!window.clipboardAPI?.setUseLocalLLM) return;
-
-    setUseLocalLLM(useLocal);
-    try {
-      await window.clipboardAPI.setUseLocalLLM(useLocal);
-    } catch (err) {
-      console.error('Failed to change use local LLM setting:', err);
-    }
-  };
-
-  // Handler for downloading local LLM model
-  const handleDownloadLocalLLM = async (model: string) => {
-    if (!window.clipboardAPI?.downloadLocalLLM || downloadingLocalLLM) return;
-
-    setDownloadingLocalLLM(model);
-    setLocalLLMProgress(null);
-    try {
-      const result = await window.clipboardAPI.downloadLocalLLM(model);
-      if (result.success) {
-        // Refresh status
-        const status = await window.clipboardAPI.getLocalLLMStatus?.();
-        if (status) setLocalLLMStatus(status);
-      }
-    } catch (err) {
-      console.error('Failed to download local LLM:', err);
-    } finally {
-      setDownloadingLocalLLM(null);
-      setLocalLLMProgress(null);
-    }
-  };
-
-  // Handler for deleting local LLM model
-  const handleDeleteLocalLLM = async (model: string) => {
-    if (!window.clipboardAPI?.deleteLocalLLM) return;
-
-    try {
-      await window.clipboardAPI.deleteLocalLLM(model);
-      // Refresh status
-      const status = await window.clipboardAPI.getLocalLLMStatus?.();
-      if (status) setLocalLLMStatus(status);
-    } catch (err) {
-      console.error('Failed to delete local LLM:', err);
-    }
-  };
-
-  // Handler for selecting local LLM model
-  const handleSelectLocalLLM = async (model: string) => {
-    if (!window.clipboardAPI?.setLocalLLMSelected) return;
-
-    setSelectedLocalLLM(model);
-    try {
-      await window.clipboardAPI.setLocalLLMSelected(model);
-    } catch (err) {
-      console.error('Failed to select local LLM:', err);
     }
   };
 
@@ -742,15 +633,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       .then(({ data }) => {
         setCallsign(data?.callsign || null);
       });
-  }, [session?.user?.id]);
-
-  // Check superadmin status when session changes
-  useEffect(() => {
-    if (!session?.user?.id) {
-      setIsSuperAdmin(false);
-      return;
-    }
-    window.scenarioAPI?.isSuperAdmin().then(setIsSuperAdmin);
   }, [session?.user?.id]);
 
   // Handle sign out - app quits after successful sign out.
@@ -1104,31 +986,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     }
   }, []);
 
-  // Handler for setting todo hotkey
-  const handleSetTodoHotkey = useCallback(async (hotkeyString: string) => {
-    setCapturingHotkey(null);
-    setHotkeyError(null);
-    
-    if (!window.todoAPI?.setHotkey) return;
-    
-    if (!hotkeyString || isModifierOnly(hotkeyString)) {
-      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
-      return;
-    }
-
-    try {
-      const success = await window.todoAPI.setHotkey(hotkeyString);
-      if (!success) {
-        setHotkeyError('Failed to register todo hotkey. It may be in use by another application.');
-      } else {
-        setTodoHotkey(hotkeyString);
-      }
-    } catch (err) {
-      setHotkeyError(err instanceof Error ? err.message : 'Failed to set todo hotkey');
-      console.error('Failed to set todo hotkey:', err);
-    }
-  }, []);
-
   // Handler for setting Super Paste hotkey
   const handleSetSuperPasteHotkey = useCallback(async (hotkeyString: string) => {
     setCapturingHotkey(null);
@@ -1281,8 +1138,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           handleSetFullScreenHotkey(hotkeyString);
         } else if (capturingHotkey === 'activeWindow') {
           handleSetActiveWindowHotkey(hotkeyString);
-        } else if (capturingHotkey === 'todo') {
-          handleSetTodoHotkey(hotkeyString);
         } else if (capturingHotkey === 'transcription') {
           handleSetTranscriptionHotkey(hotkeyString);
         } else if (capturingHotkey === 'secondaryTranscription') {
@@ -1299,7 +1154,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [capturingHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTodoHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey]);
+  }, [capturingHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey]);
 
   // Check permissions on mount and when status changes
   useEffect(() => {
@@ -2442,25 +2297,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                 Feedback
               </button>
             </div>
-
-            {/* Scenario Testing - superadmin only */}
-            {isSuperAdmin && (
-              <>
-                <SectionHeader title="Developer" />
-                <div style={styles.row}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <span style={styles.rowLabel}>Scenario Testing</span>
-                    <span style={styles.rowHint}>Simulate different app states for testing</span>
-                  </div>
-                  <button
-                    onClick={() => window.scenarioAPI?.showPanel()}
-                    style={styles.linkBtn}
-                  >
-                    Open
-                  </button>
-                </div>
-              </>
-            )}
 
           </div>
         );

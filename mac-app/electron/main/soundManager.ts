@@ -3,74 +3,25 @@ import path from 'path';
 import { exec } from 'child_process';
 import { PreferencesManager } from './preferences';
 import { NativeHelper } from './nativeHelper';
-import { createLogger } from './logger';
-
-const log = createLogger('Sound');
-
-/**
- * Available sound options that users can choose from.
- * Each category has different sounds suited for that action type.
- */
-export const AVAILABLE_SOUNDS = {
-  // Click sounds - good for start/stop recording
-  clicks: [
-    { id: 'ButtonClickDown.mp3', name: 'Button Click Down' },
-    { id: 'ButtonClickUp.mp3', name: 'Button Click Up' },
-    { id: 'Click.mp3', name: 'Click' },
-    { id: 'click.wav', name: 'Click (Original)' },
-    { id: 'PhotoShutter.mp3', name: 'Photo Shutter' },
-    { id: 'Beep.mp3', name: 'Beep' },
-    { id: 'Thump.mp3', name: 'Thump' },
-  ],
-  
-  // UI sounds - good for window/menu actions
-  ui: [
-    { id: 'MenuOpen.mp3', name: 'Menu Open' },
-    { id: 'MenuClose.mp3', name: 'Menu Close' },
-    { id: 'WindowOpen.mp3', name: 'Window Open' },
-    { id: 'WindowClose.mp3', name: 'Window Close' },
-    { id: 'tab.wav', name: 'Tab (Original)' },
-  ],
-  
-  // Alert sounds - good for errors/cancellations
-  alerts: [
-    { id: 'AlertBonk.mp3', name: 'Bonk' },
-    { id: 'AlertIndigo.mp3', name: 'Indigo' },
-    { id: 'AlertQuack.mp3', name: 'Quack' },
-    { id: 'AlertSosumi.mp3', name: 'Sosumi' },
-    { id: 'error.wav', name: 'Error (Original)' },
-  ],
-  
-  // Success sounds - good for completion
-  success: [
-    { id: 'EmailMailSent.mp3', name: 'Mail Sent' },
-  ],
-
-  // Discovery sounds - for artifacts/readings
-  discovery: [
-    { id: 'ArtifactDiscovery.wav', name: 'Artifact Discovery' },
-  ],
-} as const;
-
-/**
- * Get all available sounds as a flat list with categories.
- */
-export function getAllSounds(): Array<{ id: string; name: string; category: string }> {
-  const result: Array<{ id: string; name: string; category: string }> = [];
-  
-  for (const [category, sounds] of Object.entries(AVAILABLE_SOUNDS)) {
-    for (const sound of sounds) {
-      result.push({ ...sound, category });
-    }
-  }
-  
-  return result;
-}
 
 /**
  * Sound event types that the app can trigger.
  */
 export type SoundEvent = 'recordingStart' | 'recordingStop' | 'recordingCancel' | 'windowOpen' | 'windowClose' | 'paste' | 'transcribing' | 'artifactDiscovery';
+
+/**
+ * Default sound files for each event type.
+ */
+const DEFAULT_SOUNDS: Record<SoundEvent, string> = {
+  recordingStart: 'click.wav',
+  recordingStop: 'click.wav',
+  recordingCancel: 'error.wav',
+  windowOpen: 'tab.wav',
+  windowClose: 'tab.wav',
+  paste: 'click.wav',
+  transcribing: 'click.wav',
+  artifactDiscovery: 'ArtifactDiscovery.wav',
+};
 
 /**
  * SoundManager handles playing UI sounds based on user preferences.
@@ -98,7 +49,7 @@ export class SoundManager {
   }
 
   /**
-   * Preload all available sounds for instant playback.
+   * Preload all default sounds for instant playback.
    * Call once at app startup after NativeHelper is ready.
    */
   async preloadAllSounds(): Promise<void> {
@@ -106,8 +57,8 @@ export class SoundManager {
       return;
     }
 
-    const allSounds = getAllSounds();
-    const soundPaths = allSounds.map(s => path.join(this.soundsDir, s.id));
+    const uniqueSounds = [...new Set(Object.values(DEFAULT_SOUNDS))];
+    const soundPaths = uniqueSounds.map(s => path.join(this.soundsDir, s));
 
     await this.nativeHelper.preloadSounds(soundPaths);
   }
@@ -132,7 +83,7 @@ export class SoundManager {
       });
     }
   }
-  
+
   /**
    * Play a sound for a given event type, if sounds are enabled.
    * Librarian sound (artifactDiscovery) has its own toggle, separate from other sounds.
@@ -142,8 +93,7 @@ export class SoundManager {
     if (event === 'artifactDiscovery') {
       const librarianSoundEnabled = this.preferences.getPreference('librarianSoundEnabled') ?? true;
       if (!librarianSoundEnabled) return;
-      const soundFile = this.preferences.getPreference('artifactDiscoverySound') ?? 'ArtifactDiscovery.wav';
-      if (soundFile) this.playFile(soundFile);
+      this.playFile(DEFAULT_SOUNDS.artifactDiscovery);
       return;
     }
 
@@ -151,84 +101,38 @@ export class SoundManager {
     const soundsEnabled = this.preferences.getPreference('soundsEnabled') ?? false;
     if (!soundsEnabled) return;
 
-    let soundFile: string | undefined;
-
-    switch (event) {
-      case 'recordingStart':
-        soundFile = this.preferences.getPreference('recordingStartSound');
-        break;
-      case 'recordingStop':
-        soundFile = this.preferences.getPreference('recordingStopSound');
-        break;
-      case 'recordingCancel':
-        soundFile = this.preferences.getPreference('recordingCancelSound');
-        break;
-      case 'windowOpen':
-        soundFile = this.preferences.getPreference('windowOpenSound');
-        break;
-      case 'windowClose':
-        soundFile = this.preferences.getPreference('windowCloseSound');
-        break;
-      case 'paste':
-        soundFile = this.preferences.getPreference('pasteSound');
-        break;
-      case 'transcribing':
-        soundFile = this.preferences.getPreference('transcribingSound');
-        break;
-    }
-
+    const soundFile = DEFAULT_SOUNDS[event];
     if (soundFile) {
       this.playFile(soundFile);
     }
   }
-  
+
   /**
    * Check if sounds are currently enabled.
    */
   isEnabled(): boolean {
-    return this.preferences.getPreference('soundsEnabled') ?? true;
+    return this.preferences.getPreference('soundsEnabled') ?? false;
   }
-  
+
   /**
    * Get the current sound configuration.
    */
   getConfig(): {
     enabled: boolean;
     librarianEnabled: boolean;
-    recordingStart: string | undefined;
-    recordingStop: string | undefined;
-    recordingCancel: string | undefined;
-    windowOpen: string | undefined;
-    windowClose: string | undefined;
-    paste: string | undefined;
-    transcribing: string | undefined;
   } {
     return {
       enabled: this.preferences.getPreference('soundsEnabled') ?? false,
       librarianEnabled: this.preferences.getPreference('librarianSoundEnabled') ?? true,
-      recordingStart: this.preferences.getPreference('recordingStartSound'),
-      recordingStop: this.preferences.getPreference('recordingStopSound'),
-      recordingCancel: this.preferences.getPreference('recordingCancelSound'),
-      windowOpen: this.preferences.getPreference('windowOpenSound'),
-      windowClose: this.preferences.getPreference('windowCloseSound'),
-      paste: this.preferences.getPreference('pasteSound'),
-      transcribing: this.preferences.getPreference('transcribingSound'),
     };
   }
-  
+
   /**
    * Update sound settings.
    */
   async setConfig(config: {
     enabled?: boolean;
     librarianEnabled?: boolean;
-    recordingStart?: string;
-    recordingStop?: string;
-    recordingCancel?: string;
-    windowOpen?: string;
-    windowClose?: string;
-    paste?: string;
-    transcribing?: string;
   }): Promise<void> {
     const updates: Record<string, unknown> = {};
 
@@ -238,31 +142,10 @@ export class SoundManager {
     if (config.librarianEnabled !== undefined) {
       updates.librarianSoundEnabled = config.librarianEnabled;
     }
-    if (config.recordingStart !== undefined) {
-      updates.recordingStartSound = config.recordingStart;
-    }
-    if (config.recordingStop !== undefined) {
-      updates.recordingStopSound = config.recordingStop;
-    }
-    if (config.recordingCancel !== undefined) {
-      updates.recordingCancelSound = config.recordingCancel;
-    }
-    if (config.windowOpen !== undefined) {
-      updates.windowOpenSound = config.windowOpen;
-    }
-    if (config.windowClose !== undefined) {
-      updates.windowCloseSound = config.windowClose;
-    }
-    if (config.paste !== undefined) {
-      updates.pasteSound = config.paste;
-    }
-    if (config.transcribing !== undefined) {
-      updates.transcribingSound = config.transcribing;
-    }
 
     await this.preferences.save(updates);
   }
-  
+
   /**
    * Preview a sound without affecting settings.
    */

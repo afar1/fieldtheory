@@ -67,6 +67,9 @@ export class QuotaManager extends EventEmitter {
   // When not logged in, we enforce free tier limits regardless of cached tier.
   private sessionChecker: (() => boolean) | null = null;
 
+  // Flag to avoid spamming "optimistic pro tier" log message
+  private optimisticTierLogged = false;
+
   constructor(preferencesManager: PreferencesManager) {
     super();
     this.preferencesManager = preferencesManager;
@@ -123,7 +126,10 @@ export class QuotaManager extends EventEmitter {
       const msSinceUpdate = now - updatedAt;
 
       if (msSinceUpdate > 60000) {
-        log.info('Using optimistic pro tier during initial fetch window');
+        if (!this.optimisticTierLogged) {
+          log.info('Using optimistic pro tier during initial fetch window');
+          this.optimisticTierLogged = true;
+        }
         return 'pro';
       }
     }
@@ -216,6 +222,7 @@ export class QuotaManager extends EventEmitter {
    * Only accepts 'free' or 'pro' since 'anonymous' is a runtime-only state.
    */
   async setCachedTier(tier: 'free' | 'pro'): Promise<void> {
+    this.optimisticTierLogged = false; // Reset so we can log again if needed
     await this.saveQuotas({
       ...this.quotas,
       cachedTier: tier,

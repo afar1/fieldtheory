@@ -579,11 +579,6 @@ export default function ClipboardHistory() {
   const [usageHovered, setUsageHovered] = useState(false);
   const [priorityMicQuotaExhausted, setPriorityMicQuotaExhausted] = useState(false);
 
-  // Scenario testing state (superadmin only)
-  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
-  const [hasSimOverrides, setHasSimOverrides] = useState(false);
-  const [tasksTabEnabled, setTasksTabEnabled] = useState(false);
-
   // Narration playback state for footer controls
   const [narrationPlayback, setNarrationPlayback] = useState<{
     status: 'idle' | 'generating' | 'playing' | 'paused';
@@ -614,29 +609,12 @@ export default function ClipboardHistory() {
     });
   }, [isVisible, authSession?.user?.id]); // Refresh stats when user changes
   
-  // Load tasks tab setting.
-  useEffect(() => {
-    window.clipboardAPI?.getTasksTabEnabled?.().then(enabled => {
-      setTasksTabEnabled(enabled);
-    });
-  }, [isVisible]);
-  
   // Load show in dock setting (affects header layout for stoplight buttons).
   useEffect(() => {
     window.clipboardAPI?.getShowInDock?.().then(show => {
       setShowInDock(show);
     });
   }, [isVisible]);
-  
-  useEffect(() => {
-    const unsubscribe = window.clipboardAPI?.onTasksTabToggled?.((enabled) => {
-      setTasksTabEnabled(enabled);
-      if (!enabled && viewMode === 'todo') {
-        setViewMode('commands');
-      }
-    });
-    return () => unsubscribe?.();
-  }, [viewMode]);
   
   // Fetch quota usage on mount and when visibility changes.
   useEffect(() => {
@@ -687,29 +665,6 @@ export default function ClipboardHistory() {
 
     const cleanup = window.quotaAPI.onQuotaChanged((formatted) => {
       setQuotaUsage(formatted);
-    });
-
-    return cleanup;
-  }, []);
-
-  // Check superadmin status and override state for Sim badge
-  useEffect(() => {
-    if (!window.scenarioAPI) return;
-
-    // Check superadmin status
-    window.scenarioAPI.isSuperAdmin().then((result) => setIsSuperAdmin(result ?? false));
-
-    // Check for active overrides
-    window.scenarioAPI.hasActiveOverrides().then((result) => setHasSimOverrides(result ?? false));
-
-    // Listen for override changes
-    const cleanup = window.scenarioAPI.onOverridesChanged((overrides) => {
-      const hasOverrides = !!(overrides && (
-        overrides.tier !== undefined ||
-        overrides.authState !== undefined ||
-        (overrides.quotaPercentages && Object.keys(overrides.quotaPercentages).length > 0)
-      ));
-      setHasSimOverrides(hasOverrides);
     });
 
     return cleanup;
@@ -1514,7 +1469,8 @@ export default function ClipboardHistory() {
 
     // Listen for sound events from main process.
     const unsubscribePlaySound = window.clipboardAPI.onPlaySound?.((soundId) => {
-      rendererSoundManager.play(soundId);
+      // Cast to 'any' - renderer gracefully handles unknown sound IDs
+      rendererSoundManager.play(soundId as 'windowOpen' | 'windowClose' | 'artifactDiscovery');
     });
 
     // Listen for todo view hotkey (Cmd+Shift+T).
@@ -1607,7 +1563,7 @@ export default function ClipboardHistory() {
   // Also handles showing new readings in immersive mode.
   useEffect(() => {
     const pollLibrarianStatus = async () => {
-      const status = await window.librarianAPI?.pollStatus();
+      const status = await window.librarianAPI?.pollStatus?.();
       if (!status) return;
 
       // If there's a pending reading, show it in immersive mode
@@ -2008,8 +1964,7 @@ export default function ClipboardHistory() {
           setShowSettings(false);
           setViewMode(prev => {
             // Build visible tabs array in order, then cycle backwards
-            const visibleTabs: ViewMode[] = ['clipboard'];
-            if (tasksTabEnabled) visibleTabs.push('todo');
+            const visibleTabs: ViewMode[] = ['clipboard', 'todo'];
 
             const currentIndex = visibleTabs.indexOf(prev);
             if (currentIndex === -1) return 'clipboard';
@@ -2020,8 +1975,7 @@ export default function ClipboardHistory() {
           setShowSettings(false);
           setViewMode(prev => {
             // Build visible tabs array in order, then cycle forwards
-            const visibleTabs: ViewMode[] = ['clipboard'];
-            if (tasksTabEnabled) visibleTabs.push('todo');
+            const visibleTabs: ViewMode[] = ['clipboard', 'todo'];
 
             const currentIndex = visibleTabs.indexOf(prev);
             if (currentIndex === -1) return 'clipboard';
@@ -3442,7 +3396,7 @@ export default function ClipboardHistory() {
             overflow: 'hidden',
             transition: 'height 0.3s ease, min-height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease',
           }}>
-          {(['clipboard', ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
+          {(['clipboard', 'todo'] as ViewMode[]).map((mode) => {
             const isSelected = viewMode === mode && !showSettings;
             const bgColor = isSelected ? theme.accent : 'transparent';
 
@@ -4641,12 +4595,33 @@ export default function ClipboardHistory() {
                           marginBottom: combinedText ? '4px' : '0px',
                           flexWrap: 'wrap',
                         }}>
-                          {[...stackImages].reverse().map((item) => (
+                          {[...stackImages].reverse().map((item, thumbIndex) => (
                             <StackImageThumbnail
                               key={item.id}
                               item={item}
                               onHover={setHoveredImageId}
-                              onPreview={setPreview}
+                              onPreview={(previewContent) => {
+                                // Set up full stack preview sequence for arrow key navigation
+                                const previewItems = getStackPreviewItems(stackItems);
+                                if (previewItems.length > 0) {
+                                  setStackPreviewItems(previewItems);
+                                  // Find the index of clicked image in preview items
+                                  // Images are reversed for display, so calculate correct index
+                                  const reversedIndex = stackImages.length - 1 - thumbIndex;
+                                  const previewIndex = previewItems.findIndex(
+                                    p => p.type === 'image' && p.itemId === stackImages[reversedIndex]?.id
+                                  );
+                                  setStackPreviewIndex(previewIndex >= 0 ? previewIndex : 0);
+                                  setPreview(previewContent);
+                                  // Prefetch all images in the stack
+                                  const imageItemIds = stackItems
+                                    .filter((i: ClipboardItem) => i.imageData || i.thumbnailData)
+                                    .map((i: ClipboardItem) => i.id);
+                                  prefetchImages(imageItemIds);
+                                } else {
+                                  setPreview(previewContent);
+                                }
+                              }}
                             />
                           ))}
                         </div>
@@ -6242,34 +6217,6 @@ export default function ClipboardHistory() {
               </svg>
             </button>
           </div>
-        )}
-
-        {/* Release notes toggle icon - small square icon to toggle release notes popup */}
-        {showReleaseNotes && (
-          <button
-            onClick={() => {
-              setShowReleaseNotes(false);
-              setReleaseNotesLatestMode(false);
-            }}
-            style={{
-              background: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
-              border: `1px solid ${theme.border}`,
-              borderRadius: '4px',
-              cursor: 'pointer',
-              padding: '3px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-            title="Hide release notes"
-          >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={theme.text} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-              <polyline points="14 2 14 8 20 8"/>
-              <line x1="16" y1="13" x2="8" y2="13"/>
-              <line x1="16" y1="17" x2="8" y2="17"/>
-            </svg>
-          </button>
         )}
 
         {/* Right side: update notification OR version + settings button */}

@@ -718,11 +718,10 @@ export class TranscriberManager extends EventEmitter {
       }
 
       if (shouldTriggerImprovement && FEATURE_IMPROVE_ENABLED && this.clipboardManager) {
-        // Check if we can improve: either local LLM is enabled or we have an access token for cloud API.
-        const useLocalLLM = this.preferences.getPreference('useLocalLLM') as boolean | undefined;
+        // Check if we can improve: need an access token for cloud API.
         const accessToken = this.accessTokenGetter?.();
 
-        if (useLocalLLM || accessToken) {
+        if (accessToken) {
           // Bail silently if no text to improve
           if (!cleanedText || cleanedText.trim().length === 0) {
             // No text to improve - skip silently
