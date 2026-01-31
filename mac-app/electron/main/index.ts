@@ -12,12 +12,9 @@ import { PreferencesManager } from './preferences';
 import { ClipboardManager } from './clipboardManager';
 import { ModelSize } from './modelManager';
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
-import { MobileSync } from './mobileSync';
-import { SharedClipboardSync, SharedClipboardQueryOptions } from './sharedClipboardSync';
-import { SocialSync } from './socialSync';
+import { FeedbackManager } from './feedbackManager';
 import { AuthManager } from './authManager';
 import { createUserDataManager, UserDataManager } from './userDataManager';
-import { SharedClipboardIPCChannels } from './types/clipboard';
 import { SocialIPCChannels } from './types/social';
 import {
   AudioIPCChannels,
@@ -36,21 +33,16 @@ import { ClipboardItem, isTerminalApp, isIDEWithTerminal, obscureHomePath } from
 import { getHotkeyManager } from './hotkeyManager';
 import {
   improveTranscript,
-  setLocalLLMManager as setEngineerLocalLLMManager,
-  setUseLocalLLM as setEngineerUseLocalLLM,
   setSupabaseUrl as setEngineerSupabaseUrl,
 } from './promptEngineer';
 import { OnboardingWindow, OnboardingStep } from './onboardingWindow';
 import { OnboardingIPCChannels } from './types/onboarding';
-import { TodoIPCChannels } from './types/todo';
 import { CursorStatusManager, CursorStatusState } from './cursorStatusManager';
 import { QuotaManager } from './quotaManager';
 import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, PortableCommand } from './commandsManager';
 import { CommandsIPCChannels } from './types/commands';
 import { CommandLauncherWindow } from './commandLauncherWindow';
-import { ScenarioTestingWindow } from './scenarioTestingWindow';
-import { LocalLLMManager, LLMModelSize } from './localLLMManager';
 import { LibrarianManager, Reading, ReadingMeta, WatchedDir } from './librarianManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
 import { MESSAGES } from './messages';
@@ -148,10 +140,7 @@ let clipboardManager: ClipboardManager | null = null;
 let clipboardHistoryWindow: ClipboardHistoryWindow | null = null;
 let authManager: AuthManager | null = null;
 let userDataManager: UserDataManager | null = null;
-let mobileSync: MobileSync | null = null;
-let localLLMManager: LocalLLMManager | null = null;
-let sharedClipboardSync: SharedClipboardSync | null = null;
-let socialSync: SocialSync | null = null;
+let feedbackManager: FeedbackManager | null = null;
 let onboardingWindow: OnboardingWindow | null = null;
 let cursorStatusManager: CursorStatusManager | null = null;
 let quotaManager: QuotaManager | null = null;
@@ -159,7 +148,6 @@ let diagnosticsCollector: DiagnosticsCollector | null = null;
 let librarianManager: LibrarianManager | null = null;
 let commandsManager: CommandsManager | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
-let scenarioTestingWindow: ScenarioTestingWindow | null = null;
 let metricsManager: MetricsManager | null = null;
 
 // Track pending update state so windows can query it when they open.
@@ -2945,81 +2933,6 @@ function setupClipboardIPCHandlers(): void {
   });
 
   // =========================================================================
-  // =========================================================================
-  // Local LLM Management - Download and use local models for transcript improvement
-  // =========================================================================
-
-  // Get available local LLM models and their info.
-  ipcMain.handle(ClipboardIPCChannels.GET_LOCAL_LLM_MODELS, async () => {
-    return localLLMManager?.getAvailableModels() ?? {};
-  });
-
-  // Get download status for all local LLM models.
-  ipcMain.handle(ClipboardIPCChannels.GET_LOCAL_LLM_STATUS, async () => {
-    return localLLMManager?.getDownloadStatus() ?? {};
-  });
-
-  // Get the currently selected local LLM model.
-  ipcMain.handle(ClipboardIPCChannels.GET_LOCAL_LLM_SELECTED, async () => {
-    return localLLMManager?.getSelectedModel() ?? 'llama-3.2-1b';
-  });
-
-  // Set the selected local LLM model.
-  ipcMain.handle(ClipboardIPCChannels.SET_LOCAL_LLM_SELECTED, async (_event, model: LLMModelSize) => {
-    try {
-      await localLLMManager?.setSelectedModel(model);
-      await preferencesManager?.save({ selectedLocalLLM: model });
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to set model' };
-    }
-  });
-
-  // Download a local LLM model with progress events.
-  ipcMain.handle(ClipboardIPCChannels.DOWNLOAD_LOCAL_LLM, async (event, model: LLMModelSize) => {
-    if (!localLLMManager) {
-      return { success: false, error: 'Local LLM manager not initialized' };
-    }
-
-    try {
-      await localLLMManager.downloadModelForSize(model, (downloaded, total) => {
-        // Send progress to renderer
-        event.sender.send('local-llm:download-progress', { model, downloaded, total });
-      });
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Download failed' };
-    }
-  });
-
-  // Delete a local LLM model.
-  ipcMain.handle(ClipboardIPCChannels.DELETE_LOCAL_LLM, async (_event, model: LLMModelSize) => {
-    try {
-      await localLLMManager?.deleteModelForSize(model);
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Delete failed' };
-    }
-  });
-
-  // Get whether to use local LLM for transcript improvement.
-  ipcMain.handle(ClipboardIPCChannels.GET_USE_LOCAL_LLM, async () => {
-    return preferencesManager?.getPreference('useLocalLLM') ?? false;
-  });
-
-  // Set whether to use local LLM for transcript improvement.
-  ipcMain.handle(ClipboardIPCChannels.SET_USE_LOCAL_LLM, async (_event, useLocal: boolean) => {
-    try {
-      await preferencesManager?.save({ useLocalLLM: useLocal });
-      // Update promptEngineer with the new setting
-      setEngineerUseLocalLLM(useLocal);
-      return { success: true };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Failed to save setting' };
-    }
-  });
-
-  // =========================================================================
   // Improved Content Management - Save/clear improved versions of transcriptions
   // =========================================================================
 
@@ -3140,37 +3053,6 @@ function setupClipboardIPCHandlers(): void {
         email: session.user.email,
       } : null,
     };
-  });
-
-  ipcMain.handle(ClipboardIPCChannels.SYNC_MOBILE_TRANSCRIPTS, async () => {
-    if (!mobileSync) {
-      return 0;
-    }
-    return await mobileSync.syncTranscripts();
-  });
-
-  // Force full re-sync - clears cache and re-syncs all transcripts.
-  // This fixes source attribution for items that were synced before the fix.
-  ipcMain.handle(ClipboardIPCChannels.FORCE_SYNC_ALL, async () => {
-    if (!mobileSync) {
-      return 0;
-    }
-    return await mobileSync.forceSyncAll();
-  });
-
-  ipcMain.handle(ClipboardIPCChannels.GET_SYNC_ENABLED, async () => {
-    if (!mobileSync) {
-      return false;
-    }
-    return mobileSync.isSyncEnabled();
-  });
-
-  ipcMain.handle(ClipboardIPCChannels.SET_SYNC_ENABLED, async (_event, enabled: boolean) => {
-    if (!mobileSync) {
-      return false;
-    }
-    mobileSync.setSyncEnabled(enabled);
-    return true;
   });
 
   // =========================================================================
@@ -3376,155 +3258,6 @@ function setupClipboardIPCHandlers(): void {
     return authManager?.isSuperAdmin() ?? false;
   });
 
-  // =========================================================================
-  // Scenario Testing IPC Handlers - Superadmin-only testing panel
-  // =========================================================================
-
-  // Check superadmin status (always uses REAL auth, not simulated)
-  ipcMain.handle('scenario:isSuperAdmin', (): boolean => {
-    return authManager?.isSuperAdmin() ?? false;
-  });
-
-  // Show/hide the scenario testing panel
-  ipcMain.handle('scenario:showPanel', async (): Promise<boolean> => {
-    if (!authManager?.isSuperAdmin()) {
-      console.log('[Scenario] Panel access denied - not superadmin');
-      return false;
-    }
-    // Prevent clipboard history from auto-hiding while scenario testing is active
-    clipboardHistoryWindow?.setScenarioTestingActive(true);
-    await scenarioTestingWindow?.show();
-    return true;
-  });
-
-  ipcMain.handle('scenario:hidePanel', async (): Promise<void> => {
-    scenarioTestingWindow?.hide();
-    // Re-enable clipboard history auto-hide when scenario testing closes
-    clipboardHistoryWindow?.setScenarioTestingActive(false);
-  });
-
-  // Get current overrides from preferences
-  ipcMain.handle('scenario:getOverrides', (): any => {
-    return preferencesManager?.getPreference('devOverrides') ?? null;
-  });
-
-  // Set tier override
-  ipcMain.handle('scenario:setTierOverride', async (_event, tier: 'free' | 'pro' | null): Promise<boolean> => {
-    if (!authManager?.isSuperAdmin()) return false;
-
-    const current = preferencesManager?.getPreference('devOverrides') ?? {};
-    if (tier === null) {
-      delete current.tier;
-    } else {
-      current.tier = tier;
-    }
-
-    // Save to preferences
-    const hasOverrides = Object.keys(current).length > 0;
-    await preferencesManager?.save({ devOverrides: hasOverrides ? current : undefined });
-
-    // Apply to quota manager
-    quotaManager?.setDevOverrides(hasOverrides ? current : null);
-
-    // Broadcast change to all windows
-    broadcastOverridesChanged(hasOverrides ? current : null);
-    return true;
-  });
-
-  // Set quota percentage override
-  ipcMain.handle('scenario:setQuotaOverride', async (
-    _event,
-    feature: 'priorityMic' | 'autoStack' | 'textImprove',
-    percentage: number | null
-  ): Promise<boolean> => {
-    if (!authManager?.isSuperAdmin()) return false;
-
-    const current = preferencesManager?.getPreference('devOverrides') ?? {};
-    if (!current.quotaPercentages) {
-      current.quotaPercentages = {};
-    }
-
-    if (percentage === null) {
-      delete current.quotaPercentages[feature];
-      if (Object.keys(current.quotaPercentages).length === 0) {
-        delete current.quotaPercentages;
-      }
-    } else {
-      current.quotaPercentages[feature] = Math.max(0, Math.min(100, percentage));
-    }
-
-    // Save to preferences
-    const hasOverrides = Object.keys(current).length > 0;
-    await preferencesManager?.save({ devOverrides: hasOverrides ? current : undefined });
-
-    // Apply to quota manager
-    quotaManager?.setDevOverrides(hasOverrides ? current : null);
-
-    // Broadcast change
-    broadcastOverridesChanged(hasOverrides ? current : null);
-    return true;
-  });
-
-  // Set auth state override
-  ipcMain.handle('scenario:setAuthStateOverride', async (
-    _event,
-    state: 'logged_out' | 'offline' | null
-  ): Promise<boolean> => {
-    if (!authManager?.isSuperAdmin()) return false;
-
-    const current = preferencesManager?.getPreference('devOverrides') ?? {};
-    if (state === null) {
-      delete current.authState;
-    } else {
-      current.authState = state;
-    }
-
-    // Save to preferences
-    const hasOverrides = Object.keys(current).length > 0;
-    await preferencesManager?.save({ devOverrides: hasOverrides ? current : undefined });
-
-    // Apply auth state simulation
-    if (state === 'logged_out') {
-      authManager?.simulateState?.('SIGNED_OUT', {});
-    } else if (state === 'offline') {
-      authManager?.simulateState?.('OFFLINE_MODE', {});
-    } else {
-      authManager?.resetSimulator?.();
-    }
-
-    // Broadcast change
-    broadcastOverridesChanged(hasOverrides ? current : null);
-    return true;
-  });
-
-  // Reset all overrides
-  ipcMain.handle('scenario:resetAll', async (): Promise<boolean> => {
-    if (!authManager?.isSuperAdmin()) return false;
-
-    await preferencesManager?.save({ devOverrides: undefined });
-    quotaManager?.clearDevOverrides();
-    authManager?.resetSimulator?.();
-
-    // Broadcast change
-    broadcastOverridesChanged(null);
-    return true;
-  });
-
-  // Check if any overrides are active
-  ipcMain.handle('scenario:hasActiveOverrides', (): boolean => {
-    const overrides = preferencesManager?.getPreference('devOverrides');
-    return overrides !== undefined && Object.keys(overrides).length > 0;
-  });
-
-  // Helper to broadcast override changes to all windows
-  function broadcastOverridesChanged(overrides: any) {
-    BrowserWindow.getAllWindows().forEach(win => {
-      if (!win.isDestroyed()) {
-        win.webContents.send('scenario:overridesChanged', overrides);
-      }
-    });
-  }
-
   // Open external URL in default browser (for Stripe checkout, etc).
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
     await shell.openExternal(url);
@@ -3533,100 +3266,6 @@ function setupClipboardIPCHandlers(): void {
   // Reveal file in Finder (macOS).
   ipcMain.handle('shell:showItemInFolder', async (_event, fullPath: string) => {
     shell.showItemInFolder(fullPath);
-  });
-
-  // =========================================================================
-  // Todo IPC Handlers - Bidirectional sync with Supabase
-  // =========================================================================
-
-  ipcMain.handle('todo:isAuthenticated', async () => {
-    if (!authManager) {
-      return false;
-    }
-    return authManager.isAuthenticated();
-  });
-
-  ipcMain.handle(TodoIPCChannels.GET_TODOS, async () => {
-    if (!mobileSync) {
-      return [];
-    }
-    return mobileSync.getTodos();
-  });
-
-  ipcMain.handle(TodoIPCChannels.SYNC_TODOS, async () => {
-    if (!mobileSync) {
-      return [];
-    }
-    return await mobileSync.syncTodos();
-  });
-
-  ipcMain.handle(TodoIPCChannels.CREATE_TODO, async (_event, text: string) => {
-    if (!mobileSync) {
-      return null;
-    }
-    return await mobileSync.createTodo(text);
-  });
-
-  ipcMain.handle(TodoIPCChannels.UPDATE_TODO, async (_event, id: string, text: string) => {
-    if (!mobileSync) {
-      return null;
-    }
-    return await mobileSync.updateTodo(id, text);
-  });
-
-  ipcMain.handle(TodoIPCChannels.TOGGLE_TODO, async (_event, id: string) => {
-    if (!mobileSync) {
-      return null;
-    }
-    return await mobileSync.toggleTodo(id);
-  });
-
-  ipcMain.handle(TodoIPCChannels.DELETE_TODO, async (_event, id: string) => {
-    if (!mobileSync) {
-      return false;
-    }
-    return await mobileSync.deleteTodo(id);
-  });
-
-  ipcMain.handle(TodoIPCChannels.DELETE_TODOS, async (_event, ids: string[]) => {
-    if (!mobileSync) {
-      return false;
-    }
-    return await mobileSync.deleteTodos(ids);
-  });
-
-  ipcMain.handle(TodoIPCChannels.COMPLETE_TODOS, async (_event, ids: string[]) => {
-    if (!mobileSync) {
-      return false;
-    }
-    return await mobileSync.completeTodos(ids);
-  });
-
-  // Todo hotkey management - stored in preferences.
-  ipcMain.handle(TodoIPCChannels.GET_TODO_HOTKEY, async () => {
-    if (!preferencesManager) {
-      return 'Command+Shift+T';
-    }
-    const prefs = await preferencesManager.load();
-    return prefs.todoHotkey || 'Command+Shift+T';
-  });
-
-  ipcMain.handle(TodoIPCChannels.SET_TODO_HOTKEY, async (_event, hotkey: string) => {
-    if (!preferencesManager) {
-      return false;
-    }
-
-    // Use HotkeyManager.change() to atomically change the hotkey
-    const hotkeyManager = getHotkeyManager();
-    const result = hotkeyManager.change('todo', hotkey);
-
-    if (result.success) {
-      await preferencesManager.save({ todoHotkey: hotkey });
-      return true;
-    }
-
-    console.error('[Main] Failed to change todo hotkey:', result.error);
-    return false;
   });
 
   // =========================================================================
@@ -4335,356 +3974,133 @@ function setupClipboardIPCHandlers(): void {
   });
 
   // =========================================================================
-  // Shared Clipboard IPC Handlers - Shared clipboard for collaboration
+  // Feedback IPC Handlers
   // =========================================================================
 
-  ipcMain.handle(SharedClipboardIPCChannels.QUERY_TEAM_ITEMS, async (_event, options?: SharedClipboardQueryOptions) => {
-    if (!sharedClipboardSync) {
-      return [];
-    }
-    return await sharedClipboardSync.queryItems(options);
-  });
-
-  ipcMain.handle(SharedClipboardIPCChannels.GET_TEAM_ITEM, async (_event, id: string) => {
-    if (!sharedClipboardSync) {
-      return null;
-    }
-    return await sharedClipboardSync.getItem(id);
-  });
-
-  ipcMain.handle(SharedClipboardIPCChannels.SHARE_TO_TEAM, async (_event, localItemId: number) => {
-    if (!sharedClipboardSync) {
-      return null;
-    }
-    const teamItem = await sharedClipboardSync.shareToTeam(localItemId);
-    
-    // Broadcast to all windows that a team item was added.
-    if (teamItem) {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(SharedClipboardIPCChannels.TEAM_ITEM_ADDED, teamItem);
-        }
-      });
-    }
-    
-    return teamItem;
-  });
-
-  ipcMain.handle(SharedClipboardIPCChannels.SHARE_STACK_TO_TEAM, async (_event, localItemIds: number[]) => {
-    if (!sharedClipboardSync) {
-      return null;
-    }
-    return await sharedClipboardSync.shareStackToTeam(localItemIds);
-  });
-
-  ipcMain.handle(SharedClipboardIPCChannels.DELETE_TEAM_ITEM, async (_event, id: string) => {
-    if (!sharedClipboardSync) {
-      return false;
-    }
-    const success = await sharedClipboardSync.deleteItem(id);
-    
-    if (success) {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(SharedClipboardIPCChannels.TEAM_ITEM_DELETED, id);
-        }
-      });
-    }
-    
-    return success;
-  });
-
-  ipcMain.handle(SharedClipboardIPCChannels.UPDATE_TEAM_STACK_ID, async (_event, itemIds: string[], stackId: string | null) => {
-    if (!sharedClipboardSync) {
-      return false;
-    }
-    return await sharedClipboardSync.updateStackId(itemIds, stackId);
-  });
-
-  ipcMain.handle(SharedClipboardIPCChannels.COPY_TO_PERSONAL, async (_event, teamItemId: string) => {
-    if (!sharedClipboardSync) {
-      return null;
-    }
-    return await sharedClipboardSync.copyToPersonal(teamItemId);
-  });
-
-  ipcMain.handle(SharedClipboardIPCChannels.COPY_STACK_TO_PERSONAL, async (_event, teamStackId: string) => {
-    if (!sharedClipboardSync) {
-      return [];
-    }
-    return await sharedClipboardSync.copyStackToPersonal(teamStackId);
-  });
-
-  ipcMain.handle(SharedClipboardIPCChannels.GET_TEAM_STACKS, async () => {
-    if (!sharedClipboardSync) {
-      return [];
-    }
-    return await sharedClipboardSync.getStacks();
-  });
-
-  ipcMain.handle(SharedClipboardIPCChannels.CREATE_TEAM_STACK, async () => {
-    // Creating a team stack is implicit - when items are assigned a stack_id,
-    // a stack record is created automatically in updateStackId.
-    // This handler is here for future extensibility (e.g., creating named stacks).
-    return null;
-  });
-
-  // =========================================================================
-  // Team Membership IPC Handlers
-  // =========================================================================
-
-  ipcMain.handle(SharedClipboardIPCChannels.GET_TEAM_MEMBERS, async () => {
-    if (!sharedClipboardSync) {
-      return [];
-    }
-    return await sharedClipboardSync.getTeamMembers();
-  });
-
-  ipcMain.handle(SharedClipboardIPCChannels.ADD_TEAM_MEMBER, async (_event, email: string) => {
-    if (!sharedClipboardSync) {
-      return { success: false, error: 'Team sync not initialized' };
-    }
-    return await sharedClipboardSync.addTeamMember(email);
-  });
-
-  ipcMain.handle(SharedClipboardIPCChannels.REMOVE_TEAM_MEMBER, async (_event, membershipId: string) => {
-    if (!sharedClipboardSync) {
-      return { success: false, error: 'Team sync not initialized' };
-    }
-    return await sharedClipboardSync.removeTeamMember(membershipId);
-  });
-
-  ipcMain.handle(SharedClipboardIPCChannels.HAS_TEAMMATES, async () => {
-    if (!sharedClipboardSync) {
-      return false;
-    }
-    return await sharedClipboardSync.hasTeammates();
-  });
-
-  // =========================================================================
-  // Social IPC Handlers - DMs, Feedback, Contacts, Hot Mic
-  // =========================================================================
-
-  // DM: Send a DM with a clipboard item.
-  ipcMain.handle(SocialIPCChannels.SEND_DM, async (_event, recipientUserId: string, localItemId: number) => {
-    if (!socialSync) {
-      return null;
-    }
-    return await socialSync.sendDM(recipientUserId, localItemId);
-  });
-
-  // DM: Send a text-only DM (for replies).
+  // Send a text reply to feedback.
   ipcMain.handle(SocialIPCChannels.SEND_TEXT_DM, async (_event, recipientUserId: string, text: string, parentMessageId?: string) => {
-    if (!socialSync) {
+    if (!feedbackManager || !parentMessageId) {
       return null;
     }
-    return await socialSync.sendTextDM(recipientUserId, text, parentMessageId);
+    return await feedbackManager.sendTextReply(recipientUserId, text, parentMessageId);
   });
 
-  // DM: Send an image reply (for feedback with pasted images).
+  // Send an image reply to feedback.
   ipcMain.handle(SocialIPCChannels.SEND_IMAGE_REPLY, async (_event, recipientUserId: string, imageBase64: string, text?: string, parentMessageId?: string) => {
-    if (!socialSync) {
+    if (!feedbackManager || !parentMessageId) {
       return null;
     }
-    return await socialSync.sendImageReply(recipientUserId, imageBase64, text, parentMessageId);
+    return await feedbackManager.sendImageReply(recipientUserId, imageBase64, text, parentMessageId);
   });
 
-  // DM: Get all DM conversations.
-  ipcMain.handle(SocialIPCChannels.GET_CONVERSATIONS, async () => {
-    if (!socialSync) {
-      return [];
-    }
-    return await socialSync.getDMConversations();
-  });
-
-  // DM: Get all DMs with a specific user.
-  ipcMain.handle(SocialIPCChannels.GET_DMS_WITH_USER, async (_event, otherUserId: string) => {
-    if (!socialSync) {
-      return [];
-    }
-    return await socialSync.getDMsWithUser(otherUserId);
-  });
-
-  // DM: Mark a message as read.
+  // Mark a message as read.
   ipcMain.handle(SocialIPCChannels.MARK_AS_READ, async (_event, messageId: string) => {
-    if (!socialSync) {
+    if (!feedbackManager) {
       return false;
     }
-    return await socialSync.markAsRead(messageId);
+    return await feedbackManager.markAsRead(messageId);
   });
 
-  // DM: Mark multiple messages as read in batch.
+  // Mark multiple messages as read in batch.
   ipcMain.handle(SocialIPCChannels.MARK_AS_READ_BATCH, async (_event, messageIds: string[]) => {
-    if (!socialSync) {
+    if (!feedbackManager) {
       return false;
     }
-    return await socialSync.markAsReadBatch(messageIds);
+    return await feedbackManager.markAsReadBatch(messageIds);
   });
 
-  // DM: Check if there are unread messages.
-  ipcMain.handle(SocialIPCChannels.HAS_UNREAD, async () => {
-    if (!socialSync) {
-      return false;
-    }
-    return await socialSync.hasUnreadMessages();
-  });
-
-  // Feedback: Check if there are unread feedback messages.
+  // Check if there are unread feedback messages.
   ipcMain.handle(SocialIPCChannels.HAS_UNREAD_FEEDBACK, async () => {
-    if (!socialSync) {
+    if (!feedbackManager) {
       return false;
     }
-    return await socialSync.hasUnreadFeedback();
+    return await feedbackManager.hasUnreadFeedback();
   });
 
-  // Feedback: Mark all feedback messages as read.
+  // Mark all feedback messages as read.
   ipcMain.handle(SocialIPCChannels.MARK_ALL_FEEDBACK_AS_READ, async () => {
-    if (!socialSync) {
+    if (!feedbackManager) {
       return false;
     }
-    return await socialSync.markAllFeedbackAsRead();
+    return await feedbackManager.markAllFeedbackAsRead();
   });
 
-  // Feedback: Submit feedback (send to admin).
+  // Submit feedback (send to admin).
   ipcMain.handle(SocialIPCChannels.SUBMIT_FEEDBACK, async (_event, localItemId: number) => {
-    if (!socialSync) {
+    if (!feedbackManager) {
       return null;
     }
-    const result = await socialSync.submitFeedback(localItemId);
+    const result = await feedbackManager.submitFeedback(localItemId);
     if (result) metricsManager?.recordFeedbackGiven();
     return result;
   });
 
-  // Feedback: Submit text feedback (for diagnostics, etc.).
+  // Submit text feedback (for diagnostics, etc.).
   ipcMain.handle(SocialIPCChannels.SUBMIT_TEXT_FEEDBACK, async (_event, text: string) => {
-    if (!socialSync) {
+    if (!feedbackManager) {
       return null;
     }
-    const result = await socialSync.submitTextFeedback(text);
+    const result = await feedbackManager.submitTextFeedback(text);
     if (result) metricsManager?.recordFeedbackGiven();
     return result;
   });
 
-  // Feedback: Submit image feedback with optional caption and source app name.
+  // Submit image feedback with optional caption and source app name.
   ipcMain.handle(SocialIPCChannels.SUBMIT_IMAGE_FEEDBACK, async (_event, imageBase64: string, caption?: string, sourceAppName?: string) => {
-    if (!socialSync) {
+    if (!feedbackManager) {
       return null;
     }
-    const result = await socialSync.submitImageFeedback(imageBase64, caption, sourceAppName);
+    const result = await feedbackManager.submitImageFeedback(imageBase64, caption, sourceAppName);
     if (result) metricsManager?.recordFeedbackGiven();
     return result;
   });
 
-  // Feedback: Get current user's submitted feedback.
+  // Get current user's submitted feedback.
   ipcMain.handle(SocialIPCChannels.GET_MY_FEEDBACK, async () => {
-    if (!socialSync) {
+    if (!feedbackManager) {
       return [];
     }
-    return await socialSync.getMyFeedback();
+    return await feedbackManager.getMyFeedback();
   });
 
-  // Feedback: Get all feedback (admin only).
+  // Get all feedback (admin only).
   ipcMain.handle(SocialIPCChannels.GET_ALL_FEEDBACK, async () => {
-    if (!socialSync) {
+    if (!feedbackManager) {
       return [];
     }
-    return await socialSync.getAllFeedback();
+    return await feedbackManager.getAllFeedback();
   });
 
-  // Feedback: Get replies to a feedback item.
+  // Get replies to a feedback item.
   ipcMain.handle(SocialIPCChannels.GET_FEEDBACK_REPLIES, async (_event, feedbackId: string) => {
-    if (!socialSync) {
+    if (!feedbackManager) {
       return [];
     }
-    return await socialSync.getFeedbackReplies(feedbackId);
+    return await feedbackManager.getFeedbackReplies(feedbackId);
   });
 
-  // Feedback: Update feedback status.
+  // Update feedback status.
   ipcMain.handle(SocialIPCChannels.UPDATE_FEEDBACK_STATUS, async (_event, feedbackId: string, status: 'open' | 'resolved' | 'archived') => {
-    if (!socialSync) {
+    if (!feedbackManager) {
       return false;
     }
-    return await socialSync.updateFeedbackStatus(feedbackId, status);
+    return await feedbackManager.updateFeedbackStatus(feedbackId, status);
   });
 
-  // Feedback: Get activity log for a feedback item.
+  // Get activity log for a feedback item.
   ipcMain.handle(SocialIPCChannels.GET_ACTIVITY_LOG, async (_event, feedbackId: string) => {
-    if (!socialSync) {
+    if (!feedbackManager) {
       return [];
     }
-    return await socialSync.getActivityLog(feedbackId);
+    return await feedbackManager.getActivityLog(feedbackId);
   });
 
-  // Contacts: Get all contacts.
-  ipcMain.handle(SocialIPCChannels.GET_CONTACTS, async () => {
-    if (!socialSync) {
-      return [];
-    }
-    return await socialSync.getContacts();
-  });
-
-  // Contacts: Add a friend by email.
-  ipcMain.handle(SocialIPCChannels.ADD_FRIEND, async (_event, email: string) => {
-    if (!socialSync) {
-      return { success: false, error: 'Social sync not initialized' };
-    }
-    return await socialSync.addFriend(email);
-  });
-
-  // Contacts: Search contacts by name or email.
-  ipcMain.handle(SocialIPCChannels.SEARCH_CONTACTS, async (_event, query: string) => {
-    if (!socialSync) {
-      return [];
-    }
-    return await socialSync.searchContacts(query);
-  });
-
-  // Contacts: Get pending invites (friend requests sent to me).
-  ipcMain.handle(SocialIPCChannels.GET_PENDING_INVITES, async () => {
-    if (!socialSync) {
-      return [];
-    }
-    return await socialSync.getPendingInvites();
-  });
-
-  // Contacts: Respond to a pending invite (accept or reject).
-  ipcMain.handle(SocialIPCChannels.RESPOND_TO_INVITE, async (_event, contactId: string, accept: boolean) => {
-    if (!socialSync) {
-      return false;
-    }
-    return await socialSync.respondToInvite(contactId, accept);
-  });
-
-  // Contacts: Remove a friend (unfriend/leave).
-  ipcMain.handle(SocialIPCChannels.REMOVE_FRIEND, async (_event, contactId: string) => {
-    if (!socialSync) {
-      return false;
-    }
-    return await socialSync.removeFriend(contactId);
-  });
-
-  // Hot Mic: Get hot mic enabled status.
-  ipcMain.handle(SocialIPCChannels.GET_HOT_MIC, async () => {
-    if (!socialSync) {
-      return false;
-    }
-    return await socialSync.getHotMicEnabled();
-  });
-
-  // Hot Mic: Set hot mic enabled status.
-  ipcMain.handle(SocialIPCChannels.SET_HOT_MIC, async (_event, enabled: boolean) => {
-    if (!socialSync) {
-      return false;
-    }
-    return await socialSync.setHotMicEnabled(enabled);
-  });
-
-  // Admin: Check if current user is admin.
+  // Check if current user is admin.
   ipcMain.handle(SocialIPCChannels.IS_ADMIN, async () => {
-    if (!socialSync) {
+    if (!feedbackManager) {
       return false;
     }
-    return await socialSync.isCurrentUserAdmin();
+    return await feedbackManager.isCurrentUserAdmin();
   });
 }
 
@@ -5074,17 +4490,6 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   if (!preferencesManager) {
     preferencesManager = new PreferencesManager();
     await preferencesManager.load();
-  }
-
-  // Initialize local LLM manager
-  if (!localLLMManager) {
-    const savedLLMModel = preferencesManager.getPreference('selectedLocalLLM') as LLMModelSize | undefined;
-    localLLMManager = new LocalLLMManager(savedLLMModel || 'llama-3.2-1b');
-
-    // Wire up local LLM with promptEngineer
-    setEngineerLocalLLMManager(localLLMManager);
-    const useLocal = preferencesManager.getPreference('useLocalLLM') as boolean | undefined;
-    setEngineerUseLocalLLM(useLocal ?? false);
   }
 
   nativeHelper = new NativeHelper();
@@ -5561,13 +4966,6 @@ async function initTranscriberSystem(): Promise<void> {
   // Pass nativeHelper for instant access to cached frontmost app info.
   commandLauncherWindow = new CommandLauncherWindow(nativeHelper ?? undefined);
 
-  // Initialize scenario testing window for superadmin testing.
-  scenarioTestingWindow = new ScenarioTestingWindow(preferencesManager ?? undefined);
-  scenarioTestingWindow.setOnHide(() => {
-    // Re-enable clipboard history auto-hide when scenario testing closes
-    clipboardHistoryWindow?.setScenarioTestingActive(false);
-  });
-
   // Set up escape key priority: dismiss clipboard history before canceling recording
   transcriberManager.setClipboardHistoryVisibilityChecker(() => {
     return clipboardHistoryWindow?.isVisible() ?? false;
@@ -5712,11 +5110,6 @@ async function initTranscriberSystem(): Promise<void> {
     setEngineerSupabaseUrl(envVars.supabaseUrl);
   }
 
-  // Initialize mobile sync to pull iOS transcriptions into clipboard history.
-  // AuthManager is passed as dependency for session state.
-  mobileSync = new MobileSync(authManager, clipboardManager, preferencesManager);
-  await mobileSync.init();
-
   // Wire up session checker so quota manager uses free limits when not logged in.
   // This ensures auto-stack limits are enforced for logged-out users.
   if (quotaManager) {
@@ -5725,13 +5118,8 @@ async function initTranscriberSystem(): Promise<void> {
     });
   }
 
-  // Initialize shared clipboard sync - subscribes to AuthManager for session.
-  // This enables collaborative clipboard sharing between team members.
-  sharedClipboardSync = new SharedClipboardSync(authManager, clipboardManager);
-
-  // Initialize social sync for DMs, Feedback, and Contacts.
-  // Also subscribes to AuthManager for session.
-  socialSync = new SocialSync(authManager, clipboardManager);
+  // Initialize feedback manager for user feedback to admin.
+  feedbackManager = new FeedbackManager(authManager, clipboardManager);
 
   // metricsManager was initialized earlier, before authManager.init()
 
@@ -5741,139 +5129,7 @@ async function initTranscriberSystem(): Promise<void> {
   // Tier only changes when: (1) server confirms different tier, or (2) explicit sign-out.
   logUserState('startup');
 
-  // Forward todosChanged events to all renderer windows.
-  mobileSync.on('todosChanged', (todos) => {
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(TodoIPCChannels.TODOS_CHANGED, todos);
-      }
-    });
-  });
-
-  // Forward todo realtime events to renderer.
-  mobileSync.on('todoAdded', (todo) => {
-    console.log('[Main] Realtime: todo added:', todo.id);
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(TodoIPCChannels.TODO_ADDED, todo);
-      }
-    });
-  });
-
-  mobileSync.on('todoUpdated', (todo) => {
-    console.log('[Main] Realtime: todo updated:', todo.id);
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(TodoIPCChannels.TODO_UPDATED, todo);
-      }
-    });
-  });
-
-  mobileSync.on('todoDeleted', (id) => {
-    console.log('[Main] Realtime: todo deleted:', id);
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(TodoIPCChannels.TODO_DELETED, id);
-      }
-    });
-  });
-
-  // Forward tier changes to quota manager and all renderer windows.
-  // This fires when Stripe webhook updates the user's tier in Supabase.
-  mobileSync.on('tierChanged', async (tier: 'free' | 'pro') => {
-    // Update the cached tier in quota manager.
-    if (quotaManager) {
-      await quotaManager.setCachedTier(tier);
-    }
-
-    logUserState('tierChanged');
-
-    // Broadcast to all windows so UI updates immediately.
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send('tier:changed', tier);
-      }
-    });
-  });
-
-  // Forward socialSync messageReceived events to all renderer windows.
-  // All message types are forwarded for unread indicators. Hot Mic overlay only shows for DMs.
-  if (socialSync) {
-    socialSync.on('messageReceived', async (message: { id: string; type: string }) => {
-      console.log('[Main] Message received:', message.id, 'type:', message.type);
-      
-      // Forward ALL messages to renderer for unread indicators (feedback dot, DM dot, etc).
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(SocialIPCChannels.MESSAGE_RECEIVED, message);
-        }
-      });
-      
-      // Only show Hot Mic overlay for DMs, not feedback replies.
-      if (message.type !== 'dm') {
-        return;
-      }
-      
-      // Don't show Hot Mic during onboarding.
-      const prefs = preferencesManager?.get();
-      if (!prefs?.onboardingComplete) {
-        return;
-      }
-
-      // Check if Hot Mic is enabled for this user.
-      const hotMicEnabled = await socialSync!.getHotMicEnabled();
-      if (!hotMicEnabled) {
-        console.log('[Main] Hot Mic is disabled, skipping overlay');
-        return;
-      }
-
-      // Check if user is currently recording (don't interrupt).
-      if (clipboardHistoryWindow?.getRecordingActive()) {
-        console.log('[Main] User is recording, skipping Hot Mic overlay');
-        return;
-      }
-
-      // Show the clipboard history window if it's not visible.
-      if (clipboardHistoryWindow && !clipboardHistoryWindow.isVisible()) {
-        console.log('[Main] Showing clipboard history window for Hot Mic');
-        const boundsToUse = restoreClipboardHistoryBounds();
-        clipboardHistoryWindow.show(boundsToUse);
-      }
-    });
-  }
-
-  // Forward sharedClipboardSync realtime events to renderer windows.
-  // This enables instant updates when teammates add, modify, or delete items.
-  if (sharedClipboardSync) {
-    sharedClipboardSync.on('teamItemAdded', (item) => {
-      console.log('[Main] Realtime: team item added:', item.id);
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(SharedClipboardIPCChannels.TEAM_ITEM_ADDED, item);
-        }
-      });
-    });
-
-    sharedClipboardSync.on('teamItemUpdated', (item) => {
-      console.log('[Main] Realtime: team item updated:', item.id);
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(SharedClipboardIPCChannels.TEAM_ITEM_UPDATED, item);
-        }
-      });
-    });
-
-    sharedClipboardSync.on('teamItemDeleted', (id) => {
-      console.log('[Main] Realtime: team item deleted:', id);
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(SharedClipboardIPCChannels.TEAM_ITEM_DELETED, id);
-        }
-      });
-    });
-  }
-
-  // NOTE: Tasks toggle (Cmd+Shift+T) and Super Paste (Cmd+Shift+V) hotkeys
+  // NOTE: Super Paste (Cmd+Shift+V) hotkeys
   // are now registered in registerHotkeysAfterOnboarding() to avoid permission
   // prompts during onboarding.
 
@@ -6488,12 +5744,8 @@ if (!gotTheLock) {
   app.on('before-quit', () => {
     console.log('[Main] App quitting, cleaning up...');
 
-    if (mobileSync) {
-      mobileSync.destroy();
-    }
-
-    if (sharedClipboardSync) {
-      sharedClipboardSync.destroy();
+    if (feedbackManager) {
+      feedbackManager.destroy();
     }
 
     if (transcriberManager) {
