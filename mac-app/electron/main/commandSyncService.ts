@@ -49,6 +49,8 @@ export class CommandSyncService extends EventEmitter {
   private commandsManager: CommandsManager;
   private isSyncing: boolean = false;
   private lastSyncAt: number | null = null;
+  private pendingSyncTimeout: ReturnType<typeof setTimeout> | null = null;
+  private static readonly DEBOUNCE_MS = 1000; // Debounce rapid changes
 
   constructor(authManager: AuthManager, commandsManager: CommandsManager) {
     super();
@@ -56,36 +58,32 @@ export class CommandSyncService extends EventEmitter {
     this.commandsManager = commandsManager;
 
     // Listen for command changes to auto-sync
-    this.commandsManager.on('commandsChanged', () => this.onCommandsChanged());
-    this.commandsManager.on('mobileSyncChanged', () => this.onMobileSyncChanged());
+    this.commandsManager.on('commandsChanged', () => this.scheduleSync());
+    this.commandsManager.on('mobileSyncChanged', () => this.scheduleSync());
 
     // Listen for auth changes
     this.authManager.on('sessionChanged', (session) => {
       if (session) {
         // When user logs in, sync commands if any are enabled for mobile
-        this.syncIfNeeded();
+        this.scheduleSync();
       }
     });
   }
 
   /**
-   * Called when commands change (files added/removed/modified).
+   * Schedule a sync with debouncing. Multiple rapid calls will be coalesced.
    */
-  private async onCommandsChanged(): Promise<void> {
-    // Debounce: only sync if enough time has passed since last sync
-    const now = Date.now();
-    if (this.lastSyncAt && now - this.lastSyncAt < 5000) {
-      return; // Wait at least 5 seconds between syncs
+  private scheduleSync(): void {
+    // Clear any pending sync
+    if (this.pendingSyncTimeout) {
+      clearTimeout(this.pendingSyncTimeout);
     }
 
-    await this.syncIfNeeded();
-  }
-
-  /**
-   * Called when mobile sync is enabled/disabled for a directory.
-   */
-  private async onMobileSyncChanged(): Promise<void> {
-    await this.syncToSupabase();
+    // Schedule a new sync after debounce period
+    this.pendingSyncTimeout = setTimeout(async () => {
+      this.pendingSyncTimeout = null;
+      await this.syncIfNeeded();
+    }, CommandSyncService.DEBOUNCE_MS);
   }
 
   /**
@@ -339,6 +337,10 @@ export class CommandSyncService extends EventEmitter {
    * Cleanup resources.
    */
   destroy(): void {
+    if (this.pendingSyncTimeout) {
+      clearTimeout(this.pendingSyncTimeout);
+      this.pendingSyncTimeout = null;
+    }
     this.commandsManager.removeAllListeners('commandsChanged');
     this.commandsManager.removeAllListeners('mobileSyncChanged');
     this.removeAllListeners();
