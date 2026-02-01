@@ -294,6 +294,8 @@ interface ClipboardAPI {
   setCursorStatusEnabled?: (enabled: boolean) => Promise<boolean>;
   getHideStatusLabels?: () => Promise<boolean>;
   setHideStatusLabels?: (hide: boolean) => Promise<boolean>;
+  getCursorStatusDebugMode?: () => Promise<boolean>;
+  setCursorStatusDebugMode?: (enabled: boolean) => Promise<boolean>;
 
   getSoundsEnabled?: () => Promise<boolean>;
   setSoundsEnabled?: (enabled: boolean) => Promise<boolean>;

@@ -206,7 +206,13 @@ export class TodoStore extends EventEmitter {
     try {
       const { data, error } = await this.supabase
         .from('todos')
-        .insert({ user_id: userId, client_id: clientId, text, completed: false })
+        .insert({
+          user_id: userId,
+          client_id: clientId,
+          text,
+          completed: false,
+          client_created_at_ms: Date.now(),
+        })
         .select()
         .single();
 

@@ -61,6 +61,9 @@ export class CursorStatusManager extends EventEmitter {
   private readonly SAY_ANYTHING_LABEL_THRESHOLD = 2;
   private labelsExplicitlyEnabled: boolean = false;
   
+  // Debug mode - shows blue background to prove we control the overlay window.
+  private debugMode: boolean = false;
+  
   // Timing constants
   private readonly POLL_INTERVAL_MS = 33;
   private readonly IDLE_THRESHOLD_MS = 100;
@@ -198,12 +201,37 @@ export class CursorStatusManager extends EventEmitter {
   }
 
   /**
+   * Set debug mode - shows blue background to prove we control the overlay window.
+   * Useful for debugging the white rectangle issue on multi-monitor setups.
+   */
+  setDebugMode(enabled: boolean): void {
+    this.debugMode = enabled;
+    log.info(`Debug mode ${enabled ? 'enabled' : 'disabled'} - window size: ${this.WINDOW_WIDTH_NORMAL}x${this.WINDOW_HEIGHT_NORMAL}`);
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send('cursor-status-debug-mode', enabled);
+    }
+  }
+
+  /**
+   * Get current debug mode state.
+   */
+  isDebugMode(): boolean {
+    return this.debugMode;
+  }
+
+  /**
    * Update the current state. Shows indicator if state is active, hides if idle.
    * When transitioning from transcribing to idle, briefly shows 'done' state first.
    */
   setState(state: CursorStatusState): void {
+    // #region agent log
+    fetch('http://127.0.0.1:7245/ingest/f128ded5-2e54-40f5-9bb8-ed05e5bba619',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cursorStatusManager.ts:setState',message:'setState called',data:{newState:state,currentState:this.state,enabled:this.enabled,hasDoneTimeout:!!this.doneTimeout},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1-H3'})}).catch(()=>{});
+    // #endregion
     // Clear any pending timeouts
     if (this.doneTimeout) {
+      // #region agent log
+      fetch('http://127.0.0.1:7245/ingest/f128ded5-2e54-40f5-9bb8-ed05e5bba619',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cursorStatusManager.ts:setState:clearTimeout',message:'CLEARING doneTimeout - hide will NOT be called',data:{currentState:this.state,newState:state},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3'})}).catch(()=>{});
+      // #endregion
       clearTimeout(this.doneTimeout);
       this.doneTimeout = null;
     }
@@ -218,6 +246,9 @@ export class CursorStatusManager extends EventEmitter {
     
     // When transcribing or improving finishes, show 'done' briefly before hiding
     if ((wasTranscribing || wasImproving) && state === 'idle' && this.enabled) {
+      // #region agent log
+      fetch('http://127.0.0.1:7245/ingest/f128ded5-2e54-40f5-9bb8-ed05e5bba619',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cursorStatusManager.ts:setState:done-transition',message:'Entering done state with timeout',data:{wasTranscribing,wasImproving,DONE_DURATION_MS:this.DONE_DURATION_MS},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3'})}).catch(()=>{});
+      // #endregion
       this.state = 'done';
       this.updateWindowSize('done');
       this.sendStateToRenderer('done');
@@ -230,6 +261,9 @@ export class CursorStatusManager extends EventEmitter {
       }
       
       this.doneTimeout = setTimeout(() => {
+        // #region agent log
+        fetch('http://127.0.0.1:7245/ingest/f128ded5-2e54-40f5-9bb8-ed05e5bba619',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cursorStatusManager.ts:doneTimeout',message:'Done timeout fired, calling hide',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3'})}).catch(()=>{});
+        // #endregion
         this.doneTimeout = null;
         this.state = 'idle';
         this.hide();
@@ -261,6 +295,39 @@ export class CursorStatusManager extends EventEmitter {
    * Set state with additional data (e.g., transcription text for paste-failed).
    */
   setStateWithData(state: CursorStatusState, data: { transcription?: string; pasteFailed?: boolean }): void {
+    // #region agent log
+    fetch('http://127.0.0.1:7245/ingest/f128ded5-2e54-40f5-9bb8-ed05e5bba619',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cursorStatusManager.ts:setStateWithData',message:'setStateWithData called',data:{newState:state,currentState:this.state,hasDoneTimeout:!!this.doneTimeout,pasteFailed:data.pasteFailed},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1-H5'})}).catch(()=>{});
+    // #endregion
+    
+    // For 'done' state, don't call setState which would clear the existing doneTimeout.
+    // Instead, just send the data to the renderer. The timeout from the idle transition will hide us.
+    // However, if there's no pending timeout (e.g., called directly), set one up.
+    if (state === 'done') {
+      // Send transcription data to renderer
+      if (this.window && !this.window.isDestroyed()) {
+        this.window.webContents.send('cursor-status-data', { 
+          transcription: data.transcription,
+          pasteFailed: data.pasteFailed ?? false 
+        });
+      }
+      // If no done timeout exists (called directly without going through idle transition), set one up
+      if (!this.doneTimeout) {
+        this.state = 'done';
+        this.updateWindowSize('done');
+        this.sendStateToRenderer('done');
+        if (this.enabled) this.show();
+        this.doneTimeout = setTimeout(() => {
+          // #region agent log
+          fetch('http://127.0.0.1:7245/ingest/f128ded5-2e54-40f5-9bb8-ed05e5bba619',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cursorStatusManager.ts:setStateWithData:doneTimeout',message:'Done timeout fired from setStateWithData, calling hide',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3-fix'})}).catch(()=>{});
+          // #endregion
+          this.doneTimeout = null;
+          this.state = 'idle';
+          this.hide();
+        }, this.DONE_DURATION_MS);
+      }
+      return;
+    }
+    
     this.setState(state);
     
     if (state === 'paste-failed') {
@@ -445,6 +512,9 @@ export class CursorStatusManager extends EventEmitter {
    *                    Used by showCriticalMessage() to ensure important notifications always display.
    */
   private show(forceShow: boolean = false): void {
+    // #region agent log
+    fetch('http://127.0.0.1:7245/ingest/f128ded5-2e54-40f5-9bb8-ed05e5bba619',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cursorStatusManager.ts:show',message:'show() called',data:{forceShow,enabled:this.enabled,hasWindow:!!this.window,rendererReady:this.rendererReady,state:this.state},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1-H5'})}).catch(()=>{});
+    // #endregion
     if (!this.enabled && !forceShow) {
       return;
     }
@@ -462,6 +532,8 @@ export class CursorStatusManager extends EventEmitter {
         this.startTracking(); // Start tracking cursor position even while waiting
         return;
       }
+      // Ensure opacity is 1 before showing (defensive - should already be 1 from did-finish-load)
+      this.window.setOpacity(1);
       this.window.showInactive();
       this.startTracking();
     }
@@ -471,6 +543,9 @@ export class CursorStatusManager extends EventEmitter {
    * Hide the overlay and stop tracking.
    */
   private hide(): void {
+    // #region agent log
+    fetch('http://127.0.0.1:7245/ingest/f128ded5-2e54-40f5-9bb8-ed05e5bba619',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cursorStatusManager.ts:hide',message:'hide() called',data:{hasWindow:!!this.window,isDestroyed:this.window?.isDestroyed?.(),state:this.state,opacity:this.window?.getOpacity?.()},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1-H4'})}).catch(()=>{});
+    // #endregion
     // Clear any pending show request - user cancelled before renderer was ready
     this.pendingShow = false;
     this.pendingForceShow = false;
@@ -497,6 +572,7 @@ export class CursorStatusManager extends EventEmitter {
       y: cursorPos.y + this.CURSOR_OFFSET_Y,
       frame: false,
       transparent: true,
+      backgroundColor: '#00000000', // Explicit transparent background to prevent white flash
       hasShadow: false,
       roundedCorners: false,
       alwaysOnTop: true,
@@ -511,6 +587,15 @@ export class CursorStatusManager extends EventEmitter {
         preload: path.join(__dirname, '../cursor-status-preload.js'),
       },
     });
+
+    // CRITICAL: Set window opacity to 0 initially to prevent white rectangle on multi-monitor setups.
+    // The macOS compositor may render a white backing layer even with transparent: true.
+    // We set opacity to 1 only after did-finish-load when React content is ready.
+    this.window.setOpacity(0);
+    
+    // Also explicitly set background color after creation - some macOS/Electron combinations
+    // respect this more reliably than the constructor option on external displays.
+    this.window.setBackgroundColor('#00000000');
 
     // Show on all workspaces including full-screen apps
     this.window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
@@ -541,17 +626,22 @@ export class CursorStatusManager extends EventEmitter {
     // Send initial state once loaded.
     this.window.webContents.once('did-finish-load', () => {
       this.rendererReady = true;
+      log.info('[CursorStatus] did-finish-load fired, renderer ready');
       if (this.window && !this.window.isDestroyed()) {
         this.window.webContents.send('cursor-status-state', this.state);
         this.window.webContents.send('cursor-status-idle', this.isIdle);
         this.window.webContents.send('cursor-status-hide-labels', this.hideLabels);
+        this.window.webContents.send('cursor-status-debug-mode', this.debugMode);
         this.sendLabelVisibilityToRenderer();
         
         // Process any pending show request now that renderer is ready
         if (this.pendingShow) {
+          log.info('[CursorStatus] Processing pending show request');
           this.pendingShow = false;
           // Only show if still enabled (or was force-shown)
           if (this.enabled || this.pendingForceShow) {
+            // Set opacity to 1 now that content is ready - prevents white rectangle flash
+            this.window.setOpacity(1);
             this.window.showInactive();
           }
           this.pendingForceShow = false;

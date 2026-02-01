@@ -10,7 +10,7 @@ import { NativeHelper } from './nativeHelper';
 import { ModelManager, ModelSize } from './modelManager';
 import { PreferencesManager } from './preferences';
 import { RecordingOverlay } from './recordingOverlay';
-import { ClipboardManager, ClipboardItem, isTerminalApp } from './clipboardManager';
+import { ClipboardManager, ClipboardItem, isTerminalApp, isIDEWithTerminal } from './clipboardManager';
 import { SoundManager } from './soundManager';
 import { QuotaManager } from './quotaManager';
 import { AudioManager } from './audioManager';
@@ -1675,8 +1675,9 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
-    // Detect if frontmost app is a terminal/CLI
+    // Detect if frontmost app is a terminal/CLI or an IDE with terminal-like behavior
     const isTerminal = isTerminalApp(frontmostBundleId);
+    const isIDE = isIDEWithTerminal(frontmostBundleId);
 
     // Check if we have a transcript with figures
     const hasTranscriptWithFigures =
@@ -1698,12 +1699,20 @@ export class TranscriberManager extends EventEmitter {
           textContent = await this.addImagePathsToText(textContent, items);
         }
 
-        // Format command references for terminals: [cmd:name.md] -> [cmd1] with paths list.
-        // Non-terminals: strip [cmd:name.md] refs since we'll paste files as attachments.
+        // Format command references based on target app type:
+        // - Terminals: [cmd:name.md] -> [cmd1] with paths list
+        // - IDEs (Cursor, VS Code, etc.): strip refs and append file paths as text
+        // - Other apps: strip refs and paste files as attachments
         if (isTerminal && this.detectedCommands.length > 0) {
           textContent = this.formatCommandsForTerminal(textContent);
-        } else if (!isTerminal && this.detectedCommands.length > 0) {
-          // For multimodal apps, strip command references from text
+        } else if (isIDE && this.detectedCommands.length > 0) {
+          // For IDEs like Cursor: strip command refs and append file paths as text
+          // This allows the IDE to reference the command files directly
+          textContent = textContent.replace(/\s*\[cmd:[^\]]+\]/g, '').trim();
+          const pathList = this.detectedCommands.map(cmd => cmd.filePath).join('\n');
+          textContent = textContent + '\n\n' + pathList;
+        } else if (this.detectedCommands.length > 0) {
+          // For other multimodal apps, strip command references from text
           // since we'll paste the actual files as attachments
           textContent = textContent.replace(/\s*\[cmd:[^\]]+\]/g, '').trim();
         }
@@ -1712,9 +1721,9 @@ export class TranscriberManager extends EventEmitter {
         this.clipboardManager?.syncClipboardHash();
         await this.pasteText();
 
-        // For multimodal apps, paste command files as actual file attachments
+        // For non-terminal, non-IDE apps, paste command files as actual file attachments
         // using NSFilenamesPboardType so apps can receive them like Finder-copied files
-        if (!isTerminal && this.detectedCommands.length > 0) {
+        if (!isTerminal && !isIDE && this.detectedCommands.length > 0) {
           await new Promise(resolve => setTimeout(resolve, 100));
           const filePaths = this.detectedCommands.map(cmd => cmd.filePath);
           const plistData = plist.build(filePaths);

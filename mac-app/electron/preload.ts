@@ -632,6 +632,10 @@ export interface ClipboardAPI {
   // Hide status labels (show only colored dots)
   getHideStatusLabels?: () => Promise<boolean>;
   setHideStatusLabels?: (hide: boolean) => Promise<boolean>;
+
+  // Cursor status debug mode (shows blue background to prove we control the overlay)
+  getCursorStatusDebugMode?: () => Promise<boolean>;
+  setCursorStatusDebugMode?: (enabled: boolean) => Promise<boolean>;
   
   // Show in Dock and Cmd+Tab
   getShowInDock?: () => Promise<boolean>;
@@ -1282,6 +1286,15 @@ const clipboardAPI: ClipboardAPI = {
 
   setHideStatusLabels: async (hide: boolean): Promise<boolean> => {
     return ipcRenderer.invoke('clipboard:setHideStatusLabels', hide);
+  },
+
+  // Cursor status debug mode (shows blue background to prove we control the overlay).
+  getCursorStatusDebugMode: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:getCursorStatusDebugMode');
+  },
+
+  setCursorStatusDebugMode: async (enabled: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:setCursorStatusDebugMode', enabled);
   },
   
   // Show in Dock and Cmd+Tab.

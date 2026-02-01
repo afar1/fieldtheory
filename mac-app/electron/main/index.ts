@@ -48,6 +48,8 @@ import { CommandLauncherWindow } from './commandLauncherWindow';
 import { LibrarianManager, Reading, ReadingMeta, WatchedDir } from './librarianManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
 import { MESSAGES } from './messages';
+import { TodoStore, Todo } from './todoStore';
+import { TodoIPCChannels } from './types/todo';
 
 const log = createLogger('Main');
 
@@ -150,6 +152,7 @@ let commandsManager: CommandsManager | null = null;
 let commandSyncService: CommandSyncService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
 let metricsManager: MetricsManager | null = null;
+let todoStore: TodoStore | null = null;
 
 // Track pending update state so windows can query it when they open.
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
@@ -527,6 +530,39 @@ function registerHotkeysAfterOnboarding(): void {
   const improveTextHotkey = prefs.improveTextHotkey || 'Command+Shift+I';
   hotkeyManager.register('improveText', improveTextHotkey, async () => {
     await handleImproveSelectedText();
+  });
+
+  // Register Todo hotkey - toggles tasks tab visibility (hidden by default)
+  const todoHotkey = prefs.todoHotkey || 'Command+Shift+T';
+  hotkeyManager.register('todo', todoHotkey, async () => {
+    if (!preferencesManager) return;
+
+    // Toggle the tasksTabEnabled preference
+    const currentEnabled = preferencesManager.getPreference('tasksTabEnabled') ?? false;
+    const newEnabled = !currentEnabled;
+    await preferencesManager.save({ tasksTabEnabled: newEnabled });
+
+    if (!clipboardHistoryWindow) {
+      clipboardHistoryWindow = initClipboardHistoryWindow();
+    }
+
+    const win = clipboardHistoryWindow.getWindow();
+    if (!win || win.isDestroyed()) return;
+
+    // Broadcast the tab visibility change
+    win.webContents.send('clipboard:tasksTabToggled', newEnabled);
+
+    // If enabling, show the window and switch to Tasks view
+    if (newEnabled) {
+      if (!clipboardHistoryWindow.isShowing()) {
+        clipboardHistoryWindow.playOpenSound();
+        const boundsToUse = restoreClipboardHistoryBounds();
+        clipboardHistoryWindow.show(boundsToUse, false, true);
+        clipboardHistoryWindow.capturePreviousAppBeforeShow();
+      }
+      // Switch to Tasks view
+      win.webContents.send(TodoIPCChannels.SHOW_TODOS);
+    }
   });
 }
 
@@ -3381,6 +3417,17 @@ function setupClipboardIPCHandlers(): void {
     cursorStatusManager?.setHideLabels(hide);
     return true;
   });
+
+  // Cursor status debug mode - shows blue background to prove we control the overlay.
+  // Useful for debugging the white rectangle issue on multi-monitor setups.
+  ipcMain.handle('clipboard:getCursorStatusDebugMode', async () => {
+    return cursorStatusManager?.isDebugMode() ?? false;
+  });
+
+  ipcMain.handle('clipboard:setCursorStatusDebugMode', async (_event, enabled: boolean) => {
+    cursorStatusManager?.setDebugMode(enabled);
+    return true;
+  });
   
   // Show in Dock - controls whether app appears in Dock and Cmd+Tab.
   ipcMain.handle('clipboard:getShowInDock', async () => {
@@ -3472,6 +3519,30 @@ function setupClipboardIPCHandlers(): void {
       return false;
     }
     await preferencesManager.save({ soundsEnabled: enabled });
+    return true;
+  });
+
+  // =========================================================================
+  // Tasks Tab - hidden by default, toggled with Shift+Cmd+T
+  // =========================================================================
+
+  ipcMain.handle('clipboard:getTasksTabEnabled', async () => {
+    if (!preferencesManager) {
+      return false;
+    }
+    return preferencesManager.getPreference('tasksTabEnabled') ?? false;
+  });
+
+  ipcMain.handle('clipboard:setTasksTabEnabled', async (_event, enabled: boolean) => {
+    if (!preferencesManager) {
+      return false;
+    }
+    await preferencesManager.save({ tasksTabEnabled: enabled });
+    // Broadcast change to renderer
+    const win = clipboardHistoryWindow?.getWindow();
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('clipboard:tasksTabToggled', enabled);
+    }
     return true;
   });
 
@@ -4892,6 +4963,18 @@ async function initTranscriberSystem(): Promise<void> {
   }
   await metricsManager.init();
 
+  // Initialize todo store for iOS ↔ Mac sync.
+  todoStore = new TodoStore(authManager);
+
+  // Forward todo events to renderer windows.
+  todoStore.on('todosChanged', (todos: Todo[]) => {
+    BrowserWindow.getAllWindows().forEach(win => {
+      if (!win.isDestroyed()) {
+        win.webContents.send(TodoIPCChannels.TODOS_CHANGED, todos);
+      }
+    });
+  });
+
   // Register event handlers BEFORE authManager.init().
   // init() restores session and may emit 'userChanged' synchronously.
   authManager.on('userChanged', async (userId: string) => {
@@ -5127,9 +5210,56 @@ if (!gotTheLock) {
     setupOnboardingIPCHandlers();
     setupDisplayListeners();
 
-    // Todo IPC handlers (minimal - just auth check for now)
+    // Todo IPC handlers
     ipcMain.handle('todo:isAuthenticated', () => {
       return authManager?.isAuthenticated() ?? false;
+    });
+
+    ipcMain.handle(TodoIPCChannels.GET_TODOS, () => {
+      return todoStore?.getTodos() ?? [];
+    });
+
+    ipcMain.handle(TodoIPCChannels.SYNC_TODOS, async () => {
+      return await todoStore?.syncTodos() ?? [];
+    });
+
+    ipcMain.handle(TodoIPCChannels.CREATE_TODO, async (_event, text: string) => {
+      if (!todoStore) return null;
+      // Generate a client ID for deduplication
+      const clientId = crypto.randomUUID();
+      return await todoStore.create(text, clientId);
+    });
+
+    ipcMain.handle(TodoIPCChannels.UPDATE_TODO, async (_event, id: string, text: string) => {
+      if (!todoStore) return null;
+      const success = await todoStore.update(id, { text });
+      if (success) {
+        const todos = todoStore.getTodos();
+        return todos.find(t => t.id === id) ?? null;
+      }
+      return null;
+    });
+
+    ipcMain.handle(TodoIPCChannels.TOGGLE_TODO, async (_event, id: string) => {
+      if (!todoStore) return null;
+      const success = await todoStore.toggle(id);
+      if (success) {
+        const todos = todoStore.getTodos();
+        return todos.find(t => t.id === id) ?? null;
+      }
+      return null;
+    });
+
+    ipcMain.handle(TodoIPCChannels.DELETE_TODO, async (_event, id: string) => {
+      return await todoStore?.delete(id) ?? false;
+    });
+
+    ipcMain.handle(TodoIPCChannels.DELETE_TODOS, async (_event, ids: string[]) => {
+      return await todoStore?.deleteBatch(ids) ?? false;
+    });
+
+    ipcMain.handle(TodoIPCChannels.COMPLETE_TODOS, async (_event, ids: string[]) => {
+      return await todoStore?.completeBatch(ids) ?? false;
     });
 
     // Set up macOS app menu with standard items (required for Cmd+H, Cmd+Q, etc.)
