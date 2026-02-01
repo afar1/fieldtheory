@@ -34,6 +34,7 @@ import { PullToCreate } from './components/PullToCreate';
 import { TranscriptItem } from './components/TranscriptItem';
 import { SketchCanvas } from './components/SketchCanvas';
 import { SketchList } from './components/SketchList';
+import { CommandsList } from './components/CommandsList';
 import { StorageService } from './services/storage';
 import { SketchStorageService } from './services/sketchStorage';
 import { syncAllPendingSketches } from './services/sketchSync';
@@ -42,6 +43,7 @@ import { Todo, Observation, Settings, TranscriptEntry, TranscriptSegment, Sketch
 import { requestOtp, verifyOtp, getSession, signOut as supabaseSignOut } from './services/auth';
 import { syncAll, seedRemoteFromLocal } from './services/sync';
 import { supabase } from './services/supabase';
+import { CommandsService } from './services/commands';
 import type { Session } from '@supabase/supabase-js';
 
 // Error boundary component to catch and display errors
@@ -265,6 +267,11 @@ export default function App() {
         setSettings(loadedSettings);
         setTranscripts(loadedTranscripts);
         setSketches(loadedSketches);
+
+        // Pre-fetch commands for voice command detection (runs in background)
+        CommandsService.fetchCommands().catch((err) => {
+          console.log('Commands pre-fetch (background):', err.message || 'Not available');
+        });
       } catch (err) {
         console.error('Failed to load data from storage:', err);
         // Continue with empty state if storage fails
@@ -393,10 +400,15 @@ export default function App() {
           // Log error but don't interrupt user experience
           console.error('Background sync failed:', error);
         });
-        
+
         // Also sync any pending sketches.
         syncAllPendingSketches().catch((error) => {
           console.error('Background sketch sync failed:', error);
+        });
+
+        // Refresh commands for voice command detection.
+        CommandsService.fetchCommands().catch((error) => {
+          console.error('Background commands sync failed:', error);
         });
       }
       
@@ -410,6 +422,7 @@ export default function App() {
 
   // Capture every finished transcription so we can build the timeline.
   // If recording started on the Cursor page, paste directly into Cursor's input.
+  // Detects and expands portable commands (e.g., "use the review command").
   useEffect(() => {
     if (transcription === null) {
       return;
@@ -420,34 +433,46 @@ export default function App() {
         ? transcription.trim()
         : 'No speech detected in this recording.';
 
-    // Check if recording started on the Cursor page (page index 1)
-    const shouldPasteToCursor = recordingStartedOnPageRef.current === 1;
+    // Process transcription to detect and expand commands
+    const processAndSave = async () => {
+      // Check for command invocations and expand them inline
+      const { processedText, detectedCommands } = await CommandsService.processTranscription(cleanedText);
 
-    if (shouldPasteToCursor && cleanedText !== 'No speech detected in this recording.') {
-      // Paste directly to Cursor and don't create a transcript entry
-      console.log('[App] Recording from Cursor page - pasting directly to Cursor');
-      cursorBrowserRef.current?.pasteText(cleanedText);
-      // Also copy to clipboard as a backup
-      Clipboard.setStringAsync(cleanedText).catch(console.error);
-      return;
-    }
+      if (detectedCommands.length > 0) {
+        console.log(`[App] Detected ${detectedCommands.length} command(s):`, detectedCommands.map(c => c.name));
+      }
 
-    // Normal flow: create a transcript entry
-    const newEntry: TranscriptEntry = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      text: cleanedText,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      // Check if recording started on the Cursor page (page index 1)
+      const shouldPasteToCursor = recordingStartedOnPageRef.current === 1;
+
+      if (shouldPasteToCursor && cleanedText !== 'No speech detected in this recording.') {
+        // Paste directly to Cursor and don't create a transcript entry
+        console.log('[App] Recording from Cursor page - pasting directly to Cursor');
+        cursorBrowserRef.current?.pasteText(processedText);
+        // Also copy to clipboard as a backup
+        Clipboard.setStringAsync(processedText).catch(console.error);
+        return;
+      }
+
+      // Normal flow: create a transcript entry
+      const newEntry: TranscriptEntry = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        text: cleanedText, // Store original text in history
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      setTranscripts((prev) => {
+        const updated = [newEntry, ...prev];
+        // Save to storage whenever transcripts change
+        StorageService.saveTranscripts(updated).catch(console.error);
+        // Auto-copy processed text (with expanded commands) to clipboard
+        Clipboard.setStringAsync(processedText).catch(console.error);
+        return updated;
+      });
     };
 
-    setTranscripts((prev) => {
-      const updated = [newEntry, ...prev];
-      // Save to storage whenever transcripts change
-      StorageService.saveTranscripts(updated).catch(console.error);
-      // Auto-copy transcription to clipboard after it's added
-      Clipboard.setStringAsync(cleanedText).catch(console.error);
-      return updated;
-    });
+    processAndSave().catch(console.error);
   }, [transcription]);
 
   const handleProcessTranscription = useCallback(async (text: string) => {
@@ -1379,6 +1404,9 @@ export default function App() {
             onCreateModeChange={handleObservationCreateModeChange}
           />
         </View>
+        <View key="commands" style={styles.pageContainer}>
+          <CommandsList />
+        </View>
         </PagerView>
 
       {/* BOTTOM BAR - Changes based on mode (create > selection > normal) */}
@@ -1502,8 +1530,8 @@ export default function App() {
             </TouchableOpacity>
 
             {/* Shared Fields Tab - always visible, prompts for login if not authenticated */}
-            <TouchableOpacity 
-              style={styles.tabButton} 
+            <TouchableOpacity
+              style={styles.tabButton}
               onPress={() => {
                 if (!session) {
                   Alert.alert(
@@ -1511,7 +1539,7 @@ export default function App() {
                     'You need to log in to access shared fields. Go to Settings to sign in.',
                     [
                       { text: 'Cancel', style: 'cancel' },
-                      { text: 'Settings', onPress: () => pagerRef.current?.setPageWithoutAnimation(5) },
+                      { text: 'Settings', onPress: () => setShowSettings(true) },
                     ]
                   );
                 } else {
@@ -1585,20 +1613,35 @@ export default function App() {
 
             {/* Observations Tab */}
             {settings.showObservations && (
-              <TouchableOpacity 
-                style={styles.tabButton} 
+              <TouchableOpacity
+                style={styles.tabButton}
                 onPress={() => pagerRef.current?.setPageWithoutAnimation(3)}
               >
-                <Feather 
-                  name="eye" 
-                  size={22} 
-                  color={pageIndex === 3 ? '#007AFF' : '#9CA3AF'} 
+                <Feather
+                  name="eye"
+                  size={22}
+                  color={pageIndex === 3 ? '#007AFF' : '#9CA3AF'}
                 />
                 <Text style={[styles.tabLabel, pageIndex === 3 && styles.tabLabelActive]}>
                   Notes
                 </Text>
               </TouchableOpacity>
             )}
+
+            {/* Commands Tab - Portable commands synced from Mac */}
+            <TouchableOpacity
+              style={styles.tabButton}
+              onPress={() => pagerRef.current?.setPageWithoutAnimation(4)}
+            >
+              <Feather
+                name="command"
+                size={22}
+                color={pageIndex === 4 ? '#007AFF' : '#9CA3AF'}
+              />
+              <Text style={[styles.tabLabel, pageIndex === 4 && styles.tabLabelActive]}>
+                Commands
+              </Text>
+            </TouchableOpacity>
 
             {/* Settings Tab */}
             <TouchableOpacity 

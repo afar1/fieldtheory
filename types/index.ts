@@ -54,32 +54,57 @@ export interface TranscriptEntry {
  */
 export interface SketchEntry {
   id: string;
-  
+
   // Local file URI for the PNG image (file:///... path).
   localUri: string;
-  
+
   // Remote URL after upload to Supabase Storage (optional until synced).
   remoteUrl?: string;
-  
+
   // Image dimensions (for proper display and layout).
   width: number;
   height: number;
-  
+
   // File size in bytes.
   bytes: number;
-  
+
   // SHA256 hash for deduplication and integrity checks.
   sha256?: string;
-  
+
   // Optional caption/title for the sketch.
   title?: string;
-  
+
   // Timestamps for sync ordering.
   createdAt: number;
   updatedAt: number;
-  
+
   // Sync status - tracks whether the sketch has been uploaded.
   syncStatus: 'pending' | 'syncing' | 'synced' | 'failed';
+}
+
+/**
+ * Command entry - portable command synced from Mac app.
+ * These are markdown files from watched directories that have mobile sync enabled.
+ * Users can invoke commands by voice ("use the review command") and the full
+ * command content is expanded inline in the clipboard output.
+ */
+export interface Command {
+  id: string;
+  name: string;           // Lowercase command name (e.g., "review")
+  displayName: string;    // Human-readable name (e.g., "Review")
+  content: string;        // Full markdown content
+  updatedAt: number;      // For change detection
+}
+
+/**
+ * Result of detecting commands in transcribed text.
+ */
+export interface CommandDetectionResult {
+  detected: boolean;
+  commandNames: string[];
+  matchedCommands: Command[];
+  unmatchedNames: string[];
+  textWithoutCommandRefs: string;
 }
 
 
