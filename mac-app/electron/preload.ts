@@ -551,8 +551,8 @@ export interface ClipboardAPI {
   saveSketch: (imageData: string, width: number, height: number) => Promise<number>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
-  pasteItem: (id: number, targetBundleId?: string) => Promise<void>;
-  copyItem: (id: number) => Promise<void>;
+  pasteItem: (id: number, targetBundleId?: string, useImproved?: boolean) => Promise<void>;
+  copyItem: (id: number, useImproved?: boolean) => Promise<void>;
   pasteStack: (ids: number[]) => Promise<void>;
   pasteText: (text: string, targetBundleId?: string) => Promise<void>;
   separateIntoTasks: (id: number) => Promise<void>;
@@ -953,12 +953,12 @@ const clipboardAPI: ClipboardAPI = {
     return ipcRenderer.invoke(ClipboardIPCChannels.SET_HOTKEYS, hotkeys);
   },
 
-  pasteItem: async (id: number, targetBundleId?: string): Promise<void> => {
-    return ipcRenderer.invoke(ClipboardIPCChannels.PASTE_ITEM, id, targetBundleId);
+  pasteItem: async (id: number, targetBundleId?: string, useImproved?: boolean): Promise<void> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.PASTE_ITEM, id, targetBundleId, useImproved);
   },
-  
-  copyItem: async (id: number): Promise<void> => {
-    return ipcRenderer.invoke(ClipboardIPCChannels.COPY_ITEM, id);
+
+  copyItem: async (id: number, useImproved?: boolean): Promise<void> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.COPY_ITEM, id, useImproved);
   },
 
   pasteStack: async (ids: number[]): Promise<void> => {
