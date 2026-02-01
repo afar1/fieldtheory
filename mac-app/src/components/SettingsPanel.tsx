@@ -221,7 +221,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   
   // Hide status labels - show only colored dots.
   const [hideStatusLabels, setHideStatusLabels] = useState(false);
-  
+
+  // Cursor status debug mode - shows blue background to prove we control the overlay.
+  const [cursorStatusDebugMode, setCursorStatusDebugMode] = useState(false);
 
   // Show in Dock - whether app appears in Dock and Cmd+Tab.
   const [showInDock, setShowInDock] = useState(false);
@@ -318,7 +320,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       window.clipboardAPI.getHideStatusLabels?.().then(hide => {
         setHideStatusLabels(hide);
       });
-      
+
+      // Load cursor status debug mode setting
+      window.clipboardAPI.getCursorStatusDebugMode?.().then(enabled => {
+        setCursorStatusDebugMode(enabled);
+      });
 
       // Load word substitutions
       window.clipboardAPI.getWordSubstitutions?.().then(subs => {
@@ -508,6 +514,20 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       }
     } catch (err) {
       console.error('Failed to toggle hide status labels:', err);
+    }
+  };
+
+  // Handler for toggling cursor status debug mode (shows blue background).
+  const handleToggleCursorStatusDebugMode = async (enabled: boolean) => {
+    if (!window.clipboardAPI?.setCursorStatusDebugMode) return;
+
+    try {
+      const success = await window.clipboardAPI.setCursorStatusDebugMode(enabled);
+      if (success) {
+        setCursorStatusDebugMode(enabled);
+      }
+    } catch (err) {
+      console.error('Failed to toggle cursor status debug mode:', err);
     }
   };
 
@@ -1767,6 +1787,22 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
               style={{ ...styles.toggle, backgroundColor: !hideStatusLabels ? theme.accent : '#d1d5db' }}
             >
               <span style={{ ...styles.toggleKnob, transform: !hideStatusLabels ? 'translateX(20px)' : 'translateX(2px)' }} />
+            </button>
+          </div>
+        </div>
+
+        {/* Cursor Status Debug Mode - shows blue background to debug white rectangle issue */}
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={styles.rowLabel}>Debug cursor indicator</span>
+            <span style={styles.rowHint}>Show blue background on cursor overlay (for debugging)</span>
+          </div>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => handleToggleCursorStatusDebugMode(!cursorStatusDebugMode)}
+              style={{ ...styles.toggle, backgroundColor: cursorStatusDebugMode ? theme.accent : '#d1d5db' }}
+            >
+              <span style={{ ...styles.toggleKnob, transform: cursorStatusDebugMode ? 'translateX(20px)' : 'translateX(2px)' }} />
             </button>
           </div>
         </div>

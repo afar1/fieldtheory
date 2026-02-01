@@ -73,6 +73,9 @@ export default function CursorStatus() {
   // Used for warnings like "Note: Stacking 10+ images, some input fields may have limits"
   const [recordingNote, setRecordingNote] = useState<string | null>(null);
 
+  // Debug mode - shows blue background to prove we control this window
+  const [debugMode, setDebugMode] = useState<boolean>(false);
+
   // Refs for animation intervals
   const dotIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingTextTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -270,6 +273,36 @@ export default function CursorStatus() {
     };
   }, []);
 
+  // Listen for debug mode changes - shows blue background to prove we control the window.
+  useEffect(() => {
+    if (!window.cursorStatusAPI?.onDebugModeChange) return;
+
+    window.cursorStatusAPI.onDebugModeChange((enabled: boolean) => {
+      console.log('[CursorStatus] Debug mode changed:', enabled);
+      setDebugMode(enabled);
+    });
+
+    return () => {
+      window.cursorStatusAPI?.removeAllListeners('cursor-status-debug-mode');
+    };
+  }, []);
+
+  // Log all state changes when in debug mode
+  useEffect(() => {
+    if (debugMode) {
+      console.log('[CursorStatus] State change:', {
+        state,
+        isIdle,
+        hideLabels,
+        screenshotMode,
+        pipeCount,
+        textVisible,
+        showRecordingText,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }, [state, isIdle, hideLabels, screenshotMode, pipeCount, textVisible, showRecordingText, debugMode]);
+
   // Handle text visibility with fade-in when idle (for transcribing and improving)
   useEffect(() => {
     if (isIdle && (state === 'transcribing' || state === 'improving')) {
@@ -436,6 +469,9 @@ export default function CursorStatus() {
       style={{
         ...styles.container,
         cursor: (state === 'paste-failed' || state === 'done') ? 'pointer' : 'default',
+        // Debug mode: bright blue background to prove we control this window
+        backgroundColor: debugMode ? 'rgba(0, 122, 255, 0.9)' : 'transparent',
+        border: debugMode ? '2px solid #ff3b30' : 'none',
       }}
       onClick={handleClick}
     >

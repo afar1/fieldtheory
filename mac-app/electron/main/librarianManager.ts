@@ -4164,6 +4164,19 @@ def main():
             except:
                 pass
 
+        # Single pending job rule: abandon any existing pending jobs before creating new one
+        for old_job_file in list(jobs_dir.glob("job_*.json")) + list(jobs_dir.glob("cursor-job_*.json")):
+            if old_job_file == job_file:
+                continue  # Skip the current job file
+            try:
+                old_job = json.loads(old_job_file.read_text())
+                if old_job.get("status") == "pending":
+                    old_job["status"] = "abandoned"
+                    old_job["abandoned_at"] = datetime.now().isoformat()
+                    old_job_file.write_text(json.dumps(old_job, indent=2) + "\\n")
+            except:
+                continue
+
         # Create job file (preToolUse hook will enforce artifact creation)
         if not job_file.exists():
             job_file.write_text(json.dumps({

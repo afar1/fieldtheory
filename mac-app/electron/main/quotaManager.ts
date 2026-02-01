@@ -376,6 +376,7 @@ export class QuotaManager extends EventEmitter {
    * Call with the number of input words being improved.
    * Uses "grace" logic: if user has any quota remaining, allow the full request.
    * Both free (5k) and pro (50k) users have limits tracked.
+   * Also updates the all-time improvedPromptsCount stat for display in UserStatsPanel.
    */
   async incrementTextImprove(wordCount: number): Promise<void> {
     // Check for month rollover before incrementing.
@@ -385,6 +386,10 @@ export class QuotaManager extends EventEmitter {
       ...this.quotas,
       textImprovementWordsUsed: (this.quotas.textImprovementWordsUsed || 0) + wordCount,
     });
+
+    // Also update the all-time "Words improved" stat so it stays in sync with quota usage
+    const currentCount = this.preferencesManager.getPreference('improvedPromptsCount') ?? 0;
+    await this.preferencesManager.save({ improvedPromptsCount: currentCount + wordCount });
 
     this.emit('quotaChanged', this.getQuotas());
   }

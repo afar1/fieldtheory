@@ -78,6 +78,8 @@ interface Preferences {
   
   // Todo hotkey - opens clipboard history in todo view mode
   todoHotkey?: string;
+  // Tasks tab visibility - hidden by default, toggled via Shift+Cmd+T
+  tasksTabEnabled?: boolean;
 
   // Previously hardcoded hotkeys - now customizable
   superPasteHotkey?: string;

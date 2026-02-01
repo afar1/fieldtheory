@@ -51,6 +51,11 @@ contextBridge.exposeInMainWorld('cursorStatusAPI', {
     ipcRenderer.on('cursor-status-recording-note', (_event, note) => callback(note));
   },
 
+  // Debug mode changes (shows blue background to prove we control the overlay window).
+  onDebugModeChange: (callback: (enabled: boolean) => void) => {
+    ipcRenderer.on('cursor-status-debug-mode', (_event, enabled) => callback(enabled));
+  },
+
   // Send confirmation response (true = abandon, false = continue)
   sendConfirmationResponse: (abandon: boolean) => {
     ipcRenderer.send('cursor-status-confirmation-response', abandon);
