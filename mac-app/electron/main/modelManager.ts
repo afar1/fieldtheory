@@ -9,9 +9,9 @@ const log = createLogger('Model');
 
 /**
  * Available Whisper model sizes.
- * Larger models provide better accuracy but require more disk space and processing time.
+ * The small English model provides fast, reliable transcription.
  */
-export type ModelSize = 'small' | 'medium';
+export type ModelSize = 'small';
 
 /**
  * Model metadata including name, URL, and expected size.
@@ -31,13 +31,7 @@ const MODELS: Record<ModelSize, ModelInfo> = {
     name: 'ggml-small.en.bin',
     url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin',
     sizeBytes: 466 * 1024 * 1024, // ~466MB
-    description: 'Small (466MB) - Better accuracy',
-  },
-  medium: {
-    name: 'ggml-medium.en.bin',
-    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin',
-    sizeBytes: 1420 * 1024 * 1024, // ~1.4GB
-    description: 'Medium (1.4GB) - High accuracy',
+    description: 'English transcription model',
   },
 };
 
@@ -116,7 +110,7 @@ export class ModelManager {
     }
 
     const status: Record<ModelSize, boolean> = {} as Record<ModelSize, boolean>;
-    const modelSizes: ModelSize[] = ['small', 'medium'];
+    const modelSizes: ModelSize[] = ['small'];
 
     await Promise.all(
       modelSizes.map(async (size) => {

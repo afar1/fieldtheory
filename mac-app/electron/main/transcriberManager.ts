@@ -230,8 +230,8 @@ export class TranscriberManager extends EventEmitter {
     this.secondaryHotkey = this.preferences.getPreference('transcriptionSecondaryHotkey') || null;
 
     // Set the selected model from preferences.
-    // Validate that the model is still supported (base was removed in v0.1.29).
-    const validModels: ModelSize[] = ['small', 'medium'];
+    // Validate that the model is still supported (base was removed in v0.1.29, medium in v0.1.54).
+    const validModels: ModelSize[] = ['small'];
     let selectedModel = this.preferences.getPreference('selectedModel');
     if (!validModels.includes(selectedModel)) {
       selectedModel = 'small';

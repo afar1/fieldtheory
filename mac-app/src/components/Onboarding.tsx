@@ -18,7 +18,7 @@ type PermissionStatus = {
   screenRecording: boolean;
 };
 
-type ModelSize = 'small' | 'medium';
+type ModelSize = 'small';
 
 interface ModelInfo {
   name: string;
@@ -28,12 +28,11 @@ interface ModelInfo {
 }
 
 const MODELS: Record<ModelSize, ModelInfo> = {
-  small: { name: 'Small', size: '466 MB', description: 'Faster, good for simple notes' },
-  medium: { name: 'Medium', size: '1.4 GB', description: 'Best balance of speed and accuracy', recommended: true },
+  small: { name: 'English Model', size: '466 MB', description: 'Fast and reliable accuracy', recommended: true },
 };
 
 // Model selection order.
-const MODEL_ORDER: ModelSize[] = ['small', 'medium'];
+const MODEL_ORDER: ModelSize[] = ['small'];
 
 // Phase to step number mapping for persistence.
 const PHASE_TO_STEP: Record<OnboardingPhase, number> = {
@@ -246,9 +245,9 @@ function ModelPhase({
 
   return (
     <div style={styles.phase}>
-      <h1 style={styles.title}>Choose Voice Model</h1>
+      <h1 style={styles.title}>Download Voice Model</h1>
       <p style={styles.subtitle}>
-        Select a model for transcription. Medium is recommended.
+        Download the English transcription model to get started.
       </p>
 
       <div style={styles.modelList}>
@@ -1112,7 +1111,7 @@ export default function Onboarding() {
   });
 
   // Model state.
-  const [selectedModel, setSelectedModel] = useState<ModelSize>('medium');
+  const [selectedModel, setSelectedModel] = useState<ModelSize>('small');
   const [modelDownloadStatus, setModelDownloadStatus] = useState<Record<string, boolean>>({});
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState(0);
@@ -1165,8 +1164,8 @@ export default function Onboarding() {
             }
           }
 
-          if (currentModel && ['small', 'medium'].includes(currentModel)) {
-            setSelectedModel(currentModel as ModelSize);
+          if (currentModel === 'small') {
+            setSelectedModel(currentModel);
           }
 
           // Check if a download is already in progress.

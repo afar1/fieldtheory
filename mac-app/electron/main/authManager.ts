@@ -10,7 +10,7 @@
  * to this manager's events instead of managing their own auth state.
  */
 
-import { createClient, SupabaseClient, Session, SupportedStorage, processLock } from '@supabase/supabase-js';
+import { createClient, SupabaseClient, Session, SupportedStorage } from '@supabase/supabase-js';
 import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import fs from 'fs';
@@ -216,10 +216,8 @@ export class AuthManager extends EventEmitter {
         autoRefreshToken: true,  // SDK handles token refresh automatically
         persistSession: true,
         detectSessionInUrl: false,
-        // CRITICAL: Use processLock to prevent concurrent refresh token attempts.
-        // Without this, multiple callers (SDK auto-refresh, setSession, restoreSessionFromStorage)
-        // can race and use the same refresh token, causing "refresh_token_already_used" errors.
-        lock: processLock,
+        // NOTE: processLock uses Web Locks API which doesn't work in Electron/Node.js
+        // We handle concurrency manually via this.refreshInProgress mutex instead
       },
       realtime: {
         transport: WebSocket as any,
@@ -285,7 +283,16 @@ export class AuthManager extends EventEmitter {
     if (!this.supabase) return;
 
     try {
-      const { data, error } = await this.supabase.auth.getSession();
+      // Add timeout - getSession can hang in Electron due to SDK issues with Web Locks API
+      const timeoutPromise = new Promise<{ data: { session: null }; error: null }>((resolve) => {
+        setTimeout(() => {
+          log.warn('getSession timeout after 5s - continuing without session');
+          resolve({ data: { session: null }, error: null });
+        }, 5000);
+      });
+
+      const sessionPromise = this.supabase.auth.getSession();
+      const { data, error } = await Promise.race([sessionPromise, timeoutPromise]);
 
       if (error) {
         log.warn('Error getting session:', error.message);
