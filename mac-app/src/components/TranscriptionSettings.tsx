@@ -420,9 +420,7 @@ export default function TranscriptionSettings() {
               const progressPercent = progress ? Math.round((progress.downloaded / progress.total) * 100) : 0;
               const sizeMB = (info.sizeBytes / 1024 / 1024).toFixed(0);
 
-              const qualityHint = size === 'small' ? 'Good for quick tasks'
-                : size === 'medium' ? 'Best accuracy'
-                : '';
+              const qualityHint = size === 'small' ? 'Fast and reliable accuracy' : '';
 
               return (
                 <div

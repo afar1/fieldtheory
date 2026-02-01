@@ -1860,10 +1860,10 @@ function setupTranscribeIPCHandlers(): void {
     }
     const modelManager = transcriberManager.getModelManager();
     
-    const downloadFn = modelSize 
-      ? (onProgress?: (downloaded: number, total: number) => void) => 
-          modelManager.downloadModelForSize(modelSize as 'small' | 'medium', onProgress)
-      : (onProgress?: (downloaded: number, total: number) => void) => 
+    const downloadFn = modelSize
+      ? (onProgress?: (downloaded: number, total: number) => void) =>
+          modelManager.downloadModelForSize(modelSize as 'small', onProgress)
+      : (onProgress?: (downloaded: number, total: number) => void) =>
           modelManager.downloadModel(onProgress);
     
     await downloadFn((downloaded, total) => {
@@ -1884,7 +1884,7 @@ function setupTranscribeIPCHandlers(): void {
       throw new Error('TranscriberManager not initialized');
     }
     const modelManager = transcriberManager.getModelManager();
-    const validSizes: ModelSize[] = ['small', 'medium'];
+    const validSizes: ModelSize[] = ['small'];
     if (!validSizes.includes(modelSize as ModelSize)) {
       throw new Error(`Invalid model size: ${modelSize}`);
     }
@@ -1926,7 +1926,7 @@ function setupTranscribeIPCHandlers(): void {
     if (!transcriberManager) {
       throw new Error('TranscriberManager not initialized');
     }
-    const validSizes: ModelSize[] = ['small', 'medium'];
+    const validSizes: ModelSize[] = ['small'];
     if (!validSizes.includes(modelSize as ModelSize)) {
       throw new Error(`Invalid model size: ${modelSize}`);
     }
