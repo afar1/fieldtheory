@@ -42,6 +42,7 @@ import { CursorStatusManager, CursorStatusState } from './cursorStatusManager';
 import { QuotaManager } from './quotaManager';
 import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, PortableCommand } from './commandsManager';
+import { CommandSyncService } from './commandSyncService';
 import { CommandsIPCChannels } from './types/commands';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { LibrarianManager, Reading, ReadingMeta, WatchedDir } from './librarianManager';
@@ -146,6 +147,7 @@ let quotaManager: QuotaManager | null = null;
 let diagnosticsCollector: DiagnosticsCollector | null = null;
 let librarianManager: LibrarianManager | null = null;
 let commandsManager: CommandsManager | null = null;
+let commandSyncService: CommandSyncService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
 let metricsManager: MetricsManager | null = null;
 
@@ -3801,6 +3803,46 @@ function setupClipboardIPCHandlers(): void {
     return commandsManager.renameCommand(oldFilePath, newName);
   });
 
+  // =========================================================================
+  // Mobile Sync Operations
+  // =========================================================================
+
+  ipcMain.handle(CommandsIPCChannels.SET_MOBILE_SYNC, async (_event, dirPath: string, enabled: boolean) => {
+    if (!commandsManager) {
+      return false;
+    }
+    const success = commandsManager.setMobileSyncEnabled(dirPath, enabled);
+    // Trigger sync after enabling/disabling
+    if (success && commandSyncService) {
+      commandSyncService.syncToSupabase();
+    }
+    return success;
+  });
+
+  ipcMain.handle(CommandsIPCChannels.GET_MOBILE_SYNC_STATUS, async () => {
+    if (!commandSyncService) {
+      return { ready: false, lastSyncAt: null };
+    }
+    return {
+      ready: commandSyncService.isReady(),
+      lastSyncAt: commandSyncService.getLastSyncAt(),
+    };
+  });
+
+  ipcMain.handle(CommandsIPCChannels.SYNC_TO_MOBILE, async () => {
+    if (!commandSyncService) {
+      return { success: false, uploaded: 0, updated: 0, deleted: 0, errors: ['Not initialized'] };
+    }
+    return await commandSyncService.syncToSupabase();
+  });
+
+  ipcMain.handle(CommandsIPCChannels.GET_REMOTE_COMMAND_COUNT, async () => {
+    if (!commandSyncService) {
+      return 0;
+    }
+    return await commandSyncService.getRemoteCommandCount();
+  });
+
   // Handle direct command invocation from command launcher (Cmd+Shift+K).
   // Gets the command, determines if target is terminal, and pastes appropriately.
   ipcMain.handle('commands:invoke', async (_event, commandName: string) => {
@@ -4935,6 +4977,12 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize feedback manager for user feedback to admin.
   feedbackManager = new FeedbackManager(authManager, clipboardManager);
+
+  // Initialize command sync service for mobile voice commands.
+  // This syncs portable commands to Supabase when mobile sync is enabled.
+  if (commandsManager && authManager) {
+    commandSyncService = new CommandSyncService(authManager, commandsManager);
+  }
 
   // metricsManager was initialized earlier, before authManager.init()
 
