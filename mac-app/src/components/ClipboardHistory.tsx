@@ -289,6 +289,9 @@ export default function ClipboardHistory() {
   const [pendingReadingPath, setPendingReadingPath] = useState<string | null>(null);
   const [headerHovered, setHeaderHovered] = useState(false);
 
+  // Tasks tab visibility - hidden by default, toggled with Shift+Cmd+T
+  const [tasksTabEnabled, setTasksTabEnabled] = useState(false);
+
   // Layout variant - B8 is the official layout
   const layoutVariant = 'B8' as const;
 
@@ -1473,11 +1476,22 @@ export default function ClipboardHistory() {
       rendererSoundManager.play(soundId as 'windowOpen' | 'windowClose' | 'artifactDiscovery');
     });
 
-    // Listen for todo view hotkey (Cmd+Shift+T).
-    // Toggles between todo and clipboard view.
+    // Listen for todo view switch event (triggered when Cmd+Shift+T enables Tasks tab).
     const unsubscribeShowTodos = window.todoAPI?.onShowTodos?.(() => {
       setShowSettings(false);
-      setViewMode(prev => prev === 'todo' ? 'clipboard' : 'todo');
+      setViewMode('todo');
+    });
+
+    // Load initial Tasks tab visibility and subscribe to changes.
+    window.clipboardAPI.getTasksTabEnabled?.().then(enabled => {
+      setTasksTabEnabled(enabled);
+    });
+    const unsubscribeTasksTabToggled = window.clipboardAPI.onTasksTabToggled?.((enabled) => {
+      setTasksTabEnabled(enabled);
+      // If Tasks tab was disabled while viewing it, switch to clipboard
+      if (!enabled) {
+        setViewMode(prev => prev === 'todo' ? 'clipboard' : prev);
+      }
     });
 
     const unsubscribeTargetAppInfo = window.clipboardAPI.onTargetAppInfo?.((info) => {
@@ -1543,6 +1557,7 @@ export default function ClipboardHistory() {
       unsubscribeResetToClipboard?.();
       unsubscribePlaySound?.();
       unsubscribeShowTodos?.();
+      unsubscribeTasksTabToggled?.();
       unsubscribeTargetAppInfo?.();
       unsubscribeAdded();
       unsubscribeDeleted();
@@ -3396,7 +3411,7 @@ export default function ClipboardHistory() {
             overflow: 'hidden',
             transition: 'height 0.3s ease, min-height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease',
           }}>
-          {(['clipboard', 'todo'] as ViewMode[]).map((mode) => {
+          {(['clipboard', ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
             const isSelected = viewMode === mode && !showSettings;
             const bgColor = isSelected ? theme.accent : 'transparent';
 
