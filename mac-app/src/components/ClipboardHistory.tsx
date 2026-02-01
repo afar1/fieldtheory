@@ -1110,9 +1110,9 @@ export default function ClipboardHistory() {
   }, [authSession?.user?.email, canShare]);
 
   // Copy item to system clipboard and show flash.
-  const copyItem = useCallback(async (itemId: number, rowKey: string) => {
+  const copyItem = useCallback(async (itemId: number, rowKey: string, useImproved?: boolean) => {
     if (!window.clipboardAPI?.copyItem) return;
-    await window.clipboardAPI.copyItem(itemId);
+    await window.clipboardAPI.copyItem(itemId, useImproved);
     setCopiedItemId(rowKey);
     setTimeout(() => setCopiedItemId(null), 1500);
   }, []);
@@ -2553,7 +2553,7 @@ export default function ClipboardHistory() {
             window.clipboardAPI?.closeWindow();
           } else if (selectedRow?.type === 'item') {
             // Paste single item to target app
-            window.clipboardAPI?.pasteItem(selectedRow.item.id, pasteBundleId);
+            window.clipboardAPI?.pasteItem(selectedRow.item.id, pasteBundleId, selectedRow.item.useImprovedVersion);
             window.clipboardAPI?.closeWindow();
           }
         }
@@ -2565,7 +2565,7 @@ export default function ClipboardHistory() {
         const selectedRow = listRows[selectedIndex];
         if (selectedRow?.type === 'item') {
           e.preventDefault();
-          copyItem(selectedRow.item.id, `item-${selectedRow.item.id}`);
+          copyItem(selectedRow.item.id, `item-${selectedRow.item.id}`, selectedRow.item.useImprovedVersion);
         } else if (selectedRow?.type === 'stack' && selectedRow.items.length > 0) {
           e.preventDefault();
           copyStack(selectedRow.items, `stack-${selectedRow.items.map(i => i.id).join(',')}`);
@@ -2952,13 +2952,13 @@ export default function ClipboardHistory() {
         : targetAppInfo.previousApp?.bundleId;
       
       if (!pasteBundleId) {
-        window.clipboardAPI?.copyItem?.(item.id);
+        window.clipboardAPI?.copyItem?.(item.id, item.useImprovedVersion);
         window.clipboardAPI?.showNoTargetError?.('Copied to clipboard');
         window.clipboardAPI?.closeWindow();
         return;
       }
-      
-      window.clipboardAPI?.pasteItem(item.id, pasteBundleId);
+
+      window.clipboardAPI?.pasteItem(item.id, pasteBundleId, item.useImprovedVersion);
       window.clipboardAPI?.closeWindow();
     }
   };
@@ -5119,7 +5119,7 @@ export default function ClipboardHistory() {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      copyItem(item.id, `item-${item.id}`);
+                      copyItem(item.id, `item-${item.id}`, item.useImprovedVersion);
                     }}
                     style={{
                       position: 'absolute',
@@ -6934,12 +6934,13 @@ export default function ClipboardHistory() {
                     const selectedRow = listRows[selectedIndex];
                     if (selectedRow?.type === 'item' && window.clipboardAPI) {
                       const bundleId = targetAppInfo?.previousApp?.bundleId;
-                      await window.clipboardAPI.pasteItem(selectedRow.item.id, bundleId);
+                      await window.clipboardAPI.pasteItem(selectedRow.item.id, bundleId, selectedRow.item.useImprovedVersion);
                       window.clipboardAPI.closeWindow();
                     }
                   }},
                   { label: 'copy', key: 'c', action: async () => {
                     if (preview.type === 'image' && window.clipboardAPI) {
+                      // Images don't have improved content
                       await window.clipboardAPI.copyItem(preview.itemId);
                       showFeedback('copied to clipboard');
                     }
