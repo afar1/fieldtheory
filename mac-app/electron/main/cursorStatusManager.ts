@@ -472,13 +472,15 @@ export class CursorStatusManager extends EventEmitter {
     const cursorPos = screen.getCursorScreenPoint();
     
     this.window = new BrowserWindow({
-      type: 'panel',  // NSPanel for floating above all windows including Field Theory
+      // Note: intentionally NOT using type: 'panel' - NSPanel causes a white backing
+      // rectangle artifact on multi-monitor setups that doesn't respect transparent: true
       width: this.WINDOW_WIDTH_NORMAL,
       height: this.WINDOW_HEIGHT_NORMAL,
       x: cursorPos.x + this.CURSOR_OFFSET_X,
       y: cursorPos.y + this.CURSOR_OFFSET_Y,
       frame: false,
       transparent: true,
+      backgroundColor: '#00000000',
       alwaysOnTop: true,
       skipTaskbar: true,
       resizable: false,
