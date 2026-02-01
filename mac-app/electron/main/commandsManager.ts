@@ -1009,7 +1009,7 @@ End of User Commands
     // Emit change
     this.emit('commandsChanged', this.getCommands());
 
-    return { path: normalizedPath, enabled: true };
+    return { path: normalizedPath, enabled: true, mobileSyncEnabled: false };
   }
 
   /**
