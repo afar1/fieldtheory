@@ -202,7 +202,6 @@ export class CursorStatusManager extends EventEmitter {
    * When transitioning from transcribing to idle, briefly shows 'done' state first.
    */
   setState(state: CursorStatusState): void {
-
     // Clear any pending timeouts
     if (this.doneTimeout) {
       clearTimeout(this.doneTimeout);
@@ -434,6 +433,12 @@ export class CursorStatusManager extends EventEmitter {
     }
   }
 
+  // Track if renderer is ready (did-finish-load fired)
+  private rendererReady: boolean = false;
+  // Queue show request if renderer not ready yet
+  private pendingShow: boolean = false;
+  private pendingForceShow: boolean = false;
+
   /**
    * Show the cursor status overlay and start tracking.
    * @param forceShow - If true, shows the window even when cursor status is disabled.
@@ -449,6 +454,14 @@ export class CursorStatusManager extends EventEmitter {
     }
 
     if (this.window) {
+      // Defer showInactive until renderer is ready to prevent white rectangle flash on multi-monitor setups.
+      // The window must fully load its transparent content before becoming visible.
+      if (!this.rendererReady) {
+        this.pendingShow = true;
+        this.pendingForceShow = forceShow;
+        this.startTracking(); // Start tracking cursor position even while waiting
+        return;
+      }
       this.window.showInactive();
       this.startTracking();
     }
@@ -458,6 +471,9 @@ export class CursorStatusManager extends EventEmitter {
    * Hide the overlay and stop tracking.
    */
   private hide(): void {
+    // Clear any pending show request - user cancelled before renderer was ready
+    this.pendingShow = false;
+    this.pendingForceShow = false;
     this.stopTracking();
 
     if (this.window && !this.window.isDestroyed()) {
@@ -469,25 +485,25 @@ export class CursorStatusManager extends EventEmitter {
    * Create the overlay window.
    */
   private createWindow(): void {
+    this.rendererReady = false;
     const cursorPos = screen.getCursorScreenPoint();
     
     this.window = new BrowserWindow({
-      // Not using type: 'panel' - causes white rectangle on multi-monitor
+      // Minimal config for transparent overlay - avoid visual effect options that can cause
+      // white rectangle artifacts on multi-monitor setups
       width: this.WINDOW_WIDTH_NORMAL,
       height: this.WINDOW_HEIGHT_NORMAL,
       x: cursorPos.x + this.CURSOR_OFFSET_X,
       y: cursorPos.y + this.CURSOR_OFFSET_Y,
       frame: false,
       transparent: true,
-      backgroundColor: '#00000000',
-      visualEffectState: 'inactive',
+      hasShadow: false,
+      roundedCorners: false,
       alwaysOnTop: true,
       skipTaskbar: true,
       resizable: false,
       movable: false,
       focusable: false,
-      hasShadow: false,
-      roundedCorners: false,
       show: false,
       webPreferences: {
         nodeIntegration: false,
@@ -524,11 +540,22 @@ export class CursorStatusManager extends EventEmitter {
 
     // Send initial state once loaded.
     this.window.webContents.once('did-finish-load', () => {
+      this.rendererReady = true;
       if (this.window && !this.window.isDestroyed()) {
         this.window.webContents.send('cursor-status-state', this.state);
         this.window.webContents.send('cursor-status-idle', this.isIdle);
         this.window.webContents.send('cursor-status-hide-labels', this.hideLabels);
         this.sendLabelVisibilityToRenderer();
+        
+        // Process any pending show request now that renderer is ready
+        if (this.pendingShow) {
+          this.pendingShow = false;
+          // Only show if still enabled (or was force-shown)
+          if (this.enabled || this.pendingForceShow) {
+            this.window.showInactive();
+          }
+          this.pendingForceShow = false;
+        }
       }
     });
   }
