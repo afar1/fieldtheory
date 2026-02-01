@@ -2300,7 +2300,7 @@ function setupClipboardIPCHandlers(): void {
     return success;
   });
 
-  ipcMain.handle(ClipboardIPCChannels.PASTE_ITEM, async (_event, id: number, targetBundleId?: string) => {
+  ipcMain.handle(ClipboardIPCChannels.PASTE_ITEM, async (_event, id: number, targetBundleId?: string, useImproved?: boolean) => {
     try {
       if (!clipboardManager) {
         return;
@@ -2324,8 +2324,9 @@ function setupClipboardIPCHandlers(): void {
       // Put content on clipboard first.
       // Use optimized hash methods to avoid expensive clipboard reads after write.
       if (item.type === 'text' || item.type === 'transcript') {
-        // Use improved content if available and toggle is set.
-        let textContent = (item.useImprovedVersion && item.improvedContent)
+        // Use improved content based on explicit parameter, or fall back to item's stored preference.
+        const shouldUseImproved = useImproved !== undefined ? useImproved : item.useImprovedVersion;
+        let textContent = (shouldUseImproved && item.improvedContent)
           ? item.improvedContent
           : (item.content || '');
 
@@ -2411,7 +2412,7 @@ function setupClipboardIPCHandlers(): void {
   });
 
   // Copy item to clipboard without pasting.
-  ipcMain.handle(ClipboardIPCChannels.COPY_ITEM, async (_event, id: number) => {
+  ipcMain.handle(ClipboardIPCChannels.COPY_ITEM, async (_event, id: number, useImproved?: boolean) => {
     try {
       if (!clipboardManager) {
         return;
@@ -2420,10 +2421,15 @@ function setupClipboardIPCHandlers(): void {
       if (!item) {
         return;
       }
-      
+
       // Put content on clipboard.
       if (item.type === 'text' || item.type === 'transcript') {
-        clipboard.writeText(item.content || '');
+        // Use improved content based on explicit parameter, or fall back to item's stored preference.
+        const shouldUseImproved = useImproved !== undefined ? useImproved : item.useImprovedVersion;
+        const textContent = (shouldUseImproved && item.improvedContent)
+          ? item.improvedContent
+          : (item.content || '');
+        clipboard.writeText(textContent);
       } else if (item.imageData) {
         const { nativeImage } = require('electron');
         const imageBuffer = typeof item.imageData === 'string' 

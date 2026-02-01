@@ -232,8 +232,8 @@ interface ClipboardAPI {
   captureScreenshot: (region?: boolean) => Promise<number>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
-  pasteItem: (id: number, targetBundleId?: string) => Promise<void>;
-  copyItem: (id: number) => Promise<void>;
+  pasteItem: (id: number, targetBundleId?: string, useImproved?: boolean) => Promise<void>;
+  copyItem: (id: number, useImproved?: boolean) => Promise<void>;
   pasteStack: (ids: number[], targetBundleId?: string) => Promise<void>;
   separateIntoTasks: (id: number) => Promise<void>;
   // Target app management.
