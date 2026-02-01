@@ -472,8 +472,7 @@ export class CursorStatusManager extends EventEmitter {
     const cursorPos = screen.getCursorScreenPoint();
     
     this.window = new BrowserWindow({
-      // Note: intentionally NOT using type: 'panel' - NSPanel causes a white backing
-      // rectangle artifact on multi-monitor setups that doesn't respect transparent: true
+      // Not using type: 'panel' - causes white rectangle on multi-monitor
       width: this.WINDOW_WIDTH_NORMAL,
       height: this.WINDOW_HEIGHT_NORMAL,
       x: cursorPos.x + this.CURSOR_OFFSET_X,
