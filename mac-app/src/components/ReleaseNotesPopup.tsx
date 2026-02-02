@@ -14,6 +14,12 @@ export function hasReleaseNotes(version: string): boolean {
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.57': [
+    'Major refactoring: simplified auth and quota systems, removed 9k lines of unused code',
+    'Fixed blank screen crash on Account page',
+    'Fixed tier sync: footer now correctly shows Pro status',
+    'Redesigned footer with cycling stats for Pro users',
+  ],
   '0.1.56': [
     'Major refactoring: simplified auth and quota systems, removed 9k lines of unused code',
     'Fixed blank screen crash on Account page',
@@ -114,6 +120,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.57': 'Feb 2 2026',
   '0.1.56': 'Feb 2 2026',
   '0.1.55': 'Feb 2 2026',
   '0.1.54': 'Feb 2 2026',

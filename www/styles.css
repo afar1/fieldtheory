@@ -178,7 +178,7 @@ img {
    Hero Section
    -------------------------------------------------------------------------- */
 .hero {
-  padding: var(--space-xl) 0;
+  padding: var(--space-xl) 0 var(--space-md);
   text-align: center;
 }
 
@@ -272,6 +272,78 @@ img {
 
 .btn-secondary:hover {
   border-color: var(--color-text);
+}
+
+/* --------------------------------------------------------------------------
+   Before/After Comparison
+   -------------------------------------------------------------------------- */
+.comparison {
+  padding: var(--space-sm) 0 var(--space-lg);
+}
+
+.comparison-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-lg);
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.comparison-col {
+  text-align: center;
+}
+
+.comparison-col h3 {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.comparison-ascii {
+  background: var(--color-bg-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius);
+  padding: var(--space-md);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: var(--color-text);
+  text-align: left;
+  white-space: pre;
+  overflow-x: auto;
+  margin: 0;
+}
+
+.comparison-tagline {
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 1.1rem;
+  margin-top: var(--space-md);
+}
+
+.comparison-cta {
+  text-align: center;
+  margin-top: var(--space-md);
+}
+
+@media (max-width: 768px) {
+  .comparison-grid {
+    grid-template-columns: 1fr;
+    gap: var(--space-md);
+  }
+
+  .comparison-ascii {
+    font-size: 0.65rem;
+  }
+}
+
+@media (max-width: 400px) {
+  .comparison-ascii {
+    font-size: 0.55rem;
+  }
 }
 
 /* --------------------------------------------------------------------------
