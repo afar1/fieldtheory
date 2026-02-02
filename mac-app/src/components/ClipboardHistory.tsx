@@ -1147,9 +1147,11 @@ export default function ClipboardHistory() {
   }, []);
 
   const handleSketchSave = useCallback(async (imageData: { dataUrl: string; width: number; height: number }, andCopy?: boolean) => {
+    localStorage.removeItem('pendingSketch');
+
     const api = window.clipboardAPI;
     if (!api?.restoreItem) return;
-    
+
     const base64Data = imageData.dataUrl.replace(/^data:image\/\w+;base64,/, '');
     const createdAt = Date.now();
     
@@ -1185,6 +1187,7 @@ export default function ClipboardHistory() {
   }, [loadItems, transcriptionStatus]);
 
   const handleSketchClose = useCallback(() => {
+    localStorage.removeItem('pendingSketch');
     setEditingSketchItem(null);
     setSketchAssociatedTranscripts([]);
     setViewMode('clipboard');
@@ -1428,16 +1431,17 @@ export default function ClipboardHistory() {
         const pendingSketch = localStorage.getItem('pendingSketch');
         if (pendingSketch) {
           const restored = JSON.parse(pendingSketch);
-          // Only restore if less than 24 hours old and has content
           if (restored.elements?.length > 0 && Date.now() - restored.timestamp < 24 * 60 * 60 * 1000) {
             setViewMode('sketch');
             setEditingSketchItem(null);
             setSketchBackgroundImage(null);
-            return; // Skip normal view restoration
+            return;
+          } else {
+            localStorage.removeItem('pendingSketch');
           }
         }
       } catch (e) {
-        // Ignore parse errors
+        localStorage.removeItem('pendingSketch');
       }
 
       // Restore viewMode from localStorage - ensures we return to the last viewed tab
@@ -1547,6 +1551,12 @@ export default function ClipboardHistory() {
         const next = new Set(prev);
         next.delete(id);
         return next;
+      });
+      // Recheck scroll position after deletion - list may have shrunk
+      requestAnimationFrame(() => {
+        if (listRef.current && listRef.current.scrollTop <= 20) {
+          setHasItemsAbove(false);
+        }
       });
     });
 

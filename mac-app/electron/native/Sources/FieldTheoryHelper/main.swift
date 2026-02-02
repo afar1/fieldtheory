@@ -33,8 +33,6 @@ enum MessageType: String, Codable {
     case cancelRecording
     case checkPermissions
     case checkFocusedTextInput
-    case startKeyboardMonitoring
-    case stopKeyboardMonitoring
     case getFrontmostWindowBounds
     // Sound playback
     case preloadSounds
@@ -147,36 +145,6 @@ struct FocusedTextInputStatusMessage: Codable {
     enum CodingKeys: String, CodingKey {
         case type
         case hasTextInput
-    }
-}
-
-struct KeyEventMessage: Codable {
-    let type = "keyEvent"
-    let characters: String
-    let keyCode: Int
-    let modifiers: [String]
-    
-    enum CodingKeys: String, CodingKey {
-        case type
-        case characters
-        case keyCode
-        case modifiers
-    }
-}
-
-struct KeyboardMonitoringDisabledMessage: Codable {
-    let type = "keyboardMonitoringDisabled"
-    
-    enum CodingKeys: String, CodingKey {
-        case type
-    }
-}
-
-struct MenuBarClickedMessage: Codable {
-    let type = "menuBarClicked"
-
-    enum CodingKeys: String, CodingKey {
-        case type
     }
 }
 
@@ -609,49 +577,16 @@ final class CoreAudioHelper {
     }
 }
 
-// MARK: - Keyboard Monitor
+// MARK: - Accessibility Helper
 
-/// Manages global keyboard event monitoring using CGEventTap.
-/// Captures keyboard input without stealing focus from the active application.
+/// Provides accessibility-related permission checks and text input detection.
+/// Note: CGEventTap-based keyboard monitoring was removed as it required Input Monitoring permission.
 final class KeyboardMonitor {
-    
+
     static let shared = KeyboardMonitor()
-    
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
-    private var isMonitoring = false
-    
+
     private init() {}
-    
-    /// Check if Input Monitoring permission is granted.
-    /// Attempts to create a test event tap - if it returns nil, permission is denied.
-    func checkInputMonitoringPermission() -> Bool {
-        // Try to create a test event tap
-        let eventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
-        let testTap = CGEvent.tapCreate(
-            tap: .cghidEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: CGEventMask(eventMask),
-            callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
-                return Unmanaged.passUnretained(event)
-            },
-            userInfo: nil
-        )
-        
-        // If tap is nil, permission is denied
-        if testTap == nil {
-            return false
-        }
-        
-        // Clean up test tap
-        if let tap = testTap {
-            CFMachPortInvalidate(tap)
-        }
-        
-        return true
-    }
-    
+
     /// Check if Accessibility permission is granted.
     func checkAccessibilityPermission() -> Bool {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: false] as CFDictionary
@@ -840,255 +775,6 @@ final class KeyboardMonitor {
         
         // Continue up the tree
         return hasTextInputAncestor(parentElement, depth: depth + 1)
-    }
-    
-    /// Start monitoring keyboard events.
-    /// Only captures events when clipboard history window is visible.
-    func startMonitoring() -> Bool {
-        guard !isMonitoring else {
-            sendLog(level: "info", message: "Keyboard monitoring already active")
-            return true
-        }
-
-        // NOTE: Input Monitoring permission check removed since keyboard monitoring is not currently used.
-        // If keyboard monitoring is re-enabled in the future, uncomment the permission check below.
-        // The check itself triggers the Input Monitoring permission prompt, which we want to avoid.
-
-        // guard checkInputMonitoringPermission() else {
-        //     sendLog(level: "error", message: "Input Monitoring permission denied")
-        //     return false
-        // }
-        
-        // Create event tap for keyDown and keyUp events
-        let eventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
-        
-        eventTap = CGEvent.tapCreate(
-            tap: .cghidEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: CGEventMask(eventMask),
-            callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
-                // Call the callback on the KeyboardMonitor instance
-                let monitor = Unmanaged<KeyboardMonitor>.fromOpaque(refcon!).takeUnretainedValue()
-                return monitor.handleEvent(proxy: proxy, type: type, event: event)
-            },
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
-        )
-        
-        guard let tap = eventTap else {
-            sendLog(level: "error", message: "Failed to create keyboard event tap - permission may be denied")
-            return false
-        }
-        
-        // Check if tap is enabled (may be disabled by user input)
-        if CGEvent.tapIsEnabled(tap: tap) {
-            // Create run loop source
-            runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-            if let source = runLoopSource {
-                // Add to main run loop - CGEventTap callbacks must run on main run loop
-                CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-            }
-            
-            isMonitoring = true
-            sendLog(level: "info", message: "Keyboard monitoring started")
-            return true
-        } else {
-            // Tap was disabled (likely permission issue)
-            CFMachPortInvalidate(tap)
-            eventTap = nil
-            sendLog(level: "error", message: "Keyboard event tap disabled - permission may have been revoked")
-            let message = KeyboardMonitoringDisabledMessage()
-            sendJSON(message)
-            return false
-        }
-    }
-    
-    /// Stop monitoring keyboard events.
-    func stopMonitoring() {
-        guard isMonitoring else {
-            return
-        }
-        
-        if let source = runLoopSource {
-            // Remove from main run loop (where we added it)
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
-            runLoopSource = nil
-        }
-        
-        if let tap = eventTap {
-            CFMachPortInvalidate(tap)
-            eventTap = nil
-        }
-        
-        isMonitoring = false
-        sendLog(level: "info", message: "Keyboard monitoring stopped")
-    }
-    
-    /// Handle keyboard event from CGEventTap callback.
-    private func handleEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        // Check if tap was disabled (user may have revoked permission)
-        if type == .tapDisabledByUserInput || type == .tapDisabledByTimeout {
-            sendLog(level: "warn", message: "Keyboard event tap disabled")
-            let message = KeyboardMonitoringDisabledMessage()
-            sendJSON(message)
-            stopMonitoring()
-            return nil
-        }
-        
-        // Only process keyDown events (we'll handle keyUp if needed later)
-        guard type == .keyDown else {
-            return Unmanaged.passUnretained(event)
-        }
-        
-        // Extract key information
-        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        let flags = event.flags
-        
-        // Get characters (Unicode string)
-        var characters: String = ""
-        var length: Int = 0
-        var buffer = [UniChar](repeating: 0, count: 8)
-        event.keyboardGetUnicodeString(maxStringLength: buffer.count, actualStringLength: &length, unicodeString: &buffer)
-        if length > 0 {
-            characters = String(utf16CodeUnits: buffer, count: Int(length))
-        }
-        
-        // Build modifiers array
-        var modifiers: [String] = []
-        if flags.contains(.maskCommand) {
-            modifiers.append("meta")
-        }
-        if flags.contains(.maskShift) {
-            modifiers.append("shift")
-        }
-        if flags.contains(.maskControl) {
-            modifiers.append("ctrl")
-        }
-        if flags.contains(.maskAlternate) {
-            modifiers.append("alt")
-        }
-        
-        // Send key event to Electron
-        let keyMessage = KeyEventMessage(
-            characters: characters,
-            keyCode: Int(keyCode),
-            modifiers: modifiers
-        )
-        sendJSON(keyMessage)
-        
-        // Consume the event (don't let it reach the original app)
-        // This is the "intercepting" behavior - we swallow the keystroke
-        return nil
-    }
-}
-
-// MARK: - Menu Bar Monitor
-
-/// Monitors for mouse clicks in the menu bar area.
-/// Sends a message to Electron when the menu bar is clicked so Field Theory can hide.
-final class MenuBarMonitor {
-    
-    static let shared = MenuBarMonitor()
-    
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
-    private var isMonitoring = false
-    
-    // Menu bar is approximately 24-25 pixels tall on standard displays.
-    // On notched MacBooks, the safe area is handled differently but clicks in that region
-    // still count as menu bar area for our purposes.
-    private let menuBarHeight: CGFloat = 25
-    
-    private init() {}
-    
-    /// Start monitoring for menu bar clicks.
-    func startMonitoring() -> Bool {
-        guard !isMonitoring else {
-            return true
-        }
-        
-        // Create event tap for left mouse down events.
-        // We use listenOnly so we don't block the event - just observe it.
-        let eventMask = (1 << CGEventType.leftMouseDown.rawValue)
-        
-        eventTap = CGEvent.tapCreate(
-            tap: .cghidEventTap,
-            place: .headInsertEventTap,
-            options: .listenOnly,  // Don't block events, just observe
-            eventsOfInterest: CGEventMask(eventMask),
-            callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
-                let monitor = Unmanaged<MenuBarMonitor>.fromOpaque(refcon!).takeUnretainedValue()
-                monitor.handleMouseEvent(event: event)
-                return Unmanaged.passUnretained(event)  // Pass event through unchanged
-            },
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
-        )
-        
-        guard let tap = eventTap else {
-            sendLog(level: "error", message: "Failed to create menu bar event tap")
-            return false
-        }
-        
-        if CGEvent.tapIsEnabled(tap: tap) {
-            runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-            if let source = runLoopSource {
-                CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-            }
-            
-            isMonitoring = true
-            sendLog(level: "info", message: "Menu bar monitoring started")
-            return true
-        } else {
-            CFMachPortInvalidate(tap)
-            eventTap = nil
-            sendLog(level: "error", message: "Menu bar event tap disabled")
-            return false
-        }
-    }
-    
-    /// Stop monitoring for menu bar clicks.
-    func stopMonitoring() {
-        guard isMonitoring else { return }
-        
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
-            runLoopSource = nil
-        }
-        
-        if let tap = eventTap {
-            CFMachPortInvalidate(tap)
-            eventTap = nil
-        }
-        
-        isMonitoring = false
-        sendLog(level: "info", message: "Menu bar monitoring stopped")
-    }
-    
-    /// Handle a mouse event and check if it's in the menu bar area.
-    private func handleMouseEvent(event: CGEvent) {
-        let location = event.location
-        
-        // Get the screen that contains this click.
-        // CGEvent location is in global coordinates where (0,0) is top-left of main display.
-        // Menu bar is at the top of each screen.
-        guard let screen = NSScreen.screens.first(where: { screen in
-            // Check if click is within this screen's bounds
-            let frame = screen.frame
-            return location.x >= frame.minX && location.x <= frame.maxX
-        }) else {
-            return
-        }
-        
-        // Calculate the top of the screen in global coordinates.
-        // NSScreen.frame.maxY gives the top edge in Cocoa coordinates (origin at bottom-left).
-        // But CGEvent uses Quartz coordinates (origin at top-left of main screen).
-        let mainScreenHeight = NSScreen.main?.frame.height ?? 0
-        let screenTopInQuartz = mainScreenHeight - screen.frame.maxY
-        
-        // Check if click is in menu bar area (within menuBarHeight from top of this screen).
-        if location.y >= screenTopInQuartz && location.y <= screenTopInQuartz + menuBarHeight {
-            sendJSON(MenuBarClickedMessage())
-        }
     }
 }
 
@@ -1709,17 +1395,6 @@ final class MessageHandler {
             let hasTextInput = KeyboardMonitor.shared.checkFocusedTextInput()
             let response = FocusedTextInputStatusMessage(hasTextInput: hasTextInput)
             sendJSON(response)
-            
-        case .startKeyboardMonitoring:
-            if KeyboardMonitor.shared.startMonitoring() {
-                sendLog(level: "info", message: "Keyboard monitoring started successfully")
-            } else {
-                sendError("Failed to start keyboard monitoring - check Input Monitoring permission")
-            }
-            
-        case .stopKeyboardMonitoring:
-            KeyboardMonitor.shared.stopMonitoring()
-            sendLog(level: "info", message: "Keyboard monitoring stopped")
 
         case .getFrontmostWindowBounds:
             let bounds = getFrontmostWindowBounds()
@@ -1802,10 +1477,6 @@ final class MessageHandler {
 func setupAndRun() {
     sendLog(level: "info", message: "FieldTheoryHelper started")
 
-    // NOTE: MenuBarMonitor removed - it requires Input Monitoring permission (CGEventTap for mouse events)
-    // and is redundant since the clipboard window blur handler already hides the window when focus is lost.
-    // The blur event fires when user clicks on menu bar anyway.
-
     // Start app activation monitoring.
     // This allows us to detect when Field Theory becomes the frontmost app (e.g., via Cmd+Tab).
     _ = AppActivationMonitor.shared.startMonitoring()
@@ -1816,8 +1487,8 @@ func setupAndRun() {
     
     let handler = MessageHandler()
     
-    // Read stdin on a background queue so the main run loop can process CGEventTap callbacks.
-    // This is critical - blocking the main thread with readLine() prevents event callbacks from firing.
+    // Read stdin on a background queue so the main run loop can process notification callbacks.
+    // This is critical - blocking the main thread with readLine() prevents callbacks from firing.
     DispatchQueue.global(qos: .userInitiated).async {
         while let line = readLine() {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1864,5 +1535,5 @@ func setupAndRun() {
 // Setup and start the run loop.
 setupAndRun()
 
-// Keep the main run loop alive for CGEventTap and other callbacks.
+// Keep the main run loop alive for notification callbacks.
 RunLoop.main.run()

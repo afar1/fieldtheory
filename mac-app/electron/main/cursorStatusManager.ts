@@ -63,6 +63,10 @@ export class CursorStatusManager extends EventEmitter {
   
   // Debug mode - shows blue background to prove we control the overlay window.
   private debugMode: boolean = false;
+
+  // Window color debug - shows magenta BrowserWindow background to debug white rectangle issue.
+  // Unlike debugMode (which colors the React content), this colors the native window itself.
+  private debugWindowColor: boolean = false;
   
   // Timing constants
   private readonly POLL_INTERVAL_MS = 33;
@@ -217,6 +221,48 @@ export class CursorStatusManager extends EventEmitter {
    */
   isDebugMode(): boolean {
     return this.debugMode;
+  }
+
+  /**
+   * Set window color debug mode - shows magenta BrowserWindow background.
+   * Requires window recreation to take effect since transparent property can't be changed.
+   */
+  setDebugWindowColor(enabled: boolean): void {
+    if (this.debugWindowColor === enabled) return;
+
+    this.debugWindowColor = enabled;
+    log.info(`Window color debug ${enabled ? 'enabled' : 'disabled'}`);
+
+    const existingWindow = this.window;
+    if (!existingWindow || existingWindow.isDestroyed()) return;
+
+    const wasVisible = existingWindow.isVisible();
+    const shouldRecreate = wasVisible || this.state !== 'idle';
+
+    existingWindow.destroy();
+    this.window = null;
+
+    if (shouldRecreate) {
+      this.createWindow();
+      this.showAfterCreate();
+    }
+  }
+
+  /**
+   * Helper to show window after creation if renderer is ready.
+   */
+  private showAfterCreate(): void {
+    if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+      this.window.setOpacity(1);
+      this.window.showInactive();
+    }
+  }
+
+  /**
+   * Get current window color debug state.
+   */
+  isDebugWindowColor(): boolean {
+    return this.debugWindowColor;
   }
 
   /**
@@ -571,8 +617,8 @@ export class CursorStatusManager extends EventEmitter {
       x: cursorPos.x + this.CURSOR_OFFSET_X,
       y: cursorPos.y + this.CURSOR_OFFSET_Y,
       frame: false,
-      transparent: true,
-      backgroundColor: '#00000000', // Explicit transparent background to prevent white flash
+      transparent: !this.debugWindowColor,
+      backgroundColor: this.debugWindowColor ? '#ff00ff' : '#00000000', // Magenta for debug, transparent for prod
       hasShadow: false,
       roundedCorners: false,
       alwaysOnTop: true,
@@ -591,11 +637,17 @@ export class CursorStatusManager extends EventEmitter {
     // CRITICAL: Set window opacity to 0 initially to prevent white rectangle on multi-monitor setups.
     // The macOS compositor may render a white backing layer even with transparent: true.
     // We set opacity to 1 only after did-finish-load when React content is ready.
-    this.window.setOpacity(0);
-    
+    // Skip opacity trick when debugging window color so magenta is visible immediately.
+    if (!this.debugWindowColor) {
+      this.window.setOpacity(0);
+    }
+
     // Also explicitly set background color after creation - some macOS/Electron combinations
     // respect this more reliably than the constructor option on external displays.
-    this.window.setBackgroundColor('#00000000');
+    // Skip when debugging window color to preserve the magenta background.
+    if (!this.debugWindowColor) {
+      this.window.setBackgroundColor('#00000000');
+    }
 
     // Show on all workspaces including full-screen apps
     this.window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
