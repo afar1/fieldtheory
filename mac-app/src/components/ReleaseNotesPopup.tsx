@@ -15,9 +15,9 @@ export function hasReleaseNotes(version: string): boolean {
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
   '0.1.57': [
+    'Release notes now show automatically after updates',
     'Major refactoring: simplified auth and quota systems, removed 9k lines of unused code',
-    'Fixed blank screen crash on Account page',
-    'Fixed tier sync: footer now correctly shows Pro status',
+    'Fixed blank screen crash and tier sync issues',
     'Redesigned footer with cycling stats for Pro users',
   ],
   '0.1.56': [
