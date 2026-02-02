@@ -50,7 +50,41 @@
         Local voice transcription, screenshots, and portable commands—ready for Cursor, Claude, or any input field.
       </p>
 
-      <div class="hero-buttons">
+      </div>
+  </section>
+
+  <!-- Before/After Comparison -->
+  <section class="comparison">
+    <div class="container">
+      <div class="comparison-grid">
+        <div class="comparison-col">
+          <h3>Current</h3>
+          <pre class="comparison-ascii">
+   voice ───▶ paste ░
+         ◀────────┘
+   image ───▶ paste ░░
+         ◀────────┘
+    logs ───▶ paste ░░░
+         ◀────────┘
+ command ───▶ paste ░░░░
+         ◀────────┘
+   error ───▶ paste ░░░░░
+         ◀────────┘
+     url ───▶ paste ░░░░░░ ─▶ send</pre>
+        </div>
+        <div class="comparison-col">
+          <h3>Field Theory</h3>
+          <pre class="comparison-ascii">
+   voice ─┐
+   image ─┤
+    logs ─┼──▶ paste ░░░░░░ ─▶ send
+ command ─┤
+   error ─┤
+     url ─┘</pre>
+        </div>
+      </div>
+      <p class="comparison-tagline">Twice the context in half the steps</p>
+      <div class="comparison-cta">
         <span class="btn btn-primary">
           <span class="desktop-download-text">Download for Mac — Free</span>
           <span class="mobile-download-text">Visit on Mac to download</span>
