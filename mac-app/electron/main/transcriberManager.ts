@@ -499,14 +499,13 @@ export class TranscriberManager extends EventEmitter {
     if (this.quotaManager && this.audioManager) {
       const state = this.audioManager.getState();
       if (state.priorityDeviceId) {
-        const quotaCheck = this.quotaManager.checkQuota('priorityMic');
-        if (!quotaCheck.allowed) {
+        if (!this.quotaManager.isAllowed('priority_mic_seconds')) {
           this.priorityMicSkippedForQuota = true;
           // Show note but don't block recording - graceful degradation
           this.cursorStatusManager?.showRecordingNote(
             MESSAGES.recordingNote.priorityMicLimitReached
           );
-          this.emit('quotaExhausted', quotaCheck);
+          this.emit('quotaExhausted', this.quotaManager.getFeatureStatus('priority_mic_seconds'));
         }
       }
     }
@@ -663,10 +662,9 @@ export class TranscriberManager extends EventEmitter {
           // Check quota BEFORE stacking - if exhausted, items stay separate.
           if (this.currentStack.length > 1) {
             let canAutoStack = true;
-            
+
             if (this.quotaManager) {
-              const quotaCheck = this.quotaManager.checkQuota('autoStack');
-              if (!quotaCheck.allowed) {
+              if (!this.quotaManager.isAllowed('auto_stack_sessions')) {
                 // Quota exhausted - don't auto-stack. Remove screenshots from stack so only
                 // transcript is pasted. Screenshots are saved separately in Field Theory.
                 canAutoStack = false;
@@ -674,8 +672,8 @@ export class TranscriberManager extends EventEmitter {
                 // Keep only the transcript (just added), remove all screenshots.
                 this.currentStack = [itemId];
                 this.screenshotMetadata = [];
-                
-                this.emit('quotaExhausted', quotaCheck);
+
+                this.emit('quotaExhausted', this.quotaManager.getFeatureStatus('auto_stack_sessions'));
               }
             }
             
@@ -765,9 +763,8 @@ export class TranscriberManager extends EventEmitter {
                 },
               });
 
-              // Track quota and metrics for words improved
+              // Emit event for metrics tracking (server tracks quota via improve-text edge function)
               const improvedWordCount = result.wordCount || wordCount;
-              await this.quotaManager?.incrementTextImprove(improvedWordCount);
               this.emit('wordsImproved', improvedWordCount);
 
               // Save improved content to the transcript item in the database.
@@ -1041,7 +1038,7 @@ export class TranscriberManager extends EventEmitter {
 
     const recordingDurationSeconds = Math.floor((Date.now() - this.recordingStartTime) / 1000);
     if (recordingDurationSeconds > 0) {
-      await this.quotaManager.incrementPriorityMic(recordingDurationSeconds);
+      await this.quotaManager.updateUsage('priority_mic_seconds', recordingDurationSeconds);
     }
   }
 
@@ -1059,7 +1056,7 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
-    await this.quotaManager.incrementAutoStack();
+    await this.quotaManager.updateUsage('auto_stack_sessions', 1);
   }
 
   /**
@@ -1255,13 +1252,12 @@ export class TranscriberManager extends EventEmitter {
     // Only stack if more than 1 screenshot and quota allows.
     if (this.currentStack.length > 1) {
       let canAutoStack = true;
-      
+
       if (this.quotaManager) {
-        const quotaCheck = this.quotaManager.checkQuota('autoStack');
-        if (!quotaCheck.allowed) {
+        if (!this.quotaManager.isAllowed('auto_stack_sessions')) {
           // Quota exhausted - don't stack, emit upgrade prompt.
           canAutoStack = false;
-          this.emit('quotaExhausted', quotaCheck);
+          this.emit('quotaExhausted', this.quotaManager.getFeatureStatus('auto_stack_sessions'));
         }
       }
       
@@ -1300,12 +1296,12 @@ export class TranscriberManager extends EventEmitter {
 
       // Only check quota if there's already 1+ screenshot (allow first one always)
       if (existingScreenshots >= 1) {
-        const quotaCheck = this.quotaManager.checkQuota('autoStack');
-        if (!quotaCheck.allowed) {
+        const quotaStatus = this.quotaManager.getFeatureStatus('auto_stack_sessions');
+        if (!quotaStatus.allowed) {
           // Show cursor message with limit info, but only once per session.
           if (this.cursorStatusManager && !this.autoStackLimitShownThisSession) {
             this.cursorStatusManager.showRecordingNote(
-              MESSAGES.recordingNote.autoStackLimitReached(quotaCheck.used, quotaCheck.limit)
+              MESSAGES.recordingNote.autoStackLimitReached(quotaStatus.used, quotaStatus.limit)
             );
             this.autoStackLimitShownThisSession = true;
           }

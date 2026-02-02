@@ -106,9 +106,6 @@ export type HelperOutgoingMessageType =
   | 'audioLevel'
   | 'permissionsStatus'
   | 'focusedTextInputStatus'
-  | 'keyEvent'
-  | 'keyboardMonitoringDisabled'
-  | 'menuBarClicked'
   | 'appBecameFrontmost'
   | 'frontmostAppChanged'
   | 'frontmostWindowBounds'
@@ -126,8 +123,6 @@ export type HelperIncomingMessageType =
   | 'stopRecording'
   | 'cancelRecording'
   | 'checkPermissions'
-  | 'startKeyboardMonitoring'
-  | 'stopKeyboardMonitoring'
   | 'getFrontmostWindowBounds'
   | 'preloadSounds'
   | 'playSound'
@@ -221,31 +216,6 @@ export interface FocusedTextInputStatusMessage extends HelperMessage {
 }
 
 /**
- * Key event message from the helper (for global keyboard capture).
- */
-export interface KeyEventMessage extends HelperMessage {
-  type: 'keyEvent';
-  characters: string;
-  keyCode: number;
-  modifiers: string[];
-}
-
-/**
- * Keyboard monitoring disabled message (permission revoked).
- */
-export interface KeyboardMonitoringDisabledMessage extends HelperMessage {
-  type: 'keyboardMonitoringDisabled';
-}
-
-/**
- * Menu bar clicked message.
- * Sent when user clicks in the menu bar area so Field Theory can hide.
- */
-export interface MenuBarClickedMessage extends HelperMessage {
-  type: 'menuBarClicked';
-}
-
-/**
  * App became frontmost message.
  * Sent when Field Theory becomes the frontmost app (e.g., via Cmd+Tab).
  */
@@ -307,9 +277,6 @@ export type HelperOutgoingMessage =
   | AudioLevelMessage
   | PermissionsStatusMessage
   | FocusedTextInputStatusMessage
-  | KeyEventMessage
-  | KeyboardMonitoringDisabledMessage
-  | MenuBarClickedMessage
   | AppBecameFrontmostMessage
   | FrontmostAppChangedMessage
   | FrontmostWindowBoundsMessage
@@ -355,14 +322,6 @@ export interface CheckFocusedTextInputCommand {
   type: 'checkFocusedTextInput';
 }
 
-export interface StartKeyboardMonitoringCommand {
-  type: 'startKeyboardMonitoring';
-}
-
-export interface StopKeyboardMonitoringCommand {
-  type: 'stopKeyboardMonitoring';
-}
-
 export interface GetFrontmostWindowBoundsCommand {
   type: 'getFrontmostWindowBounds';
 }
@@ -394,8 +353,6 @@ export type HelperIncomingCommand =
   | CancelRecordingCommand
   | CheckPermissionsCommand
   | CheckFocusedTextInputCommand
-  | StartKeyboardMonitoringCommand
-  | StopKeyboardMonitoringCommand
   | GetFrontmostWindowBoundsCommand
   | PreloadSoundsCommand
   | PlaySoundCommand

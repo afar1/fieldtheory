@@ -584,7 +584,6 @@ export interface ClipboardAPI {
 
   // All-time stats for footer display
   getAllTimeStats: () => Promise<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>;
-  incrementImprovedCount: () => Promise<number>;
 
   // Local LLM model management
   getLocalLLMModels: () => Promise<Record<string, { name: string; filename: string; sizeBytes: number; description: string }>>;
@@ -636,7 +635,11 @@ export interface ClipboardAPI {
   // Cursor status debug mode (shows blue background to prove we control the overlay)
   getCursorStatusDebugMode?: () => Promise<boolean>;
   setCursorStatusDebugMode?: (enabled: boolean) => Promise<boolean>;
-  
+
+  // Cursor status window color debug (shows magenta BrowserWindow background)
+  getCursorStatusWindowColorDebug?: () => Promise<boolean>;
+  setCursorStatusWindowColorDebug?: (enabled: boolean) => Promise<boolean>;
+
   // Show in Dock and Cmd+Tab
   getShowInDock?: () => Promise<boolean>;
   setShowInDock?: (show: boolean) => Promise<boolean>;
@@ -1133,10 +1136,6 @@ const clipboardAPI: ClipboardAPI = {
     return ipcRenderer.invoke('clipboard:getAllTimeStats');
   },
 
-  incrementImprovedCount: async (): Promise<number> => {
-    return ipcRenderer.invoke('clipboard:incrementImprovedCount');
-  },
-
   // Local LLM model management
   getLocalLLMModels: async () => {
     return ipcRenderer.invoke(ClipboardIPCChannels.GET_LOCAL_LLM_MODELS);
@@ -1296,7 +1295,16 @@ const clipboardAPI: ClipboardAPI = {
   setCursorStatusDebugMode: async (enabled: boolean): Promise<boolean> => {
     return ipcRenderer.invoke('clipboard:setCursorStatusDebugMode', enabled);
   },
-  
+
+  // Cursor status window color debug (shows magenta BrowserWindow background).
+  getCursorStatusWindowColorDebug: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:getCursorStatusWindowColorDebug');
+  },
+
+  setCursorStatusWindowColorDebug: async (enabled: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:setCursorStatusWindowColorDebug', enabled);
+  },
+
   // Show in Dock and Cmd+Tab.
   getShowInDock: async (): Promise<boolean> => {
     return ipcRenderer.invoke('clipboard:getShowInDock');

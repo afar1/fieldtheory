@@ -37,21 +37,7 @@ interface ClipboardHistoryBounds {
   displayConfig: string; // Hash of display arrangement to detect changes
 }
 
-/**
- * Local quota tracking for free users.
- * Resets on per-user anniversary date (day of month they signed up).
- */
-export interface LocalQuotas {
-  period: string;                     // DEPRECATED: "YYYY-MM" format, kept for migration
-  lastResetDate?: string;             // ISO date of last reset (YYYY-MM-DD)
-  signupDay?: number;                 // Day of month user signed up (1-31)
-  priorityMicSecondsUsed: number;     // Seconds of priority mic used this period
-  autoStackSessionsUsed: number;      // Multi-image stack sessions (2+ images)
-  textImprovementWordsUsed: number;   // Input words improved this period
-  verbalCommandsUsed: number;         // Voice commands used this period
-  cachedTier: 'free' | 'pro';         // Cached tier for offline access
-  cachedTierUpdatedAt: string;        // ISO timestamp of last tier sync
-}
+// Note: LocalQuotas interface removed - server is now single source of truth for usage tracking.
 
 /**
  * Application preferences stored in userData directory.
@@ -87,9 +73,8 @@ interface Preferences {
   improveTextHotkey?: string;
   autoImproveHotkey?: string;
   
-  // All-time statistics tracking
-  improvedPromptsCount?: number;
-  
+  // Note: improvedPromptsCount removed - server tracks text improve usage via improve-text edge function
+
   // Abandon recording settings - hotkey to cancel recording and whether to confirm
   abandonRecordingHotkey?: string;
   abandonRecordingConfirmation?: boolean;
@@ -122,8 +107,7 @@ interface Preferences {
   // Hide status text labels - show only colored dots (red/purple/green).
   hideStatusLabels?: boolean;
 
-  // Local quota tracking for anonymous users.
-  localQuotas?: LocalQuotas;
+  // Note: localQuotas removed - server is now single source of truth for usage tracking.
   
   // Show in Dock and Cmd+Tab - when enabled, app appears in Dock and application switcher.
   showInDock?: boolean;
