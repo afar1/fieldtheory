@@ -2046,11 +2046,22 @@ const quotaAPI = {
   refreshTier: () => ipcRenderer.invoke('quota:refreshTier') as Promise<{ tier: 'free' | 'pro'; error: string | null }>,
 
   // Listen for tier changes (e.g., after Stripe checkout upgrades user to pro).
+  // Also immediately emits the current tier on registration (BehaviorSubject pattern).
   onTierChanged: (callback: (tier: 'free' | 'pro') => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, tier: 'free' | 'pro') => {
       callback(tier);
     };
     ipcRenderer.on('tier:changed', handler);
+
+    // Immediately emit current tier so subscriber has the current state
+    ipcRenderer.invoke('quota:getQuotas').then((quotas) => {
+      if (quotas?.tier) {
+        callback(quotas.tier);
+      }
+    }).catch(() => {
+      // Ignore errors - subscriber will get tier on next change
+    });
+
     return () => {
       ipcRenderer.removeListener('tier:changed', handler);
     };
