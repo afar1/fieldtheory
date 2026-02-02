@@ -66,6 +66,10 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   // Resume after close (return to last artifact vs clipboard)
   const [resumeAfterClose, setResumeAfterClose] = useState(false);
 
+  // Mute status
+  const [isMutedForToday, setIsMutedForToday] = useState(false);
+  const [isUnmuting, setIsUnmuting] = useState(false);
+
   // Cursor instructions modal
   const [showCursorModal, setShowCursorModal] = useState(false);
   const [cursorInstructions, setCursorInstructions] = useState('');
@@ -123,8 +127,10 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       window.librarianAPI.getDiscoveryFrequency(),
       window.librarianAPI.getUserExpertiseContext(),
       window.librarianAPI.getResumeAfterClose(),
+      // Mute status
+      window.librarianAPI.isMutedForToday(),
     ])
-      .then(([dirs, readingsList, isEnabled, autoShow, ccStatus, seThreshold, defaultRule, customRule, discFreq, expertiseCtx, resumeClose]) => {
+      .then(([dirs, readingsList, isEnabled, autoShow, ccStatus, seThreshold, defaultRule, customRule, discFreq, expertiseCtx, resumeClose, mutedStatus]) => {
         setWatchedDirs(dirs);
         setReadings(readingsList);
         setEnabled(isEnabled);
@@ -145,6 +151,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         setUserExpertiseContext(expertiseCtx || '');
         setExpertiseText(expertiseCtx || '');
         setResumeAfterClose(resumeClose);
+        setIsMutedForToday(mutedStatus);
         setLoading(false);
       })
       .catch((err) => {
@@ -632,6 +639,62 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
             style={{ width: '18px', height: '18px', cursor: 'pointer' }}
           />
         </label>
+
+        {/* Muted status indicator with unmute option */}
+        {isMutedForToday && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '10px 12px',
+              marginTop: '8px',
+              borderRadius: '6px',
+              backgroundColor: theme.isDark ? 'rgba(234, 179, 8, 0.1)' : 'rgba(234, 179, 8, 0.08)',
+              border: `1px solid ${theme.isDark ? 'rgba(234, 179, 8, 0.25)' : 'rgba(234, 179, 8, 0.2)'}`,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {/* Bell-off icon */}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={theme.warning} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5"/>
+                <path d="M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7"/>
+                <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
+                <path d="m2 2 20 20"/>
+              </svg>
+              <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
+                Muted until tomorrow
+              </span>
+            </div>
+            <button
+              onClick={async () => {
+                setIsUnmuting(true);
+                try {
+                  const success = await window.librarianAPI?.unmute();
+                  if (success) {
+                    setIsMutedForToday(false);
+                  }
+                } finally {
+                  setIsUnmuting(false);
+                }
+              }}
+              disabled={isUnmuting}
+              style={{
+                padding: '4px 10px',
+                fontSize: '11px',
+                fontWeight: 500,
+                color: theme.warning,
+                backgroundColor: 'transparent',
+                border: `1px solid ${theme.isDark ? 'rgba(234, 179, 8, 0.4)' : 'rgba(234, 179, 8, 0.5)'}`,
+                borderRadius: '4px',
+                cursor: isUnmuting ? 'wait' : 'pointer',
+                opacity: isUnmuting ? 0.6 : 1,
+              }}
+            >
+              {isUnmuting ? '...' : 'Unmute'}
+            </button>
+          </div>
+        )}
 
         {/* State-enforced mode settings */}
         {enabled && (

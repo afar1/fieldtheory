@@ -42,24 +42,38 @@ class FileStorage implements SupportedStorage {
   getRawSessionData(): { access_token?: string; refresh_token?: string; expires_at?: number; user?: { email?: string } } | null {
     try {
       const authKeyPatterns = ['auth-token', 'supabase.auth.token', 'session'];
+      const keys = Array.from(this.storage.keys());
+      log.info('[DEBUG] getRawSessionData called, storage keys:', keys.length > 0 ? keys : '(empty)');
 
+      // First try in-memory storage
       for (const [key, value] of this.storage.entries()) {
         const matchesPattern = authKeyPatterns.some(pattern => key.includes(pattern));
         if (matchesPattern) {
           const parsed = JSON.parse(value);
           if (parsed?.refresh_token) {
-            log.debug('Found session data under key:', key);
+            log.info('[DEBUG] Found session data in memory under key:', key, 'refresh_token length:', parsed.refresh_token.length);
             return parsed;
           }
         }
       }
 
-      const keys = Array.from(this.storage.keys());
-      if (keys.length > 0) {
-        log.debug('Storage keys present:', keys);
-      } else {
-        log.debug('Storage is empty');
+      // Fallback: read directly from disk (SDK may have cleared in-memory storage)
+      log.info('[DEBUG] Memory empty, checking disk...');
+      if (fs.existsSync(this.filePath)) {
+        const diskData = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
+        for (const [key, value] of Object.entries(diskData)) {
+          const matchesPattern = authKeyPatterns.some(pattern => key.includes(pattern));
+          if (matchesPattern && typeof value === 'string') {
+            const parsed = JSON.parse(value);
+            if (parsed?.refresh_token) {
+              log.info('[DEBUG] Found session data on disk under key:', key, 'refresh_token length:', parsed.refresh_token.length);
+              return parsed;
+            }
+          }
+        }
       }
+
+      log.info('[DEBUG] No refresh_token found in memory or on disk');
     } catch (err) {
       log.warn('Failed to parse raw session:', err);
     }
@@ -230,7 +244,7 @@ export class AuthManager extends EventEmitter {
       const newUserId = session?.user?.id ?? null;
       const isNewSession = newUserId !== this.lastEmittedUserId;
 
-      log.debug('Auth state changed:', event, isNewSession ? '(new)' : '(duplicate)', newUserId ? `userId: ${newUserId}` : '');
+      log.info('[DEBUG] SDK onAuthStateChange:', event, isNewSession ? '(new)' : '(duplicate)', session ? `user: ${session.user?.email}` : 'no session');
 
       if (event === 'TOKEN_REFRESHED') {
         log.debug('Token refreshed by SDK');
@@ -320,9 +334,11 @@ export class AuthManager extends EventEmitter {
       }
 
       // getSession() returned null - attempt manual refresh
-      log.debug('getSession() returned null, checking for stored refresh_token...');
+      log.info('[DEBUG] getSession() returned null, checking for stored refresh_token...');
 
       const rawSession = this.fileStorage?.getRawSessionData();
+      log.info('[DEBUG] rawSession exists:', !!rawSession, 'has refresh_token:', !!rawSession?.refresh_token);
+
       if (rawSession?.refresh_token) {
         this.hasEverAuthenticated = true; // They had a session before
 
@@ -330,16 +346,18 @@ export class AuthManager extends EventEmitter {
         const expiresAt = rawSession.expires_at || 0;
         const expiredAgoMinutes = Math.floor((now - expiresAt) / 60);
 
-        log.debug('Stored session diagnostic:', {
+        log.info('[DEBUG] Stored session:', {
           user: rawSession.user?.email || 'unknown',
-          hasRefreshToken: true,
+          refreshTokenLength: rawSession.refresh_token.length,
           accessTokenExpiredAgo: `${expiredAgoMinutes} minutes`,
         });
 
         // Use coordinated refresh to prevent concurrent attempts
+        log.info('[DEBUG] Calling coordinatedRefresh...');
         await this.coordinatedRefresh(rawSession.refresh_token, 'restore');
+        log.info('[DEBUG] coordinatedRefresh completed');
       } else {
-        log.debug('No stored session found - user must login');
+        log.info('[DEBUG] No stored session found - user must login');
       }
     } catch (err) {
       log.warn('Failed to restore session:', err);
@@ -353,14 +371,15 @@ export class AuthManager extends EventEmitter {
   private async coordinatedRefresh(refreshToken: string, source: string): Promise<boolean> {
     // If a refresh is already in progress, wait for it
     if (this.refreshInProgress) {
-      log.debug(`Refresh already in progress, ${source} waiting...`);
+      log.info(`[DEBUG] Refresh already in progress, ${source} waiting...`);
       await this.refreshInProgress;
       // After waiting, check if we now have a session
+      log.info(`[DEBUG] ${source} done waiting, session exists:`, !!this.session);
       return !!this.session;
     }
 
     // Start a new refresh operation
-    log.debug(`Starting coordinated refresh from ${source}...`);
+    log.info(`[DEBUG] Starting coordinated refresh from ${source}, token length: ${refreshToken.length}`);
 
     // Create a promise that other callers can wait on
     let resolveRefresh: () => void;
@@ -369,13 +388,28 @@ export class AuthManager extends EventEmitter {
     });
 
     try {
-      const { data: refreshData, error: refreshError } = await this.supabase!.auth.refreshSession({
+      log.info(`[DEBUG] Calling supabase.auth.refreshSession...`);
+
+      // Add timeout to prevent hanging forever (Supabase SDK can hang on network issues)
+      const REFRESH_TIMEOUT_MS = 10000;
+      const refreshPromise = this.supabase!.auth.refreshSession({
         refresh_token: refreshToken,
       });
+      const timeoutPromise = new Promise<{ data: { session: null }; error: { message: string } }>((resolve) => {
+        setTimeout(() => {
+          log.warn(`[DEBUG] refreshSession timeout after ${REFRESH_TIMEOUT_MS}ms`);
+          resolve({ data: { session: null }, error: { message: 'Refresh timeout' } });
+        }, REFRESH_TIMEOUT_MS);
+      });
+
+      const { data: refreshData, error: refreshError } = await Promise.race([refreshPromise, timeoutPromise]);
+      log.info(`[DEBUG] refreshSession returned, error:`, refreshError?.message || 'none', 'hasSession:', !!refreshData?.session);
 
       if (refreshError) {
         if (this.isTokenRevoked(refreshError)) {
-          log.warn(`Refresh token revoked (${source}), user must re-login`);
+          log.warn(`Refresh token revoked (${source}), user must re-login. Error:`, refreshError.message);
+          // Clear stale session file to prevent infinite retry loops
+          this.fileStorage?.clearStorage();
           return false;
         } else {
           // Network error - SDK will retry automatically via autoRefreshToken

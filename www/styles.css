@@ -28,7 +28,7 @@
   --font-mono: 'SF Mono', Monaco, 'Cascadia Code', monospace;
 
   /* Layout */
-  --max-width: 1100px;
+  --max-width: 1300px;
   --border-radius: 4px;
 }
 
@@ -214,6 +214,27 @@ img {
   overflow-x: auto;
 }
 
+/* Hero video embed */
+.hero-video {
+  position: relative;
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto var(--space-lg);
+  padding-bottom: 72%;
+  border-radius: var(--border-radius);
+  overflow: hidden;
+  background: #000;
+}
+
+.hero-video iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
 /* CTA Buttons */
 .hero-buttons {
   display: flex;
@@ -283,6 +304,31 @@ img {
   letter-spacing: -0.02em;
 }
 
+.offline-badge,
+.online-badge {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  padding: 0.2rem 0.5rem;
+  border-radius: 2rem;
+  background: transparent;
+  margin-top: 0.75rem;
+  text-align: right;
+  width: fit-content;
+  margin-left: auto;
+}
+
+.offline-badge {
+  border: 1px solid var(--color-text-muted);
+  color: var(--color-text-muted);
+}
+
+.online-badge {
+  border: 1px solid var(--color-text-muted);
+  color: var(--color-text-muted);
+}
+
 .feature-problem {
   font-size: 0.95rem;
   color: var(--color-text-muted);
@@ -313,6 +359,83 @@ img {
   color: var(--color-accent);
 }
 
+/* Logo cloud for compatible apps */
+.logo-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem 1.25rem;
+  row-gap: 1.75rem;
+  justify-content: center;
+  align-items: center;
+  padding: var(--space-lg);
+  width: 100%;
+}
+
+.logo-circle {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  cursor: default;
+  border: 1px solid #b0b0b0;
+}
+
+body.dark .logo-circle {
+  border-color: #606060;
+}
+
+.logo-circle svg {
+  width: 32px;
+  height: 32px;
+}
+
+.logo-circle:hover {
+  transform: scale(1.1);
+}
+
+/* Brand colors - work on light/dark with subtle backgrounds */
+.logo-circle:nth-child(1) { background: rgba(217, 119, 6, 0.15); color: #D97706; } /* Claude - orange */
+.logo-circle:nth-child(2) { background: rgba(16, 163, 127, 0.15); color: #10A37F; } /* ChatGPT - green */
+.logo-circle:nth-child(3) { background: rgba(124, 58, 237, 0.15); color: #7C3AED; } /* Cursor - purple */
+.logo-circle:nth-child(4) { background: rgba(36, 41, 46, 0.15); color: var(--color-text); } /* Copilot/GitHub */
+.logo-circle:nth-child(5) { background: rgba(66, 133, 244, 0.15); color: #4285F4; } /* Gemini - blue */
+.logo-circle:nth-child(6) { background: rgba(31, 184, 205, 0.15); color: #1FB8CD; } /* Perplexity - teal */
+.logo-circle:nth-child(7) { background: rgba(0, 199, 183, 0.15); color: #00C7B7; } /* Windsurf - mint */
+
+/* Organic scatter positioning */
+.logo-circle:nth-child(1) { transform: translateY(-6px) translateX(4px); }
+.logo-circle:nth-child(2) { transform: translateY(10px) translateX(-8px); }
+.logo-circle:nth-child(3) { transform: translateY(-4px) translateX(12px); }
+.logo-circle:nth-child(4) { transform: translateY(8px) translateX(-4px); }
+.logo-circle:nth-child(5) { transform: translateY(-10px) translateX(-6px); }
+.logo-circle:nth-child(6) { transform: translateY(6px) translateX(10px); }
+.logo-circle:nth-child(7) { transform: translateY(-8px) translateX(-10px); }
+
+/* Feature screenshot images */
+.feature-image {
+  border-radius: var(--border-radius);
+}
+
+.feature-image img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: var(--border-radius);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.28);
+  border: 1px solid #c0c0c0;
+}
+
+body.dark .feature-image img {
+  border-color: #505050;
+}
+
+body.dark .feature-image img {
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+}
+
 /* --------------------------------------------------------------------------
    Pricing Section
    -------------------------------------------------------------------------- */
@@ -339,6 +462,7 @@ img {
   border: 1px solid var(--color-border);
   border-radius: var(--border-radius);
   padding: var(--space-lg);
+  text-align: left;
 }
 
 .pricing-card.featured {
@@ -371,10 +495,45 @@ img {
   padding: var(--space-xs) 0;
   border-bottom: 1px dotted var(--color-dots);
   font-size: 0.95rem;
+  padding-left: 1.5rem;
+  position: relative;
+}
+
+.pricing-card li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  color: var(--color-accent);
+  font-weight: 600;
 }
 
 .pricing-card li:last-child {
   border-bottom: none;
+}
+
+/* Limit badges */
+.limit-badge {
+  float: right;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  background: transparent;
+  padding: 0.05rem 0.4rem;
+  border-radius: 2rem;
+  border: 1px solid var(--color-border);
+}
+
+/* Unlimited symbol (no badge) */
+.limit-unlimited {
+  float: right;
+  font-size: 1.1rem;
+  font-weight: 400;
+  color: var(--color-text-muted);
+}
+
+/* Grayed out free features in Pro card (keep green checkmark) */
+.pricing-card li.included-free {
+  color: var(--color-text-muted);
 }
 
 /* Pricing description text below heading */
@@ -424,6 +583,58 @@ img {
 
 .pricing-footnotes p:last-child {
   margin-bottom: 0;
+}
+
+/* Simplified pricing (within download section) */
+.pricing-simple {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-md);
+  max-width: 800px;
+  margin: var(--space-lg) auto 0;
+  text-align: left;
+}
+
+.pricing-tier {
+  background: var(--color-bg-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius);
+  padding: var(--space-md);
+}
+
+.pricing-tier.featured {
+  border-color: var(--color-text);
+}
+
+.pricing-tier h3 {
+  font-size: 1.1rem;
+  margin-bottom: var(--space-xs);
+}
+
+.pricing-amount {
+  font-weight: 400;
+  font-size: 0.9rem;
+  color: var(--color-text-muted);
+  margin-left: 0.5rem;
+}
+
+.pricing-tier-desc {
+  font-size: 0.9rem;
+  color: var(--color-text);
+  margin-bottom: var(--space-sm);
+  line-height: 1.5;
+}
+
+.pricing-tier-limits {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.pricing-tier .btn-small {
+  padding: 0.4rem 1rem;
+  font-size: 0.85rem;
+  margin-top: var(--space-sm);
 }
 
 /* FAQ Section */
@@ -480,6 +691,26 @@ img {
 .download-hero {
   text-align: center;
   padding: var(--space-xl) 0;
+}
+
+.download-hero .pricing-grid {
+  margin-top: var(--space-lg);
+}
+
+.download-cta {
+  margin-top: var(--space-lg);
+  text-align: center;
+}
+
+.download-cta .requirements {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  margin-top: var(--space-sm);
+}
+
+.btn-large {
+  padding: 1rem 2.5rem;
+  font-size: 1.1rem;
 }
 
 .download-options {
@@ -607,6 +838,10 @@ html, body {
   }
 
   .download-options {
+    grid-template-columns: 1fr;
+  }
+
+  .pricing-simple {
     grid-template-columns: 1fr;
   }
 

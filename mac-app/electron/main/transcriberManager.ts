@@ -1578,26 +1578,42 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
-   * Format text for terminal output by converting [cmd:name.md] to numbered refs.
-   * Adds a "Commands:" section at the end with file paths.
+   * Format command references by converting [cmd:name.md] to [cmd1: name].
+   * Used for multimodal apps where files are attached separately.
    */
-  private formatCommandsForTerminal(text: string): string {
+  private formatCommandReferences(text: string): string {
     if (this.detectedCommands.length === 0) {
       return text;
     }
 
     let formattedText = text;
-    const commandPaths: string[] = [];
-
     this.detectedCommands.forEach((cmd, index) => {
       const cmdNum = index + 1;
-      // Replace [cmd:name.md] with [cmd1: name], [cmd2: name], etc.
       const refPattern = new RegExp(`\\[cmd:${cmd.name}\\.md\\]`, 'gi');
       formattedText = formattedText.replace(refPattern, `[cmd${cmdNum}: ${cmd.name}]`);
-      commandPaths.push(`[cmd${cmdNum}: ${cmd.name}] ${cmd.filePath}`);
     });
 
-    // Add the commands list at the end
+    return formattedText;
+  }
+
+  /**
+   * Format text for terminal output by converting [cmd:name.md] to numbered refs.
+   * Adds a "Commands:" section at the end with file paths.
+   */
+  private formatCommandsForTerminal(text: string): string {
+    // Use the common formatting
+    let formattedText = this.formatCommandReferences(text);
+
+    if (this.detectedCommands.length === 0) {
+      return formattedText;
+    }
+
+    // Add the commands list at the end for terminals
+    const commandPaths = this.detectedCommands.map((cmd, index) => {
+      const cmdNum = index + 1;
+      return `[cmd${cmdNum}: ${cmd.name}] ${cmd.filePath}`;
+    });
+
     if (commandPaths.length > 0) {
       formattedText += '\n\nCommands:\n' + commandPaths.join('\n');
     }
@@ -1708,9 +1724,11 @@ export class TranscriberManager extends EventEmitter {
           const pathList = this.detectedCommands.map(cmd => cmd.filePath).join('\n');
           textContent = textContent + '\n\n' + pathList;
         } else if (this.detectedCommands.length > 0) {
-          // For other multimodal apps, strip command references from text
-          // since we'll paste the actual files as attachments
-          textContent = textContent.replace(/\s*\[cmd:[^\]]+\]/g, '').trim();
+          // For other multimodal apps, format command references as [cmd1: name]
+          // Files will be pasted as attachments below
+          log.info(`Before formatCommandReferences: "${textContent}"`);
+          textContent = this.formatCommandReferences(textContent);
+          log.info(`After formatCommandReferences: "${textContent}"`);
         }
 
         clipboard.writeText(textContent);

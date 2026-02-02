@@ -776,6 +776,25 @@ export class CursorStatusManager extends EventEmitter {
   }
 
   /**
+   * Refresh window properties to fix potential corruption from app state changes.
+   * Called when clipboard history opens to ensure transparency is preserved.
+   * See: https://github.com/electron/electron/issues/... (macOS compositor bug)
+   */
+  refreshWindowProperties(): void {
+    if (!this.window || this.window.isDestroyed() || this.debugWindowColor) {
+      return;
+    }
+
+    // Re-apply background color - can get corrupted when app.show() is called
+    this.window.setBackgroundColor('#00000000');
+
+    // Re-assert z-level to ensure cursor status stays above clipboard history
+    this.window.setAlwaysOnTop(true, 'screen-saver', 2);
+
+    log.debug('[CursorStatus] Refreshed window properties');
+  }
+
+  /**
    * Clean up resources.
    */
   destroy(): void {
