@@ -562,14 +562,11 @@ export default function ClipboardHistory() {
   // App version for footer display.
   const [appVersion] = useState(() => window.updaterAPI?.getVersion?.() || '0.0.0');
   
-  // Release notes popup - only show when user explicitly requests via 3-second hover on "check for updates".
-  // Track version changes in localStorage but don't auto-show.
+  // Release notes popup - shows once automatically after update, or manually via toggle button.
   const [showReleaseNotes, setShowReleaseNotes] = useState(false);
-  // Whether the popup is showing because user hovered or confirmed "uptodate" (vs. after update).
+  // Whether the popup is showing in "Latest" mode (user clicked while up-to-date) vs "What's new" mode.
   const [releaseNotesLatestMode, setReleaseNotesLatestMode] = useState(false);
   const [versionHovered, setVersionHovered] = useState(false);
-  // Timer ref for 3-second hover to show release notes
-  const checkForUpdatesHoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   const [allTimeStats, setAllTimeStats] = useState<{
     stacks: number;
@@ -602,14 +599,21 @@ export default function ClipboardHistory() {
   // Show in Dock - affects header padding for stoplight buttons.
   const [showInDock, setShowInDock] = useState(false);
 
-  // Cleanup release notes hover timer on unmount
+  // Show release notes once after app update (not on fresh install)
   useEffect(() => {
-    return () => {
-      if (checkForUpdatesHoverTimerRef.current) {
-        clearTimeout(checkForUpdatesHoverTimerRef.current);
+    const lastSeenVersion = localStorage.getItem('lastSeenReleaseNotesVersion');
+
+    // If versions differ and we have release notes for current version, show popup once
+    if (lastSeenVersion !== appVersion && hasReleaseNotes(appVersion)) {
+      // Only auto-show if this isn't a fresh install (lastSeenVersion exists)
+      if (lastSeenVersion !== null) {
+        setShowReleaseNotes(true);
+        setReleaseNotesLatestMode(false); // "What's new" mode, not "Latest" mode
       }
-    };
-  }, []);
+      // Save immediately so we don't show again (even if user quits before dismissing)
+      localStorage.setItem('lastSeenReleaseNotesVersion', appVersion);
+    }
+  }, [appVersion]);
 
   useEffect(() => {
     if (!isVisible) return;
@@ -6399,20 +6403,6 @@ export default function ClipboardHistory() {
                   ) : (
                     <button
                       onClick={() => window.updaterAPI?.checkForUpdates?.()}
-                      onMouseEnter={() => {
-                        // Start 3-second timer to show release notes
-                        checkForUpdatesHoverTimerRef.current = setTimeout(() => {
-                          setShowReleaseNotes(true);
-                          setReleaseNotesLatestMode(true);
-                        }, 3000);
-                      }}
-                      onMouseLeave={() => {
-                        // Clear timer if user moves away before 3 seconds
-                        if (checkForUpdatesHoverTimerRef.current) {
-                          clearTimeout(checkForUpdatesHoverTimerRef.current);
-                          checkForUpdatesHoverTimerRef.current = null;
-                        }
-                      }}
                       style={{
                         cursor: 'pointer',
                         color: theme.textSecondary,
