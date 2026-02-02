@@ -225,6 +225,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   // Cursor status debug mode - shows blue background to prove we control the overlay.
   const [cursorStatusDebugMode, setCursorStatusDebugMode] = useState(false);
 
+  // Cursor status window color debug - shows magenta native window background.
+  const [cursorStatusWindowColorDebug, setCursorStatusWindowColorDebug] = useState(false);
+
   // Show in Dock - whether app appears in Dock and Cmd+Tab.
   const [showInDock, setShowInDock] = useState(false);
 
@@ -324,6 +327,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       // Load cursor status debug mode setting
       window.clipboardAPI.getCursorStatusDebugMode?.().then(enabled => {
         setCursorStatusDebugMode(enabled);
+      });
+
+      // Load cursor status window color debug setting
+      window.clipboardAPI.getCursorStatusWindowColorDebug?.().then(enabled => {
+        setCursorStatusWindowColorDebug(enabled);
       });
 
       // Load word substitutions
@@ -528,6 +536,20 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       }
     } catch (err) {
       console.error('Failed to toggle cursor status debug mode:', err);
+    }
+  };
+
+  // Handler for toggling cursor status window color debug (shows magenta BrowserWindow background).
+  const handleToggleCursorStatusWindowColorDebug = async (enabled: boolean) => {
+    if (!window.clipboardAPI?.setCursorStatusWindowColorDebug) return;
+
+    try {
+      const success = await window.clipboardAPI.setCursorStatusWindowColorDebug(enabled);
+      if (success) {
+        setCursorStatusWindowColorDebug(enabled);
+      }
+    } catch (err) {
+      console.error('Failed to toggle cursor status window color debug:', err);
     }
   };
 
@@ -1806,7 +1828,23 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             </button>
           </div>
         </div>
-        
+
+        {/* Cursor Status Window Color Debug - shows magenta native window background */}
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={styles.rowLabel}>Debug window background</span>
+            <span style={styles.rowHint}>Show magenta native window (for white rectangle debugging)</span>
+          </div>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => handleToggleCursorStatusWindowColorDebug(!cursorStatusWindowColorDebug)}
+              style={{ ...styles.toggle, backgroundColor: cursorStatusWindowColorDebug ? theme.accent : '#d1d5db' }}
+            >
+              <span style={{ ...styles.toggleKnob, transform: cursorStatusWindowColorDebug ? 'translateX(20px)' : 'translateX(2px)' }} />
+            </button>
+          </div>
+        </div>
+
         {hotkeyError && <p style={styles.error}>{hotkeyError}</p>}
       </div>
       )}

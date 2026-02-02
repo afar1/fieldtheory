@@ -7,15 +7,17 @@ const log = createLogger('Onboarding');
 
 /**
  * Onboarding step identifiers.
- * Each step represents a screen in the first-run wizard.
+ * Maps to the 4-phase flow in the Onboarding component:
+ * - PERMISSIONS (0): Microphone, Accessibility, Screen Recording
+ * - MODEL (1): Voice model download
+ * - ACCOUNT (2): Email sign-in with OTP
+ * - SHORTCUTS (3): Keyboard shortcuts configuration
  */
 export enum OnboardingStep {
-  WELCOME = 0,
-  MICROPHONE = 1,
-  ACCESSIBILITY = 2,
-  MODEL_DOWNLOAD = 3,
-  SCREEN_RECORDING = 4,
-  COMPLETE = 5,
+  PERMISSIONS = 0,
+  MODEL = 1,
+  ACCOUNT = 2,
+  SHORTCUTS = 3,
 }
 
 /**
@@ -152,7 +154,7 @@ export class OnboardingWindow {
    * If already visible, brings it to focus.
    * Also shows the app in the Dock so user can Cmd+Tab back to it.
    */
-  show(startStep: OnboardingStep = OnboardingStep.WELCOME): void {
+  show(startStep: OnboardingStep = OnboardingStep.PERMISSIONS): void {
     // Show app in Dock during onboarding so user can Cmd+Tab back
     if (app.dock) {
       app.dock.show();

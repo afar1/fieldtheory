@@ -39,6 +39,9 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Track when user explicitly exits (back, save, save copy) to prevent re-saving pendingSketch
+  const isExitingRef = useRef(false);
   
   // Track container dimensions for responsive canvas sizing.
   const [containerSize, setContainerSize] = useState({ width: 1200, height: 800 });
@@ -151,18 +154,21 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
 
     const elements = excalidrawAPI.getSceneElements();
     const activeElements = elements.filter((el: any) => !el.isDeleted);
-    
+
     // Require at least one element (drawing or image).
     if (activeElements.length === 0) {
       alert('Please draw something before saving.');
       return;
     }
-    
+
     // If only a background image exists with no drawings, warn user.
     if (backgroundImage && activeElements.length === 1 && activeElements[0].type === 'image') {
       alert('Please draw something on the image before saving.');
       return;
     }
+
+    isExitingRef.current = true;
+    localStorage.removeItem('pendingSketch');
 
     setIsSaving(true);
 
@@ -187,8 +193,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
       reader.onloadend = () => {
         const dataUrl = reader.result as string;
         const appState = excalidrawAPI.getAppState();
-        // Clear pending sketch since we're saving successfully
-        localStorage.removeItem('pendingSketch');
+        // pendingSketch already cleared synchronously at start of handleSave
         // Dimensions must account for exportScale since blob is exported at that scale
         onSave({
           dataUrl,
@@ -216,12 +221,12 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
   const handleClose = useCallback(() => {
     if (hasChanges) {
       if (confirm('You have unsaved changes. Discard drawing?')) {
-        // Clear pending sketch since user explicitly discarded
+        isExitingRef.current = true;
         localStorage.removeItem('pendingSketch');
         onClose();
       }
     } else {
-      // No changes, clear any stale pending sketch
+      isExitingRef.current = true;
       localStorage.removeItem('pendingSketch');
       onClose();
     }
@@ -243,7 +248,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
     onHasChangesChange?.(newHasChanges);
 
     // Persist sketch to localStorage for recovery if window closes unexpectedly
-    if (newHasChanges && activeElements.length > 0) {
+    if (newHasChanges && activeElements.length > 0 && !isExitingRef.current) {
       try {
         localStorage.setItem('pendingSketch', JSON.stringify({
           elements: activeElements,
@@ -251,7 +256,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
           timestamp: Date.now(),
         }));
       } catch (e) {
-        // Ignore storage errors (quota, etc.)
+        // Ignore storage errors
       }
     }
 

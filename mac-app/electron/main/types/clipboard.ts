@@ -33,8 +33,7 @@ export const ClipboardIPCChannels = {
 
   // All-time stats for footer display
   GET_ALL_TIME_STATS: 'clipboard:getAllTimeStats',
-  INCREMENT_IMPROVED_COUNT: 'clipboard:incrementImprovedCount',
-  
+
   // API key management (stored securely via OS keychain)
   GET_API_KEY_STATUS: 'clipboard:getApiKeyStatus',
   GET_API_KEY_INFO: 'clipboard:getApiKeyInfo',

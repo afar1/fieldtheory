@@ -1,6 +1,7 @@
 // =============================================================================
 // Get Usage Edge Function
-// Returns the user's current text improvement usage for the billing period.
+// Returns the user's current usage for all quota-tracked features.
+// Server is the single source of truth for usage data.
 // =============================================================================
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
@@ -10,10 +11,23 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') || '';
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
 
-// Quota limits by tier
+// Quota limits by tier for each feature.
+// Free users have monthly limits, Pro users are unlimited (Infinity).
 const QUOTA_LIMITS = {
-  free: 5000,   // 5,000 words/month for free users
-  pro: 50000,   // 50,000 words/month for pro users
+  free: {
+    text_improve_words: 5000,       // 5k words/month
+    priority_mic_seconds: 30000,    // 500 minutes/month
+    auto_stack_sessions: 50,        // 50 sessions/month
+    verbal_commands: 50,            // 50 commands/month
+    portable_commands: 50,          // 50 commands/month
+  },
+  pro: {
+    text_improve_words: 50000,      // 50k words/month (soft limit for analytics)
+    priority_mic_seconds: Infinity,
+    auto_stack_sessions: Infinity,
+    verbal_commands: Infinity,
+    portable_commands: Infinity,
+  },
 };
 
 // CORS headers for Electron app
@@ -69,25 +83,37 @@ serve(async (req: Request) => {
     .single();
 
   const tier = (profile?.tier as 'free' | 'pro') || 'free';
-  const limit = QUOTA_LIMITS[tier];
+  const limits = QUOTA_LIMITS[tier];
 
   // Get current month in YYYY-MM format
   const monthYear = new Date().toISOString().slice(0, 7);
 
-  // Get current usage
+  // Get current usage for all features
   const { data: usage } = await supabase
     .from('user_usage')
-    .select('text_improve_words, quota_message_shown')
+    .select('text_improve_words, priority_mic_seconds, auto_stack_sessions, verbal_commands, portable_commands')
     .eq('user_id', user.id)
     .eq('month_year', monthYear)
     .single();
 
+  // Build response with all usage data and limits
   return new Response(JSON.stringify({
-    used: usage?.text_improve_words || 0,
-    limit: limit,
     tier: tier,
     monthYear: monthYear,
-    quotaMessageShown: usage?.quota_message_shown || false,
+    usage: {
+      text_improve_words: usage?.text_improve_words || 0,
+      priority_mic_seconds: usage?.priority_mic_seconds || 0,
+      auto_stack_sessions: usage?.auto_stack_sessions || 0,
+      verbal_commands: usage?.verbal_commands || 0,
+      portable_commands: usage?.portable_commands || 0,
+    },
+    limits: {
+      text_improve_words: limits.text_improve_words,
+      priority_mic_seconds: limits.priority_mic_seconds,
+      auto_stack_sessions: limits.auto_stack_sessions,
+      verbal_commands: limits.verbal_commands,
+      portable_commands: limits.portable_commands,
+    },
   }), {
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });

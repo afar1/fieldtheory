@@ -530,11 +530,6 @@ export class NativeHelper extends EventEmitter {
         this.emit('message', msg);
         break;
 
-      case 'menuBarClicked':
-        // User clicked on the menu bar - emit event so Field Theory can hide.
-        this.emit('menuBarClicked');
-        break;
-
       case 'appBecameFrontmost':
         // Field Theory became the frontmost app (e.g., via Cmd+Tab).
         // Emit event so we can show the clipboard window.

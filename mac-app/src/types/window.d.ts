@@ -226,8 +226,7 @@ interface ClipboardAPI {
 
   // All-time stats for footer display
   getAllTimeStats?: () => Promise<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>;
-  incrementImprovedCount?: () => Promise<number>;
-  
+
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
@@ -296,6 +295,8 @@ interface ClipboardAPI {
   setHideStatusLabels?: (hide: boolean) => Promise<boolean>;
   getCursorStatusDebugMode?: () => Promise<boolean>;
   setCursorStatusDebugMode?: (enabled: boolean) => Promise<boolean>;
+  getCursorStatusWindowColorDebug?: () => Promise<boolean>;
+  setCursorStatusWindowColorDebug?: (enabled: boolean) => Promise<boolean>;
 
   getSoundsEnabled?: () => Promise<boolean>;
   setSoundsEnabled?: (enabled: boolean) => Promise<boolean>;

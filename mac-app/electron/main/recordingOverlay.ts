@@ -101,7 +101,7 @@ export class RecordingOverlay extends EventEmitter {
       movable: false,
       focusable: false,
       show: false,
-      backgroundColor: '#1a1a1a',
+      backgroundColor: '#ff00ff', // TEMP: Bright magenta to debug white rectangle issue
       hasShadow: true,
       roundedCorners: true,
       webPreferences: {

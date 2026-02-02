@@ -245,9 +245,9 @@ function ModelPhase({
 
   return (
     <div style={styles.phase}>
-      <h1 style={styles.title}>Download Voice Model</h1>
+      <h1 style={styles.title}>Download Local Voice Transcription Model</h1>
       <p style={styles.subtitle}>
-        Download the English transcription model to get started.
+        This model runs locally on your Mac for private, offline transcription.
       </p>
 
       <div style={styles.modelList}>
@@ -399,6 +399,8 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
   const [isSavingName, setIsSavingName] = useState(false);
   // Loading state for session setup after OTP verification
   const [isSettingUpSession, setIsSettingUpSession] = useState(false);
+  // Call sign state - fetched after OTP verification
+  const [callsign, setCallsign] = useState<string | null>(null);
 
   // Load launch at login setting on mount (checks actual system state).
   useEffect(() => {
@@ -506,6 +508,22 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
           // Continue anyway - the renderer has the session, main process will recover on next sync
         }
 
+        // Fetch call sign for new users
+        if (supabase && result.session.user?.id) {
+          try {
+            const { data } = await supabase
+              .from('profiles')
+              .select('callsign')
+              .eq('id', result.session.user.id)
+              .maybeSingle();
+            if (data?.callsign) {
+              setCallsign(data.callsign);
+            }
+          } catch (err) {
+            console.warn('[Onboarding] Failed to fetch callsign:', err);
+          }
+        }
+
         setIsSettingUpSession(false);
 
         // Show name input for new users, skip for returning users
@@ -567,15 +585,46 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
   if (showNameInput) {
     return (
       <div style={styles.phase}>
-        <h1 style={styles.title}>What's your name?</h1>
+        <h1 style={styles.title}>Welcome to Field Theory</h1>
+
+        {/* Show call sign prominently */}
+        {callsign && (
+          <div style={{
+            marginBottom: '16px',
+            padding: '12px 16px',
+            backgroundColor: theme.isDark ? 'rgba(139, 92, 246, 0.1)' : 'rgba(139, 92, 246, 0.08)',
+            borderRadius: '8px',
+            border: `1px solid ${theme.isDark ? 'rgba(139, 92, 246, 0.3)' : 'rgba(139, 92, 246, 0.2)'}`,
+          }}>
+            <div style={{
+              fontSize: '11px',
+              color: theme.textSecondary,
+              marginBottom: '4px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+            }}>
+              Your Call Sign
+            </div>
+            <div style={{
+              fontFamily: 'SF Mono, Monaco, Consolas, monospace',
+              fontSize: '18px',
+              fontWeight: 600,
+              color: theme.isDark ? '#a78bfa' : '#7c3aed',
+              letterSpacing: '2px',
+            }}>
+              {callsign}
+            </div>
+          </div>
+        )}
+
         <p style={styles.subtitle}>
-          This is optional — you can skip or add it later in Settings.
+          Add your name below, or skip to continue.
         </p>
 
         <div style={styles.accountForm}>
           <input
             type="text"
-            placeholder="Full name"
+            placeholder="Full name (optional)"
             value={fullName}
             onChange={(e) => setFullName(e.target.value)}
             disabled={isSavingName}

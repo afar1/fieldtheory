@@ -1,39 +1,32 @@
 import { EventEmitter } from 'events';
-import { PreferencesManager, LocalQuotas } from './preferences';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { createLogger } from './logger';
 
 const log = createLogger('Quota');
 
 // =============================================================================
-// QuotaManager - Local quota tracking for free users.
-// Tracks priority mic minutes, auto-stack sessions, and text improvement words
-// per calendar month.
+// QuotaManager - Server-backed usage tracking.
+// Server (user_usage table) is the single source of truth.
+// Local cache is for display and offline support.
 // =============================================================================
 
-// User tier type. All users have accounts (no anonymous tier).
-type UserTier = 'free' | 'pro';
+// Feature names matching database columns.
+export type QuotaFeature =
+  | 'text_improve_words'
+  | 'priority_mic_seconds'
+  | 'auto_stack_sessions'
+  | 'verbal_commands'
+  | 'portable_commands';
 
-// Feature limits by tier.
-const TIER_LIMITS = {
-  free: {
-    priorityMicMinutes: 500,      // ~8 hours per month
-    autoStackSessions: 50,        // Only counts 2+ image sessions
-    textImprovementWords: 5000,   // Word-based (input words)
-    verbalCommands: 50,           // Voice commands (copy that, new line, etc.)
-  },
-  pro: {
-    priorityMicMinutes: Infinity,
-    autoStackSessions: Infinity,
-    textImprovementWords: 50000,   // 50k words/month for Pro
-    verbalCommands: Infinity,
-  },
-} as const;
-
-// Check if a limit value is effectively unlimited.
-function isUnlimited(value: number): boolean {
-  return value === Infinity || value >= Number.MAX_SAFE_INTEGER;
+// Usage data synced from server.
+interface ServerUsage {
+  tier: 'free' | 'pro';
+  monthYear: string;
+  usage: Record<QuotaFeature, number>;
+  limits: Record<QuotaFeature, number>;
 }
 
+// Quota status for a single feature.
 export interface QuotaStatus {
   used: number;
   limit: number;
@@ -42,484 +35,289 @@ export interface QuotaStatus {
   percentUsed: number;
 }
 
-export interface QuotaCheckResult {
-  allowed: boolean;
-  used: number;
-  limit: number;
-  feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'verbalCommands';
-}
+// Background sync interval (30 minutes).
+const SYNC_INTERVAL_MS = 30 * 60 * 1000;
 
 /**
- * QuotaManager tracks local usage for quota-limited features.
- * Quotas reset on calendar month boundary (YYYY-MM format).
- * Tier is cached locally for offline access.
+ * QuotaManager syncs usage data from server and writes updates directly.
+ * Server is the single source of truth - local cache is for display only.
  */
 export class QuotaManager extends EventEmitter {
-  private preferencesManager: PreferencesManager;
-  private quotas: LocalQuotas;
+  private cache: ServerUsage | null = null;
+  private supabase: SupabaseClient | null = null;
+  private supabaseUrl: string = '';
+  private syncInterval: ReturnType<typeof setInterval> | null = null;
+  private lastSyncAt: number = 0;
 
-  // Per-user quota reset tracking
-  private signupDay: number = 1;  // Day of month user signed up (1-31)
-  private lastResetDate: Date | null = null;  // Date of last quota reset
+  // Session getter injected from main process (provides access token and user ID).
+  private getSession: (() => { access_token: string; user: { id: string } } | null) | null = null;
 
-  // Session checker function injected from main process.
-  // Returns true if user has a valid (non-expired) session.
-  // When not logged in, we enforce free tier limits regardless of cached tier.
-  private sessionChecker: (() => boolean) | null = null;
-
-  // Flag to avoid spamming "optimistic pro tier" log message
-  private optimisticTierLogged = false;
-
-  constructor(preferencesManager: PreferencesManager) {
+  constructor() {
     super();
-    this.preferencesManager = preferencesManager;
-    this.quotas = this.loadQuotas();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Initialization
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Initialize with Supabase credentials and session getter.
+   * Call this after auth is set up in main process.
+   */
+  init(supabaseUrl: string, supabaseAnonKey: string, getSession: () => { access_token: string; user: { id: string } } | null): void {
+    this.supabaseUrl = supabaseUrl;
+    this.supabase = createClient(supabaseUrl, supabaseAnonKey);
+    this.getSession = getSession;
+
+    // Start background sync loop.
+    this.startBackgroundSync();
   }
 
   /**
-   * Reload quotas from preferences.
-   * Call after user login when preferencesManager path changes.
+   * Start background sync - syncs on init and every 30 minutes.
    */
-  reload(): void {
-    this.quotas = this.loadQuotas();
-    log.info('Reloaded quotas:', {
-      textImprove: this.quotas.textImprovementWordsUsed,
-      autoStack: this.quotas.autoStackSessionsUsed,
-      period: this.quotas.period,
-    });
-    this.emit('quotaChanged', this.getQuotas());
+  private startBackgroundSync(): void {
+    // Initial sync.
+    this.syncFromServer();
+
+    // Periodic sync every 30 minutes.
+    this.syncInterval = setInterval(() => {
+      this.syncFromServer();
+    }, SYNC_INTERVAL_MS);
   }
 
   /**
-   * Set the session checker function. Called from main process after mobileSync is initialized.
-   * This allows quota checks to use free limits when user is not logged in.
+   * Stop background sync (call on app shutdown).
    */
-  setSessionChecker(checker: () => boolean): void {
-    this.sessionChecker = checker;
-  }
-  
-  /**
-   * Get the effective tier based on login state:
-   * - Not logged in → 'free' (all users must have accounts)
-   * - Logged in + free → 'free'
-   * - Logged in + pro → 'pro' (unlimited)
-   */
-  private getEffectiveTier(): UserTier {
-    // If no session checker set, fall back to cached tier.
-    if (!this.sessionChecker) {
-      return this.quotas.cachedTier;
+  destroy(): void {
+    if (this.syncInterval) {
+      clearInterval(this.syncInterval);
+      this.syncInterval = null;
     }
-
-    // If not logged in, use free tier (all users have accounts via onboarding).
-    const hasValidSession = this.sessionChecker();
-    if (!hasValidSession) {
-      return 'free';
-    }
-
-    // User is logged in - check if tier has been fetched from server yet.
-    // If cached tier is 'free' but we haven't updated it recently (within 60 seconds of app start),
-    // it's likely the default value and the real tier hasn't been fetched yet.
-    // In this case, be optimistic and assume 'pro' to avoid blocking during initial load.
-    if (this.quotas.cachedTier === 'free' && this.quotas.cachedTierUpdatedAt) {
-      const updatedAt = new Date(this.quotas.cachedTierUpdatedAt).getTime();
-      const now = Date.now();
-      const msSinceUpdate = now - updatedAt;
-
-      if (msSinceUpdate > 60000) {
-        if (!this.optimisticTierLogged) {
-          log.info('Using optimistic pro tier during initial fetch window');
-          this.optimisticTierLogged = true;
-        }
-        return 'pro';
-      }
-    }
-
-    return this.quotas.cachedTier;
   }
 
   // ---------------------------------------------------------------------------
-  // Initialization and persistence
+  // Server sync
   // ---------------------------------------------------------------------------
 
   /**
-   * Load quotas from preferences, handling migration and per-user reset.
+   * Fetch current usage from server via get-usage edge function.
+   * Updates local cache and emits 'quotaChanged' event.
    */
-  private loadQuotas(): LocalQuotas {
-    const stored = this.preferencesManager.getPreference('localQuotas');
-    const currentPeriod = this.getCurrentPeriod();
-
-    // If no stored quotas, create fresh
-    if (!stored) {
-      const fresh: LocalQuotas = {
-        period: currentPeriod,
-        priorityMicSecondsUsed: 0,
-        autoStackSessionsUsed: 0,
-        textImprovementWordsUsed: 0,
-        verbalCommandsUsed: 0,
-        cachedTier: 'free',
-        cachedTierUpdatedAt: new Date().toISOString(),
-      };
-      this.saveQuotas(fresh);
-      return fresh;
-    }
-
-    // Load signup day and last reset date for per-user reset logic
-    this.signupDay = stored.signupDay || 1;
-    this.lastResetDate = stored.lastResetDate ? new Date(stored.lastResetDate) : null;
-
-    // Migration: if old period exists but no lastResetDate, convert
-    // Assume last reset was 1st of stored period month
-    if (stored.period && !stored.lastResetDate) {
-      const [year, month] = stored.period.split('-').map(Number);
-      this.lastResetDate = new Date(year, month - 1, 1);
-      stored.lastResetDate = this.lastResetDate.toISOString().split('T')[0];
-    }
-
-    // Handle migration from older quota format (count-based to word-based).
-    if (stored.textImprovementWordsUsed === undefined) {
-      stored.textImprovementWordsUsed = 0;
-    }
-
-    // Handle migration for verbal commands quota.
-    if (stored.verbalCommandsUsed === undefined) {
-      stored.verbalCommandsUsed = 0;
-    }
-
-    return stored;
-  }
-
-  /**
-   * Persist quotas to preferences.
-   */
-  private async saveQuotas(quotas: LocalQuotas): Promise<void> {
-    this.quotas = quotas;
-    await this.preferencesManager.save({ localQuotas: quotas });
-  }
-
-  /**
-   * Get current period in YYYY-MM format.
-   */
-  private getCurrentPeriod(): string {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    return `${year}-${month}`;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Tier management
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Get the cached tier for offline use.
-   */
-  getCachedTier(): UserTier {
-    return this.quotas.cachedTier;
-  }
-
-  /**
-   * Update cached tier when fetched from server.
-   * Only accepts 'free' or 'pro' since 'anonymous' is a runtime-only state.
-   */
-  async setCachedTier(tier: 'free' | 'pro'): Promise<void> {
-    this.optimisticTierLogged = false; // Reset so we can log again if needed
-    await this.saveQuotas({
-      ...this.quotas,
-      cachedTier: tier,
-      cachedTierUpdatedAt: new Date().toISOString(),
-    });
-    this.emit('tierChanged', tier);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Per-user quota reset
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Set signup day. Called when user creates account or logs in.
-   * Signup day determines when quotas reset each month.
-   */
-  async setSignupDay(day: number): Promise<void> {
-    // Clamp to valid range (1-31)
-    this.signupDay = Math.max(1, Math.min(31, day));
-    this.quotas.signupDay = this.signupDay;
-
-    // If no lastResetDate yet (new user), set it to today
-    if (!this.quotas.lastResetDate) {
-      const today = new Date();
-      this.quotas.lastResetDate = today.toISOString().split('T')[0];
-      this.lastResetDate = today;
-    }
-
-    await this.saveQuotas(this.quotas);
-  }
-
-  /**
-   * Get the effective signup day for a given month (handles 31st in Feb, etc.)
-   */
-  private getEffectiveSignupDay(year: number, month: number): number {
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    return Math.min(this.signupDay, daysInMonth);
-  }
-
-  /**
-   * Get the next reset date after a given date.
-   */
-  private getNextResetAfter(afterDate: Date): Date {
-    const year = afterDate.getFullYear();
-    const month = afterDate.getMonth();
-    const day = afterDate.getDate();
-    const effectiveDay = this.getEffectiveSignupDay(year, month);
-
-    // If we haven't passed signup day this month, next reset is this month
-    if (day < effectiveDay) {
-      return new Date(year, month, effectiveDay);
-    }
-
-    // Otherwise, next reset is next month
-    const nextMonth = month + 1;
-    const nextYear = nextMonth > 11 ? year + 1 : year;
-    const normalizedMonth = nextMonth % 12;
-    const effectiveDayNextMonth = this.getEffectiveSignupDay(nextYear, normalizedMonth);
-    return new Date(nextYear, normalizedMonth, effectiveDayNextMonth);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Priority mic quota
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Increment priority mic usage by the given number of seconds.
-   * Only call this when priority device is selected (not "none").
-   */
-  async incrementPriorityMic(seconds: number): Promise<void> {
-    // Pro users don't consume quota.
-    if (this.getEffectiveTier() === 'pro') return;
-
-    // Check for month rollover before incrementing.
-    this.checkAndResetIfNeeded();
-
-    await this.saveQuotas({
-      ...this.quotas,
-      priorityMicSecondsUsed: this.quotas.priorityMicSecondsUsed + seconds,
-    });
-
-    this.emit('quotaChanged', this.getQuotas());
-  }
-
-  /**
-   * Get priority mic quota status.
-   */
-  getPriorityMicStatus(): QuotaStatus {
-    const tier = this.getEffectiveTier();
-    const limitMinutes = TIER_LIMITS[tier].priorityMicMinutes;
-    const limitSeconds = isUnlimited(limitMinutes) ? Infinity : limitMinutes * 60;
-    const used = this.quotas.priorityMicSecondsUsed;
-    const remaining = isUnlimited(limitSeconds) ? Infinity : Math.max(0, limitSeconds - used);
-
-    return {
-      used,
-      limit: limitSeconds,
-      remaining,
-      allowed: isUnlimited(limitSeconds) || used < limitSeconds,
-      percentUsed: isUnlimited(limitSeconds) ? 0 : Math.min(100, (used / limitSeconds) * 100),
-    };
-  }
-
-  // ---------------------------------------------------------------------------
-  // Auto-stack quota
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Increment auto-stack sessions count.
-   * Call once per recording session that creates an auto-stack.
-   */
-  async incrementAutoStack(): Promise<void> {
-    // Pro users don't consume quota.
-    if (this.getEffectiveTier() === 'pro') return;
-
-    // Check for month rollover before incrementing.
-    this.checkAndResetIfNeeded();
-
-    await this.saveQuotas({
-      ...this.quotas,
-      autoStackSessionsUsed: this.quotas.autoStackSessionsUsed + 1,
-    });
-
-    this.emit('quotaChanged', this.getQuotas());
-  }
-
-  /**
-   * Get auto-stack quota status.
-   */
-  getAutoStackStatus(): QuotaStatus {
-    const tier = this.getEffectiveTier();
-    const limit = TIER_LIMITS[tier].autoStackSessions;
-    const used = this.quotas.autoStackSessionsUsed;
-    const remaining = isUnlimited(limit) ? Infinity : Math.max(0, limit - used);
-
-    return {
-      used,
-      limit,
-      remaining,
-      allowed: isUnlimited(limit) || used < limit,
-      percentUsed: isUnlimited(limit) ? 0 : Math.min(100, (used / limit) * 100),
-    };
-  }
-
-  // ---------------------------------------------------------------------------
-  // Text improvement quota (word-based)
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Increment text improvement word count.
-   * Call with the number of input words being improved.
-   * Uses "grace" logic: if user has any quota remaining, allow the full request.
-   * Both free (5k) and pro (50k) users have limits tracked.
-   * Also updates the all-time improvedPromptsCount stat for display in UserStatsPanel.
-   */
-  async incrementTextImprove(wordCount: number): Promise<void> {
-    // Check for month rollover before incrementing.
-    this.checkAndResetIfNeeded();
-
-    await this.saveQuotas({
-      ...this.quotas,
-      textImprovementWordsUsed: (this.quotas.textImprovementWordsUsed || 0) + wordCount,
-    });
-
-    // Also update the all-time "Words improved" stat so it stays in sync with quota usage
-    const currentCount = this.preferencesManager.getPreference('improvedPromptsCount') ?? 0;
-    await this.preferencesManager.save({ improvedPromptsCount: currentCount + wordCount });
-
-    this.emit('quotaChanged', this.getQuotas());
-  }
-
-  /**
-   * Get text improvement quota status (word-based).
-   */
-  getTextImproveStatus(): QuotaStatus {
-    const tier = this.getEffectiveTier();
-    const limit = TIER_LIMITS[tier].textImprovementWords;
-    const used = this.quotas.textImprovementWordsUsed || 0;
-    const remaining = isUnlimited(limit) ? Infinity : Math.max(0, limit - used);
-
-    return {
-      used,
-      limit,
-      remaining,
-      allowed: isUnlimited(limit) || used < limit,
-      percentUsed: isUnlimited(limit) ? 0 : Math.min(100, (used / limit) * 100),
-    };
-  }
-
-  // ---------------------------------------------------------------------------
-  // Verbal commands quota
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Increment verbal commands count.
-   * Call once per voice command executed (copy that, new line, etc.).
-   */
-  async incrementVerbalCommands(): Promise<void> {
-    // Pro users don't consume quota.
-    if (this.getEffectiveTier() === 'pro') return;
-
-    // Check for month rollover before incrementing.
-    this.checkAndResetIfNeeded();
-
-    await this.saveQuotas({
-      ...this.quotas,
-      verbalCommandsUsed: (this.quotas.verbalCommandsUsed || 0) + 1,
-    });
-
-    this.emit('quotaChanged', this.getQuotas());
-  }
-
-  /**
-   * Get verbal commands quota status.
-   */
-  getVerbalCommandsStatus(): QuotaStatus {
-    const tier = this.getEffectiveTier();
-    const limit = TIER_LIMITS[tier].verbalCommands;
-    const used = this.quotas.verbalCommandsUsed || 0;
-    const remaining = isUnlimited(limit) ? Infinity : Math.max(0, limit - used);
-
-    return {
-      used,
-      limit,
-      remaining,
-      allowed: isUnlimited(limit) || used < limit,
-      percentUsed: isUnlimited(limit) ? 0 : Math.min(100, (used / limit) * 100),
-    };
-  }
-
-  // ---------------------------------------------------------------------------
-  // Combined quota access
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Get all quotas at once, plus the current tier.
-   */
-  getQuotas(): { priorityMic: QuotaStatus; autoStack: QuotaStatus; textImprove: QuotaStatus; verbalCommands: QuotaStatus; tier: UserTier } {
-    return {
-      priorityMic: this.getPriorityMicStatus(),
-      autoStack: this.getAutoStackStatus(),
-      textImprove: this.getTextImproveStatus(),
-      verbalCommands: this.getVerbalCommandsStatus(),
-      tier: this.getEffectiveTier(),
-    };
-  }
-
-  /**
-   * Check if a specific quota is exhausted.
-   */
-  checkQuota(feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'verbalCommands'): QuotaCheckResult {
-    let status: QuotaStatus;
-    if (feature === 'priorityMic') {
-      status = this.getPriorityMicStatus();
-    } else if (feature === 'autoStack') {
-      status = this.getAutoStackStatus();
-    } else if (feature === 'verbalCommands') {
-      status = this.getVerbalCommandsStatus();
-    } else {
-      status = this.getTextImproveStatus();
-    }
-
-    return {
-      allowed: status.allowed,
-      used: status.used,
-      limit: status.limit,
-      feature,
-    };
-  }
-
-  /**
-   * Check if quotas should reset based on per-user anniversary date.
-   */
-  private checkAndResetIfNeeded(): void {
-    // If no lastResetDate, this is a new user - quotas start fresh
-    if (!this.lastResetDate) {
+  async syncFromServer(): Promise<void> {
+    const session = this.getSession?.();
+    if (!session?.access_token) {
+      log.info('No session, skipping sync');
       return;
     }
 
-    const now = new Date();
-    const nextReset = this.getNextResetAfter(this.lastResetDate);
+    try {
+      const response = await fetch(`${this.supabaseUrl}/functions/v1/get-usage`, {
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+      });
 
-    if (now >= nextReset) {
-      // Time to reset quotas
-      const todayStr = now.toISOString().split('T')[0];
-      this.quotas = {
-        ...this.quotas,
-        period: this.getCurrentPeriod(),  // Keep period updated for backwards compat
-        lastResetDate: todayStr,
-        priorityMicSecondsUsed: 0,
-        autoStackSessionsUsed: 0,
-        textImprovementWordsUsed: 0,
-        verbalCommandsUsed: 0,
+      if (!response.ok) {
+        log.error('Sync failed:', response.status);
+        return;
+      }
+
+      const data = await response.json() as ServerUsage;
+
+      // Validate response has expected structure
+      if (!data.tier || !data.usage || !data.limits) {
+        log.error('Invalid response structure from get-usage:', data);
+        return;
+      }
+
+      // Convert null limits back to Infinity (JSON can't serialize Infinity)
+      for (const key of Object.keys(data.limits) as QuotaFeature[]) {
+        if (data.limits[key] === null) {
+          data.limits[key] = Infinity;
+        }
+      }
+
+      this.cache = data;
+      this.lastSyncAt = Date.now();
+
+      log.info('Synced from server:', {
+        tier: this.cache.tier,
+        monthYear: this.cache.monthYear,
+        usage: this.cache.usage,
+      });
+
+      this.emit('quotaChanged', this.getQuotas());
+      this.emit('tierChanged', this.cache.tier);
+    } catch (err) {
+      log.error('Sync error:', err);
+      // Keep using cached data if available.
+    }
+  }
+
+  /**
+   * Reload usage from server. Call after login/logout.
+   */
+  async reload(): Promise<void> {
+    await this.syncFromServer();
+  }
+
+  /**
+   * Clear cached usage data. Call on logout/delete account.
+   * Resets to showing free tier defaults.
+   */
+  clearCache(): void {
+    this.cache = null;
+    this.emit('quotaChanged', this.getQuotas());
+    this.emit('tierChanged', 'free');
+    log.info('Cache cleared');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Usage checking
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Check if a feature is allowed (has remaining quota).
+   * Returns true if: offline (no cache), pro tier, or under limit.
+   * Grace-based: returns true if AT the limit (allows that action), false if OVER.
+   */
+  isAllowed(feature: QuotaFeature): boolean {
+    // Offline or not synced yet: allow (permissive).
+    if (!this.cache) return true;
+
+    // Pro users have no limits on most features (except text_improve_words soft limit).
+    if (this.cache.tier === 'pro' && feature !== 'text_improve_words') {
+      return true;
+    }
+
+    const used = this.cache.usage[feature] || 0;
+    const limit = this.cache.limits[feature];
+
+    // Allow if under or AT the limit (grace for the action that hits limit).
+    return used < limit;
+  }
+
+  /**
+   * Get status for a specific feature.
+   */
+  getFeatureStatus(feature: QuotaFeature): QuotaStatus {
+    if (!this.cache) {
+      // No data yet - return permissive defaults.
+      return {
+        used: 0,
+        limit: Infinity,
+        remaining: Infinity,
+        allowed: true,
+        percentUsed: 0,
       };
-      this.lastResetDate = now;
-      this.saveQuotas(this.quotas);
-      this.emit('quotaReset');
+    }
+
+    const used = this.cache.usage[feature] || 0;
+    const limit = this.cache.limits[feature];
+    const isUnlimited = limit === Infinity || limit >= Number.MAX_SAFE_INTEGER;
+    const remaining = isUnlimited ? Infinity : Math.max(0, limit - used);
+    const percentUsed = isUnlimited ? 0 : Math.min(100, (used / limit) * 100);
+
+    return {
+      used,
+      limit,
+      remaining,
+      allowed: this.isAllowed(feature),
+      percentUsed,
+    };
+  }
+
+  /**
+   * Get all quota statuses at once.
+   */
+  getQuotas(): {
+    textImprove: QuotaStatus;
+    priorityMic: QuotaStatus;
+    autoStack: QuotaStatus;
+    verbalCommands: QuotaStatus;
+    portableCommands: QuotaStatus;
+    tier: 'free' | 'pro';
+  } {
+    return {
+      textImprove: this.getFeatureStatus('text_improve_words'),
+      priorityMic: this.getFeatureStatus('priority_mic_seconds'),
+      autoStack: this.getFeatureStatus('auto_stack_sessions'),
+      verbalCommands: this.getFeatureStatus('verbal_commands'),
+      portableCommands: this.getFeatureStatus('portable_commands'),
+      tier: this.cache?.tier || 'free',
+    };
+  }
+
+  /**
+   * Get cached tier.
+   */
+  getCachedTier(): 'free' | 'pro' {
+    return this.cache?.tier || 'free';
+  }
+
+  // ---------------------------------------------------------------------------
+  // Usage tracking
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Update usage for a feature.
+   * 1. Optimistic local update (immediate UI feedback).
+   * 2. Fire-and-forget write to server (background, will sync later if offline).
+   */
+  async updateUsage(feature: QuotaFeature, amount: number): Promise<void> {
+    const session = this.getSession?.();
+    if (!session?.user?.id) {
+      log.info('No session, skipping usage update');
+      return;
+    }
+
+    const monthYear = new Date().toISOString().slice(0, 7);
+    const userId = session.user.id;
+
+    // 1. Optimistic local update for immediate UI feedback.
+    if (this.cache) {
+      this.cache.usage[feature] = (this.cache.usage[feature] || 0) + amount;
+      this.emit('quotaChanged', this.getQuotas());
+    }
+
+    // 2. Write to server (fire and forget).
+    if (!this.supabase) {
+      log.error('Supabase not initialized');
+      return;
+    }
+
+    try {
+      // Set the user's access token for RLS
+      await this.supabase.auth.setSession({
+        access_token: session.access_token,
+        refresh_token: '',
+      });
+
+      // Get current usage to calculate new total.
+      const currentValue = this.cache?.usage[feature] || amount;
+
+      const { error } = await this.supabase
+        .from('user_usage')
+        .upsert({
+          user_id: userId,
+          month_year: monthYear,
+          [feature]: currentValue,
+          updated_at: new Date().toISOString(),
+        }, {
+          onConflict: 'user_id,month_year',
+        });
+
+      if (error) {
+        log.error('Failed to update usage:', error);
+        // Will sync on next interval.
+      } else {
+        log.info(`Updated ${feature}: +${amount} (total: ${currentValue})`);
+      }
+    } catch (err) {
+      log.error('Usage update error:', err);
+      // Offline - will sync later.
     }
   }
 
@@ -528,94 +326,77 @@ export class QuotaManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Format priority mic usage for display.
-   * Returns "0/500 priority mic mins" or "0/∞ priority mic mins".
-   * Caps displayed usage at limit (shows "30/30" not "35/30").
+   * Format usage for display (e.g., "2,340/5,000 words").
+   */
+  formatUsage(feature: QuotaFeature, unit: string): string {
+    const status = this.getFeatureStatus(feature);
+
+    if (status.limit === Infinity) {
+      return `${status.used.toLocaleString()}/∞ ${unit}`;
+    }
+
+    // Cap displayed usage at limit (show "5,000/5,000" not "5,500/5,000").
+    const displayedUsed = Math.min(status.used, status.limit);
+    return `${displayedUsed.toLocaleString()}/${status.limit.toLocaleString()} ${unit}`;
+  }
+
+  /**
+   * Format priority mic usage (converts seconds to minutes).
    */
   formatPriorityMicUsage(): string {
-    const status = this.getPriorityMicStatus();
-    const usedMinutes = Math.floor(status.used / 60);
-    if (isUnlimited(status.limit)) {
+    const status = this.getFeatureStatus('priority_mic_seconds');
+
+    if (status.limit === Infinity) {
+      const usedMinutes = Math.floor(status.used / 60);
       return `${usedMinutes}/∞ priority mic mins`;
     }
+
+    const usedMinutes = Math.floor(status.used / 60);
     const limitMinutes = Math.floor(status.limit / 60);
     const displayedMinutes = Math.min(usedMinutes, limitMinutes);
     return `${displayedMinutes}/${limitMinutes} priority mic mins`;
   }
 
-  /**
-   * Format auto-stack usage for display.
-   * Returns "7/50 auto-stacks" or "7/∞ auto-stacks".
-   * Caps displayed usage at limit (shows "30/30" not "35/30").
-   */
   formatAutoStackUsage(): string {
-    const status = this.getAutoStackStatus();
-    if (isUnlimited(status.limit)) {
-      return `${status.used}/∞ auto-stacks`;
-    }
-    const displayedUsed = Math.min(status.used, status.limit);
-    return `${displayedUsed}/${status.limit} auto-stacks`;
+    return this.formatUsage('auto_stack_sessions', 'auto-stacks');
   }
 
-  /**
-   * Format text improvement usage for display.
-   * Returns "2,340/5,000 words" or "2,340/∞ words".
-   * Caps displayed usage at limit (shows "5,000/5,000" not "5,500/5,000").
-   */
   formatTextImproveUsage(): string {
-    const status = this.getTextImproveStatus();
-    if (isUnlimited(status.limit)) {
-      return `${status.used.toLocaleString()}/∞ words`;
-    }
-    const displayedUsed = Math.min(status.used, status.limit);
-    return `${displayedUsed.toLocaleString()}/${status.limit.toLocaleString()} words`;
+    return this.formatUsage('text_improve_words', 'words');
   }
 
-  /**
-   * Format verbal commands usage for display.
-   * Returns "25/50 voice commands" or "25/∞ voice commands".
-   */
   formatVerbalCommandsUsage(): string {
-    const status = this.getVerbalCommandsStatus();
-    if (isUnlimited(status.limit)) {
-      return `${status.used}/∞ voice commands`;
-    }
-    const displayedUsed = Math.min(status.used, status.limit);
-    return `${displayedUsed}/${status.limit} voice commands`;
+    return this.formatUsage('verbal_commands', 'voice commands');
+  }
+
+  formatPortableCommandsUsage(): string {
+    return this.formatUsage('portable_commands', 'portable commands');
   }
 
   /**
-   * Get the next reset date based on user's signup day.
-   */
-  getResetDate(): Date {
-    if (!this.lastResetDate) {
-      // Fallback: if no reset date yet, calculate from today
-      return this.getNextResetAfter(new Date());
-    }
-    return this.getNextResetAfter(this.lastResetDate);
-  }
-
-  /**
-   * Get days until quota reset (based on user's signup day).
+   * Get days until next month (approximate reset date).
    */
   getDaysUntilReset(): number {
     const now = new Date();
-    const resetDate = this.getResetDate();
-    const diffMs = resetDate.getTime() - now.getTime();
+    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const diffMs = nextMonth.getTime() - now.getTime();
     return Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
   }
 
   /**
    * Get the quota limits for the current tier.
-   * Used to display "resets to X" in UI.
    */
-  getLimits(): { priorityMicMinutes: number; autoStackSessions: number; textImprovementWords: number; verbalCommands: number } {
-    const tier = this.getEffectiveTier();
-    return {
-      priorityMicMinutes: TIER_LIMITS[tier].priorityMicMinutes,
-      autoStackSessions: TIER_LIMITS[tier].autoStackSessions,
-      textImprovementWords: TIER_LIMITS[tier].textImprovementWords,
-      verbalCommands: TIER_LIMITS[tier].verbalCommands,
-    };
+  getLimits(): Record<QuotaFeature, number> {
+    if (!this.cache) {
+      // Default to free tier limits.
+      return {
+        text_improve_words: 5000,
+        priority_mic_seconds: 30000,
+        auto_stack_sessions: 50,
+        verbal_commands: 50,
+        portable_commands: 50,
+      };
+    }
+    return this.cache.limits;
   }
 }

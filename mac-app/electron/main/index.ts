@@ -620,13 +620,12 @@ async function handleImproveSelectedText(): Promise<void> {
     // Show done state briefly.
     cursorStatusManager?.setState('done');
 
-    // Track quota usage and metrics (count input words).
-    const inputWordCount = selectedText.trim().split(/\s+/).filter(w => w.length > 0).length;
-    await quotaManager?.incrementTextImprove(inputWordCount);
-    metricsManager?.recordWordsImproved(inputWordCount);
+    // Note: Text improvement usage is tracked server-side by the improve-text edge function.
+    // No client-side tracking needed here to avoid double-counting.
 
     // Track auto-improve usage stats (only for API calls with usage data)
     if (result.usage && preferencesManager) {
+      const inputWordCount = selectedText.trim().split(/\s+/).filter(w => w.length > 0).length;
       const currentPrefs = preferencesManager.get();
       const currentStats = currentPrefs.autoImproveStats || {
         wordsImproved: 0,
@@ -2787,23 +2786,16 @@ function setupClipboardIPCHandlers(): void {
 
   // All-time stats for footer display
   ipcMain.handle(ClipboardIPCChannels.GET_ALL_TIME_STATS, async () => {
-    if (!clipboardManager || !preferencesManager) {
+    if (!clipboardManager) {
       return { stacks: 0, transcriptions: 0, screenshots: 0, improved: 0, words: 0 };
     }
     const dbStats = clipboardManager.getAllTimeStats();
-    const improved = preferencesManager.getPreference('improvedPromptsCount') ?? 0;
+    // Note: improved count is now tracked server-side via quota manager
+    const improved = quotaManager?.getFeatureStatus('text_improve_words').used ?? 0;
     return { ...dbStats, improved };
   });
 
-  ipcMain.handle(ClipboardIPCChannels.INCREMENT_IMPROVED_COUNT, async () => {
-    if (!preferencesManager) {
-      return 0;
-    }
-    const current = preferencesManager.getPreference('improvedPromptsCount') ?? 0;
-    const newCount = current + 1;
-    await preferencesManager.save({ improvedPromptsCount: newCount });
-    return newCount;
-  });
+  // Note: INCREMENT_IMPROVED_COUNT removed - server tracks text improve usage via improve-text edge function
 
   ipcMain.handle(ClipboardIPCChannels.UPDATE_STACK_ID, async (_event, itemIds: number[], stackId: string | null) => {
     try {
@@ -3040,13 +3032,9 @@ function setupClipboardIPCHandlers(): void {
     }
     const result = await authManager.verifyOtp(email, token);
 
-    // Set signup day for per-user quota reset
+    // Sync quota data after login
     if (result.session && quotaManager) {
-      const createdAt = result.session.user?.created_at;
-      if (createdAt) {
-        const signupDay = new Date(createdAt).getDate();
-        await quotaManager.setSignupDay(signupDay);
-      }
+      await quotaManager.reload();
     }
 
     return result;
@@ -3087,9 +3075,9 @@ function setupClipboardIPCHandlers(): void {
     const result = await authManager.signOut();
 
     if (!result.error) {
-      // Reset cached tier to 'free' on logout so quotas show free limits.
+      // Clear cached quota data on logout so quotas show free limits.
       if (quotaManager) {
-        await quotaManager.setCachedTier('free');
+        quotaManager.clearCache();
       }
 
       // Reset onboarding state so user sees login screen on next open.
@@ -3158,7 +3146,7 @@ function setupClipboardIPCHandlers(): void {
 
       await authManager.signOut();
       if (quotaManager) {
-        await quotaManager.setCachedTier('free');
+        quotaManager.clearCache();
       }
 
       // Reset onboarding state so user sees login screen on next open.
@@ -3428,7 +3416,18 @@ function setupClipboardIPCHandlers(): void {
     cursorStatusManager?.setDebugMode(enabled);
     return true;
   });
-  
+
+  // Cursor status window color debug - shows magenta BrowserWindow background.
+  // Useful for debugging the white rectangle issue (colors the native window, not React content).
+  ipcMain.handle('clipboard:getCursorStatusWindowColorDebug', async () => {
+    return cursorStatusManager?.isDebugWindowColor() ?? false;
+  });
+
+  ipcMain.handle('clipboard:setCursorStatusWindowColorDebug', async (_event, enabled: boolean) => {
+    cursorStatusManager?.setDebugWindowColor(enabled);
+    return true;
+  });
+
   // Show in Dock - controls whether app appears in Dock and Cmd+Tab.
   ipcMain.handle('clipboard:getShowInDock', async () => {
     if (!preferencesManager) {
@@ -3601,11 +3600,20 @@ function setupClipboardIPCHandlers(): void {
     return quotaManager.getQuotas();
   });
 
-  ipcMain.handle('quota:checkQuota', async (_event, feature: 'priorityMic' | 'autoStack') => {
+  ipcMain.handle('quota:checkQuota', async (_event, feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'verbalCommands' | 'portableCommands') => {
     if (!quotaManager) {
       return { allowed: true, used: 0, limit: Infinity, remaining: Infinity, percentUsed: 0 };
     }
-    return quotaManager.checkQuota(feature);
+    // Map old feature names to new database column names.
+    const featureMap: Record<string, 'text_improve_words' | 'priority_mic_seconds' | 'auto_stack_sessions' | 'verbal_commands' | 'portable_commands'> = {
+      priorityMic: 'priority_mic_seconds',
+      autoStack: 'auto_stack_sessions',
+      textImprove: 'text_improve_words',
+      verbalCommands: 'verbal_commands',
+      portableCommands: 'portable_commands',
+    };
+    const dbFeature = featureMap[feature];
+    return quotaManager.getFeatureStatus(dbFeature);
   });
 
   ipcMain.handle('quota:getFormattedUsage', async () => {
@@ -3621,10 +3629,9 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle('quota:getResetDate', async () => {
-    if (!quotaManager) {
-      return new Date();
-    }
-    return quotaManager.getResetDate();
+    // Quotas now reset on calendar month boundary (1st of each month).
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth() + 1, 1);
   });
 
   ipcMain.handle('quota:getDaysUntilReset', async () => {
@@ -3642,38 +3649,16 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle('quota:refreshTier', async () => {
-    if (!authManager) {
+    // Sync usage and tier from server. Tier is included in get-usage response.
+    if (!quotaManager) {
       return { tier: 'free', error: 'Not initialized' };
     }
 
-    const session = authManager.getSession();
-    if (!session) {
-      return { tier: 'free', error: 'Not signed in' };
-    }
-
     try {
-      const supabase = authManager.getSupabaseClient();
-      if (!supabase) {
-        return { tier: 'free', error: 'No Supabase client' };
-      }
-      
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('tier')
-        .eq('id', session.user.id)
-        .single();
-      
-      if (error) {
-        log.error('Failed to fetch tier:', error);
-        return { tier: quotaManager?.getCachedTier() || 'free', error: error.message };
-      }
-      
-      const tier = data?.tier || 'free';
-      
-      if (quotaManager) {
-        await quotaManager.setCachedTier(tier);
-      }
-      
+      await quotaManager.syncFromServer();
+      const tier = quotaManager.getCachedTier();
+
+      // Broadcast tier change to all windows.
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send('tier:changed', tier);
@@ -3683,7 +3668,7 @@ function setupClipboardIPCHandlers(): void {
       return { tier, error: null };
     } catch (err) {
       log.error('Error refreshing tier:', err);
-      return { tier: quotaManager?.getCachedTier() || 'free', error: String(err) };
+      return { tier: quotaManager.getCachedTier(), error: String(err) };
     }
   });
 
@@ -3926,6 +3911,11 @@ function setupClipboardIPCHandlers(): void {
       return { success: false, error: 'Not initialized' };
     }
 
+    // Check portable commands quota
+    if (quotaManager && !quotaManager.isAllowed('portable_commands')) {
+      return { success: false, error: 'Portable command limit reached. Upgrade to continue.' };
+    }
+
     const command = commandsManager.getCommand(commandName);
     if (!command) {
       return { success: false, error: 'Command not found' };
@@ -3961,6 +3951,8 @@ function setupClipboardIPCHandlers(): void {
 
       await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
 
+      // Track portable command usage
+      await quotaManager?.updateUsage('portable_commands', 1);
       metricsManager?.recordCommandExecuted();
       return { success: true };
     } catch (error) {
@@ -4258,7 +4250,7 @@ function setupOnboardingIPCHandlers(): void {
 
     // Show onboarding window from the beginning.
     onboardingWindow = createOnboardingWindow();
-    onboardingWindow.show(OnboardingStep.WELCOME);
+    onboardingWindow.show(OnboardingStep.PERMISSIONS);
 
     return true;
   });
@@ -4330,7 +4322,7 @@ function broadcastTranscribeEvents(): void {
 
   transcriberManager.on('verbalCommand', () => {
     metricsManager?.recordVerbalCommand();
-    quotaManager?.incrementVerbalCommands();
+    quotaManager?.updateUsage('verbal_commands', 1);
   });
 
   transcriberManager.on('wordsImproved', (wordCount: number) => {
@@ -4464,21 +4456,6 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
 
   nativeHelper = new NativeHelper();
   nativeHelper.start();
-  
-  // Hide clipboard history when user clicks on menu bar (Alfred-style).
-  // Debounce to avoid hiding immediately after app activation.
-  let lastActivateTime = 0;
-  
-  app.on('activate', () => {
-    lastActivateTime = Date.now();
-  });
-  
-  nativeHelper.on('menuBarClicked', () => {
-    if (Date.now() - lastActivateTime < 300) return;
-    if (clipboardHistoryWindow?.isVisible()) {
-      clipboardHistoryWindow.hide();
-    }
-  });
 
   // Hide clipboard history when another app (like Alfred/Spotlight) becomes active.
   // NSPanel windows don't always trigger blur events on other panels, so we use
@@ -4605,7 +4582,7 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
       onboardingWindow = createOnboardingWindow();
     }
     const prefs = preferencesManager?.get();
-    const startStep = prefs?.onboardingStep ?? OnboardingStep.WELCOME;
+    const startStep = prefs?.onboardingStep ?? OnboardingStep.PERMISSIONS;
     onboardingWindow.show(startStep);
   });
 
@@ -4701,8 +4678,8 @@ async function initTranscriberSystem(): Promise<void> {
   
   // Hotkeys will be registered after checking onboarding status (see below in app.whenReady).
 
-  // Initialize quota manager for tracking local usage.
-  quotaManager = new QuotaManager(preferencesManager);
+  // Initialize quota manager (will be configured after auth is ready).
+  quotaManager = new QuotaManager();
 
   // Initialize librarian manager for watching markdown reading files.
   librarianManager = new LibrarianManager();
@@ -5032,10 +5009,9 @@ async function initTranscriberSystem(): Promise<void> {
   authManager.on('sessionChanged', async (session) => {
     logUserState(session ? 'login' : 'logout');
 
-    // Set signup day for per-user quota reset when session is restored
-    if (session?.user?.created_at && quotaManager) {
-      const signupDay = new Date(session.user.created_at).getDate();
-      await quotaManager.setSignupDay(signupDay);
+    // Sync quota data when session is restored
+    if (session && quotaManager) {
+      await quotaManager.reload();
     }
   });
 
@@ -5050,11 +5026,16 @@ async function initTranscriberSystem(): Promise<void> {
     setEngineerSupabaseUrl(envVars.supabaseUrl);
   }
 
-  // Wire up session checker so quota manager uses free limits when not logged in.
-  // This ensures auto-stack limits are enforced for logged-out users.
-  if (quotaManager) {
-    quotaManager.setSessionChecker(() => {
-      return authManager?.isAuthenticated() ?? false;
+  // Initialize quota manager with Supabase credentials and session getter.
+  // Server is the single source of truth for usage data.
+  if (quotaManager && envVars.supabaseUrl && envVars.supabaseAnonKey) {
+    quotaManager.init(envVars.supabaseUrl, envVars.supabaseAnonKey, () => {
+      const session = authManager?.getSession();
+      if (!session) return null;
+      return {
+        access_token: session.access_token,
+        user: { id: session.user.id },
+      };
     });
   }
 
@@ -5356,7 +5337,7 @@ if (!gotTheLock) {
         }
 
         onboardingWindow = createOnboardingWindow();
-        onboardingWindow.show(OnboardingStep.WELCOME);
+        onboardingWindow.show(OnboardingStep.PERMISSIONS);
       });
     }
 
@@ -5578,10 +5559,10 @@ if (!gotTheLock) {
         startStep = 2; // account phase
       } else if (hasAllPermissions && !modelDownloaded) {
         // Only model is missing - go straight to model download phase
-        startStep = OnboardingStep.MODEL_DOWNLOAD;
+        startStep = OnboardingStep.MODEL;
       } else {
         // Other requirements missing - use saved step or start from beginning
-        startStep = prefs?.onboardingStep ?? OnboardingStep.WELCOME;
+        startStep = prefs?.onboardingStep ?? OnboardingStep.PERMISSIONS;
       }
 
       onboardingWindow.show(startStep);
@@ -5627,7 +5608,7 @@ if (!gotTheLock) {
         if (!onboardingWindow) {
           onboardingWindow = createOnboardingWindow();
         }
-        onboardingWindow.show(OnboardingStep.WELCOME);
+        onboardingWindow.show(OnboardingStep.PERMISSIONS);
         return;
       }
 

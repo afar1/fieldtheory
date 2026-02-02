@@ -56,18 +56,22 @@ export function createLogger(component: string) {
     return `${timestamp} ${ICONS[level]} [${component}] ${msg}`;
   };
 
+  const safeLog = (fn: (...args: unknown[]) => void, ...args: unknown[]) => {
+    try { fn(...args); } catch { /* EPIPE during shutdown */ }
+  };
+
   return {
     debug: (msg: string, ...args: unknown[]) => {
-      if (shouldLog('debug')) console.debug(format('debug', msg), ...args);
+      if (shouldLog('debug')) safeLog(console.debug, format('debug', msg), ...args);
     },
     info: (msg: string, ...args: unknown[]) => {
-      if (shouldLog('info')) console.log(format('info', msg), ...args);
+      if (shouldLog('info')) safeLog(console.log, format('info', msg), ...args);
     },
     warn: (msg: string, ...args: unknown[]) => {
-      if (shouldLog('warn')) console.warn(format('warn', msg), ...args);
+      if (shouldLog('warn')) safeLog(console.warn, format('warn', msg), ...args);
     },
     error: (msg: string, ...args: unknown[]) => {
-      if (shouldLog('error')) console.error(format('error', msg), ...args);
+      if (shouldLog('error')) safeLog(console.error, format('error', msg), ...args);
     },
   };
 }
