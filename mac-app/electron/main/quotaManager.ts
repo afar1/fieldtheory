@@ -49,8 +49,8 @@ export class QuotaManager extends EventEmitter {
   private syncInterval: ReturnType<typeof setInterval> | null = null;
   private lastSyncAt: number = 0;
 
-  // Session getter injected from main process (provides access token and user ID).
-  private getSession: (() => { access_token: string; user: { id: string } } | null) | null = null;
+  // Session getter injected from main process (provides access token, refresh token, and user ID).
+  private getSession: (() => { access_token: string; refresh_token: string; user: { id: string } } | null) | null = null;
 
   constructor() {
     super();
@@ -64,7 +64,7 @@ export class QuotaManager extends EventEmitter {
    * Initialize with Supabase credentials and session getter.
    * Call this after auth is set up in main process.
    */
-  init(supabaseUrl: string, supabaseAnonKey: string, getSession: () => { access_token: string; user: { id: string } } | null): void {
+  init(supabaseUrl: string, supabaseAnonKey: string, getSession: () => { access_token: string; refresh_token: string; user: { id: string } } | null): void {
     this.supabaseUrl = supabaseUrl;
     this.supabase = createClient(supabaseUrl, supabaseAnonKey);
     this.getSession = getSession;
@@ -289,10 +289,10 @@ export class QuotaManager extends EventEmitter {
     }
 
     try {
-      // Set the user's access token for RLS
+      // Set the user's session for RLS
       await this.supabase.auth.setSession({
         access_token: session.access_token,
-        refresh_token: '',
+        refresh_token: session.refresh_token,
       });
 
       // Get current usage to calculate new total.
