@@ -1097,7 +1097,9 @@ export class ClipboardHistoryWindow {
    */
   openDevTools(): void {
     if (this.window && !this.window.isDestroyed()) {
-      this.window.webContents.openDevTools({ mode: 'detach' });
+      // Use 'bottom' mode to dock DevTools inside the panel window.
+      // 'detach' mode opens a separate window which causes the panel to dismiss on click.
+      this.window.webContents.openDevTools({ mode: 'bottom' });
     }
   }
 }

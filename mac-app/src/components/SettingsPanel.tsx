@@ -1513,7 +1513,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                   Limit reached
                 </span>
                 <span style={{ fontSize: '12px', color: theme.textSecondary, marginLeft: '8px' }}>
-                  Resets in {daysUntilReset} day{daysUntilReset !== 1 ? 's' : ''} to {quotaLimits.textImprovementWords.toLocaleString()} words
+                  Resets in {daysUntilReset} day{daysUntilReset !== 1 ? 's' : ''} to {(quotaLimits?.textImprovementWords ?? 0).toLocaleString()} words
                 </span>
               </div>
               <button
@@ -2267,7 +2267,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                             <span style={{ fontSize: '12px', color: theme.text }}>Text Improvements</span>
                             <span style={{ fontSize: '11px', color: quotaStatus.textImprove.allowed ? theme.textSecondary : theme.error }}>
-                              {quotaStatus.textImprove.used.toLocaleString()} of {quotaLimits.textImprovementWords.toLocaleString()} words
+                              {(quotaStatus?.textImprove?.used ?? 0).toLocaleString()} of {(quotaLimits?.textImprovementWords ?? 0).toLocaleString()} words
                             </span>
                           </div>
                           <div style={{ height: '4px', backgroundColor: theme.isDark ? theme.border : '#e5e7eb', borderRadius: '2px', overflow: 'hidden' }}>

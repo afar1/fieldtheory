@@ -6,9 +6,27 @@
 import { useState, useEffect } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 
+// Helper to check if release notes exist for a version
+export function hasReleaseNotes(version: string): boolean {
+  return version in RELEASE_NOTES && RELEASE_NOTES[version].length > 0;
+}
+
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.56': [
+    'Major refactoring: simplified auth and quota systems, removed 9k lines of unused code',
+    'Fixed blank screen crash on Account page',
+    'Fixed tier sync: footer now correctly shows Pro status',
+    'Redesigned footer with cycling stats for Pro users',
+  ],
+  '0.1.55': [
+    'Major refactoring: simplified auth and quota systems, removed 9k lines of unused code',
+    'Fixed white rectangle artifacts on multi-monitor setups',
+    'Fixed cursor overlay not hiding after recording',
+    'Fixed startup hang caused by medium model loading',
+    'Fixed draw tool auto-reopen behavior',
+  ],
   '0.1.54': [
     'Major refactoring: simplified auth and quota systems, removed 9k lines of unused code',
     'Fixed white rectangle artifacts on multi-monitor setups',
@@ -96,6 +114,8 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.56': 'Feb 2 2026',
+  '0.1.55': 'Feb 2 2026',
   '0.1.54': 'Feb 2 2026',
   '0.1.53': 'Jan 30 2026',
   '0.1.51': 'Jan 29 2026',

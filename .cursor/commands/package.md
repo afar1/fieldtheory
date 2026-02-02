@@ -1,5 +1,6 @@
 Please notarize the application, if necessary for this application with Apple. Bump the version number. Make sure to run the slop command. Then package always and push to GitHub and make this release. The latest version with release notes, succinct release notes that you provide and write and publish. Um, unless I specify that I want it to be a draft.
 
+
 ## Release files (CRITICAL - auto-updater will break without these)
 
 The auto-updater requires ALL of these files to be uploaded to the GitHub release:
@@ -34,6 +35,10 @@ The auto-updater requires ALL of these files to be uploaded to the GitHub releas
 This application manages its releases in the field-releases repo.
 
 You can find the credentials necessary for notarization and GitHub in my .env.local file in the root directory.
+
+You make this mistake a lot by the way "⏺ I see - the variable is named
+  APPLE_APP_SPECIFIC_PASSWORD, not APPLE_ID_PASSWORD.
+  Let me use the correct variable names."
 
 ## In-app release notes
 
