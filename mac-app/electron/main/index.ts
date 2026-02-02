@@ -318,6 +318,9 @@ function registerHotkeysAfterOnboarding(): void {
       const boundsToUse = restoreClipboardHistoryBounds();
       clipboardHistoryWindow.show(boundsToUse, false, true);
       clipboardHistoryWindow.capturePreviousAppBeforeShow();
+      // Refresh cursor status window properties to prevent white rectangle bug.
+      // Opening clipboard history during recording can corrupt window transparency.
+      cursorStatusManager?.refreshWindowProperties();
     } else if (!showInDock) {
       // If in immersive mode, exit fullscreen instead of hiding (like pressing ESC)
       if (clipboardHistoryWindow.getImmersiveMode()) {
@@ -998,6 +1001,8 @@ function showClipboardHistoryOnActivate(): void {
   // Show the clipboard window when app is activated (e.g., Dock icon click).
   const boundsToUse = restoreClipboardHistoryBounds();
   clipboardHistoryWindow.show(boundsToUse);
+  // Refresh cursor status window properties to prevent white rectangle bug.
+  cursorStatusManager?.refreshWindowProperties();
 }
 
 /**
@@ -5034,6 +5039,7 @@ async function initTranscriberSystem(): Promise<void> {
       if (!session) return null;
       return {
         access_token: session.access_token,
+        refresh_token: session.refresh_token,
         user: { id: session.user.id },
       };
     });
