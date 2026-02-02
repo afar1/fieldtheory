@@ -4768,6 +4768,15 @@ async function initTranscriberSystem(): Promise<void> {
     trayManager.setQuotaManager(quotaManager);
   }
 
+  // Broadcast tier changes to all windows so UI can update in real-time.
+  quotaManager.on('tierChanged', (tier) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send('tier:changed', tier);
+      }
+    });
+  });
+
   // Broadcast quota changes to all windows so UI can update in real-time.
   // Also auto-select 'none' for priority mic when quota is exhausted.
   quotaManager.on('quotaChanged', (quotas) => {

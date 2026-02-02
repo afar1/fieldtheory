@@ -47,8 +47,8 @@ interface QuotaLimits {
 /**
  * Format a number for display (e.g., 1234 -> "1,234")
  */
-function formatNumber(n: number): string {
-  return n.toLocaleString();
+function formatNumber(n: number | undefined | null): string {
+  return (n ?? 0).toLocaleString();
 }
 
 // Quota status for checking if at limit

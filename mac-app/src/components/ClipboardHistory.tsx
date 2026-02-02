@@ -9,7 +9,7 @@ import SettingsPanel from './SettingsPanel';
 import TodoView from './TodoView';
 import FeedbackView from './FeedbackView';
 import CommandsView from './CommandsView';
-import ReleaseNotesPopup from './ReleaseNotesPopup';
+import ReleaseNotesPopup, { hasReleaseNotes } from './ReleaseNotesPopup';
 import LibrarianView from './LibrarianView';
 import DebugConsole from './DebugConsole';
 import type { SketchViewHandle } from './SketchView';
@@ -571,8 +571,17 @@ export default function ClipboardHistory() {
   // Timer ref for 3-second hover to show release notes
   const checkForUpdatesHoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
-  const [allTimeStats, setAllTimeStats] = useState<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>({
-    stacks: 0, transcriptions: 0, screenshots: 0, improved: 0, words: 0,
+  const [allTimeStats, setAllTimeStats] = useState<{
+    stacks: number;
+    transcriptions: number;
+    screenshots: number;
+    improved: number;
+    words: number;
+    voiceCommands: number;
+    commandsUsed: number;
+    autoStacks: number;
+  }>({
+    stacks: 0, transcriptions: 0, screenshots: 0, improved: 0, words: 0, voiceCommands: 0, commandsUsed: 0, autoStacks: 0,
   });
   
   // Quota usage for free users (priority mic, auto-stacking, text improve).
@@ -603,12 +612,25 @@ export default function ClipboardHistory() {
   }, []);
 
   useEffect(() => {
-    if (!isVisible || !window.clipboardAPI?.getAllTimeStats) return;
+    if (!isVisible) return;
 
-    window.clipboardAPI.getAllTimeStats().then(stats => {
-      setAllTimeStats(stats);
+    // Fetch basic stats from clipboard API
+    window.clipboardAPI?.getAllTimeStats?.().then(stats => {
+      setAllTimeStats(prev => ({ ...prev, ...stats }));
     }).catch(err => {
       console.error('[ClipboardHistory] Failed to load all-time stats:', err);
+    });
+
+    // Fetch additional metrics for Pro users
+    window.metricsAPI?.getMetrics?.().then(metrics => {
+      setAllTimeStats(prev => ({
+        ...prev,
+        voiceCommands: metrics.verbal_commands || 0,
+        commandsUsed: metrics.command_launcher_uses || 0,
+        autoStacks: metrics.autostacks_created || 0,
+      }));
+    }).catch(err => {
+      console.error('[ClipboardHistory] Failed to load metrics:', err);
     });
   }, [isVisible, authSession?.user?.id]); // Refresh stats when user changes
   
@@ -847,9 +869,7 @@ export default function ClipboardHistory() {
       }),
       window.updaterAPI.onUpdateNotAvailable(() => {
         setUpdateStatus('uptodate');
-        // Show release notes popup in "Latest" mode when confirmed up to date.
-        setReleaseNotesLatestMode(true);
-        setShowReleaseNotes(true);
+        // Don't auto-show release notes - only show when user explicitly requests via hover or button.
         // Reset to idle after 3 seconds so the version number returns.
         setTimeout(() => setUpdateStatus('idle'), 3000);
       }),
@@ -901,14 +921,16 @@ export default function ClipboardHistory() {
   const sensors = useSensors(useSensor(PointerSensor, pointerSensorOptions));
 
   // Format numbers with commas (e.g., 16,000)
-  const formatNumber = (num: number): string => num.toLocaleString();
+  const formatNumber = (num: number | undefined | null): string => (num ?? 0).toLocaleString();
 
+  // Pro user stats - cycle through these on click
   const statItems = useMemo(() => [
-    { label: 'Words', value: allTimeStats.words, singular: 'word transcribed', plural: 'words transcribed' },
-    { label: 'Stacks', value: allTimeStats.stacks, singular: 'stack', plural: 'stacks' },
-    { label: 'Transcriptions', value: allTimeStats.transcriptions, singular: 'transcription', plural: 'transcriptions' },
-    { label: 'Screenshots', value: allTimeStats.screenshots, singular: 'screenshot', plural: 'screenshots' },
-  ].filter(item => item.value > 0), [allTimeStats]);
+    { label: 'Words', value: allTimeStats.words ?? 0, singular: 'word transcribed', plural: 'words transcribed' },
+    { label: 'Improved', value: allTimeStats.improved ?? 0, singular: 'word auto-improved', plural: 'words auto-improved' },
+    { label: 'Voice', value: allTimeStats.voiceCommands ?? 0, singular: 'voice command', plural: 'voice commands' },
+    { label: 'Commands', value: allTimeStats.commandsUsed ?? 0, singular: 'command used', plural: 'commands used' },
+    { label: 'AutoStacks', value: allTimeStats.autoStacks ?? 0, singular: 'auto-stack', plural: 'auto-stacks' },
+  ], [allTimeStats]);
 
   const nextStat = useCallback(() => {
     if (statItems.length <= 1) return;
@@ -6083,64 +6105,73 @@ export default function ClipboardHistory() {
           </button>
           {/* Plan info - always show for logged in users */}
           {authSession && cachedTier === 'pro' ? (
+                // Pro Plan: show cycling stats on click
                 <>
                   <span style={{ fontWeight: 500 }}>Pro:</span>
-                  {statItems.length > 0 ? (
-                    <>
-                      <span
-                        style={{
-                          opacity: statFading ? 0 : 1,
-                          transition: 'opacity 0.15s ease',
-                          cursor: 'pointer',
-                        }}
-                        onClick={nextStat}
-                      >
-                        {formatNumber(statItems[currentStatIndex]?.value ?? 0)} {statItems[currentStatIndex]?.value === 1
-                          ? statItems[currentStatIndex]?.singular
-                          : statItems[currentStatIndex]?.plural}
-                      </span>
-                      <span style={{ fontSize: '10px' }}>
-                        ({timeIntervals[currentIntervalIndex]})
-                      </span>
-                    </>
-                  ) : (
-                    <span style={{ opacity: 0.5 }}>No activity yet</span>
-                  )}
+                  <span
+                    style={{
+                      opacity: statFading ? 0 : 1,
+                      transition: 'opacity 0.15s ease',
+                      cursor: 'pointer',
+                    }}
+                    onClick={nextStat}
+                  >
+                    {formatNumber(statItems[currentStatIndex]?.value ?? 0)} {statItems[currentStatIndex]?.value === 1
+                      ? statItems[currentStatIndex]?.singular
+                      : statItems[currentStatIndex]?.plural}
+                  </span>
                 </>
               ) : authSession && quotaUsage ? (
-                // Basic Plan: show quotas with upgrade on footer hover
+                // Basic Plan: show words transcribed + hover for quota details + Upgrade
                 <div
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}
-                  title="Resets monthly"
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap', position: 'relative' }}
+                  onMouseEnter={() => setUsageHovered(true)}
+                  onMouseLeave={() => setUsageHovered(false)}
                 >
-                  <span>{quotaUsage.autoStack}</span>
-                  <span style={{ opacity: 0.4 }}>·</span>
-                  <span>{quotaUsage.textImprove}</span>
-                  <span style={{ opacity: 0.4 }}>·</span>
-                  <span>{quotaUsage.verbalCommands}</span>
-                  {/* Upgrade link - show when footer is hovered */}
-                  {headerHovered && (
-                    <>
-                      <span style={{ opacity: 0.4 }}>·</span>
-                      <span
-                        onClick={() => {
-                          // Open Stripe checkout with user ID for webhook linking.
-                          const userId = authSession.user.id;
-                          const paymentLink = window.stripeConfig?.paymentLink || '';
-                          window.shellAPI?.openExternal(
-                            `${paymentLink}?client_reference_id=${userId}`
-                          );
-                        }}
-                        style={{
-                          color: theme.accent,
-                          cursor: 'pointer',
-                          textDecoration: 'underline',
-                        }}
-                      >
-                        Upgrade
-                      </span>
-                    </>
+                  <span style={{ fontWeight: 500 }}>Basic:</span>
+                  <span>{formatNumber(allTimeStats.words)} words transcribed</span>
+                  {/* Quota tooltip on hover */}
+                  {usageHovered && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        bottom: '100%',
+                        left: 0,
+                        marginBottom: '8px',
+                        padding: '8px 12px',
+                        backgroundColor: theme.bgSecondary,
+                        border: `1px solid ${theme.border}`,
+                        borderRadius: '6px',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                        fontSize: '10px',
+                        whiteSpace: 'nowrap',
+                        zIndex: 100,
+                      }}
+                    >
+                      <div style={{ marginBottom: '4px', fontWeight: 500, color: theme.text }}>Monthly Quota</div>
+                      <div style={{ color: theme.textSecondary }}>{quotaUsage.textImprove}</div>
+                      <div style={{ color: theme.textSecondary }}>{quotaUsage.verbalCommands}</div>
+                      <div style={{ color: theme.textSecondary }}>{quotaUsage.autoStack}</div>
+                    </div>
                   )}
+                  <span style={{ opacity: 0.4 }}>·</span>
+                  <span
+                    onClick={() => {
+                      // Open Stripe checkout with user ID for webhook linking.
+                      const userId = authSession.user.id;
+                      const paymentLink = window.stripeConfig?.paymentLink || '';
+                      window.shellAPI?.openExternal(
+                        `${paymentLink}?client_reference_id=${userId}`
+                      );
+                    }}
+                    style={{
+                      color: theme.accent,
+                      cursor: 'pointer',
+                      textDecoration: 'underline',
+                    }}
+                  >
+                    Upgrade
+                  </span>
                 </div>
               ) : null}
         </div>
@@ -6397,6 +6428,7 @@ export default function ClipboardHistory() {
                   {/* Release notes toggle button - only on hover */}
                   <button
                     onClick={() => {
+                      if (!hasReleaseNotes(appVersion)) return;
                       if (showReleaseNotes) {
                         setShowReleaseNotes(false);
                         setReleaseNotesLatestMode(false);
@@ -6404,6 +6436,7 @@ export default function ClipboardHistory() {
                         setShowReleaseNotes(true);
                       }
                     }}
+                    disabled={!hasReleaseNotes(appVersion)}
                     style={{
                       width: '14px',
                       height: '14px',
@@ -6414,11 +6447,12 @@ export default function ClipboardHistory() {
                       backgroundColor: showReleaseNotes ? theme.accent : 'transparent',
                       border: 'none',
                       borderRadius: '3px',
-                      cursor: 'pointer',
+                      cursor: hasReleaseNotes(appVersion) ? 'pointer' : 'default',
                       transition: 'all 0.15s ease',
+                      opacity: hasReleaseNotes(appVersion) ? 1 : 0.3,
                     }}
                     onMouseEnter={(e) => {
-                      if (!showReleaseNotes) {
+                      if (!showReleaseNotes && hasReleaseNotes(appVersion)) {
                         e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
                       }
                     }}
@@ -6452,6 +6486,7 @@ export default function ClipboardHistory() {
                   {/* Release notes toggle button */}
                   <button
                     onClick={() => {
+                      if (!hasReleaseNotes(appVersion)) return;
                       if (showReleaseNotes) {
                         setShowReleaseNotes(false);
                         setReleaseNotesLatestMode(false);
@@ -6460,6 +6495,7 @@ export default function ClipboardHistory() {
                         setReleaseNotesLatestMode(true);
                       }
                     }}
+                    disabled={!hasReleaseNotes(appVersion)}
                     style={{
                       width: '14px',
                       height: '14px',
@@ -6470,11 +6506,12 @@ export default function ClipboardHistory() {
                       backgroundColor: showReleaseNotes ? theme.accent : 'transparent',
                       border: 'none',
                       borderRadius: '3px',
-                      cursor: 'pointer',
+                      cursor: hasReleaseNotes(appVersion) ? 'pointer' : 'default',
                       transition: 'all 0.15s ease',
+                      opacity: hasReleaseNotes(appVersion) ? 1 : 0.3,
                     }}
                     onMouseEnter={(e) => {
-                      if (!showReleaseNotes) {
+                      if (!showReleaseNotes && hasReleaseNotes(appVersion)) {
                         e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
                       }
                     }}
