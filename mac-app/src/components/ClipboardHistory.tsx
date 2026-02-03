@@ -618,21 +618,26 @@ export default function ClipboardHistory() {
   useEffect(() => {
     if (!isVisible) return;
 
-    // Fetch all stats from MetricsManager (single source of truth, synced to Supabase).
-    window.metricsAPI?.getMetrics?.().then(metrics => {
-      setAllTimeStats({
-        stacks: metrics.stacks_created || 0,
-        transcriptions: metrics.transcriptions || 0,
-        screenshots: metrics.screenshots_taken || 0,
-        improved: metrics.words_improved || 0,
-        words: metrics.words_transcribed || 0,
-        voiceCommands: metrics.verbal_commands || 0,
-        commandsUsed: metrics.command_launcher_uses || 0,
-        autoStacks: metrics.autostacks_created || 0,
+    // Sync from Supabase first, then load metrics (ensures we have latest data).
+    const loadMetrics = () => {
+      window.metricsAPI?.getMetrics?.().then(metrics => {
+        setAllTimeStats({
+          stacks: metrics.stacks_created || 0,
+          transcriptions: metrics.transcriptions || 0,
+          screenshots: metrics.screenshots_taken || 0,
+          improved: metrics.words_improved || 0,
+          words: metrics.words_transcribed || 0,
+          voiceCommands: metrics.verbal_commands || 0,
+          commandsUsed: metrics.command_launcher_uses || 0,
+          autoStacks: metrics.autostacks_created || 0,
+        });
+      }).catch(err => {
+        console.error('[ClipboardHistory] Failed to load metrics:', err);
       });
-    }).catch(err => {
-      console.error('[ClipboardHistory] Failed to load metrics:', err);
-    });
+    };
+
+    // Fetch from server first (merges with local), then read
+    window.metricsAPI?.fetchFromSupabase?.().finally(loadMetrics);
   }, [isVisible, authSession?.user?.id]); // Refresh stats when user changes
   
   // Load show in dock setting (affects header layout for stoplight buttons).

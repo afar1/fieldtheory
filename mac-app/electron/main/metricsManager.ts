@@ -145,10 +145,13 @@ export class MetricsManager {
 
   /**
    * Reinitialize for current user. Call after setUserDataManager.
+   * Loads local data then fetches from Supabase to merge (takes max values).
    */
   async reinitializeForUser(): Promise<void> {
     this.updateLocalPath();
     await this.loadFromDisk();
+    // Fetch from Supabase and merge with local (takes max of each metric)
+    await this.fetchFromSupabase();
   }
 
   /**
@@ -321,12 +324,17 @@ export class MetricsManager {
   // ===========================================================================
 
   /**
-   * Handle session changes - sync on login.
+   * Handle session changes - fetch then sync on login.
    */
   private handleSessionChanged(session: Session | null): void {
-    if (session && this.storage.pendingSync) {
-      // User logged in and we have pending changes - sync
-      this.syncToSupabase().catch((err) => {
+    if (session) {
+      // Always fetch first to merge server data (prevents overwriting backfills)
+      this.fetchFromSupabase().then(() => {
+        // Only sync if we have local changes to push
+        if (this.storage.pendingSync) {
+          return this.syncToSupabase();
+        }
+      }).catch((err) => {
         log.error('Sync on session change failed:', err);
       });
     }
