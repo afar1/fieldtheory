@@ -1134,24 +1134,6 @@ export class ClipboardManager extends EventEmitter {
     return result.count > 0;
   }
 
-  getAllTimeStats(): { stacks: number; transcriptions: number; screenshots: number; words: number } {
-    // Read all cumulative stats from the persistent counters table.
-    // These counters only increase, so stats persist even when items are deleted.
-    const stats = this.db.prepare(`
-      SELECT key, value FROM cumulative_stats 
-      WHERE key IN ('screenshots_taken', 'transcriptions_made', 'stacks_created', 'words_transcribed')
-    `).all() as { key: string; value: number }[];
-    
-    const statsMap = Object.fromEntries(stats.map(s => [s.key, s.value]));
-    
-    return {
-      stacks: statsMap['stacks_created'] ?? 0,
-      transcriptions: statsMap['transcriptions_made'] ?? 0,
-      screenshots: statsMap['screenshots_taken'] ?? 0,
-      words: statsMap['words_transcribed'] ?? 0,
-    };
-  }
-
   /**
    * Update the stack ID for a set of items.
    * Used for combining items into stacks or unstacking them.

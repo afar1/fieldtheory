@@ -224,9 +224,6 @@ interface ClipboardAPI {
   restoreItem?: (item: ClipboardItem) => Promise<number>;
   pasteText?: (text: string, targetBundleId?: string) => Promise<void>;
 
-  // All-time stats for footer display
-  getAllTimeStats?: () => Promise<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>;
-
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
   getHotkeys: () => Promise<ClipboardHotkeys>;

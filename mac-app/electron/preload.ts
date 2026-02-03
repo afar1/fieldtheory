@@ -582,9 +582,6 @@ export interface ClipboardAPI {
   updateStackId: (itemIds: number[], stackId: string | null) => Promise<void>;
   startDrag: (stackId: string) => Promise<void>;
 
-  // All-time stats for footer display
-  getAllTimeStats: () => Promise<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }>;
-
   // Local LLM model management
   getLocalLLMModels: () => Promise<Record<string, { name: string; filename: string; sizeBytes: number; description: string }>>;
   getLocalLLMStatus: () => Promise<Record<string, boolean>>;
@@ -1129,11 +1126,6 @@ const clipboardAPI: ClipboardAPI = {
 
   startDrag: async (stackId: string): Promise<void> => {
     return ipcRenderer.invoke('clipboard:startDrag', stackId);
-  },
-
-  // All-time stats for footer display
-  getAllTimeStats: async (): Promise<{ stacks: number; transcriptions: number; screenshots: number; improved: number; words: number }> => {
-    return ipcRenderer.invoke('clipboard:getAllTimeStats');
   },
 
   // Local LLM model management
