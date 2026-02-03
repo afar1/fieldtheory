@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import os from 'os';
@@ -2248,7 +2248,10 @@ function setupClipboardIPCHandlers(): void {
           window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
         }
       });
-      
+
+      // Track sketch creation
+      metricsManager?.recordSketchCreated();
+
       return id;
     } catch (error) {
       log.error('Failed to save sketch:', error);
@@ -3864,7 +3867,14 @@ function setupClipboardIPCHandlers(): void {
     const success = commandsManager.setMobileSyncEnabled(dirPath, enabled);
     // Trigger sync after enabling/disabling
     if (success && commandSyncService) {
-      commandSyncService.syncToSupabase();
+      commandSyncService.syncToSupabase().then((result) => {
+        // Track newly contributed commands
+        if (result.uploaded > 0) {
+          for (let i = 0; i < result.uploaded; i++) {
+            metricsManager?.recordCommandContributed();
+          }
+        }
+      });
     }
     return success;
   });
@@ -3883,7 +3893,14 @@ function setupClipboardIPCHandlers(): void {
     if (!commandSyncService) {
       return { success: false, uploaded: 0, updated: 0, deleted: 0, errors: ['Not initialized'] };
     }
-    return await commandSyncService.syncToSupabase();
+    const result = await commandSyncService.syncToSupabase();
+    // Track newly contributed commands
+    if (result.uploaded > 0) {
+      for (let i = 0; i < result.uploaded; i++) {
+        metricsManager?.recordCommandContributed();
+      }
+    }
+    return result;
   });
 
   ipcMain.handle(CommandsIPCChannels.GET_REMOTE_COMMAND_COUNT, async () => {
@@ -5020,6 +5037,13 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Now safe to init AuthManager - handlers are registered
   await authManager.init(envVars.supabaseUrl, envVars.supabaseAnonKey);
+
+  // Handle system wake from sleep - check if token needs refresh.
+  // Timers may not have fired while sleeping, so we check on wake.
+  powerMonitor.on('resume', () => {
+    log.info('[PowerMonitor] System resumed from sleep, checking token expiry');
+    authManager?.refreshIfExpiringSoon();
+  });
 
   // The userChanged handler handles preference reloading when session is restored.
   // Don't call load() again here - it would race with the async handler.

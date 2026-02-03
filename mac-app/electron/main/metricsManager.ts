@@ -145,24 +145,54 @@ export class MetricsManager {
 
   /**
    * Reinitialize for current user. Call after setUserDataManager.
-   * Loads local data then fetches from Supabase to merge (takes max values).
+   *
+   * Strategy: Local is source of truth, cloud is backup.
+   * - If local is empty (new device/install), bootstrap from cloud
+   * - Otherwise trust local, sync to cloud periodically
+   * - Always use max-merge to prevent data loss across devices
    */
   async reinitializeForUser(): Promise<void> {
     this.updateLocalPath();
     await this.loadFromDisk();
-    // Fetch from Supabase and merge with local (takes max of each metric)
-    await this.fetchFromSupabase();
+
+    // Check if local data looks empty (never synced or fresh install)
+    const totalLocalMetrics = Object.values(this.storage.metrics).reduce((a, b) => a + b, 0);
+    const neverSynced = !this.storage.lastSyncedAt;
+
+    log.debug(`Reinitializing metrics. Local total: ${totalLocalMetrics}, lastSyncedAt: ${this.storage.lastSyncedAt}`);
+
+    // Bootstrap from cloud if local is empty - this handles new devices
+    // Also fetch if we've never synced to get any backfilled data
+    if (totalLocalMetrics === 0 || neverSynced) {
+      log.debug('Local metrics empty or never synced - fetching from cloud to bootstrap');
+      const fetched = await this.fetchFromSupabase();
+      if (fetched) {
+        const newTotal = Object.values(this.storage.metrics).reduce((a, b) => a + b, 0);
+        log.debug(`Bootstrapped from cloud: total metrics now ${newTotal}`);
+      } else {
+        log.warn('Failed to bootstrap from cloud - will retry on next session');
+      }
+    } else {
+      log.debug('Local metrics present - using local as source of truth');
+      // Still do a background fetch to merge any data from other devices (max merge)
+      this.fetchFromSupabase().catch(err => log.warn('Background fetch failed:', err));
+    }
   }
 
   /**
-   * Reset metrics on logout.
+   * Reset in-memory metrics on logout.
+   * Note: This clears memory only, NOT the persisted file.
+   * The file persists so data isn't lost on re-login.
    */
   reset(): void {
+    // Clear in-memory state but don't touch the file
+    // When user logs back in, reinitializeForUser will reload from disk
     this.storage = {
       metrics: { ...MetricsManager.DEFAULT_METRICS },
       lastSyncedAt: null,
       pendingSync: false,
     };
+    log.debug('In-memory metrics cleared (file preserved)');
   }
 
   /**
@@ -358,6 +388,9 @@ export class MetricsManager {
   /**
    * Sync metrics to Supabase.
    * Uses upsert to create or update the user's row.
+   *
+   * Safety: Won't push all-zeros if we've never successfully synced,
+   * to prevent accidentally overwriting cloud data on a fresh/broken install.
    */
   async syncToSupabase(): Promise<boolean> {
     const supabase = this.authManager.getSupabaseClient();
@@ -367,7 +400,15 @@ export class MetricsManager {
       return false;
     }
 
+    // Safety check: don't overwrite cloud with zeros
+    const totalLocalMetrics = Object.values(this.storage.metrics).reduce((a, b) => a + b, 0);
+    if (totalLocalMetrics === 0 && !this.storage.lastSyncedAt) {
+      log.warn('Skipping sync: local is all zeros and never synced - would overwrite cloud data');
+      return false;
+    }
+
     try {
+      log.debug(`Syncing metrics to cloud: total=${totalLocalMetrics}`);
       const { error } = await supabase
         .from('user_metrics')
         .upsert({
@@ -412,10 +453,12 @@ export class MetricsManager {
     const session = this.authManager.getSession();
 
     if (!supabase || !session?.user?.id) {
+      // Don't log - expected when not logged in
       return false;
     }
 
     try {
+      log.debug('Fetching metrics from Supabase...');
       const { data, error } = await supabase
         .from('user_metrics')
         .select('*')
@@ -425,6 +468,7 @@ export class MetricsManager {
       if (error) {
         if (error.code === 'PGRST116') {
           // No row exists yet - that's OK, will be created on first sync
+          log.debug('No remote metrics row yet, will create on first sync');
           return true;
         }
         if (error.code === '42P01') {
@@ -442,12 +486,20 @@ export class MetricsManager {
       if (data) {
         // Merge: take max of local and remote for each metric
         const metricKeys = Object.keys(MetricsManager.DEFAULT_METRICS) as (keyof UserMetrics)[];
+        let changesFromRemote = 0;
         for (const key of metricKeys) {
           const remoteValue = data[key] as number | undefined;
-          if (typeof remoteValue === 'number') {
-            this.storage.metrics[key] = Math.max(this.storage.metrics[key], remoteValue);
+          if (typeof remoteValue === 'number' && remoteValue > this.storage.metrics[key]) {
+            this.storage.metrics[key] = remoteValue;
+            changesFromRemote++;
           }
         }
+        log.debug(`Fetched metrics: ${changesFromRemote} values updated from remote`);
+
+        // Mark as synced and save - even if no changes, we successfully connected
+        this.storage.lastSyncedAt = new Date().toISOString();
+        // Only clear pendingSync if we don't have local changes that exceed remote
+        // (pendingSync will be set again on next increment if needed)
         await this.saveToDisk();
       }
 
