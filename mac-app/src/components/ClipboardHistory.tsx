@@ -618,21 +618,18 @@ export default function ClipboardHistory() {
   useEffect(() => {
     if (!isVisible) return;
 
-    // Fetch basic stats from clipboard API
-    window.clipboardAPI?.getAllTimeStats?.().then(stats => {
-      setAllTimeStats(prev => ({ ...prev, ...stats }));
-    }).catch(err => {
-      console.error('[ClipboardHistory] Failed to load all-time stats:', err);
-    });
-
-    // Fetch additional metrics for Pro users
+    // Fetch all stats from MetricsManager (single source of truth, synced to Supabase).
     window.metricsAPI?.getMetrics?.().then(metrics => {
-      setAllTimeStats(prev => ({
-        ...prev,
+      setAllTimeStats({
+        stacks: metrics.stacks_created || 0,
+        transcriptions: metrics.transcriptions || 0,
+        screenshots: metrics.screenshots_taken || 0,
+        improved: metrics.words_improved || 0,
+        words: metrics.words_transcribed || 0,
         voiceCommands: metrics.verbal_commands || 0,
         commandsUsed: metrics.command_launcher_uses || 0,
         autoStacks: metrics.autostacks_created || 0,
-      }));
+      });
     }).catch(err => {
       console.error('[ClipboardHistory] Failed to load metrics:', err);
     });
