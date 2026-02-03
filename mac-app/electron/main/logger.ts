@@ -9,8 +9,16 @@
  *
  * Output:
  *   14:32:06.234 → [Auth] Signed in: user@example.com
- *   14:32:10.567 ⚠️ [Auth] Token refresh failed
- *   14:32:15.890 ❌ [Auth] Session expired: Error: ...
+ *   14:32:10.567 WARN [Auth] Token refresh failed
+ *   14:32:15.890 ERR [Auth] Session expired: Error: ...
+ *
+ * Guidelines:
+ * - debug: Verbose internal state, not shown in production
+ * - info: Normal operations worth noting (startup, config, user actions)
+ * - warn: Recoverable issues, degraded functionality
+ * - error: Failures that need attention
+ *
+ * See: .cursor/commands/logs.md for full conventions
  */
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -22,11 +30,11 @@ const LEVELS: Record<LogLevel, number> = {
   error: 3
 };
 
-const ICONS: Record<LogLevel, string> = {
-  debug: '🔍',
+const PREFIXES: Record<LogLevel, string> = {
+  debug: '    ',  // 4 spaces (aligns with → and WARN)
   info: '→',
-  warn: '⚠️',
-  error: '❌'
+  warn: 'WARN',
+  error: 'ERR'
 };
 
 let currentLevel: LogLevel = process.env.NODE_ENV === 'development' ? 'debug' : 'info';
@@ -53,7 +61,7 @@ export function createLogger(component: string) {
 
   const format = (level: LogLevel, msg: string) => {
     const timestamp = new Date().toISOString().slice(11, 23);
-    return `${timestamp} ${ICONS[level]} [${component}] ${msg}`;
+    return `${timestamp} ${PREFIXES[level]} [${component}] ${msg}`;
   };
 
   const safeLog = (fn: (...args: unknown[]) => void, ...args: unknown[]) => {

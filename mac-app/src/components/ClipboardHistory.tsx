@@ -558,7 +558,21 @@ export default function ClipboardHistory() {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
-  
+
+  // Network status for update checks.
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
   // App version for footer display.
   const [appVersion] = useState(() => window.updaterAPI?.getVersion?.() || '0.0.0');
   
@@ -881,6 +895,11 @@ export default function ClipboardHistory() {
       }),
       window.updaterAPI.onError((error) => {
         console.error('[Updater] Error:', error);
+        // Silently ignore network errors - button is disabled when offline anyway
+        if (error?.includes('ERR_INTERNET_DISCONNECTED') || error?.includes('ERR_NETWORK') || error?.includes('ENOTFOUND')) {
+          setUpdateStatus('idle');
+          return;
+        }
         setUpdateError(error);
         setUpdateStatus('error');
       }),
@@ -6404,14 +6423,17 @@ export default function ClipboardHistory() {
                     </span>
                   ) : (
                     <button
-                      onClick={() => window.updaterAPI?.checkForUpdates?.()}
+                      onClick={() => isOnline && window.updaterAPI?.checkForUpdates?.()}
+                      disabled={!isOnline}
+                      title={!isOnline ? 'No internet connection' : undefined}
                       style={{
-                        cursor: 'pointer',
+                        cursor: isOnline ? 'pointer' : 'not-allowed',
                         color: theme.textSecondary,
                         fontSize: '9px',
                         background: 'none',
                         border: 'none',
                         padding: 0,
+                        opacity: isOnline ? 1 : 0.5,
                       }}
                     >
                       Check for updates

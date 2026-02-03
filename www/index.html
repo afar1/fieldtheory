@@ -7,6 +7,63 @@
   <meta name="description" content="Local voice transcription, screenshots, and portable commands—ready for Cursor, Claude, or any input field.">
   <meta name="robots" content="noindex, nofollow">
   <link rel="stylesheet" href="styles.css">
+  <style>
+    /* Keyboard shortcut badge */
+    .shortcut-badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-family: var(--font-mono, monospace);
+      font-weight: 500;
+      padding: 0.25rem 0.6rem;
+      border-radius: 4px;
+      background: var(--color-bg-alt, #f5f4f2);
+      border: 1px solid var(--color-border, #e0e0e0);
+      color: var(--color-text-muted, #6b6b6b);
+      margin-left: 0.5rem;
+    }
+    .shortcut-cmd {
+      font-size: 1rem;
+      vertical-align: middle;
+    }
+    .dark .shortcut-badge {
+      background: var(--color-bg-alt, #2a2a2a);
+      border-color: var(--color-border, #3a3a3a);
+    }
+    /* Upgrade note */
+    .upgrade-note {
+      font-size: 0.7rem;
+      color: var(--color-text-muted, #6b6b6b);
+      text-align: right;
+      margin: 0.5rem 0 0 0;
+    }
+    /* Download button wrapper */
+    .download-btn-wrapper {
+      display: inline-flex;
+      align-items: stretch;
+      justify-content: center;
+    }
+    .download-btn-wrapper .btn-primary {
+      border-radius: var(--border-radius, 4px) 0 0 var(--border-radius, 4px);
+    }
+    /* Free pill badge */
+    .free-pill {
+      display: flex;
+      background: var(--color-bg, #fff);
+      color: var(--color-text, #1a1a1a);
+      font-size: 0.85rem;
+      font-weight: 500;
+      padding: 0 1rem;
+      border: 1px solid var(--color-text, #1a1a1a);
+      border-left: none;
+      border-radius: 0 var(--border-radius, 4px) var(--border-radius, 4px) 0;
+      align-items: center;
+    }
+    .dark .free-pill {
+      background: var(--color-bg, #1a1a1a);
+      color: var(--color-text, #fff);
+      border-color: var(--color-text, #fff);
+    }
+  </style>
 </head>
 <body>
 
@@ -23,6 +80,7 @@
       </button>
       <ul class="nav-links" id="nav-links">
         <li><a href="#pricing">Pricing</a></li>
+        <li><a href="#download">Download</a></li>
         <li class="theme-toggle-wrapper">
           <button class="theme-toggle" onclick="toggleTheme()">◐</button>
           <span class="theme-label" id="theme-label">Switch theme</span>
@@ -45,52 +103,20 @@
         </iframe>
       </div>
 
-      <h1>Stack context. Paste anywhere.</h1>
-      <p class="hero-tagline">
-        Local voice transcription, screenshots, and portable commands—ready for Cursor, Claude, or any input field.
-      </p>
+      <h1>Capture twice the context in half the steps.</h1>
+      <p class="hero-tagline">Local transcription, stackable screenshots, portable commands, and priority mic.<br>Made for builders, developers, and engineers.</p>
+
+      <div class="hero-buttons">
+        <div class="download-btn-wrapper">
+          <span class="btn btn-primary btn-large">
+            <span class="desktop-download-text">Download for Mac</span>
+            <span class="mobile-download-text">Visit on Mac to download</span>
+          </span><span class="free-pill">Free</span>
+        </div>
+        <p class="requirements">Requires macOS 14+ and Apple Silicon (M1 or later)</p>
+      </div>
 
       </div>
-  </section>
-
-  <!-- Before/After Comparison -->
-  <section class="comparison">
-    <div class="container">
-      <div class="comparison-grid">
-        <div class="comparison-col">
-          <h3>Current</h3>
-          <pre class="comparison-ascii">
-   voice ───▶ paste ░
-         ◀────────┘
-   image ───▶ paste ░░
-         ◀────────┘
-    logs ───▶ paste ░░░
-         ◀────────┘
- command ───▶ paste ░░░░
-         ◀────────┘
-   error ───▶ paste ░░░░░
-         ◀────────┘
-     url ───▶ paste ░░░░░░ ─▶ send</pre>
-        </div>
-        <div class="comparison-col">
-          <h3>Field Theory</h3>
-          <pre class="comparison-ascii">
-   voice ─┐
-   image ─┤
-    logs ─┼──▶ paste ░░░░░░ ─▶ send
- command ─┤
-   error ─┤
-     url ─┘</pre>
-        </div>
-      </div>
-      <p class="comparison-tagline">Twice the context in half the steps</p>
-      <div class="comparison-cta">
-        <span class="btn btn-primary">
-          <span class="desktop-download-text">Download for Mac — Free</span>
-          <span class="mobile-download-text">Visit on Mac to download</span>
-        </span>
-      </div>
-    </div>
   </section>
 
   <!-- Features Section -->
@@ -98,14 +124,13 @@
     <div class="container">
       <hr class="dotted-line">
 
-      <!-- Feature 1: Local Transcription -->
+      <!-- Feature 1: Portable Commands -->
       <article class="feature">
         <div class="feature-content">
-          <h2>Portable Commands. Use Cursor commands anywhere</h2>
-          <p class="feature-problem">
-            Paste the path of your current Cursor commands directory (or any .md folder) to make them portable to all other applications.
-          </p>
-          <span class="offline-badge">Works locally</span>
+          <h2>Portable Commands — Cursor commands now work everywhere.</h2>
+          <p class="feature-problem">Point Field Theory at any folder of markdown commands. They become available in Claude, ChatGPT, Cursor, or anywhere else you type.</p>
+          <span class="offline-badge">works locally</span>
+          <span class="shortcut-badge">command + shift + k</span>
         </div>
         <div class="feature-image">
           <img src="images/portablecommands.gif" alt="Portable commands feature showing Cursor commands available everywhere">
@@ -117,14 +142,9 @@
       <!-- Feature: Priority Mic -->
       <article class="feature reversed">
         <div class="feature-content">
-          <h2>Priority Mic. Keep your microphone locked.</h2>
-          <p class="feature-problem">
-            Designate your preferred microphone and Field Theory will always use it, even when you try to connect bluetooth headphones.
-          </p>
-          <p class="feature-description">
-            Your priority mic stays locked until you say otherwise.
-          </p>
-          <span class="offline-badge">Works locally</span>
+          <h2>Priority Mic — Never lose your input to Bluetooth again.</h2>
+          <p class="feature-problem">Mac likes to switch your microphone when Bluetooth headphones connect. Field Theory doesn't. Set your preferred input once. It stays selected until you change it.</p>
+          <span class="offline-badge">works locally</span>
         </div>
         <div class="feature-image">
           <img src="images/priority-mic.png" alt="Priority Mic feature showing microphone selection dropdown">
@@ -133,17 +153,12 @@
 
       <hr class="dotted-line">
 
-      <!-- Feature: Verbal Commands -->
+      <!-- Feature: Voice Commands -->
       <article class="feature">
         <div class="feature-content">
-          <h2>Voice Commands and fast, local transcription</h2>
-          <p class="feature-problem">
-            Try saying "use the commit command" while transcribing anything. Field Theory will recognize and invoke any command in your directory.
-          </p>
-          <p class="feature-description">
-            Voice commands feel natural because they don't require you to change mediums to ensure a model runs any given sequence or macro. "Run [____] command" and the Field Theory will know and insert.
-          </p>
-          <span class="offline-badge">Works locally</span>
+          <h2>Voice Commands — "Run the deslop command" and it will just run.</h2>
+          <p class="feature-problem">While transcribing you can say "use the commit command" and Field Theory will insert it. This works with any command in your directory and without internet. Just invoke what you need mid-sentence.</p>
+          <span class="offline-badge">works locally</span>
         </div>
         <div class="feature-image">
           <img src="images/voicecommands.png" alt="Verbal commands in Claude Code showing logs, commit, and review commands">
@@ -155,14 +170,9 @@
       <!-- Feature: Drawing -->
       <article class="feature reversed">
         <div class="feature-content">
-          <h2>Draw and paste. Pairs well with screenshots.  </h2>
-          <p class="feature-problem">
-            Freehand a sketch or draw on a screengrab without needing to export or screenshot from Figma, Keynote, TLDraw, etc.
-          </p>
-          <p class="feature-description">
-            Drawings in Field Theory are made for fast copy/paste. It makes abstract ideas easier and faster to communicate in context. Freehand a sketch or draw on a screenshot to make it instantly stackable or pastable.
-          </p>
-          <span class="offline-badge">Works locally</span>
+          <h2>Draw on screenshots. Paste the result.</h2>
+          <p class="feature-problem">Capture a screenshot. Circle the problem. Arrow to where it should go. Freehand a quick wireframe. It's all pasteable without exporting from another tool.</p>
+          <span class="offline-badge">works locally</span>
         </div>
         <div class="feature-image">
           <img src="images/draw.gif" alt="Drawing feature showing freehand sketching and copy/paste">
@@ -171,17 +181,12 @@
 
       <hr class="dotted-line">
 
-      <!-- Feature: Auto-improved context -->
+      <!-- Feature: Auto-improve -->
       <article class="feature">
         <div class="feature-content">
-          <h2>Auto-improve transcriptions</h2>
-          <p class="feature-problem">
-            Think outloud and Field Theory will gently tidy long-form prompts and associate screenshots and commands with your prompt.
-          </p>
-          <p class="feature-description">
-            Humans think in abstract and concrete terms. Foundation models do better work when prompts are concrete, user questions are explicit, and reference material (like screenshots or commands) are properly embedded or labeled.
-          </p>
-          <span class="online-badge">Requires internet</span>
+          <h2>Speak like you're human. Paste like you proofread.</h2>
+          <p class="feature-problem">Auto-improve removes filler, tightens phrasing, and labels your attachments—so spoken prompts read like written ones.<br><br><strong>Before:</strong> "So the auth tokens are expiring, well actually they're refreshing but then failing silently, not sure if it's the token endpoint or maybe client-side storage, anyway I added a screenshot of the error from the network tab"<br><br><strong>After:</strong> "The auth tokens refresh but fail silently. It could be the token endpoint or client-side storage. [Figure 1]"</p>
+          <span class="online-badge">requires internet</span>
         </div>
         <div class="feature-image">
           <img src="images/auto-improve.png" alt="Auto-improve settings showing AI enhancement toggle">
@@ -190,16 +195,11 @@
 
       <hr class="dotted-line">
 
-      <!-- Feature: Stack Context -->
+      <!-- Feature: Works Anywhere -->
       <article class="feature reversed">
         <div class="feature-content">
-          <h2>Works out of the box with any input field</h2>
-          <p class="feature-problem">
-            Field Theory works with any agentic input field.
-          </p>
-          <p class="feature-description">
-            ChatGPT, Claude, Cursor, Claude Code, Copilot, Gemini, Perplexity—if it has an input field, your stacked context pastes right in.
-          </p>
+          <h2>Input field agnostic — Works anywhere you can paste.</h2>
+          <p class="feature-problem">No integrations to configure. Field Theory uses the clipboard. ChatGPT, Claude, Cursor, Copilot, Gemini, Perplexity—if it accepts paste, it works.</p>
         </div>
         <div class="logo-cloud">
           <span class="logo-circle" title="Claude">
@@ -235,15 +235,13 @@
     <div class="container">
       <hr class="dotted-line">
       <h2>Pricing</h2>
-      <p class="hero-tagline">
-        All features available on all accounts. Pro removes limits.
-      </p>
+      <p class="hero-tagline">All features available for Basic users. Pro for the workhorses.</p>
 
       <!-- Pricing tiers -->
       <div id="pricing" class="pricing-grid">
         <div class="pricing-card featured">
           <h3>Basic</h3>
-          <div class="price">Free</div>
+          <div class="price">$0 <span>/ mo</span></div>
           <ul>
             <li>Local transcription <span class="limit-unlimited">∞</span></li>
             <li>Screenshots <span class="limit-unlimited">∞</span></li>
@@ -260,21 +258,24 @@
           <h3>Pro</h3>
           <div class="price">$14 <span>/ mo</span></div>
           <ul>
-            <li class="included-free">Local transcription <span class="limit-unlimited">∞</span></li>
-            <li class="included-free">Screenshots <span class="limit-unlimited">∞</span></li>
-            <li class="included-free">Drawings <span class="limit-unlimited">∞</span></li>
+            <li class="included-free"><em>Local transcription</em> <span class="limit-unlimited">∞</span></li>
+            <li class="included-free"><em>Screenshots</em> <span class="limit-unlimited">∞</span></li>
+            <li class="included-free"><em>Drawings</em> <span class="limit-unlimited">∞</span></li>
             <li>Portable commands <span class="limit-unlimited">∞</span></li>
             <li>Verbal commands <span class="limit-unlimited">∞</span></li>
             <li>Priority mic <span class="limit-unlimited">∞</span></li>
             <li>Auto-stacks <span class="limit-unlimited">∞</span></li>
             <li>Auto-improve text <span class="limit-badge">50,000 words / mo</span></li>
           </ul>
+          <p class="upgrade-note">*Upgrade in-app</p>
         </div>
       </div>
 
       <!-- Single download button -->
-      <div class="download-cta">
-        <span class="btn btn-primary btn-large">Download for Mac — Free</span>
+      <div class="download-cta" id="download">
+        <div class="download-btn-wrapper">
+          <span class="btn btn-primary btn-large">Download for Mac</span><span class="free-pill">Free</span>
+        </div>
         <p class="requirements">Requires macOS 14+ and Apple Silicon (M1 or later)</p>
       </div>
     </div>
@@ -283,12 +284,14 @@
   <!-- Footer -->
   <footer class="footer">
     <div class="container footer-inner">
-      <p>&copy; 2026 Field Theory</p>
-      <ul class="footer-links">
-        <li><a href="#pricing">Pricing</a></li>
-        <li><a href="mailto:support@fieldtheory.dev">support@fieldtheory.dev</a></li>
-        <li><button class="theme-toggle" onclick="toggleTheme()">◐</button></li>
-      </ul>
+      <div class="footer-content">
+        <p class="footer-copyright"><span class="footer-brand">Field Theory</span> © 2026 | <a href="mailto:support@fieldtheory.dev" class="footer-email"><em>support@fieldtheory.dev</em></a></p>
+        <ul class="footer-links">
+          <li><a href="#pricing">Pricing</a></li>
+          <li><a href="#download">Download</a></li>
+          <li><button class="theme-toggle" onclick="toggleTheme()">◐</button></li>
+        </ul>
+      </div>
     </div>
   </footer>
 
@@ -303,13 +306,17 @@
       document.body.classList.toggle('dark');
       const isDark = document.body.classList.contains('dark');
       localStorage.setItem('theme', isDark ? 'dark' : 'light');
-      // Update logo based on theme
+      // Update logos based on theme
       const logoImg = document.getElementById('nav-logo-img');
+      const footerLogoImg = document.getElementById('footer-logo-img');
       if (logoImg) {
         logoImg.src = isDark ? 'images/fieldtheory-logo-white.png' : 'images/fieldtheory-logo-black.png';
       }
+      if (footerLogoImg) {
+        footerLogoImg.src = isDark ? 'images/fieldtheory-logo-white.png' : 'images/fieldtheory-logo-black.png';
+      }
     }
-    
+
     // Toggle mobile nav menu
     function toggleNav() {
       const navLinks = document.getElementById('nav-links');
@@ -318,13 +325,19 @@
       }
     }
 
-    // Toggle theater mode for video
-    function toggleTheater() {
-      const video = document.getElementById('hero-video');
-      if (video) {
-        video.classList.toggle('theater');
-      }
+    // Toggle button style (pill vs dash)
+    function setButtonStyle(style) {
+      document.body.classList.remove('btn-style-pill', 'btn-style-dash');
+      document.body.classList.add('btn-style-' + style);
+      localStorage.setItem('btnStyle', style);
+      // Update active button
+      document.querySelectorAll('.style-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.style === style);
+      });
     }
+    // Load saved button style
+    const savedBtnStyle = localStorage.getItem('btnStyle') || 'pill';
+    setButtonStyle(savedBtnStyle);
 
     // YouTube Player API
     let player;
@@ -338,9 +351,7 @@
     }
 
     function onPlayerReady(event) {
-      // Set playback speed to 1.25x
       player.setPlaybackRate(1.25);
-      // Check initial mute state periodically to sync with YouTube controls
       setInterval(syncMuteState, 500);
     }
 
@@ -351,21 +362,22 @@
     function syncMuteState() {
       if (player && player.isMuted) {
         const controls = document.querySelector('.video-controls');
-        const muted = player.isMuted();
-        controls.classList.toggle('unmuted', !muted);
+        if (controls) {
+          const muted = player.isMuted();
+          controls.classList.toggle('unmuted', !muted);
+        }
       }
     }
 
-    // Toggle mute for video
     function toggleMute() {
       if (player && player.isMuted) {
         const controls = document.querySelector('.video-controls');
         if (player.isMuted()) {
           player.unMute();
-          controls.classList.add('unmuted');
+          if (controls) controls.classList.add('unmuted');
         } else {
           player.mute();
-          controls.classList.remove('unmuted');
+          if (controls) controls.classList.remove('unmuted');
         }
       }
     }
@@ -383,13 +395,17 @@
         if (navLinks) navLinks.classList.remove('open');
       });
     });
-    
+
     // Update logo on page load based on saved theme
     (function() {
       const isDark = document.body.classList.contains('dark');
       const logoImg = document.getElementById('nav-logo-img');
+      const footerLogoImg = document.getElementById('footer-logo-img');
       if (logoImg) {
         logoImg.src = isDark ? 'images/fieldtheory-logo-white.png' : 'images/fieldtheory-logo-black.png';
+      }
+      if (footerLogoImg) {
+        footerLogoImg.src = isDark ? 'images/fieldtheory-logo-white.png' : 'images/fieldtheory-logo-black.png';
       }
     })();
   </script>

@@ -114,6 +114,8 @@ img {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  max-width: 1150px;
+  margin: 0 auto;
 }
 
 .nav-logo {
@@ -130,6 +132,7 @@ img {
 
 .nav-links {
   display: flex;
+  align-items: center;
   gap: var(--space-md);
   list-style: none;
 }
@@ -178,7 +181,7 @@ img {
    Hero Section
    -------------------------------------------------------------------------- */
 .hero {
-  padding: var(--space-xl) 0 var(--space-md);
+  padding: var(--space-lg) 0 0;
   text-align: center;
 }
 
@@ -193,7 +196,7 @@ img {
 .hero-tagline {
   font-size: 1.2rem;
   color: var(--color-text-muted);
-  max-width: 600px;
+  max-width: 800px;
   margin: 0 auto var(--space-lg);
 }
 
@@ -218,9 +221,9 @@ img {
 .hero-video {
   position: relative;
   width: 100%;
-  max-width: 1200px;
+  max-width: 1020px; /* Reduced 15% from 1200px for above-fold visibility */
   margin: 0 auto var(--space-lg);
-  padding-bottom: 72%;
+  aspect-ratio: 23.97 / 18;
   border-radius: var(--border-radius);
   overflow: hidden;
   background: #000;
@@ -228,8 +231,7 @@ img {
 
 .hero-video iframe {
   position: absolute;
-  top: 0;
-  left: 0;
+  inset: 0;
   width: 100%;
   height: 100%;
   border: none;
@@ -238,9 +240,15 @@ img {
 /* CTA Buttons */
 .hero-buttons {
   display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: var(--space-sm);
-  justify-content: center;
-  flex-wrap: wrap;
+  margin-top: var(--space-lg);
+  padding: var(--space-lg) 0;
+  border-top: 1px solid var(--color-border);
+  max-width: 400px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .btn {
@@ -350,7 +358,7 @@ img {
    Feature Sections
    -------------------------------------------------------------------------- */
 .features {
-  padding: var(--space-lg) 0;
+  padding: 0 0 var(--space-lg);
 }
 
 .feature {
@@ -560,7 +568,7 @@ body.dark .feature-image img {
 
 .pricing-card ul {
   list-style: none;
-  margin-bottom: var(--space-md);
+  margin-bottom: 0;
 }
 
 .pricing-card li {
@@ -745,12 +753,37 @@ body.dark .feature-image img {
 
 .footer-inner {
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  max-width: 1150px;
+  margin: 0 auto;
+}
+
+.footer-content {
+  display: flex;
   justify-content: space-between;
   align-items: center;
+  width: 100%;
+}
+
+.footer-copyright {
+  margin: 0;
+}
+
+.footer-brand {
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+.footer-email {
+  color: var(--color-text-muted);
+  opacity: 0.7;
 }
 
 .footer-links {
   display: flex;
+  align-items: center;
   gap: var(--space-md);
   list-style: none;
 }
@@ -770,14 +803,16 @@ body.dark .feature-image img {
 }
 
 .download-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
   margin-top: var(--space-lg);
-  text-align: center;
 }
 
-.download-cta .requirements {
+.requirements {
   font-size: 0.85rem;
   color: var(--color-text-muted);
-  margin-top: var(--space-sm);
 }
 
 .btn-large {
@@ -804,12 +839,6 @@ body.dark .feature-image img {
 
 .download-card h3 {
   margin-bottom: var(--space-sm);
-}
-
-.download-card .requirements {
-  font-size: 0.85rem;
-  color: var(--color-text-muted);
-  margin-top: var(--space-sm);
 }
 
 .download-card .feature-visual {

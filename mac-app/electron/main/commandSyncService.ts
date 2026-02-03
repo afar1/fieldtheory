@@ -51,6 +51,7 @@ export class CommandSyncService extends EventEmitter {
   private lastSyncAt: number | null = null;
   private pendingSyncTimeout: ReturnType<typeof setTimeout> | null = null;
   private static readonly DEBOUNCE_MS = 1000; // Debounce rapid changes
+  private static readonly MIN_SYNC_INTERVAL_MS = 5000; // Don't sync more than once per 5 seconds
 
   constructor(authManager: AuthManager, commandsManager: CommandsManager) {
     super();
@@ -90,6 +91,11 @@ export class CommandSyncService extends EventEmitter {
    * Sync commands if there are any directories with mobile sync enabled.
    */
   private async syncIfNeeded(): Promise<void> {
+    // Skip if we synced very recently (prevents duplicate syncs from multiple events)
+    if (this.lastSyncAt && Date.now() - this.lastSyncAt < CommandSyncService.MIN_SYNC_INTERVAL_MS) {
+      return;
+    }
+
     const mobileSyncDirs = this.commandsManager.getMobileSyncDirs();
     if (mobileSyncDirs.length === 0) {
       return; // No directories have mobile sync enabled
@@ -246,7 +252,7 @@ export class CommandSyncService extends EventEmitter {
           result.errors.push(`Failed to delete commands: ${deleteError.message}`);
         } else {
           result.deleted = toDelete.length;
-          log.info(`Deleted ${toDelete.length} commands`);
+          log.debug(`Deleted ${toDelete.length} commands`);
         }
       }
 
@@ -254,7 +260,7 @@ export class CommandSyncService extends EventEmitter {
       this.lastSyncAt = Date.now();
 
       if (result.success) {
-        log.info('Command sync completed successfully');
+        log.debug('Command sync completed');
       }
 
     } catch (error) {
