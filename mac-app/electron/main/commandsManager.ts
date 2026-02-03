@@ -1291,7 +1291,7 @@ End of User Commands
       }
     }
 
-    log.info(`Prepared ${syncableCommands.length} commands for mobile sync`);
+    log.debug(`Prepared ${syncableCommands.length} commands for mobile sync`);
     return syncableCommands;
   }
 

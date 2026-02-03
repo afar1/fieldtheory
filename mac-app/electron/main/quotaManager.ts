@@ -107,7 +107,7 @@ export class QuotaManager extends EventEmitter {
   async syncFromServer(): Promise<void> {
     const session = this.getSession?.();
     if (!session?.access_token) {
-      log.info('No session, skipping sync');
+      // Don't log - this is expected during startup before login
       return;
     }
 
@@ -142,11 +142,7 @@ export class QuotaManager extends EventEmitter {
       this.cache = data;
       this.lastSyncAt = Date.now();
 
-      log.info('Synced from server:', {
-        tier: this.cache.tier,
-        monthYear: this.cache.monthYear,
-        usage: this.cache.usage,
-      });
+      log.debug('Synced from server:', this.cache.tier, this.cache.monthYear);
 
       this.emit('quotaChanged', this.getQuotas());
       this.emit('tierChanged', this.cache.tier);
@@ -269,7 +265,7 @@ export class QuotaManager extends EventEmitter {
   async updateUsage(feature: QuotaFeature, amount: number): Promise<void> {
     const session = this.getSession?.();
     if (!session?.user?.id) {
-      log.info('No session, skipping usage update');
+      // Don't log - this is expected when not logged in
       return;
     }
 
@@ -313,7 +309,7 @@ export class QuotaManager extends EventEmitter {
         log.error('Failed to update usage:', error);
         // Will sync on next interval.
       } else {
-        log.info(`Updated ${feature}: +${amount} (total: ${currentValue})`);
+        log.debug(`Updated ${feature}: +${amount} (total: ${currentValue})`);
       }
     } catch (err) {
       log.error('Usage update error:', err);
