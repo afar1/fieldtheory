@@ -737,30 +737,8 @@ export class ClipboardManager extends EventEmitter {
       source
     );
 
-    // If this is a transcript, increment cumulative counters.
-    // These ensure stats never decrease even if items are deleted.
-    if (type === 'transcript') {
-      // Increment words transcribed.
-      if (wordCount > 0) {
-        this.db.prepare(`
-          INSERT INTO cumulative_stats (key, value) VALUES ('words_transcribed', ?)
-          ON CONFLICT(key) DO UPDATE SET value = value + ?
-        `).run(wordCount, wordCount);
-      }
-      // Increment transcriptions count.
-      this.db.prepare(`
-        INSERT INTO cumulative_stats (key, value) VALUES ('transcriptions_made', 1)
-        ON CONFLICT(key) DO UPDATE SET value = value + 1
-      `).run();
-    }
-
-    // If this item started a new stack, increment the stacks counter.
-    if (isNewStack) {
-      this.db.prepare(`
-        INSERT INTO cumulative_stats (key, value) VALUES ('stacks_created', 1)
-        ON CONFLICT(key) DO UPDATE SET value = value + 1
-      `).run();
-    }
+    // Note: Cumulative stats are now tracked by MetricsManager (single source of truth).
+    // The cumulative_stats table is kept for historical data but no longer written to.
 
     // Cleanup old items
     this.cleanupOldItems();
@@ -854,22 +832,7 @@ export class ClipboardManager extends EventEmitter {
       source
     );
 
-    // If this is a screenshot, increment the cumulative counter.
-    // This ensures the stat never decreases even if items are deleted.
-    if (type === 'screenshot') {
-      this.db.prepare(`
-        INSERT INTO cumulative_stats (key, value) VALUES ('screenshots_taken', 1)
-        ON CONFLICT(key) DO UPDATE SET value = value + 1
-      `).run();
-    }
-
-    // If this item started a new stack, increment the stacks counter.
-    if (isNewStack) {
-      this.db.prepare(`
-        INSERT INTO cumulative_stats (key, value) VALUES ('stacks_created', 1)
-        ON CONFLICT(key) DO UPDATE SET value = value + 1
-      `).run();
-    }
+    // Note: Cumulative stats (screenshots, stacks) are now tracked by MetricsManager.
 
     // Cleanup old items
     this.cleanupOldItems();
@@ -1198,28 +1161,12 @@ export class ClipboardManager extends EventEmitter {
   updateStackId(itemIds: number[], stackId: string | null): void {
     if (itemIds.length === 0) return;
 
-    // Check if this is a new stack being created (stack_id doesn't exist yet).
-    // We only increment the counter for genuinely new stacks, not when adding to existing ones.
-    let isNewStack = false;
-    if (stackId !== null) {
-      const existing = this.db
-        .prepare('SELECT 1 FROM clipboard_items WHERE stack_id = ? LIMIT 1')
-        .get(stackId);
-      isNewStack = !existing;
-    }
+    // Note: Stack creation stats are now tracked by MetricsManager.
 
     const placeholders = itemIds.map(() => '?').join(',');
     this.db
       .prepare(`UPDATE clipboard_items SET stack_id = ? WHERE id IN (${placeholders})`)
       .run(stackId, ...itemIds);
-
-    // Increment cumulative stacks counter if this is a new stack.
-    if (isNewStack) {
-      this.db.prepare(`
-        INSERT INTO cumulative_stats (key, value) VALUES ('stacks_created', 1)
-        ON CONFLICT(key) DO UPDATE SET value = value + 1
-      `).run();
-    }
   }
 
   /**

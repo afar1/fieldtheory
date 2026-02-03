@@ -371,8 +371,13 @@ export class MetricsManager {
         });
 
       if (error) {
-        // Table might not exist yet - that's OK
+        // Known recoverable errors - warn but don't spam logs
         if (error.code === '42P01') {
+          log.warn('Metrics sync skipped: user_metrics table not found');
+          return false;
+        }
+        if (error.code === '42501') {
+          log.warn('Metrics sync blocked: RLS policy denied access');
           return false;
         }
         log.error('Sync failed:', error);
@@ -411,11 +416,15 @@ export class MetricsManager {
 
       if (error) {
         if (error.code === 'PGRST116') {
-          // No row exists yet - that's OK
+          // No row exists yet - that's OK, will be created on first sync
           return true;
         }
         if (error.code === '42P01') {
-          // Table doesn't exist yet - that's OK
+          log.warn('Metrics fetch skipped: user_metrics table not found');
+          return false;
+        }
+        if (error.code === '42501') {
+          log.warn('Metrics fetch blocked: RLS policy denied access');
           return false;
         }
         log.error('Fetch failed:', error);

@@ -67,57 +67,25 @@ interface FullQuotas {
   verbalCommands: QuotaStatus;
 }
 
-// Clipboard cumulative stats (authoritative for transcription metrics)
-interface ClipboardStats {
-  stacks: number;
-  transcriptions: number;
-  screenshots: number;
-  words: number;
-  improved: number;
-}
-
 export default function UserStatsPanel() {
   const { theme } = useTheme();
   const [data, setData] = useState<MetricsWithStatus | null>(null);
-  const [clipboardStats, setClipboardStats] = useState<ClipboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [tier, setTier] = useState<'free' | 'pro'>('free');
   const [limits, setLimits] = useState<QuotaLimits | null>(null);
   const [quotas, setQuotas] = useState<FullQuotas | null>(null);
 
-  // Load metrics and quota info on mount
+  // Load metrics and quota info on mount.
+  // MetricsManager is the single source of truth for all stats (synced to Supabase).
   useEffect(() => {
-    let metricsLoaded = false;
-    let clipboardLoaded = false;
-
-    const checkDone = () => {
-      if (metricsLoaded && clipboardLoaded) {
-        setLoading(false);
-      }
-    };
-
-    // Load from metricsAPI (user-metrics.json) for non-transcription stats
     if (window.metricsAPI) {
       window.metricsAPI.getMetricsWithStatus()
         .then(setData)
         .catch(console.error)
-        .finally(() => { metricsLoaded = true; checkDone(); });
+        .finally(() => setLoading(false));
     } else {
-      metricsLoaded = true;
+      setLoading(false);
     }
-
-    // Load from clipboardAPI (clipboard.db cumulative_stats) for transcription stats
-    // This is the authoritative source - same as footer stats
-    if (window.clipboardAPI?.getAllTimeStats) {
-      window.clipboardAPI.getAllTimeStats()
-        .then(setClipboardStats)
-        .catch(console.error)
-        .finally(() => { clipboardLoaded = true; checkDone(); });
-    } else {
-      clipboardLoaded = true;
-    }
-
-    checkDone();
 
     // Fetch full quota info for tier and at-limit states
     window.quotaAPI?.getQuotas().then(q => {
@@ -161,19 +129,18 @@ export default function UserStatsPanel() {
     return !status.allowed || status.percentUsed >= 100;
   };
 
-  // Group metrics for display - compact format
-  // Items with quotaInfo show the limit, atQuota shows red when at limit
-  // Use clipboardStats (from clipboard.db) as authoritative source for transcription metrics
-  // This matches the footer stats and persists across sessions
+  // Group metrics for display - compact format.
+  // Items with quotaInfo show the limit, atQuota shows red when at limit.
+  // All stats come from MetricsManager (single source of truth, synced to Supabase).
   const sections = [
     {
       title: 'Transcription',
       items: [
-        { label: 'Total transcriptions', value: clipboardStats?.transcriptions ?? metrics.transcriptions },
-        { label: 'Words transcribed', value: clipboardStats?.words ?? metrics.words_transcribed },
+        { label: 'Total transcriptions', value: metrics.transcriptions },
+        { label: 'Words transcribed', value: metrics.words_transcribed },
         {
           label: 'Words improved',
-          value: clipboardStats?.improved ?? metrics.words_improved,
+          value: metrics.words_improved,
           quotaInfo: formatQuota(limits?.textImprovementWords, 'mo'),
           atQuota: isAtQuota(quotas?.textImprove),
         },
@@ -202,7 +169,7 @@ export default function UserStatsPanel() {
       items: [
         { label: 'Items captured', value: metrics.clipboard_items },
         { label: 'Pastes used', value: metrics.pastes_used },
-        { label: 'Stacks created', value: clipboardStats?.stacks ?? metrics.stacks_created },
+        { label: 'Stacks created', value: metrics.stacks_created },
         {
           label: 'Autostacks created',
           value: metrics.autostacks_created,
@@ -217,7 +184,7 @@ export default function UserStatsPanel() {
       title: 'Creative',
       items: [
         { label: 'Drawings created', value: metrics.sketches_created },
-        { label: 'Screenshots taken', value: clipboardStats?.screenshots ?? metrics.screenshots_taken },
+        { label: 'Screenshots taken', value: metrics.screenshots_taken },
       ],
     },
     {
