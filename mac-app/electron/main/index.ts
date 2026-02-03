@@ -2789,18 +2789,7 @@ function setupClipboardIPCHandlers(): void {
     return clipboardManager.getUniqueStacks();
   });
 
-  // All-time stats for footer display
-  ipcMain.handle(ClipboardIPCChannels.GET_ALL_TIME_STATS, async () => {
-    if (!clipboardManager) {
-      return { stacks: 0, transcriptions: 0, screenshots: 0, improved: 0, words: 0 };
-    }
-    const dbStats = clipboardManager.getAllTimeStats();
-    // Note: improved count is now tracked server-side via quota manager
-    const improved = quotaManager?.getFeatureStatus('text_improve_words').used ?? 0;
-    return { ...dbStats, improved };
-  });
-
-  // Note: INCREMENT_IMPROVED_COUNT removed - server tracks text improve usage via improve-text edge function
+  // Note: getAllTimeStats and INCREMENT_IMPROVED_COUNT removed - stats now tracked by MetricsManager
 
   ipcMain.handle(ClipboardIPCChannels.UPDATE_STACK_ID, async (_event, itemIds: number[], stackId: string | null) => {
     try {

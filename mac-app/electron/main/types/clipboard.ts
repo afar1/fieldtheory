@@ -31,9 +31,6 @@ export const ClipboardIPCChannels = {
   UPDATE_STACK_ID: 'clipboard:updateStackId',
   START_DRAG: 'clipboard:startDrag',
 
-  // All-time stats for footer display
-  GET_ALL_TIME_STATS: 'clipboard:getAllTimeStats',
-
   // API key management (stored securely via OS keychain)
   GET_API_KEY_STATUS: 'clipboard:getApiKeyStatus',
   GET_API_KEY_INFO: 'clipboard:getApiKeyInfo',
