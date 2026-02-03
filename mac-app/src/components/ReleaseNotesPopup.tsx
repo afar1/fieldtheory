@@ -14,6 +14,11 @@ export function hasReleaseNotes(version: string): boolean {
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.58': [
+    'Stats now sync properly from cloud on startup',
+    'Fixed bug where local data could overwrite cloud backups',
+    'Unified metrics tracking to single source of truth',
+  ],
   '0.1.57': [
     'Release notes now show automatically after updates',
     'Major refactoring: simplified auth and quota systems, removed 9k lines of unused code',
@@ -120,6 +125,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.58': 'Feb 2 2026',
   '0.1.57': 'Feb 2 2026',
   '0.1.56': 'Feb 2 2026',
   '0.1.55': 'Feb 2 2026',
