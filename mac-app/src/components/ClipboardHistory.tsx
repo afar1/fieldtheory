@@ -2067,28 +2067,10 @@ export default function ClipboardHistory() {
             targetAppIndex: nextIndex,
           }));
           window.clipboardAPI?.setTargetApp(newApp);
-        } else if (hasShift) {
-          setShowSettings(false);
-          setViewMode(prev => {
-            // Build visible tabs array in order, then cycle backwards
-            const visibleTabs: ViewMode[] = ['clipboard', 'todo'];
-
-            const currentIndex = visibleTabs.indexOf(prev);
-            if (currentIndex === -1) return 'clipboard';
-            const prevIndex = (currentIndex - 1 + visibleTabs.length) % visibleTabs.length;
-            return visibleTabs[prevIndex];
-          });
         } else {
+          // Tab key: just return to clipboard view (no cycling to other tabs)
           setShowSettings(false);
-          setViewMode(prev => {
-            // Build visible tabs array in order, then cycle forwards
-            const visibleTabs: ViewMode[] = ['clipboard', 'todo'];
-
-            const currentIndex = visibleTabs.indexOf(prev);
-            if (currentIndex === -1) return 'clipboard';
-            const nextIndex = (currentIndex + 1) % visibleTabs.length;
-            return visibleTabs[nextIndex];
-          });
+          setViewMode('clipboard');
         }
         return;
       }
@@ -3503,7 +3485,7 @@ export default function ClipboardHistory() {
             overflow: 'hidden',
             transition: 'height 0.3s ease, min-height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease',
           }}>
-          {(['clipboard', ...(tasksTabEnabled ? ['todo'] : [])] as ViewMode[]).map((mode) => {
+          {(['clipboard'] as ViewMode[]).map((mode) => {
             const isSelected = viewMode === mode && !showSettings;
             const bgColor = isSelected ? theme.accent : 'transparent';
 
