@@ -32,6 +32,8 @@ export class AudioManager extends EventEmitter {
   private favoriteDeviceName: string | null = null;
   // Callback to save favorite to preferences
   private onFavoriteChanged: ((name: string | null) => void) | null = null;
+  // Callback to save priority device to preferences
+  private onPriorityChanged: ((deviceId: string | null) => void) | null = null;
   // Timer for tracking priority mic minutes (time the mic is locked)
   private priorityMicTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -69,6 +71,13 @@ export class AudioManager extends EventEmitter {
    */
   setOnFavoriteChanged(callback: (name: string | null) => void): void {
     this.onFavoriteChanged = callback;
+  }
+
+  /**
+   * Set callback for when priority device changes (to save to preferences).
+   */
+  setOnPriorityChanged(callback: (deviceId: string | null) => void): void {
+    this.onPriorityChanged = callback;
   }
 
   /**
@@ -181,7 +190,13 @@ export class AudioManager extends EventEmitter {
    */
   async setPriorityDevice(deviceId: string | null): Promise<void> {
     const wasLocked = this.priorityDeviceId !== null;
+    const changed = this.priorityDeviceId !== deviceId;
     this.priorityDeviceId = deviceId;
+
+    // Save to preferences via callback (ensures all paths save correctly)
+    if (changed && this.onPriorityChanged) {
+      this.onPriorityChanged(deviceId);
+    }
 
     if (deviceId) {
 
@@ -303,8 +318,9 @@ export class AudioManager extends EventEmitter {
     if (this.priorityDeviceId) {
       const stillExists = devices.some((d) => d.id === this.priorityDeviceId);
       if (!stillExists) {
-        this.priorityDeviceId = null;
-        // Don't clear favoriteDeviceName - we want to reconnect when it comes back
+        // Use setPriorityDevice to ensure preference is saved
+        // Note: This preserves favoriteDeviceName for auto-reconnect
+        await this.setPriorityDevice(null);
       }
     }
 
@@ -313,10 +329,9 @@ export class AudioManager extends EventEmitter {
     if (!this.priorityDeviceId && this.favoriteDeviceName) {
       const favoriteDevice = devices.find(d => d.name === this.favoriteDeviceName && d.isInput);
       if (favoriteDevice) {
-        this.priorityDeviceId = favoriteDevice.id;
-        this.priorityMode = true;
-        this.startPriorityMicTimer();
-        await this.enforcePriority();
+        log.info('Auto-reconnecting favorite device:', this.favoriteDeviceName);
+        // Use setPriorityDevice to ensure preference is saved with new device ID
+        await this.setPriorityDevice(favoriteDevice.id);
       }
     }
 

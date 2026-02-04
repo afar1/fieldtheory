@@ -1035,11 +1035,8 @@ function setupIPCHandlers(): void {
     AudioIPCChannels.SET_PRIORITY_DEVICE,
     async (_event, payload: SetPriorityDevicePayload) => {
       if (audioManager) {
+        // setPriorityDevice now triggers onPriorityChanged callback which saves to prefs
         await audioManager.setPriorityDevice(payload.deviceId);
-        // Save priority device to preferences
-        if (preferencesManager) {
-          await preferencesManager.save({ priorityDeviceId: payload.deviceId });
-        }
       }
     }
   );
@@ -4576,6 +4573,14 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
     if (preferencesManager) {
       await preferencesManager.save({ favoriteDeviceName: name });
       log.info('Favorite device saved successfully');
+    }
+  });
+  // Save priority device ID when it changes (ensures all paths save correctly)
+  audioManager.setOnPriorityChanged(async (deviceId) => {
+    log.info('Saving priority device to prefs:', deviceId);
+    if (preferencesManager) {
+      await preferencesManager.save({ priorityDeviceId: deviceId });
+      log.info('Priority device saved successfully');
     }
   });
 
