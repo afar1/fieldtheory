@@ -17,6 +17,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
   '0.1.64': [
     'Fixed onboarding shortcuts - hotkey configuration now works properly for new users',
     'Fixed popular commands display in Commands tab',
+    'Removed unexpected todo tab from Tab key navigation',
   ],
   '0.1.63': [
     'Fixed daily logout bug - authentication no longer expires automatically',
