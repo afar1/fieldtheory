@@ -1314,58 +1314,46 @@ function ShortcutsPhase({ onFinish, theme, styles }: ShortcutsPhaseProps) {
     runTests();
   }, [hotkeysLoaded, historyHotkey, transcriptionHotkey, screenshotHotkey]);
 
-  // Handle hotkey capture
+  // Handle hotkey capture - always save the user's choice, warn if registration may fail
   const handleSetHistoryHotkey = useCallback(async (hotkeyString: string) => {
     setCapturing(null);
     setError(null);
+    setHistoryHotkey(hotkeyString);
 
     if (!window.clipboardAPI) return;
 
     try {
-      const success = await window.clipboardAPI.setHotkeys({ history: hotkeyString });
-      if (!success) {
-        setError('Failed to register shortcut. It may be in use.');
-      } else {
-        setHistoryHotkey(hotkeyString);
-      }
+      await window.clipboardAPI.setHotkeys({ history: hotkeyString });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to set shortcut');
+      console.warn('History hotkey registration warning:', err);
     }
   }, []);
 
   const handleSetTranscriptionHotkey = useCallback(async (hotkeyString: string) => {
     setCapturing(null);
     setError(null);
+    setTranscriptionHotkey(hotkeyString);
 
     if (!window.transcribeAPI?.setHotkey) return;
 
     try {
-      const success = await window.transcribeAPI.setHotkey(hotkeyString);
-      if (!success) {
-        setError('Failed to register shortcut. It may be in use.');
-      } else {
-        setTranscriptionHotkey(hotkeyString);
-      }
+      await window.transcribeAPI.setHotkey(hotkeyString);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to set shortcut');
+      console.warn('Transcription hotkey registration warning:', err);
     }
   }, []);
 
   const handleSetScreenshotHotkey = useCallback(async (hotkeyString: string) => {
     setCapturing(null);
     setError(null);
+    setScreenshotHotkey(hotkeyString);
 
     if (!window.clipboardAPI) return;
 
     try {
-      const success = await window.clipboardAPI.setHotkeys({ screenshot: hotkeyString });
-      if (!success) {
-        setError('Failed to register shortcut. It may be in use.');
-      } else {
-        setScreenshotHotkey(hotkeyString);
-      }
+      await window.clipboardAPI.setHotkeys({ screenshot: hotkeyString });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to set shortcut');
+      console.warn('Screenshot hotkey registration warning:', err);
     }
   }, []);
 
@@ -1407,7 +1395,7 @@ function ShortcutsPhase({ onFinish, theme, styles }: ShortcutsPhaseProps) {
     borderRadius: '6px',
     color: theme.text,
     cursor: 'pointer',
-    minWidth: '100px',
+    minWidth: '70px',
     textAlign: 'center',
   };
 
