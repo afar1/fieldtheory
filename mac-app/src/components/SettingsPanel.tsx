@@ -56,21 +56,21 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'commands': 'Portable Commands',
   'sounds': 'Sounds',
   'stats': 'Stats',
-  'terminal-commands': 'Claude Code',
+  'terminal-commands': 'Allowlist',
 };
 
 // Alphabetically ordered sections for navigation
 const SECTIONS_ORDER: SettingsSection[] = [
   'account',
+  'terminal-commands', // Allowlist
   'appearance',
   'audio',
   'auto-improve',
-  'commands',
   'keyboard',
   'librarian',
+  'commands', // Portable Commands
   'sounds',
   'stats',
-  'terminal-commands',
 ];
 
 interface SettingsPanelProps {
@@ -166,6 +166,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   const [capturingHotkey, setCapturingHotkey] = useState<HotkeyCapture>(null);
   const [hotkeyError, setHotkeyError] = useState<string | null>(null);
 
+  // Hotkey conflict detection state (auto-tested when keyboard section loads)
+  const [hotkeyTestResults, setHotkeyTestResults] = useState<Record<string, HotkeyTestResult | null>>({});
+
   // Continuous Context configuration
   const [continuousContextEnabled, setContinuousContextEnabled] = useState(false);
   const [continuousContextHotkey, setContinuousContextHotkey] = useState('Shift+Command+4');
@@ -237,18 +240,19 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   const [userTier, setUserTier] = useState<'free' | 'pro'>('free');
 
   // Quota usage for free users (formatted strings).
-  const [quotaUsage, setQuotaUsage] = useState<{ priorityMic: string; autoStack: string; textImprove: string } | null>(null);
+  const [quotaUsage, setQuotaUsage] = useState<{ priorityMic: string; autoStack: string; textImprove: string; portableCommands: string } | null>(null);
 
   // Full quota status for progress bars and exhaustion checks.
   const [quotaStatus, setQuotaStatus] = useState<{
     priorityMic: { used: number; limit: number; remaining: number; allowed: boolean; percentUsed: number };
     autoStack: { used: number; limit: number; remaining: number; allowed: boolean; percentUsed: number };
     textImprove: { used: number; limit: number; remaining: number; allowed: boolean; percentUsed: number };
+    portableCommands: { used: number; limit: number; remaining: number; allowed: boolean; percentUsed: number };
   } | null>(null);
 
   // Days until quota reset and limits for display.
   const [daysUntilReset, setDaysUntilReset] = useState<number>(0);
-  const [quotaLimits, setQuotaLimits] = useState<{ priorityMicMinutes: number; autoStackSessions: number; textImprovementWords: number } | null>(null);
+  const [quotaLimits, setQuotaLimits] = useState<{ priorityMicMinutes: number; autoStackSessions: number; textImprovementWords: number; portableCommands: number } | null>(null);
 
   // Diagnostics modal visibility.
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -395,6 +399,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             priorityMic: quotas.priorityMic,
             autoStack: quotas.autoStack,
             textImprove: quotas.textImprove,
+            portableCommands: quotas.portableCommands,
           });
         }
       });
@@ -435,6 +440,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
               priorityMic: quotas.priorityMic,
               autoStack: quotas.autoStack,
               textImprove: quotas.textImprove,
+              portableCommands: quotas.portableCommands,
             });
           }
         });
@@ -681,17 +687,15 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       });
   }, [session?.user?.id]);
 
-  // Handle sign out - app quits after successful sign out.
+  // Handle sign out - redirects to onboarding/login screen after successful sign out.
   const handleSignOut = async () => {
     setAuthLoading(true);
     try {
-      // Main process will quit the app after successful sign out.
-      // If sign out fails, we'll reach the finally block.
+      // Main process will show onboarding window after successful sign out.
       await window.authAPI?.signOut();
     } catch (err) {
       console.error('Sign out error:', err);
     } finally {
-      // Only reached if sign out failed (app didn't quit)
       setAuthLoading(false);
     }
   };
@@ -981,6 +985,36 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       console.error('Failed to clear screenshot hotkeys:', err);
     }
   }, []);
+
+  // Auto-test hotkeys for conflicts when keyboard section is selected
+  useEffect(() => {
+    if (selectedSection !== 'keyboard' || !window.hotkeyAPI?.testHotkey) return;
+
+    const testHotkeys = async () => {
+      const hotkeysToTest = [
+        { id: 'history', key: clipboardHotkeys.history },
+        { id: 'transcription', key: transcriptionHotkey },
+        { id: 'secondaryTranscription', key: secondaryTranscriptionHotkey },
+        { id: 'screenshot', key: clipboardHotkeys.screenshot },
+        { id: 'fullScreen', key: clipboardHotkeys.fullScreen },
+        { id: 'activeWindow', key: clipboardHotkeys.activeWindow },
+      ];
+
+      const results: Record<string, HotkeyTestResult | null> = {};
+      for (const { id, key } of hotkeysToTest) {
+        if (key) {
+          try {
+            results[id] = await window.hotkeyAPI!.testHotkey(key, 500);
+          } catch {
+            results[id] = null;
+          }
+        }
+      }
+      setHotkeyTestResults(results);
+    };
+
+    testHotkeys();
+  }, [selectedSection, clipboardHotkeys.history, clipboardHotkeys.screenshot, clipboardHotkeys.fullScreen, clipboardHotkeys.activeWindow, transcriptionHotkey, secondaryTranscriptionHotkey]);
 
   // Handler for setting history hotkey
   const handleSetHistoryHotkey = useCallback(async (hotkeyString: string) => {
@@ -1575,6 +1609,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             {capturingHotkey === 'history' && (
               <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
             )}
+            {hotkeyTestResults.history?.status === 'conflict' && (
+              <span style={{ color: '#f59e0b', fontSize: '11px' }} title={hotkeyTestResults.history.conflictApp || 'Conflict detected'}>
+                !
+              </span>
+            )}
           </div>
         </div>
         
@@ -1592,6 +1631,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             {capturingHotkey === 'transcription' && (
               <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
             )}
+            {hotkeyTestResults.transcription?.status === 'conflict' && (
+              <span style={{ color: '#f59e0b', fontSize: '11px' }} title={hotkeyTestResults.transcription.conflictApp || 'Conflict detected'}>
+                !
+              </span>
+            )}
           </div>
         </div>
 
@@ -1599,8 +1643,14 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         <div style={styles.row}>
           <span style={styles.rowLabel}>Record Transcription (Alt)</span>
           <div style={styles.rowControls}>
-            {capturingHotkey !== 'secondaryTranscription' && secondaryTranscriptionHotkey && (
-              <button onClick={handleClearSecondaryHotkey} style={styles.btnGhost}>Clear</button>
+            {capturingHotkey !== 'secondaryTranscription' && (
+              <button
+                onClick={handleClearSecondaryHotkey}
+                disabled={!secondaryTranscriptionHotkey}
+                style={{ ...styles.btnGhost, fontSize: '11px', padding: '4px 8px' }}
+              >
+                Clear
+              </button>
             )}
             <button
               onClick={() => { setCapturingHotkey('secondaryTranscription'); setHotkeyError(null); }}
@@ -1612,6 +1662,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             {capturingHotkey === 'secondaryTranscription' && (
               <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
             )}
+            {hotkeyTestResults.secondaryTranscription?.status === 'conflict' && (
+              <span style={{ color: '#f59e0b', fontSize: '11px' }} title={hotkeyTestResults.secondaryTranscription.conflictApp || 'Conflict detected'}>
+                !
+              </span>
+            )}
           </div>
         </div>
 
@@ -1619,8 +1674,14 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         <div style={styles.row}>
           <span style={styles.rowLabel}>Take Screenshot</span>
           <div style={styles.rowControls}>
-            {capturingHotkey !== 'screenshot' && clipboardHotkeys.screenshot && (
-              <button onClick={handleClearScreenshotHotkey} style={styles.btnGhost}>Clear</button>
+            {capturingHotkey !== 'screenshot' && (
+              <button
+                onClick={handleClearScreenshotHotkey}
+                disabled={!clipboardHotkeys.screenshot}
+                style={{ ...styles.btnGhost, fontSize: '11px', padding: '4px 8px' }}
+              >
+                Clear
+              </button>
             )}
             <button
               onClick={() => { setCapturingHotkey('screenshot'); setHotkeyError(null); }}
@@ -1632,6 +1693,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             {capturingHotkey === 'screenshot' && (
               <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
             )}
+            {hotkeyTestResults.screenshot?.status === 'conflict' && (
+              <span style={{ color: '#f59e0b', fontSize: '11px' }} title={hotkeyTestResults.screenshot.conflictApp || 'Conflict detected'}>
+                !
+              </span>
+            )}
           </div>
         </div>
 
@@ -1639,8 +1705,14 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         <div style={styles.row}>
           <span style={styles.rowLabel}>Take Full Screen Screenshot</span>
           <div style={styles.rowControls}>
-            {capturingHotkey !== 'fullScreen' && clipboardHotkeys.fullScreen && (
-              <button onClick={handleClearFullScreenHotkey} style={styles.btnGhost}>Clear</button>
+            {capturingHotkey !== 'fullScreen' && (
+              <button
+                onClick={handleClearFullScreenHotkey}
+                disabled={!clipboardHotkeys.fullScreen}
+                style={{ ...styles.btnGhost, fontSize: '11px', padding: '4px 8px' }}
+              >
+                Clear
+              </button>
             )}
             <button
               onClick={() => { setCapturingHotkey('fullScreen'); setHotkeyError(null); }}
@@ -1652,6 +1724,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             {capturingHotkey === 'fullScreen' && (
               <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
             )}
+            {hotkeyTestResults.fullScreen?.status === 'conflict' && (
+              <span style={{ color: '#f59e0b', fontSize: '11px' }} title={hotkeyTestResults.fullScreen.conflictApp || 'Conflict detected'}>
+                !
+              </span>
+            )}
           </div>
         </div>
 
@@ -1659,8 +1736,14 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         <div style={styles.row}>
           <span style={styles.rowLabel}>Take Active Window Screenshot</span>
           <div style={styles.rowControls}>
-            {capturingHotkey !== 'activeWindow' && clipboardHotkeys.activeWindow && (
-              <button onClick={handleClearActiveWindowHotkey} style={styles.btnGhost}>Clear</button>
+            {capturingHotkey !== 'activeWindow' && (
+              <button
+                onClick={handleClearActiveWindowHotkey}
+                disabled={!clipboardHotkeys.activeWindow}
+                style={{ ...styles.btnGhost, fontSize: '11px', padding: '4px 8px' }}
+              >
+                Clear
+              </button>
             )}
             <button
               onClick={() => { setCapturingHotkey('activeWindow'); setHotkeyError(null); }}
@@ -1671,6 +1754,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             </button>
             {capturingHotkey === 'activeWindow' && (
               <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+            {hotkeyTestResults.activeWindow?.status === 'conflict' && (
+              <span style={{ color: '#f59e0b', fontSize: '11px' }} title={hotkeyTestResults.activeWindow.conflictApp || 'Conflict detected'}>
+                !
+              </span>
             )}
           </div>
         </div>
@@ -1752,38 +1840,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
               style={{ ...styles.toggle, backgroundColor: !hideStatusLabels ? theme.accent : '#d1d5db' }}
             >
               <span style={{ ...styles.toggleKnob, transform: !hideStatusLabels ? 'translateX(20px)' : 'translateX(2px)' }} />
-            </button>
-          </div>
-        </div>
-
-        {/* Cursor Status Debug Mode - shows blue background to debug white rectangle issue */}
-        <div style={styles.row}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={styles.rowLabel}>Debug cursor indicator</span>
-            <span style={styles.rowHint}>Show blue background on cursor overlay (for debugging)</span>
-          </div>
-          <div style={styles.rowControls}>
-            <button
-              onClick={() => handleToggleCursorStatusDebugMode(!cursorStatusDebugMode)}
-              style={{ ...styles.toggle, backgroundColor: cursorStatusDebugMode ? theme.accent : '#d1d5db' }}
-            >
-              <span style={{ ...styles.toggleKnob, transform: cursorStatusDebugMode ? 'translateX(20px)' : 'translateX(2px)' }} />
-            </button>
-          </div>
-        </div>
-
-        {/* Cursor Status Window Color Debug - shows magenta native window background */}
-        <div style={styles.row}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={styles.rowLabel}>Debug window background</span>
-            <span style={styles.rowHint}>Show magenta native window (for white rectangle debugging)</span>
-          </div>
-          <div style={styles.rowControls}>
-            <button
-              onClick={() => handleToggleCursorStatusWindowColorDebug(!cursorStatusWindowColorDebug)}
-              style={{ ...styles.toggle, backgroundColor: cursorStatusWindowColorDebug ? theme.accent : '#d1d5db' }}
-            >
-              <span style={{ ...styles.toggleKnob, transform: cursorStatusWindowColorDebug ? 'translateX(20px)' : 'translateX(2px)' }} />
             </button>
           </div>
         </div>
@@ -1953,10 +2009,10 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       </div>
       )}
 
-      {/* Claude Code Section */}
+      {/* Allowlist Section */}
       {selectedSection === 'terminal-commands' && (
       <div style={styles.section}>
-        <SectionHeader title="Claude Code" />
+        <SectionHeader title="Allowlist" />
         <ClaudeSettings />
       </div>
       )}
@@ -1999,7 +2055,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                     disabled={authLoading}
                     style={styles.linkBtn}
                   >
-                    {authLoading ? '...' : 'Sign Out & Quit'}
+                    {authLoading ? 'Signing out...' : 'Sign Out'}
                   </button>
                 </div>
 
@@ -2218,6 +2274,25 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                               height: '100%',
                               width: `${Math.min(100, quotaStatus.textImprove.percentUsed)}%`,
                               backgroundColor: quotaStatus.textImprove.allowed ? theme.accent : theme.error,
+                              borderRadius: '2px',
+                              transition: 'width 0.3s ease',
+                            }} />
+                          </div>
+                        </div>
+
+                        {/* Portable Commands (includes voice commands) */}
+                        <div style={{ marginBottom: '12px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                            <span style={{ fontSize: '12px', color: theme.text }}>Portable Commands</span>
+                            <span style={{ fontSize: '11px', color: quotaStatus.portableCommands?.allowed !== false ? theme.textSecondary : theme.error }}>
+                              {quotaStatus?.portableCommands?.used ?? 0} of {quotaLimits?.portableCommands ?? 0}
+                            </span>
+                          </div>
+                          <div style={{ height: '4px', backgroundColor: theme.isDark ? theme.border : '#e5e7eb', borderRadius: '2px', overflow: 'hidden' }}>
+                            <div style={{
+                              height: '100%',
+                              width: `${Math.min(100, quotaStatus?.portableCommands?.percentUsed ?? 0)}%`,
+                              backgroundColor: quotaStatus?.portableCommands?.allowed !== false ? theme.accent : theme.error,
                               borderRadius: '2px',
                               transition: 'width 0.3s ease',
                             }} />
