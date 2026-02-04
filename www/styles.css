@@ -197,6 +197,12 @@ img {
   font-size: 1.2rem;
   color: var(--color-text-muted);
   max-width: 800px;
+  margin: 0 auto var(--space-xs);
+}
+
+.hero-audience {
+  font-size: 1rem;
+  color: var(--color-text-muted);
   margin: 0 auto var(--space-lg);
 }
 
@@ -384,19 +390,24 @@ img {
   letter-spacing: -0.02em;
 }
 
+.feature-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  justify-content: flex-end;
+}
+
 .offline-badge,
 .online-badge {
-  display: block;
+  display: inline-block;
   font-size: 0.65rem;
   font-weight: 500;
   letter-spacing: 0.02em;
   padding: 0.2rem 0.5rem;
   border-radius: 2rem;
   background: transparent;
-  margin-top: 0.75rem;
-  text-align: right;
   width: fit-content;
-  margin-left: auto;
 }
 
 .offline-badge {
@@ -1015,6 +1026,81 @@ html, body {
   }
 }
 
+/* Mobile break - only shows on mobile */
+.mobile-break {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .mobile-break {
+    display: inline;
+  }
+
+  /* Hero tagline - smaller on mobile */
+  .hero-tagline {
+    font-size: 1rem;
+    margin-bottom: var(--space-xs);
+  }
+
+  .hero-audience {
+    font-size: 0.9rem;
+    margin-bottom: var(--space-md);
+  }
+
+  /* Reduce hero button section spacing */
+  .hero-buttons {
+    padding: var(--space-md) 0;
+    margin-top: var(--space-md);
+  }
+
+  /* Pricing card - reduce padding for more text space */
+  .pricing-card {
+    padding: var(--space-md);
+  }
+
+  .pricing-card li {
+    font-size: 0.85rem;
+  }
+
+  .limit-badge {
+    font-size: 0.6rem;
+  }
+
+  /* Logo cloud - reduce bottom spacing before pricing */
+  .logo-cloud {
+    padding: var(--space-md);
+  }
+
+  /* Footer - centered and smaller on mobile */
+  .footer {
+    padding: var(--space-md) 0;
+    font-size: 0.8rem;
+  }
+
+  .footer-content {
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-sm);
+    text-align: center;
+  }
+
+  .footer-links {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-sm);
+  }
+
+  .footer-copyright {
+    font-size: 0.8rem;
+  }
+
+  /* Feature badges - stack vertically on mobile */
+  .feature-badges {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
 /* Extra small screens need even smaller ASCII art. */
 @media (max-width: 400px) {
   .hero-visual,
@@ -1025,5 +1111,10 @@ html, body {
   .nav-logo-img {
     height: 24px;
     max-height: 24px;
+  }
+
+  /* Even smaller pricing text */
+  .pricing-card li {
+    font-size: 0.8rem;
   }
 }

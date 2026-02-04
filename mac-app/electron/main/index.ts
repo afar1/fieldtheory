@@ -4572,8 +4572,10 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   }
   // Save favorite device name when it changes
   audioManager.setOnFavoriteChanged(async (name) => {
+    log.info('Saving favorite device to prefs:', name);
     if (preferencesManager) {
       await preferencesManager.save({ favoriteDeviceName: name });
+      log.info('Favorite device saved successfully');
     }
   });
 
@@ -5051,6 +5053,11 @@ async function initTranscriberSystem(): Promise<void> {
           prefs.clipboardHistoryHotkey,
           prefs.clipboardDesktopScreenshotHotkey
         );
+      }
+      // Reload favorite device for audio manager (may differ in per-user prefs)
+      if (audioManager) {
+        audioManager.setFavoriteDeviceName(prefs.favoriteDeviceName ?? null);
+        log.info('Reloaded favorite device from user prefs:', prefs.favoriteDeviceName);
       }
     }
     if (clipboardManager) {

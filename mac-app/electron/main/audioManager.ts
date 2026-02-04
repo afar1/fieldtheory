@@ -53,6 +53,7 @@ export class AudioManager extends EventEmitter {
    * When this device reconnects, it will automatically become the priority.
    */
   setFavoriteDeviceName(name: string | null): void {
+    log.info('setFavoriteDeviceName called with:', name);
     this.favoriteDeviceName = name;
   }
 
@@ -88,8 +89,10 @@ export class AudioManager extends EventEmitter {
   setFavoriteDeviceById(deviceId: string): boolean {
     const device = this.devices.find(d => d.id === deviceId && d.isInput);
     if (!device) {
+      log.warn('setFavoriteDeviceById: device not found:', deviceId);
       return false;
     }
+    log.info('setFavoriteDeviceById: setting favorite to:', device.name);
     this.favoriteDeviceName = device.name;
     if (this.onFavoriteChanged) {
       this.onFavoriteChanged(device.name);
@@ -120,6 +123,9 @@ export class AudioManager extends EventEmitter {
       await this.refreshDevices();
       await this.refreshDefaultInput();
 
+      log.info('Audio init - favoriteDeviceName from prefs:', this.favoriteDeviceName);
+      log.info('Audio init - available inputs:', this.devices.filter(d => d.isInput).map(d => d.name));
+
       // Try to restore priority device - first by ID, then by favorite name
       let deviceRestored = false;
 
@@ -138,7 +144,10 @@ export class AudioManager extends EventEmitter {
       if (!deviceRestored && this.favoriteDeviceName) {
         const favoriteDevice = this.devices.find(d => d.name === this.favoriteDeviceName && d.isInput);
         if (favoriteDevice) {
+          log.info('Restoring priority from favorite:', this.favoriteDeviceName);
           await this.setPriorityDevice(favoriteDevice.id);
+        } else {
+          log.info('Favorite device not currently connected:', this.favoriteDeviceName);
         }
       }
     } catch (error) {

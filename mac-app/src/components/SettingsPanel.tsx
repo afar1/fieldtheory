@@ -148,10 +148,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedSection]);
 
-  // Permissions state
-  const [permissions, setPermissions] = useState<{ accessibilityGranted: boolean } | null>(null);
-  const [showPermissionsGate, setShowPermissionsGate] = useState(false);
-  
   // System Access permissions state (microphone, accessibility, screen recording)
   const [systemPermissions, setSystemPermissions] = useState<{
     microphone: 'granted' | 'denied' | 'not-determined';
@@ -1206,85 +1202,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [capturingHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey]);
 
-  // Check permissions on mount and when status changes
-  useEffect(() => {
-    const permissionsAPI = window.permissionsAPI;
-    if (!permissionsAPI) {
-      console.log('[SettingsPanel] permissionsAPI not available, assuming permissions granted');
-      setPermissions({ accessibilityGranted: true });
-      setShowPermissionsGate(false);
-      return;
-    }
-
-    const checkPermissions = async () => {
-      try {
-        const status = await permissionsAPI.check();
-        setPermissions(status);
-        setShowPermissionsGate(!status.accessibilityGranted);
-      } catch (error) {
-        console.error('Failed to check permissions:', error);
-        setPermissions({ accessibilityGranted: true });
-        setShowPermissionsGate(false);
-      }
-    };
-
-    checkPermissions();
-
-    const unsubscribeStatus = permissionsAPI.onStatusChanged((status: { accessibilityGranted: boolean }) => {
-      setPermissions(status);
-      setShowPermissionsGate(!status.accessibilityGranted);
-    });
-
-    const unsubscribeRevoked = permissionsAPI.onRevoked(() => {
-      setShowPermissionsGate(true);
-      checkPermissions();
-    });
-
-    let pollInterval: ReturnType<typeof setInterval> | null = null;
-    if (showPermissionsGate) {
-      pollInterval = setInterval(() => {
-        checkPermissions();
-      }, 2000);
-    }
-
-    return () => {
-      unsubscribeStatus?.();
-      unsubscribeRevoked?.();
-      if (pollInterval) {
-        clearInterval(pollInterval);
-      }
-    };
-  }, [showPermissionsGate]);
-
-  // Show loading state while checking permissions
-  if (permissions === null) {
-    return (
-      <div style={styles.loading}>
-        <div style={styles.loadingText}>Loading...</div>
-      </div>
-    );
-  }
-
-  // Permissions gate - show inline warning instead of blocking the whole UI
-  const permissionsWarning = showPermissionsGate && permissions && !permissions.accessibilityGranted && (
-    <div style={styles.permissionsWarning}>
-      <div style={styles.permissionsContent}>
-        <h3 style={styles.permissionsTitle}>⚠️ Accessibility Permission Required</h3>
-        <p style={styles.permissionsText}>
-          Field Theory needs Accessibility permission to paste clipboard items.
-        </p>
-        <button
-          onClick={() => {
-            window.open('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility', '_blank');
-          }}
-          style={styles.permissionsButton}
-        >
-          Open Settings
-        </button>
-      </div>
-    </div>
-  );
-
   // Section header component for consistent divider styling
   const SectionHeader = ({ title }: { title: string }) => (
     <div style={styles.sectionHeader}>
@@ -1316,8 +1233,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
 
       {/* Right Content Area */}
       <div style={styles.content}>
-        {permissionsWarning}
-
       {/* Appearance Section - Dark mode toggle, accent colors, intensity */}
       {selectedSection === 'appearance' && (
         <>
