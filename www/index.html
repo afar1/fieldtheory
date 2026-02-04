@@ -6,6 +6,8 @@
   <title>Field Theory: Local voice transcription, context stacking, and portable commands</title>
   <meta name="description" content="Local voice transcription, screenshots, and portable commands—ready for Cursor, Claude, or any input field.">
   <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#faf9f7">
+  <meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)">
   <link rel="stylesheet" href="styles.css">
   <style>
     /* Keyboard shortcut badge */
@@ -104,7 +106,8 @@
       </div>
 
       <h1>Capture twice the context in half the steps.</h1>
-      <p class="hero-tagline">Local transcription, stackable screenshots, portable commands, and priority mic.<br>Made for builders, developers, and engineers.</p>
+      <p class="hero-tagline">Local transcription, stackable screenshots, portable commands, and priority mic.</p>
+      <p class="hero-audience">Made for builders, developers, and engineers.</p>
 
       <div class="hero-buttons">
         <div class="download-btn-wrapper">
@@ -129,8 +132,10 @@
         <div class="feature-content">
           <h2>Portable Commands — Cursor commands now work everywhere.</h2>
           <p class="feature-problem">Point Field Theory at any folder of markdown commands. They become available in Claude, ChatGPT, Cursor, or anywhere else you type.</p>
-          <span class="offline-badge">works locally</span>
-          <span class="shortcut-badge">command + shift + k</span>
+          <div class="feature-badges">
+            <span class="shortcut-badge">command + shift + k</span>
+            <span class="offline-badge">works locally</span>
+          </div>
         </div>
         <div class="feature-image">
           <img src="images/portablecommands.gif" alt="Portable commands feature showing Cursor commands available everywhere">
@@ -235,7 +240,7 @@
     <div class="container">
       <hr class="dotted-line">
       <h2>Pricing</h2>
-      <p class="hero-tagline">All features available for Basic users. Pro for the workhorses.</p>
+      <p class="hero-tagline">All features available for Basic users.<br class="mobile-break"> Pro for the workhorses.</p>
 
       <!-- Pricing tiers -->
       <div id="pricing" class="pricing-grid">
@@ -274,7 +279,10 @@
       <!-- Single download button -->
       <div class="download-cta" id="download">
         <div class="download-btn-wrapper">
-          <span class="btn btn-primary btn-large">Download for Mac</span><span class="free-pill">Free</span>
+          <span class="btn btn-primary btn-large" id="bottom-download-btn" onclick="handleMobileDownload(event)">
+            <span class="desktop-download-text">Download for Mac</span>
+            <span class="mobile-download-text">Visit on Mac to download</span>
+          </span><span class="free-pill">Free</span>
         </div>
         <p class="requirements">Requires macOS 14+ and Apple Silicon (M1 or later)</p>
       </div>
@@ -285,8 +293,9 @@
   <footer class="footer">
     <div class="container footer-inner">
       <div class="footer-content">
-        <p class="footer-copyright"><span class="footer-brand">Field Theory</span> © 2026 | <a href="mailto:support@fieldtheory.dev" class="footer-email"><em>support@fieldtheory.dev</em></a></p>
+        <p class="footer-copyright"><span class="footer-brand">Field Theory</span> © 2026</p>
         <ul class="footer-links">
+          <li><a href="mailto:support@fieldtheory.dev" class="footer-email">support@fieldtheory.dev</a></li>
           <li><a href="#pricing">Pricing</a></li>
           <li><a href="#download">Download</a></li>
           <li><button class="theme-toggle" onclick="toggleTheme()">◐</button></li>
@@ -315,6 +324,8 @@
       if (footerLogoImg) {
         footerLogoImg.src = isDark ? 'images/fieldtheory-logo-white.png' : 'images/fieldtheory-logo-black.png';
       }
+      // Update theme-color meta tag for mobile browser chrome
+      updateThemeColor(isDark);
     }
 
     // Toggle mobile nav menu
@@ -407,7 +418,33 @@
       if (footerLogoImg) {
         footerLogoImg.src = isDark ? 'images/fieldtheory-logo-white.png' : 'images/fieldtheory-logo-black.png';
       }
+      // Update theme-color meta tag
+      updateThemeColor(isDark);
     })();
+
+    function updateThemeColor(isDark) {
+      const themeColor = isDark ? '#1e1e1e' : '#faf9f7';
+      let meta = document.querySelector('meta[name="theme-color"]:not([media])');
+      if (meta) {
+        meta.setAttribute('content', themeColor);
+      }
+    }
+
+    // Handle mobile download button - copies URL instead of downloading
+    function handleMobileDownload(event) {
+      const isMobile = window.innerWidth <= 768;
+      if (isMobile) {
+        event.preventDefault();
+        navigator.clipboard.writeText('https://fieldtheory.dev').then(() => {
+          const btn = event.currentTarget;
+          const originalText = btn.querySelector('.mobile-download-text').textContent;
+          btn.querySelector('.mobile-download-text').textContent = 'Copied fieldtheory.dev!';
+          setTimeout(() => {
+            btn.querySelector('.mobile-download-text').textContent = originalText;
+          }, 2000);
+        });
+      }
+    }
   </script>
 
 </body>
