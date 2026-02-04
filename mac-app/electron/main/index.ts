@@ -249,8 +249,6 @@ function registerHotkeysAfterOnboarding(): void {
     return;
   }
 
-  log.info('registerHotkeysAfterOnboarding: starting hotkey registration');
-
   // Re-register transcription hotkeys (may have been unregistered during sign-out or onboarding reset)
   if (transcriberManager) {
     transcriberManager.reRegisterHotkeys();
@@ -258,7 +256,6 @@ function registerHotkeysAfterOnboarding(): void {
 
   const prefs = preferencesManager.get();
   const hotkeys = clipboardManager.getHotkeys();
-  log.info(`registerHotkeysAfterOnboarding: clipboard config hotkeys: screenshot="${hotkeys.screenshot}", history="${hotkeys.history}"`);
 
   // Register clipboard hotkeys (screenshot, full screen, active window)
   clipboardManager.registerScreenshotHotkey(async () => {

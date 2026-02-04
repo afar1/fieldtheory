@@ -194,6 +194,9 @@ export class AuthManager extends EventEmitter {
   private lastFailedRecoveryTime: number = 0;
   private static readonly RECOVERY_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes between recovery attempts
 
+  // Flag to skip recovery on intentional sign-out (user clicked sign out button)
+  private intentionalSignOut: boolean = false;
+
   constructor() {
     super();
   }
@@ -321,6 +324,12 @@ export class AuthManager extends EventEmitter {
             reason: 'In recovery cooldown',
             cooldownRemainingMs: AuthManager.RECOVERY_COOLDOWN_MS - timeSinceLastFailedRecovery,
           }, 'info');
+          return;
+        }
+
+        if (this.intentionalSignOut) {
+          this.intentionalSignOut = false;
+          log.info('Intentional sign-out, skipping recovery');
           return;
         }
 
@@ -1013,6 +1022,7 @@ export class AuthManager extends EventEmitter {
     }
 
     try {
+      this.intentionalSignOut = true;
       const { error } = await this.supabase.auth.signOut();
 
       if (error) {
@@ -1035,6 +1045,8 @@ export class AuthManager extends EventEmitter {
       const message = err instanceof Error ? err.message : 'Unknown error';
       log.error('Sign out exception:', message);
       return { error: message };
+    } finally {
+      this.intentionalSignOut = false;
     }
   }
 
