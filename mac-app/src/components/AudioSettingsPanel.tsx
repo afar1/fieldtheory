@@ -34,6 +34,7 @@ export default function AudioSettingsPanel() {
   const [audioState, setAudioState] = useState<AudioState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [favoriteDeviceName, setFavoriteDeviceName] = useState<string | null>(null);
 
   const styles = getStyles(theme);
 
@@ -53,6 +54,9 @@ export default function AudioSettingsPanel() {
       try {
         const state = await window.audioAPI!.getState();
         setAudioState(state);
+        // Also fetch the favorite device name
+        const favName = await window.audioAPI!.getFavoriteDeviceName();
+        setFavoriteDeviceName(favName);
         setError(null);
       } catch (err) {
         setError('Failed to fetch audio state');
@@ -65,8 +69,11 @@ export default function AudioSettingsPanel() {
     fetchState();
 
     // Subscribe to state changes.
-    const unsubscribe = window.audioAPI!.onStateChanged((state) => {
+    const unsubscribe = window.audioAPI!.onStateChanged(async (state) => {
       setAudioState(state);
+      // Refresh favorite name when state changes (e.g., after setting priority device)
+      const favName = await window.audioAPI!.getFavoriteDeviceName();
+      setFavoriteDeviceName(favName);
     });
 
     return () => {
@@ -106,6 +113,33 @@ export default function AudioSettingsPanel() {
       console.error('Failed to reset override:', err);
     }
   }, []);
+
+  // Handler for clearing favorite device.
+  const handleClearFavorite = useCallback(async () => {
+    if (!window.audioAPI) return;
+
+    try {
+      await window.audioAPI.clearFavoriteDevice();
+      setFavoriteDeviceName(null);
+    } catch (err) {
+      console.error('Failed to clear favorite device:', err);
+    }
+  }, []);
+
+  // Handler for setting current priority device as favorite.
+  const handleSetAsFavorite = useCallback(async () => {
+    if (!window.audioAPI || !audioState?.priorityDeviceId) return;
+
+    try {
+      const success = await window.audioAPI.setFavoriteDevice(audioState.priorityDeviceId);
+      if (success) {
+        const favName = await window.audioAPI.getFavoriteDeviceName();
+        setFavoriteDeviceName(favName);
+      }
+    } catch (err) {
+      console.error('Failed to set favorite device:', err);
+    }
+  }, [audioState?.priorityDeviceId]);
 
   // If not on macOS, show a message.
   if (!isMacOS) {
@@ -172,10 +206,39 @@ export default function AudioSettingsPanel() {
         </div>
       </div>
       
-      {/* Priority microphone helper text */}
+      {/* Priority microphone helper text and Set as Favorite button */}
       {audioState.priorityDeviceId && (
+        <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '12px', paddingLeft: '2px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span>Your microphone will not auto-switch while a priority mic is selected.</span>
+          {priorityDevice && priorityDevice.name !== favoriteDeviceName && (
+            <button onClick={handleSetAsFavorite} style={{ ...styles.btn, fontSize: '11px', padding: '2px 6px', marginLeft: 'auto' }}>
+              set as favorite
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Favorite - shows the saved device that auto-connects on startup */}
+      {favoriteDeviceName ? (
+        <>
+          <div style={styles.row}>
+            <span style={styles.rowLabel}>Favorite</span>
+            <div style={styles.rowControls}>
+              <span style={{ fontSize: '13px', color: theme.text, marginRight: '8px' }}>
+                {favoriteDeviceName}
+              </span>
+              <button onClick={handleClearFavorite} style={styles.btn}>
+                Clear
+              </button>
+            </div>
+          </div>
+          <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '12px', paddingLeft: '2px' }}>
+            Your favorite is automatically restored when you restart the app or when the device reconnects.
+          </div>
+        </>
+      ) : (
         <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '12px', paddingLeft: '2px' }}>
-          Your microphone will not auto-switch while a priority mic is selected.
+          No favorite set. Select a priority mic and click "set as favorite" to auto-restore it on startup.
         </div>
       )}
 

@@ -849,7 +849,13 @@ export class LibrarianManager extends EventEmitter {
     }
 
     try {
-      const content = fs.readFileSync(normalizedPath, 'utf-8');
+      let content = fs.readFileSync(normalizedPath, 'utf-8');
+      // Strip STORY/LESSON metadata lines (used for indexing, not display)
+      content = content
+        .split('\n')
+        .filter(line => !line.startsWith('STORY:') && !line.startsWith('LESSON:'))
+        .join('\n')
+        .trimEnd();
       return { ...meta, content };
     } catch (error) {
       log.error(`Error reading file ${normalizedPath}:`, error);
@@ -1772,19 +1778,9 @@ Before non-trivial implementations, provide a short reading via the Librarian:
 [run this command: librarian.md]
 ${commandPath}
 
-Store each reading in \`.librarian/\` with a unique filename.
+Store each reading in \`~/.fieldtheory/librarian/artifacts/\` with a unique filename.
 
 This should feel serendipitous—not every change, just when there's meaningful wait time. Use your discretion.
-
-### Project setup (once per project)
-Check if \`.claude/settings.json\` contains \`Write(.librarian/*)\` in the allow array. If not, create/update it:
-\`\`\`json
-{
-  "permissions": {
-    "allow": ["Write(.librarian/*)"]
-  }
-}
-\`\`\`
 ${this.CLAUDE_MD_END_MARKER}`;
   }
 

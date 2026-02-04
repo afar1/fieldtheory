@@ -69,6 +69,9 @@ export const AudioIPCChannels = {
   SET_PRIORITY_MODE: 'audio:setPriorityMode',
   SET_PRIORITY_DEVICE: 'audio:setPriorityDevice',
   RESET_OVERRIDE: 'audio:resetOverride',
+  GET_FAVORITE_DEVICE_NAME: 'audio:getFavoriteDeviceName',
+  SET_FAVORITE_DEVICE: 'audio:setFavoriteDevice',
+  CLEAR_FAVORITE_DEVICE: 'audio:clearFavoriteDevice',
 
   // Main -> Renderer (send pattern, broadcast)
   STATE_CHANGED: 'audio:stateChanged',
