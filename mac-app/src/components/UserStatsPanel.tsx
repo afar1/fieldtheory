@@ -41,7 +41,7 @@ interface QuotaLimits {
   priorityMicMinutes: number;
   autoStackSessions: number;
   textImprovementWords: number;
-  verbalCommands: number;
+  portableCommands: number;
 }
 
 /**
@@ -64,7 +64,21 @@ interface FullQuotas {
   priorityMic: QuotaStatus;
   autoStack: QuotaStatus;
   textImprove: QuotaStatus;
-  verbalCommands: QuotaStatus;
+  portableCommands: QuotaStatus;
+}
+
+interface StatItem {
+  label: string;
+  value: number;
+  quotaInfo?: string;
+  atQuota?: boolean;
+}
+
+interface StatSection {
+  title: string;
+  items: StatItem[];
+  quotaInfo?: string;
+  atQuota?: boolean;
 }
 
 export default function UserStatsPanel() {
@@ -132,7 +146,7 @@ export default function UserStatsPanel() {
   // Group metrics for display - compact format.
   // Items with quotaInfo show the limit, atQuota shows red when at limit.
   // All stats come from MetricsManager (single source of truth, synced to Supabase).
-  const sections = [
+  const sections: StatSection[] = [
     {
       title: 'Transcription',
       items: [
@@ -153,15 +167,12 @@ export default function UserStatsPanel() {
       ],
     },
     {
-      title: 'Voice Commands',
+      title: 'Commands',
+      quotaInfo: formatQuota(limits?.portableCommands, 'mo'),
+      atQuota: isAtQuota(quotas?.portableCommands),
       items: [
-        {
-          label: 'Verbal commands',
-          value: metrics.verbal_commands,
-          quotaInfo: formatQuota(limits?.verbalCommands, 'mo'),
-          atQuota: isAtQuota(quotas?.verbalCommands),
-        },
-        { label: 'Command launcher uses', value: metrics.command_launcher_uses },
+        { label: 'Portable commands', value: metrics.commands_executed },
+        { label: 'Voice commands', value: metrics.verbal_commands },
       ],
     },
     {
@@ -261,6 +272,16 @@ export default function UserStatsPanel() {
               marginBottom: '4px'
             }}>
               {section.title}
+              {section.quotaInfo && (
+                <span style={{
+                  marginLeft: '6px',
+                  textTransform: 'none',
+                  fontWeight: section.atQuota ? 600 : (tier === 'pro' ? 500 : 400),
+                  color: section.atQuota ? theme.error : (tier === 'pro' ? theme.accent : theme.textSecondary),
+                }}>
+                  {section.atQuota ? 'Limit reached' : section.quotaInfo}
+                </span>
+              )}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
               {section.items.map((item) => (

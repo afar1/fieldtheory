@@ -18,14 +18,12 @@ const QUOTA_LIMITS = {
     text_improve_words: 5000,       // 5k words/month
     priority_mic_seconds: 30000,    // 500 minutes/month
     auto_stack_sessions: 50,        // 50 sessions/month
-    verbal_commands: 50,            // 50 commands/month
-    portable_commands: 100,         // 100 commands/month
+    portable_commands: 100,         // 100 commands/month (includes verbal commands)
   },
   pro: {
     text_improve_words: 50000,      // 50k words/month (soft limit for analytics)
     priority_mic_seconds: Infinity,
     auto_stack_sessions: Infinity,
-    verbal_commands: Infinity,
     portable_commands: Infinity,
   },
 };
@@ -91,7 +89,7 @@ serve(async (req: Request) => {
   // Get current usage for all features
   const { data: usage } = await supabase
     .from('user_usage')
-    .select('text_improve_words, priority_mic_seconds, auto_stack_sessions, verbal_commands, portable_commands')
+    .select('text_improve_words, priority_mic_seconds, auto_stack_sessions, portable_commands')
     .eq('user_id', user.id)
     .eq('month_year', monthYear)
     .single();
@@ -104,14 +102,12 @@ serve(async (req: Request) => {
       text_improve_words: usage?.text_improve_words || 0,
       priority_mic_seconds: usage?.priority_mic_seconds || 0,
       auto_stack_sessions: usage?.auto_stack_sessions || 0,
-      verbal_commands: usage?.verbal_commands || 0,
       portable_commands: usage?.portable_commands || 0,
     },
     limits: {
       text_improve_words: limits.text_improve_words,
       priority_mic_seconds: limits.priority_mic_seconds,
       auto_stack_sessions: limits.auto_stack_sessions,
-      verbal_commands: limits.verbal_commands,
       portable_commands: limits.portable_commands,
     },
   }), {

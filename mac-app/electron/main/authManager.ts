@@ -190,6 +190,10 @@ export class AuthManager extends EventEmitter {
   private static readonly FALLBACK_REFRESH_MS = 30 * 60 * 1000; // 30 min if no expiry info
   private static readonly RETRY_DELAY_MS = 30 * 1000; // 30 seconds retry on failure
 
+  // Track failed recovery to prevent infinite retry loops when SDK keeps firing SIGNED_OUT
+  private lastFailedRecoveryTime: number = 0;
+  private static readonly RECOVERY_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes between recovery attempts
+
   constructor() {
     super();
   }
@@ -199,6 +203,9 @@ export class AuthManager extends EventEmitter {
    * These events are forwarded to renderer for DevTools visibility.
    */
   private emitDebug(event: string, details: Record<string, unknown>, level: AuthDebugEvent['level'] = 'info'): void {
+    // Only emit/log warnings, errors, and recovery events (info is too noisy)
+    if (level === 'info') return;
+
     const debugEvent: AuthDebugEvent = {
       timestamp: new Date().toISOString(),
       event,
@@ -207,9 +214,13 @@ export class AuthManager extends EventEmitter {
     };
     this.emit('authDebug', debugEvent);
 
-    // Also log to main process for Console.app
-    const prefix = level === 'error' ? 'ERR' : level === 'warn' ? 'WARN' : level === 'recovery' ? 'RECOVERY' : '→';
-    log.info(`[AuthDebug] ${prefix} ${event}:`, JSON.stringify(details));
+    if (level === 'error') {
+      log.error(`[AuthDebug] ${event}:`, JSON.stringify(details));
+    } else if (level === 'warn') {
+      log.warn(`[AuthDebug] ${event}:`, JSON.stringify(details));
+    } else if (level === 'recovery') {
+      log.info(`[AuthDebug] RECOVERY ${event}:`, JSON.stringify(details));
+    }
   }
 
   /**
@@ -300,6 +311,19 @@ export class AuthManager extends EventEmitter {
         // Clear refresh timer on logout
         this.clearRefreshTimer();
 
+        // Check if we're in recovery cooldown to prevent infinite retry loops.
+        // SDK may fire SIGNED_OUT repeatedly; we don't want to spam recovery attempts.
+        const timeSinceLastFailedRecovery = Date.now() - this.lastFailedRecoveryTime;
+        const inCooldown = this.lastFailedRecoveryTime > 0 && timeSinceLastFailedRecovery < AuthManager.RECOVERY_COOLDOWN_MS;
+
+        if (inCooldown) {
+          this.emitDebug('SDK_SIGNED_OUT_SKIPPED', {
+            reason: 'In recovery cooldown',
+            cooldownRemainingMs: AuthManager.RECOVERY_COOLDOWN_MS - timeSinceLastFailedRecovery,
+          }, 'info');
+          return;
+        }
+
         this.emitDebug('SDK_SIGNED_OUT_RECEIVED', {
           hadPreviousUser: this.lastEmittedUserId !== null,
           attemptingRecovery: true,
@@ -312,8 +336,12 @@ export class AuthManager extends EventEmitter {
             note: 'SDK fired SIGNED_OUT but we recovered from disk',
             recoveredUser: this.session?.user?.email,
           }, 'recovery');
+          this.lastFailedRecoveryTime = 0; // Reset on successful recovery
           return;
         }
+
+        // Recovery failed - set cooldown to prevent infinite retry loop
+        this.lastFailedRecoveryTime = Date.now();
 
         // Auth principle: never auto-logout. Even if SDK fires SIGNED_OUT and
         // recovery fails, keep the local session. User stays "logged in" locally.
@@ -323,6 +351,7 @@ export class AuthManager extends EventEmitter {
             previousUserId: this.lastEmittedUserId,
             recoveryFailed: true,
             action: 'Keeping local session, not logging out',
+            nextRecoveryAttemptIn: `${AuthManager.RECOVERY_COOLDOWN_MS / 60000} minutes`,
           }, 'info');
           // Don't clear session, don't emit userLoggedOut, don't clear UserDataManager.
           // User remains "logged in" from app's perspective.
@@ -975,6 +1004,7 @@ export class AuthManager extends EventEmitter {
     this.fileStorage?.clearStorage();
     this.session = null;
     this.lastEmittedUserId = null;
+    this.lastFailedRecoveryTime = 0; // Reset cooldown for fresh login
   }
 
   async signOut(): Promise<{ error: string | null }> {
@@ -999,6 +1029,7 @@ export class AuthManager extends EventEmitter {
       this.clearSession();
       // Explicitly clear the session file (only place this should happen)
       this.fileStorage?.clearStorage();
+      this.lastFailedRecoveryTime = 0; // Reset cooldown on explicit sign out
       return { error: null };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';

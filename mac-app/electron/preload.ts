@@ -128,6 +128,7 @@ const OnboardingIPCChannels = {
   RESET_ONBOARDING: 'onboarding:reset',
   CHECK_MODEL_STATUS: 'onboarding:checkModelStatus',
   EXPAND_WINDOW: 'onboarding:expandWindow',
+  SHOW_SIGN_IN: 'onboarding:showSignIn',
   // AI integration detection and configuration
   GET_AI_INTEGRATION_STATUS: 'onboarding:getAIIntegrationStatus',
   INSTALL_CLAUDE_HOOK: 'onboarding:installClaudeHook',
@@ -504,10 +505,20 @@ export interface AudioAPI {
 // Valid hotkey IDs that can be get/set via the hotkeyAPI
 export type HotkeyId = 'superPaste' | 'commandLauncher' | 'improveText' | 'autoImprove';
 
+export interface HotkeyTestResult {
+  key: string;
+  status: 'working' | 'conflict' | 'error';
+  callbackFired: boolean;
+  conflictApp?: string;
+  error?: string;
+}
+
 export interface HotkeyAPI {
   getHotkey: (id: HotkeyId) => Promise<string | null>;
   setHotkey: (id: HotkeyId, key: string) => Promise<{ success: boolean; error?: string }>;
   getAllHotkeys: () => Promise<Record<HotkeyId, string | null>>;
+  testHotkey: (key: string, timeoutMs?: number) => Promise<HotkeyTestResult>;
+  getRunningConflictApps: () => Promise<string[]>;
 }
 
 export interface TranscribeAPI {
@@ -741,6 +752,14 @@ const hotkeyAPI: HotkeyAPI = {
 
   getAllHotkeys: async (): Promise<Record<HotkeyId, string | null>> => {
     return ipcRenderer.invoke(HotkeyIPCChannels.GET_ALL_HOTKEYS);
+  },
+
+  testHotkey: async (key: string, timeoutMs?: number): Promise<HotkeyTestResult> => {
+    return ipcRenderer.invoke('hotkey:test', key, timeoutMs);
+  },
+
+  getRunningConflictApps: async (): Promise<string[]> => {
+    return ipcRenderer.invoke('hotkey:getRunningConflictApps');
   },
 };
 
@@ -1513,6 +1532,12 @@ const onboardingAPI = {
   installCursorHook: async (): Promise<{ success: boolean; message: string }> => {
     return ipcRenderer.invoke(OnboardingIPCChannels.INSTALL_CURSOR_HOOK);
   },
+
+  // Show the sign-in screen (onboarding at account step).
+  // Used when user clicks "Sign in" from settings while logged out.
+  showSignIn: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.SHOW_SIGN_IN);
+  },
 };
 
 type OnboardingAPI = typeof onboardingAPI;
@@ -2085,7 +2110,7 @@ const quotaAPI = {
   getQuotas: () => ipcRenderer.invoke('quota:getQuotas'),
 
   // Check if a specific quota is exhausted.
-  checkQuota: (feature: 'priorityMic' | 'autoStack' | 'textImprove') =>
+  checkQuota: (feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'portableCommands') =>
     ipcRenderer.invoke('quota:checkQuota', feature),
 
   // Get formatted usage strings for display.
@@ -2102,7 +2127,7 @@ const quotaAPI = {
     priorityMicMinutes: number;
     autoStackSessions: number;
     textImprovementWords: number;
-    verbalCommands: number;
+    portableCommands: number;
   }>,
 
   // Manually refresh tier from server (debugging and edge cases).
@@ -2142,8 +2167,8 @@ const quotaAPI = {
   },
 
   // Listen for quota changes (updates in real-time after usage).
-  onQuotaChanged: (callback: (data: { priorityMic: string; autoStack: string; textImprove: string; verbalCommands: string }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, data: { priorityMic: string; autoStack: string; textImprove: string; verbalCommands: string }) => {
+  onQuotaChanged: (callback: (data: { priorityMic: string; autoStack: string; textImprove: string; portableCommands: string }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { priorityMic: string; autoStack: string; textImprove: string; portableCommands: string }) => {
       callback(data);
     };
     ipcRenderer.on('quota:changed', handler);

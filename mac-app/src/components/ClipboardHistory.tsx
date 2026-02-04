@@ -595,8 +595,8 @@ export default function ClipboardHistory() {
     stacks: 0, transcriptions: 0, screenshots: 0, improved: 0, words: 0, voiceCommands: 0, commandsUsed: 0, autoStacks: 0,
   });
   
-  // Quota usage for free users (priority mic, auto-stacking, text improve).
-  const [quotaUsage, setQuotaUsage] = useState<{ priorityMic: string; autoStack: string; textImprove: string; verbalCommands: string } | null>(null);
+  // Quota usage for free users (priority mic, auto-stacking, text improve, portable commands).
+  const [quotaUsage, setQuotaUsage] = useState<{ priorityMic: string; autoStack: string; textImprove: string; portableCommands: string } | null>(null);
   const [cachedTier, setCachedTier] = useState<'free' | 'pro'>('free');
   const [quotaPercentUsed, setQuotaPercentUsed] = useState(0); // Max percentage of either quota
   const [usageHovered, setUsageHovered] = useState(false);
@@ -606,8 +606,8 @@ export default function ClipboardHistory() {
     textImprove: number;
     priorityMic: number;
     autoStack: number;
-    verbalCommands: number;
-  }>({ textImprove: 0, priorityMic: 0, autoStack: 0, verbalCommands: 0 });
+    portableCommands: number;
+  }>({ textImprove: 0, priorityMic: 0, autoStack: 0, portableCommands: 0 });
 
   // Narration playback state for footer controls
   const [narrationPlayback, setNarrationPlayback] = useState<{
@@ -706,7 +706,7 @@ export default function ClipboardHistory() {
             textImprove: quotas.textImprove.percentUsed,
             priorityMic: quotas.priorityMic.percentUsed,
             autoStack: quotas.autoStack.percentUsed,
-            verbalCommands: quotas.verbalCommands.percentUsed,
+            portableCommands: quotas.portableCommands.percentUsed,
           });
         }
       } catch (err) {
@@ -742,7 +742,7 @@ export default function ClipboardHistory() {
           textImprove: quotas.textImprove.percentUsed,
           priorityMic: quotas.priorityMic.percentUsed,
           autoStack: quotas.autoStack.percentUsed,
-          verbalCommands: quotas.verbalCommands.percentUsed,
+          portableCommands: quotas.portableCommands.percentUsed,
         });
       }
     });
@@ -4037,7 +4037,8 @@ export default function ClipboardHistory() {
       {showSettings ? (
         <SettingsPanel
           onNavigateToSignIn={() => {
-            setSettingsSection('account');
+            // Show onboarding window at account/sign-in step
+            window.onboardingAPI?.showSignIn();
           }}
           onNavigateToFeedback={() => {
             setShowSettings(false);
@@ -6150,72 +6151,85 @@ export default function ClipboardHistory() {
                   if (quotaPercents.textImprove >= 85) quotaWarnings.push({ name: 'Text improve', percent: quotaPercents.textImprove });
                   if (quotaPercents.priorityMic >= 85) quotaWarnings.push({ name: 'Priority mic', percent: quotaPercents.priorityMic });
                   if (quotaPercents.autoStack >= 85) quotaWarnings.push({ name: 'Auto-stack', percent: quotaPercents.autoStack });
-                  if (quotaPercents.verbalCommands >= 85) quotaWarnings.push({ name: 'Voice commands', percent: quotaPercents.verbalCommands });
+                  if (quotaPercents.portableCommands >= 85) quotaWarnings.push({ name: 'Portable commands', percent: quotaPercents.portableCommands });
                   const hasQuotaWarnings = quotaWarnings.length > 0;
 
                   return (
                     <div
-                      style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap', position: 'relative' }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        whiteSpace: 'nowrap',
+                        position: 'relative',
+                        padding: '4px 8px',
+                        margin: '-4px -8px',
+                        cursor: 'default',
+                      }}
                       onMouseEnter={() => setUsageHovered(true)}
                       onMouseLeave={() => setUsageHovered(false)}
                     >
-                      <span style={{ fontWeight: 500 }}>Basic:</span>
                       {hasQuotaWarnings ? (
                         // Show quota warnings (85%+ usage)
-                        <span style={{ color: theme.warning || '#f59e0b' }}>
-                          {quotaWarnings.map((w, i) => (
-                            <span key={w.name}>
-                              {i > 0 && ', '}
-                              {w.name} {Math.round(w.percent)}%
-                            </span>
-                          ))}
-                        </span>
+                        <>
+                          <span style={{ fontWeight: 500 }}>Basic:</span>
+                          <span style={{ color: theme.warning || '#f59e0b' }}>
+                            {quotaWarnings.map((w, i) => (
+                              <span key={w.name}>
+                                {i > 0 && ', '}
+                                {w.name} {Math.round(w.percent)}%
+                              </span>
+                            ))}
+                          </span>
+                          <span style={{ opacity: 0.4 }}>·</span>
+                          <span
+                            onClick={() => {
+                              const userId = authSession.user.id;
+                              const paymentLink = window.stripeConfig?.paymentLink || '';
+                              window.shellAPI?.openExternal(
+                                `${paymentLink}?client_reference_id=${userId}`
+                              );
+                            }}
+                            style={{
+                              color: theme.accent,
+                              cursor: 'pointer',
+                              textDecoration: 'underline',
+                            }}
+                          >
+                            Upgrade to Pro
+                          </span>
+                        </>
+                      ) : usageHovered ? (
+                        // Hover: show clickable Upgrade + all quota items inline
+                        <>
+                          <span
+                            onClick={() => {
+                              const userId = authSession.user.id;
+                              const paymentLink = window.stripeConfig?.paymentLink || '';
+                              window.shellAPI?.openExternal(
+                                `${paymentLink}?client_reference_id=${userId}`
+                              );
+                            }}
+                            style={{
+                              fontWeight: 500,
+                              color: theme.accent,
+                              cursor: 'pointer',
+                              textDecoration: 'underline',
+                            }}
+                          >
+                            Upgrade to Pro
+                          </span>
+                          <span style={{ opacity: 0.8 }}>
+                            {quotaUsage.textImprove} · {quotaUsage.priorityMic} · {quotaUsage.autoStack} · {quotaUsage.portableCommands}
+                          </span>
+                        </>
                       ) : (
                         // Normal display: words transcribed
-                        <span>{formatNumber(allTimeStats.words)} words transcribed</span>
+                        <>
+                          <span style={{ fontWeight: 500 }}>Basic:</span>
+                          <span>{formatNumber(allTimeStats.words)} words transcribed</span>
+                        </>
                       )}
-                      {/* Quota tooltip on hover */}
-                      {usageHovered && (
-                        <div
-                          style={{
-                            position: 'absolute',
-                            bottom: '100%',
-                            left: 0,
-                            marginBottom: '8px',
-                            padding: '8px 12px',
-                            backgroundColor: theme.bgSecondary,
-                            border: `1px solid ${theme.border}`,
-                            borderRadius: '6px',
-                            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                            fontSize: '10px',
-                            whiteSpace: 'nowrap',
-                            zIndex: 100,
-                          }}
-                        >
-                          <div style={{ marginBottom: '4px', fontWeight: 500, color: theme.text }}>Monthly Quota</div>
-                          <div style={{ color: theme.textSecondary }}>{quotaUsage.textImprove}</div>
-                          <div style={{ color: theme.textSecondary }}>{quotaUsage.verbalCommands}</div>
-                          <div style={{ color: theme.textSecondary }}>{quotaUsage.autoStack}</div>
-                        </div>
-                      )}
-                      <span style={{ opacity: 0.4 }}>·</span>
-                      <span
-                        onClick={() => {
-                          // Open Stripe checkout with user ID for webhook linking.
-                          const userId = authSession.user.id;
-                          const paymentLink = window.stripeConfig?.paymentLink || '';
-                          window.shellAPI?.openExternal(
-                            `${paymentLink}?client_reference_id=${userId}`
-                          );
-                        }}
-                        style={{
-                          color: theme.accent,
-                          cursor: 'pointer',
-                          textDecoration: 'underline',
-                        }}
-                      >
-                        Upgrade
-                      </span>
                     </div>
                   );
                 })()
@@ -6229,12 +6243,13 @@ export default function ClipboardHistory() {
             quotaPercents.textImprove >= 85 ||
             quotaPercents.priorityMic >= 85 ||
             quotaPercents.autoStack >= 85 ||
-            quotaPercents.verbalCommands >= 85
+            quotaPercents.portableCommands >= 85
           );
 
-          // Show link when: preference is on, no quota warnings, not showing narration
+          // Show link when: preference is on, no quota warnings, not hovering usage, not showing narration
           const showLink = showFieldTheoryLink &&
             !hasQuotaWarnings &&
+            !usageHovered &&
             (!FEATURE_NARRATION_ENABLED || narrationPlayback.status === 'idle');
 
           return showLink ? (
@@ -6504,7 +6519,7 @@ export default function ClipboardHistory() {
                       </span>
                     )}
                     {librarianStatus && (
-                      <span style={{ color: librarianStatus.edits >= librarianStatus.threshold ? '#f59e0b' : theme.textSecondary, fontSize: '9px', fontStyle: 'italic' }}>
+                      <span style={{ color: librarianStatus.edits >= librarianStatus.threshold ? '#f59e0b' : theme.textSecondary, fontSize: '9px' }}>
                         {librarianStatus.edits}/{librarianStatus.threshold}
                       </span>
                     )}

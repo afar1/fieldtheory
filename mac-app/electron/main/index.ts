@@ -31,7 +31,7 @@ import {
   ContinuousContextState,
 } from './types/clipboard';
 import { ClipboardItem, isTerminalApp, isIDEWithTerminal, obscureHomePath } from './clipboardManager';
-import { getHotkeyManager } from './hotkeyManager';
+import { getHotkeyManager, KNOWN_CONFLICT_APPS } from './hotkeyManager';
 import {
   improveTranscript,
   setSupabaseUrl as setEngineerSupabaseUrl,
@@ -245,15 +245,20 @@ function migrateFromLegacyPaths(): void {
  */
 function registerHotkeysAfterOnboarding(): void {
   if (!clipboardManager || !preferencesManager) {
+    log.info('registerHotkeysAfterOnboarding: skipping (missing manager)');
     return;
   }
 
-  // Re-register transcription hotkeys (may have been unregistered by globalShortcut.unregisterAll())
+  log.info('registerHotkeysAfterOnboarding: starting hotkey registration');
+
+  // Re-register transcription hotkeys (may have been unregistered during sign-out or onboarding reset)
   if (transcriberManager) {
     transcriberManager.reRegisterHotkeys();
   }
 
   const prefs = preferencesManager.get();
+  const hotkeys = clipboardManager.getHotkeys();
+  log.info(`registerHotkeysAfterOnboarding: clipboard config hotkeys: screenshot="${hotkeys.screenshot}", history="${hotkeys.history}"`);
 
   // Register clipboard hotkeys (screenshot, full screen, active window)
   clipboardManager.registerScreenshotHotkey(async () => {
@@ -567,6 +572,7 @@ function registerHotkeysAfterOnboarding(): void {
       win.webContents.send(TodoIPCChannels.SHOW_TODOS);
     }
   });
+
 }
 
 /**
@@ -3103,7 +3109,7 @@ function setupClipboardIPCHandlers(): void {
       }
 
       // Unregister all hotkeys - they shouldn't work while signed out.
-      globalShortcut.unregisterAll();
+      getHotkeyManager().unregisterAll();
 
       // Refresh tray menu to show onboarding-only options.
       if (trayManager) {
@@ -3118,8 +3124,13 @@ function setupClipboardIPCHandlers(): void {
         }
       });
 
-      // Quit the app after sign out - user must relaunch to log back in.
-      app.quit();
+      // Hide other windows and show onboarding window for re-login.
+      clipboardHistoryWindow?.hide(true);
+      mainWindow?.hide();
+      if (!onboardingWindow) {
+        onboardingWindow = createOnboardingWindow();
+      }
+      onboardingWindow.show(OnboardingStep.ACCOUNT);
     }
 
     return result;
@@ -3172,7 +3183,7 @@ function setupClipboardIPCHandlers(): void {
       }
 
       // Unregister all hotkeys - they shouldn't work while signed out.
-      globalShortcut.unregisterAll();
+      getHotkeyManager().unregisterAll();
 
       // Refresh tray menu to show onboarding-only options.
       if (trayManager) {
@@ -3276,6 +3287,90 @@ function setupClipboardIPCHandlers(): void {
       result[id] = ((prefs as any)[prefKey] as string) || hotkeyDefaults[id] || null;
     }
     return result;
+  });
+
+  // Diagnostic handler to check hotkey registration state
+  ipcMain.handle('hotkey:diagnose', async () => {
+    const hotkeyManager = getHotkeyManager();
+    const testKeys = ['Alt+4', 'Alt+3', 'Alt+Space', 'Command+4', 'Shift+Alt+4'];
+    const results: Record<string, any> = {};
+
+    for (const key of testKeys) {
+      results[key] = {
+        isRegisteredWithOS: globalShortcut.isRegistered(key),
+      };
+    }
+
+    // Get all registered hotkeys from our manager
+    const registered = hotkeyManager.getAll();
+    results.registeredHotkeys = Object.fromEntries(registered);
+
+    // Check clipboard manager state
+    if (clipboardManager) {
+      results.clipboardConfig = clipboardManager.getHotkeys();
+    }
+
+    log.info('Hotkey diagnostic:', JSON.stringify(results, null, 2));
+    return results;
+  });
+
+  // Hotkey conflict detection - test if a hotkey is working
+  ipcMain.handle('hotkey:test', async (_event, key: string, timeoutMs?: number) => {
+    const hotkeyManager = getHotkeyManager();
+    const result = await hotkeyManager.testHotkey(key, timeoutMs || 3000);
+
+    // If registration succeeded, the hotkey is working (we own it)
+    // Only check for conflict apps if registration actually FAILED
+    let conflictApp: string | undefined;
+    if (!result.success) {
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execAsync = promisify(exec);
+
+      try {
+        const { stdout } = await execAsync('ps aux');
+        const normalizedKey = hotkeyManager.normalizeKeyPublic(key);
+
+        for (const app of KNOWN_CONFLICT_APPS) {
+          const isRunning = app.processNames.some(name => stdout.includes(name));
+          const mightConflict = app.defaultConflicts.some(k =>
+            hotkeyManager.normalizeKeyPublic(k) === normalizedKey
+          );
+          // Flag if app is running AND (its known to conflict with this key OR it has no specific conflicts listed)
+          if (isRunning && (mightConflict || app.defaultConflicts.length === 0)) {
+            conflictApp = app.name;
+            break;
+          }
+        }
+      } catch {
+        // Ignore errors checking running processes
+      }
+    }
+
+    return {
+      key,
+      // If registration succeeded, the hotkey is working
+      status: result.success ? 'working' : 'conflict',
+      callbackFired: result.callbackFired,
+      conflictApp,
+      error: result.error,
+    };
+  });
+
+  // Get list of running apps that commonly capture hotkeys
+  ipcMain.handle('hotkey:getRunningConflictApps', async () => {
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(exec);
+
+    try {
+      const { stdout } = await execAsync('ps aux');
+      return KNOWN_CONFLICT_APPS
+        .filter(app => app.processNames.some(name => stdout.includes(name)))
+        .map(app => app.name);
+    } catch {
+      return [];
+    }
   });
 
   // =========================================================================
@@ -3630,16 +3725,15 @@ function setupClipboardIPCHandlers(): void {
     return quotaManager.getQuotas();
   });
 
-  ipcMain.handle('quota:checkQuota', async (_event, feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'verbalCommands' | 'portableCommands') => {
+  ipcMain.handle('quota:checkQuota', async (_event, feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'portableCommands') => {
     if (!quotaManager) {
       return { allowed: true, used: 0, limit: Infinity, remaining: Infinity, percentUsed: 0 };
     }
     // Map old feature names to new database column names.
-    const featureMap: Record<string, 'text_improve_words' | 'priority_mic_seconds' | 'auto_stack_sessions' | 'verbal_commands' | 'portable_commands'> = {
+    const featureMap: Record<string, 'text_improve_words' | 'priority_mic_seconds' | 'auto_stack_sessions' | 'portable_commands'> = {
       priorityMic: 'priority_mic_seconds',
       autoStack: 'auto_stack_sessions',
       textImprove: 'text_improve_words',
-      verbalCommands: 'verbal_commands',
       portableCommands: 'portable_commands',
     };
     const dbFeature = featureMap[feature];
@@ -3648,13 +3742,13 @@ function setupClipboardIPCHandlers(): void {
 
   ipcMain.handle('quota:getFormattedUsage', async () => {
     if (!quotaManager) {
-      return { priorityMic: 'Unlimited', autoStack: 'Unlimited', textImprove: 'Unlimited', verbalCommands: 'Unlimited' };
+      return { priorityMic: 'Unlimited', autoStack: 'Unlimited', textImprove: 'Unlimited', portableCommands: 'Unlimited' };
     }
     return {
       priorityMic: quotaManager.formatPriorityMicUsage(),
       autoStack: quotaManager.formatAutoStackUsage(),
       textImprove: quotaManager.formatTextImproveUsage(),
-      verbalCommands: quotaManager.formatVerbalCommandsUsage(),
+      portableCommands: quotaManager.formatPortableCommandsUsage(),
     };
   });
 
@@ -3673,9 +3767,16 @@ function setupClipboardIPCHandlers(): void {
 
   ipcMain.handle('quota:getLimits', async () => {
     if (!quotaManager) {
-      return { priorityMicMinutes: Infinity, autoStackSessions: Infinity, textImprovementWords: Infinity, verbalCommands: Infinity };
+      return { priorityMicMinutes: Infinity, autoStackSessions: Infinity, textImprovementWords: Infinity, portableCommands: Infinity };
     }
-    return quotaManager.getLimits();
+    const raw = quotaManager.getLimits();
+    // Transform keys from snake_case to camelCase and convert seconds to minutes.
+    return {
+      priorityMicMinutes: raw.priority_mic_seconds === Infinity ? Infinity : Math.floor(raw.priority_mic_seconds / 60),
+      autoStackSessions: raw.auto_stack_sessions,
+      textImprovementWords: raw.text_improve_words,
+      portableCommands: raw.portable_commands,
+    };
   });
 
   ipcMain.handle('quota:refreshTier', async () => {
@@ -4274,7 +4375,7 @@ function setupOnboardingIPCHandlers(): void {
     });
 
     // Unregister hotkeys - they shouldn't work during onboarding.
-    globalShortcut.unregisterAll();
+    getHotkeyManager().unregisterAll();
 
     // Hide clipboard history window if visible.
     if (clipboardHistoryWindow?.isVisible()) {
@@ -4295,6 +4396,23 @@ function setupOnboardingIPCHandlers(): void {
     // Show onboarding window from the beginning.
     onboardingWindow = createOnboardingWindow();
     onboardingWindow.show(OnboardingStep.PERMISSIONS);
+
+    return true;
+  });
+
+  // Show sign-in screen (onboarding at account step).
+  // Used when user clicks "Sign in" from settings while logged out.
+  ipcMain.handle(OnboardingIPCChannels.SHOW_SIGN_IN, async () => {
+    // Hide clipboard history window if visible.
+    if (clipboardHistoryWindow?.isVisible()) {
+      clipboardHistoryWindow.hide();
+    }
+
+    // Create onboarding window if needed and show at account step.
+    if (!onboardingWindow) {
+      onboardingWindow = createOnboardingWindow();
+    }
+    onboardingWindow.show(OnboardingStep.ACCOUNT);
 
     return true;
   });
@@ -4394,7 +4512,7 @@ function broadcastTranscribeEvents(): void {
 
   transcriberManager.on('verbalCommand', () => {
     metricsManager?.recordVerbalCommand();
-    quotaManager?.updateUsage('verbal_commands', 1);
+    quotaManager?.updateUsage('portable_commands', 1);  // Combined quota with portable commands
   });
 
   transcriberManager.on('wordsImproved', (wordCount: number) => {
@@ -4869,7 +4987,7 @@ async function initTranscriberSystem(): Promise<void> {
       priorityMic: quotaManager!.formatPriorityMicUsage(),
       autoStack: quotaManager!.formatAutoStackUsage(),
       textImprove: quotaManager!.formatTextImproveUsage(),
-      verbalCommands: quotaManager!.formatVerbalCommandsUsage(),
+      portableCommands: quotaManager!.formatPortableCommandsUsage(),
     };
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
@@ -5727,7 +5845,7 @@ if (!gotTheLock) {
       // Check if permissions are revoked
       if (!hasAllPermissions) {
         // Unregister all hotkeys - they shouldn't work without permissions
-        globalShortcut.unregisterAll();
+        getHotkeyManager().unregisterAll();
 
         // Reset onboarding state
         await preferencesManager?.save({ onboardingComplete: false });
@@ -5756,7 +5874,7 @@ if (!gotTheLock) {
       // continue using local features. AuthManager will retry token refresh automatically.
       if (!authenticated && !hasEverAuthenticated) {
         // Unregister all hotkeys - app requires login for new users
-        globalShortcut.unregisterAll();
+        getHotkeyManager().unregisterAll();
 
         // Reset onboarding state
         await preferencesManager?.save({ onboardingComplete: false });

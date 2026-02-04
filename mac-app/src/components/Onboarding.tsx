@@ -589,6 +589,8 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
   // Completion screen for returning users (shows call sign before continuing)
   const [showCompletionScreen, setShowCompletionScreen] = useState(false);
   const [isReturningUser, setIsReturningUser] = useState(false);
+  // Loading state for completing onboarding (clicking "Done")
+  const [isCompleting, setIsCompleting] = useState(false);
 
   // Load launch at login setting on mount (checks actual system state).
   useEffect(() => {
@@ -901,10 +903,22 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
         </p>
 
         <button
-          style={{ ...styles.primaryButton, marginTop: '16px', width: '100%' }}
-          onClick={isReturningUser ? onFinishReturning : onFinish}
+          style={{
+            ...styles.primaryButton,
+            marginTop: '16px',
+            width: '100%',
+            opacity: isCompleting ? 0.7 : 1,
+            cursor: isCompleting ? 'wait' : 'pointer',
+          }}
+          onClick={async () => {
+            setIsCompleting(true);
+            const handler = isReturningUser ? onFinishReturning : onFinish;
+            await handler?.();
+            // Note: if handler closes the window, this won't run
+          }}
+          disabled={isCompleting}
         >
-          Done
+          {isCompleting ? 'Finishing setup...' : 'Done'}
         </button>
       </div>
     );
@@ -971,10 +985,20 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
         </div>
 
         <button
-          style={{ ...styles.primaryButton, marginTop: '16px' }}
-          onClick={onFinishReturning || onFinish}
+          style={{
+            ...styles.primaryButton,
+            marginTop: '16px',
+            opacity: isCompleting ? 0.7 : 1,
+            cursor: isCompleting ? 'wait' : 'pointer',
+          }}
+          onClick={async () => {
+            setIsCompleting(true);
+            const handler = onFinishReturning || onFinish;
+            await handler?.();
+          }}
+          disabled={isCompleting}
         >
-          Continue
+          {isCompleting ? 'Finishing setup...' : 'Continue'}
         </button>
 
         <button
@@ -1218,6 +1242,13 @@ function ShortcutsPhase({ onFinish, theme, styles }: ShortcutsPhaseProps) {
   // Capture state
   const [capturing, setCapturing] = useState<ShortcutCapture>(null);
   const [error, setError] = useState<string | null>(null);
+  // Loading state for completing onboarding
+  const [isCompleting, setIsCompleting] = useState(false);
+
+  // Hotkey conflict detection state
+  const [testingHotkeys, setTestingHotkeys] = useState(false);
+  const [hotkeyStatuses, setHotkeyStatuses] = useState<Record<string, HotkeyTestResult | null>>({});
+  const [hotkeysLoaded, setHotkeysLoaded] = useState(false);
 
   // Load current hotkeys on mount
   useEffect(() => {
@@ -1231,13 +1262,57 @@ function ShortcutsPhase({ onFinish, theme, styles }: ShortcutsPhaseProps) {
         if (transcription) setTranscriptionHotkey(transcription);
         if (clipboard?.history) setHistoryHotkey(clipboard.history);
         if (clipboard?.screenshot) setScreenshotHotkey(clipboard.screenshot);
+        setHotkeysLoaded(true);
       } catch (err) {
         console.error('[Onboarding] Failed to load hotkeys:', err);
+        setHotkeysLoaded(true);
       }
     };
 
     loadHotkeys();
   }, []);
+
+  // Auto-test hotkeys for conflicts after they're loaded
+  useEffect(() => {
+    if (!hotkeysLoaded || testingHotkeys) return;
+
+    const runTests = async () => {
+      if (!window.hotkeyAPI?.testHotkey) {
+        console.log('[Onboarding] hotkeyAPI.testHotkey not available, skipping conflict check');
+        return;
+      }
+
+      setTestingHotkeys(true);
+      console.log('[Onboarding] Testing hotkeys for conflicts...');
+
+      const hotkeysToTest = [
+        { id: 'history', key: historyHotkey },
+        { id: 'transcription', key: transcriptionHotkey },
+        { id: 'screenshot', key: screenshotHotkey },
+      ];
+
+      const results: Record<string, HotkeyTestResult | null> = {};
+
+      for (const { id, key } of hotkeysToTest) {
+        if (key) {
+          try {
+            // Short timeout since we're just checking registration, not waiting for user input
+            const result = await window.hotkeyAPI.testHotkey(key, 500);
+            results[id] = result;
+            console.log(`[Onboarding] Hotkey test ${id} (${key}):`, result);
+          } catch (err) {
+            console.error(`[Onboarding] Failed to test hotkey ${id}:`, err);
+            results[id] = null;
+          }
+        }
+      }
+
+      setHotkeyStatuses(results);
+      setTestingHotkeys(false);
+    };
+
+    runTests();
+  }, [hotkeysLoaded, historyHotkey, transcriptionHotkey, screenshotHotkey]);
 
   // Handle hotkey capture
   const handleSetHistoryHotkey = useCallback(async (hotkeyString: string) => {
@@ -1362,45 +1437,75 @@ function ShortcutsPhase({ onFinish, theme, styles }: ShortcutsPhaseProps) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
         {shortcuts.map((shortcut) => {
           const isCapturing = capturing === shortcut.id;
+          const status = hotkeyStatuses[shortcut.id];
+          const hasConflict = status?.status === 'conflict';
 
           return (
-            <div
-              key={shortcut.id}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '10px 12px',
-                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-                borderRadius: '8px',
-                border: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}`,
-              }}
-            >
-              <span style={{ fontSize: '13px', fontWeight: 500, color: theme.text }}>
-                {shortcut.label}
-              </span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <button
-                  onClick={() => {
-                    if (!isCapturing) {
-                      setCapturing(shortcut.id as ShortcutCapture);
-                      setError(null);
-                    }
-                  }}
-                  disabled={capturing !== null && !isCapturing}
-                  style={isCapturing ? btnActiveStyle : btnStyle}
-                >
-                  {isCapturing ? 'Press keys...' : formatHotkeyDisplay(shortcut.hotkey)}
-                </button>
-                {isCapturing && (
+            <div key={shortcut.id}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '10px 12px',
+                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+                  borderRadius: hasConflict ? '8px 8px 0 0' : '8px',
+                  border: `1px solid ${hasConflict ? '#f59e0b' : (theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)')}`,
+                  borderBottom: hasConflict ? 'none' : undefined,
+                }}
+              >
+                <span style={{ fontSize: '13px', fontWeight: 500, color: theme.text }}>
+                  {shortcut.label}
+                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <button
-                    onClick={() => { setCapturing(null); setError(null); }}
-                    style={btnCancelStyle}
+                    onClick={() => {
+                      if (!isCapturing) {
+                        setCapturing(shortcut.id as ShortcutCapture);
+                        setError(null);
+                      }
+                    }}
+                    disabled={capturing !== null && !isCapturing}
+                    style={isCapturing ? btnActiveStyle : btnStyle}
                   >
-                    Cancel
+                    {isCapturing ? 'Press keys...' : formatHotkeyDisplay(shortcut.hotkey)}
                   </button>
-                )}
+                  {isCapturing && (
+                    <button
+                      onClick={() => { setCapturing(null); setError(null); }}
+                      style={btnCancelStyle}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                  {/* Status indicator */}
+                  {!isCapturing && (
+                    testingHotkeys ? (
+                      <span style={{ fontSize: '11px', color: theme.textSecondary }}>...</span>
+                    ) : status?.status === 'working' ? (
+                      <span style={{ color: '#10b981', fontSize: '14px' }} title="Working">✓</span>
+                    ) : hasConflict ? (
+                      <span style={{ color: '#f59e0b', fontSize: '14px' }} title={status?.conflictApp || 'May be captured by another app'}>!</span>
+                    ) : null
+                  )}
+                </div>
               </div>
+              {/* Conflict warning */}
+              {hasConflict && (
+                <div style={{
+                  fontSize: '11px',
+                  color: '#f59e0b',
+                  padding: '6px 12px',
+                  backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                  borderRadius: '0 0 8px 8px',
+                  border: '1px solid #f59e0b',
+                  borderTop: 'none',
+                }}>
+                  {status?.conflictApp
+                    ? `May conflict with ${status.conflictApp}. Consider changing.`
+                    : 'May be captured by another app. Consider changing.'}
+                </div>
+              )}
             </div>
           );
         })}
@@ -1420,10 +1525,16 @@ function ShortcutsPhase({ onFinish, theme, styles }: ShortcutsPhaseProps) {
         style={{
           ...styles.primaryButton,
           marginTop: '16px',
+          opacity: isCompleting ? 0.7 : 1,
+          cursor: isCompleting ? 'wait' : 'pointer',
         }}
-        onClick={onFinish}
+        onClick={async () => {
+          setIsCompleting(true);
+          await onFinish?.();
+        }}
+        disabled={isCompleting}
       >
-        Get Started
+        {isCompleting ? 'Starting up...' : 'Get Started'}
       </button>
     </div>
   );

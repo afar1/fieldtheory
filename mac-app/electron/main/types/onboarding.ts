@@ -21,6 +21,7 @@ export const OnboardingIPCChannels = {
 
   // Window control
   EXPAND_WINDOW: 'onboarding:expandWindow',
+  SHOW_SIGN_IN: 'onboarding:showSignIn',
 
   // AI integration (Claude Code / Cursor)
   GET_AI_INTEGRATION_STATUS: 'onboarding:getAIIntegrationStatus',
