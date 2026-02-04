@@ -186,6 +186,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
 
   // Mobile sync state - sign-in is handled via TeamView, we just listen for session.
   const [session, setSession] = useState<Session | null>(null);
+  const [initialAuthLoading, setInitialAuthLoading] = useState(true);
   const [authLoading, setAuthLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -624,29 +625,31 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     // This handles the case where user signed in via Onboarding window.
     const client = supabase; // Capture non-null reference for async closure
     const initSession = async () => {
-      // First check main process AuthManager
-      const mainSession = await window.authAPI?.getSession();
-      if (mainSession) {
-        console.log('[SettingsPanel] Got session from main process:', mainSession.user?.email);
-        setSession(mainSession);
-        // Sync to client-side Supabase (needed for realtime subscriptions)
-        await client.auth.setSession({
-          access_token: mainSession.access_token,
-          refresh_token: mainSession.refresh_token,
-        });
-        return;
-      }
+      try {
+        // First check main process AuthManager
+        const mainSession = await window.authAPI?.getSession();
+        if (mainSession) {
+          setSession(mainSession);
+          // Sync to client-side Supabase (needed for realtime subscriptions)
+          await client.auth.setSession({
+            access_token: mainSession.access_token,
+            refresh_token: mainSession.refresh_token,
+          });
+          return;
+        }
 
-      // Fallback: check client-side Supabase (handles TeamView sign-in in same window)
-      const { data: { session } } = await client.auth.getSession();
-      if (session) {
-        console.log('[SettingsPanel] Got session from client-side Supabase:', session.user?.email);
-        setSession(session);
-        // Pass to main process for sync
-        window.clipboardAPI?.setSyncSession?.(
-          session.access_token,
-          session.refresh_token
-        );
+        // Fallback: check client-side Supabase (handles TeamView sign-in in same window)
+        const { data: { session } } = await client.auth.getSession();
+        if (session) {
+          setSession(session);
+          // Pass to main process for sync
+          window.clipboardAPI?.setSyncSession?.(
+            session.access_token,
+            session.refresh_token
+          );
+        }
+      } finally {
+        setInitialAuthLoading(false);
       }
     };
     initSession();
@@ -2036,16 +2039,20 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         // Only trust cached 'pro' tier if user is actually signed in.
         const displayTier = session ? userTier : 'free';
         const tierDisplayName = displayTier === 'pro' ? 'Pro Plan' : 'Basic Plan';
-        
+
         // Get display name from user metadata, fallback to email.
         const userFullName = session?.user?.user_metadata?.full_name as string | undefined;
         const userEmail = session?.user?.email;
-        
+
         return (
           <div style={styles.section}>
             <SectionHeader title="Account" />
-            
-            {session ? (
+
+            {initialAuthLoading ? (
+              <div style={styles.row}>
+                <span style={{ color: theme.textSecondary, fontSize: '13px' }}>Loading...</span>
+              </div>
+            ) : session ? (
               <>
                 {/* Email row with sign out */}
                 <div style={styles.row}>

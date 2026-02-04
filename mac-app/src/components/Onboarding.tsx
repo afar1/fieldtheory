@@ -713,31 +713,31 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
           // Continue anyway - the renderer has the session, main process will recover on next sync
         }
 
-        // Fetch call sign for new users
+        // Fetch profile to check if returning user (has name) or new user
+        let hasExistingProfile = false;
         if (supabase && result.session.user?.id) {
           try {
             const { data } = await supabase
               .from('profiles')
-              .select('callsign')
+              .select('callsign, full_name')
               .eq('id', result.session.user.id)
               .maybeSingle();
             if (data?.callsign) {
               setCallsign(data.callsign);
             }
+            hasExistingProfile = !!data?.full_name;
           } catch (err) {
-            console.warn('[Onboarding] Failed to fetch callsign:', err);
+            console.warn('[Onboarding] Failed to fetch profile:', err);
           }
         }
 
         setIsSettingUpSession(false);
 
-        // Show completion screen for both new and returning users
-        if (onFinishReturning) {
-          // Returning user - show completion screen with call sign before continuing
+        // Returning users (have name set) skip shortcuts, new users go through full flow
+        if (hasExistingProfile && onFinishReturning) {
           setIsReturningUser(true);
           setShowCompletionScreen(true);
         } else {
-          // New user - show name input with call sign
           setShowNameInput(true);
         }
       }
