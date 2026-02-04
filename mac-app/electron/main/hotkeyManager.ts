@@ -141,6 +141,25 @@ export interface HotkeyResult {
 }
 
 /**
+ * Known apps that commonly capture keyboard shortcuts.
+ * Used for conflict detection hints.
+ */
+interface KnownConflictApp {
+  name: string;
+  processNames: string[];
+  defaultConflicts: string[]; // Hotkeys this app commonly captures
+}
+
+export const KNOWN_CONFLICT_APPS: KnownConflictApp[] = [
+  { name: 'Rectangle', processNames: ['Rectangle'], defaultConflicts: ['Alt+3', 'Alt+4', 'Alt+Left', 'Alt+Right'] },
+  { name: 'Magnet', processNames: ['Magnet'], defaultConflicts: ['Control+Alt+Left', 'Control+Alt+Right'] },
+  { name: 'Alfred', processNames: ['Alfred'], defaultConflicts: ['Alt+Space', 'Command+Space'] },
+  { name: 'Raycast', processNames: ['Raycast'], defaultConflicts: ['Alt+Space', 'Command+Space'] },
+  { name: 'CleanShot X', processNames: ['CleanShot X'], defaultConflicts: ['Command+Shift+4', 'Command+Shift+5'] },
+  { name: 'BetterTouchTool', processNames: ['BetterTouchTool'], defaultConflicts: [] },
+];
+
+/**
  * Callback function type for hotkey triggers.
  */
 export type HotkeyCallback = () => void;
@@ -428,6 +447,108 @@ export class HotkeyManager {
     return Object.values(HOTKEY_CONFIGS)
       .filter(config => config.category === category)
       .map(config => config.id);
+  }
+
+  /**
+   * Normalize a hotkey string (public access for conflict detection).
+   */
+  public normalizeKeyPublic(key: string): string {
+    return this.normalizeKey(key);
+  }
+
+  /**
+   * Test if a hotkey can be registered and receives callbacks.
+   * Temporarily registers the hotkey and waits to see if it receives events.
+   * This helps detect when another app has captured the shortcut.
+   *
+   * Note: This is a passive test - it registers and waits, but cannot
+   * simulate key presses. The user must press the key during the timeout.
+   */
+  async testHotkey(key: string, timeoutMs: number = 3000): Promise<{
+    success: boolean;
+    callbackFired: boolean;
+    error?: string;
+  }> {
+    if (!key || key.trim() === '') {
+      return { success: false, callbackFired: false, error: 'Empty key' };
+    }
+
+    const normalizedKey = this.normalizeKey(key);
+
+    // Check if this hotkey is already registered by our app
+    let existingId: HotkeyId | null = null;
+    let existingCallback: HotkeyCallback | null = null;
+    for (const [id, registered] of this.registeredHotkeys) {
+      if (this.normalizeKey(registered.key) === normalizedKey) {
+        existingId = id;
+        existingCallback = registered.callback;
+        break;
+      }
+    }
+
+    // Temporarily unregister our own hotkey if needed
+    if (existingId) {
+      try {
+        globalShortcut.unregister(normalizedKey);
+      } catch {
+        // Ignore
+      }
+    }
+
+    return new Promise((resolve) => {
+      let callbackFired = false;
+      let resolved = false;
+
+      const cleanup = () => {
+        if (!resolved) {
+          resolved = true;
+          try {
+            globalShortcut.unregister(normalizedKey);
+          } catch {
+            // Ignore cleanup errors
+          }
+          // Re-register our original hotkey if we had one
+          if (existingId && existingCallback) {
+            try {
+              globalShortcut.register(normalizedKey, existingCallback);
+            } catch (err) {
+              log.error(`Failed to re-register original hotkey "${normalizedKey}":`, err);
+            }
+          }
+        }
+      };
+
+      try {
+        const registered = globalShortcut.register(normalizedKey, () => {
+          callbackFired = true;
+          cleanup();
+          resolve({ success: true, callbackFired: true });
+        });
+
+        if (!registered) {
+          // Re-register original before returning
+          if (existingId && existingCallback) {
+            try {
+              globalShortcut.register(normalizedKey, existingCallback);
+            } catch {
+              // Ignore
+            }
+          }
+          resolve({ success: false, callbackFired: false, error: 'Registration failed - hotkey may be captured by another app' });
+          return;
+        }
+
+        // Timeout - callback didn't fire
+        setTimeout(() => {
+          cleanup();
+          resolve({ success: true, callbackFired: false });
+        }, timeoutMs);
+      } catch (err) {
+        log.error(`Test hotkey exception for "${normalizedKey}":`, err);
+        cleanup();
+        resolve({ success: false, callbackFired: false, error: String(err) });
+      }
+    });
   }
 }
 

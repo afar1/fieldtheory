@@ -220,7 +220,12 @@ export class MetricsManager {
         pendingSync: parsed.pendingSync || false,
       };
     } catch {
-      // File doesn't exist or is invalid, use defaults
+      // File doesn't exist or is invalid - reset to defaults
+      this.storage = {
+        metrics: { ...MetricsManager.DEFAULT_METRICS },
+        lastSyncedAt: null,
+        pendingSync: false,
+      };
     }
   }
 

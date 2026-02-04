@@ -15,7 +15,6 @@ export type QuotaFeature =
   | 'text_improve_words'
   | 'priority_mic_seconds'
   | 'auto_stack_sessions'
-  | 'verbal_commands'
   | 'portable_commands';
 
 // Usage data synced from server.
@@ -232,7 +231,6 @@ export class QuotaManager extends EventEmitter {
     textImprove: QuotaStatus;
     priorityMic: QuotaStatus;
     autoStack: QuotaStatus;
-    verbalCommands: QuotaStatus;
     portableCommands: QuotaStatus;
     tier: 'free' | 'pro';
   } {
@@ -240,7 +238,6 @@ export class QuotaManager extends EventEmitter {
       textImprove: this.getFeatureStatus('text_improve_words'),
       priorityMic: this.getFeatureStatus('priority_mic_seconds'),
       autoStack: this.getFeatureStatus('auto_stack_sessions'),
-      verbalCommands: this.getFeatureStatus('verbal_commands'),
       portableCommands: this.getFeatureStatus('portable_commands'),
       tier: this.cache?.tier || 'free',
     };
@@ -269,20 +266,17 @@ export class QuotaManager extends EventEmitter {
           text_improve_words: 0,
           priority_mic_seconds: 0,
           auto_stack_sessions: 0,
-          verbal_commands: 0,
           portable_commands: 0,
         },
         limits: tier === 'pro' ? {
           text_improve_words: Infinity,
           priority_mic_seconds: Infinity,
           auto_stack_sessions: Infinity,
-          verbal_commands: Infinity,
           portable_commands: Infinity,
         } : {
           text_improve_words: 5000,
           priority_mic_seconds: 30000,
           auto_stack_sessions: 50,
-          verbal_commands: 50,
           portable_commands: 100,
         },
       };
@@ -396,15 +390,11 @@ export class QuotaManager extends EventEmitter {
   }
 
   formatTextImproveUsage(): string {
-    return this.formatUsage('text_improve_words', 'words');
-  }
-
-  formatVerbalCommandsUsage(): string {
-    return this.formatUsage('verbal_commands', 'voice commands');
+    return this.formatUsage('text_improve_words', 'words improved');
   }
 
   formatPortableCommandsUsage(): string {
-    return this.formatUsage('portable_commands', 'portable commands');
+    return this.formatUsage('portable_commands', 'portable command uses');
   }
 
   /**
@@ -427,7 +417,6 @@ export class QuotaManager extends EventEmitter {
         text_improve_words: 5000,
         priority_mic_seconds: 30000,
         auto_stack_sessions: 50,
-        verbal_commands: 50,
         portable_commands: 100,
       };
     }

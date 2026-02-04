@@ -777,7 +777,7 @@ interface QuotaLimits {
   priorityMicMinutes: number;
   autoStackSessions: number;
   textImprovementWords: number;
-  verbalCommands: number;
+  portableCommands: number;
 }
 
 /**
@@ -785,16 +785,16 @@ interface QuotaLimits {
  * Free users have monthly limits on priority mic, auto-stacking, and text improvements.
  */
 interface QuotaAPI {
-  getQuotas: () => Promise<{ priorityMic: QuotaStatus; autoStack: QuotaStatus; textImprove: QuotaStatus; verbalCommands: QuotaStatus; tier: 'free' | 'pro' } | null>;
-  checkQuota: (feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'verbalCommands') => Promise<QuotaCheckResult>;
-  getFormattedUsage: () => Promise<{ priorityMic: string; autoStack: string; textImprove: string; verbalCommands: string }>;
+  getQuotas: () => Promise<{ priorityMic: QuotaStatus; autoStack: QuotaStatus; textImprove: QuotaStatus; portableCommands: QuotaStatus; tier: 'free' | 'pro' } | null>;
+  checkQuota: (feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'portableCommands') => Promise<QuotaCheckResult>;
+  getFormattedUsage: () => Promise<{ priorityMic: string; autoStack: string; textImprove: string; portableCommands: string }>;
   getResetDate: () => Promise<Date>;
   getDaysUntilReset: () => Promise<number>;
   getLimits: () => Promise<QuotaLimits>;
   refreshTier: () => Promise<{ tier: 'free' | 'pro'; error: string | null }>;
   onTierChanged: (callback: (tier: 'free' | 'pro') => void) => () => void;
   onQuotaExhausted: (callback: (data: QuotaExhaustedData) => void) => () => void;
-  onQuotaChanged: (callback: (data: { priorityMic: string; autoStack: string; textImprove: string; verbalCommands: string }) => void) => () => void;
+  onQuotaChanged: (callback: (data: { priorityMic: string; autoStack: string; textImprove: string; portableCommands: string }) => void) => () => void;
 }
 
 /**
@@ -926,6 +926,10 @@ interface HotkeyAPI {
   getHotkey: (id: HotkeyId) => Promise<string | null>;
   setHotkey: (id: HotkeyId, key: string) => Promise<{ success: boolean; error?: string }>;
   getAllHotkeys: () => Promise<Record<HotkeyId, string | null>>;
+  /** Test if a hotkey is working (not captured by another app) */
+  testHotkey: (key: string, timeoutMs?: number) => Promise<HotkeyTestResult>;
+  /** Get list of running apps known to capture hotkeys */
+  getRunningConflictApps: () => Promise<string[]>;
 }
 
 /**
@@ -1039,6 +1043,17 @@ interface LibrarianAPI {
 }
 
 declare global {
+  /**
+   * Result of testing a hotkey for conflicts.
+   */
+  interface HotkeyTestResult {
+    key: string;
+    status: 'working' | 'conflict' | 'error';
+    callbackFired: boolean;
+    conflictApp?: string;
+    error?: string;
+  }
+
   /**
    * Reading metadata for sidebar display.
    * Path is the identity - no numeric IDs.

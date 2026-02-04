@@ -1465,14 +1465,18 @@ export class ClipboardManager extends EventEmitter {
 
     const hotkeyManager = getHotkeyManager();
     const wrappedCallback = () => {
+      log.info('Screenshot hotkey triggered!');
       const result = callback();
       if (result instanceof Promise) {
         result.catch(err => log.error('Screenshot callback error:', err));
       }
     };
 
-    const result = hotkeyManager.register('screenshot', this.config.screenshotHotkey || '', wrappedCallback);
+    const hotkey = this.config.screenshotHotkey || '';
+    log.info(`Registering screenshot hotkey: "${hotkey}"`);
+    const result = hotkeyManager.register('screenshot', hotkey, wrappedCallback);
     this.screenshotHotkeyRegistered = result.success;
+    log.info(`Screenshot hotkey registration result: success=${result.success}, error=${result.error || 'none'}`);
 
     return result.success;
   }
