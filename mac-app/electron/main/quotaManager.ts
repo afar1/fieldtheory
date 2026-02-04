@@ -253,6 +253,44 @@ export class QuotaManager extends EventEmitter {
     return this.cache?.tier || 'free';
   }
 
+  /**
+   * Set initial tier from preferences (for offline/startup).
+   * This pre-populates the cache so Pro users don't get downgraded
+   * before server sync completes.
+   */
+  setInitialTier(tier: 'free' | 'pro'): void {
+    if (!this.cache) {
+      // Create minimal cache with just tier - server will fill in rest
+      const monthYear = new Date().toISOString().slice(0, 7);
+      this.cache = {
+        tier,
+        monthYear,
+        usage: {
+          text_improve_words: 0,
+          priority_mic_seconds: 0,
+          auto_stack_sessions: 0,
+          verbal_commands: 0,
+          portable_commands: 0,
+        },
+        limits: tier === 'pro' ? {
+          text_improve_words: Infinity,
+          priority_mic_seconds: Infinity,
+          auto_stack_sessions: Infinity,
+          verbal_commands: Infinity,
+          portable_commands: Infinity,
+        } : {
+          text_improve_words: 5000,
+          priority_mic_seconds: 30000,
+          auto_stack_sessions: 50,
+          verbal_commands: 50,
+          portable_commands: 100,
+        },
+      };
+      log.info('Set initial tier from preferences:', tier);
+      this.emit('tierChanged', tier);
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Usage tracking
   // ---------------------------------------------------------------------------
