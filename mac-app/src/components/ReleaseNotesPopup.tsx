@@ -14,6 +14,10 @@ export function hasReleaseNotes(version: string): boolean {
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.61': [
+    'Fixed favorite microphone not persisting after restart',
+    'Removed duplicate accessibility permission banner from Settings',
+  ],
   '0.1.60': [
     'Favorite microphone: Set a preferred mic that auto-restores on startup',
     'Quota warning shows in footer at 85% usage',
@@ -130,6 +134,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.61': 'Feb 3 2026',
   '0.1.60': 'Feb 3 2026',
   '0.1.58': 'Feb 2 2026',
   '0.1.57': 'Feb 2 2026',
