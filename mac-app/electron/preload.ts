@@ -14,6 +14,9 @@ const AudioIPCChannels = {
   SET_PRIORITY_MODE: 'audio:setPriorityMode',
   SET_PRIORITY_DEVICE: 'audio:setPriorityDevice',
   RESET_OVERRIDE: 'audio:resetOverride',
+  GET_FAVORITE_DEVICE_NAME: 'audio:getFavoriteDeviceName',
+  SET_FAVORITE_DEVICE: 'audio:setFavoriteDevice',
+  CLEAR_FAVORITE_DEVICE: 'audio:clearFavoriteDevice',
   STATE_CHANGED: 'audio:stateChanged',
 } as const;
 
@@ -125,6 +128,10 @@ const OnboardingIPCChannels = {
   RESET_ONBOARDING: 'onboarding:reset',
   CHECK_MODEL_STATUS: 'onboarding:checkModelStatus',
   EXPAND_WINDOW: 'onboarding:expandWindow',
+  // AI integration detection and configuration
+  GET_AI_INTEGRATION_STATUS: 'onboarding:getAIIntegrationStatus',
+  INSTALL_CLAUDE_HOOK: 'onboarding:installClaudeHook',
+  INSTALL_CURSOR_HOOK: 'onboarding:installCursorHook',
 } as const;
 
 // Todo IPC channels for bidirectional sync with Supabase.
@@ -489,6 +496,9 @@ export interface AudioAPI {
   setPriorityDevice: (deviceId: string | null) => Promise<void>;
   resetOverride: () => Promise<void>;
   onStateChanged: (callback: (state: AudioState) => void) => () => void;
+  getFavoriteDeviceName: () => Promise<string | null>;
+  setFavoriteDevice: (deviceId: string) => Promise<boolean>;
+  clearFavoriteDevice: () => Promise<void>;
 }
 
 // Valid hotkey IDs that can be get/set via the hotkeyAPI
@@ -641,6 +651,10 @@ export interface ClipboardAPI {
   getShowInDock?: () => Promise<boolean>;
   setShowInDock?: (show: boolean) => Promise<boolean>;
 
+  // Show fieldtheory.dev link in footer
+  getShowFieldTheoryLink?: () => Promise<boolean>;
+  setShowFieldTheoryLink?: (show: boolean) => Promise<boolean>;
+
   // Launch at login
   getLaunchAtLogin?: () => Promise<boolean>;
   setLaunchAtLogin?: (enabled: boolean) => Promise<{ success: boolean; enabled: boolean }>;
@@ -701,6 +715,18 @@ const audioAPI: AudioAPI = {
     return () => {
       ipcRenderer.removeListener(AudioIPCChannels.STATE_CHANGED, handler);
     };
+  },
+
+  getFavoriteDeviceName: async (): Promise<string | null> => {
+    return ipcRenderer.invoke(AudioIPCChannels.GET_FAVORITE_DEVICE_NAME);
+  },
+
+  setFavoriteDevice: async (deviceId: string): Promise<boolean> => {
+    return ipcRenderer.invoke(AudioIPCChannels.SET_FAVORITE_DEVICE, deviceId);
+  },
+
+  clearFavoriteDevice: async (): Promise<void> => {
+    return ipcRenderer.invoke(AudioIPCChannels.CLEAR_FAVORITE_DEVICE);
   },
 };
 
@@ -1306,6 +1332,15 @@ const clipboardAPI: ClipboardAPI = {
     return ipcRenderer.invoke('clipboard:setShowInDock', show);
   },
 
+  // Show fieldtheory.dev link in footer.
+  getShowFieldTheoryLink: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:getShowFieldTheoryLink');
+  },
+
+  setShowFieldTheoryLink: async (show: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:setShowFieldTheoryLink', show);
+  },
+
   // Launch at login.
   getLaunchAtLogin: async (): Promise<boolean> => {
     return ipcRenderer.invoke('clipboard:getLaunchAtLogin');
@@ -1458,6 +1493,25 @@ const onboardingAPI = {
   // Used during onboarding to guide users through the tutorial.
   setTutorialHint: (hint: string | null): void => {
     ipcRenderer.send('onboarding:set-tutorial-hint', hint);
+  },
+
+  // Get AI integration status - checks if Claude Code and Cursor are available
+  // and whether hooks are already installed.
+  getAIIntegrationStatus: async (): Promise<{
+    claudeCode: { available: boolean; connected: boolean };
+    cursor: { available: boolean; connected: boolean };
+  }> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.GET_AI_INTEGRATION_STATUS);
+  },
+
+  // Install Claude Code read permission hook for screenshot access.
+  installClaudeHook: async (): Promise<{ success: boolean; message: string }> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.INSTALL_CLAUDE_HOOK);
+  },
+
+  // Install Cursor read permission hook for screenshot access.
+  installCursorHook: async (): Promise<{ success: boolean; message: string }> => {
+    return ipcRenderer.invoke(OnboardingIPCChannels.INSTALL_CURSOR_HOOK);
   },
 };
 

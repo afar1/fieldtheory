@@ -71,6 +71,33 @@ export class AudioManager extends EventEmitter {
   }
 
   /**
+   * Clear the favorite device name.
+   * This stops auto-reconnect behavior when the device reconnects.
+   */
+  clearFavoriteDevice(): void {
+    this.favoriteDeviceName = null;
+    if (this.onFavoriteChanged) {
+      this.onFavoriteChanged(null);
+    }
+  }
+
+  /**
+   * Set the favorite device by ID.
+   * The favorite device is auto-selected on app startup and when it reconnects.
+   */
+  setFavoriteDeviceById(deviceId: string): boolean {
+    const device = this.devices.find(d => d.id === deviceId && d.isInput);
+    if (!device) {
+      return false;
+    }
+    this.favoriteDeviceName = device.name;
+    if (this.onFavoriteChanged) {
+      this.onFavoriteChanged(device.name);
+    }
+    return true;
+  }
+
+  /**
    * Initialize the AudioManager.
    * Sets up event listeners, fetches initial state, and starts monitoring.
    */
@@ -92,13 +119,26 @@ export class AudioManager extends EventEmitter {
     try {
       await this.refreshDevices();
       await this.refreshDefaultInput();
-      
+
+      // Try to restore priority device - first by ID, then by favorite name
+      let deviceRestored = false;
+
       if (this.savedPriorityDeviceId) {
         const deviceExists = this.devices.some(d => d.id === this.savedPriorityDeviceId);
         if (deviceExists) {
           await this.setPriorityDevice(this.savedPriorityDeviceId);
+          deviceRestored = true;
         } else {
           this.savedPriorityDeviceId = null;
+        }
+      }
+
+      // If ID didn't match but we have a favorite name, try to find by name
+      // (device IDs can change between restarts, but names are more stable)
+      if (!deviceRestored && this.favoriteDeviceName) {
+        const favoriteDevice = this.devices.find(d => d.name === this.favoriteDeviceName && d.isInput);
+        if (favoriteDevice) {
+          await this.setPriorityDevice(favoriteDevice.id);
         }
       }
     } catch (error) {
@@ -128,20 +168,13 @@ export class AudioManager extends EventEmitter {
 
   /**
    * Set which device should be prioritized (user selection).
+   * Note: This does NOT change the favorite device - use setFavoriteDevice for that.
    */
   async setPriorityDevice(deviceId: string | null): Promise<void> {
     const wasLocked = this.priorityDeviceId !== null;
     this.priorityDeviceId = deviceId;
 
     if (deviceId) {
-      // Save device name as favorite for auto-reconnect
-      const device = this.devices.find(d => d.id === deviceId);
-      if (device) {
-        this.favoriteDeviceName = device.name;
-        if (this.onFavoriteChanged) {
-          this.onFavoriteChanged(device.name);
-        }
-      }
 
       if (!this.priorityMode) {
         this.priorityMode = true;
@@ -157,11 +190,8 @@ export class AudioManager extends EventEmitter {
       // Stop tracking priority mic minutes
       this.stopPriorityMicTimer();
 
-      // Clear favorite when explicitly selecting "None"
-      this.favoriteDeviceName = null;
-      if (this.onFavoriteChanged) {
-        this.onFavoriteChanged(null);
-      }
+      // Note: Selecting "None" for priority does NOT clear the favorite.
+      // The favorite is independent and only cleared explicitly.
 
       if (this.priorityMode) {
         this.priorityMode = false;

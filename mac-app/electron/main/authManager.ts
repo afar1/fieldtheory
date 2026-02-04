@@ -950,6 +950,13 @@ export class AuthManager extends EventEmitter {
         return { error: error.message };
       }
 
+      // Delete local user data (GDPR compliance - right to erasure)
+      const userDataManager = getUserDataManager();
+      if (userDataManager) {
+        await userDataManager.deleteCurrentUserData();
+        log.info('Local user data deleted');
+      }
+
       this.clearSession();
       this.fileStorage?.clearStorage();
       log.info('Account deleted');

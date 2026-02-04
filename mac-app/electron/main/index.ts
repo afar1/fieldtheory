@@ -1050,6 +1050,26 @@ function setupIPCHandlers(): void {
     }
   });
 
+  // Get favorite device name (for UI display)
+  ipcMain.handle(AudioIPCChannels.GET_FAVORITE_DEVICE_NAME, () => {
+    return audioManager?.getFavoriteDeviceName() ?? null;
+  });
+
+  // Set favorite device by ID
+  ipcMain.handle(AudioIPCChannels.SET_FAVORITE_DEVICE, async (_event, deviceId: string) => {
+    if (audioManager) {
+      return audioManager.setFavoriteDeviceById(deviceId);
+    }
+    return false;
+  });
+
+  // Clear favorite device (removes auto-reconnect behavior)
+  ipcMain.handle(AudioIPCChannels.CLEAR_FAVORITE_DEVICE, async () => {
+    if (audioManager) {
+      audioManager.clearFavoriteDevice();
+    }
+  });
+
   // Permission check handler
   ipcMain.handle('permissions:check', async () => {
     return await checkPermissions();
@@ -3468,6 +3488,22 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
+  // Show fieldtheory.dev link in footer - toggleable per user preference.
+  ipcMain.handle('clipboard:getShowFieldTheoryLink', async () => {
+    if (!preferencesManager) {
+      return true; // Default to showing
+    }
+    return preferencesManager.getPreference('showFieldTheoryLink') ?? true;
+  });
+
+  ipcMain.handle('clipboard:setShowFieldTheoryLink', async (_event, show: boolean) => {
+    if (!preferencesManager) {
+      return false;
+    }
+    await preferencesManager.save({ showFieldTheoryLink: show });
+    return true;
+  });
+
   // Launch at login - start app automatically when macOS starts.
   // Returns the actual system state, not just the preference.
   ipcMain.handle('clipboard:getLaunchAtLogin', async () => {
@@ -4268,6 +4304,34 @@ function setupOnboardingIPCHandlers(): void {
 
   // Note: EXPAND_WINDOW handler removed - no longer needed since onboarding
   // is now just 2 phases (permissions + model) with no tutorial phase.
+
+  // ---------------------------------------------------------------------------
+  // AI Integration (Claude Code / Cursor) - shown during model download
+  // ---------------------------------------------------------------------------
+
+  // Get status of Claude Code and Cursor - checks if installed and if hooks are connected.
+  ipcMain.handle(OnboardingIPCChannels.GET_AI_INTEGRATION_STATUS, () => {
+    const claudeCodeAvailable = librarianManager?.getClaudeCodeStatus() !== 'not-installed';
+    const cursorAvailable = fs.existsSync(path.join(os.homedir(), '.cursor'));
+
+    const claudeHookInstalled = librarianManager?.isReadPermissionHookInstalled() ?? false;
+    const cursorHookInstalled = librarianManager?.isCursorReadPermissionHookInstalled() ?? false;
+
+    return {
+      claudeCode: { available: claudeCodeAvailable, connected: claudeHookInstalled },
+      cursor: { available: cursorAvailable, connected: cursorHookInstalled },
+    };
+  });
+
+  // Install Claude Code read permission hook for screenshot access.
+  ipcMain.handle(OnboardingIPCChannels.INSTALL_CLAUDE_HOOK, () => {
+    return librarianManager?.installReadPermissionHook() ?? { success: false, message: 'Manager not ready' };
+  });
+
+  // Install Cursor read permission hook for screenshot access.
+  ipcMain.handle(OnboardingIPCChannels.INSTALL_CURSOR_HOOK, () => {
+    return librarianManager?.installCursorReadPermissionHook() ?? { success: false, message: 'Manager not ready' };
+  });
 }
 
 

@@ -8,19 +8,24 @@ export const OnboardingIPCChannels = {
   OPEN_ACCESSIBILITY_SETTINGS: 'onboarding:openAccessibilitySettings',
   OPEN_SCREEN_RECORDING_SETTINGS: 'onboarding:openScreenRecordingSettings',
   TRIGGER_SCREEN_RECORDING_PROMPT: 'onboarding:triggerScreenRecordingPrompt',
-  
+
   // Onboarding state
   GET_ONBOARDING_STATE: 'onboarding:getState',
   SET_ONBOARDING_STEP: 'onboarding:setStep',
   COMPLETE_ONBOARDING: 'onboarding:complete',
   SKIP_ONBOARDING: 'onboarding:skip',
   RESET_ONBOARDING: 'onboarding:reset',
-  
+
   // Model download (reuses existing model download infrastructure)
   CHECK_MODEL_STATUS: 'onboarding:checkModelStatus',
-  
+
   // Window control
   EXPAND_WINDOW: 'onboarding:expandWindow',
+
+  // AI integration (Claude Code / Cursor)
+  GET_AI_INTEGRATION_STATUS: 'onboarding:getAIIntegrationStatus',
+  INSTALL_CLAUDE_HOOK: 'onboarding:installClaudeHook',
+  INSTALL_CURSOR_HOOK: 'onboarding:installCursorHook',
 } as const;
 
 /**

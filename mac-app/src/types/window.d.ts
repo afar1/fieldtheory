@@ -39,6 +39,9 @@ interface AudioAPI {
   setPriorityDevice: (deviceId: string | null) => Promise<void>;
   resetOverride: () => Promise<void>;
   onStateChanged: (callback: (state: AudioState) => void) => () => void;
+  getFavoriteDeviceName: () => Promise<string | null>;
+  setFavoriteDevice: (deviceId: string) => Promise<boolean>;
+  clearFavoriteDevice: () => Promise<void>;
 }
 
 /**
@@ -301,6 +304,10 @@ interface ClipboardAPI {
   getShowInDock?: () => Promise<boolean>;
   setShowInDock?: (show: boolean) => Promise<boolean>;
 
+  // Show fieldtheory.dev link in footer
+  getShowFieldTheoryLink?: () => Promise<boolean>;
+  setShowFieldTheoryLink?: (show: boolean) => Promise<boolean>;
+
   // Launch at login
   getLaunchAtLogin?: () => Promise<boolean>;
   setLaunchAtLogin?: (enabled: boolean) => Promise<{ success: boolean; enabled: boolean }>;
@@ -390,6 +397,14 @@ interface OnboardingState {
 /**
  * The onboarding API for first-run wizard.
  */
+/**
+ * AI integration status for Claude Code and Cursor.
+ */
+interface AIIntegrationStatus {
+  claudeCode: { available: boolean; connected: boolean };
+  cursor: { available: boolean; connected: boolean };
+}
+
 interface OnboardingAPI {
   getPermissionStatus: () => Promise<OnboardingPermissionStatus>;
   requestMicrophone: () => Promise<boolean>;
@@ -405,6 +420,10 @@ interface OnboardingAPI {
   expandWindow?: () => Promise<void>;
   onFieldTheoryOpened?: (callback: () => void) => () => void;
   setTutorialHint?: (hint: string | null) => void;
+  // AI integration - detect and configure Claude Code and Cursor
+  getAIIntegrationStatus?: () => Promise<AIIntegrationStatus>;
+  installClaudeHook?: () => Promise<{ success: boolean; message: string }>;
+  installCursorHook?: () => Promise<{ success: boolean; message: string }>;
 }
 
 /**

@@ -19,7 +19,7 @@ const QUOTA_LIMITS = {
     priority_mic_seconds: 30000,    // 500 minutes/month
     auto_stack_sessions: 50,        // 50 sessions/month
     verbal_commands: 50,            // 50 commands/month
-    portable_commands: 50,          // 50 commands/month
+    portable_commands: 100,         // 100 commands/month
   },
   pro: {
     text_improve_words: 50000,      // 50k words/month (soft limit for analytics)

@@ -390,7 +390,7 @@ export class QuotaManager extends EventEmitter {
         priority_mic_seconds: 30000,
         auto_stack_sessions: 50,
         verbal_commands: 50,
-        portable_commands: 50,
+        portable_commands: 100,
       };
     }
     return this.cache.limits;

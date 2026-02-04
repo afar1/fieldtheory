@@ -211,6 +211,11 @@ function PermissionRow({ label, description, granted, denied, onGrant, grantButt
 // Phase 2: Model Selection
 // =============================================================================
 
+interface AIIntegrationStatus {
+  claudeCode: { available: boolean; connected: boolean };
+  cursor: { available: boolean; connected: boolean };
+}
+
 interface ModelPhaseProps {
   selectedModel: ModelSize;
   onSelectModel: (model: ModelSize) => void;
@@ -243,6 +248,54 @@ function ModelPhase({
   // Can finish if the selected model is downloaded.
   const canFinish = isSelectedModelDownloaded;
 
+  // AI integration state - shown while downloading to give user something to do
+  const [aiStatus, setAiStatus] = useState<AIIntegrationStatus | null>(null);
+  const [claudeConnecting, setClaudeConnecting] = useState(false);
+  const [cursorConnecting, setCursorConnecting] = useState(false);
+
+  // Load AI integration status on mount
+  useEffect(() => {
+    window.onboardingAPI?.getAIIntegrationStatus?.().then(setAiStatus).catch(() => {});
+  }, []);
+
+  // Handle Claude Code connection
+  const handleClaudeConnect = async () => {
+    if (claudeConnecting || !aiStatus?.claudeCode.available) return;
+    setClaudeConnecting(true);
+    try {
+      const result = await window.onboardingAPI?.installClaudeHook?.();
+      if (result?.success) {
+        setAiStatus(prev => prev ? {
+          ...prev,
+          claudeCode: { ...prev.claudeCode, connected: true }
+        } : null);
+      }
+    } finally {
+      setClaudeConnecting(false);
+    }
+  };
+
+  // Handle Cursor connection
+  const handleCursorConnect = async () => {
+    if (cursorConnecting || !aiStatus?.cursor.available) return;
+    setCursorConnecting(true);
+    try {
+      const result = await window.onboardingAPI?.installCursorHook?.();
+      if (result?.success) {
+        setAiStatus(prev => prev ? {
+          ...prev,
+          cursor: { ...prev.cursor, connected: true }
+        } : null);
+      }
+    } finally {
+      setCursorConnecting(false);
+    }
+  };
+
+  // Show AI integration section when downloading or after download
+  const showAIIntegration = downloadingModel !== null || isSelectedModelDownloaded;
+  const hasAnyAITool = aiStatus && (aiStatus.claudeCode.available || aiStatus.cursor.available);
+
   return (
     <div style={styles.phase}>
       <h1 style={styles.title}>Download Local Voice Transcription Model</h1>
@@ -257,7 +310,7 @@ function ModelPhase({
           const isDownloaded = modelDownloadStatus[modelKey] || false;
           const isDownloading = downloadingModel === modelKey;
           const isSelected = selectedModel === modelKey;
-          
+
           // Determine border and shadow styles
           const isRecommended = info.recommended;
           let borderColor = theme.border;
@@ -355,6 +408,138 @@ function ModelPhase({
         })}
       </div>
 
+      {/* AI Integration Section - shown while downloading or after download */}
+      {showAIIntegration && aiStatus && hasAnyAITool && (
+        <div style={{
+          marginTop: '16px',
+          padding: '12px',
+          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+          borderRadius: '8px',
+          border: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}`,
+        }}>
+          <div style={{
+            fontSize: '11px',
+            fontWeight: 600,
+            color: theme.text,
+            marginBottom: '8px',
+          }}>
+            AI Code Editor Integration
+          </div>
+          <div style={{
+            fontSize: '10px',
+            color: theme.textSecondary,
+            marginBottom: '10px',
+            lineHeight: 1.4,
+          }}>
+            Let AI agents read your screenshots without permission prompts.
+          </div>
+
+          {/* Claude Code */}
+          {aiStatus.claudeCode.available && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '8px 10px',
+              backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+              border: `1px solid ${theme.border}`,
+              borderRadius: '6px',
+              marginBottom: '6px',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 500, color: theme.text }}>Claude Code</span>
+                {aiStatus.claudeCode.connected && (
+                  <span style={{
+                    fontSize: '9px',
+                    color: theme.success,
+                    padding: '2px 5px',
+                    backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)',
+                    borderRadius: '3px',
+                  }}>
+                    Connected
+                  </span>
+                )}
+              </div>
+              {!aiStatus.claudeCode.connected && (
+                <button
+                  onClick={handleClaudeConnect}
+                  disabled={claudeConnecting}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: '10px',
+                    fontWeight: 500,
+                    color: '#fff',
+                    backgroundColor: theme.accent,
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: claudeConnecting ? 'wait' : 'pointer',
+                    opacity: claudeConnecting ? 0.5 : 1,
+                  }}
+                >
+                  {claudeConnecting ? '...' : 'Connect'}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Cursor */}
+          {aiStatus.cursor.available && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '8px 10px',
+              backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+              border: `1px solid ${theme.border}`,
+              borderRadius: '6px',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 500, color: theme.text }}>Cursor</span>
+                {aiStatus.cursor.connected && (
+                  <span style={{
+                    fontSize: '9px',
+                    color: theme.success,
+                    padding: '2px 5px',
+                    backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)',
+                    borderRadius: '3px',
+                  }}>
+                    Connected
+                  </span>
+                )}
+              </div>
+              {!aiStatus.cursor.connected && (
+                <button
+                  onClick={handleCursorConnect}
+                  disabled={cursorConnecting}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: '10px',
+                    fontWeight: 500,
+                    color: '#fff',
+                    backgroundColor: theme.accent,
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: cursorConnecting ? 'wait' : 'pointer',
+                    opacity: cursorConnecting ? 0.5 : 1,
+                  }}
+                >
+                  {cursorConnecting ? '...' : 'Connect'}
+                </button>
+              )}
+            </div>
+          )}
+
+          <div style={{
+            fontSize: '9px',
+            color: theme.textSecondary,
+            marginTop: '8px',
+            textAlign: 'center',
+          }}>
+            Can also be configured in Settings → Claude Code
+          </div>
+        </div>
+      )}
+
       <button
         style={{
           ...styles.primaryButton,
@@ -401,6 +586,9 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
   const [isSettingUpSession, setIsSettingUpSession] = useState(false);
   // Call sign state - fetched after OTP verification
   const [callsign, setCallsign] = useState<string | null>(null);
+  // Completion screen for returning users (shows call sign before continuing)
+  const [showCompletionScreen, setShowCompletionScreen] = useState(false);
+  const [isReturningUser, setIsReturningUser] = useState(false);
 
   // Load launch at login setting on mount (checks actual system state).
   useEffect(() => {
@@ -409,7 +597,7 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
     });
   }, []);
 
-  // Check if user is already logged in on mount.
+  // Check if user is already logged in on mount, and fetch their call sign.
   useEffect(() => {
     if (!supabase) {
       setIsCheckingSession(false);
@@ -421,6 +609,21 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
         const { data: { session } } = await client.auth.getSession();
         if (session?.user?.email) {
           setExistingEmail(session.user.email);
+          // Also fetch call sign for already-logged-in users
+          if (session.user.id) {
+            try {
+              const { data } = await client
+                .from('profiles')
+                .select('callsign')
+                .eq('id', session.user.id)
+                .maybeSingle();
+              if (data?.callsign) {
+                setCallsign(data.callsign);
+              }
+            } catch (err) {
+              console.warn('[Onboarding] Failed to fetch callsign:', err);
+            }
+          }
         }
       } catch (err) {
         console.error('[Onboarding] Failed to check session:', err);
@@ -526,10 +729,13 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
 
         setIsSettingUpSession(false);
 
-        // Show name input for new users, skip for returning users
+        // Show completion screen for both new and returning users
         if (onFinishReturning) {
-          onFinishReturning();
+          // Returning user - show completion screen with call sign before continuing
+          setIsReturningUser(true);
+          setShowCompletionScreen(true);
         } else {
+          // New user - show name input with call sign
           setShowNameInput(true);
         }
       }
@@ -654,11 +860,92 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
     );
   }
 
+  // Completion screen for returning users after OTP verification
+  if (showCompletionScreen) {
+    return (
+      <div style={styles.phase}>
+        <h1 style={styles.title}>Welcome Back</h1>
+
+        {/* Show call sign prominently */}
+        {callsign && (
+          <div style={{
+            marginBottom: '16px',
+            padding: '12px 16px',
+            backgroundColor: theme.isDark ? 'rgba(139, 92, 246, 0.1)' : 'rgba(139, 92, 246, 0.08)',
+            borderRadius: '8px',
+            border: `1px solid ${theme.isDark ? 'rgba(139, 92, 246, 0.3)' : 'rgba(139, 92, 246, 0.2)'}`,
+          }}>
+            <div style={{
+              fontSize: '11px',
+              color: theme.textSecondary,
+              marginBottom: '4px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+            }}>
+              Your Call Sign
+            </div>
+            <div style={{
+              fontFamily: 'SF Mono, Monaco, Consolas, monospace',
+              fontSize: '18px',
+              fontWeight: 600,
+              color: theme.isDark ? '#a78bfa' : '#7c3aed',
+              letterSpacing: '2px',
+            }}>
+              {callsign}
+            </div>
+          </div>
+        )}
+
+        <p style={styles.subtitle}>
+          You're all set. Ready to continue?
+        </p>
+
+        <button
+          style={{ ...styles.primaryButton, marginTop: '16px', width: '100%' }}
+          onClick={isReturningUser ? onFinishReturning : onFinish}
+        >
+          Done
+        </button>
+      </div>
+    );
+  }
+
   // If already logged in, show confirmation and continue button.
   if (existingEmail) {
     return (
       <div style={styles.phase}>
         <h1 style={styles.title}>Welcome Back</h1>
+
+        {/* Show call sign prominently */}
+        {callsign && (
+          <div style={{
+            marginBottom: '16px',
+            padding: '12px 16px',
+            backgroundColor: theme.isDark ? 'rgba(139, 92, 246, 0.1)' : 'rgba(139, 92, 246, 0.08)',
+            borderRadius: '8px',
+            border: `1px solid ${theme.isDark ? 'rgba(139, 92, 246, 0.3)' : 'rgba(139, 92, 246, 0.2)'}`,
+          }}>
+            <div style={{
+              fontSize: '11px',
+              color: theme.textSecondary,
+              marginBottom: '4px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px',
+            }}>
+              Your Call Sign
+            </div>
+            <div style={{
+              fontFamily: 'SF Mono, Monaco, Consolas, monospace',
+              fontSize: '18px',
+              fontWeight: 600,
+              color: theme.isDark ? '#a78bfa' : '#7c3aed',
+              letterSpacing: '2px',
+            }}>
+              {callsign}
+            </div>
+          </div>
+        )}
+
         <p style={styles.subtitle}>
           You're signed in as {existingEmail}
         </p>
