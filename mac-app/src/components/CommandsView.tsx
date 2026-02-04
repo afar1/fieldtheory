@@ -1302,9 +1302,9 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
                 onShowInFolder={viewMode === 'mine' && selectedCommand ? () => window.shellAPI?.showItemInFolder(selectedCommand.filePath) : undefined}
                 showFolder={viewMode === 'mine' && !!selectedCommand}
                 onCopy={() => {
-                  const content = selectedCommand?.content || selectedPopularCommand?.content || '';
-                  const id = selectedPopularCommand?.id;
-                  handleCopyContent(content, id);
+                  const content = viewMode === 'mine' ? selectedCommand?.content : selectedPopularCommand?.content;
+                  const id = viewMode === 'popular' ? selectedPopularCommand?.id : undefined;
+                  handleCopyContent(content || '', id);
                 }}
                 showCopy={true}
                 shareStatus={viewMode === 'mine' ? shareStatus : null}
@@ -1381,6 +1381,18 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
                 />
               ) : (
                 <>
+                  {/* Title - show command name as heading */}
+                  <h1 style={{
+                    fontSize: textSizes[textSize].h1,
+                    fontWeight: 600,
+                    marginTop: 0,
+                    marginBottom: '10px',
+                    lineHeight: 1.2,
+                    color: theme.text,
+                    fontFamily: fonts.sans,
+                  }}>
+                    {viewMode === 'mine' ? selectedCommand?.name : selectedPopularCommand?.name}
+                  </h1>
                   <div
                     className="command-content"
                     style={{
@@ -1553,7 +1565,7 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
                         ),
                       }}
                     >
-                      {selectedCommand?.content || selectedPopularCommand?.content || ''}
+                      {viewMode === 'mine' ? selectedCommand?.content || '' : selectedPopularCommand?.content || ''}
                     </ReactMarkdown>
                   </div>
                   <div style={{ height: '50vh', flexShrink: 0 }} />
