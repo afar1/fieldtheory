@@ -312,11 +312,10 @@ export class HotkeyManager {
   change(id: HotkeyId, newKey: string): HotkeyResult {
     const existingCallback = this.callbacks.get(id);
 
+    // If no callback registered yet (e.g., during onboarding), just return success.
+    // The actual registration will happen later when the callback is set.
     if (!existingCallback) {
-      return {
-        success: false,
-        error: 'No callback registered for this hotkey',
-      };
+      return { success: true };
     }
 
     // If clearing the hotkey
