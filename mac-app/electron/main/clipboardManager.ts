@@ -1473,10 +1473,8 @@ export class ClipboardManager extends EventEmitter {
     };
 
     const hotkey = this.config.screenshotHotkey || '';
-    log.info(`Registering screenshot hotkey: "${hotkey}"`);
     const result = hotkeyManager.register('screenshot', hotkey, wrappedCallback);
     this.screenshotHotkeyRegistered = result.success;
-    log.info(`Screenshot hotkey registration result: success=${result.success}, error=${result.error || 'none'}`);
 
     return result.success;
   }
