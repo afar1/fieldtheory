@@ -14,6 +14,10 @@ export function hasReleaseNotes(version: string): boolean {
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.64': [
+    'Fixed onboarding shortcuts - hotkey configuration now works properly for new users',
+    'Fixed popular commands display in Commands tab',
+  ],
   '0.1.63': [
     'Fixed daily logout bug - authentication no longer expires automatically',
     'Pro status now persists across app restarts',
@@ -141,6 +145,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.64': 'Feb 4 2026',
   '0.1.63': 'Feb 3 2026',
   '0.1.62': 'Feb 3 2026',
   '0.1.61': 'Feb 3 2026',
