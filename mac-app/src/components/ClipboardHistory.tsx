@@ -601,6 +601,13 @@ export default function ClipboardHistory() {
   const [quotaPercentUsed, setQuotaPercentUsed] = useState(0); // Max percentage of either quota
   const [usageHovered, setUsageHovered] = useState(false);
   const [priorityMicQuotaExhausted, setPriorityMicQuotaExhausted] = useState(false);
+  // Track individual quota percentages for 85% warning in footer
+  const [quotaPercents, setQuotaPercents] = useState<{
+    textImprove: number;
+    priorityMic: number;
+    autoStack: number;
+    verbalCommands: number;
+  }>({ textImprove: 0, priorityMic: 0, autoStack: 0, verbalCommands: 0 });
 
   // Narration playback state for footer controls
   const [narrationPlayback, setNarrationPlayback] = useState<{
@@ -612,6 +619,9 @@ export default function ClipboardHistory() {
   
   // Show in Dock - affects header padding for stoplight buttons.
   const [showInDock, setShowInDock] = useState(false);
+
+  // Show fieldtheory.dev link in footer.
+  const [showFieldTheoryLink, setShowFieldTheoryLink] = useState(true);
 
   // Show release notes once after app update (not on fresh install)
   useEffect(() => {
@@ -660,6 +670,13 @@ export default function ClipboardHistory() {
       setShowInDock(show);
     });
   }, [isVisible]);
+
+  // Load show fieldtheory.dev link setting.
+  useEffect(() => {
+    window.clipboardAPI?.getShowFieldTheoryLink?.().then(show => {
+      setShowFieldTheoryLink(show);
+    });
+  }, [isVisible]);
   
   // Fetch quota usage on mount and when visibility changes.
   useEffect(() => {
@@ -683,6 +700,14 @@ export default function ClipboardHistory() {
 
           // Track if priority mic quota is exhausted for dropdown
           setPriorityMicQuotaExhausted(!quotas.priorityMic.allowed);
+
+          // Track individual percentages for 85% warning in footer
+          setQuotaPercents({
+            textImprove: quotas.textImprove.percentUsed,
+            priorityMic: quotas.priorityMic.percentUsed,
+            autoStack: quotas.autoStack.percentUsed,
+            verbalCommands: quotas.verbalCommands.percentUsed,
+          });
         }
       } catch (err) {
         console.error('[ClipboardHistory] Failed to load quota usage:', err);
@@ -708,8 +733,18 @@ export default function ClipboardHistory() {
   useEffect(() => {
     if (!window.quotaAPI?.onQuotaChanged) return;
 
-    const cleanup = window.quotaAPI.onQuotaChanged((formatted) => {
+    const cleanup = window.quotaAPI.onQuotaChanged(async (formatted) => {
       setQuotaUsage(formatted);
+      // Also refresh percentages for 85% warning
+      const quotas = await window.quotaAPI?.getQuotas();
+      if (quotas) {
+        setQuotaPercents({
+          textImprove: quotas.textImprove.percentUsed,
+          priorityMic: quotas.priorityMic.percentUsed,
+          autoStack: quotas.autoStack.percentUsed,
+          verbalCommands: quotas.verbalCommands.percentUsed,
+        });
+      }
     });
 
     return cleanup;
@@ -6077,7 +6112,7 @@ export default function ClipboardHistory() {
           transition: 'height 0.3s ease, padding 0.3s ease',
         }}
       >
-        {/* Left side: Dark mode toggle + Plan info (quotas or stats) */}
+        {/* Left side: Plan info (quotas or stats) */}
         <div
           style={{
             display: 'flex',
@@ -6089,45 +6124,6 @@ export default function ClipboardHistory() {
             flex: 1,
           }}
         >
-          {/* Dark/Light mode toggle - always visible */}
-          <button
-            onClick={toggleDarkMode}
-            title={theme.isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-            style={{
-              width: '18px',
-              height: '18px',
-              padding: 0,
-              backgroundColor: 'transparent',
-              border: `1px solid ${theme.border}`,
-              borderRadius: '4px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              transition: 'all 0.15s ease',
-              marginRight: '4px',
-            }}
-          >
-            {theme.isDark ? (
-              // Sun icon for "switch to light" - distinct radiating design
-              <svg width="10" height="10" viewBox="0 0 24 24" fill={theme.textSecondary} stroke="none">
-                <circle cx="12" cy="12" r="4" />
-                <rect x="11" y="1" width="2" height="4" rx="1" />
-                <rect x="11" y="19" width="2" height="4" rx="1" />
-                <rect x="19" y="11" width="4" height="2" rx="1" />
-                <rect x="1" y="11" width="4" height="2" rx="1" />
-                <rect x="17.5" y="4.1" width="2" height="4" rx="1" transform="rotate(45 18.5 6.1)" />
-                <rect x="4.5" y="15.9" width="2" height="4" rx="1" transform="rotate(45 5.5 17.9)" />
-                <rect x="15.9" y="17.5" width="4" height="2" rx="1" transform="rotate(45 17.9 18.5)" />
-                <rect x="4.1" y="4.5" width="4" height="2" rx="1" transform="rotate(45 6.1 5.5)" />
-              </svg>
-            ) : (
-              // Moon icon for "switch to dark"
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-              </svg>
-            )}
-          </button>
           {/* Plan info - always show for logged in users */}
           {authSession && cachedTier === 'pro' ? (
                 // Pro Plan: show cycling stats on click
@@ -6147,59 +6143,119 @@ export default function ClipboardHistory() {
                   </span>
                 </>
               ) : authSession && quotaUsage ? (
-                // Basic Plan: show words transcribed + hover for quota details + Upgrade
-                <div
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap', position: 'relative' }}
-                  onMouseEnter={() => setUsageHovered(true)}
-                  onMouseLeave={() => setUsageHovered(false)}
-                >
-                  <span style={{ fontWeight: 500 }}>Basic:</span>
-                  <span>{formatNumber(allTimeStats.words)} words transcribed</span>
-                  {/* Quota tooltip on hover */}
-                  {usageHovered && (
+                // Basic Plan: show quota warnings at 85% OR words transcribed + hover for quota details + Upgrade
+                (() => {
+                  // Build list of quotas at 85% or higher
+                  const quotaWarnings: { name: string; percent: number }[] = [];
+                  if (quotaPercents.textImprove >= 85) quotaWarnings.push({ name: 'Text improve', percent: quotaPercents.textImprove });
+                  if (quotaPercents.priorityMic >= 85) quotaWarnings.push({ name: 'Priority mic', percent: quotaPercents.priorityMic });
+                  if (quotaPercents.autoStack >= 85) quotaWarnings.push({ name: 'Auto-stack', percent: quotaPercents.autoStack });
+                  if (quotaPercents.verbalCommands >= 85) quotaWarnings.push({ name: 'Voice commands', percent: quotaPercents.verbalCommands });
+                  const hasQuotaWarnings = quotaWarnings.length > 0;
+
+                  return (
                     <div
-                      style={{
-                        position: 'absolute',
-                        bottom: '100%',
-                        left: 0,
-                        marginBottom: '8px',
-                        padding: '8px 12px',
-                        backgroundColor: theme.bgSecondary,
-                        border: `1px solid ${theme.border}`,
-                        borderRadius: '6px',
-                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                        fontSize: '10px',
-                        whiteSpace: 'nowrap',
-                        zIndex: 100,
-                      }}
+                      style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap', position: 'relative' }}
+                      onMouseEnter={() => setUsageHovered(true)}
+                      onMouseLeave={() => setUsageHovered(false)}
                     >
-                      <div style={{ marginBottom: '4px', fontWeight: 500, color: theme.text }}>Monthly Quota</div>
-                      <div style={{ color: theme.textSecondary }}>{quotaUsage.textImprove}</div>
-                      <div style={{ color: theme.textSecondary }}>{quotaUsage.verbalCommands}</div>
-                      <div style={{ color: theme.textSecondary }}>{quotaUsage.autoStack}</div>
+                      <span style={{ fontWeight: 500 }}>Basic:</span>
+                      {hasQuotaWarnings ? (
+                        // Show quota warnings (85%+ usage)
+                        <span style={{ color: theme.warning || '#f59e0b' }}>
+                          {quotaWarnings.map((w, i) => (
+                            <span key={w.name}>
+                              {i > 0 && ', '}
+                              {w.name} {Math.round(w.percent)}%
+                            </span>
+                          ))}
+                        </span>
+                      ) : (
+                        // Normal display: words transcribed
+                        <span>{formatNumber(allTimeStats.words)} words transcribed</span>
+                      )}
+                      {/* Quota tooltip on hover */}
+                      {usageHovered && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            bottom: '100%',
+                            left: 0,
+                            marginBottom: '8px',
+                            padding: '8px 12px',
+                            backgroundColor: theme.bgSecondary,
+                            border: `1px solid ${theme.border}`,
+                            borderRadius: '6px',
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                            fontSize: '10px',
+                            whiteSpace: 'nowrap',
+                            zIndex: 100,
+                          }}
+                        >
+                          <div style={{ marginBottom: '4px', fontWeight: 500, color: theme.text }}>Monthly Quota</div>
+                          <div style={{ color: theme.textSecondary }}>{quotaUsage.textImprove}</div>
+                          <div style={{ color: theme.textSecondary }}>{quotaUsage.verbalCommands}</div>
+                          <div style={{ color: theme.textSecondary }}>{quotaUsage.autoStack}</div>
+                        </div>
+                      )}
+                      <span style={{ opacity: 0.4 }}>·</span>
+                      <span
+                        onClick={() => {
+                          // Open Stripe checkout with user ID for webhook linking.
+                          const userId = authSession.user.id;
+                          const paymentLink = window.stripeConfig?.paymentLink || '';
+                          window.shellAPI?.openExternal(
+                            `${paymentLink}?client_reference_id=${userId}`
+                          );
+                        }}
+                        style={{
+                          color: theme.accent,
+                          cursor: 'pointer',
+                          textDecoration: 'underline',
+                        }}
+                      >
+                        Upgrade
+                      </span>
                     </div>
-                  )}
-                  <span style={{ opacity: 0.4 }}>·</span>
-                  <span
-                    onClick={() => {
-                      // Open Stripe checkout with user ID for webhook linking.
-                      const userId = authSession.user.id;
-                      const paymentLink = window.stripeConfig?.paymentLink || '';
-                      window.shellAPI?.openExternal(
-                        `${paymentLink}?client_reference_id=${userId}`
-                      );
-                    }}
-                    style={{
-                      color: theme.accent,
-                      cursor: 'pointer',
-                      textDecoration: 'underline',
-                    }}
-                  >
-                    Upgrade
-                  </span>
-                </div>
+                  );
+                })()
               ) : null}
         </div>
+
+        {/* Center: fieldtheory.dev link (hidden when quota warnings show for basic users) */}
+        {(() => {
+          // Check if any quota is at 85% or higher (only relevant for basic users)
+          const hasQuotaWarnings = cachedTier === 'free' && (
+            quotaPercents.textImprove >= 85 ||
+            quotaPercents.priorityMic >= 85 ||
+            quotaPercents.autoStack >= 85 ||
+            quotaPercents.verbalCommands >= 85
+          );
+
+          // Show link when: preference is on, no quota warnings, not showing narration
+          const showLink = showFieldTheoryLink &&
+            !hasQuotaWarnings &&
+            (!FEATURE_NARRATION_ENABLED || narrationPlayback.status === 'idle');
+
+          return showLink ? (
+            <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
+              <span
+                onClick={() => window.shellAPI?.openExternal('https://fieldtheory.dev')}
+                style={{
+                  fontSize: '9px',
+                  color: theme.textSecondary,
+                  cursor: 'pointer',
+                  opacity: 0.7,
+                  transition: 'opacity 0.15s',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; }}
+              >
+                fieldtheory.dev
+              </span>
+            </div>
+          ) : null;
+        })()}
 
         {/* Center: Librarian narration playback controls (feature flagged) */}
         {FEATURE_NARRATION_ENABLED && narrationPlayback.status !== 'idle' && (
@@ -6410,14 +6466,15 @@ export default function ClipboardHistory() {
               )}
             </div>
           ) : (
-            <div
-              onMouseEnter={() => setVersionHovered(true)}
-              onMouseLeave={() => setVersionHovered(false)}
-              style={{ display: 'flex', gap: '6px', alignItems: 'center' }}
-            >
-              {versionHovered ? (
-                <>
-                  {updateStatus === 'uptodate' ? (
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+              {/* Version/update text - hover triggers check for updates */}
+              <div
+                onMouseEnter={() => setVersionHovered(true)}
+                onMouseLeave={() => setVersionHovered(false)}
+                style={{ display: 'flex', gap: '6px', alignItems: 'center' }}
+              >
+                {versionHovered ? (
+                  updateStatus === 'uptodate' ? (
                     <span style={{ color: theme.success, fontSize: '9px' }}>
                       Up to date ✓
                     </span>
@@ -6438,110 +6495,97 @@ export default function ClipboardHistory() {
                     >
                       Check for updates
                     </button>
-                  )}
-                  {/* Release notes toggle button - only on hover */}
-                  <button
-                    onClick={() => {
-                      if (!hasReleaseNotes(appVersion)) return;
-                      if (showReleaseNotes) {
-                        setShowReleaseNotes(false);
-                        setReleaseNotesLatestMode(false);
-                      } else {
-                        setShowReleaseNotes(true);
-                      }
-                    }}
-                    disabled={!hasReleaseNotes(appVersion)}
-                    style={{
-                      width: '14px',
-                      height: '14px',
-                      padding: 0,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: showReleaseNotes ? theme.accent : 'transparent',
-                      border: 'none',
-                      borderRadius: '3px',
-                      cursor: hasReleaseNotes(appVersion) ? 'pointer' : 'default',
-                      transition: 'all 0.15s ease',
-                      opacity: hasReleaseNotes(appVersion) ? 1 : 0.3,
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!showReleaseNotes && hasReleaseNotes(appVersion)) {
-                        e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!showReleaseNotes) {
-                        e.currentTarget.style.backgroundColor = 'transparent';
-                      }
-                    }}
-                  >
-                    <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke={showReleaseNotes ? '#fff' : theme.textSecondary} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                      <line x1="3" y1="9" x2="21" y2="9" />
-                    </svg>
-                  </button>
-                </>
-              ) : (
-                <>
-                  {librarianStatus && (
-                    <span style={{ color: librarianStatus.edits >= librarianStatus.threshold ? '#f59e0b' : theme.textSecondary, fontSize: '9px', fontStyle: 'italic' }}>
-                      {librarianStatus.edits}/{librarianStatus.threshold}
+                  )
+                ) : (
+                  <>
+                    {userCallsign && (
+                      <span style={{ color: theme.textSecondary, fontSize: '9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', letterSpacing: '0.5px' }}>
+                        {userCallsign}
+                      </span>
+                    )}
+                    {librarianStatus && (
+                      <span style={{ color: librarianStatus.edits >= librarianStatus.threshold ? '#f59e0b' : theme.textSecondary, fontSize: '9px', fontStyle: 'italic' }}>
+                        {librarianStatus.edits}/{librarianStatus.threshold}
+                      </span>
+                    )}
+                    <span style={{ color: updateStatus === 'uptodate' ? theme.success : theme.textSecondary, fontSize: '9px', fontStyle: 'italic' }}>
+                      {updateStatus === 'uptodate' ? 'Up to date ✓' : `v${appVersion}`}
                     </span>
-                  )}
-                  <span style={{ color: updateStatus === 'uptodate' ? theme.success : theme.textSecondary, fontSize: '9px', fontStyle: 'italic' }}>
-                    {updateStatus === 'uptodate' ? 'Up to date ✓' : `v${appVersion}`}
-                  </span>
-                  {userCallsign && (
-                    <span style={{ color: theme.textSecondary, fontSize: '9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', letterSpacing: '0.5px' }}>
-                      {userCallsign}
-                    </span>
-                  )}
-                  {/* Release notes toggle button */}
-                  <button
-                    onClick={() => {
-                      if (!hasReleaseNotes(appVersion)) return;
-                      if (showReleaseNotes) {
-                        setShowReleaseNotes(false);
-                        setReleaseNotesLatestMode(false);
-                      } else {
-                        setShowReleaseNotes(true);
-                        setReleaseNotesLatestMode(true);
-                      }
-                    }}
-                    disabled={!hasReleaseNotes(appVersion)}
-                    style={{
-                      width: '14px',
-                      height: '14px',
-                      padding: 0,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: showReleaseNotes ? theme.accent : 'transparent',
-                      border: 'none',
-                      borderRadius: '3px',
-                      cursor: hasReleaseNotes(appVersion) ? 'pointer' : 'default',
-                      transition: 'all 0.15s ease',
-                      opacity: hasReleaseNotes(appVersion) ? 1 : 0.3,
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!showReleaseNotes && hasReleaseNotes(appVersion)) {
-                        e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!showReleaseNotes) {
-                        e.currentTarget.style.backgroundColor = 'transparent';
-                      }
-                    }}
-                  >
-                    <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke={showReleaseNotes ? '#fff' : theme.textSecondary} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                      <line x1="3" y1="9" x2="21" y2="9" />
-                    </svg>
-                  </button>
-                </>
-              )}
+                  </>
+                )}
+              </div>
+              {/* Release notes toggle button - always visible, styled like dark mode toggle */}
+              <button
+                onClick={() => {
+                  if (!hasReleaseNotes(appVersion)) return;
+                  if (showReleaseNotes) {
+                    setShowReleaseNotes(false);
+                    setReleaseNotesLatestMode(false);
+                  } else {
+                    setShowReleaseNotes(true);
+                    setReleaseNotesLatestMode(true);
+                  }
+                }}
+                disabled={!hasReleaseNotes(appVersion)}
+                title="Release notes"
+                style={{
+                  width: '18px',
+                  height: '18px',
+                  padding: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: showReleaseNotes ? theme.accent : 'transparent',
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '4px',
+                  cursor: hasReleaseNotes(appVersion) ? 'pointer' : 'default',
+                  transition: 'all 0.15s ease',
+                  opacity: hasReleaseNotes(appVersion) ? 1 : 0.3,
+                }}
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={showReleaseNotes ? '#fff' : theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                  <line x1="3" y1="9" x2="21" y2="9" />
+                </svg>
+              </button>
+              {/* Dark/Light mode toggle */}
+              <button
+                onClick={toggleDarkMode}
+                title={theme.isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                style={{
+                  width: '18px',
+                  height: '18px',
+                  padding: 0,
+                  backgroundColor: 'transparent',
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {theme.isDark ? (
+                  // Sun icon for "switch to light"
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill={theme.textSecondary} stroke="none">
+                    <circle cx="12" cy="12" r="4" />
+                    <rect x="11" y="1" width="2" height="4" rx="1" />
+                    <rect x="11" y="19" width="2" height="4" rx="1" />
+                    <rect x="19" y="11" width="4" height="2" rx="1" />
+                    <rect x="1" y="11" width="4" height="2" rx="1" />
+                    <rect x="17.5" y="4.1" width="2" height="4" rx="1" transform="rotate(45 18.5 6.1)" />
+                    <rect x="4.5" y="15.9" width="2" height="4" rx="1" transform="rotate(45 5.5 17.9)" />
+                    <rect x="15.9" y="17.5" width="4" height="2" rx="1" transform="rotate(45 17.9 18.5)" />
+                    <rect x="4.1" y="4.5" width="4" height="2" rx="1" transform="rotate(45 6.1 5.5)" />
+                  </svg>
+                ) : (
+                  // Moon icon for "switch to dark"
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                  </svg>
+                )}
+              </button>
             </div>
           )}
         </div>

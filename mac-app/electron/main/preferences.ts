@@ -112,6 +112,9 @@ interface Preferences {
   // Show in Dock and Cmd+Tab - when enabled, app appears in Dock and application switcher.
   showInDock?: boolean;
 
+  // Show fieldtheory.dev link in footer - toggleable per user preference.
+  showFieldTheoryLink?: boolean;
+
   // Launch at login - start Field Theory automatically when macOS starts.
   launchAtLogin?: boolean;
 

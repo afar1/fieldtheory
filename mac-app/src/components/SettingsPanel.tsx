@@ -231,6 +231,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   // Show in Dock - whether app appears in Dock and Cmd+Tab.
   const [showInDock, setShowInDock] = useState(false);
 
+  // Show fieldtheory.dev link in footer.
+  const [showFieldTheoryLink, setShowFieldTheoryLink] = useState(true);
+
   // Launch at login - start app when macOS starts.
   const [launchAtLogin, setLaunchAtLogin] = useState(true);
 
@@ -347,6 +350,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       // Load show in dock setting
       window.clipboardAPI.getShowInDock?.().then(show => {
         setShowInDock(show);
+      });
+
+      // Load show fieldtheory.dev link setting
+      window.clipboardAPI.getShowFieldTheoryLink?.().then(show => {
+        setShowFieldTheoryLink(show);
       });
 
       // Load launch at login setting
@@ -1396,6 +1404,26 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             </div>
           </div>
         )}
+
+        {/* Show fieldtheory.dev link in footer */}
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={styles.rowLabel}>Show Website Link</span>
+            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+              Display fieldtheory.dev in footer
+            </span>
+          </div>
+          <button
+            onClick={async () => {
+              const newValue = !showFieldTheoryLink;
+              setShowFieldTheoryLink(newValue);
+              await window.clipboardAPI?.setShowFieldTheoryLink?.(newValue);
+            }}
+            style={{ ...styles.toggle, backgroundColor: showFieldTheoryLink ? theme.success : '#d1d5db' }}
+          >
+            <span style={{ ...styles.toggleKnob, transform: showFieldTheoryLink ? 'translateX(20px)' : 'translateX(2px)' }} />
+          </button>
+        </div>
       </div>
 
       {/* System Access Section - Permission status with quick links to settings */}

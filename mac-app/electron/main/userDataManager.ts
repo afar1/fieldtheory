@@ -133,6 +133,45 @@ export class UserDataManager extends EventEmitter {
   }
 
   /**
+   * Permanently delete all local data for the current user.
+   * Called on account deletion for GDPR compliance (right to erasure).
+   * DANGER: This is irreversible and deletes all user preferences, figures, etc.
+   * @returns true if deletion succeeded, false if no user was logged in
+   */
+  async deleteCurrentUserData(): Promise<boolean> {
+    const callsign = this.currentCallsign;
+    if (!callsign) {
+      return false;
+    }
+
+    // Get paths BEFORE clearing current user
+    const userDataDir = path.join(this.baseUserDataPath, 'users', callsign);
+    const fieldTheoryDir = path.join(this.baseFieldTheoryPath, 'users', callsign);
+
+    // Clear current user state first
+    await this.clearCurrentUser();
+
+    // Delete user directories
+    try {
+      if (await fs.pathExists(userDataDir)) {
+        await fs.remove(userDataDir);
+      }
+    } catch (err) {
+      console.error('[UserDataManager] Failed to delete user data dir:', err);
+    }
+
+    try {
+      if (await fs.pathExists(fieldTheoryDir)) {
+        await fs.remove(fieldTheoryDir);
+      }
+    } catch (err) {
+      console.error('[UserDataManager] Failed to delete fieldtheory dir:', err);
+    }
+
+    return true;
+  }
+
+  /**
    * Try to restore the current user from saved file.
    * Called on app startup before auth check.
    * @returns The restored callsign, or null if none saved
