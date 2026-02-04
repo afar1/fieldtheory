@@ -1,6 +1,6 @@
 {
   "name": "fieldtheory-mac",
-  "version": "0.1.62",
+  "version": "0.1.63",
   "private": true,
   "main": "electron-dist/main/index.js",
   "scripts": {

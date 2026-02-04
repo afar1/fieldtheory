@@ -152,11 +152,19 @@ class FileStorage implements SupportedStorage {
 // AuthManager
 // =============================================================================
 
+export interface AuthDebugEvent {
+  timestamp: string;
+  event: string;
+  details: Record<string, unknown>;
+  level: 'info' | 'warn' | 'error' | 'recovery';
+}
+
 export interface AuthManagerEvents {
   sessionChanged: (session: Session | null) => void;
   tierChanged: (tier: string) => void;
   userChanged: (callsign: string) => void;
   userLoggedOut: () => void;
+  authDebug: (event: AuthDebugEvent) => void;
 }
 
 export class AuthManager extends EventEmitter {
@@ -184,6 +192,24 @@ export class AuthManager extends EventEmitter {
 
   constructor() {
     super();
+  }
+
+  /**
+   * Emit a debug event for monitoring auth behavior.
+   * These events are forwarded to renderer for DevTools visibility.
+   */
+  private emitDebug(event: string, details: Record<string, unknown>, level: AuthDebugEvent['level'] = 'info'): void {
+    const debugEvent: AuthDebugEvent = {
+      timestamp: new Date().toISOString(),
+      event,
+      details,
+      level,
+    };
+    this.emit('authDebug', debugEvent);
+
+    // Also log to main process for Console.app
+    const prefix = level === 'error' ? 'ERR' : level === 'warn' ? 'WARN' : level === 'recovery' ? 'RECOVERY' : '→';
+    log.info(`[AuthDebug] ${prefix} ${event}:`, JSON.stringify(details));
   }
 
   /**
@@ -263,7 +289,10 @@ export class AuthManager extends EventEmitter {
 
       if (event === 'TOKEN_REFRESHED') {
         // Shouldn't happen with autoRefreshToken: false, but handle defensively
-        log.debug('Token refreshed (unexpected with autoRefreshToken disabled)');
+        this.emitDebug('SDK_TOKEN_REFRESHED_UNEXPECTED', {
+          note: 'TOKEN_REFRESHED fired despite autoRefreshToken:false',
+          hasSession: !!session,
+        }, 'warn');
         this.session = session;
         this.scheduleTokenRefresh();
         // Don't emit sessionChanged for token refresh - session user didn't change
@@ -271,23 +300,32 @@ export class AuthManager extends EventEmitter {
         // Clear refresh timer on logout
         this.clearRefreshTimer();
 
+        this.emitDebug('SDK_SIGNED_OUT_RECEIVED', {
+          hadPreviousUser: this.lastEmittedUserId !== null,
+          attemptingRecovery: true,
+        }, 'warn');
+
         // Try recovery before accepting logout (SDK may have fired spuriously)
         const recovered = await this.attemptSessionRecovery();
         if (recovered) {
-          log.info('Recovered session, ignoring spurious SIGNED_OUT');
+          this.emitDebug('SPURIOUS_LOGOUT_RECOVERED', {
+            note: 'SDK fired SIGNED_OUT but we recovered from disk',
+            recoveredUser: this.session?.user?.email,
+          }, 'recovery');
           return;
         }
 
+        // Auth principle: never auto-logout. Even if SDK fires SIGNED_OUT and
+        // recovery fails, keep the local session. User stays "logged in" locally.
+        // API calls will fail silently, user can re-login from Settings when needed.
         if (this.lastEmittedUserId !== null) {
-          this.session = null;
-          this.lastEmittedUserId = null;
-
-          // Coordinate with UserDataManager
-          if (this.userDataManager) {
-            await this.userDataManager.clearCurrentUser();
-          }
-          this.emit('userLoggedOut');
-          this.emit('sessionChanged', null);
+          this.emitDebug('SIGNED_OUT_IGNORED', {
+            previousUserId: this.lastEmittedUserId,
+            recoveryFailed: true,
+            action: 'Keeping local session, not logging out',
+          }, 'info');
+          // Don't clear session, don't emit userLoggedOut, don't clear UserDataManager.
+          // User remains "logged in" from app's perspective.
         }
       } else if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && isNewSession) {
         // Only emit if this is actually a new user session
@@ -391,13 +429,19 @@ export class AuthManager extends EventEmitter {
   private async coordinatedRefresh(refreshToken: string, source: string): Promise<boolean> {
     // If a refresh is already in progress, wait for it
     if (this.refreshInProgress) {
-      log.debug(`Refresh already in progress, ${source} waiting...`);
+      this.emitDebug('REFRESH_WAITING', {
+        source,
+        note: 'Another refresh in progress, waiting...',
+      }, 'info');
       await this.refreshInProgress;
       return !!this.session;
     }
 
     // Start a new refresh operation
-    log.debug(`Starting coordinated refresh from ${source}`);
+    this.emitDebug('REFRESH_STARTED', {
+      source,
+      tokenPrefix: refreshToken.substring(0, 8) + '...',
+    }, 'info');
 
     // Create a promise that other callers can wait on
     let resolveRefresh: () => void;
@@ -427,12 +471,21 @@ export class AuthManager extends EventEmitter {
         if (this.isTokenRevoked(refreshError)) {
           // Belt-and-suspenders: before logging out, check if we actually have a valid session
           // This handles edge cases where refresh succeeded via another path
-          log.warn(`Token error (${source}): ${refreshError.message} - checking for valid session...`);
+          this.emitDebug('REFRESH_TOKEN_ERROR', {
+            source,
+            error: refreshError.message,
+            isRevoked: true,
+            attemptingSessionCheck: true,
+          }, 'warn');
 
           try {
             const { data: currentSession } = await this.supabase!.auth.getSession();
             if (currentSession?.session?.access_token && currentSession.session.user) {
-              log.info('Token error but valid session exists - recovering');
+              this.emitDebug('REFRESH_ERROR_BUT_SESSION_VALID', {
+                source,
+                note: 'Token error but found valid session - recovering',
+                user: currentSession.session.user.email,
+              }, 'recovery');
               this.session = currentSession.session;
               this.scheduleTokenRefresh();
               return true; // Recovered!
@@ -441,13 +494,22 @@ export class AuthManager extends EventEmitter {
             log.debug('Session check failed:', checkErr);
           }
 
-          // No valid session found - this is a real logout
-          log.warn(`Refresh token revoked (${source}), user must re-login`);
-          this.fileStorage?.clearStorage();
+          // No valid session found - but don't log out.
+          // Auth principle: never auto-logout. User stays "logged in" locally.
+          // API calls will fail silently, user can re-login from Settings when needed.
+          this.emitDebug('REFRESH_TOKEN_INVALID', {
+            source,
+            error: refreshError.message,
+            action: 'Keeping local session, API calls will fail gracefully',
+          }, 'warn');
           return false;
         } else {
           // Network error - will retry via scheduled refresh
-          log.warn(`Error during ${source} refresh:`, refreshError.message);
+          this.emitDebug('REFRESH_NETWORK_ERROR', {
+            source,
+            error: refreshError.message,
+            willRetry: true,
+          }, 'warn');
           return false;
         }
       }
@@ -455,6 +517,8 @@ export class AuthManager extends EventEmitter {
       if (refreshData.session) {
         this.session = refreshData.session;
         const userId = refreshData.session.user?.id ?? null;
+        const expiresAt = refreshData.session.expires_at;
+        const expiresInMinutes = expiresAt ? Math.round((expiresAt * 1000 - Date.now()) / 60000) : null;
 
         // Only emit userChanged if onAuthStateChange hasn't already done so
         const shouldEmitUserChanged = userId !== this.lastEmittedUserId;
@@ -467,7 +531,12 @@ export class AuthManager extends EventEmitter {
           this.emit('userChanged', userId);
         }
 
-        log.info(`Refresh succeeded (${source}) for user:`, refreshData.session.user?.email, userId ? `(${userId})` : '', shouldEmitUserChanged ? '(new)' : '(already emitted)');
+        this.emitDebug('REFRESH_SUCCESS', {
+          source,
+          user: refreshData.session.user?.email,
+          expiresInMinutes,
+          newUserEmitted: shouldEmitUserChanged,
+        }, 'info');
         this.emit('sessionChanged', this.session);
 
         // Schedule next refresh
@@ -491,20 +560,33 @@ export class AuthManager extends EventEmitter {
   private async attemptSessionRecovery(): Promise<boolean> {
     const sessionPath = path.join(app.getPath('userData'), 'supabase-session.json');
     try {
-      if (!fs.existsSync(sessionPath)) return false;
+      if (!fs.existsSync(sessionPath)) {
+        this.emitDebug('RECOVERY_NO_DISK_SESSION', {
+          path: sessionPath,
+        }, 'info');
+        return false;
+      }
 
       const diskData = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
       for (const value of Object.values(diskData)) {
         if (typeof value === 'string') {
           const parsed = JSON.parse(value);
           if (parsed?.refresh_token) {
-            log.debug('Found disk-preserved refresh token, attempting recovery...');
+            this.emitDebug('RECOVERY_FOUND_DISK_TOKEN', {
+              tokenPrefix: parsed.refresh_token.substring(0, 8) + '...',
+              user: parsed.user?.email,
+            }, 'recovery');
             return await this.coordinatedRefresh(parsed.refresh_token, 'recovery');
           }
         }
       }
+      this.emitDebug('RECOVERY_NO_TOKEN_IN_DISK_DATA', {
+        keysFound: Object.keys(diskData),
+      }, 'warn');
     } catch (err) {
-      log.warn('Recovery failed:', err);
+      this.emitDebug('RECOVERY_FAILED', {
+        error: err instanceof Error ? err.message : String(err),
+      }, 'error');
     }
     return false;
   }
@@ -535,10 +617,8 @@ export class AuthManager extends EventEmitter {
       const success = await this.coordinatedRefresh(refreshToken, 'setSession');
 
       if (!success) {
-        if (this.isTokenRevoked({ message: 'refresh failed' })) {
-          this.lastFailedToken = accessToken;
-          this.clearSession();
-        }
+        // Auth principle: never auto-logout. Just track failed token to avoid retrying.
+        this.lastFailedToken = accessToken;
         return;
       }
     } else {
@@ -1045,22 +1125,34 @@ export class AuthManager extends EventEmitter {
       log.warn('No expires_at on session, using fallback refresh interval');
     }
 
-    log.debug(`Scheduling token refresh in ${Math.round(delay / 1000)}s`);
+    const delayMinutes = Math.round(delay / 60000);
+    this.emitDebug('REFRESH_SCHEDULED', {
+      delayMinutes,
+      delaySeconds: Math.round(delay / 1000),
+      expiresAt: this.session.expires_at ? new Date(this.session.expires_at * 1000).toISOString() : null,
+    }, 'info');
 
     this.refreshTimer = setTimeout(async () => {
       if (!this.session?.refresh_token) {
-        log.debug('No refresh token when timer fired, skipping');
+        this.emitDebug('REFRESH_TIMER_NO_TOKEN', {
+          note: 'Timer fired but no refresh token available',
+        }, 'warn');
         return;
       }
+
+      this.emitDebug('REFRESH_TIMER_FIRED', {
+        note: 'Scheduled refresh timer executing',
+      }, 'info');
 
       try {
         const success = await this.coordinatedRefresh(this.session.refresh_token, 'scheduled');
         if (success) {
           // coordinatedRefresh will call scheduleTokenRefresh again on success
-          log.debug('Scheduled refresh succeeded');
         } else {
           // Retry after delay
-          log.warn('Scheduled refresh failed, retrying...');
+          this.emitDebug('REFRESH_SCHEDULING_RETRY', {
+            retryInSeconds: AuthManager.RETRY_DELAY_MS / 1000,
+          }, 'warn');
           this.refreshTimer = setTimeout(() => {
             if (this.session?.refresh_token) {
               this.coordinatedRefresh(this.session.refresh_token, 'retry');

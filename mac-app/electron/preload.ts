@@ -1767,6 +1767,23 @@ const authAPI = {
 
   getSimulatorState: (): Promise<{ offline: boolean; revoked: boolean }> =>
     ipcRenderer.invoke('auth:getSimulatorState'),
+
+  // Subscribe to auth debug events (callback only - console logging handled by auto-subscribe below)
+  onDebug: (callback: (event: {
+    timestamp: string;
+    event: string;
+    details: Record<string, unknown>;
+    level: 'info' | 'warn' | 'error' | 'recovery';
+  }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, debugEvent: {
+      timestamp: string;
+      event: string;
+      details: Record<string, unknown>;
+      level: 'info' | 'warn' | 'error' | 'recovery';
+    }) => callback(debugEvent);
+    ipcRenderer.on('auth:debug', handler);
+    return () => ipcRenderer.removeListener('auth:debug', handler);
+  },
 };
 
 type AuthAPI = typeof authAPI;
@@ -2874,6 +2891,35 @@ contextBridge.exposeInMainWorld('commandsAPI', commandsAPI);
 contextBridge.exposeInMainWorld('metricsAPI', metricsAPI);
 contextBridge.exposeInMainWorld('claudeAPI', claudeAPI);
 contextBridge.exposeInMainWorld('cursorAPI', cursorAPI);
+
+// =============================================================================
+// Auto-subscribe to auth debug events for DevTools visibility
+// =============================================================================
+// This ensures auth events are always logged to the DevTools console without
+// requiring any code in the renderer to subscribe.
+ipcRenderer.on('auth:debug', (_event, debugEvent: {
+  timestamp: string;
+  event: string;
+  details: Record<string, unknown>;
+  level: 'info' | 'warn' | 'error' | 'recovery';
+}) => {
+  const levelStyles: Record<string, string> = {
+    info: 'background: #3b82f6; color: white; padding: 2px 6px; border-radius: 3px;',
+    warn: 'background: #f59e0b; color: white; padding: 2px 6px; border-radius: 3px;',
+    error: 'background: #ef4444; color: white; padding: 2px 6px; border-radius: 3px;',
+    recovery: 'background: #10b981; color: white; padding: 2px 6px; border-radius: 3px;',
+  };
+  const style = levelStyles[debugEvent.level] || levelStyles.info;
+  const time = debugEvent.timestamp.split('T')[1]?.split('.')[0] || debugEvent.timestamp;
+
+  console.log(
+    `%c AUTH ${debugEvent.level.toUpperCase()} %c ${debugEvent.event}`,
+    style,
+    'color: inherit; font-weight: bold;',
+    debugEvent.details,
+    `[${time}]`
+  );
+});
 contextBridge.exposeInMainWorld('scenarioAPI', scenarioAPI);
 
 contextBridge.exposeInMainWorld('platform', {

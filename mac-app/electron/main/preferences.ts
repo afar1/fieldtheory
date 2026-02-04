@@ -132,6 +132,10 @@ interface Preferences {
   // Data retention - how long to keep clipboard history items.
   // Values: 2, 7, 30, 90 (days) or -1 (never delete)
   dataRetentionDays?: number;
+
+  // Cached tier - persisted locally so Pro users don't get downgraded on startup.
+  // Server is authoritative; this is only for offline/startup display.
+  cachedTier?: 'free' | 'pro';
 }
 
 const DEFAULT_PREFERENCES: Preferences = {

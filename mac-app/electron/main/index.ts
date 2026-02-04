@@ -4846,7 +4846,15 @@ async function initTranscriberSystem(): Promise<void> {
   }
 
   // Broadcast tier changes to all windows so UI can update in real-time.
+  // Also persist tier locally so Pro users don't get downgraded on startup.
   quotaManager.on('tierChanged', (tier) => {
+    // Save tier to preferences for offline/startup use
+    if (preferencesManager) {
+      preferencesManager.save({ cachedTier: tier as 'free' | 'pro' }).catch((err) => {
+        log.warn('Failed to save cached tier:', err);
+      });
+    }
+
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send('tier:changed', tier);
@@ -5059,9 +5067,14 @@ async function initTranscriberSystem(): Promise<void> {
           prefs.clipboardDesktopScreenshotHotkey
         );
       }
-      // Reload favorite device for audio manager (may differ in per-user prefs)
+      // Reload audio manager preferences (may differ in per-user prefs)
       if (audioManager) {
         audioManager.setFavoriteDeviceName(prefs.favoriteDeviceName ?? null);
+        // Restore priority device - must call setPriorityDevice directly since init() already ran
+        if (prefs.priorityDeviceId) {
+          await audioManager.setPriorityDevice(prefs.priorityDeviceId);
+          log.info('Restored priority device from user prefs:', prefs.priorityDeviceId);
+        }
         log.info('Reloaded favorite device from user prefs:', prefs.favoriteDeviceName);
       }
     }
@@ -5072,6 +5085,11 @@ async function initTranscriberSystem(): Promise<void> {
       await metricsManager.reinitializeForUser();
     }
     if (quotaManager) {
+      // Set cached tier from user prefs before server sync (so Pro users stay Pro during sync)
+      const prefs = preferencesManager?.get();
+      if (prefs?.cachedTier) {
+        quotaManager.setInitialTier(prefs.cachedTier);
+      }
       quotaManager.reload();
     }
     if (librarianManager) {
@@ -5111,6 +5129,15 @@ async function initTranscriberSystem(): Promise<void> {
     }
   });
 
+  // Forward auth debug events to all renderer windows for DevTools visibility
+  authManager.on('authDebug', (event) => {
+    BrowserWindow.getAllWindows().forEach(win => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('auth:debug', event);
+      }
+    });
+  });
+
   // Now safe to init AuthManager - handlers are registered
   await authManager.init(envVars.supabaseUrl, envVars.supabaseAnonKey);
 
@@ -5141,6 +5168,13 @@ async function initTranscriberSystem(): Promise<void> {
         user: { id: session.user.id },
       };
     });
+
+    // Set initial tier from preferences so Pro users don't get downgraded on startup.
+    // Server will update this when sync completes.
+    const prefs = preferencesManager?.get();
+    if (prefs?.cachedTier) {
+      quotaManager.setInitialTier(prefs.cachedTier);
+    }
   }
 
   // Initialize feedback manager for user feedback to admin.
