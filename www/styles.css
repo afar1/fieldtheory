@@ -1072,7 +1072,9 @@ html, body {
   /* Show mobile theme toggle */
   .theme-toggle-mobile {
     display: block;
-    margin-right: var(--space-xs);
+    margin-right: 0.35rem;
+    padding: 0.5rem 0.6rem;
+    font-size: 0.85rem;
   }
 
   .theme-label {
