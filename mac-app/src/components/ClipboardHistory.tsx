@@ -1365,12 +1365,14 @@ export default function ClipboardHistory() {
       const mainProcessSession = await window.authAPI?.getSession?.();
 
       // If main process has a session but client doesn't, restore it to client.
+      // IMPORTANT: Only pass access_token, not refresh_token.
+      // Main process owns refresh logic - renderer shouldn't have refresh_token.
       if (mainProcessSession && !clientSession) {
         console.log('[ClipboardHistory] Restoring session from main process to Supabase client');
         try {
           const { data, error } = await client.auth.setSession({
             access_token: mainProcessSession.access_token,
-            refresh_token: mainProcessSession.refresh_token,
+            refresh_token: '', // Empty - main process handles refresh
           });
           if (!error && data.session) {
             setAuthSession(data.session);
