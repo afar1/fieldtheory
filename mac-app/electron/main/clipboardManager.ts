@@ -64,6 +64,15 @@ export function isIDEWithTerminal(bundleId: string | null): boolean {
 }
 
 /**
+ * Check if a bundle ID is Finder.
+ * Finder doesn't handle Cmd+V paste well and can cause app stalls.
+ */
+export function isFinder(bundleId: string | null): boolean {
+  if (!bundleId) return false;
+  return bundleId.toLowerCase() === 'com.apple.finder';
+}
+
+/**
  * Replace home directory and app storage path with branded path for privacy.
  * Converts: /Users/username/Library/Application Support/Field Theory/figures/image.png
  * To: ~/field-theory/image.png

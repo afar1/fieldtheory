@@ -30,7 +30,7 @@ import {
   ClipboardQueryOptions,
   ContinuousContextState,
 } from './types/clipboard';
-import { ClipboardItem, isTerminalApp, isIDEWithTerminal, obscureHomePath } from './clipboardManager';
+import { ClipboardItem, isTerminalApp, isIDEWithTerminal, isFinder, obscureHomePath } from './clipboardManager';
 import { getHotkeyManager, KNOWN_CONFLICT_APPS } from './hotkeyManager';
 import {
   improveTranscript,
@@ -2396,8 +2396,16 @@ function setupClipboardIPCHandlers(): void {
         effectiveBundleId = previousApp?.bundleId || null;
       }
 
+      // Skip pasting to Finder - it doesn't handle Cmd+V well and causes stalls
+      if (isFinder(effectiveBundleId)) {
+        log.info('pasteItem: skipping paste to Finder');
+        if (clipboardHistoryWindow) {
+          clipboardHistoryWindow.hide();
+        }
+        return;
+      }
+
       // Check if target is a terminal
-      const { isTerminalApp } = require('./clipboardManager');
       const isTerminal = isTerminalApp(effectiveBundleId);
 
       // Put content on clipboard first.
@@ -2548,17 +2556,24 @@ function setupClipboardIPCHandlers(): void {
       
       const { nativeImage } = require('electron');
 
-      // Detect if frontmost app is a terminal (can't render images inline).
-      // Use timeout to prevent hang if System Events is slow (e.g., pasting to Finder).
+      // Detect frontmost app to check for terminal or Finder.
+      let frontmostBundleId: string | null = null;
       let isTerminal = false;
       try {
         const { stdout } = await execWithTimeout(
           'osascript -e \'tell application "System Events" to get bundle identifier of first process whose frontmost is true\'',
           3000
         );
-        isTerminal = isTerminalApp(stdout.trim());
+        frontmostBundleId = stdout.trim();
+        isTerminal = isTerminalApp(frontmostBundleId);
       } catch {
         // Default to non-terminal if detection fails or times out
+      }
+
+      // Skip pasting to Finder - it doesn't handle Cmd+V well
+      if (isFinder(frontmostBundleId)) {
+        log.info('pasteStack: skipping paste to Finder');
+        return;
       }
 
       // Check if we have images with figure labels (for building figure paths).
@@ -2758,10 +2773,17 @@ function setupClipboardIPCHandlers(): void {
     if (!clipboardHistoryWindow) {
       return false;
     }
-    
+
+    // Skip pasting to Finder - it doesn't handle Cmd+V well and causes stalls
+    if (isFinder(bundleId)) {
+      log.info('pasteToApp: skipping paste to Finder');
+      clipboardHistoryWindow.hide();
+      return false;
+    }
+
     // Hide our window first.
     clipboardHistoryWindow.hide();
-    
+
     // Paste to the target app.
     return clipboardHistoryWindow.pasteToApp(bundleId);
   });
