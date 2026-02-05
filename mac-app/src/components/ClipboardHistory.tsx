@@ -3421,19 +3421,6 @@ export default function ClipboardHistory() {
                   </button>
                 ))}
 
-                {/* Quota info at bottom of dropdown (free tier only) */}
-                {cachedTier === 'free' && quotaUsage && (
-                  <>
-                    <div style={{ height: '1px', backgroundColor: theme.border, margin: '4px 0' }} />
-                    <div style={{
-                      padding: '6px 10px',
-                      fontSize: '10px',
-                      color: priorityMicQuotaExhausted ? theme.error : theme.textSecondary,
-                    }}>
-                      {priorityMicQuotaExhausted ? 'Limit reached' : quotaUsage.priorityMic}
-                    </div>
-                  </>
-                )}
               </div>
               </>
             )}
@@ -4399,12 +4386,34 @@ export default function ClipboardHistory() {
         ) : listRows.length === 0 ? (
           <div
             style={{
-              padding: '40px',
-              textAlign: 'center',
+              padding: '40px 24px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '20px',
               color: theme.textSecondary,
             }}
           >
-            No items found
+            <span style={{ fontSize: '13px' }}>No items yet</span>
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '8px',
+              fontSize: '11px',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '24px' }}>
+                <span style={{ opacity: 0.7 }}>Open Field Theory</span>
+                <span style={{ fontFamily: 'monospace', opacity: 0.5 }}>⌥ Space</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '24px' }}>
+                <span style={{ opacity: 0.7 }}>Record transcription</span>
+                <span style={{ fontFamily: 'monospace', opacity: 0.5 }}>⌘ \</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '24px' }}>
+                <span style={{ opacity: 0.7 }}>Take screenshot</span>
+                <span style={{ fontFamily: 'monospace', opacity: 0.5 }}>⌥ 4</span>
+              </div>
+            </div>
           </div>
         ) : (
           listRows.map((row, index) => {
