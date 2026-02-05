@@ -5,6 +5,7 @@ import { promisify } from 'util';
 import { PreferencesManager } from './preferences';
 import { SoundManager } from './soundManager';
 import { createLogger } from './logger';
+import { isFinder } from './clipboardManager';
 
 const log = createLogger('ClipboardHistory');
 
@@ -1090,6 +1091,12 @@ export class ClipboardHistoryWindow {
    */
   async pasteToApp(bundleId: string): Promise<boolean> {
     try {
+      // Skip pasting to Finder - it doesn't handle Cmd+V well and causes stalls
+      if (isFinder(bundleId)) {
+        log.info('pasteToApp: skipping paste to Finder');
+        return false;
+      }
+
       // Validate bundleId doesn't contain quotes (bundle IDs shouldn't have them anyway)
       if (bundleId.includes('"') || bundleId.includes("'")) {
         log.error('Invalid bundleId for paste:', bundleId);
