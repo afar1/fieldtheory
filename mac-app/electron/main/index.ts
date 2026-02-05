@@ -53,6 +53,20 @@ import { TodoIPCChannels } from './types/todo';
 
 const log = createLogger('Main');
 
+// Helper for exec with timeout to prevent osascript hangs (especially with Finder)
+const { exec } = require('child_process');
+function execWithTimeout(command: string, timeoutMs: number = 5000): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    exec(command, { timeout: timeoutMs }, (error: Error | null, stdout: string, stderr: string) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve({ stdout, stderr });
+      }
+    });
+  });
+}
+
 // Load environment variables from .env.local for Supabase credentials.
 // In development, the file is in the mac-app directory.
 // In production, we use the bundled values or fall back to hardcoded ones.
@@ -2456,17 +2470,16 @@ function setupClipboardIPCHandlers(): void {
         clipboardHistoryWindow.hide(); // This includes app.hide() to restore focus
       }
 
-      const { exec } = require('child_process');
-      const { promisify } = require('util');
-      const execAsync = promisify(exec);
-
       // If a specific target app was provided, activate it and paste there.
       // Otherwise, use the default behavior (paste to previous app).
       if (targetBundleId && clipboardHistoryWindow) {
         await clipboardHistoryWindow.pasteToApp(targetBundleId);
       } else {
         // Default behavior: paste to previous app (focus restored by hide()).
-        await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+        // Use timeout to prevent hang if target app is unresponsive (e.g., Finder).
+        try {
+          await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
+        } catch { /* Silently fail if paste times out */ }
       }
 
       // Record paste metric
@@ -2533,20 +2546,19 @@ function setupClipboardIPCHandlers(): void {
         clipboardHistoryWindow.hide();
       }
       
-      const { exec } = require('child_process');
-      const { promisify } = require('util');
-      const execAsync = promisify(exec);
       const { nativeImage } = require('electron');
 
       // Detect if frontmost app is a terminal (can't render images inline).
+      // Use timeout to prevent hang if System Events is slow (e.g., pasting to Finder).
       let isTerminal = false;
       try {
-        const { stdout } = await execAsync(
-          'osascript -e \'tell application "System Events" to get bundle identifier of first process whose frontmost is true\''
+        const { stdout } = await execWithTimeout(
+          'osascript -e \'tell application "System Events" to get bundle identifier of first process whose frontmost is true\'',
+          3000
         );
         isTerminal = isTerminalApp(stdout.trim());
       } catch {
-        // Default to non-terminal if detection fails
+        // Default to non-terminal if detection fails or times out
       }
 
       // Check if we have images with figure labels (for building figure paths).
@@ -2604,7 +2616,9 @@ function setupClipboardIPCHandlers(): void {
             
             clipboard.writeText(textContent);
             clipboardManager.syncClipboardHash();
-            await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+            try {
+              await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
+            } catch { /* Silently fail if paste times out (e.g., Finder) */ }
             await new Promise(resolve => setTimeout(resolve, 100));
           } else if (item.imageData) {
             // For terminals with transcript+figures, skip individual image paste.
@@ -2620,7 +2634,9 @@ function setupClipboardIPCHandlers(): void {
                 // Use real path for terminal compatibility
                 clipboard.writeText(imagePath);
                 clipboardManager.syncClipboardHash();
-                await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+                try {
+                  await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
+                } catch { /* Silently fail if paste times out */ }
               }
               await new Promise(resolve => setTimeout(resolve, 100));
             } else {
@@ -2632,7 +2648,9 @@ function setupClipboardIPCHandlers(): void {
               clipboard.writeImage(image);
               // Set hash directly from the buffer (avoids expensive toPNG() call)
               clipboardManager.setClipboardHashFromBuffer(imageBuffer);
-              await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+              try {
+                await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
+              } catch { /* Silently fail if paste times out */ }
               // Use adaptive delay for images to prevent overwhelming target apps.
               await new Promise(resolve => setTimeout(resolve, imagePasteDelay));
             }
@@ -2667,16 +2685,15 @@ function setupClipboardIPCHandlers(): void {
         clipboardHistoryWindow.hide();
       }
       
-      const { exec } = require('child_process');
-      const { promisify } = require('util');
-      const execAsync = promisify(exec);
-      
       // If a specific target app was provided, activate it and paste there
       if (targetBundleId && clipboardHistoryWindow) {
         await clipboardHistoryWindow.pasteToApp(targetBundleId);
       } else {
         // Default behavior: paste to previous app
-        await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+        // Use timeout to prevent hang if target app is unresponsive.
+        try {
+          await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
+        } catch { /* Silently fail if paste times out */ }
       }
     } catch (error) {
       log.error('pasteText error:', error);

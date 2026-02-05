@@ -11,6 +11,23 @@ const log = createLogger('ClipboardHistory');
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
+// Helper to run execFile with timeout to prevent hangs (especially with Finder)
+function execFileWithTimeout(
+  file: string,
+  args: string[],
+  timeoutMs: number = 5000
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { timeout: timeoutMs }, (error, stdout, stderr) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve({ stdout, stderr });
+      }
+    });
+  });
+}
+
 /**
  * Check if an app is the Electron app itself (should be excluded from target apps).
  */
@@ -1080,14 +1097,16 @@ export class ClipboardHistoryWindow {
       }
       // Small delay after hiding our window to ensure focus transfer.
       await new Promise(resolve => setTimeout(resolve, 50));
-      
+
       // Use execFile with array arguments to avoid shell interpretation
       // This prevents command injection even if bundleId contains special characters
+      // Use timeout to prevent hang if target app is unresponsive (e.g., Finder).
       const script = `tell application id "${bundleId}"\n  activate\nend tell\ndelay 0.1\ntell application "System Events"\n  keystroke "v" using command down\nend tell`;
-      await execFileAsync('osascript', ['-e', script]);
+      await execFileWithTimeout('osascript', ['-e', script], 3000);
       return true;
     } catch (error) {
-      log.error('Failed to paste to app:', error);
+      // Log but don't fail loudly - paste may have worked despite timeout
+      log.warn('pasteToApp timed out or failed for:', bundleId, error);
       return false;
     }
   }
