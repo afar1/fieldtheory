@@ -1387,15 +1387,15 @@ function ShortcutsPhase({ onFinish, theme, styles }: ShortcutsPhaseProps) {
   ];
 
   const btnStyle: React.CSSProperties = {
-    padding: '6px 12px',
-    fontSize: '12px',
+    padding: '6px 10px',
+    fontSize: '11px',
     fontWeight: 500,
     backgroundColor: theme.isDark ? theme.surface2 : '#f3f4f6',
     border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     color: theme.text,
     cursor: 'pointer',
-    minWidth: '70px',
+    minWidth: '60px',
     textAlign: 'center',
   };
 

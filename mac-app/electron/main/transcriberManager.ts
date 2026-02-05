@@ -1003,8 +1003,8 @@ export class TranscriberManager extends EventEmitter {
    * Transcripts below this word count will skip auto-improve.
    */
   async setAutoImproveMinWords(minWords: number): Promise<void> {
-    // Clamp to valid range: 0-500
-    const clamped = Math.max(0, Math.min(500, minWords));
+    // Clamp to valid range: 30-500
+    const clamped = Math.max(30, Math.min(500, minWords));
     await this.preferences.save({ autoImproveMinWords: clamped });
   }
 

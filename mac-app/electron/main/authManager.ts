@@ -970,6 +970,8 @@ export class AuthManager extends EventEmitter {
       // Update local session with new user data
       if (data.user && this.session) {
         this.session = { ...this.session, user: data.user };
+        // Emit sessionChanged so listeners (like Settings) can update
+        this.emit('sessionChanged', this.session);
       }
 
       log.info('Full name updated successfully');
