@@ -3258,32 +3258,7 @@ export default function ClipboardHistory() {
           </span>
         )}
         {!showSettings && viewMode !== 'commands' && viewMode !== 'feedback' && viewMode !== 'sketch' && viewMode !== 'librarian' && <div style={{ marginRight: 'auto' }} />}
-        
-        {/* Sign in button when not authenticated - hidden in views with titles (commands, feedback, librarian) but shown in sketch/draw */}
-        {!showSettings && viewMode !== 'commands' && viewMode !== 'feedback' && viewMode !== 'librarian' && !authSession?.user?.email && (
-          <button
-            onClick={() => {
-              setSettingsSection('account');
-              setShowSettings(true);
-            }}
-            style={{
-              fontSize: '10px',
-              color: theme.textSecondary,
-              backgroundColor: 'transparent',
-              border: `1px solid ${theme.border}`,
-              borderRadius: '4px',
-              padding: '2px 8px',
-              cursor: 'pointer',
-              marginRight: '12px',
-              // @ts-ignore - prevent drag
-              WebkitAppRegion: 'no-drag',
-            }}
-            title="Sign in to sync across devices"
-          >
-            Sign in
-          </button>
-        )}
-        
+
         {/* Priority Mic label - visible in all views */}
         {audioDevices.length > 0 && (
           <span style={{
