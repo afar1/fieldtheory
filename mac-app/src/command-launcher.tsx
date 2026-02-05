@@ -574,7 +574,8 @@ function CommandLauncher() {
   }, []);
 
   const hasContentBelow = filtered.length > 0 || (query.trim() !== '' && allItems.length > 0);
-  const styles = getStyles(isDarkMode);
+  // Always use dark mode styling for the launcher regardless of system theme
+  const styles = getStyles(true);
 
   return (
     <div style={styles.container}>
@@ -583,7 +584,7 @@ function CommandLauncher() {
         ...(hasContentBelow ? styles.inputRowWithBorder : {}),
       }}>
         <img
-          src={isDarkMode ? "fieldtheory-icon.png" : "field-theory-icon-black.png"}
+          src="fieldtheory-icon.png"
           alt=""
           style={styles.icon}
         />
