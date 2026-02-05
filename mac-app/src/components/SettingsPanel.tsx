@@ -2395,6 +2395,22 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
               </button>
             </div>
 
+            {/* Delete Account - only show when signed in */}
+            {session && (
+              <div style={{ ...styles.row, marginTop: '24px', borderTop: `1px solid ${theme.border}`, paddingTop: '16px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <span style={{ ...styles.rowLabel, color: theme.error }}>Delete Account</span>
+                  <span style={styles.rowHint}>Permanently delete your account and all data</span>
+                </div>
+                <button
+                  onClick={() => setShowDeleteModal(true)}
+                  style={{ ...styles.linkBtn, color: theme.error }}
+                >
+                  Delete
+                </button>
+              </div>
+            )}
+
           </div>
         );
       })()}
@@ -2509,25 +2525,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         onSendAsFeedback={onNavigateToFeedback}
       />
 
-      {/* Delete Account button - only show in account section */}
-      {session && selectedSection === 'account' && (
-        <button
-          onClick={() => setShowDeleteModal(true)}
-          onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.color = theme.error; }}
-          onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.6'; e.currentTarget.style.color = theme.textSecondary; }}
-          style={{
-            ...styles.linkBtn,
-            position: 'absolute',
-            bottom: '16px',
-            right: '16px',
-            color: theme.textSecondary,
-            fontSize: '11px',
-            opacity: 0.6,
-          }}
-        >
-          Delete Account
-        </button>
-      )}
     </div>
   );
 }
