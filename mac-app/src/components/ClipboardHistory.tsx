@@ -1353,48 +1353,13 @@ export default function ClipboardHistory() {
       return;
     }
 
-    // Initialize auth session from both Supabase client AND main process.
-    // This handles the case where main process has a valid session but Supabase client doesn't.
-    // Note: supabase is guaranteed non-null here due to the guard above.
-    const client = supabase;
+    // Initialize auth session from main process (single source of truth).
+    // Renderer doesn't need to sync to Supabase client - main process owns auth.
     const initializeSession = async () => {
-      // First check Supabase client's localStorage.
-      const { data: { session: clientSession } } = await client.auth.getSession();
-
-      // Then check if main process has a session (MobileSync).
       const mainProcessSession = await window.authAPI?.getSession?.();
-
-      // If main process has a session but client doesn't, restore it to client.
-      // IMPORTANT: Only pass access_token, not refresh_token.
-      // Main process owns refresh logic - renderer shouldn't have refresh_token.
-      if (mainProcessSession && !clientSession) {
-        console.log('[ClipboardHistory] Restoring session from main process to Supabase client');
-        try {
-          const { data, error } = await client.auth.setSession({
-            access_token: mainProcessSession.access_token,
-            refresh_token: '', // Empty - main process handles refresh
-          });
-          if (!error && data.session) {
-            setAuthSession(data.session);
-          } else {
-            console.warn('[ClipboardHistory] Failed to restore session:', error);
-            setAuthSession(mainProcessSession);
-          }
-        } catch (err) {
-          console.error('[ClipboardHistory] Error restoring session:', err);
-          setAuthSession(mainProcessSession);
-        }
-      } else {
-        // Use whichever session we have (prefer client session if both exist).
-        setAuthSession(clientSession || mainProcessSession);
+      if (mainProcessSession) {
+        setAuthSession(mainProcessSession);
       }
-
-      // Forward valid session to main process for tier sync.
-      const finalSession = clientSession || mainProcessSession;
-      if (finalSession) {
-        window.clipboardAPI?.setSyncSession?.(finalSession.access_token, finalSession.refresh_token);
-      }
-
       // Mark session initialization as complete to prevent UI flicker.
       setSessionInitialized(true);
     };
@@ -1402,31 +1367,22 @@ export default function ClipboardHistory() {
     initializeSession();
 
     // Listen for auth state changes.
-    const { data: { subscription } } = client.auth.onAuthStateChange((event, session) => {
-      // Log auth event to help debug unexpected sign-outs.
-      // Events: INITIAL_SESSION, SIGNED_IN, SIGNED_OUT, TOKEN_REFRESHED, USER_UPDATED
+    // Note: We only update React state if there's a valid session or explicit sign out.
+    // INITIAL_SESSION with null is ignored - main process session is authoritative.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       console.log(`[ClipboardHistory] Auth event: ${event}, session: ${session ? 'present' : 'null'}`);
 
-      setAuthSession(session);
-      // Forward session changes to main process.
       if (session) {
+        setAuthSession(session);
         window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
-      } else {
-        // Session became null - just update local UI state.
-        // Auth is managed by main process (AuthManager) - we don't need to call clearSyncSession.
-        // Main process handles all session clearing and will emit events via IPC.
-        if (event === 'SIGNED_OUT') {
-          console.log('[FeedbackDot] User signed out - setting hasUnreadFeedback to FALSE');
-          // Clear unread indicator when signing out.
-          setHasUnreadFeedback(false);
-          // Also reset sharing unlock.
-          setSharingUnlocked(false);
-          // Switch to clipboard view if on a view that requires auth.
-          setViewMode('clipboard');
-        } else {
-          console.log(`[ClipboardHistory] Session became null after ${event} event`);
-        }
+      } else if (event === 'SIGNED_OUT') {
+        setAuthSession(null);
+        console.log('[ClipboardHistory] User signed out');
+        setHasUnreadFeedback(false);
+        setSharingUnlocked(false);
+        setViewMode('clipboard');
       }
+      // Ignore INITIAL_SESSION with null - main process session is authoritative
     });
 
     return () => subscription.unsubscribe();

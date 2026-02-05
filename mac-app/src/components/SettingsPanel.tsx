@@ -630,14 +630,8 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         const mainSession = await window.authAPI?.getSession();
         if (mainSession) {
           setSession(mainSession);
-          // Sync to client-side Supabase (needed for realtime subscriptions)
-          // IMPORTANT: Only pass access_token, not refresh_token.
-          // Main process owns refresh logic - giving renderer the refresh_token
-          // causes race conditions where both try to refresh the same token.
-          await client.auth.setSession({
-            access_token: mainSession.access_token,
-            refresh_token: '', // Empty - main process handles refresh
-          });
+          // No need to sync to client-side Supabase - renderer doesn't use it for auth.
+          // Main process is the single source of truth for authentication.
           return;
         }
 
@@ -657,21 +651,22 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     };
     initSession();
 
-    // Listen for auth changes (triggered by TeamView sign-in or token refresh).
+    // Listen for auth changes (triggered by TeamView sign-in).
+    // Note: We only update React state if there's a valid session or explicit sign out.
+    // INITIAL_SESSION with null is ignored - we already have session from main process.
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       console.log(`[SettingsPanel] Auth event: ${event}, session: ${session ? 'present' : 'null'}`);
-      setSession(session);
       if (session) {
+        setSession(session);
         window.clipboardAPI?.setSyncSession?.(
           session.access_token,
           session.refresh_token
         );
       } else if (event === 'SIGNED_OUT') {
-        // Auth is managed by main process (AuthManager) - no need to call clearSyncSession.
+        setSession(null);
         console.log(`[SettingsPanel] User signed out`);
-      } else {
-        console.log(`[SettingsPanel] Session became null after ${event} event`);
       }
+      // Ignore INITIAL_SESSION with null - main process session is authoritative
     });
 
     return () => subscription.unsubscribe();
