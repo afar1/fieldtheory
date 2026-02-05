@@ -283,6 +283,21 @@ body.dark .btn-primary:hover {
   color: #1a1a1a;
 }
 
+.link-primary {
+  color: var(--color-text);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+
+.link-primary:hover {
+  color: #4a2c6a;
+}
+
+body.dark .link-primary:hover {
+  color: #9b6dca;
+}
+
 .btn-secondary {
   background: transparent;
   color: var(--color-text);
@@ -794,9 +809,13 @@ body.dark .feature-image img {
   font-weight: 500;
 }
 
+.footer-divider {
+  margin: 0 0.5rem;
+  color: var(--color-text-muted);
+}
+
 .footer-email {
   color: var(--color-text-muted);
-  opacity: 0.7;
 }
 
 .footer-links {
@@ -804,6 +823,15 @@ body.dark .feature-image img {
   align-items: center;
   gap: var(--space-md);
   list-style: none;
+}
+
+.footer-links a {
+  color: var(--color-text-muted);
+  transition: color 0.15s ease;
+}
+
+.footer-links a:hover {
+  color: var(--color-text);
 }
 
 /* --------------------------------------------------------------------------
@@ -868,6 +896,7 @@ body.dark .feature-image img {
   max-width: 700px;
   margin: 0 auto;
   padding: var(--space-xl) var(--space-md);
+  min-height: calc(100vh - 200px);
 }
 
 .theory-content h1 {
