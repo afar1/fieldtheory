@@ -14,6 +14,11 @@ export function hasReleaseNotes(version: string): boolean {
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.67': [
+    'Fixed random logouts caused by refresh token race condition',
+    'Fixed Command Launcher readability in light mode',
+    'Improved empty state with keyboard shortcuts',
+  ],
   '0.1.66': [
     'Fixed random logouts caused by refresh token race condition',
     'Fixed Command Launcher readability in light mode',
@@ -156,6 +161,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.67': 'Feb 5 2026',
   '0.1.66': 'Feb 5 2026',
   '0.1.65': 'Feb 5 2026',
   '0.1.64': 'Feb 4 2026',
