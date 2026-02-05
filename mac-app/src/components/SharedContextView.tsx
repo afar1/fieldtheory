@@ -736,15 +736,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
     if (result?.error) {
       setAuthError(result.error);
     } else if (result?.session) {
-      // Set session in Supabase client (for realtime subscriptions)
-      // IMPORTANT: Only pass access_token, not refresh_token.
-      // Main process owns refresh logic - renderer shouldn't have refresh_token.
-      if (supabase) {
-        await supabase.auth.setSession({
-          access_token: result.session.access_token,
-          refresh_token: '', // Empty - main process handles refresh
-        });
-      }
+      // Main process already has session from verifyOtp - no need to sync to renderer's Supabase client.
       setSession(result.session);
       setAuthEmail('');
       setOtpCode('');

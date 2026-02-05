@@ -690,16 +690,8 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
         setIsVerifyingOtp(false);
         setIsSettingUpSession(true);
 
-        // Set session in Supabase client (for realtime subscriptions)
-        // IMPORTANT: Only pass access_token, not refresh_token.
-        // Main process owns refresh logic - renderer shouldn't have refresh_token.
-        if (supabase) {
-          await supabase.auth.setSession({
-            access_token: result.session.access_token,
-            refresh_token: '', // Empty - main process handles refresh
-          });
-        }
-        // Forward session to main process
+        // Main process already has session from verifyOtp - no need to sync to renderer's Supabase client.
+        // Forward session to main process for tier sync
         try {
           await Promise.race([
             window.clipboardAPI?.setSyncSession?.(
