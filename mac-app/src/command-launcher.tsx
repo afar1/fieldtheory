@@ -213,10 +213,10 @@ function getBuiltInActions(hotkeys: typeof DEFAULT_HOTKEYS, isDarkMode: boolean)
 }
 
 // =============================================================================
-// Styles
+// Styles (dynamic based on theme)
 // =============================================================================
 
-const styles = {
+const getStyles = (isDark: boolean) => ({
   container: {
     display: 'flex',
     flexDirection: 'column' as const,
@@ -232,7 +232,7 @@ const styles = {
     gap: '6px',
   },
   inputRowWithBorder: {
-    borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+    borderBottom: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.08)'}`,
   },
   icon: {
     width: '14px',
@@ -245,7 +245,7 @@ const styles = {
     border: 'none',
     outline: 'none',
     fontSize: '11px',
-    color: '#fff',
+    color: isDark ? '#fff' : '#1a1a1a',
     fontFamily: 'SF Mono, Monaco, Menlo, monospace',
   },
   list: {
@@ -258,7 +258,7 @@ const styles = {
   listItem: {
     padding: '4px 12px',
     cursor: 'pointer',
-    color: '#e0e0e0',
+    color: isDark ? '#e0e0e0' : '#333',
     fontSize: '10px',
     fontFamily: 'SF Mono, Monaco, Menlo, monospace',
     display: 'flex',
@@ -266,7 +266,7 @@ const styles = {
     gap: '6px',
   },
   listItemSelected: {
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)',
   },
   itemName: {
     flex: 1,
@@ -275,13 +275,13 @@ const styles = {
   },
   itemHotkey: {
     fontSize: '9px',
-    color: '#888',
+    color: isDark ? '#888' : '#666',
     fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
     flexShrink: 0,
   },
   emptyState: {
     padding: '6px 10px',
-    color: '#666',
+    color: isDark ? '#666' : '#999',
     fontSize: '9px',
     fontFamily: 'SF Mono, Monaco, Menlo, monospace',
     textAlign: 'center' as const,
@@ -289,12 +289,12 @@ const styles = {
   sectionHeader: {
     padding: '5px 12px 3px 12px',
     fontSize: '8px',
-    color: '#666',
+    color: isDark ? '#666' : '#999',
     textTransform: 'uppercase' as const,
     letterSpacing: '0.5px',
     fontWeight: 600,
   },
-};
+});
 
 // =============================================================================
 // Main Component
@@ -574,6 +574,7 @@ function CommandLauncher() {
   }, []);
 
   const hasContentBelow = filtered.length > 0 || (query.trim() !== '' && allItems.length > 0);
+  const styles = getStyles(isDarkMode);
 
   return (
     <div style={styles.container}>
@@ -582,7 +583,7 @@ function CommandLauncher() {
         ...(hasContentBelow ? styles.inputRowWithBorder : {}),
       }}>
         <img
-          src="fieldtheory-icon.png"
+          src={isDarkMode ? "fieldtheory-icon.png" : "field-theory-icon-black.png"}
           alt=""
           style={styles.icon}
         />
