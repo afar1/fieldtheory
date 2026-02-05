@@ -631,9 +631,12 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         if (mainSession) {
           setSession(mainSession);
           // Sync to client-side Supabase (needed for realtime subscriptions)
+          // IMPORTANT: Only pass access_token, not refresh_token.
+          // Main process owns refresh logic - giving renderer the refresh_token
+          // causes race conditions where both try to refresh the same token.
           await client.auth.setSession({
             access_token: mainSession.access_token,
-            refresh_token: mainSession.refresh_token,
+            refresh_token: '', // Empty - main process handles refresh
           });
           return;
         }
