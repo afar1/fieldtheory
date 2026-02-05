@@ -958,6 +958,11 @@ html, body {
   max-width: 100vw;
 }
 
+/* Mobile theme toggle - hidden on desktop */
+.theme-toggle-mobile {
+  display: none;
+}
+
 /* Hamburger menu for mobile */
 .nav-toggle {
   display: none;
@@ -1041,7 +1046,8 @@ html, body {
     background: var(--color-bg);
     border-bottom: 1px solid var(--color-border);
     flex-direction: column;
-    padding: var(--space-md);
+    align-items: flex-end;
+    padding: var(--space-md) var(--space-lg);
     gap: var(--space-xs);
   }
 
@@ -1054,20 +1060,23 @@ html, body {
   }
 
   .nav-links li {
-    text-align: left;
+    text-align: right;
   }
-  
-  /* Theme toggle with label on mobile */
-  .theme-toggle-wrapper {
-    display: flex;
-    align-items: center;
-    gap: var(--space-xs);
+
+  /* Hide theme toggle inside dropdown on mobile */
+  .nav-links .theme-toggle-wrapper,
+  .nav-links li:has(.theme-toggle) {
+    display: none;
   }
-  
+
+  /* Show mobile theme toggle */
+  .theme-toggle-mobile {
+    display: block;
+    margin-right: var(--space-xs);
+  }
+
   .theme-label {
-    display: inline;
-    font-size: 0.9rem;
-    color: var(--color-text-muted);
+    display: none;
   }
   
   /* Mobile: show "Visit on Mac" instead of "Download for Mac" */
