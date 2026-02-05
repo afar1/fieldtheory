@@ -379,8 +379,7 @@ export default function CommandsSettings() {
               lineHeight: '1.5',
             }}>
               <strong>Common locations:</strong><br />
-              • <code style={{ fontSize: '10px', backgroundColor: theme.isDark ? '#2d2d2d' : '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>~/.cursor/commands</code> — Cursor commands<br />
-              • <code style={{ fontSize: '10px', backgroundColor: theme.isDark ? '#2d2d2d' : '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>~/.claude/commands</code> — Claude commands
+              • <code style={{ fontSize: '10px', backgroundColor: theme.isDark ? '#2d2d2d' : '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>~/.cursor/commands</code> — Cursor commands
             </p>
           )}
         </div>
