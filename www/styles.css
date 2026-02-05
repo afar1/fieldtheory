@@ -891,6 +891,32 @@ body.dark .feature-image img {
   margin-top: var(--space-lg);
 }
 
+.theory-subtitle {
+  font-size: 1.1rem;
+  color: var(--color-text-muted);
+  margin-top: calc(var(--space-sm) * -1);
+  margin-bottom: var(--space-lg);
+}
+
+.theory-body {
+  margin-top: var(--space-lg);
+}
+
+.theory-signature {
+  margin-top: var(--space-lg);
+  font-style: italic;
+  color: var(--color-text-muted);
+}
+
+.theory-signature .callsign {
+  font-size: 0.75rem;
+  opacity: 0.4;
+}
+
+.theory-body[contenteditable]:focus {
+  outline: none;
+}
+
 /* --------------------------------------------------------------------------
    Responsive Styles
    -------------------------------------------------------------------------- */

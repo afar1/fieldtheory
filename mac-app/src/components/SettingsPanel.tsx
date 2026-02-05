@@ -1553,7 +1553,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
               </div>
               <input
                 type="range"
-                min="0"
+                min="30"
                 max="500"
                 step="10"
                 value={autoImproveMinWords}
@@ -1562,13 +1562,13 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
                   width: '100%',
                   height: '6px',
                   borderRadius: '3px',
-                  background: `linear-gradient(to right, ${theme.success} 0%, ${theme.success} ${(autoImproveMinWords / 500) * 100}%, ${theme.border} ${(autoImproveMinWords / 500) * 100}%, ${theme.border} 100%)`,
+                  background: `linear-gradient(to right, ${theme.success} 0%, ${theme.success} ${((autoImproveMinWords - 30) / (500 - 30)) * 100}%, ${theme.border} ${((autoImproveMinWords - 30) / (500 - 30)) * 100}%, ${theme.border} 100%)`,
                   appearance: 'none',
                   cursor: 'pointer',
                 }}
               />
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
-                <span style={{ fontSize: '11px', color: theme.textSecondary }}>0</span>
+                <span style={{ fontSize: '11px', color: theme.textSecondary }}>30</span>
                 <span style={{ fontSize: '11px', color: theme.textSecondary }}>500</span>
               </div>
             </div>
