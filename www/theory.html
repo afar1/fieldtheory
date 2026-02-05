@@ -14,7 +14,14 @@
   <nav class="nav">
     <div class="container nav-inner">
       <a href="/" class="nav-logo"><img id="nav-logo-img" src="images/fieldtheory-logo-black.png" alt="Field Theory" class="nav-logo-img"></a>
-      <ul class="nav-links">
+      <button class="nav-toggle" onclick="toggleNav()" aria-label="Toggle navigation">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round">
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+      <ul class="nav-links" id="nav-links">
         <li><a href="/#pricing">Pricing</a></li>
         <li><a href="/#download">Download</a></li>
         <li><a href="theory.html">Theory</a></li>
@@ -36,15 +43,15 @@
 
       <p><strong>Context stacking</strong></p>
 
-      <p>I believe "context stacking" is an emergent set of behaviors - voice transcription, conversation summaries, model memory, plan and debug mode, etc. - these are all forms of information stacking. When you get enough of it cobbled together and send it to a model it tends to be a more productive partner.</p>
+      <p>I believe "context stacking" is an emergent set of behaviors - voice transcription, model memory, conversation summaries, plan and debug mode, etc. - these are all forms of information stacking. When you get enough of it cobbled together and send it to a model it tends to be a more productive partner.</p>
 
-      <p>Pre tool-call and "think-harder" era (the present day), we used to have prompt engineering. I remember the Dali-like writing of professional prompt engineers. They were part code, part emotional plea, and part ascii-art. And they read more like incantations than English.</p>
+      <p>Pre tool-call and "think-harder" era (the present day), we used to have prompt engineering. I remember the Dali-like writing of professional prompt engineers. They were part code, part emotional plea, part ascii-art and they read more like incantations than English.</p>
 
       <p>This pidgin language that prompt engineers used was short lived because context windows got bigger, multi-modal input became standard, we made better harnesses, and in general the models became pretty good at separating meaning from a bunch of half-formed ideas or a dump of text. In so doing, hallucination seemed to give way to real productive creativity.</p>
 
-      <p>But there has been a major consequence to model improvement. The machine's appetite for more context about a human's project or goal or ambition has become insatiable. The current meta for talking to SOTA models is effectively, "Tell it more and it will make you a better thing." When it's bad, it's more and more a human's fault for not contributing enough context or good judgement.</p>
+      <p>But there has been a major consequence to model improvement. The machine's appetite for more context about a human's project or goal or ambition has become insatiable. The current meta for talking to SOTA models is effectively, "Tell it more and it will make you a better thing." When it's bad, it's often a human's fault for not contributing enough context or good judgement.</p>
 
-      <p>So we copy and paste more stuff in. But when your job is to do this 10 hours a day, 6 days a week, you quickly realize context management at inference time (CMIT?) is pretty time consuming and pretty tedious. I think we need many more tools to help facilitate the process of getting both the right amount and the right type of information shuttled to a model on-demand. This is the driving thesis behind the application, Field Theory.</p>
+      <p>So we copy and paste more stuff in. But when your job includes doing this hours a day you quickly realize context management at inference time (CMIT?) is pretty time consuming and pretty tedious. I think we need many more tools to help facilitate the process of getting both the right amount and the right type of information shuttled to a model on-demand. This is the driving thesis behind the application, Field Theory.</p>
 
       <p>For sure, there will be a great context firehose in the not too distant future. One that will come from a federation of technologies that you wear or install or have near you that do autonomous, continuous context stacking (computer use, always-on microphones, personal cameras, that sort of thing). But until then, we need better more ergonomic tools to move information around.</p>
 
@@ -54,7 +61,7 @@
 
       <p><strong>Elephants on balance beams</strong></p>
 
-      <p>Computer use isn't yet a replacement for a human's ability to select what context matters. And as a general principle, today's models do better when given specific relevant information than when given all of the information. As an extreme example: analyzing a continuous video stream of a day's worth of work on a laptop is less efficient for a model to solve a problem than a human saying, "this is the error code I'm getting."</p>
+      <p>Computer use isn't yet a replacement for a human's ability to select what context matters. And as a general principle, today's models do better when given specific relevant information than when given all of the information. As an extreme example: analyzing a continuous video stream of a day's worth of work on a laptop is less efficient for a model to solve a problem than a human saying, "this is the error I'm getting."</p>
 
       <p>A good litmus test for this is the current state of browser use. The frontend of the internet is a native environment for humans but not so much for agents. Browser use is great when you don't really care about latency. That's because asking an agent to interact with a webpage by clicking on a frontend is like putting an elephant on a balance beam. It will do it and it's awesome to watch but it needs some coaxing and it's kinda slow. On the other hand, if you ask the same agent to use a console or a terminal, it's like putting a fish in water. They move in ways we can't.</p>
 
@@ -62,7 +69,7 @@
 
       <p>We have will. They have infiniteness. Can there be such a thing as infinite will?</p>
 
-      <p>Until now, I think the evidence of co-evolution between computers and humans hasn't really looked like co-dependence (in the healthy, cooperative sense, I mean). But it's starting to. As far back as I can remember, I've never felt pride for a gadget. Delight or wonder? Definitely. But pride? I don't know. Like, I've never felt proud of my iPhone.</p>
+      <p>Until now, I think the evidence of co-evolution between computers and humans hasn't really looked like co-dependence (in the healthy, cooperative sense, I mean). But it's starting to. As far back as I can remember, I've never felt pride for a gadget. Delight? Or Wonder? Definitely. But pride? I don't know. Like, I've never felt proud of my iPhone.</p>
 
       <p>But I have felt something close, maybe not exactly, but something close to pride when Opus 4.5 has done genuinely good work on a genuinely hard problem. I'm invested in that model's future. I'm rooting for it.</p>
 
@@ -78,7 +85,7 @@
 
       <p>What do you want to contribute to this world? If you say it plainly enough and if you're the right kind of stubborn, so it will be. It's for this reason, I think we're at the beginning of a once in a civilization transition from being tool makers to becoming ambition machines.</p>
 
-      <p>And maybe this is the thing we were always meant to be.</p>
+      <p>And maybe this is the thing we were always meant to be. Or have always been.</p>
 
       <p>When you build and contribute a useful thing the exhaust from that creative act is enthusiasm. That means that using these models and their descendants to make good and productive things might legitimately be making us better at being human. And everyone, even if only for a few moments, everyone knows what it feels like to be enthusiastic.</p>
 
@@ -115,6 +122,13 @@
   <script>
     if (localStorage.getItem('theme') === 'dark') {
       document.body.classList.add('dark');
+    }
+
+    function toggleNav() {
+      const navLinks = document.getElementById('nav-links');
+      if (navLinks) {
+        navLinks.classList.toggle('open');
+      }
     }
 
     function toggleTheme() {
