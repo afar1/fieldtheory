@@ -258,6 +258,7 @@ export class ClipboardManager extends EventEmitter {
   }
   private pollInterval: NodeJS.Timeout | null = null;
   private lastContentHash: string = '';
+  private lastClipboardFormats: string = '';  // Cheap change detection to avoid expensive toPNG()
   private config: ClipboardConfig;
   private screenshotHotkeyRegistered: boolean = false;
   private fullScreenHotkeyRegistered: boolean = false;
@@ -341,6 +342,7 @@ export class ClipboardManager extends EventEmitter {
 
     // Reset state and restart polling
     this.lastContentHash = '';
+    this.lastClipboardFormats = '';
     this.startPolling();
   }
 
@@ -358,6 +360,7 @@ export class ClipboardManager extends EventEmitter {
     }
     this.dbPath = null;
     this.lastContentHash = '';
+    this.lastClipboardFormats = '';
   }
 
   /**
@@ -615,14 +618,21 @@ export class ClipboardManager extends EventEmitter {
     if (this.screenshotInProgress) {
       return;
     }
-    
+
     try {
+      // Quick format check to skip expensive toPNG() when clipboard hasn't changed
+      const formats = clipboard.availableFormats().sort().join(',');
+      if (formats === this.lastClipboardFormats && this.lastContentHash) {
+        return;
+      }
+
       // Check for text first
       const text = clipboard.readText();
       if (text) {
         const hash = this.hashContent(text);
         if (hash !== this.lastContentHash) {
           this.lastContentHash = hash;
+          this.lastClipboardFormats = formats;
 
           // Notify clipboard change (fires even for duplicates)
           this.onClipboardChangeCallback?.();
@@ -634,6 +644,8 @@ export class ClipboardManager extends EventEmitter {
           if (!existing) {
             await this.storeText(text);
           }
+        } else {
+          this.lastClipboardFormats = formats;
         }
         return;
       }
@@ -645,6 +657,7 @@ export class ClipboardManager extends EventEmitter {
         const hash = this.hashContent(imageBuffer);
         if (hash !== this.lastContentHash) {
           this.lastContentHash = hash;
+          this.lastClipboardFormats = formats;
 
           // Notify clipboard change (fires even for duplicates)
           this.onClipboardChangeCallback?.();
@@ -656,6 +669,8 @@ export class ClipboardManager extends EventEmitter {
           if (!existing) {
             await this.storeImage(image, imageBuffer);
           }
+        } else {
+          this.lastClipboardFormats = formats;
         }
       }
     } catch (error) {
