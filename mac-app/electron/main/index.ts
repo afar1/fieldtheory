@@ -125,7 +125,7 @@ function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
   // Production fallback - anon key is public by design, protected by RLS.
   return {
     supabaseUrl: 'https://FIELD_THEORY_SUPABASE_URL.example',
-    supabaseAnonKey: 'FIELD_THEORY_SUPABASE_PUBLISHABLE_KEY',
+    supabaseAnonKey: 'FIELD_THEORY_SUPABASE_ANON_KEY',
   };
 }
 
