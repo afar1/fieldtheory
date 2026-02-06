@@ -14,6 +14,9 @@ export function hasReleaseNotes(version: string): boolean {
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.71': [
+    'Fixed footer layout shift when checking for updates',
+  ],
   '0.1.70': [
     'Fixed clipboard not capturing consecutive text copies (e.g., JSON strings)',
   ],
@@ -173,6 +176,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.71': 'Feb 6 2026',
   '0.1.70': 'Feb 6 2026',
   '0.1.69': 'Feb 6 2026',
   '0.1.68': 'Feb 5 2026',

@@ -6296,7 +6296,7 @@ export default function ClipboardHistory() {
         )}
 
         {/* Right side: update notification OR version + settings button */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', fontSize: '9px', flex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', fontSize: '9px', flex: 1, minHeight: '18px' }}>
           {/* Update notification (when active) or version number */}
           {updateStatus !== 'idle' && updateStatus !== 'uptodate' ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -6315,7 +6315,7 @@ export default function ClipboardHistory() {
                   <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/>
                   <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>
                 </svg>
-                <span style={{ fontSize: '10px', color: updateStatus === 'error' ? theme.error : theme.text }}>
+                <span style={{ fontSize: '9px', color: updateStatus === 'error' ? theme.error : theme.text }}>
                   {updateStatus === 'checking' ? 'Checking...' : updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'Update ready' : updateStatus === 'error' ? `Update failed: ${updateError}` : 'Update available'}
                 </span>
                 {/* Shimmer overlay */}
