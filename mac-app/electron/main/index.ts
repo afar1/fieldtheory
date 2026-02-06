@@ -125,7 +125,7 @@ function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
   // Production fallback - anon key is public by design, protected by RLS.
   return {
     supabaseUrl: 'https://cighxaroptskntwbrctl.supabase.co',
-    supabaseAnonKey: 'sb_publishable_j-f9Y3EU1YrD4K3Dglz0Ag_rrVgKzcM',
+    supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNpZ2h4YXJvcHRza250d2JyY3RsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQwMDkxNDAsImV4cCI6MjA3OTU4NTE0MH0.fWy4cWCjjGin6b6DDbE43OXEpCLDtuIAIN6FGEepYdk',
   };
 }
 
