@@ -620,13 +620,9 @@ export class ClipboardManager extends EventEmitter {
     }
 
     try {
-      // Quick format check to skip expensive toPNG() when clipboard hasn't changed
       const formats = clipboard.availableFormats().sort().join(',');
-      if (formats === this.lastClipboardFormats && this.lastContentHash) {
-        return;
-      }
 
-      // Check for text first
+      // Check for text first (cheap operation)
       const text = clipboard.readText();
       if (text) {
         const hash = this.hashContent(text);
@@ -650,7 +646,10 @@ export class ClipboardManager extends EventEmitter {
         return;
       }
 
-      // Check for image
+      // Check for image (skip expensive toPNG() if formats unchanged)
+      if (formats === this.lastClipboardFormats && this.lastContentHash) {
+        return;
+      }
       const image = clipboard.readImage();
       if (!image.isEmpty()) {
         const imageBuffer = image.toPNG();
