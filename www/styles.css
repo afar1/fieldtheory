@@ -948,6 +948,36 @@ body.dark .feature-image img {
   outline: none;
 }
 
+/* Theory hero image */
+.theory-figure {
+  margin: 0 0 var(--space-lg) 0;
+}
+
+.theory-hero-image {
+  width: 144%;
+  max-width: 144%;
+  height: auto;
+  border-radius: var(--border-radius);
+  margin-left: -22%;
+  display: block;
+}
+
+.theory-figure figcaption {
+  font-size: 0.8rem;
+  font-style: italic;
+  color: var(--color-text-muted);
+  margin-top: var(--space-xs);
+  text-align: center;
+}
+
+@media (max-width: 768px) {
+  .theory-hero-image {
+    width: 100%;
+    max-width: 100%;
+    margin-left: 0;
+  }
+}
+
 /* --------------------------------------------------------------------------
    Responsive Styles
    -------------------------------------------------------------------------- */
