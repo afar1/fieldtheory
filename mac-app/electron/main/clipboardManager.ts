@@ -639,6 +639,9 @@ export class ClipboardManager extends EventEmitter {
 
           if (!existing) {
             await this.storeText(text);
+          } else {
+            // Item already exists - still notify so it can be added to stack during recording/silentStacking
+            this.onItemAddedCallback?.(existing.id);
           }
         } else {
           this.lastClipboardFormats = formats;
@@ -667,6 +670,9 @@ export class ClipboardManager extends EventEmitter {
 
           if (!existing) {
             await this.storeImage(image, imageBuffer);
+          } else {
+            // Item already exists - still notify so it can be added to stack during recording/silentStacking
+            this.onItemAddedCallback?.(existing.id);
           }
         } else {
           this.lastClipboardFormats = formats;
