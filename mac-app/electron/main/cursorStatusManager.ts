@@ -9,6 +9,7 @@ const log = createLogger('CursorStatus');
 /**
  * Status states for the cursor indicator.
  * - idle: No indicator shown
+ * - silentStacking: Red pulsing ring (transparent center) with "collecting" label
  * - recording: Red pulsing dot with "Say anything" label
  * - transcribing: Purple dot, "Transcribing..." text when cursor is still
  * - improving: Blue dot, "improving..." text during AI improvement
@@ -16,7 +17,7 @@ const log = createLogger('CursorStatus');
  * - confirmation: Red pulsing dot with countdown, awaiting abandon/continue decision
  * - paste-failed: Orange dot, shows transcription then "Saved to Field Theory"
  */
-export type CursorStatusState = 'idle' | 'recording' | 'transcribing' | 'improving' | 'done' | 'confirmation' | 'paste-failed';
+export type CursorStatusState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'improving' | 'done' | 'confirmation' | 'paste-failed';
 
 /**
  * Manages the cursor-following status indicator overlay.
@@ -131,12 +132,12 @@ export class CursorStatusManager extends EventEmitter {
   }
   
   /**
-   * Set the screenshot count for the pipe indicator during recording.
-   * Only sends updates when recording is active.
+   * Set the screenshot count for the pipe indicator during recording or silentStacking.
+   * Only sends updates when recording or silentStacking is active.
    */
   setScreenshotCount(count: number): void {
     this.screenshotCount = count;
-    if (this.state === 'recording' && this.window && !this.window.isDestroyed()) {
+    if ((this.state === 'recording' || this.state === 'silentStacking') && this.window && !this.window.isDestroyed()) {
       this.window.webContents.send('cursor-status-stack', count);
     }
   }
@@ -320,8 +321,8 @@ export class CursorStatusManager extends EventEmitter {
     this.state = state;
     this.updateWindowSize(state);
     
-    // Reset screenshot count when recording starts.
-    if (state === 'recording') {
+    // Reset screenshot count when recording or silentStacking starts.
+    if (state === 'recording' || state === 'silentStacking') {
       this.screenshotCount = 0;
       if (this.window && !this.window.isDestroyed()) {
         this.window.webContents.send('cursor-status-stack', 0);

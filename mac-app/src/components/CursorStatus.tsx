@@ -5,11 +5,12 @@
 
 import { useEffect, useState, useRef } from 'react';
 
-type StatusState = 'idle' | 'recording' | 'transcribing' | 'improving' | 'done' | 'confirmation' | 'paste-failed';
+type StatusState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'improving' | 'done' | 'confirmation' | 'paste-failed';
 
 // Colors for each state
 const STATE_COLORS: Record<StatusState, string> = {
   idle: 'transparent',
+  silentStacking: 'transparent',  // No fill - ring only
   recording: '#ff3b30',      // Red
   transcribing: '#af52de',   // Purple
   improving: '#007aff',      // Blue - distinct from purple/green
@@ -21,6 +22,7 @@ const STATE_COLORS: Record<StatusState, string> = {
 // Glow colors (slightly transparent for the shadow effect)
 const STATE_GLOWS: Record<StatusState, string> = {
   idle: 'transparent',
+  silentStacking: 'rgba(255, 59, 48, 0.5)',  // Red glow for ring
   recording: 'rgba(255, 59, 48, 0.5)',
   transcribing: 'rgba(175, 82, 222, 0.5)',
   improving: 'rgba(0, 122, 255, 0.5)',
@@ -89,9 +91,9 @@ export default function CursorStatus() {
     
     window.cursorStatusAPI.onStateChange((newState) => {
       setState(newState);
-      
-      // When recording starts, show "Say anything" text briefly then fade it out
-      if (newState === 'recording') {
+
+      // When recording or silentStacking starts, show text briefly then fade it out
+      if (newState === 'recording' || newState === 'silentStacking') {
         setShowRecordingText(true);
         // Clear any existing timeout
         if (recordingTextTimeoutRef.current) {
@@ -102,12 +104,12 @@ export default function CursorStatus() {
           recordingTextTimeoutRef.current = null;
         }, 2520);
       }
-      
+
       // When confirmation starts, begin countdown
       if (newState === 'confirmation') {
         setCountdownSeconds(CONFIRMATION_COUNTDOWN_SECONDS);
       }
-      
+
       // Reset paste-failed state when leaving it
       if (newState !== 'paste-failed') {
         setPasteFailedText('');
@@ -412,6 +414,9 @@ export default function CursorStatus() {
     if (state === 'recording' && tutorialHint) {
       return tutorialHint;
     }
+    if (state === 'silentStacking' && showRecordingText) {
+      return 'collecting';
+    }
     if (state === 'recording' && showRecordingText) {
       return 'recording';
     }
@@ -449,6 +454,8 @@ export default function CursorStatus() {
   const showLabel = state === 'paste-failed' || state === 'confirmation' || state === 'done' ||
     (state === 'recording' && tutorialHint) ||  // Always show tutorial hints
     (!hideLabels && (
+      // "collecting" during silentStacking - respects progressive threshold
+      (state === 'silentStacking' && showRecordingText && showSayAnythingLabel) ||
       // "Say anything" during recording - respects progressive threshold
       (state === 'recording' && showRecordingText && showSayAnythingLabel) ||
       // "Transcribing..." - respects progressive threshold
@@ -475,25 +482,28 @@ export default function CursorStatus() {
       }}
       onClick={handleClick}
     >
-      {/* Colored dot - always visible during active state, pulses for recording/confirmation, fades for done */}
-      <div 
+      {/* Colored dot - always visible during active state, pulses for recording/confirmation/silentStacking, fades for done */}
+      <div
         style={{
           ...styles.dot,
           marginLeft: screenshotMode ? '16px' : '3px', // Shift right during screenshot to avoid overlap
           transition: 'margin-left 0.15s ease-out', // Smooth animation for screenshot mode
-          backgroundColor: color,
-          border: '1px solid rgba(0, 0, 0, 0.4)',
+          // silentStacking: transparent fill with red ring border
+          backgroundColor: state === 'silentStacking' ? 'transparent' : color,
+          border: state === 'silentStacking'
+            ? '2px solid #ff3b30'  // Red ring for silentStacking
+            : '1px solid rgba(0, 0, 0, 0.4)',
           boxShadow: `0 0 6px ${glow}`,
-          animation: (state === 'recording' || state === 'confirmation') 
-            ? 'pulse 1.8s ease-in-out infinite' 
-            : state === 'done' 
+          animation: (state === 'recording' || state === 'confirmation' || state === 'silentStacking')
+            ? 'pulse 1.8s ease-in-out infinite'
+            : state === 'done'
               ? 'fadeOutDot 0.8s ease-out forwards'
               : 'none',
-        }} 
+        }}
       />
       
-      {/* Pipe indicator - shows screenshots captured during recording */}
-      {state === 'recording' && pipeCount > 0 && (
+      {/* Pipe indicator - shows screenshots captured during recording or silentStacking */}
+      {(state === 'recording' || state === 'silentStacking') && pipeCount > 0 && (
         <div style={{
           display: 'flex',
           alignItems: 'center',
@@ -532,7 +542,7 @@ export default function CursorStatus() {
       )}
 
       {/* Recording note - informational warning shown to the right during recording */}
-      {state === 'recording' && recordingNote && (
+      {(state === 'recording' || state === 'silentStacking') && recordingNote && (
         <div style={{
           ...styles.labelContainer,
           animation: 'fadeIn 150ms ease-out',

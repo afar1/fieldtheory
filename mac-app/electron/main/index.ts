@@ -4614,9 +4614,12 @@ function broadcastTranscribeEvents(): void {
   });
   
   transcriberManager.on('confirmation-hide', () => {
-    // Return to recording state (recording continues during confirmation)
-    if (cursorStatusManager) {
-      cursorStatusManager.setState('recording');
+    // Return to the actual current state (recording or silentStacking)
+    if (cursorStatusManager && transcriberManager) {
+      const status = transcriberManager.getStatus();
+      if (status === 'recording' || status === 'silentStacking') {
+        cursorStatusManager.setState(status);
+      }
     }
   });
   
@@ -5369,9 +5372,10 @@ async function initClipboardCallbacks(): Promise<void> {
     // Record clipboard item metric
     metricsManager?.recordClipboardItem();
 
-    // Add ALL items to recording stack if user is currently recording.
+    // Add ALL items to recording/silentStacking stack if user is currently recording or silentStacking.
     // This enables any clipboard copy (text, images, screenshots) to participate in auto-stacking.
-    if (item && transcriberManager && transcriberManager.getStatus() === 'recording') {
+    const status = transcriberManager?.getStatus();
+    if (item && transcriberManager && (status === 'recording' || status === 'silentStacking')) {
       transcriberManager.addToStack(id);
     }
 

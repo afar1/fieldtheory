@@ -32,7 +32,7 @@ const execAsync = promisify(exec);
 /**
  * Transcription status states.
  */
-export type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
+export type TranscriptionStatus = 'idle' | 'silentStacking' | 'recording' | 'transcribing';
 
 /**
  * Events emitted by TranscriberManager.
@@ -120,6 +120,12 @@ export class TranscriberManager extends EventEmitter {
   // If user starts with primary and ends with secondary (or vice versa), trigger improvement.
   private startedWithSecondaryHotkey: boolean = false;
 
+  // Double-tap detection for silent stacking mode.
+  // When user double-taps the hotkey, enters silentStacking instead of recording.
+  private doubleTapThresholdMs: number = 300;
+  private pendingHotkeyTimer: NodeJS.Timeout | null = null;
+  private pendingHotkeyIsSecondary: boolean = false;
+
   constructor(nativeHelper: NativeHelper, preferences: PreferencesManager, clipboardManager?: ClipboardManager, quotaManager?: QuotaManager, audioManager?: AudioManager, cursorStatusManager?: CursorStatusManager, commandsManager?: CommandsManager) {
     super();
     this.nativeHelper = nativeHelper;
@@ -169,19 +175,29 @@ export class TranscriberManager extends EventEmitter {
   
   /**
    * Handle confirmation response (from overlay or cursorStatusManager).
-   * @param abandon - true to abandon recording, false to continue
+   * @param abandon - true to abandon recording/silentStacking, false to continue
    */
   handleConfirmationResponse(abandon: boolean): void {
     if (!this.pendingAbandonConfirmation) return;
-    
+
     this.pendingAbandonConfirmation = false;
     this.overlay.hideConfirmation();
     this.emit('confirmation-hide');
-    
+
     if (abandon) {
-      this.cancelRecording();
+      if (this.status === 'silentStacking') {
+        this.cancelSilentStacking();
+      } else {
+        this.cancelRecording();
+      }
+    } else {
+      // Not abandoning - restore cursor indicator to current state.
+      if (this.status === 'silentStacking') {
+        this.cursorStatusManager?.setState('silentStacking');
+      } else if (this.status === 'recording') {
+        this.cursorStatusManager?.setState('recording');
+      }
     }
-    // If not abandoning, recording continues (no action needed)
   }
 
   /**
@@ -452,16 +468,47 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
-   * Handle hotkey press - toggle recording.
+   * Handle hotkey press - toggle recording with double-tap detection.
+   * Double-tap in idle → silentStacking mode
+   * Single-tap in idle → recording mode (after 300ms delay)
+   * Double-tap in silentStacking → paste and exit
+   * Single-tap in silentStacking → start recording (keep existing stack)
    * @param isSecondary - True if triggered by secondary hotkey, false for primary
    */
   private async handleHotkeyPress(isSecondary: boolean): Promise<void> {
     if (this.status === 'idle') {
-      this.startedWithSecondaryHotkey = isSecondary;
-      await this.startRecording();
+      if (this.pendingHotkeyTimer) {
+        // Second tap within threshold → double-tap confirmed → silentStacking
+        clearTimeout(this.pendingHotkeyTimer);
+        this.pendingHotkeyTimer = null;
+        await this.startSilentStacking();
+      } else {
+        // First tap → wait to see if it's a double-tap
+        this.pendingHotkeyIsSecondary = isSecondary;
+        this.pendingHotkeyTimer = setTimeout(async () => {
+          this.pendingHotkeyTimer = null;
+          this.startedWithSecondaryHotkey = this.pendingHotkeyIsSecondary;
+          await this.startRecording();
+        }, this.doubleTapThresholdMs);
+      }
+    } else if (this.status === 'silentStacking') {
+      if (this.pendingHotkeyTimer) {
+        // Double-tap from silentStacking → paste and exit
+        clearTimeout(this.pendingHotkeyTimer);
+        this.pendingHotkeyTimer = null;
+        await this.finishSilentStacking();
+      } else {
+        // First tap in silentStacking → wait to distinguish single vs double
+        this.pendingHotkeyIsSecondary = isSecondary;
+        this.pendingHotkeyTimer = setTimeout(async () => {
+          this.pendingHotkeyTimer = null;
+          // Single-tap → start recording (keep existing stack)
+          this.startedWithSecondaryHotkey = this.pendingHotkeyIsSecondary;
+          await this.startRecordingFromSilentStack();
+        }, this.doubleTapThresholdMs);
+      }
     } else if (this.status === 'recording') {
-      // Determine if improvement should be triggered.
-      // Improvement triggers when: both hotkeys are configured AND ended with different hotkey than started.
+      // No double-tap detection needed here - just stop recording
       const shouldImprove = this.secondaryHotkey !== null && isSecondary !== this.startedWithSecondaryHotkey;
       await this.stopRecordingAndTranscribe(shouldImprove);
     }
@@ -542,6 +589,232 @@ export class TranscriberManager extends EventEmitter {
       this.overlay.dismiss();
       this.unregisterAbandonHotkey();
       this.emit('error', error as Error);
+    }
+  }
+
+  /**
+   * Start silent stacking mode - collect screenshots without recording audio.
+   * Activated by double-tapping the transcribe hotkey.
+   */
+  private async startSilentStacking(): Promise<void> {
+    if (this.status !== 'idle') {
+      return;
+    }
+
+    // Block until onboarding is complete.
+    const onboardingComplete = this.preferences.getPreference('onboardingComplete');
+    if (!onboardingComplete) {
+      return;
+    }
+
+    try {
+      this.setStatus('silentStacking');
+
+      // Track start time for figure timestamp calculation.
+      this.recordingStartTime = Date.now();
+
+      // Reset tracking for new silent stacking session.
+      this.pendingAbandonConfirmation = false;
+
+      // Clear stack and screenshot metadata for fresh start.
+      this.currentStack = [];
+      this.screenshotMetadata = [];
+      this.detectedCommands = [];
+
+      // Register abandon hotkey (Escape) - with confirmation if items exist.
+      this.registerAbandonHotkey();
+
+      // Play start sound (same as recording start).
+      this.soundManager.play('recordingStart');
+
+      // Emit stack changed to reset UI.
+      this.emit('stackChanged', 0);
+
+      log.info('Silent stacking started');
+    } catch (error) {
+      log.error('Failed to start silent stacking:', error);
+      this.setStatus('idle');
+      this.unregisterAbandonHotkey();
+      this.emit('error', error as Error);
+    }
+  }
+
+  /**
+   * Transition from silent stacking to recording mode.
+   * Keeps existing stack and continues figure numbering.
+   */
+  private async startRecordingFromSilentStack(): Promise<void> {
+    if (this.status !== 'silentStacking') {
+      return;
+    }
+
+    // Block recording if no model is downloaded.
+    const modelAvailable = await this.modelManager.isModelAvailable();
+    if (!modelAvailable) {
+      const errorMsg = 'You must download a voice model first. Go to Settings → Transcription to download one.';
+      this.emit('error', new Error(errorMsg));
+      this.cursorStatusManager?.showRecordingNote(errorMsg);
+      return;
+    }
+
+    // Check priority mic quota if a priority device is selected.
+    this.priorityMicSkippedForQuota = false;
+    if (this.quotaManager && this.audioManager) {
+      const state = this.audioManager.getState();
+      if (state.priorityDeviceId) {
+        if (!this.quotaManager.isAllowed('priority_mic_seconds')) {
+          this.priorityMicSkippedForQuota = true;
+          this.cursorStatusManager?.showRecordingNote(
+            MESSAGES.recordingNote.priorityMicLimitReached
+          );
+          this.emit('quotaExhausted', this.quotaManager.getFeatureStatus('priority_mic_seconds'));
+        }
+      }
+    }
+
+    try {
+      this.setStatus('recording');
+
+      // Track recording start time for quota calculation.
+      this.recordingStartTime = Date.now();
+
+      // Reset audio content tracking for recording portion.
+      this.hasAudioContent = false;
+      this.pendingAbandonConfirmation = false;
+
+      // DON'T clear currentStack or screenshotMetadata - keep existing figures!
+      // Figure numbering will continue from where silentStacking left off.
+
+      // Show overlay
+      this.overlay.showRecording();
+
+      // Abandon hotkey should already be registered from silentStacking,
+      // but ensure it's registered.
+      if (!this.abandonHotkeyRegistered) {
+        this.registerAbandonHotkey();
+      }
+
+      // Play start recording sound.
+      this.soundManager.play('recordingStart');
+
+      await this.nativeHelper.startRecording();
+      log.info('Recording started from silent stack (keeping %d existing figures)', this.screenshotMetadata.length);
+    } catch (error) {
+      log.error('Failed to start recording from silent stack:', error);
+      this.setStatus('idle');
+      this.overlay.dismiss();
+      this.unregisterAbandonHotkey();
+      this.emit('error', error as Error);
+    }
+  }
+
+  /**
+   * Finish silent stacking mode - paste collected screenshots and return to idle.
+   * Activated by double-tapping the transcribe hotkey while in silentStacking mode.
+   */
+  private async finishSilentStacking(): Promise<void> {
+    if (this.status !== 'silentStacking') {
+      return;
+    }
+
+    // Unregister abandon hotkey.
+    this.unregisterAbandonHotkey();
+
+    // Play stop sound.
+    this.soundManager.play('recordingStop');
+
+    // If stack is empty or no clipboard manager, just return to idle.
+    if (this.currentStack.length === 0 || !this.clipboardManager) {
+      this.setStatus('idle');
+      log.info('Silent stacking finished (empty stack)');
+      return;
+    }
+
+    // Assign stackId to group items together (same logic as voice-enabled stacking).
+    const stackId = crypto.randomUUID();
+    this.clipboardManager.updateStackId(this.currentStack, stackId);
+
+    // Emit event for metrics tracking.
+    this.emit('autostackCreated');
+
+    // Paste the stack.
+    await this.pasteSilentStack();
+
+    // Clear stack and return to idle.
+    this.clearStack();
+    this.setStatus('idle');
+    log.info('Silent stacking finished and pasted');
+  }
+
+  /**
+   * Paste all items collected during silent stacking.
+   * For terminals: pastes "Figure N" label + path with blank lines between.
+   * For multimodal apps: pastes actual images with blank lines between.
+   */
+  private async pasteSilentStack(): Promise<void> {
+    if (!this.clipboardManager || this.currentStack.length === 0) {
+      return;
+    }
+
+    const frontmostBundleId = await this.getFrontmostAppBundleId();
+
+    // Skip paste if Field Theory itself is frontmost.
+    if (frontmostBundleId === 'com.fieldtheory.app' || frontmostBundleId === 'com.fieldtheory.experimental') {
+      this.emit('paste-failed', 'Field Theory has focus - press Cmd+V in your target app', '');
+      return;
+    }
+
+    const isTerminal = isTerminalApp(frontmostBundleId);
+
+    // Get ALL items from currentStack (text and images).
+    const items = this.currentStack
+      .map(id => this.clipboardManager!.getItem(id))
+      .filter((item): item is ClipboardItem => item !== null);
+
+    if (items.length === 0) {
+      return;
+    }
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+
+      if (item.imageData) {
+        // Image item
+        if (isTerminal) {
+          // Terminal: paste "Figure N" label + newline + path.
+          const figureLabel = item.figureLabel || String(i + 1);
+          const imagePath = await this.clipboardManager!.exportImageToCache(item);
+          if (imagePath) {
+            clipboard.writeText(`Figure ${figureLabel}\n${imagePath}`);
+            this.clipboardManager?.syncClipboardHash();
+            await this.pasteText();
+          }
+        } else {
+          // Multimodal: paste actual image.
+          const imageBuffer = typeof item.imageData === 'string'
+            ? Buffer.from(item.imageData, 'base64')
+            : item.imageData;
+          const image = nativeImage.createFromBuffer(imageBuffer);
+          clipboard.writeImage(image);
+          this.clipboardManager?.setClipboardHashFromBuffer(imageBuffer);
+          await this.pasteText();
+        }
+      } else if (item.content) {
+        // Text item - paste as text.
+        clipboard.writeText(item.content);
+        this.clipboardManager?.syncClipboardHash();
+        await this.pasteText();
+      }
+
+      // Blank line between items.
+      if (i < items.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        clipboard.writeText('\n');
+        this.clipboardManager?.syncClipboardHash();
+        await this.pasteText();
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
   }
 
@@ -859,7 +1132,22 @@ export class TranscriberManager extends EventEmitter {
       this.unregisterAbandonHotkey();
     }
   }
-  
+
+  /**
+   * Cancel silent stacking (called by abandon hotkey in silentStacking mode).
+   */
+  private cancelSilentStacking(): void {
+    if (this.status !== 'silentStacking') {
+      return;
+    }
+
+    this.setStatus('idle');
+    this.currentStack = [];
+    this.screenshotMetadata = [];
+    this.unregisterAbandonHotkey();
+    log.info('Silent stacking cancelled');
+  }
+
   /**
    * Register abandon recording hotkey (configurable, default: Escape).
    * If clipboard history is visible, dismiss it first instead of canceling recording.
@@ -873,19 +1161,41 @@ export class TranscriberManager extends EventEmitter {
     this.registeredAbandonHotkey = abandonHotkey;
     
     const registered = globalShortcut.register(abandonHotkey, () => {
+      // Handle second Escape press during confirmation.
       if (this.pendingAbandonConfirmation) {
         this.pendingAbandonConfirmation = false;
         this.overlay.hideConfirmation();
-        this.cancelRecording();
+        if (this.status === 'silentStacking') {
+          this.cancelSilentStacking();
+        } else {
+          this.cancelRecording();
+        }
         return;
       }
-      
+
+      // Let clipboard history handle Escape if it's visible.
       if (this.clipboardHistoryVisibilityChecker?.()) {
         this.emit('dismiss-clipboard-history');
         return;
       }
+
       const confirmationEnabled = this.preferences.getPreference('abandonRecordingConfirmation') ?? true;
-      
+
+      // Handle silentStacking mode.
+      if (this.status === 'silentStacking') {
+        if (confirmationEnabled && this.currentStack.length > 0) {
+          // Has items - show "Esc again to discard" confirmation.
+          this.pendingAbandonConfirmation = true;
+          this.cursorStatusManager?.setState('confirmation');
+          this.emit('confirmation-show');
+          return;
+        }
+        // No items or confirmation disabled - cancel immediately.
+        this.cancelSilentStacking();
+        return;
+      }
+
+      // Handle recording mode (existing behavior).
       if (confirmationEnabled && this.hasAudioContent) {
         // Show confirmation dialog.
         this.pendingAbandonConfirmation = true;
@@ -893,7 +1203,7 @@ export class TranscriberManager extends EventEmitter {
         this.emit('confirmation-show');
         return;
       }
-      
+
       // No confirmation needed - cancel immediately.
       this.cancelRecording();
     });
@@ -934,7 +1244,7 @@ export class TranscriberManager extends EventEmitter {
    * Resume the abandon hotkey after it was paused.
    */
   resumeAbandonHotkey(): void {
-    if (this.status !== 'recording') {
+    if (this.status !== 'recording' && this.status !== 'silentStacking') {
       return;
     }
     if (this.abandonHotkeyRegistered) {
@@ -954,8 +1264,8 @@ export class TranscriberManager extends EventEmitter {
     
     await this.preferences.save({ abandonRecordingHotkey: hotkey });
     
-    // Re-register if we're currently recording.
-    if (this.status === 'recording') {
+    // Re-register if we're currently recording or silentStacking.
+    if (this.status === 'recording' || this.status === 'silentStacking') {
       this.registerAbandonHotkey();
     }
 
@@ -1287,10 +1597,10 @@ export class TranscriberManager extends EventEmitter {
   addToStack(itemId: number): void {
     if (this.currentStack.includes(itemId)) return;
 
-    // Check auto-stack quota before adding screenshots to stack during recording.
+    // Check auto-stack quota before adding screenshots to stack during recording or silentStacking.
     // Free tier: Allow first screenshot to stack (users can experience transcript + 1 figure)
     // Pro tier: Unlimited screenshots
-    if (this.status === 'recording' && this.quotaManager) {
+    if ((this.status === 'recording' || this.status === 'silentStacking') && this.quotaManager) {
       // Count existing screenshots in stack (use screenshotMetadata length as proxy)
       const existingScreenshots = this.screenshotMetadata.length;
 
@@ -1316,8 +1626,8 @@ export class TranscriberManager extends EventEmitter {
     
     this.currentStack.push(itemId);
     
-    // If we're currently recording, check if this is a screenshot and assign a figure label.
-    if (this.status === 'recording' && this.clipboardManager) {
+    // If we're currently recording or silentStacking, check if this is a screenshot and assign a figure label.
+    if ((this.status === 'recording' || this.status === 'silentStacking') && this.clipboardManager) {
       const item = this.clipboardManager.getItem(itemId);
       if (item && (item.type === 'screenshot' || item.type === 'image')) {
         // Generate the next figure label (A, B, C... Z, AA, AB...).

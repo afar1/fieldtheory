@@ -704,7 +704,7 @@ interface SocialAPI {
 /**
  * Cursor status indicator state.
  */
-type CursorStatusState = 'idle' | 'recording' | 'transcribing' | 'done' | 'confirmation' | 'paste-failed';
+type CursorStatusState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'improving' | 'done' | 'confirmation' | 'paste-failed';
 
 /**
  * Label visibility state for progressive hiding.
