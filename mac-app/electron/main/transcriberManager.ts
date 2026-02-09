@@ -806,8 +806,8 @@ export class TranscriberManager extends EventEmitter {
         await this.pasteText();
       }
 
-      // Blank line between items.
-      if (i < items.length - 1) {
+      // Blank line between items (terminal only - multimodal apps don't need separators).
+      if (isTerminal && i < items.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 100));
         clipboard.writeText('\n');
         this.clipboardManager?.syncClipboardHash();
