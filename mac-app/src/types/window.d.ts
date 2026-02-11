@@ -912,6 +912,10 @@ interface CommandsAPI {
   getMobileSyncStatus: () => Promise<MobileSyncStatus>;
   syncToMobile: () => Promise<CommandSyncResult>;
   getRemoteCommandCount: () => Promise<number>;
+
+  // Shared commands (routes through main process for auth)
+  shareCommand: (command: { name: string; content: string }) => Promise<{ data?: any; error?: string }>;
+  unshareCommand: (commandId: string) => Promise<{ success?: boolean; error?: string }>;
 }
 
 /**

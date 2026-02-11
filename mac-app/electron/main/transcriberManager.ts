@@ -737,22 +737,28 @@ export class TranscriberManager extends EventEmitter {
     // Emit event for metrics tracking.
     this.emit('autostackCreated');
 
-    // Paste the stack.
-    await this.pasteSilentStack();
+    // Capture items to paste before changing status (snapshot).
+    const itemsToPaste = [...this.currentStack];
+    log.info('[SilentStack] Captured %d items to paste, setting status to idle', itemsToPaste.length);
 
-    // Clear stack and return to idle.
+    // Set to idle BEFORE pasting so clipboard changes during paste don't get re-added.
     this.clearStack();
     this.setStatus('idle');
-    log.info('Silent stacking finished and pasted');
+    log.info('[SilentStack] Status is now: %s, stack cleared', this.status);
+
+    // Paste the captured items.
+    await this.pasteSilentStack(itemsToPaste);
+    log.info('[SilentStack] Paste complete');
   }
 
   /**
    * Paste all items collected during silent stacking.
    * For terminals: pastes "Figure N" label + path with blank lines between.
    * For multimodal apps: pastes actual images with blank lines between.
+   * @param itemIds - Snapshot of item IDs to paste (captured before status change)
    */
-  private async pasteSilentStack(): Promise<void> {
-    if (!this.clipboardManager || this.currentStack.length === 0) {
+  private async pasteSilentStack(itemIds: number[]): Promise<void> {
+    if (!this.clipboardManager || itemIds.length === 0) {
       return;
     }
 
@@ -766,10 +772,17 @@ export class TranscriberManager extends EventEmitter {
 
     const isTerminal = isTerminalApp(frontmostBundleId);
 
-    // Get ALL items from currentStack (text and images).
-    const items = this.currentStack
+    // Get ALL items from captured IDs (text and images).
+    log.info('[SilentStack] itemIds to paste:', itemIds);
+    const items = itemIds
       .map(id => this.clipboardManager!.getItem(id))
       .filter((item): item is ClipboardItem => item !== null);
+
+    log.info('[SilentStack] Pasting %d items, isTerminal: %s', items.length, isTerminal);
+    items.forEach((item, i) => {
+      log.info('[SilentStack] Item %d: id=%d, type=%s, hasImage=%s, contentPreview=%s',
+        i, item.id, item.type, !!item.imageData, item.content?.substring(0, 30));
+    });
 
     if (items.length === 0) {
       return;
@@ -777,6 +790,7 @@ export class TranscriberManager extends EventEmitter {
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
+      log.info('[SilentStack] Pasting item %d/%d: id=%d', i + 1, items.length, item.id);
 
       if (item.imageData) {
         // Image item
@@ -806,8 +820,8 @@ export class TranscriberManager extends EventEmitter {
         await this.pasteText();
       }
 
-      // Blank line between items (terminal only - multimodal apps don't need separators).
-      if (isTerminal && i < items.length - 1) {
+      // Blank line between items for all apps.
+      if (i < items.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 100));
         clipboard.writeText('\n');
         this.clipboardManager?.syncClipboardHash();
@@ -1595,7 +1609,11 @@ export class TranscriberManager extends EventEmitter {
    * It's still saved to Field Theory but must be manually stacked by the user.
    */
   addToStack(itemId: number): void {
-    if (this.currentStack.includes(itemId)) return;
+    log.info('[Stack] addToStack called: itemId=%d, status=%s, stackLen=%d', itemId, this.status, this.currentStack.length);
+    if (this.currentStack.includes(itemId)) {
+      log.info('[Stack] Skipping duplicate itemId=%d', itemId);
+      return;
+    }
 
     // Check auto-stack quota before adding screenshots to stack during recording or silentStacking.
     // Free tier: Allow first screenshot to stack (users can experience transcript + 1 figure)
@@ -2006,18 +2024,23 @@ export class TranscriberManager extends EventEmitter {
       items.some(i => i.type === 'text' || i.type === 'transcript') &&
       items.some(i => i.imageData);
 
+    // Find the last text/transcript item for appending figure paths (terminal only).
+    const lastTextItemIndex = items.reduce((lastIdx, item, idx) =>
+      (item.type === 'text' || item.type === 'transcript') ? idx : lastIdx, -1);
+
     // Paste in chronological order: oldest first (top), newest last (bottom).
     // This preserves the natural flow of conversation/context building.
-    for (const item of items) {
+    for (let itemIdx = 0; itemIdx < items.length; itemIdx++) {
+      const item = items[itemIdx];
       if (item.type === 'text' || item.type === 'transcript') {
         // Use improved content if available and toggle is set.
         let textContent = (item.useImprovedVersion && item.improvedContent)
           ? item.improvedContent
           : (item.content || '');
 
-        // Append figure paths at the end for terminals when there are multiple items.
+        // Append figure paths at the end for terminals, but only on the LAST text item.
         // Non-terminals get inline [Figure X] refs without the file path list.
-        if (this.currentStack.length > 1 && isTerminal) {
+        if (this.currentStack.length > 1 && isTerminal && itemIdx === lastTextItemIndex) {
           textContent = await this.addImagePathsToText(textContent, items);
         }
 
@@ -2081,6 +2104,15 @@ export class TranscriberManager extends EventEmitter {
           await this.pasteText();
         }
       }
+
+      // Blank line between items for all apps.
+      if (itemIdx < items.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        clipboard.writeText('\n');
+        this.clipboardManager?.syncClipboardHash();
+        await this.pasteText();
+      }
+
       await new Promise(resolve => setTimeout(resolve, 100));
     }
 

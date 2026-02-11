@@ -295,6 +295,31 @@ export default function ContentToolbar({
         </div>
       )}
 
+      {/* Share button */}
+      {showShare && onToggleShare && !isEditing && (
+        <button
+          onClick={onToggleShare}
+          disabled={isSharing}
+          style={{
+            padding: '3px 8px',
+            fontSize: '11px',
+            color: shareStatus?.shared ? theme.accent : theme.textSecondary,
+            backgroundColor: 'transparent',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: isSharing ? 'default' : 'pointer',
+            opacity: isSharing ? 0.6 : 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: '24px',
+          }}
+          title={shareStatus?.shared ? 'Remove from Shared' : 'Add to Shared'}
+        >
+          {isSharing ? 'Sharing...' : shareStatus?.shared ? 'Shared' : 'Share'}
+        </button>
+      )}
+
       {/* Edit controls */}
       {isEditing ? (
         <>

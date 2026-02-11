@@ -4142,6 +4142,56 @@ function setupClipboardIPCHandlers(): void {
     }
   });
 
+  // Share a command to the shared pool (popular_commands table).
+  // Routes through main process to use AuthManager's authenticated Supabase client.
+  ipcMain.handle('commands:share', async (_event, command: { name: string; content: string }) => {
+    const supabase = authManager?.getSupabaseClient();
+    if (!supabase) {
+      return { error: 'Not authenticated' };
+    }
+
+    const session = await authManager?.getSession();
+    if (!session) {
+      return { error: 'Please log in to share commands' };
+    }
+
+    const { data, error } = await supabase
+      .from('popular_commands')
+      .insert({
+        name: command.name,
+        content: command.content,
+        copy_count: 0,
+        contributed_by: session.user?.id || null,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      log.error('Failed to share command:', error);
+      return { error: error.message };
+    }
+    return { data };
+  });
+
+  // Unshare a command from the shared pool.
+  ipcMain.handle('commands:unshare', async (_event, commandId: string) => {
+    const supabase = authManager?.getSupabaseClient();
+    if (!supabase) {
+      return { error: 'Not authenticated' };
+    }
+
+    const { error } = await supabase
+      .from('popular_commands')
+      .delete()
+      .eq('id', commandId);
+
+    if (error) {
+      log.error('Failed to unshare command:', error);
+      return { error: error.message };
+    }
+    return { success: true };
+  });
+
   // =========================================================================
   // Feedback IPC Handlers
   // =========================================================================
