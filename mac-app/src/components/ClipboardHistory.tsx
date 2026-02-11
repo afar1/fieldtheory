@@ -3584,6 +3584,47 @@ export default function ClipboardHistory() {
             </div>
           )}
           
+          {/* Commands button */}
+          <button
+            onClick={() => {
+              setViewMode('commands');
+              setShowSettings(false);
+            }}
+            tabIndex={0}
+            style={{
+              padding: '5px 6px',
+              fontSize: '9px',
+              fontWeight: 500,
+              backgroundColor: viewMode === 'commands' && !showSettings ? theme.accent : 'transparent',
+              color: viewMode === 'commands' && !showSettings ? '#fff' : theme.textSecondary,
+              border: 'none',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              outline: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px',
+            }}
+            onMouseEnter={(e) => {
+              if (viewMode !== 'commands' || showSettings) {
+                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (viewMode !== 'commands' || showSettings) {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }
+            }}
+            title="Portable commands"
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="4 17 10 11 4 5" />
+              <line x1="12" y1="19" x2="20" y2="19" />
+            </svg>
+            Commands
+          </button>
+
           {/* Librarian button */}
           {librarianEnabled && (
             <button
@@ -3691,47 +3732,6 @@ export default function ClipboardHistory() {
                 backgroundColor: theme.info,
               }} />
             )}
-          </button>
-
-          {/* Commands button */}
-          <button
-            onClick={() => {
-              setViewMode('commands');
-              setShowSettings(false);
-            }}
-            tabIndex={0}
-            style={{
-              padding: '5px 6px',
-              fontSize: '9px',
-              fontWeight: 500,
-              backgroundColor: viewMode === 'commands' && !showSettings ? theme.accent : 'transparent',
-              color: viewMode === 'commands' && !showSettings ? '#fff' : theme.textSecondary,
-              border: 'none',
-              borderRadius: '3px',
-              cursor: 'pointer',
-              transition: 'all 0.15s ease',
-              outline: 'none',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '3px',
-            }}
-            onMouseEnter={(e) => {
-              if (viewMode !== 'commands' || showSettings) {
-                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (viewMode !== 'commands' || showSettings) {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }
-            }}
-            title="Portable commands"
-          >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="4 17 10 11 4 5" />
-              <line x1="12" y1="19" x2="20" y2="19" />
-            </svg>
-            Commands
           </button>
 
           {/* Settings button */}

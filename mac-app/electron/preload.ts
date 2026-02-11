@@ -2436,6 +2436,16 @@ const commandsAPI = {
   getRemoteCommandCount: async (): Promise<number> => {
     return ipcRenderer.invoke(CommandsIPCChannels.GET_REMOTE_COMMAND_COUNT);
   },
+
+  // Share a command to the shared pool (routes through main process for auth).
+  shareCommand: async (command: { name: string; content: string }): Promise<{ data?: any; error?: string }> => {
+    return ipcRenderer.invoke('commands:share', command);
+  },
+
+  // Unshare a command from the shared pool.
+  unshareCommand: async (commandId: string): Promise<{ success?: boolean; error?: string }> => {
+    return ipcRenderer.invoke('commands:unshare', commandId);
+  },
 };
 
 type CommandsAPI = typeof commandsAPI;
