@@ -1,0 +1,14 @@
+{
+  "lookback_days": 90,
+  "product": {
+    "name": "Field Theory",
+    "url": "fieldtheory.dev",
+    "features": [
+      "Local voice transcription",
+      "Portable commands",
+      "Screenshot annotation",
+      "Priority Mic",
+      "No subscription"
+    ]
+  }
+}

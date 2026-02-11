@@ -1,7 +1,7 @@
 // =============================================================================
 // CommandsView - Unified Commands View for portable commands management.
 // Based on LibrarianView pattern - two-pane layout with sidebar and detail pane.
-// Supports multi-directory watching, full CRUD, and Popular commands discovery.
+// Supports multi-directory watching, full CRUD, and Shared commands discovery.
 // =============================================================================
 
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
@@ -429,42 +429,35 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
     checkShareStatus();
   }, [selectedCommand]);
 
-  // Toggle share status
+  // Toggle share status - routes through main process for proper auth
   const handleShareToggle = useCallback(async () => {
-    if (!selectedCommand || !supabase || isSharing) return;
+    if (!selectedCommand || isSharing) return;
 
     setIsSharing(true);
     try {
       if (shareStatus?.shared && shareStatus.id) {
-        // Unshare - delete from popular_commands
-        const { error } = await supabase
-          .from('popular_commands')
-          .delete()
-          .eq('id', shareStatus.id);
-
-        if (error) throw error;
+        // Unshare via IPC
+        const result = await window.commandsAPI?.unshareCommand(shareStatus.id);
+        if (result?.error) {
+          window.alert(`Failed to unshare: ${result.error}`);
+          throw new Error(result.error);
+        }
         setShareStatus({ shared: false });
-
-        // Also refresh popular commands list
         setPopularCommands(prev => prev.filter(cmd => cmd.id !== shareStatus.id));
       } else {
-        // Share - insert into popular_commands
-        const { data, error } = await supabase
-          .from('popular_commands')
-          .insert({
-            name: selectedCommand.name,
-            content: selectedCommand.content,
-            copy_count: 0,
-          })
-          .select()
-          .single();
-
-        if (error) throw error;
-
-        setShareStatus({ shared: true, id: data.id });
-
-        // Add to popular commands list
-        setPopularCommands(prev => [data, ...prev]);
+        // Share via IPC
+        const result = await window.commandsAPI?.shareCommand({
+          name: selectedCommand.name,
+          content: selectedCommand.content,
+        });
+        if (result?.error) {
+          window.alert(`Failed to share: ${result.error}`);
+          throw new Error(result.error);
+        }
+        if (result?.data) {
+          setShareStatus({ shared: true, id: result.data.id });
+          setPopularCommands(prev => [result.data, ...prev]);
+        }
       }
     } catch (err) {
       console.error('Failed to toggle share:', err);
@@ -895,7 +888,7 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
               letterSpacing: '0.5px',
             }}
           >
-            My Commands
+            Internal
           </span>
           <span style={{ color: theme.isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.15)' }}>|</span>
           <span
@@ -909,7 +902,7 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
               letterSpacing: '0.5px',
             }}
           >
-            Popular
+            Shared
           </span>
           {/* Spacer */}
           <div style={{ flex: 1 }} />
@@ -972,7 +965,7 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
         {/* Commands list */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {viewMode === 'mine' ? (
-            // My Commands view - grouped by directory (Librarian style)
+            // Internal view - grouped by directory (Librarian style)
             Array.from(groupedCommands.entries()).map(([dirPath, items]) => (
               <div key={dirPath}>
                 {/* Directory header with horizontal rule - always show like Librarian */}
@@ -1116,7 +1109,7 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
               </div>
             ))
           ) : (
-            // Popular view - identical styling to My Commands
+            // Shared view - identical styling to Internal
             popularLoading ? (
               <div style={{ padding: '16px', textAlign: 'center', color: theme.textSecondary, fontSize: '12px' }}>
                 Loading...

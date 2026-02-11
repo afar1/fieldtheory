@@ -1,0 +1,3 @@
+# dangerous
+
+--dangerously-skip-permissions

@@ -1,0 +1,33 @@
+{
+  "competitors": [
+    "superwhisper",
+    "wispr flow",
+    "wisprflow",
+    "macwhisper",
+    "mac whisper",
+    "whisper flow",
+    "aqua voice",
+    "willow voice"
+  ],
+  "pain_points": [
+    "voice dictation mac",
+    "voice to text developer",
+    "dictation app subscription expensive",
+    "voice coding cursor",
+    "local voice transcription",
+    "offline dictation mac",
+    "speech to text privacy",
+    "vibe coding voice"
+  ],
+  "intent_signals": [
+    "looking for",
+    "anyone know",
+    "best voice app",
+    "alternative to",
+    "switched from",
+    "stopped working",
+    "which should I use",
+    "recommend voice"
+  ],
+  "custom": []
+}

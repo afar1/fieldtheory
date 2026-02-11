@@ -22,7 +22,7 @@ const STATE_COLORS: Record<StatusState, string> = {
 // Glow colors (slightly transparent for the shadow effect)
 const STATE_GLOWS: Record<StatusState, string> = {
   idle: 'transparent',
-  silentStacking: 'rgba(255, 59, 48, 0.5)',  // Red glow for ring
+  silentStacking: 'rgba(251, 191, 36, 0.5)',  // Gold glow for ring
   recording: 'rgba(255, 59, 48, 0.5)',
   transcribing: 'rgba(175, 82, 222, 0.5)',
   improving: 'rgba(0, 122, 255, 0.5)',
@@ -483,24 +483,39 @@ export default function CursorStatus() {
       onClick={handleClick}
     >
       {/* Colored dot - always visible during active state, pulses for recording/confirmation/silentStacking, fades for done */}
-      <div
-        style={{
-          ...styles.dot,
-          marginLeft: screenshotMode ? '16px' : '3px', // Shift right during screenshot to avoid overlap
-          transition: 'margin-left 0.15s ease-out', // Smooth animation for screenshot mode
-          // silentStacking: transparent fill with red ring border
-          backgroundColor: state === 'silentStacking' ? 'transparent' : color,
-          border: state === 'silentStacking'
-            ? '2px solid #ff3b30'  // Red ring for silentStacking
-            : '1px solid rgba(0, 0, 0, 0.4)',
-          boxShadow: `0 0 6px ${glow}`,
-          animation: (state === 'recording' || state === 'confirmation' || state === 'silentStacking')
-            ? 'pulse 1.8s ease-in-out infinite'
-            : state === 'done'
-              ? 'fadeOutDot 0.8s ease-out forwards'
-              : 'none',
-        }}
-      />
+      {state === 'silentStacking' ? (
+        // Field Theory icon for collecting mode
+        <img
+          src="field-theory-icon-black.png"
+          alt=""
+          style={{
+            width: '14px',
+            height: '14px',
+            marginTop: '2px',
+            marginLeft: screenshotMode ? '16px' : '3px',
+            transition: 'margin-left 0.15s ease-out',
+            filter: 'invert(1) sepia(1) saturate(6) hue-rotate(-15deg) brightness(0.85)', // Gold tint
+            opacity: 0.95,
+            animation: 'pulse 1.8s ease-in-out infinite',
+          }}
+        />
+      ) : (
+        <div
+          style={{
+            ...styles.dot,
+            marginLeft: screenshotMode ? '16px' : '3px', // Shift right during screenshot to avoid overlap
+            transition: 'margin-left 0.15s ease-out',
+            backgroundColor: color,
+            border: '1px solid rgba(0, 0, 0, 0.4)',
+            boxShadow: `0 0 6px ${glow}`,
+            animation: (state === 'recording' || state === 'confirmation')
+              ? 'pulse 1.8s ease-in-out infinite'
+              : state === 'done'
+                ? 'fadeOutDot 0.8s ease-out forwards'
+                : 'none',
+          }}
+        />
+      )}
       
       {/* Pipe indicator - shows screenshots captured during recording or silentStacking */}
       {(state === 'recording' || state === 'silentStacking') && pipeCount > 0 && (

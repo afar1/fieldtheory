@@ -1728,7 +1728,7 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
                     <li>Unlimited transcripts and screenshots</li>
                     <li>Unlimited fields and manual stacking</li>
                     <li>Unlimited manual drawings</li> 
-                    <li>Popular commands</li>
+                    <li>Shared commands</li>
                   </ul>
                 </form>
               ) : (

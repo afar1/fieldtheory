@@ -14,6 +14,12 @@ export function hasReleaseNotes(version: string): boolean {
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.74': [
+    'New collecting mode: double-tap transcribe hotkey to silently capture without transcribing',
+    'Share button to contribute your commands to the shared pool',
+    'Renamed command tabs to "Internal" and "Shared"',
+    'Commands tab now appears before Librarian in navigation',
+  ],
   '0.1.71': [
     'Fixed footer layout shift when checking for updates',
   ],
@@ -176,6 +182,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.74': 'Feb 10 2026',
   '0.1.71': 'Feb 6 2026',
   '0.1.70': 'Feb 6 2026',
   '0.1.69': 'Feb 6 2026',

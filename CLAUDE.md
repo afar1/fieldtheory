@@ -60,6 +60,61 @@ React → window.clipboardAPI.queryItems() → ipcRenderer.invoke('clipboard:que
      → ipcMain.handle() → ClipboardManager.queryItems() → SQLite → response
 ```
 
+### Authentication Architecture (CRITICAL)
+
+**AuthManager is the single source of truth for authentication.** This design prevents random logout bugs caused by multiple auth states conflicting.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         MAIN PROCESS                                │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │  AuthManager (single source of truth)                        │   │
+│  │  - Owns Supabase client with auth session                    │   │
+│  │  - Handles login, logout, token refresh                      │   │
+│  │  - Exposes getSupabaseClient() for other managers            │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│         │                                                           │
+│         │ getSupabaseClient()                                       │
+│         ▼                                                           │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │  Other Managers (feedbackManager, todoStore, etc.)           │   │
+│  │  - Use authManager.getSupabaseClient() for DB operations     │   │
+│  │  - Never manage auth state themselves                        │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘
+         │
+         │ IPC (ipcMain.handle / ipcRenderer.invoke)
+         ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                         RENDERER PROCESS                            │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │  Supabase Client (supabaseClient.ts)                         │   │
+│  │  - persistSession: false (NO auth state)                     │   │
+│  │  - ONLY used for realtime subscriptions                      │   │
+│  │  - NEVER call setSession() or manipulate auth                │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                                                                     │
+│  For authenticated DB operations:                                   │
+│  window.someAPI.doThing() → IPC → main process → Supabase          │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**DO NOT:**
+- Call `supabase.auth.setSession()` in the renderer
+- Create additional Supabase clients with auth
+- Bypass IPC for authenticated database operations
+
+**DO:**
+- Route authenticated operations through IPC to main process
+- Use `authManager.getSupabaseClient()` in main process managers
+- Keep renderer Supabase client for realtime subscriptions only
+
+Example of correct pattern (from commandSyncService.ts):
+```typescript
+const supabase = this.authManager.getSupabaseClient();
+await supabase.from('user_commands').insert({...});
+```
+
 ### Multi-Window Architecture
 
 The app has multiple separate React entry points (each a separate HTML file):
