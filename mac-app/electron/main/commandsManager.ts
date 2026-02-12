@@ -1321,4 +1321,125 @@ End of User Commands
       return null;
     }
   }
+
+  // =========================================================================
+  // Handoffs - Global session handoff files
+  // =========================================================================
+
+  /**
+   * Get the global handoffs directory path.
+   * Creates the directory if it doesn't exist.
+   */
+  getHandoffsDirectory(): string {
+    const userDataPath = app.getPath('userData');
+    const handoffsDir = path.join(userDataPath, 'handoffs');
+
+    // Create directory if it doesn't exist
+    if (!fs.existsSync(handoffsDir)) {
+      try {
+        fs.mkdirSync(handoffsDir, { recursive: true });
+      } catch (error) {
+        log.error('Error creating handoffs directory:', error);
+      }
+    }
+
+    return handoffsDir;
+  }
+
+  /**
+   * Get the 10 most recent handoff files, sorted by modification time.
+   * Returns handoff info similar to PortableCommand for consistent handling.
+   */
+  async getHandoffs(limit: number = 10): Promise<PortableCommand[]> {
+    const handoffsDir = this.getHandoffsDirectory();
+    const handoffs: PortableCommand[] = [];
+
+    try {
+      if (!fs.existsSync(handoffsDir)) {
+        return [];
+      }
+
+      const entries = fs.readdirSync(handoffsDir, { withFileTypes: true });
+
+      // Collect all markdown files with their stats
+      const filesWithStats: Array<{ entry: typeof entries[0]; stats: fs.Stats }> = [];
+
+      for (const entry of entries) {
+        if (entry.isFile() && this.isMarkdownFile(entry.name)) {
+          try {
+            const fullPath = path.join(handoffsDir, entry.name);
+            const stats = fs.statSync(fullPath);
+            filesWithStats.push({ entry, stats });
+          } catch {
+            // Skip files we can't stat
+          }
+        }
+      }
+
+      // Sort by modification time, most recent first
+      filesWithStats.sort((a, b) => b.stats.mtimeMs - a.stats.mtimeMs);
+
+      // Take top N
+      const topFiles = filesWithStats.slice(0, limit);
+
+      for (const { entry, stats } of topFiles) {
+        const fullPath = path.join(handoffsDir, entry.name);
+        const nameWithoutExt = entry.name.replace(/\.(md|markdown)$/i, '');
+
+        // Parse project path and date from filename
+        // New format: "parent-project-2025-02-11-143022-handoff" (e.g., "fieldtheory-mac-app-2025-02-11-143022-handoff")
+        // Old format: "project-2025-02-11-143022-handoff" (e.g., "mac-app-2025-02-11-143022-handoff")
+        const match = nameWithoutExt.match(/^(.+?)-(\d{4})-(\d{2})-(\d{2})-(\d+)-handoff$/);
+        let displayName: string;
+
+        if (match) {
+          const [, projectPath, year, month, day] = match;
+          // Format: "↩ fieldtheory/mac-app · Feb 11"
+          // Convert "fieldtheory-mac-app" to "fieldtheory/mac-app" for display
+          const projectDisplay = projectPath.replace(/-([^-]+)$/, '/$1');
+          const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+          const shortDate = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          displayName = `↩ ${projectDisplay} · ${shortDate}`;
+        } else {
+          // Fallback: just use the filename without extension with prefix
+          displayName = `↩ ${nameWithoutExt}`;
+        }
+
+        handoffs.push({
+          name: nameWithoutExt.toLowerCase(),
+          filePath: fullPath,
+          displayName,
+          lastModified: stats.mtimeMs,
+        });
+      }
+    } catch (error) {
+      log.error('Error reading handoffs directory:', error);
+    }
+
+    return handoffs;
+  }
+
+  /**
+   * Load handoff content by file path.
+   */
+  async loadHandoffContent(filePath: string): Promise<LoadedCommand | null> {
+    try {
+      if (!fs.existsSync(filePath)) {
+        return null;
+      }
+
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const filename = path.basename(filePath);
+      const nameWithoutExt = filename.replace(/\.(md|markdown)$/i, '');
+
+      return {
+        name: nameWithoutExt,
+        content,
+        filePath,
+      };
+    } catch (error) {
+      log.error(`Error loading handoff ${filePath}:`, error);
+      return null;
+    }
+  }
 }

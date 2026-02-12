@@ -43,6 +43,10 @@ export const CommandsIPCChannels = {
   GET_MOBILE_SYNC_STATUS: 'commands:getMobileSyncStatus',
   SYNC_TO_MOBILE: 'commands:syncToMobile',
   GET_REMOTE_COMMAND_COUNT: 'commands:getRemoteCommandCount',
+
+  // Handoffs - global session handoff files
+  GET_HANDOFFS: 'commands:getHandoffs',
+  GET_HANDOFF_CONTENT: 'commands:getHandoffContent',
 } as const;
 
 /**

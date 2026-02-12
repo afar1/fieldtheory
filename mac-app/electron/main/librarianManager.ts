@@ -2939,6 +2939,30 @@ if __name__ == "__main__":
   }
 
   /**
+   * Check if the read permission hook needs updating (installed but missing newer permissions).
+   */
+  needsReadPermissionUpdate(): boolean {
+    try {
+      if (!this.isReadPermissionHookInstalled()) return false;
+
+      const settingsPath = this.getClaudeSettingsPath();
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      const allowList: string[] = settings.permissions?.allow ?? [];
+
+      const handoffsDir = path.join(os.homedir(), '.fieldtheory', 'handoffs');
+      const requiredPerms = [
+        `Read(${handoffsDir}/*)`,
+        `Write(${handoffsDir}/*)`,
+        `Edit(${handoffsDir}/*)`,
+      ];
+
+      return requiredPerms.some(p => !allowList.includes(p));
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Install the read permission auto-approve hook for Claude Code.
    * Separate from Librarian hooks. Returns result with feedback message.
    */
@@ -2988,6 +3012,34 @@ if __name__ == "__main__":
         });
       }
 
+      // Create handoffs directory and add permissions
+      const handoffsDir = path.join(os.homedir(), '.fieldtheory', 'handoffs');
+      if (!fs.existsSync(handoffsDir)) {
+        fs.mkdirSync(handoffsDir, { recursive: true });
+      }
+
+      // Ensure permissions.allow exists
+      if (!settings.permissions) {
+        settings.permissions = { allow: [] };
+      }
+      const permissions = settings.permissions as Record<string, unknown>;
+      if (!Array.isArray(permissions.allow)) {
+        permissions.allow = [];
+      }
+      const allowList = permissions.allow as string[];
+
+      // Add handoff permissions if not already present
+      const handoffPerms = [
+        `Read(${handoffsDir}/*)`,
+        `Write(${handoffsDir}/*)`,
+        `Edit(${handoffsDir}/*)`,
+      ];
+      for (const perm of handoffPerms) {
+        if (!allowList.includes(perm)) {
+          allowList.push(perm);
+        }
+      }
+
       fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 
       return {
@@ -3030,6 +3082,20 @@ if __name__ == "__main__":
         // Clean up empty hooks object
         if (settings.hooks && Object.keys(settings.hooks).length === 0) {
           delete settings.hooks;
+        }
+
+        // Remove handoff permissions
+        const handoffsDir = path.join(os.homedir(), '.fieldtheory', 'handoffs');
+        if (settings.permissions && Array.isArray((settings.permissions as Record<string, unknown>).allow)) {
+          const allowList = (settings.permissions as Record<string, unknown>).allow as string[];
+          const handoffPerms = [
+            `Read(${handoffsDir}/*)`,
+            `Write(${handoffsDir}/*)`,
+            `Edit(${handoffsDir}/*)`,
+          ];
+          (settings.permissions as Record<string, unknown>).allow = allowList.filter(
+            (p: string) => !handoffPerms.includes(p)
+          );
         }
 
         fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
