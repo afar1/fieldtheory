@@ -1,0 +1,139 @@
+schema_version: 1
+name: "Field Theory"
+description: "Electron + React Native development environment with Swift native helpers, Supabase backend, and local AI inference"
+
+dependencies:
+  - id: xcode-cli
+    name: Xcode Command Line Tools
+    icon: "🔧"
+    icon_bg: "#147EFB"
+    desc: Foundation for compiling Swift native helpers and all dev tools.
+    check: xcode-select -p
+    install: xcode-select --install
+
+  - id: homebrew
+    name: Homebrew
+    icon_img: homebrew.svg
+    icon_bg: "#FBB040"
+    desc: Package manager for installing Node, Python, and CLI tools.
+    check: which brew
+    install: '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+    depends_on: xcode-cli
+
+  - id: git
+    name: Git
+    icon_img: git.svg
+    icon_bg: "#F05032"
+    desc: Version control for the monorepo.
+    check: which git
+    install: brew install git
+    depends_on: homebrew
+
+  - id: node
+    name: Node.js
+    icon_img: nodejs.svg
+    icon_bg: "#333"
+    desc: Runtime for the Electron desktop app, React Native iOS app, and web services.
+    check: which node
+    install: brew install node
+    depends_on: homebrew
+
+  - id: python
+    name: Python 3
+    icon_img: python.svg
+    icon_bg: "#306998"
+    desc: Used for build scripts, test evaluation, model conversion, and Claude Code hooks.
+    check: which python3
+    install: brew install python
+    depends_on: homebrew
+
+  - id: supabase
+    name: Supabase CLI
+    icon: "⚡"
+    icon_bg: "#3ECF8E"
+    desc: Manage edge functions, run migrations, and deploy the backend.
+    check: which supabase
+    install: brew install supabase/tap/supabase
+    depends_on: homebrew
+
+  - id: gh
+    name: GitHub CLI
+    icon_img: github.png
+    icon_bg: "#24292e"
+    desc: Create releases on field-releases repo and manage pull requests.
+    check: which gh
+    install: brew install gh
+    depends_on: homebrew
+
+apps:
+  - id: iterm
+    name: iTerm
+    icon: "🖥"
+    icon_bg: "#000000"
+    desc: Terminal emulator for running dev servers and build commands.
+    check: ls /Applications/iTerm.app
+    install: brew install --cask iterm2
+    depends_on: homebrew
+
+  - id: chatgpt
+    name: ChatGPT
+    icon: "🤖"
+    icon_bg: "#10A37F"
+    desc: AI assistant for research and pair programming.
+    check: ls /Applications/ChatGPT.app
+    install: brew install --cask chatgpt
+    depends_on: homebrew
+
+  - id: alfred
+    name: Alfred 5
+    icon: "🎩"
+    icon_bg: "#5C1F87"
+    desc: Productivity launcher and workflow automation.
+    check: ls /Applications/Alfred\ 5.app
+    install: brew install --cask alfred
+    depends_on: homebrew
+
+  - id: rectangle
+    name: Rectangle
+    icon: "▪️"
+    icon_bg: "#2B5797"
+    desc: Window management with keyboard shortcuts.
+    check: ls /Applications/Rectangle.app
+    install: brew install --cask rectangle
+    depends_on: homebrew
+
+  - id: caffeine
+    name: Caffeine
+    icon: "☕"
+    icon_bg: "#6F4E37"
+    desc: Prevents sleep during long builds and deployments.
+    check: ls /Applications/Caffeine.app
+    install: brew install --cask caffeine
+    depends_on: homebrew
+
+  - id: fieldtheory
+    name: Field Theory
+    icon: "📋"
+    icon_bg: "#6366F1"
+    desc: Clipboard history, transcription, and productivity toolkit.
+    check: ls /Applications/Field\ Theory.app
+    install: brew install --cask fieldtheory
+    depends_on: homebrew
+
+  - id: docker
+    name: Docker
+    icon: "🐳"
+    icon_bg: "#2496ED"
+    desc: Container runtime for local services and testing.
+    check: ls /Applications/Docker.app
+    install: brew install --cask docker
+    depends_on: homebrew
+
+  - id: screen-studio
+    name: Screen Studio
+    icon: "🎬"
+    icon_bg: "#FF3366"
+    desc: Screen recording for demos and bug reports.
+    check: ls /Applications/Screen\ Studio.app
+    install: brew install --cask screen-studio
+    depends_on: homebrew
