@@ -1805,6 +1805,11 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager?.isReadPermissionHookInstalled() ?? false;
   });
 
+  // Check if Claude Code read permission hook needs updating
+  ipcMain.handle('claude:needsReadPermissionUpdate', (): boolean => {
+    return librarianManager?.needsReadPermissionUpdate() ?? false;
+  });
+
   // Install Claude Code read permission hook
   ipcMain.handle('claude:installReadPermissionHook', (): { success: boolean; message: string } => {
     return librarianManager?.installReadPermissionHook() ?? { success: false, message: 'Manager not ready' };
@@ -4078,6 +4083,77 @@ function setupClipboardIPCHandlers(): void {
       return 0;
     }
     return await commandSyncService.getRemoteCommandCount();
+  });
+
+  // =========================================================================
+  // Handoffs - Global session handoff files
+  // =========================================================================
+
+  ipcMain.handle(CommandsIPCChannels.GET_HANDOFFS, async () => {
+    if (!commandsManager) {
+      return [];
+    }
+    const handoffs = await commandsManager.getHandoffs(10);
+    return handoffs.map(h => ({
+      name: h.name,
+      displayName: h.displayName,
+      filePath: h.filePath,
+      lastModified: h.lastModified,
+    }));
+  });
+
+  ipcMain.handle(CommandsIPCChannels.GET_HANDOFF_CONTENT, async (_event, filePath: string) => {
+    if (!commandsManager) {
+      return null;
+    }
+    return await commandsManager.loadHandoffContent(filePath);
+  });
+
+  // Handle handoff invocation from command launcher (same behavior as commands).
+  ipcMain.handle('commands:invokeHandoff', async (_event, filePath: string) => {
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
+    const plist = require('plist');
+
+    if (!commandsManager || !fs.existsSync(filePath)) {
+      return { success: false, error: 'Handoff not found' };
+    }
+
+    try {
+      // Get the app that was active before the launcher opened.
+      const targetApp = commandLauncherWindow?.getPreviousApp();
+      const isTerminal = targetApp ? isTerminalApp(targetApp.bundleId) : false;
+      const isIDE = targetApp ? isIDEWithTerminal(targetApp.bundleId) : false;
+
+      const fileName = path.basename(filePath);
+
+      // Use text-based file path for terminals and IDEs with integrated terminals.
+      if (isTerminal || isIDE) {
+        const referenceText = `[resume from handoff: ${fileName}]\n${filePath}`;
+        clipboard.writeText(referenceText);
+        clipboardManager?.syncClipboardHash();
+      } else {
+        // For other apps: paste the .md file as an attachment.
+        const filePaths = [filePath];
+        const plistData = plist.build(filePaths);
+        clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
+        clipboardManager?.syncClipboardHash();
+      }
+
+      // Refocus the previous app and paste.
+      if (targetApp) {
+        await execAsync(`osascript -e 'tell application "${targetApp.name}" to activate'`);
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+
+      await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+
+      return { success: true };
+    } catch (error) {
+      log.error('Error invoking handoff:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
   });
 
   // Handle direct command invocation from command launcher (Cmd+Shift+K).

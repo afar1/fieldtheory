@@ -24,7 +24,14 @@ interface PortableCommandInfo {
   filePath: string;
 }
 
-type LauncherItemType = 'command' | 'action';
+interface HandoffInfo {
+  name: string;
+  displayName: string;
+  filePath: string;
+  lastModified: number;
+}
+
+type LauncherItemType = 'command' | 'action' | 'handoff';
 
 interface LauncherItem {
   id: string;
@@ -34,17 +41,22 @@ interface LauncherItem {
   keywords: string[];
   hotkey?: string;
   hotkeyDisplay?: string;
-  // For commands
+  // For commands and handoffs
   filePath?: string;
   // For actions
   actionId?: string;
+  // For handoffs - relative time display
+  timeAgo?: string;
 }
 
 // Window API types for the launcher's standalone renderer context.
 // In the launcher window, these APIs are always available (not optional).
 interface LauncherCommandsAPI {
   getCommands: () => Promise<PortableCommandInfo[]>;
+  getHandoffs: () => Promise<HandoffInfo[]>;
+  getHandoffContent: (filePath: string) => Promise<{ name: string; content: string; filePath: string } | null>;
   invokeCommand: (name: string) => Promise<{ success: boolean; error?: string }>;
+  invokeHandoff: (filePath: string) => Promise<{ success: boolean; error?: string }>;
   launcherResize: (height: number) => void;
   launcherClose: () => void;
   onLauncherReset: (callback: () => void) => () => void;
@@ -97,6 +109,25 @@ function formatHotkeyDisplay(hotkey: string): string {
     .replace(/Ctrl/g, '⌃')
     .replace(/\+/g, ' ')
     .replace(/\\/g, '\\');
+}
+
+// =============================================================================
+// Time Formatting
+// =============================================================================
+
+function formatTimeAgo(timestamp: number): string {
+  const now = Date.now();
+  const diff = now - timestamp;
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days === 1) return 'yesterday';
+  if (days < 7) return `${days}d ago`;
+  return new Date(timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 // =============================================================================
@@ -303,6 +334,7 @@ const getStyles = (isDark: boolean) => ({
 function CommandLauncher() {
   const [query, setQuery] = useState('');
   const [commands, setCommands] = useState<PortableCommandInfo[]>([]);
+  const [handoffs, setHandoffs] = useState<HandoffInfo[]>([]);
   const [hotkeys, setHotkeys] = useState(DEFAULT_HOTKEYS);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [filtered, setFiltered] = useState<LauncherItem[]>([]);
@@ -319,6 +351,17 @@ function CommandLauncher() {
       setCommands(cmds || []);
     } catch (err) {
       console.error('[CommandLauncher] Failed to load commands:', err);
+    }
+  }, []);
+
+  // Load handoffs from global Field Theory directory.
+  const loadHandoffs = useCallback(async () => {
+    try {
+      const hoffs = await commandsAPI.getHandoffs();
+      console.log('[CommandLauncher] Loaded handoffs:', hoffs?.length || 0);
+      setHandoffs(hoffs || []);
+    } catch (err) {
+      console.error('[CommandLauncher] Failed to load handoffs:', err);
     }
   }, []);
 
@@ -344,26 +387,28 @@ function CommandLauncher() {
     }
   }, []);
 
-  // Load commands and hotkeys on mount.
+  // Load commands, handoffs, and hotkeys on mount.
   useEffect(() => {
     // Set initial height immediately to prevent layout shift
     commandsAPI.launcherResize(36);
 
     loadCommands();
+    loadHandoffs();
     loadHotkeys();
 
     // Load current theme
     themeAPI.getTheme().then(dark => setIsDarkMode(dark));
 
     // Listen for reset events (when window is shown).
-    // Reload commands each time to pick up newly added commands without restart.
+    // Reload commands and handoffs each time to pick up newly added ones without restart.
     const handleReset = async () => {
       setQuery('');
       setFiltered([]);
       setSelectedIndex(0);
       inputRef.current?.focus();
-      // Reload commands to pick up any new ones added since last open.
+      // Reload commands and handoffs to pick up any new ones added since last open.
       loadCommands();
+      loadHandoffs();
       // Refresh theme state
       const dark = await themeAPI.getTheme();
       setIsDarkMode(dark ?? true);
@@ -373,9 +418,9 @@ function CommandLauncher() {
 
     const unsubscribe = commandsAPI.onLauncherReset(handleReset);
     return () => unsubscribe();
-  }, [loadCommands, loadHotkeys]);
+  }, [loadCommands, loadHandoffs, loadHotkeys]);
 
-  // Build all items (commands + actions).
+  // Build all items (commands + actions + handoffs).
   const allItems = useMemo(() => {
     const commandItems: LauncherItem[] = commands.map(cmd => ({
       id: `cmd-${cmd.name}`,
@@ -386,10 +431,20 @@ function CommandLauncher() {
       filePath: cmd.filePath,
     }));
 
+    const handoffItems: LauncherItem[] = handoffs.map(h => ({
+      id: `handoff-${h.name}`,
+      type: 'handoff' as const,
+      name: h.name,
+      displayName: h.displayName,
+      keywords: [h.name, h.displayName, 'handoff', 'session', ...h.displayName.split('-')],
+      filePath: h.filePath,
+      timeAgo: formatTimeAgo(h.lastModified),
+    }));
+
     const actionItems = getBuiltInActions(hotkeys, isDarkMode);
 
-    return [...commandItems, ...actionItems];
-  }, [commands, hotkeys, isDarkMode]);
+    return [...commandItems, ...handoffItems, ...actionItems];
+  }, [commands, handoffs, hotkeys, isDarkMode]);
 
   // Check if query is a help command.
   const isHelpQuery = useMemo(() => {
@@ -419,23 +474,26 @@ function CommandLauncher() {
 
     // Help mode: show all items grouped by type.
     if (isHelpQuery) {
-      // Sort: actions first (alphabetically), then commands (alphabetically).
+      // Sort: actions first (alphabetically), then handoffs (by recency), then commands (alphabetically).
       const actions = allItems
         .filter(item => item.type === 'action')
         .sort((a, b) => a.displayName.localeCompare(b.displayName));
+      const hoffs = allItems
+        .filter(item => item.type === 'handoff');
+      // Handoffs are already sorted by recency from the backend
       const cmds = allItems
         .filter(item => item.type === 'command')
         .sort((a, b) => a.name.localeCompare(b.name));
 
-      setFiltered([...actions, ...cmds]);
+      setFiltered([...actions, ...hoffs, ...cmds]);
       setSelectedIndex(0);
 
       // Resize for all items.
       const itemHeight = 22;
       const sectionHeaderHeight = 20;
       const padding = 10;
-      const numSections = (actions.length > 0 ? 1 : 0) + (cmds.length > 0 ? 1 : 0);
-      const totalItems = actions.length + cmds.length;
+      const numSections = (actions.length > 0 ? 1 : 0) + (hoffs.length > 0 ? 1 : 0) + (cmds.length > 0 ? 1 : 0);
+      const totalItems = actions.length + hoffs.length + cmds.length;
       const listHeight = Math.min(
         totalItems * itemHeight + numSections * sectionHeaderHeight + padding,
         280
@@ -547,6 +605,12 @@ function CommandLauncher() {
     if (item.type === 'command') {
       await commandsAPI.invokeCommand(item.name);
       commandsAPI.launcherClose();
+    } else if (item.type === 'handoff') {
+      // Invoke handoff - same behavior as commands (paste file reference).
+      if (item.filePath) {
+        await commandsAPI.invokeHandoff(item.filePath);
+      }
+      commandsAPI.launcherClose();
     } else if (item.type === 'action') {
       // Handle built-in actions.
       switch (item.actionId) {
@@ -630,6 +694,31 @@ function CommandLauncher() {
                     </li>
                   );
                 })}
+              {filtered.some(item => item.type === 'handoff') && (
+                <li style={styles.sectionHeader}>Recent Handoffs</li>
+              )}
+              {filtered
+                .filter(item => item.type === 'handoff')
+                .map((item, i) => {
+                  const globalIndex = filtered.findIndex(f => f.id === item.id);
+                  return (
+                    <li
+                      key={item.id}
+                      data-item-index={globalIndex}
+                      style={{
+                        ...styles.listItem,
+                        ...(globalIndex === selectedIndex ? styles.listItemSelected : {}),
+                      }}
+                      onClick={() => invokeItem(item)}
+                      onMouseEnter={() => setSelectedIndex(globalIndex)}
+                    >
+                      <span style={styles.itemName}>{item.displayName}</span>
+                      {item.timeAgo && (
+                        <span style={styles.itemHotkey}>{item.timeAgo}</span>
+                      )}
+                    </li>
+                  );
+                })}
               {filtered.some(item => item.type === 'command') && (
                 <li style={styles.sectionHeader}>Commands</li>
               )}
@@ -671,6 +760,9 @@ function CommandLauncher() {
                 </span>
                 {item.hotkeyDisplay && (
                   <span style={styles.itemHotkey}>{item.hotkeyDisplay}</span>
+                )}
+                {item.type === 'handoff' && item.timeAgo && (
+                  <span style={styles.itemHotkey}>{item.timeAgo}</span>
                 )}
               </li>
             ))

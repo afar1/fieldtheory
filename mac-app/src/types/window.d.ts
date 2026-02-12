@@ -871,6 +871,16 @@ interface MobileSyncStatus {
 }
 
 /**
+ * Handoff file info for the command launcher.
+ */
+interface HandoffInfo {
+  name: string;
+  displayName: string;
+  filePath: string;
+  lastModified: number;
+}
+
+/**
  * Commands API for managing portable commands (markdown files).
  * Allows users to bring their commands from other tools like Claude, Cursor, etc.
  * Now supports multiple directories and full CRUD operations.
@@ -916,6 +926,11 @@ interface CommandsAPI {
   // Shared commands (routes through main process for auth)
   shareCommand: (command: { name: string; content: string }) => Promise<{ data?: any; error?: string }>;
   unshareCommand: (commandId: string) => Promise<{ success?: boolean; error?: string }>;
+
+  // Handoffs - global session handoff files
+  getHandoffs?: () => Promise<HandoffInfo[]>;
+  getHandoffContent?: (filePath: string) => Promise<{ name: string; content: string; filePath: string } | null>;
+  invokeHandoff?: (filePath: string) => Promise<{ success: boolean; error?: string }>;
 }
 
 /**
@@ -1139,6 +1154,7 @@ declare global {
     clearManagedPermissions: () => Promise<boolean>;
     // Read permission hooks (auto-approve Field Theory file reads)
     isReadPermissionHookInstalled: () => Promise<boolean>;
+    needsReadPermissionUpdate: () => Promise<boolean>;
     installReadPermissionHook: () => Promise<{ success: boolean; message: string }>;
     uninstallReadPermissionHook: () => Promise<{ success: boolean; message: string }>;
   }

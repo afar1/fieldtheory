@@ -2234,6 +2234,9 @@ const CommandsIPCChannels = {
   GET_MOBILE_SYNC_STATUS: 'commands:getMobileSyncStatus',
   SYNC_TO_MOBILE: 'commands:syncToMobile',
   GET_REMOTE_COMMAND_COUNT: 'commands:getRemoteCommandCount',
+  // Handoffs - global session handoff files
+  GET_HANDOFFS: 'commands:getHandoffs',
+  GET_HANDOFF_CONTENT: 'commands:getHandoffContent',
 } as const;
 
 type PortableCommandInfo = {
@@ -2267,6 +2270,13 @@ type CommandWithContent = {
   filePath: string;
   lastModified: number;
   content: string;
+};
+
+type HandoffInfo = {
+  name: string;
+  displayName: string;
+  filePath: string;
+  lastModified: number;
 };
 
 const commandsAPI = {
@@ -2445,6 +2455,25 @@ const commandsAPI = {
   // Unshare a command from the shared pool.
   unshareCommand: async (commandId: string): Promise<{ success?: boolean; error?: string }> => {
     return ipcRenderer.invoke('commands:unshare', commandId);
+  },
+
+  // ==========================================================================
+  // Handoffs - Global session handoff files
+  // ==========================================================================
+
+  // Get the 10 most recent handoff files.
+  getHandoffs: async (): Promise<HandoffInfo[]> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_HANDOFFS);
+  },
+
+  // Get the content of a specific handoff by file path.
+  getHandoffContent: async (filePath: string): Promise<{ name: string; content: string; filePath: string } | null> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_HANDOFF_CONTENT, filePath);
+  },
+
+  // Invoke a handoff (same behavior as commands - paste file reference).
+  invokeHandoff: async (filePath: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('commands:invokeHandoff', filePath);
   },
 };
 
@@ -2822,6 +2851,9 @@ const claudeAPI = {
   // Read permission hooks (auto-approve Field Theory file reads)
   isReadPermissionHookInstalled: (): Promise<boolean> =>
     ipcRenderer.invoke('claude:isReadPermissionHookInstalled'),
+
+  needsReadPermissionUpdate: (): Promise<boolean> =>
+    ipcRenderer.invoke('claude:needsReadPermissionUpdate'),
 
   installReadPermissionHook: (): Promise<{ success: boolean; message: string }> =>
     ipcRenderer.invoke('claude:installReadPermissionHook'),

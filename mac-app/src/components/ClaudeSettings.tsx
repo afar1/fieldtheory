@@ -36,6 +36,7 @@ export default function ClaudeSettings() {
 
   // Read permission hooks state
   const [claudeHookInstalled, setClaudeHookInstalled] = useState(false);
+  const [claudeNeedsUpdate, setClaudeNeedsUpdate] = useState(false);
   const [cursorHookInstalled, setCursorHookInstalled] = useState(false);
   const [hookInstalling, setHookInstalling] = useState(false);
   const [hookMessage, setHookMessage] = useState<string | null>(null);
@@ -48,15 +49,17 @@ export default function ClaudeSettings() {
     }
 
     try {
-      const [profilesData, statusData, claudeHook, cursorHook] = await Promise.all([
+      const [profilesData, statusData, claudeHook, claudeUpdate, cursorHook] = await Promise.all([
         window.claudeAPI.getAvailableProfiles(),
         window.claudeAPI.getPermissionStatus(),
         window.claudeAPI.isReadPermissionHookInstalled?.() ?? Promise.resolve(false),
+        window.claudeAPI.needsReadPermissionUpdate?.() ?? Promise.resolve(false),
         window.cursorAPI?.isReadPermissionHookInstalled?.() ?? Promise.resolve(false),
       ]);
       setProfiles(profilesData);
       setStatus(statusData);
       setClaudeHookInstalled(claudeHook);
+      setClaudeNeedsUpdate(claudeUpdate);
       setCursorHookInstalled(cursorHook);
     } catch (err) {
       console.error('Failed to load Claude settings:', err);
@@ -192,7 +195,7 @@ export default function ClaudeSettings() {
             Auto-Approve File Reads
           </div>
           <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '4px', lineHeight: '1.5' }}>
-            This feature reduces agent babysitting. It gives an agent permission to read the screenshots you take and the command directories you link.
+            This feature reduces agent babysitting. It gives an agent permission to read the screenshots you take, the command directories you link, and read/write handoff documents.
           </div>
         </div>
 
@@ -211,7 +214,17 @@ export default function ClaudeSettings() {
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>Claude Code</span>
-            {claudeHookInstalled ? (
+            {claudeHookInstalled && claudeNeedsUpdate ? (
+              <span style={{
+                fontSize: '10px',
+                color: '#d97706',
+                padding: '2px 6px',
+                backgroundColor: theme.isDark ? 'rgba(217, 119, 6, 0.15)' : 'rgba(217, 119, 6, 0.1)',
+                borderRadius: '4px',
+              }}>
+                Update available
+              </span>
+            ) : claudeHookInstalled ? (
               <span style={{
                 fontSize: '10px',
                 color: theme.success,
@@ -239,15 +252,28 @@ export default function ClaudeSettings() {
               setHookInstalling(true);
               setHookMessage(null);
               try {
-                const result = claudeHookInstalled
-                  ? await window.claudeAPI?.uninstallReadPermissionHook?.()
-                  : await window.claudeAPI?.installReadPermissionHook?.();
-                if (result?.success) {
-                  setClaudeHookInstalled(!claudeHookInstalled);
-                  setHookMessage(result.message);
-                  setTimeout(() => setHookMessage(null), 5000);
+                if (claudeHookInstalled && !claudeNeedsUpdate) {
+                  // Disconnect
+                  const result = await window.claudeAPI?.uninstallReadPermissionHook?.();
+                  if (result?.success) {
+                    setClaudeHookInstalled(false);
+                    setClaudeNeedsUpdate(false);
+                    setHookMessage(result.message);
+                    setTimeout(() => setHookMessage(null), 5000);
+                  } else {
+                    setError(result?.message || 'Failed');
+                  }
                 } else {
-                  setError(result?.message || 'Failed');
+                  // Connect or Update (both call install)
+                  const result = await window.claudeAPI?.installReadPermissionHook?.();
+                  if (result?.success) {
+                    setClaudeHookInstalled(true);
+                    setClaudeNeedsUpdate(false);
+                    setHookMessage(result.message);
+                    setTimeout(() => setHookMessage(null), 5000);
+                  } else {
+                    setError(result?.message || 'Failed');
+                  }
                 }
               } finally {
                 setHookInstalling(false);
@@ -258,15 +284,15 @@ export default function ClaudeSettings() {
               padding: '4px 10px',
               fontSize: '11px',
               fontWeight: 500,
-              color: claudeHookInstalled ? theme.textSecondary : '#fff',
-              backgroundColor: claudeHookInstalled ? 'transparent' : theme.accent,
-              border: claudeHookInstalled ? `1px solid ${theme.border}` : 'none',
+              color: claudeHookInstalled && !claudeNeedsUpdate ? theme.textSecondary : '#fff',
+              backgroundColor: claudeNeedsUpdate ? '#d97706' : claudeHookInstalled ? 'transparent' : theme.accent,
+              border: claudeHookInstalled && !claudeNeedsUpdate ? `1px solid ${theme.border}` : 'none',
               borderRadius: '4px',
               cursor: hookInstalling ? 'wait' : 'pointer',
               opacity: hookInstalling ? 0.5 : 1,
             }}
           >
-            {hookInstalling ? '...' : claudeHookInstalled ? 'Disconnect' : 'Connect'}
+            {hookInstalling ? '...' : claudeNeedsUpdate ? 'Update' : claudeHookInstalled ? 'Disconnect' : 'Connect'}
           </button>
         </div>
 

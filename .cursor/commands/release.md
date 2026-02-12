@@ -1,91 +1,75 @@
-# Oscar Release Workflow
+# Package and Release
 
-## Overview
+  Notarize the application with Apple (if necessary). Bump the version number.
+  Run the slop command. Package and push to GitHub releases with succinct
+  release notes that you write. Publish unless I specify "draft".
 
-Oscar releases are published to a **separate public repository** (`afar1/field-releases`) to keep the source code private while allowing public distribution via GitHub Releases.
+  ## Credentials
 
-## Repository Setup
+  You can find the credentials for notarization and GitHub in the `.env.local`
+  file in the project root.
 
-- **Source code**: `afar1/littleai` (private) or `afar1/oscar` (private)
-- **Releases**: `afar1/field-releases` (public) — only contains release assets, no source code
+  **Important:** The password variable is `APPLE_APP_SPECIFIC_PASSWORD`, not
+  `APPLE_ID_PASSWORD`.
 
-## Configuration
+  ## Steps
 
-### `package.json` (build.publish section)
-```json
-"publish": {
-  "provider": "github",
-  "owner": "afar1",
-  "repo": "field-releases"
-}
-```
+  1. **Run the slop command** to clean up any AI-generated code artifacts
+  2. **Bump the version** in `package.json`
+  3. **Update in-app release notes** (see section below)
+  4. **Draft release notes** and confirm with me before building - I may want
+  changes
+  5. **Source credentials**: `source .env.local`
+  6. **Build and package**: `npm run package`
+  7. **Rename and upload release files** (see section below)
+  8. **Create GitHub release** with the release notes
 
-### `electron/main/index.ts` (autoUpdater feed URL)
-```typescript
-autoUpdater.setFeedURL({ 
-  provider: 'github', 
-  owner: 'afar1', 
-  repo: 'field-releases' 
-});
-```
+  ## In-app release notes
 
-## Publishing a New Release
+  **Important:** Update the release notes file with notes for each version. Add
+  an entry to both:
+  - `RELEASE_NOTES` - array of 1-4 bullet points describing what's new
+  - `RELEASE_DATES` - the release date in format 'Jan 15 2026'
 
-1. **Bump version** in `mac-app/package.json`
-2. **Export GitHub token** with `Contents: Read and write` permission for `field-releases`:
-   ```bash
-   export GH_TOKEN=ghp_your_token_here
-   ```
-3. **Build and publish**:
-   ```bash
-   cd mac-app
-   npm run package -- --publish always
-   ```
+  This shows the "What's new" popup to users after they update. If you skip
+  this, users won't see any release notes in the app.
 
-This uploads:
-- `Oscar-x.x.x-arm64-mac.zip`
-- `Oscar-x.x.x-arm64.dmg`
-- `latest-mac.yml` (used by auto-updater to detect new versions)
+  **Before packaging:** Draft the release notes and confirm them with me before
+  building. I may want to make changes to the wording or add/remove items.
 
-## Testing Auto-Updates
+  ## Release files (CRITICAL - auto-updater will break without these)
 
-1. Build an older version locally (without publishing):
-   ```bash
-   # Set version to e.g., 0.1.14-test in package.json
-   npm run package
-   # Install the DMG from mac-app/release/
-   ```
+  The auto-updater requires ALL of these files to be uploaded to the GitHub
+  release:
 
-2. Publish a newer version to `field-releases`
+  ### Required files checklist:
+  1. `AppName-X.X.X-arm64.dmg` - DMG installer
+  2. `AppName-X.X.X-arm64-mac.zip` - ZIP for auto-updates
+  3. `latest-mac.yml` - Auto-update manifest (MUST be edited before upload)
 
-3. Run the installed app from terminal to see updater logs:
-   ```bash
-   /Applications/Oscar.app/Contents/MacOS/Oscar
-   ```
+  ### Steps for release files:
+  1. **Rename files** to use periods instead of spaces:
+     ```bash
+     mv "release/App Name-X.X.X-arm64.dmg" "release/App.Name-X.X.X-arm64.dmg"
+     mv "release/App Name-X.X.X-arm64-mac.zip"
+  "release/App.Name-X.X.X-arm64-mac.zip"
 
-4. Look for `[Updater]` logs confirming update detection
+  2. Edit latest-mac.yml - Change all spaces/dashes to match the renamed files:
+    - url: must match the renamed zip filename
+    - path: must match the renamed zip filename
+    - DMG url must also match
+  3. Upload ALL three files to the GitHub release:
+  gh release upload vX.X.X \
+    "release/App.Name-X.X.X-arm64.dmg" \
+    "release/App.Name-X.X.X-arm64-mac.zip" \
+    "release/latest-mac.yml"
 
-## GitHub Token Permissions
+  Why this matters: The auto-updater downloads latest-mac.yml first, then uses
+  the URLs inside to download the update. If the yml is missing or has wrong
+  filenames, updates will fail with a 404 error.
 
-For fine-grained tokens on `field-releases`:
-- **Contents**: Read and write (required for creating releases and uploading assets)
+  Draft vs Published
 
-For classic tokens:
-- `repo` scope (full control of private repositories)
-
-## Troubleshooting
-
-### "No published versions on GitHub"
-The `field-releases` repo has no releases yet. Publish one first.
-
-### "403 Forbidden - Resource not accessible by personal access token"
-Your `GH_TOKEN` doesn't have write access to `field-releases`. Update token permissions.
-
-### Auto-updater not checking
-- Only runs in production builds (not when `ELECTRON_START_URL` is set)
-- Checks on startup (5s delay) and every 30 minutes
-- Use "Check for Updates…" in tray menu for manual check
-
-
-
-
+  Unless I specify "draft", create a published release. Use --draft flag for
+  draft releases.
+  ```
