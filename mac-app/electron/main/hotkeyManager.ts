@@ -20,7 +20,8 @@ export type HotkeyId =
   | 'superPaste'
   | 'commandLauncher'
   | 'improveText'
-  | 'autoImprove';
+  | 'autoImprove'
+  | 'hotMic';
 
 /**
  * Hotkey configuration with metadata.
@@ -128,6 +129,13 @@ export const HOTKEY_CONFIGS: Record<HotkeyId, HotkeyConfig> = {
     preferenceKey: 'autoImproveHotkey',
     description: 'Toggle auto-improve',
     category: 'text',
+  },
+  hotMic: {
+    id: 'hotMic',
+    defaultKey: '',
+    preferenceKey: 'hotMicHotkey',
+    description: 'Toggle Hot Mic',
+    category: 'transcription',
   },
 };
 

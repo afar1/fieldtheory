@@ -2,8 +2,27 @@
 // HotMicSettings - Continuous voice input for Claude Code terminals.
 // =============================================================================
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
+
+function buildHotkeyString(e: KeyboardEvent): string {
+  const parts: string[] = [];
+  if (e.metaKey) parts.push('Command');
+  if (e.ctrlKey) parts.push('Control');
+  if (e.altKey) parts.push('Alt');
+  if (e.shiftKey) parts.push('Shift');
+  const codeMap: Record<string, string> = {
+    Space: 'Space', Backquote: '`', Backslash: '\\', BracketLeft: '[',
+    BracketRight: ']', Minus: '-', Equal: '=', Semicolon: ';', Quote: "'",
+    Comma: ',', Period: '.', Slash: '/',
+  };
+  let key = e.code;
+  if (codeMap[key]) key = codeMap[key];
+  else if (key.startsWith('Key')) key = key.slice(3);
+  else if (key.startsWith('Digit')) key = key.slice(5);
+  if (['Meta', 'Control', 'Alt', 'Shift'].includes(key)) return '';
+  return parts.length > 0 ? `${parts.join('+')}+${key}` : '';
+}
 
 export default function HotMicSettings() {
   const { theme } = useTheme();
@@ -17,7 +36,12 @@ export default function HotMicSettings() {
   const [currentState, setCurrentState] = useState('idle');
   const [hookInstalled, setHookInstalled] = useState(false);
   const [hookLoading, setHookLoading] = useState(false);
-  const [submitWord, setSubmitWord] = useState('go');
+  const [submitWord, setSubmitWord] = useState('');
+  const [switchWords, setSwitchWords] = useState('');
+  const [hotkey, setHotkey] = useState<string | null>(null);
+  const [isCapturingHotkey, setIsCapturingHotkey] = useState(false);
+  const [hotkeyError, setHotkeyError] = useState<string | null>(null);
+  const capturingRef = useRef(false);
 
   const styles = getStyles(theme);
 
@@ -25,7 +49,7 @@ export default function HotMicSettings() {
     if (!window.hotMicAPI) return;
 
     const load = async () => {
-      const [en, target, sounds, terminals, state, hookStatus, submit] = await Promise.all([
+      const [en, target, sounds, terminals, state, hookStatus, submit, sw, hk] = await Promise.all([
         window.hotMicAPI!.getEnabled(),
         window.hotMicAPI!.getTargetApp(),
         window.hotMicAPI!.getSoundsEnabled(),
@@ -33,6 +57,8 @@ export default function HotMicSettings() {
         window.hotMicAPI!.getState(),
         window.hotMicAPI!.isHookInstalled(),
         window.hotMicAPI!.getSubmitWord(),
+        window.hotMicAPI!.getSwitchWords(),
+        window.hotMicAPI!.getHotkey(),
       ]);
       setEnabled(en);
       setTargetBundleId(target);
@@ -41,6 +67,8 @@ export default function HotMicSettings() {
       setCurrentState(state);
       setHookInstalled(hookStatus);
       setSubmitWord(submit);
+      setSwitchWords(sw);
+      setHotkey(hk);
 
       // Check if target is a known terminal or custom
       if (target && !terminals.some(t => t.bundleId === target)) {
@@ -93,6 +121,52 @@ export default function HotMicSettings() {
     await window.hotMicAPI.setSubmitWord(submitWord.trim());
   }, [submitWord]);
 
+  const handleSwitchWordsSave = useCallback(async () => {
+    if (!window.hotMicAPI || !switchWords.trim()) return;
+    await window.hotMicAPI.setSwitchWords(switchWords.trim());
+  }, [switchWords]);
+
+  const handleSetHotkey = useCallback(async (newHotkey: string) => {
+    setIsCapturingHotkey(false);
+    capturingRef.current = false;
+    setHotkeyError(null);
+    try {
+      const success = await window.hotMicAPI!.setHotkey(newHotkey);
+      if (success) {
+        setHotkey(newHotkey);
+      } else {
+        setHotkeyError('Failed to register hotkey. It may be in use by another application.');
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set hotkey');
+    }
+  }, []);
+
+  const handleClearHotkey = useCallback(async () => {
+    setHotkeyError(null);
+    await window.hotMicAPI!.setHotkey(null);
+    setHotkey(null);
+  }, []);
+
+  // Hotkey capture listener
+  useEffect(() => {
+    capturingRef.current = isCapturingHotkey;
+    if (!isCapturingHotkey) return;
+    const handler = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Escape') {
+        setIsCapturingHotkey(false);
+        capturingRef.current = false;
+        return;
+      }
+      const hk = buildHotkeyString(e);
+      if (hk) handleSetHotkey(hk);
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [isCapturingHotkey, handleSetHotkey]);
+
   const handleStop = useCallback(async () => {
     if (!window.hotMicAPI) return;
     await window.hotMicAPI.stop();
@@ -133,6 +207,51 @@ export default function HotMicSettings() {
         Hands-free voice input for multiple Claude Code terminals. When Claude finishes a turn,
         the terminal is queued. Speak freely — your words buffer until you say the submit word
         to flush and send. Say "skip" to cycle or "dismiss" to remove from queue.
+      </p>
+
+      <div style={styles.divider} />
+
+      {/* Hotkey */}
+      <div style={styles.row}>
+        <span style={styles.rowLabel}>Hotkey</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {isCapturingHotkey ? (
+            <span style={{ fontSize: '11px', color: theme.textSecondary, fontStyle: 'italic' }}>
+              Press a key combo...
+            </span>
+          ) : (
+            <button
+              onClick={() => { setIsCapturingHotkey(true); setHotkeyError(null); }}
+              style={{
+                ...styles.hookButton,
+                backgroundColor: theme.surface0,
+                color: theme.text,
+                fontSize: '11px',
+                minWidth: hotkey ? undefined : '80px',
+              }}
+            >
+              {hotkey || 'Not set'}
+            </button>
+          )}
+          {hotkey && !isCapturingHotkey && (
+            <button
+              onClick={handleClearHotkey}
+              style={{
+                fontSize: '10px', padding: '2px 6px', borderRadius: '4px',
+                border: `1px solid ${theme.border}`, backgroundColor: 'transparent',
+                color: theme.textSecondary, cursor: 'pointer',
+              }}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+      {hotkeyError && (
+        <p style={{ ...styles.description, color: '#ef4444' }}>{hotkeyError}</p>
+      )}
+      <p style={styles.description}>
+        Press to toggle Hot Mic on or off. Click to set, Escape to cancel.
       </p>
 
       <div style={styles.divider} />
@@ -202,6 +321,25 @@ export default function HotMicSettings() {
       </div>
       <p style={styles.description}>
         Comma-separated words or phrases. Say any of these at the end of a sentence to submit.
+      </p>
+
+      <div style={styles.divider} />
+
+      {/* Switch words */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Switch Window Words</span>
+        <input
+          type="text"
+          value={switchWords}
+          onChange={(e) => setSwitchWords(e.target.value)}
+          placeholder="next, switch"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleSwitchWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleSwitchWordsSave()}
+        />
+      </div>
+      <p style={styles.description}>
+        Say any of these to cycle to the next window of the current app (Cmd+`).
       </p>
 
       <div style={styles.divider} />

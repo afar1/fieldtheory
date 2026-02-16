@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { app, globalShortcut } from 'electron';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, ChildProcess, exec } from 'child_process';
 import http from 'http';
 import path from 'path';
 import os from 'os';
@@ -11,6 +11,7 @@ import { ModelManager } from './modelManager';
 import { SoundManager } from './soundManager';
 import { CursorStatusManager } from './cursorStatusManager';
 import { CommandsManager } from './commandsManager';
+import { getHotkeyManager } from './hotkeyManager';
 import { createLogger } from './logger';
 
 const log = createLogger('HotMic');
@@ -140,6 +141,72 @@ export class HotMicManager extends EventEmitter {
   }
 
   // ---------------------------------------------------------------------------
+  // Hotkey — toggle Hot Mic on/off
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Register the Hot Mic hotkey from preferences.
+   * Called after preferences are loaded (post-auth).
+   */
+  registerHotkey(): void {
+    const hotkey = this.preferences.getPreference('hotMicHotkey');
+    if (!hotkey) return;
+
+    const hotkeyManager = getHotkeyManager();
+    const result = hotkeyManager.register('hotMic', hotkey, () => {
+      log.info('Hot Mic: hotkey pressed, toggling');
+      if (this.isActive) {
+        this.deactivate();
+      } else {
+        this.activate();
+      }
+    });
+
+    if (!result.success) {
+      log.error('Hot Mic: failed to register hotkey "%s": %s', hotkey, result.error);
+    } else {
+      log.info('Hot Mic: registered hotkey "%s"', hotkey);
+    }
+  }
+
+  /**
+   * Set a new hotkey and save to preferences.
+   */
+  async setHotkey(hotkey: string | null): Promise<boolean> {
+    const hotkeyManager = getHotkeyManager();
+
+    // Unregister existing
+    hotkeyManager.unregister('hotMic');
+
+    if (!hotkey) {
+      await this.preferences.save({ hotMicHotkey: undefined });
+      return true;
+    }
+
+    const result = hotkeyManager.register('hotMic', hotkey, () => {
+      log.info('Hot Mic: hotkey pressed, toggling');
+      if (this.isActive) {
+        this.deactivate();
+      } else {
+        this.activate();
+      }
+    });
+
+    if (result.success) {
+      await this.preferences.save({ hotMicHotkey: hotkey });
+      log.info('Hot Mic: hotkey set to "%s"', hotkey);
+      return true;
+    }
+
+    log.error('Hot Mic: failed to set hotkey "%s": %s', hotkey, result.error);
+    return false;
+  }
+
+  getHotkey(): string | null {
+    return this.preferences.getPreference('hotMicHotkey') || null;
+  }
+
+  // ---------------------------------------------------------------------------
   // Local HTTP server for hook triggers
   // ---------------------------------------------------------------------------
 
@@ -248,6 +315,12 @@ export class HotMicManager extends EventEmitter {
     this.stopBufferDiscardTimer();
     await this.nativeHelper.cancelRecording().catch(() => {});
 
+    // Release Escape hotkey so the transcriber can use it
+    try { globalShortcut.unregister('Escape'); } catch { /* ignore */ }
+
+    // Give the native helper time to fully release the audio device
+    await new Promise(resolve => setTimeout(resolve, 200));
+
     // Don't change state to idle — keep as listening so we know to resume
     // The transcriber status getter will prevent us from restarting until it's done
   }
@@ -264,12 +337,31 @@ export class HotMicManager extends EventEmitter {
     }
 
     log.info('Hot Mic: resuming after transcriber finished');
-    try {
-      await this.nativeHelper.startRecording();
-      this.startAudioMonitoring();
-    } catch (error) {
-      log.error('Hot Mic: failed to resume recording:', error);
+
+    // Retry with backoff — the audio device may not be immediately available
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        if (attempt > 0) {
+          await new Promise(resolve => setTimeout(resolve, 300 * attempt));
+          log.info('Hot Mic: resume attempt %d', attempt + 1);
+        }
+        await this.nativeHelper.startRecording();
+        this.startAudioMonitoring();
+        // Re-register Escape hotkey
+        try {
+          if (!globalShortcut.isRegistered('Escape')) {
+            globalShortcut.register('Escape', () => {
+              log.info('Hot Mic: Escape pressed, deactivating');
+              this.deactivate();
+            });
+          }
+        } catch { /* ignore */ }
+        return;
+      } catch (error) {
+        log.error('Hot Mic: failed to resume recording (attempt %d):', attempt + 1, error);
+      }
     }
+    log.error('Hot Mic: giving up on resume after 3 attempts');
   }
 
   // ---------------------------------------------------------------------------
@@ -568,6 +660,13 @@ export class HotMicManager extends EventEmitter {
     const stripped = trimmed.replace(/[.,!?;:]+$/, '').trim();
     const lower = stripped.toLowerCase();
 
+    // Navigation command: cycle to the next window of the same app (Cmd+`)
+    if (this.transcriptBuffer.length === 0 && this.isSwitchWord(lower)) {
+      log.info('Hot Mic: switch command "%s" — cycling window (Cmd+`)', lower);
+      exec('osascript -e \'tell application "System Events" to keystroke "`" using command down\'');
+      return;
+    }
+
     // Auto-submit: if buffer is empty and chunk is a bare number/permission word,
     // submit immediately without needing the submit word
     if (this.transcriptBuffer.length === 0) {
@@ -630,6 +729,7 @@ export class HotMicManager extends EventEmitter {
   }
 
   private static readonly DEFAULT_SUBMIT_PHRASES = 'over, go ahead, send it, submit, do it';
+  private static readonly DEFAULT_SWITCH_WORDS = 'next, switch';
 
   private getSubmitPhrases(): string[][] {
     const pref = this.preferences.getPreference('hotMicSubmitWord');
@@ -663,6 +763,16 @@ export class HotMicManager extends EventEmitter {
     }
 
     return { shouldSubmit: false, cleanedText: trimmed };
+  }
+
+  /**
+   * Check if a word is a configured switch/navigation word.
+   */
+  private isSwitchWord(word: string): boolean {
+    const pref = this.preferences.getPreference('hotMicSwitchWords');
+    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_SWITCH_WORDS;
+    const words = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
+    return words.includes(word);
   }
 
   /**
