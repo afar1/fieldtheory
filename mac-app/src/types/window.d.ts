@@ -951,6 +951,8 @@ interface HotMicAPI {
   setSubmitWord: (word: string) => Promise<string>;
   getHotkey: () => Promise<string | null>;
   setHotkey: (hotkey: string | null) => Promise<boolean>;
+  getPasteWords: () => Promise<string>;
+  setPasteWords: (words: string) => Promise<string>;
   getSwitchWords: () => Promise<string>;
   setSwitchWords: (words: string) => Promise<string>;
   getKnownTerminals: () => Promise<Array<{ name: string; bundleId: string }>>;

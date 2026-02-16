@@ -46,6 +46,7 @@ type HotkeyCapture =
   | 'abandon'
   | 'superPaste'
   | 'commandLauncher'
+  | 'hotMic'
   | null;
 
 const SECTION_LABELS: Record<SettingsSection, string> = {
@@ -187,6 +188,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
 
   // Abandon recording hotkey configuration
   const [abandonHotkey, setAbandonHotkey] = useState('Escape');
+
+  // Hot Mic hotkey
+  const [hotMicHotkey, setHotMicHotkey] = useState<string | null>(null);
 
   // Mobile sync state - sign-in is handled via TeamView, we just listen for session.
   const [session, setSession] = useState<Session | null>(null);
@@ -375,6 +379,13 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       });
       window.hotkeyAPI.getHotkey('commandLauncher').then(hotkey => {
         if (hotkey) setCommandLauncherHotkey(hotkey);
+      });
+    }
+
+    // Load Hot Mic hotkey
+    if (window.hotMicAPI) {
+      window.hotMicAPI.getHotkey().then(hotkey => {
+        setHotMicHotkey(hotkey);
       });
     }
 
@@ -1121,6 +1132,39 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
     }
   }, []);
 
+  // Handler for setting Hot Mic hotkey
+  const handleSetHotMicHotkey = useCallback(async (hotkeyString: string) => {
+    setCapturingHotkey(null);
+    setHotkeyError(null);
+
+    if (!window.hotMicAPI?.setHotkey) return;
+
+    if (!hotkeyString || isModifierOnly(hotkeyString)) {
+      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+      return;
+    }
+
+    try {
+      const success = await window.hotMicAPI.setHotkey(hotkeyString);
+      if (!success) {
+        setHotkeyError('Failed to register Hot Mic hotkey. It may be in use by another application.');
+      } else {
+        setHotMicHotkey(hotkeyString);
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set Hot Mic hotkey');
+    }
+  }, []);
+
+  // Handler for clearing Hot Mic hotkey
+  const handleClearHotMicHotkey = useCallback(async () => {
+    setHotkeyError(null);
+    if (window.hotMicAPI?.setHotkey) {
+      await window.hotMicAPI.setHotkey(null);
+    }
+    setHotMicHotkey(null);
+  }, []);
+
   // Handler for setting transcription hotkey
   const handleSetTranscriptionHotkey = useCallback(async (hotkeyString: string) => {
     setCapturingHotkey(null);
@@ -1233,13 +1277,15 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
           handleSetSuperPasteHotkey(hotkeyString);
         } else if (capturingHotkey === 'commandLauncher') {
           handleSetCommandLauncherHotkey(hotkeyString);
+        } else if (capturingHotkey === 'hotMic') {
+          handleSetHotMicHotkey(hotkeyString);
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [capturingHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey]);
+  }, [capturingHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey, handleSetHotMicHotkey]);
 
   // Section header component for consistent divider styling
   const SectionHeader = ({ title }: { title: string }) => (
@@ -1824,6 +1870,31 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
               {capturingHotkey === 'commandLauncher' ? 'Press keys...' : (commandLauncherHotkey || 'Not set')}
             </button>
             {capturingHotkey === 'commandLauncher' && (
+              <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+          </div>
+        </div>
+
+        {/* Hot Mic */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Toggle Hot Mic</span>
+          <div style={styles.rowControls}>
+            {capturingHotkey !== 'hotMic' && hotMicHotkey && (
+              <button
+                onClick={handleClearHotMicHotkey}
+                style={{ ...styles.btnGhost, fontSize: '11px', padding: '4px 8px' }}
+              >
+                Clear
+              </button>
+            )}
+            <button
+              onClick={() => { setCapturingHotkey('hotMic'); setHotkeyError(null); }}
+              disabled={capturingHotkey !== null}
+              style={{ ...styles.btn, ...(capturingHotkey === 'hotMic' ? styles.btnActive : {}) }}
+            >
+              {capturingHotkey === 'hotMic' ? 'Press keys...' : (hotMicHotkey || 'Not set')}
+            </button>
+            {capturingHotkey === 'hotMic' && (
               <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
             )}
           </div>

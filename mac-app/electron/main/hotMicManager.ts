@@ -95,7 +95,8 @@ export class HotMicManager extends EventEmitter {
   // Thresholds
   private readonly SPEECH_LEVEL_THRESHOLD = 0.02;
   private readonly SILENCE_LEVEL_THRESHOLD = 0.008;
-  private readonly SILENCE_DURATION_MS = 500;
+  private readonly SILENCE_DURATION_COMMAND_MS = 50;    // Buffer empty → likely a command
+  private readonly SILENCE_DURATION_DICTATION_MS = 500; // Buffer active → natural speech pause
 
   // Known whisper hallucination patterns (empty/silence audio)
   private readonly HALLUCINATION_PATTERNS = [
@@ -109,6 +110,9 @@ export class HotMicManager extends EventEmitter {
 
   // Conflict resolution
   private transcriberStatusGetter: (() => string) | null = null;
+
+  // External transcription function (uses user's configured engine via TranscriberManager)
+  private externalTranscribe: ((wavPath: string) => Promise<string>) | null = null;
 
   constructor(
     nativeHelper: NativeHelper,
@@ -266,6 +270,10 @@ export class HotMicManager extends EventEmitter {
 
   setTranscriberStatusGetter(getter: () => string): void {
     this.transcriberStatusGetter = getter;
+  }
+
+  setTranscribeFunction(fn: (wavPath: string) => Promise<string>): void {
+    this.externalTranscribe = fn;
   }
 
   getState(): HotMicState {
@@ -541,12 +549,15 @@ export class HotMicManager extends EventEmitter {
         }
       } else {
         if (this.hasSpeechSinceLastHarvest && !this.silenceTimer) {
+          const silenceMs = this.transcriptBuffer.length === 0
+            ? this.SILENCE_DURATION_COMMAND_MS
+            : this.SILENCE_DURATION_DICTATION_MS;
           this.silenceTimer = setTimeout(() => {
             this.silenceTimer = null;
             if (this.state === 'recording' || this.state === 'listening') {
               this.onSilenceDetected();
             }
-          }, this.SILENCE_DURATION_MS);
+          }, silenceMs);
         }
       }
     };
@@ -602,26 +613,38 @@ export class HotMicManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   private async onSilenceDetected(): Promise<void> {
+    const t0 = performance.now();
     log.info('Hot Mic: silence detected, harvesting chunk');
     this.hasSpeechSinceLastHarvest = false;
     this.stopAudioMonitoring();
 
     try {
       const wavPath = await this.nativeHelper.stopRecording();
+      const t1 = performance.now();
+      log.info('Hot Mic: [timing] stopRecording: %dms', Math.round(t1 - t0));
 
-      // Immediately restart recording (minimal gap)
+      // Restart recording and transcribe in parallel — they're independent
+      const transcribePromise = this.transcribe(wavPath);
+
       if (this.isActive) {
         try {
           await this.nativeHelper.startRecording();
+          const t2 = performance.now();
+          log.info('Hot Mic: [timing] startRecording: %dms', Math.round(t2 - t1));
           this.startAudioMonitoring();
         } catch (error) {
           log.error('Hot Mic: failed to restart recording:', error);
           this.deactivate();
+          // Still await transcription so the command fires
+          await transcribePromise.catch(() => {});
           return;
         }
       }
 
-      const transcript = await this.transcribe(wavPath);
+      // Strip Whisper/Qwen sound descriptions: (crickets chirping), (dog barking), etc.
+      const transcript = (await transcribePromise).replace(/\([^)]*\)/g, '').trim();
+      const tPost = performance.now();
+      log.info('Hot Mic: [timing] transcribe (parallel): %dms, total: %dms', Math.round(tPost - t1), Math.round(tPost - t0));
 
       // Clean up WAV file
       try {
@@ -667,6 +690,32 @@ export class HotMicManager extends EventEmitter {
       return;
     }
 
+    // New window command: open a new terminal window (Cmd+N)
+    if (this.transcriptBuffer.length === 0 && lower === 'new window') {
+      log.info('Hot Mic: new window command — sending Cmd+N');
+      exec('osascript -e \'tell application "System Events" to keystroke "n" using command down\'');
+      return;
+    }
+
+    // Close window command: close the current window (Cmd+W)
+    if (this.transcriptBuffer.length === 0 && (lower === 'close window' || lower === 'close the window' || lower === 'close this window')) {
+      log.info('Hot Mic: close window command — sending Cmd+W');
+      exec('osascript -e \'tell application "System Events" to keystroke "w" using command down\'');
+      return;
+    }
+
+    // Start Claude: type "claude" and submit
+    const startClaude = lower.replace(/[.,!?;:]+/g, '').replace(/\s+/g, ' ').trim();
+    if (this.transcriptBuffer.length === 0 && (startClaude === 'start claude' || startClaude === 'start cloud')) {
+      const target = this.getTypeTarget();
+      if (target) {
+        log.info('Hot Mic: start claude command — typing "claude" and submitting');
+        const result = await this.nativeHelper.typeIntoApp(target, 'claude', true);
+        if (result.success) this.playSound('paste');
+      }
+      return;
+    }
+
     // Auto-submit: if buffer is empty and chunk is a bare number/permission word,
     // submit immediately without needing the submit word
     if (this.transcriptBuffer.length === 0) {
@@ -684,6 +733,35 @@ export class HotMicManager extends EventEmitter {
         }
         return;
       }
+    }
+
+    // Check for paste word (flush buffer without submitting)
+    const { shouldPaste, cleanedText: pasteCleanedText } = this.checkPastePhrases(transcript);
+
+    if (shouldPaste) {
+      if (pasteCleanedText.trim()) {
+        this.transcriptBuffer.push(pasteCleanedText.trim());
+      }
+
+      const fullText = this.transcriptBuffer.join(' ');
+      this.transcriptBuffer = [];
+      this.updateOrangeDot();
+
+      const target = this.getTypeTarget();
+      if (fullText && target) {
+        let mappedText = this.applyMappings(fullText);
+        mappedText = this.applyCommandDetection(mappedText);
+        log.info('Hot Mic: pasting buffer (%d chars, no submit) to %s: "%s"', mappedText.length, target, mappedText);
+        const result = await this.nativeHelper.typeIntoApp(target, mappedText, false);
+        if (!result.success) {
+          log.error('Hot Mic: typeIntoApp failed:', result.error);
+        } else {
+          this.playSound('paste');
+        }
+      }
+
+      this.resetBufferDiscardTimer();
+      return;
     }
 
     // Check for submit word
@@ -729,6 +807,7 @@ export class HotMicManager extends EventEmitter {
   }
 
   private static readonly DEFAULT_SUBMIT_PHRASES = 'over, go ahead, send it, submit, do it';
+  private static readonly DEFAULT_PASTE_PHRASES = 'paste, paste it, transcribe';
   private static readonly DEFAULT_SWITCH_WORDS = 'next, switch';
 
   private getSubmitPhrases(): string[][] {
@@ -763,6 +842,36 @@ export class HotMicManager extends EventEmitter {
     }
 
     return { shouldSubmit: false, cleanedText: trimmed };
+  }
+
+  private getPastePhrases(): string[][] {
+    const pref = this.preferences.getPreference('hotMicPasteWords');
+    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_PASTE_PHRASES;
+    return raw
+      .split(',')
+      .map(p => p.trim().toLowerCase())
+      .filter(p => p.length > 0)
+      .map(p => p.split(/\s+/));
+  }
+
+  private checkPastePhrases(transcript: string): { shouldPaste: boolean; cleanedText: string } {
+    const trimmed = transcript.trim();
+    const stripped = trimmed.replace(/[.,!?;:]+$/, '').trim();
+    const words = stripped.split(/\s+/);
+    const phrases = this.getPastePhrases().sort((a, b) => b.length - a.length);
+
+    for (const phraseWords of phrases) {
+      const phraseLen = phraseWords.length;
+      if (words.length >= phraseLen) {
+        const tail = words.slice(-phraseLen).map(w => w.toLowerCase());
+        if (tail.every((w, i) => w === phraseWords[i])) {
+          const remaining = words.slice(0, -phraseLen);
+          return { shouldPaste: true, cleanedText: remaining.join(' ') };
+        }
+      }
+    }
+
+    return { shouldPaste: false, cleanedText: trimmed };
   }
 
   /**
@@ -883,10 +992,20 @@ export class HotMicManager extends EventEmitter {
   }
 
   // ---------------------------------------------------------------------------
-  // Transcription (whisper-cli)
+  // Transcription
   // ---------------------------------------------------------------------------
 
   private async transcribe(wavPath: string): Promise<string> {
+    // Use the user's configured engine (Qwen/Whisper) via TranscriberManager when available
+    if (this.externalTranscribe) {
+      return this.externalTranscribe(wavPath);
+    }
+
+    // Fallback: cold-spawn whisper-cli directly
+    return this.transcribeWithWhisper(wavPath);
+  }
+
+  private transcribeWithWhisper(wavPath: string): Promise<string> {
     const modelPath = this.modelManager.getModelPath();
     const whisperPath = this.getWhisperPath();
 
