@@ -21,7 +21,9 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSMicrophoneUsageDescription": "This app needs access to your microphone to transcribe speech.",
-        "UIBackgroundModes": ["audio"]
+        "UIBackgroundModes": [
+          "audio"
+        ]
       },
       "bundleIdentifier": "com.afar1.littleai"
     },
@@ -37,8 +39,9 @@
     },
     "extra": {
       "eas": {
-        "projectId": "52287007-1AA2-4787-A5F2-B039D54A607D"
+        "projectId": "ae3e87d2-45df-4162-b5de-63740ed0e3fd"
       }
-    }
+    },
+    "owner": "afar1"
   }
 }
