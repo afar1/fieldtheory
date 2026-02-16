@@ -16,8 +16,9 @@ const log = createLogger('CursorStatus');
  * - done: Green dot with "Pasted", shown briefly after transcribing completes
  * - confirmation: Red pulsing dot with countdown, awaiting abandon/continue decision
  * - paste-failed: Orange dot, shows transcription then "Saved to Field Theory"
+ * - hot-mic: Orange dot only (no label, no auto-hide)
  */
-export type CursorStatusState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'improving' | 'done' | 'confirmation' | 'paste-failed';
+export type CursorStatusState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'improving' | 'done' | 'confirmation' | 'paste-failed' | 'hot-mic';
 
 /**
  * Manages the cursor-following status indicator overlay.
@@ -54,6 +55,9 @@ export class CursorStatusManager extends EventEmitter {
   
   // Whether to hide text labels (show only colored dots)
   private hideLabels: boolean = false;
+
+  // Fade-out animation state
+  private fadeOutTimer: NodeJS.Timeout | null = null;
   
   // Progressive label hiding - counts how many times each label has been shown.
   private transcribingLabelShownCount: number = 0;
@@ -492,22 +496,85 @@ export class CursorStatusManager extends EventEmitter {
       clearTimeout(this.pasteFailedTimeout);
       this.pasteFailedTimeout = null;
     }
+    // Cancel any in-progress fade and restore opacity
+    if (this.fadeOutTimer) {
+      clearTimeout(this.fadeOutTimer);
+      this.fadeOutTimer = null;
+      if (this.window && !this.window.isDestroyed()) {
+        this.window.setOpacity(1);
+      }
+    }
 
-    this.state = 'paste-failed';
+    this.state = 'hot-mic';
     this.show(true);  // Create window first (if needed)
 
-    // Only send size/IPC if renderer is already ready.
-    // If not ready, did-finish-load will handle it via pendingShow + pendingPasteFailedData.
     if (this.rendererReady && this.window && !this.window.isDestroyed()) {
-      this.updateWindowSize('paste-failed');
-      this.sendStateToRenderer('paste-failed');
-      this.window.webContents.send('cursor-status-data', {
-        transcription: 'Hot Mic',
-        pasteFailed: false
-      });
-    } else {
-      this.pendingPasteFailedData = { transcription: 'Hot Mic', pasteFailed: false, persistent: true };
+      this.updateWindowSize('hot-mic');
+      this.sendStateToRenderer('hot-mic');
     }
+  }
+
+  /**
+   * Update the Hot Mic word count displayed next to the orange dot.
+   */
+  setHotMicWordCount(count: number): void {
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send('cursor-status-hotmic-words', count);
+    }
+  }
+
+  /**
+   * Hide the Hot Mic indicator immediately (no "done" or "Saved" transition).
+   */
+  hideHotMic(): void {
+    if (this.state !== 'hot-mic') return;
+    if (this.fadeOutTimer) {
+      clearTimeout(this.fadeOutTimer);
+      this.fadeOutTimer = null;
+    }
+    this.state = 'idle';
+    this.hide();
+  }
+
+  /**
+   * Fade out the Hot Mic indicator over ~500ms, then hide.
+   * Called when the buffer is discarded due to silence timeout.
+   */
+  fadeOutHotMic(): void {
+    if (!this.window || this.window.isDestroyed()) return;
+    if (this.fadeOutTimer) {
+      clearTimeout(this.fadeOutTimer);
+      this.fadeOutTimer = null;
+    }
+
+    const steps = 10;
+    const totalMs = 500;
+    const interval = totalMs / steps;
+    let step = 0;
+
+    const tick = () => {
+      step++;
+      if (!this.window || this.window.isDestroyed()) {
+        this.fadeOutTimer = null;
+        return;
+      }
+      const opacity = 1 - step / steps;
+      this.window.setOpacity(Math.max(0, opacity));
+
+      if (step >= steps) {
+        this.fadeOutTimer = null;
+        this.state = 'idle';
+        this.hide();
+        // Restore opacity for next show
+        if (this.window && !this.window.isDestroyed()) {
+          this.window.setOpacity(1);
+        }
+      } else {
+        this.fadeOutTimer = setTimeout(tick, interval);
+      }
+    };
+
+    this.fadeOutTimer = setTimeout(tick, interval);
   }
 
   /**
