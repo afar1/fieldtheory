@@ -323,6 +323,38 @@ export class NativeHelper extends EventEmitter {
   }
 
   /**
+   * Snapshot the current recording: rotate the output file without stopping the audio engine.
+   * Returns the path to the completed WAV file. The engine keeps recording into a new file.
+   */
+  async snapshotRecording(): Promise<string> {
+    await this.waitForReady();
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error('snapshotRecording timed out'));
+      }, 2000);
+
+      const onMessage = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'recordingSnapshot') {
+          cleanup();
+          resolve(msg.filePath);
+        } else if (msg.type === 'error') {
+          cleanup();
+          reject(new Error(msg.message));
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', onMessage);
+      };
+
+      this.on('message', onMessage);
+      this.send({ type: 'snapshotRecording' });
+    });
+  }
+
+  /**
    * Cancel the current recording without saving.
    */
   async cancelRecording(): Promise<void> {
@@ -585,6 +617,7 @@ export class NativeHelper extends EventEmitter {
 
       case 'recordingStarted':
       case 'recordingStopped':
+      case 'recordingSnapshot':
       case 'recordingCancelled':
         this.emit('message', msg);
         break;

@@ -30,6 +30,7 @@ enum MessageType: String, Codable {
     case startMonitoring
     case startRecording
     case stopRecording
+    case snapshotRecording
     case cancelRecording
     case checkPermissions
     case checkFocusedTextInput
@@ -112,6 +113,16 @@ struct RecordingStoppedMessage: Codable {
     let type = "recordingStopped"
     let filePath: String
     
+    enum CodingKeys: String, CodingKey {
+        case type
+        case filePath
+    }
+}
+
+struct RecordingSnapshotMessage: Codable {
+    let type = "recordingSnapshot"
+    let filePath: String
+
     enum CodingKeys: String, CodingKey {
         case type
         case filePath
@@ -1198,6 +1209,65 @@ final class RecordingHelper {
         return path
     }
     
+    /// Snapshot the current recording: close the current WAV file and open a new one
+    /// without stopping the audio engine or removing the input tap.
+    /// Returns the path to the completed file, or nil on failure.
+    func snapshotRecording() -> String? {
+        guard isRecording else {
+            sendLog(level: "error", message: "No recording in progress for snapshot")
+            return nil
+        }
+
+        guard let oldURL = recordingURL else {
+            sendLog(level: "error", message: "No recording URL for snapshot")
+            return nil
+        }
+
+        // Create new temp WAV file
+        let tempDir = FileManager.default.temporaryDirectory
+        let fileName = "littleone-recording-\(UUID().uuidString).wav"
+        let newURL = tempDir.appendingPathComponent(fileName)
+
+        // Create new audio file for writing
+        let newFile: AVAudioFile
+        do {
+            newFile = try AVAudioFile(forWriting: newURL, settings: [
+                AVFormatIDKey: Int(kAudioFormatLinearPCM),
+                AVSampleRateKey: 16000,
+                AVNumberOfChannelsKey: 1,
+                AVLinearPCMBitDepthKey: 32,
+                AVLinearPCMIsFloatKey: true,
+                AVLinearPCMIsBigEndianKey: false
+            ])
+        } catch {
+            sendLog(level: "error", message: "Failed to create new audio file for snapshot: \(error.localizedDescription)")
+            return nil
+        }
+
+        // Swap the audio file — the tap callback reads self.audioFile, so the next buffer
+        // write goes to the new file. The old file flushes when its last reference drops
+        // (end of this function, or after any in-flight tap callback finishes).
+        self.audioFile = newFile
+        self.recordingURL = newURL
+
+        let path = oldURL.path
+
+        // Verify file exists and log size
+        if !FileManager.default.fileExists(atPath: path) {
+            sendLog(level: "error", message: "Snapshot file does not exist: \(path)")
+            return nil
+        }
+
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+           let fileSize = attributes[.size] as? Int64 {
+            sendLog(level: "info", message: "Recording snapshot: \(path) (\(fileSize) bytes)")
+        } else {
+            sendLog(level: "info", message: "Recording snapshot: \(path)")
+        }
+
+        return path
+    }
+
     /// Cancel recording without saving.
     func cancelRecording() {
         guard isRecording else {
@@ -1411,6 +1481,14 @@ final class MessageHandler {
                 sendError("Failed to stop recording")
             }
             
+        case .snapshotRecording:
+            if let filePath = RecordingHelper.shared.snapshotRecording() {
+                let response = RecordingSnapshotMessage(filePath: filePath)
+                sendJSON(response)
+            } else {
+                sendError("Failed to snapshot recording")
+            }
+
         case .cancelRecording:
             RecordingHelper.shared.cancelRecording()
             let response = RecordingCancelledMessage()
