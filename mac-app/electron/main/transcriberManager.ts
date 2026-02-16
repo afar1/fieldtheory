@@ -1794,6 +1794,17 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
+   * Transcribe an audio file using the user's configured engine (whisper or qwen).
+   * Exposed for HotMicManager so it can share the persistent Qwen server.
+   */
+  async transcribeAudio(wavPath: string): Promise<string> {
+    const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+    return engine === 'qwen'
+      ? this.transcribeWithQwen(wavPath)
+      : this.transcribe(wavPath);
+  }
+
+  /**
    * Get the currently selected model size.
    */
   getSelectedModel(): string {

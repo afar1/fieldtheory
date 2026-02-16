@@ -5218,6 +5218,7 @@ async function initTranscriberSystem(): Promise<void> {
     hotMicManager = new HotMicManager(nativeHelper, preferencesManager, soundMgr);
     hotMicManager.setCursorStatusManager(cursorStatusManager);
     hotMicManager.setTranscriberStatusGetter(() => transcriberManager?.getStatus() ?? 'idle');
+    hotMicManager.setTranscribeFunction((wavPath) => transcriberManager!.transcribeAudio(wavPath));
 
     // Wire hotkey delegation: when Hot Mic is active, hotkey presses go to it
     transcriberManager.setHotMicDelegate({
@@ -5729,6 +5730,15 @@ if (!gotTheLock) {
     ipcMain.handle('hotmic:setHotkey', async (_event, hotkey: string | null) => {
       if (!hotMicManager) return false;
       return hotMicManager.setHotkey(hotkey);
+    });
+
+    ipcMain.handle('hotmic:getPasteWords', () => {
+      return preferencesManager?.getPreference('hotMicPasteWords') ?? 'paste, paste it, transcribe';
+    });
+
+    ipcMain.handle('hotmic:setPasteWords', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicPasteWords: words });
+      return words;
     });
 
     ipcMain.handle('hotmic:getSwitchWords', () => {

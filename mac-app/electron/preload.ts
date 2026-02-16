@@ -3006,6 +3006,12 @@ const hotMicAPI = {
   setHotkey: async (hotkey: string | null): Promise<boolean> => {
     return ipcRenderer.invoke('hotmic:setHotkey', hotkey);
   },
+  getPasteWords: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getPasteWords');
+  },
+  setPasteWords: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setPasteWords', words);
+  },
   getSwitchWords: async (): Promise<string> => {
     return ipcRenderer.invoke('hotmic:getSwitchWords');
   },
