@@ -5,7 +5,7 @@
 
 import { useEffect, useState, useRef } from 'react';
 
-type StatusState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'improving' | 'done' | 'confirmation' | 'paste-failed';
+type StatusState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'improving' | 'done' | 'confirmation' | 'paste-failed' | 'hot-mic';
 
 // Colors for each state
 const STATE_COLORS: Record<StatusState, string> = {
@@ -17,6 +17,7 @@ const STATE_COLORS: Record<StatusState, string> = {
   done: '#34c759',           // Green
   confirmation: '#ff3b30',   // Red (still recording)
   'paste-failed': '#ff9500', // Orange
+  'hot-mic': '#ff9500',      // Orange (dot only, no label)
 };
 
 // Glow colors (slightly transparent for the shadow effect)
@@ -29,6 +30,7 @@ const STATE_GLOWS: Record<StatusState, string> = {
   done: 'rgba(52, 199, 89, 0.5)',
   confirmation: 'rgba(255, 59, 48, 0.5)',
   'paste-failed': 'rgba(255, 149, 0, 0.5)',
+  'hot-mic': 'rgba(255, 149, 0, 0.5)',
 };
 
 // Confirmation countdown duration
@@ -74,6 +76,9 @@ export default function CursorStatus() {
   // Recording note - informational message shown to the right of the recording indicator.
   // Used for warnings like "Note: Stacking 10+ images, some input fields may have limits"
   const [recordingNote, setRecordingNote] = useState<string | null>(null);
+
+  // Hot Mic word count - shows cumulative word count in buffer
+  const [hotMicWordCount, setHotMicWordCount] = useState<number>(0);
 
   // Debug mode - shows blue background to prove we control this window
   const [debugMode, setDebugMode] = useState<boolean>(false);
@@ -148,10 +153,16 @@ export default function CursorStatus() {
       }
     });
     
+    // Listen for hot mic word count updates
+    window.cursorStatusAPI.onHotMicWordCount?.((count: number) => {
+      setHotMicWordCount(count);
+    });
+
     return () => {
       window.cursorStatusAPI?.removeAllListeners('cursor-status-state');
       window.cursorStatusAPI?.removeAllListeners('cursor-status-idle');
       window.cursorStatusAPI?.removeAllListeners('cursor-status-data');
+      window.cursorStatusAPI?.removeAllListeners('cursor-status-hotmic-words');
       if (recordingTextTimeoutRef.current) {
         clearTimeout(recordingTextTimeoutRef.current);
       }
@@ -437,6 +448,9 @@ export default function CursorStatus() {
       // Use custom message if provided, otherwise show default.
       return pasteFailedText || 'Transcript saved to Field Theory';
     }
+    if (state === 'hot-mic') {
+      return hotMicWordCount > 0 ? String(hotMicWordCount) : '';
+    }
     return '';
   };
 
@@ -452,6 +466,7 @@ export default function CursorStatus() {
   //    - "Transcribing..." shows for first 3 transcriptions, then hides
   // After thresholds, only the colored dots remain (stacks are the core mechanic).
   const showLabel = state === 'paste-failed' || state === 'confirmation' || state === 'done' ||
+    (state === 'hot-mic' && hotMicWordCount > 0) ||
     (state === 'recording' && tutorialHint) ||  // Always show tutorial hints
     (!hideLabels && (
       // "collecting" during silentStacking - respects progressive threshold

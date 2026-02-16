@@ -731,6 +731,7 @@ interface CursorStatusAPI {
   onScreenshotModeChange?: (callback: (active: boolean) => void) => void;
   onTutorialHint?: (callback: (hint: string | null) => void) => void;
   onRecordingNote?: (callback: (note: string | null) => void) => void;
+  onHotMicWordCount?: (callback: (count: number) => void) => void;
   sendConfirmationResponse?: (abandon: boolean) => void;
   dismiss?: () => void;
   removeAllListeners: (channel: string) => void;

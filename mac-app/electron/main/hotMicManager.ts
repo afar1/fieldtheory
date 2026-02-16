@@ -486,7 +486,8 @@ export class HotMicManager extends EventEmitter {
         if (this.state === 'listening' && this.transcriptBuffer.length > 0) {
           log.info('Hot Mic: silence timeout, discarding buffer (%d chunks)', this.transcriptBuffer.length);
           this.transcriptBuffer = [];
-          this.updateOrangeDot();
+          // Fade out the orange dot instead of hiding instantly
+          this.cursorStatusManager?.fadeOutHotMic();
         }
       }, timeout);
     }
@@ -587,8 +588,7 @@ export class HotMicManager extends EventEmitter {
     }
 
     // Check for submit word
-    const submitWord = this.getSubmitWord();
-    const { shouldSubmit, cleanedText } = this.checkSubmitWord(transcript, submitWord);
+    const { shouldSubmit, cleanedText } = this.checkSubmitPhrases(transcript);
 
     if (shouldSubmit) {
       // Add any remaining text before the submit word to buffer
@@ -629,23 +629,37 @@ export class HotMicManager extends EventEmitter {
     this.resetBufferDiscardTimer();
   }
 
-  private getSubmitWord(): string {
+  private static readonly DEFAULT_SUBMIT_PHRASES = 'over, go ahead, send it, submit, do it';
+
+  private getSubmitPhrases(): string[][] {
     const pref = this.preferences.getPreference('hotMicSubmitWord');
-    return (typeof pref === 'string' && pref.trim() ? pref.trim() : 'go').toLowerCase();
+    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_SUBMIT_PHRASES;
+    return raw
+      .split(',')
+      .map(p => p.trim().toLowerCase())
+      .filter(p => p.length > 0)
+      .map(p => p.split(/\s+/));
   }
 
   /**
-   * Check if the transcript ends with the submit word.
+   * Check if the transcript ends with any of the submit phrases.
+   * Longer phrases are checked first to avoid partial matches.
    */
-  private checkSubmitWord(transcript: string, submitWord: string): { shouldSubmit: boolean; cleanedText: string } {
+  private checkSubmitPhrases(transcript: string): { shouldSubmit: boolean; cleanedText: string } {
     const trimmed = transcript.trim();
     const stripped = trimmed.replace(/[.,!?;:]+$/, '').trim();
     const words = stripped.split(/\s+/);
-    const lastWord = words[words.length - 1]?.toLowerCase();
+    const phrases = this.getSubmitPhrases().sort((a, b) => b.length - a.length);
 
-    if (lastWord === submitWord) {
-      words.pop();
-      return { shouldSubmit: true, cleanedText: words.join(' ') };
+    for (const phraseWords of phrases) {
+      const phraseLen = phraseWords.length;
+      if (words.length >= phraseLen) {
+        const tail = words.slice(-phraseLen).map(w => w.toLowerCase());
+        if (tail.every((w, i) => w === phraseWords[i])) {
+          const remaining = words.slice(0, -phraseLen);
+          return { shouldSubmit: true, cleanedText: remaining.join(' ') };
+        }
+      }
     }
 
     return { shouldSubmit: false, cleanedText: trimmed };
@@ -665,34 +679,48 @@ export class HotMicManager extends EventEmitter {
 
   /**
    * Detect portable command references in text.
-   * e.g. "use the review command" → inserts [cmd:review.md] inline.
+   * e.g. "use the review command" → strips trigger phrase, appends
+   * [run this command: review.md]\n/path/to/review.md
    */
   private applyCommandDetection(text: string): string {
     if (!this.commandsManager) return text;
     const detection = this.commandsManager.detectCommands(text);
-    if (detection.detected) {
-      log.info('Hot Mic: detected commands: %s', detection.commandNames.join(', '));
-      return this.commandsManager.insertCommandReferences(
-        detection.textWithoutCommandRefs,
-        detection.matchedCommands,
-      );
+    if (!detection.detected) return text;
+
+    log.info('Hot Mic: detected commands: %s', detection.commandNames.join(', '));
+
+    // Strip [cmd:name.md] refs from the text (they were inserted inline by detectCommands)
+    let cleaned = detection.textWithoutCommandRefs
+      .replace(/\s*\[cmd:[^\]]+\]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    // Append command references in the terminal-friendly format
+    for (const cmd of detection.matchedCommands) {
+      const ref = `\n[run this command: ${cmd.name}.md]\n${cmd.filePath}`;
+      cleaned += ref;
     }
-    return text;
+
+    return cleaned;
   }
 
   // ---------------------------------------------------------------------------
   // Orange dot — shows when buffer has content
   // ---------------------------------------------------------------------------
 
+  private getBufferWordCount(): number {
+    return this.transcriptBuffer.join(' ').split(/\s+/).filter(w => w.length > 0).length;
+  }
+
   private updateOrangeDot(): void {
     if (!this.cursorStatusManager) return;
 
-    if (this.state === 'listening' && this.transcriptBuffer.length > 0) {
+    if ((this.state === 'listening' && this.transcriptBuffer.length > 0) || this.state === 'recording') {
       this.cursorStatusManager.showHotMic();
-    } else if (this.state === 'recording') {
-      this.cursorStatusManager.showHotMic();
+      this.cursorStatusManager.setHotMicWordCount(this.getBufferWordCount());
     } else {
-      this.cursorStatusManager.setState('idle');
+      this.cursorStatusManager.setHotMicWordCount(0);
+      this.cursorStatusManager.hideHotMic();
     }
   }
 
@@ -705,7 +733,7 @@ export class HotMicManager extends EventEmitter {
     const stripped = trimmed.replace(/[.,!?;:]+$/, '').trim();
     const lower = stripped.toLowerCase();
 
-    const { shouldSubmit, cleanedText } = this.checkSubmitWord(transcript, this.getSubmitWord());
+    const { shouldSubmit, cleanedText } = this.checkSubmitPhrases(transcript);
 
     let textToInject = cleanedText.trim();
     if (!shouldSubmit) {
