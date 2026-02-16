@@ -105,6 +105,7 @@ export type HelperOutgoingMessageType =
   | 'log'
   | 'recordingStarted'
   | 'recordingStopped'
+  | 'recordingSnapshot'
   | 'recordingCancelled'
   | 'audioLevel'
   | 'permissionsStatus'
@@ -126,6 +127,7 @@ export type HelperIncomingMessageType =
   | 'startMonitoring'
   | 'startRecording'
   | 'stopRecording'
+  | 'snapshotRecording'
   | 'cancelRecording'
   | 'checkPermissions'
   | 'getFrontmostWindowBounds'
@@ -187,6 +189,14 @@ export interface RecordingStartedMessage extends HelperMessage {
  */
 export interface RecordingStoppedMessage extends HelperMessage {
   type: 'recordingStopped';
+  filePath: string;
+}
+
+/**
+ * Recording snapshot message from the helper.
+ */
+export interface RecordingSnapshotMessage extends HelperMessage {
+  type: 'recordingSnapshot';
   filePath: string;
 }
 
@@ -300,6 +310,7 @@ export type HelperOutgoingMessage =
   | HelperLogMessage
   | RecordingStartedMessage
   | RecordingStoppedMessage
+  | RecordingSnapshotMessage
   | RecordingCancelledMessage
   | AudioLevelMessage
   | PermissionsStatusMessage
@@ -337,6 +348,10 @@ export interface StartRecordingCommand {
 
 export interface StopRecordingCommand {
   type: 'stopRecording';
+}
+
+export interface SnapshotRecordingCommand {
+  type: 'snapshotRecording';
 }
 
 export interface CancelRecordingCommand {
@@ -398,6 +413,7 @@ export type HelperIncomingCommand =
   | StartMonitoringCommand
   | StartRecordingCommand
   | StopRecordingCommand
+  | SnapshotRecordingCommand
   | CancelRecordingCommand
   | CheckPermissionsCommand
   | CheckFocusedTextInputCommand

@@ -616,35 +616,18 @@ export class HotMicManager extends EventEmitter {
     const t0 = performance.now();
     log.info('Hot Mic: silence detected, harvesting chunk');
     this.hasSpeechSinceLastHarvest = false;
-    this.stopAudioMonitoring();
 
     try {
-      const wavPath = await this.nativeHelper.stopRecording();
+      // Snapshot rotates the output file without stopping the audio engine.
+      // The engine and input tap keep running — no stop/start overhead.
+      const wavPath = await this.nativeHelper.snapshotRecording();
       const t1 = performance.now();
-      log.info('Hot Mic: [timing] stopRecording: %dms', Math.round(t1 - t0));
+      log.info('Hot Mic: [timing] snapshotRecording: %dms', Math.round(t1 - t0));
 
-      // Restart recording and transcribe in parallel — they're independent
-      const transcribePromise = this.transcribe(wavPath);
-
-      if (this.isActive) {
-        try {
-          await this.nativeHelper.startRecording();
-          const t2 = performance.now();
-          log.info('Hot Mic: [timing] startRecording: %dms', Math.round(t2 - t1));
-          this.startAudioMonitoring();
-        } catch (error) {
-          log.error('Hot Mic: failed to restart recording:', error);
-          this.deactivate();
-          // Still await transcription so the command fires
-          await transcribePromise.catch(() => {});
-          return;
-        }
-      }
-
-      // Strip Whisper/Qwen sound descriptions: (crickets chirping), (dog barking), etc.
-      const transcript = (await transcribePromise).replace(/\([^)]*\)/g, '').trim();
+      // Transcribe the completed chunk — audio monitoring stays active
+      const transcript = (await this.transcribe(wavPath)).replace(/\([^)]*\)/g, '').trim();
       const tPost = performance.now();
-      log.info('Hot Mic: [timing] transcribe (parallel): %dms, total: %dms', Math.round(tPost - t1), Math.round(tPost - t0));
+      log.info('Hot Mic: [timing] transcribe: %dms, total: %dms', Math.round(tPost - t1), Math.round(tPost - t0));
 
       // Clean up WAV file
       try {
