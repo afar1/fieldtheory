@@ -27,6 +27,7 @@ export default function TranscriptionSettings() {
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [deletingModel, setDeletingModel] = useState<string | null>(null);
   const [modelDownloadProgress, setModelDownloadProgress] = useState<Record<string, { downloaded: number; total: number }>>({});
+  const [engine, setEngine] = useState<'whisper' | 'qwen'>('whisper');
   
   const [abandonHotkey, setAbandonHotkey] = useState<string>('Escape');
   const [isCapturingAbandonHotkey, setIsCapturingAbandonHotkey] = useState(false);
@@ -64,6 +65,10 @@ export default function TranscriptionSettings() {
           setDownloadingModel(downloadingModels[0]);
         }
         setAbandonHotkey(currentAbandonHotkey);
+
+        // Fetch transcription engine
+        const currentEngine = await window.transcribeAPI!.getTranscriptionEngine?.() ?? 'whisper';
+        setEngine(currentEngine);
       } catch (err) {
         console.error('Failed to fetch transcription status:', err);
       }
@@ -233,6 +238,17 @@ export default function TranscriptionSettings() {
     }
   }, []);
 
+  const handleEngineChange = useCallback(async (newEngine: 'whisper' | 'qwen') => {
+    if (!window.transcribeAPI?.setTranscriptionEngine) return;
+    setEngine(newEngine);
+    try {
+      await window.transcribeAPI.setTranscriptionEngine(newEngine);
+    } catch (err) {
+      console.error('Failed to set transcription engine:', err);
+      setEngine(engine); // revert on failure
+    }
+  }, [engine]);
+
   const handleStartCaptureHotkey = useCallback(() => {
     setIsCapturingHotkey(true);
     setHotkeyError(null);
@@ -376,7 +392,30 @@ export default function TranscriptionSettings() {
 
   return (
     <div style={styles.container}>
-      <div style={styles.modelsSection}>
+      <div style={{ marginTop: '16px' }}>
+        <div style={styles.sectionHeader}>
+          <span style={styles.sectionTitle}>TRANSCRIPTION ENGINE</span>
+          <div style={styles.sectionLine} />
+        </div>
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Engine</span>
+          <select
+            value={engine}
+            onChange={(e) => handleEngineChange(e.target.value as 'whisper' | 'qwen')}
+            style={styles.select}
+          >
+            <option value="whisper">Whisper (default)</option>
+            <option value="qwen">Qwen3-ASR (experimental)</option>
+          </select>
+        </div>
+        {engine === 'qwen' && (
+          <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '4px' }}>
+            Qwen requires one-time setup: <code style={{ fontSize: '11px' }}>cd mac-app && bash scripts/setup-qwen.sh</code>
+          </div>
+        )}
+      </div>
+
+      <div style={{ ...styles.modelsSection, opacity: engine === 'qwen' ? 0.4 : 1, pointerEvents: engine === 'qwen' ? 'none' : 'auto' }}>
         <div style={styles.sectionHeader}>
           <span style={styles.sectionTitle}>LOCAL TRANSCRIPTION MODELS</span>
           <div style={styles.sectionLine} />
