@@ -546,6 +546,17 @@ export class NativeHelper extends EventEmitter {
   }
 
   /**
+   * Set the harvest mode for Swift silence detection.
+   * Fire-and-forget — no response expected.
+   */
+  setHarvestMode(mode: 'command' | 'dictation'): void {
+    if (!this.child || !this.child.stdin.writable) {
+      return;
+    }
+    this.send({ type: 'setHarvestMode', mode });
+  }
+
+  /**
    * Stop all currently playing sounds.
    */
   stopSounds(): void {
@@ -620,6 +631,10 @@ export class NativeHelper extends EventEmitter {
       case 'recordingSnapshot':
       case 'recordingCancelled':
         this.emit('message', msg);
+        break;
+
+      case 'recordingChunkReady':
+        this.emit('recordingChunkReady', msg.filePath);
         break;
 
       case 'audioLevel':

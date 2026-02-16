@@ -19,7 +19,11 @@ export default function HotMicSettings() {
   const [hookLoading, setHookLoading] = useState(false);
   const [submitWord, setSubmitWord] = useState('');
   const [pasteWords, setPasteWords] = useState('');
+  const [cancelWords, setCancelWords] = useState('');
   const [switchWords, setSwitchWords] = useState('');
+  const [newWindowWords, setNewWindowWords] = useState('');
+  const [closeWindowWords, setCloseWindowWords] = useState('');
+  const [showWordCount, setShowWordCount] = useState(false);
 
   const styles = getStyles(theme);
 
@@ -27,7 +31,7 @@ export default function HotMicSettings() {
     if (!window.hotMicAPI) return;
 
     const load = async () => {
-      const [en, target, sounds, terminals, state, hookStatus, submit, pw, sw] = await Promise.all([
+      const [en, target, sounds, terminals, state, hookStatus, submit, pw, cw, sw, nww, cww, wc] = await Promise.all([
         window.hotMicAPI!.getEnabled(),
         window.hotMicAPI!.getTargetApp(),
         window.hotMicAPI!.getSoundsEnabled(),
@@ -36,7 +40,11 @@ export default function HotMicSettings() {
         window.hotMicAPI!.isHookInstalled(),
         window.hotMicAPI!.getSubmitWord(),
         window.hotMicAPI!.getPasteWords(),
+        window.hotMicAPI!.getCancelWords(),
         window.hotMicAPI!.getSwitchWords(),
+        window.hotMicAPI!.getNewWindowWords(),
+        window.hotMicAPI!.getCloseWindowWords(),
+        window.hotMicAPI!.getShowWordCount(),
       ]);
       setEnabled(en);
       setTargetBundleId(target);
@@ -46,7 +54,11 @@ export default function HotMicSettings() {
       setHookInstalled(hookStatus);
       setSubmitWord(submit);
       setPasteWords(pw);
+      setCancelWords(cw);
       setSwitchWords(sw);
+      setNewWindowWords(nww);
+      setCloseWindowWords(cww);
+      setShowWordCount(wc);
 
       // Check if target is a known terminal or custom
       if (target && !terminals.some(t => t.bundleId === target)) {
@@ -103,6 +115,21 @@ export default function HotMicSettings() {
     if (!window.hotMicAPI || !pasteWords.trim()) return;
     await window.hotMicAPI.setPasteWords(pasteWords.trim());
   }, [pasteWords]);
+
+  const handleCancelWordsSave = useCallback(async () => {
+    if (!window.hotMicAPI || !cancelWords.trim()) return;
+    await window.hotMicAPI.setCancelWords(cancelWords.trim());
+  }, [cancelWords]);
+
+  const handleNewWindowWordsSave = useCallback(async () => {
+    if (!window.hotMicAPI || !newWindowWords.trim()) return;
+    await window.hotMicAPI.setNewWindowWords(newWindowWords.trim());
+  }, [newWindowWords]);
+
+  const handleCloseWindowWordsSave = useCallback(async () => {
+    if (!window.hotMicAPI || !closeWindowWords.trim()) return;
+    await window.hotMicAPI.setCloseWindowWords(closeWindowWords.trim());
+  }, [closeWindowWords]);
 
   const handleSwitchWordsSave = useCallback(async () => {
     if (!window.hotMicAPI || !switchWords.trim()) return;
@@ -203,6 +230,26 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
+      {/* Word count toggle */}
+      <div style={styles.row}>
+        <span style={styles.rowLabel}>Show Word Count</span>
+        <button
+          onClick={async () => {
+            const next = !showWordCount;
+            setShowWordCount(next);
+            await window.hotMicAPI?.setShowWordCount(next);
+          }}
+          style={{ ...styles.toggle, backgroundColor: showWordCount ? theme.success : '#d1d5db' }}
+        >
+          <span style={{ ...styles.toggleKnob, transform: showWordCount ? 'translateX(20px)' : 'translateX(2px)' }} />
+        </button>
+      </div>
+      <p style={styles.description}>
+        Display word count on the status indicator while buffering speech.
+      </p>
+
+      <div style={styles.divider} />
+
       {/* Submit phrases */}
       <div style={{ padding: '4px 0' }}>
         <span style={styles.rowLabel}>Submit Phrases</span>
@@ -241,6 +288,25 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
+      {/* Cancel phrases */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Cancel Phrases</span>
+        <input
+          type="text"
+          value={cancelWords}
+          onChange={(e) => setCancelWords(e.target.value)}
+          placeholder="cancel, stop, abort"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleCancelWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleCancelWordsSave()}
+        />
+      </div>
+      <p style={styles.description}>
+        Say any of these to send Ctrl+C to the terminal (interrupt the current process).
+      </p>
+
+      <div style={styles.divider} />
+
       {/* Switch words */}
       <div style={{ padding: '4px 0' }}>
         <span style={styles.rowLabel}>Switch Window Words</span>
@@ -260,24 +326,69 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
+      {/* New window phrases */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>New Window Phrases</span>
+        <input
+          type="text"
+          value={newWindowWords}
+          onChange={(e) => setNewWindowWords(e.target.value)}
+          placeholder="new window"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleNewWindowWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleNewWindowWordsSave()}
+        />
+      </div>
+      <p style={styles.description}>
+        Say any of these to open a new terminal window (Cmd+N).
+      </p>
+
+      <div style={styles.divider} />
+
+      {/* Close window phrases */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Close Window Phrases</span>
+        <input
+          type="text"
+          value={closeWindowWords}
+          onChange={(e) => setCloseWindowWords(e.target.value)}
+          placeholder="close window, close the window, close this window"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleCloseWindowWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleCloseWindowWordsSave()}
+        />
+      </div>
+      <p style={styles.description}>
+        Say any of these to close the current window (Cmd+W).
+      </p>
+
+      <div style={styles.divider} />
+
       {/* Current state */}
+      <div style={styles.row}>
+        <span style={styles.rowLabel}>Status</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ ...styles.stateBadge, backgroundColor: getStateColor(currentState) }}>
+            {currentState}
+          </span>
+          {isActive ? (
+            <button onClick={handleStop} style={styles.stopButton}>Stop</button>
+          ) : (
+            <button
+              onClick={async () => { if (window.hotMicAPI) await window.hotMicAPI.start(); }}
+              style={{ ...styles.hookButton, backgroundColor: theme.success, color: '#fff' }}
+            >
+              Start
+            </button>
+          )}
+        </div>
+      </div>
       {isActive && (
-        <>
-          <div style={styles.row}>
-            <span style={styles.rowLabel}>Status</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ ...styles.stateBadge, backgroundColor: getStateColor(currentState) }}>
-                {currentState}
-              </span>
-              <button onClick={handleStop} style={styles.stopButton}>Stop</button>
-            </div>
-          </div>
-          <p style={styles.description}>
-            Target: {targetName}
-          </p>
-          <div style={styles.divider} />
-        </>
+        <p style={styles.description}>
+          Target: {targetName}
+        </p>
       )}
+      <div style={styles.divider} />
 
       {/* Claude Code hook */}
       <div style={styles.row}>

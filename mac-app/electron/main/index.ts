@@ -5219,6 +5219,7 @@ async function initTranscriberSystem(): Promise<void> {
     hotMicManager.setCursorStatusManager(cursorStatusManager);
     hotMicManager.setTranscriberStatusGetter(() => transcriberManager?.getStatus() ?? 'idle');
     hotMicManager.setTranscribeFunction((wavPath) => transcriberManager!.transcribeAudio(wavPath));
+    hotMicManager.setWarmupFunction(() => transcriberManager!.warmup());
 
     // Wire hotkey delegation: when Hot Mic is active, hotkey presses go to it
     transcriberManager.setHotMicDelegate({
@@ -5741,6 +5742,42 @@ if (!gotTheLock) {
       return words;
     });
 
+    ipcMain.handle('hotmic:getShowWordCount', () => {
+      return preferencesManager?.getPreference('hotMicShowWordCount') === true;
+    });
+
+    ipcMain.handle('hotmic:setShowWordCount', async (_event, enabled: boolean) => {
+      await preferencesManager?.save({ hotMicShowWordCount: enabled });
+      return enabled;
+    });
+
+    ipcMain.handle('hotmic:getCancelWords', () => {
+      return preferencesManager?.getPreference('hotMicCancelWords') ?? 'cancel, stop, abort';
+    });
+
+    ipcMain.handle('hotmic:setCancelWords', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicCancelWords: words });
+      return words;
+    });
+
+    ipcMain.handle('hotmic:getNewWindowWords', () => {
+      return preferencesManager?.getPreference('hotMicNewWindowWords') ?? 'new window';
+    });
+
+    ipcMain.handle('hotmic:setNewWindowWords', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicNewWindowWords: words });
+      return words;
+    });
+
+    ipcMain.handle('hotmic:getCloseWindowWords', () => {
+      return preferencesManager?.getPreference('hotMicCloseWindowWords') ?? 'close window, close the window, close this window';
+    });
+
+    ipcMain.handle('hotmic:setCloseWindowWords', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicCloseWindowWords: words });
+      return words;
+    });
+
     ipcMain.handle('hotmic:getSwitchWords', () => {
       return preferencesManager?.getPreference('hotMicSwitchWords') ?? 'next, switch';
     });
@@ -5752,6 +5789,10 @@ if (!gotTheLock) {
 
     ipcMain.handle('hotmic:getKnownTerminals', () => {
       return KNOWN_TERMINALS;
+    });
+
+    ipcMain.handle('hotmic:start', () => {
+      hotMicManager?.activate();
     });
 
     ipcMain.handle('hotmic:stop', () => {

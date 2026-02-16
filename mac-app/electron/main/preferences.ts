@@ -151,6 +151,10 @@ interface Preferences {
   hotMicSubmitWord?: string; // Word that flushes the transcript buffer (default: "go")
   hotMicBufferDiscardMs?: number; // Silence timeout to discard buffer (default: 15000)
   hotMicPasteWords?: string; // Comma-separated words that flush buffer without submitting
+  hotMicCancelWords?: string; // Comma-separated words that send Ctrl+C to terminal
+  hotMicShowWordCount?: boolean; // Show word count on cursor indicator (default: false)
+  hotMicNewWindowWords?: string; // Comma-separated phrases that open a new window (Cmd+N)
+  hotMicCloseWindowWords?: string; // Comma-separated phrases that close the window (Cmd+W)
   hotMicSwitchWords?: string; // Comma-separated words that trigger Cmd+` window cycling
   hotMicHotkey?: string; // Hotkey to toggle Hot Mic on/off (unset by default)
 }

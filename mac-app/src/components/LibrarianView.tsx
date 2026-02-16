@@ -1230,7 +1230,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                   width: '12px',
                   height: '12px',
                   borderRadius: '50%',
-                  backgroundColor: (headerHovered || externalHeaderHover) ? '#ff5f57' : 'rgba(128, 128, 128, 0.5)',
+                  backgroundColor: '#ff5f57',
                   transition: 'background-color 0.2s ease',
                   pointerEvents: 'none',
                 }}
