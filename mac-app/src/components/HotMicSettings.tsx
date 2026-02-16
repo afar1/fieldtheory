@@ -187,21 +187,21 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
-      {/* Submit word */}
-      <div style={styles.row}>
-        <span style={styles.rowLabel}>Submit Word</span>
+      {/* Submit phrases */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Submit Phrases</span>
         <input
           type="text"
           value={submitWord}
           onChange={(e) => setSubmitWord(e.target.value)}
-          placeholder="go"
-          style={{ ...styles.input, maxWidth: '120px', textAlign: 'right' as const }}
+          placeholder="over, go ahead, send it, submit, do it"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
           onBlur={handleSubmitWordSave}
           onKeyDown={(e) => e.key === 'Enter' && handleSubmitWordSave()}
         />
       </div>
       <p style={styles.description}>
-        Say this word at the end of a phrase to flush the buffer and submit to Claude.
+        Comma-separated words or phrases. Say any of these at the end of a sentence to submit.
       </p>
 
       <div style={styles.divider} />

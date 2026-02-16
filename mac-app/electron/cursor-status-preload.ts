@@ -51,6 +51,11 @@ contextBridge.exposeInMainWorld('cursorStatusAPI', {
     ipcRenderer.on('cursor-status-recording-note', (_event, note) => callback(note));
   },
 
+  // Hot Mic word count (cumulative words in buffer).
+  onHotMicWordCount: (callback: (count: number) => void) => {
+    ipcRenderer.on('cursor-status-hotmic-words', (_event, count) => callback(count));
+  },
+
   // Debug mode changes (shows blue background to prove we control the overlay window).
   onDebugModeChange: (callback: (enabled: boolean) => void) => {
     ipcRenderer.on('cursor-status-debug-mode', (_event, enabled) => callback(enabled));
