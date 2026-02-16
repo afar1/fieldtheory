@@ -150,6 +150,7 @@ interface Preferences {
   hotMicWakeWord?: string; // Deprecated — use hotMicSubmitWord
   hotMicSubmitWord?: string; // Word that flushes the transcript buffer (default: "go")
   hotMicBufferDiscardMs?: number; // Silence timeout to discard buffer (default: 15000)
+  hotMicPasteWords?: string; // Comma-separated words that flush buffer without submitting
   hotMicSwitchWords?: string; // Comma-separated words that trigger Cmd+` window cycling
   hotMicHotkey?: string; // Hotkey to toggle Hot Mic on/off (unset by default)
 }
