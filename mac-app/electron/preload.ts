@@ -3012,6 +3012,30 @@ const hotMicAPI = {
   setPasteWords: async (words: string): Promise<string> => {
     return ipcRenderer.invoke('hotmic:setPasteWords', words);
   },
+  getShowWordCount: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('hotmic:getShowWordCount');
+  },
+  setShowWordCount: async (enabled: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke('hotmic:setShowWordCount', enabled);
+  },
+  getCancelWords: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getCancelWords');
+  },
+  setCancelWords: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setCancelWords', words);
+  },
+  getNewWindowWords: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getNewWindowWords');
+  },
+  setNewWindowWords: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setNewWindowWords', words);
+  },
+  getCloseWindowWords: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getCloseWindowWords');
+  },
+  setCloseWindowWords: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setCloseWindowWords', words);
+  },
   getSwitchWords: async (): Promise<string> => {
     return ipcRenderer.invoke('hotmic:getSwitchWords');
   },
@@ -3020,6 +3044,9 @@ const hotMicAPI = {
   },
   getKnownTerminals: async (): Promise<Array<{ name: string; bundleId: string }>> => {
     return ipcRenderer.invoke('hotmic:getKnownTerminals');
+  },
+  start: async (): Promise<void> => {
+    return ipcRenderer.invoke('hotmic:start');
   },
   stop: async (): Promise<void> => {
     return ipcRenderer.invoke('hotmic:stop');

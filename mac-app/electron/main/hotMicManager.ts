@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { app, globalShortcut } from 'electron';
+import { app } from 'electron';
 import { spawn, ChildProcess, exec } from 'child_process';
 import http from 'http';
 import path from 'path';
@@ -78,9 +78,9 @@ export class HotMicManager extends EventEmitter {
   private targetBundleId: string | null = null;
   private whisperProcess: ChildProcess | null = null;
 
-  // Audio level monitoring for silence detection
+  // Audio level monitoring for orange dot UI (silence detection moved to Swift)
   private audioLevelListener: ((level: number) => void) | null = null;
-  private silenceTimer: NodeJS.Timeout | null = null;
+  private chunkReadyListener: ((filePath: string) => void) | null = null;
   private hasSpeechSinceLastHarvest: boolean = false;
 
   // Transcript buffer — accumulates chunks until submit word or silence discard
@@ -92,11 +92,8 @@ export class HotMicManager extends EventEmitter {
   private server: http.Server | null = null;
   private static readonly HTTP_PORT = 19847;
 
-  // Thresholds
+  // Speech level threshold for orange dot (silence detection thresholds moved to Swift)
   private readonly SPEECH_LEVEL_THRESHOLD = 0.02;
-  private readonly SILENCE_LEVEL_THRESHOLD = 0.008;
-  private readonly SILENCE_DURATION_COMMAND_MS = 50;    // Buffer empty → likely a command
-  private readonly SILENCE_DURATION_DICTATION_MS = 500; // Buffer active → natural speech pause
 
   // Known whisper hallucination patterns (empty/silence audio)
   private readonly HALLUCINATION_PATTERNS = [
@@ -113,6 +110,7 @@ export class HotMicManager extends EventEmitter {
 
   // External transcription function (uses user's configured engine via TranscriberManager)
   private externalTranscribe: ((wavPath: string) => Promise<string>) | null = null;
+  private externalWarmup: (() => Promise<void>) | null = null;
 
   constructor(
     nativeHelper: NativeHelper,
@@ -276,6 +274,10 @@ export class HotMicManager extends EventEmitter {
     this.externalTranscribe = fn;
   }
 
+  setWarmupFunction(fn: () => Promise<void>): void {
+    this.externalWarmup = fn;
+  }
+
   getState(): HotMicState {
     return this.state;
   }
@@ -323,9 +325,6 @@ export class HotMicManager extends EventEmitter {
     this.stopBufferDiscardTimer();
     await this.nativeHelper.cancelRecording().catch(() => {});
 
-    // Release Escape hotkey so the transcriber can use it
-    try { globalShortcut.unregister('Escape'); } catch { /* ignore */ }
-
     // Give the native helper time to fully release the audio device
     await new Promise(resolve => setTimeout(resolve, 200));
 
@@ -355,15 +354,6 @@ export class HotMicManager extends EventEmitter {
         }
         await this.nativeHelper.startRecording();
         this.startAudioMonitoring();
-        // Re-register Escape hotkey
-        try {
-          if (!globalShortcut.isRegistered('Escape')) {
-            globalShortcut.register('Escape', () => {
-              log.info('Hot Mic: Escape pressed, deactivating');
-              this.deactivate();
-            });
-          }
-        } catch { /* ignore */ }
         return;
       } catch (error) {
         log.error('Hot Mic: failed to resume recording (attempt %d):', attempt + 1, error);
@@ -397,6 +387,11 @@ export class HotMicManager extends EventEmitter {
   private async startListening(): Promise<void> {
     this.transcriptBuffer = [];
     this.setState('listening');
+
+    // Warm up transcription engine in parallel with recording start
+    this.externalWarmup?.().catch((err) => {
+      log.error('Hot Mic: warmup failed:', err);
+    });
 
     try {
       await this.nativeHelper.startRecording();
@@ -528,6 +523,7 @@ export class HotMicManager extends EventEmitter {
   private startAudioMonitoring(): void {
     this.stopAudioMonitoring();
 
+    // Audio level listener — only for orange dot UI (silence detection is in Swift)
     this.audioLevelListener = (level: number) => {
       if (this.state !== 'recording' && this.state !== 'listening') return;
 
@@ -538,31 +534,17 @@ export class HotMicManager extends EventEmitter {
         }
         this.hasSpeechSinceLastHarvest = true;
         this.resetBufferDiscardTimer();
-        if (this.silenceTimer) {
-          clearTimeout(this.silenceTimer);
-          this.silenceTimer = null;
-        }
-      } else if (level > this.SILENCE_LEVEL_THRESHOLD) {
-        if (this.silenceTimer) {
-          clearTimeout(this.silenceTimer);
-          this.silenceTimer = null;
-        }
-      } else {
-        if (this.hasSpeechSinceLastHarvest && !this.silenceTimer) {
-          const silenceMs = this.transcriptBuffer.length === 0
-            ? this.SILENCE_DURATION_COMMAND_MS
-            : this.SILENCE_DURATION_DICTATION_MS;
-          this.silenceTimer = setTimeout(() => {
-            this.silenceTimer = null;
-            if (this.state === 'recording' || this.state === 'listening') {
-              this.onSilenceDetected();
-            }
-          }, silenceMs);
-        }
       }
     };
 
+    // Chunk ready listener — Swift detected silence and auto-snapshotted
+    this.chunkReadyListener = (filePath: string) => {
+      if (this.state !== 'recording' && this.state !== 'listening') return;
+      this.onChunkReady(filePath);
+    };
+
     this.nativeHelper.on('audioLevel', this.audioLevelListener);
+    this.nativeHelper.on('recordingChunkReady', this.chunkReadyListener);
   }
 
   private stopAudioMonitoring(): void {
@@ -570,9 +552,9 @@ export class HotMicManager extends EventEmitter {
       this.nativeHelper.removeListener('audioLevel', this.audioLevelListener);
       this.audioLevelListener = null;
     }
-    if (this.silenceTimer) {
-      clearTimeout(this.silenceTimer);
-      this.silenceTimer = null;
+    if (this.chunkReadyListener) {
+      this.nativeHelper.removeListener('recordingChunkReady', this.chunkReadyListener);
+      this.chunkReadyListener = null;
     }
   }
 
@@ -609,25 +591,19 @@ export class HotMicManager extends EventEmitter {
   }
 
   // ---------------------------------------------------------------------------
-  // Silence → harvest chunk
+  // Chunk ready — Swift detected silence and auto-snapshotted
   // ---------------------------------------------------------------------------
 
-  private async onSilenceDetected(): Promise<void> {
+  private async onChunkReady(wavPath: string): Promise<void> {
     const t0 = performance.now();
-    log.info('Hot Mic: silence detected, harvesting chunk');
+    log.info('Hot Mic: chunk ready from Swift, transcribing');
     this.hasSpeechSinceLastHarvest = false;
 
     try {
-      // Snapshot rotates the output file without stopping the audio engine.
-      // The engine and input tap keep running — no stop/start overhead.
-      const wavPath = await this.nativeHelper.snapshotRecording();
-      const t1 = performance.now();
-      log.info('Hot Mic: [timing] snapshotRecording: %dms', Math.round(t1 - t0));
-
       // Transcribe the completed chunk — audio monitoring stays active
       const transcript = (await this.transcribe(wavPath)).replace(/\([^)]*\)/g, '').trim();
       const tPost = performance.now();
-      log.info('Hot Mic: [timing] transcribe: %dms, total: %dms', Math.round(tPost - t1), Math.round(tPost - t0));
+      log.info('Hot Mic: [timing] transcribe: %dms', Math.round(tPost - t0));
 
       // Clean up WAV file
       try {
@@ -639,6 +615,8 @@ export class HotMicManager extends EventEmitter {
 
       if (this.isHallucination(transcript)) {
         log.info('Hot Mic: skipping hallucinated/empty chunk');
+        // Tell Swift to stay in current mode
+        this.nativeHelper.setHarvestMode(this.transcriptBuffer.length === 0 ? 'command' : 'dictation');
         return;
       }
 
@@ -648,6 +626,9 @@ export class HotMicManager extends EventEmitter {
         // Legacy direct-paste mode
         this.processTranscriptDirectPaste(transcript);
       }
+
+      // After processing, tell Swift which silence duration to use next
+      this.nativeHelper.setHarvestMode(this.transcriptBuffer.length === 0 ? 'command' : 'dictation');
     } catch (error) {
       log.error('Hot Mic chunk error:', error);
     }
@@ -674,15 +655,15 @@ export class HotMicManager extends EventEmitter {
     }
 
     // New window command: open a new terminal window (Cmd+N)
-    if (this.transcriptBuffer.length === 0 && lower === 'new window') {
-      log.info('Hot Mic: new window command — sending Cmd+N');
+    if (this.transcriptBuffer.length === 0 && this.isNewWindowPhrase(lower)) {
+      log.info('Hot Mic: new window command "%s" — sending Cmd+N', lower);
       exec('osascript -e \'tell application "System Events" to keystroke "n" using command down\'');
       return;
     }
 
     // Close window command: close the current window (Cmd+W)
-    if (this.transcriptBuffer.length === 0 && (lower === 'close window' || lower === 'close the window' || lower === 'close this window')) {
-      log.info('Hot Mic: close window command — sending Cmd+W');
+    if (this.transcriptBuffer.length === 0 && this.isCloseWindowPhrase(lower)) {
+      log.info('Hot Mic: close window command "%s" — sending Cmd+W', lower);
       exec('osascript -e \'tell application "System Events" to keystroke "w" using command down\'');
       return;
     }
@@ -696,6 +677,13 @@ export class HotMicManager extends EventEmitter {
         const result = await this.nativeHelper.typeIntoApp(target, 'claude', true);
         if (result.success) this.playSound('paste');
       }
+      return;
+    }
+
+    // Cancel command: send Ctrl+C to the terminal
+    if (this.transcriptBuffer.length === 0 && this.isCancelPhrase(lower)) {
+      log.info('Hot Mic: cancel command "%s" — sending Ctrl+C', lower);
+      exec('osascript -e \'tell application "System Events" to keystroke "c" using control down\'');
       return;
     }
 
@@ -791,6 +779,9 @@ export class HotMicManager extends EventEmitter {
 
   private static readonly DEFAULT_SUBMIT_PHRASES = 'over, go ahead, send it, submit, do it';
   private static readonly DEFAULT_PASTE_PHRASES = 'paste, paste it, transcribe';
+  private static readonly DEFAULT_CANCEL_PHRASES = 'cancel, stop, abort';
+  private static readonly DEFAULT_NEW_WINDOW_PHRASES = 'new window';
+  private static readonly DEFAULT_CLOSE_WINDOW_PHRASES = 'close window, close the window, close this window';
   private static readonly DEFAULT_SWITCH_WORDS = 'next, switch';
 
   private getSubmitPhrases(): string[][] {
@@ -868,6 +859,30 @@ export class HotMicManager extends EventEmitter {
   }
 
   /**
+   * Check if a word/phrase is a configured cancel phrase.
+   */
+  private isCancelPhrase(word: string): boolean {
+    const pref = this.preferences.getPreference('hotMicCancelWords');
+    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_CANCEL_PHRASES;
+    const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
+    return phrases.includes(word);
+  }
+
+  private isNewWindowPhrase(word: string): boolean {
+    const pref = this.preferences.getPreference('hotMicNewWindowWords');
+    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_NEW_WINDOW_PHRASES;
+    const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
+    return phrases.includes(word);
+  }
+
+  private isCloseWindowPhrase(word: string): boolean {
+    const pref = this.preferences.getPreference('hotMicCloseWindowWords');
+    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_CLOSE_WINDOW_PHRASES;
+    const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
+    return phrases.includes(word);
+  }
+
+  /**
    * Apply number/permission mappings if the text is a single mapped word.
    */
   private applyMappings(text: string): string {
@@ -919,7 +934,8 @@ export class HotMicManager extends EventEmitter {
 
     if ((this.state === 'listening' && this.transcriptBuffer.length > 0) || this.state === 'recording') {
       this.cursorStatusManager.showHotMic();
-      this.cursorStatusManager.setHotMicWordCount(this.getBufferWordCount());
+      const showCount = this.preferences.getPreference('hotMicShowWordCount') === true;
+      this.cursorStatusManager.setHotMicWordCount(showCount ? this.getBufferWordCount() : 0);
     } else {
       this.cursorStatusManager.setHotMicWordCount(0);
       this.cursorStatusManager.hideHotMic();
@@ -1100,24 +1116,6 @@ export class HotMicManager extends EventEmitter {
     this.emit('stateChanged', state);
 
     this.updateOrangeDot();
-
-    // Register/unregister Escape to exit hot mic
-    if (state !== 'idle') {
-      try {
-        if (!globalShortcut.isRegistered('Escape')) {
-          globalShortcut.register('Escape', () => {
-            log.info('Hot Mic: Escape pressed, deactivating');
-            this.deactivate();
-          });
-        }
-      } catch (error) {
-        log.error('Failed to register Escape shortcut:', error);
-      }
-    } else {
-      try {
-        globalShortcut.unregister('Escape');
-      } catch { /* ignore */ }
-    }
   }
 
   // ---------------------------------------------------------------------------

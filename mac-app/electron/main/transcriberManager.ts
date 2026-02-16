@@ -1794,6 +1794,17 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
+   * Pre-start the Qwen server so the first transcription is fast.
+   * No-op if already running or if engine is not qwen.
+   */
+  async warmup(): Promise<void> {
+    const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+    if (engine === 'qwen') {
+      await this.startQwenServer();
+    }
+  }
+
+  /**
    * Transcribe an audio file using the user's configured engine (whisper or qwen).
    * Exposed for HotMicManager so it can share the persistent Qwen server.
    */
