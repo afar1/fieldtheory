@@ -43,6 +43,8 @@ enum MessageType: String, Codable {
     case typeIntoApp
     // Window focus by title
     case focusWindowByTitle
+    // Silence detection harvest mode
+    case setHarvestMode
 }
 
 /// Message received from Electron.
@@ -55,6 +57,7 @@ struct IncomingMessage: Codable {
     let text: String?           // For typeIntoApp
     let pressEnter: Bool?       // For typeIntoApp
     let titleSubstring: String? // For focusWindowByTitle
+    let mode: String?           // For setHarvestMode ("command" or "dictation")
 }
 
 // MARK: - Outgoing Message Types
@@ -121,6 +124,16 @@ struct RecordingStoppedMessage: Codable {
 
 struct RecordingSnapshotMessage: Codable {
     let type = "recordingSnapshot"
+    let filePath: String
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case filePath
+    }
+}
+
+struct RecordingChunkReadyMessage: Codable {
+    let type = "recordingChunkReady"
     let filePath: String
 
     enum CodingKeys: String, CodingKey {
@@ -1009,14 +1022,106 @@ struct FrontmostAppChangedMessage: Codable {
 final class RecordingHelper {
     
     static let shared = RecordingHelper()
-    
+
     private var audioEngine: AVAudioEngine?
     private var audioFile: AVAudioFile?
     private var recordingURL: URL?
     private var isRecording = false
-    
+
+    // Pre-created file for fast snapshots — created in background after each snapshot/start
+    private var pendingAudioFile: AVAudioFile?
+    private var pendingRecordingURL: URL?
+
+    // Silence detection state (all accessed on main thread only)
+    private var hasSpeechSinceLastHarvest = false
+    private var silenceTimer: DispatchWorkItem?
+    private var harvestMode: String = "command"  // "command" = 50ms, "dictation" = 500ms
+
+    private static let SPEECH_THRESHOLD: Double = 0.02
+    private static let SILENCE_THRESHOLD: Double = 0.015
+    private static let SILENCE_COMMAND_MS: Int = 10
+    private static let SILENCE_DICTATION_MS: Int = 500
+
+    private static let wavSettings: [String: Any] = [
+        AVFormatIDKey: Int(kAudioFormatLinearPCM),
+        AVSampleRateKey: 16000,
+        AVNumberOfChannelsKey: 1,
+        AVLinearPCMBitDepthKey: 32,
+        AVLinearPCMIsFloatKey: true,
+        AVLinearPCMIsBigEndianKey: false
+    ]
+
     private init() {}
-    
+
+    /// Pre-create the next WAV file on a background queue so snapshotRecording is near-instant.
+    private func prepareNextFile() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let tempDir = FileManager.default.temporaryDirectory
+            let fileName = "littleone-recording-\(UUID().uuidString).wav"
+            let url = tempDir.appendingPathComponent(fileName)
+
+            do {
+                let file = try AVAudioFile(forWriting: url, settings: RecordingHelper.wavSettings)
+                DispatchQueue.main.async {
+                    guard let self = self, self.isRecording else {
+                        // Recording stopped before we finished — clean up
+                        try? FileManager.default.removeItem(at: url)
+                        return
+                    }
+                    self.pendingAudioFile = file
+                    self.pendingRecordingURL = url
+                }
+            } catch {
+                sendLog(level: "error", message: "Failed to pre-create next audio file: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Process an audio level on the main thread for silence detection.
+    /// Called from the tap callback via DispatchQueue.main.async.
+    func processAudioLevel(_ level: Double) {
+        guard isRecording else { return }
+
+        if level > RecordingHelper.SPEECH_THRESHOLD {
+            hasSpeechSinceLastHarvest = true
+            silenceTimer?.cancel()
+            silenceTimer = nil
+        } else if level > RecordingHelper.SILENCE_THRESHOLD {
+            // Mid-range — not silence, cancel any pending timer
+            silenceTimer?.cancel()
+            silenceTimer = nil
+        } else {
+            // Below silence threshold
+            if hasSpeechSinceLastHarvest && silenceTimer == nil {
+                let silenceMs = harvestMode == "dictation"
+                    ? RecordingHelper.SILENCE_DICTATION_MS
+                    : RecordingHelper.SILENCE_COMMAND_MS
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self = self, self.isRecording else { return }
+                    self.silenceTimer = nil
+                    if let filePath = self.snapshotRecording() {
+                        let message = RecordingChunkReadyMessage(filePath: filePath)
+                        sendJSON(message)
+                        self.hasSpeechSinceLastHarvest = false
+                    }
+                }
+                silenceTimer = work
+                DispatchQueue.main.asyncAfter(
+                    deadline: .now() + .milliseconds(silenceMs),
+                    execute: work
+                )
+            }
+        }
+    }
+
+    /// Set the harvest mode and cancel any pending silence timer.
+    /// Called from MessageHandler when Node sends setHarvestMode.
+    func setHarvestMode(_ mode: String) {
+        harvestMode = mode
+        silenceTimer?.cancel()
+        silenceTimer = nil
+    }
+
     /// Start recording from the default input device.
     /// Records to a temporary WAV file at 16kHz mono PCM.
     func startRecording() -> Bool {
@@ -1058,14 +1163,7 @@ final class RecordingHelper {
         // Create audio file first
         let file: AVAudioFile
         do {
-            file = try AVAudioFile(forWriting: url, settings: [
-                AVFormatIDKey: Int(kAudioFormatLinearPCM),
-                AVSampleRateKey: 16000,
-                AVNumberOfChannelsKey: 1,
-                AVLinearPCMBitDepthKey: 32,
-                AVLinearPCMIsFloatKey: true,
-                AVLinearPCMIsBigEndianKey: false
-            ])
+            file = try AVAudioFile(forWriting: url, settings: RecordingHelper.wavSettings)
             audioFile = file
         } catch {
             sendLog(level: "error", message: "Failed to create audio file: \(error.localizedDescription)")
@@ -1073,7 +1171,7 @@ final class RecordingHelper {
         }
         
         // Install tap on input node
-        let bufferSize: AVAudioFrameCount = 4096
+        let bufferSize: AVAudioFrameCount = 2048
         inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, _ in
             guard let self = self, self.isRecording, let audioFile = self.audioFile else { return }
             
@@ -1093,6 +1191,11 @@ final class RecordingHelper {
                 // Send audio level to Electron for live waveform
                 let levelMessage = AudioLevelMessage(level: level)
                 sendJSON(levelMessage)
+
+                // Dispatch to main thread for silence detection
+                DispatchQueue.main.async { [weak self] in
+                    self?.processAudioLevel(level)
+                }
             }
             
             // Convert to target format if needed
@@ -1142,6 +1245,11 @@ final class RecordingHelper {
         do {
             try engine.start()
             isRecording = true
+            hasSpeechSinceLastHarvest = false
+            silenceTimer?.cancel()
+            silenceTimer = nil
+            harvestMode = "command"
+            prepareNextFile()
             sendLog(level: "info", message: "Recording started: \(url.path)")
             return true
         } catch {
@@ -1176,7 +1284,9 @@ final class RecordingHelper {
         
         // Stop recording first
         isRecording = false
-        
+        silenceTimer?.cancel()
+        silenceTimer = nil
+
         // Remove tap and stop engine
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
@@ -1191,13 +1301,20 @@ final class RecordingHelper {
         // Clean up
         audioEngine = nil
         recordingURL = nil
-        
+
+        // Clean up pre-created pending file
+        if let pendingURL = pendingRecordingURL {
+            try? FileManager.default.removeItem(at: pendingURL)
+        }
+        pendingAudioFile = nil
+        pendingRecordingURL = nil
+
         // Verify file exists
         if !FileManager.default.fileExists(atPath: path) {
             sendLog(level: "error", message: "Recording file does not exist: \(path)")
             return nil
         }
-        
+
         // Check file size
         if let attributes = try? FileManager.default.attributesOfItem(atPath: path),
            let fileSize = attributes[.size] as? Int64 {
@@ -1205,7 +1322,7 @@ final class RecordingHelper {
         } else {
             sendLog(level: "info", message: "Recording stopped: \(path)")
         }
-        
+
         return path
     }
     
@@ -1223,46 +1340,39 @@ final class RecordingHelper {
             return nil
         }
 
-        // Create new temp WAV file
-        let tempDir = FileManager.default.temporaryDirectory
-        let fileName = "littleone-recording-\(UUID().uuidString).wav"
-        let newURL = tempDir.appendingPathComponent(fileName)
-
-        // Create new audio file for writing
+        // Use pre-created file if available (near-instant), otherwise create synchronously
         let newFile: AVAudioFile
-        do {
-            newFile = try AVAudioFile(forWriting: newURL, settings: [
-                AVFormatIDKey: Int(kAudioFormatLinearPCM),
-                AVSampleRateKey: 16000,
-                AVNumberOfChannelsKey: 1,
-                AVLinearPCMBitDepthKey: 32,
-                AVLinearPCMIsFloatKey: true,
-                AVLinearPCMIsBigEndianKey: false
-            ])
-        } catch {
-            sendLog(level: "error", message: "Failed to create new audio file for snapshot: \(error.localizedDescription)")
-            return nil
+        let newURL: URL
+        if let pf = pendingAudioFile, let pu = pendingRecordingURL {
+            newFile = pf
+            newURL = pu
+            pendingAudioFile = nil
+            pendingRecordingURL = nil
+        } else {
+            sendLog(level: "info", message: "Snapshot: pending file not ready, creating synchronously")
+            let tempDir = FileManager.default.temporaryDirectory
+            let fileName = "littleone-recording-\(UUID().uuidString).wav"
+            newURL = tempDir.appendingPathComponent(fileName)
+            do {
+                newFile = try AVAudioFile(forWriting: newURL, settings: RecordingHelper.wavSettings)
+            } catch {
+                sendLog(level: "error", message: "Failed to create audio file for snapshot: \(error.localizedDescription)")
+                return nil
+            }
         }
 
         // Swap the audio file — the tap callback reads self.audioFile, so the next buffer
-        // write goes to the new file. The old file flushes when its last reference drops
-        // (end of this function, or after any in-flight tap callback finishes).
+        // write goes to the new file. The old file flushes when its last reference drops.
         self.audioFile = newFile
         self.recordingURL = newURL
 
+        // Pre-create the next file for the following snapshot
+        prepareNextFile()
+
         let path = oldURL.path
-
-        // Verify file exists and log size
-        if !FileManager.default.fileExists(atPath: path) {
-            sendLog(level: "error", message: "Snapshot file does not exist: \(path)")
-            return nil
-        }
-
         if let attributes = try? FileManager.default.attributesOfItem(atPath: path),
            let fileSize = attributes[.size] as? Int64 {
             sendLog(level: "info", message: "Recording snapshot: \(path) (\(fileSize) bytes)")
-        } else {
-            sendLog(level: "info", message: "Recording snapshot: \(path)")
         }
 
         return path
@@ -1273,8 +1383,10 @@ final class RecordingHelper {
         guard isRecording else {
             return
         }
-        
+
         isRecording = false
+        silenceTimer?.cancel()
+        silenceTimer = nil
         
         if let engine = audioEngine {
             engine.inputNode.removeTap(onBus: 0)
@@ -1285,10 +1397,17 @@ final class RecordingHelper {
         if let url = recordingURL {
             try? FileManager.default.removeItem(at: url)
         }
-        
+
+        // Clean up pre-created pending file
+        if let pendingURL = pendingRecordingURL {
+            try? FileManager.default.removeItem(at: pendingURL)
+        }
+
         audioEngine = nil
         audioFile = nil
         recordingURL = nil
+        pendingAudioFile = nil
+        pendingRecordingURL = nil
         
         sendLog(level: "info", message: "Recording cancelled")
     }
@@ -1552,6 +1671,14 @@ final class MessageHandler {
                 return
             }
             focusWindowByTitle(bundleId: bundleId, titleSubstring: titleSubstring)
+
+        case .setHarvestMode:
+            if let mode = message.mode {
+                RecordingHelper.shared.setHarvestMode(mode)
+                sendLog(level: "info", message: "Harvest mode set to: \(mode)")
+            } else {
+                sendError("setHarvestMode requires mode")
+            }
         }
     }
 

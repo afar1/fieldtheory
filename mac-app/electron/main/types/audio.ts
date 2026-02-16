@@ -107,6 +107,7 @@ export type HelperOutgoingMessageType =
   | 'recordingStopped'
   | 'recordingSnapshot'
   | 'recordingCancelled'
+  | 'recordingChunkReady'
   | 'audioLevel'
   | 'permissionsStatus'
   | 'focusedTextInputStatus'
@@ -135,7 +136,8 @@ export type HelperIncomingMessageType =
   | 'playSound'
   | 'stopSounds'
   | 'typeIntoApp'
-  | 'focusWindowByTitle';
+  | 'focusWindowByTitle'
+  | 'setHarvestMode';
 
 /**
  * Base interface for all messages from the native helper.
@@ -197,6 +199,15 @@ export interface RecordingStoppedMessage extends HelperMessage {
  */
 export interface RecordingSnapshotMessage extends HelperMessage {
   type: 'recordingSnapshot';
+  filePath: string;
+}
+
+/**
+ * Recording chunk ready message from the helper.
+ * Sent when Swift's silence detection triggers an auto-snapshot.
+ */
+export interface RecordingChunkReadyMessage extends HelperMessage {
+  type: 'recordingChunkReady';
   filePath: string;
 }
 
@@ -311,6 +322,7 @@ export type HelperOutgoingMessage =
   | RecordingStartedMessage
   | RecordingStoppedMessage
   | RecordingSnapshotMessage
+  | RecordingChunkReadyMessage
   | RecordingCancelledMessage
   | AudioLevelMessage
   | PermissionsStatusMessage
@@ -404,6 +416,14 @@ export interface FocusWindowByTitleCommand {
 }
 
 /**
+ * Command to set the harvest mode for Swift silence detection.
+ */
+export interface SetHarvestModeCommand {
+  type: 'setHarvestMode';
+  mode: 'command' | 'dictation';
+}
+
+/**
  * Union type of all possible commands to the helper.
  */
 export type HelperIncomingCommand =
@@ -422,4 +442,5 @@ export type HelperIncomingCommand =
   | PlaySoundCommand
   | StopSoundsCommand
   | TypeIntoAppCommand
-  | FocusWindowByTitleCommand;
+  | FocusWindowByTitleCommand
+  | SetHarvestModeCommand;
