@@ -136,6 +136,20 @@ interface Preferences {
   // Cached tier - persisted locally so Pro users don't get downgraded on startup.
   // Server is authoritative; this is only for offline/startup display.
   cachedTier?: 'free' | 'pro';
+
+  // Transcription engine - experimental alternative to whisper.
+  // 'whisper' (default): uses whisper-cli (whisper.cpp)
+  // 'qwen': uses Qwen3-ASR-0.6B via mlx-audio (Apple Silicon only)
+  transcriptionEngine?: 'whisper' | 'qwen';
+
+  // Hot Mic - continuous voice input for Claude Code terminals.
+  // When enabled, auto-records voice fragments and injects them into a target terminal.
+  hotMicEnabled?: boolean;
+  hotMicTargetBundleId?: string; // e.g., "com.mitchellh.ghostty"
+  hotMicSoundsEnabled?: boolean;
+  hotMicWakeWord?: string; // Deprecated — use hotMicSubmitWord
+  hotMicSubmitWord?: string; // Word that flushes the transcript buffer (default: "go")
+  hotMicBufferDiscardMs?: number; // Silence timeout to discard buffer (default: 15000)
 }
 
 const DEFAULT_PREFERENCES: Preferences = {

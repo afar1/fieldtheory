@@ -63,6 +63,11 @@ export class TranscriberManager extends EventEmitter {
   private secondaryHotkey: string | null = null; // Optional secondary hotkey for transcription
   private registeredSecondaryHotkey: string | null = null; // Track currently registered secondary hotkey
   private whisperProcess: ChildProcess | null = null;
+  private qwenProcess: ChildProcess | null = null;
+  private qwenReady: boolean = false;
+  private qwenReadyPromise: Promise<void> | null = null;
+  private qwenPendingResolve: ((response: { ok: boolean; text?: string; error?: string }) => void) | null = null;
+  private qwenStarting: boolean = false;
   private abandonHotkeyRegistered: boolean = false;
   private registeredAbandonHotkey: string = 'Escape'; // Track currently registered abandon hotkey
   
@@ -125,6 +130,14 @@ export class TranscriberManager extends EventEmitter {
   private doubleTapThresholdMs: number = 300;
   private pendingHotkeyTimer: NodeJS.Timeout | null = null;
   private pendingHotkeyIsSecondary: boolean = false;
+
+  // Hot Mic delegation — when Hot Mic is active, hotkey presses are delegated to it.
+  private hotMicDelegate: {
+    isActive: boolean;
+    handleShortPress: () => Promise<void>;
+    yieldToTranscriber: () => Promise<void>;
+    resumeAfterTranscriber: () => Promise<void>;
+  } | null = null;
 
   constructor(nativeHelper: NativeHelper, preferences: PreferencesManager, clipboardManager?: ClipboardManager, quotaManager?: QuotaManager, audioManager?: AudioManager, cursorStatusManager?: CursorStatusManager, commandsManager?: CommandsManager) {
     super();
@@ -218,6 +231,14 @@ export class TranscriberManager extends EventEmitter {
 
   setSketchModeChecker(checker: () => boolean): void {
     this.sketchModeChecker = checker;
+  }
+
+  /**
+   * Set the Hot Mic delegate for hotkey delegation.
+   * When Hot Mic is active, hotkey presses are forwarded to it instead of starting normal recording.
+   */
+  setHotMicDelegate(delegate: { isActive: boolean; handleShortPress: () => Promise<void>; yieldToTranscriber: () => Promise<void>; resumeAfterTranscriber: () => Promise<void> }): void {
+    this.hotMicDelegate = delegate;
   }
 
   /**
@@ -523,20 +544,28 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
+    // Yield Hot Mic's recording so we can use the audio device
+    if (this.hotMicDelegate?.isActive) {
+      await this.hotMicDelegate.yieldToTranscriber();
+    }
+
     // Block recording until onboarding is complete.
     const onboardingComplete = this.preferences.getPreference('onboardingComplete');
     if (!onboardingComplete) {
       return;
     }
 
-    // Block recording if no model is downloaded.
-    const modelAvailable = await this.modelManager.isModelAvailable();
-    if (!modelAvailable) {
-      const errorMsg = 'You must download a voice model first. Go to Settings → Transcription to download one.';
-      this.emit('error', new Error(errorMsg));
-      // Also show a visible note to the user
-      this.cursorStatusManager?.showRecordingNote(errorMsg);
-      return;
+    // Block recording if no model is downloaded (whisper only - Qwen manages its own model).
+    const engineForStart = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+    if (engineForStart === 'whisper') {
+      const modelAvailable = await this.modelManager.isModelAvailable();
+      if (!modelAvailable) {
+        const errorMsg = 'You must download a voice model first. Go to Settings → Transcription to download one.';
+        this.emit('error', new Error(errorMsg));
+        // Also show a visible note to the user
+        this.cursorStatusManager?.showRecordingNote(errorMsg);
+        return;
+      }
     }
 
     // Check priority mic quota if a priority device is selected.
@@ -648,13 +677,16 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
-    // Block recording if no model is downloaded.
-    const modelAvailable = await this.modelManager.isModelAvailable();
-    if (!modelAvailable) {
-      const errorMsg = 'You must download a voice model first. Go to Settings → Transcription to download one.';
-      this.emit('error', new Error(errorMsg));
-      this.cursorStatusManager?.showRecordingNote(errorMsg);
-      return;
+    // Block recording if no model is downloaded (whisper only - Qwen manages its own model).
+    const engineForSilentStart = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+    if (engineForSilentStart === 'whisper') {
+      const modelAvailable = await this.modelManager.isModelAvailable();
+      if (!modelAvailable) {
+        const errorMsg = 'You must download a voice model first. Go to Settings → Transcription to download one.';
+        this.emit('error', new Error(errorMsg));
+        this.cursorStatusManager?.showRecordingNote(errorMsg);
+        return;
+      }
     }
 
     // Check priority mic quota if a priority device is selected.
@@ -854,22 +886,28 @@ export class TranscriberManager extends EventEmitter {
       // Track priority mic usage if a priority device was selected during recording.
       await this.trackPriorityMicUsage();
 
-      // Check if model is available
-      const selectedModel = this.modelManager.getSelectedModel();
-      const modelAvailable = await this.modelManager.isModelAvailable();
-      if (!modelAvailable) {
-        this.setStatus('idle');
-        this.handleOverlayAfterTranscription();
-        this.emit('error', new Error(`Model "${selectedModel}" not available. Please download the model first.`));
-        return;
+      // Check if whisper model is available (skip for Qwen - it manages its own model)
+      const engineForModelCheck = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+      if (engineForModelCheck === 'whisper') {
+        const selectedModel = this.modelManager.getSelectedModel();
+        const modelAvailable = await this.modelManager.isModelAvailable();
+        if (!modelAvailable) {
+          this.setStatus('idle');
+          this.handleOverlayAfterTranscription();
+          this.emit('error', new Error(`Model "${selectedModel}" not available. Please download the model first.`));
+          return;
+        }
       }
 
       // Switch to transcribing state
       this.setStatus('transcribing');
       this.overlay.showTranscribing();
 
-      // Transcribe
-      const text = await this.transcribe(wavPath);
+      // Transcribe using configured engine
+      const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+      const text = engine === 'qwen'
+        ? await this.transcribeWithQwen(wavPath)
+        : await this.transcribe(wavPath);
       
       // Check for silence (empty or whitespace-only text)
       const trimmedText = text ? text.trim() : '';
@@ -1384,6 +1422,224 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
+   * Get the path to the Qwen transcription Python script.
+   */
+  private getQwenScriptPath(): string {
+    // __dirname in compiled code is mac-app/electron-dist/main
+    // So we need to go up 2 levels: main -> electron-dist -> mac-app
+    const macAppRoot = path.resolve(__dirname, '../..');
+    return path.join(macAppRoot, 'scripts', 'qwen-transcribe.py');
+  }
+
+  /**
+   * Get the path to the Python interpreter in the Qwen venv.
+   */
+  private getQwenPythonPath(): string {
+    const macAppRoot = path.resolve(__dirname, '../..');
+    return path.join(macAppRoot, 'build-qwen', 'venv', 'bin', 'python');
+  }
+
+  /**
+   * Start the persistent Qwen server process.
+   * Spawns the Python script with --server flag and waits for the ready signal.
+   */
+  private startQwenServer(): Promise<void> {
+    if (this.qwenReady && this.qwenProcess) {
+      return Promise.resolve();
+    }
+    if (this.qwenReadyPromise) {
+      return this.qwenReadyPromise;
+    }
+
+    this.qwenStarting = true;
+    const pythonPath = this.getQwenPythonPath();
+    const scriptPath = this.getQwenScriptPath();
+
+    this.qwenReadyPromise = new Promise<void>((resolve, reject) => {
+      const proc = spawn(pythonPath, [scriptPath, '--server'], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      this.qwenProcess = proc;
+      let buffer = '';
+
+      const onData = (data: Buffer) => {
+        buffer += data.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const msg = JSON.parse(line);
+            if (msg.ready) {
+              // Server is ready — model loaded
+              this.qwenReady = true;
+              this.qwenStarting = false;
+              // Switch from startup handler to normal line handler
+              proc.stdout?.removeListener('data', onData);
+              this.setupQwenLineHandler(proc, buffer);
+              buffer = '';
+              log.info('Qwen server ready');
+              resolve();
+              return;
+            }
+          } catch {
+            // Not JSON, ignore during startup
+          }
+        }
+      };
+
+      proc.stdout?.on('data', onData);
+
+      proc.stderr?.on('data', (data: Buffer) => {
+        log.info('[Qwen stderr] %s', data.toString().trim());
+      });
+
+      proc.on('error', (error) => {
+        this.qwenProcess = null;
+        this.qwenReady = false;
+        this.qwenStarting = false;
+        this.qwenReadyPromise = null;
+        reject(new Error(`Failed to start qwen server: ${error.message}. Run: cd mac-app && bash scripts/setup-qwen.sh`));
+      });
+
+      proc.on('close', (code) => {
+        const wasReady = this.qwenReady;
+        this.qwenProcess = null;
+        this.qwenReady = false;
+        this.qwenStarting = false;
+        this.qwenReadyPromise = null;
+
+        // Reject any pending transcription request
+        if (this.qwenPendingResolve) {
+          this.qwenPendingResolve({ ok: false, error: `Qwen server exited with code ${code}` });
+          this.qwenPendingResolve = null;
+        }
+
+        if (!wasReady) {
+          reject(new Error(`Qwen server exited during startup with code ${code}`));
+        } else {
+          log.warn('Qwen server process exited (code %d), will restart on next transcription', code);
+        }
+      });
+    });
+
+    return this.qwenReadyPromise;
+  }
+
+  /**
+   * Set up the stdout line handler for the Qwen server process after startup.
+   * Parses JSON responses and resolves pending transcription requests.
+   */
+  private setupQwenLineHandler(proc: ChildProcess, initialBuffer: string): void {
+    let buffer = initialBuffer;
+
+    proc.stdout?.on('data', (data: Buffer) => {
+      buffer += data.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (this.qwenPendingResolve) {
+            this.qwenPendingResolve(msg);
+            this.qwenPendingResolve = null;
+          }
+        } catch {
+          log.warn('[Qwen] Non-JSON stdout: %s', line);
+        }
+      }
+    });
+  }
+
+  /**
+   * Stop the persistent Qwen server process.
+   */
+  private stopQwenServer(): void {
+    if (this.qwenProcess) {
+      this.qwenProcess.kill('SIGTERM');
+      this.qwenProcess = null;
+    }
+    this.qwenReady = false;
+    this.qwenStarting = false;
+    this.qwenReadyPromise = null;
+    this.qwenPendingResolve = null;
+  }
+
+  /**
+   * Send a command to the Qwen server and wait for the response.
+   * Times out after 120 seconds to avoid hanging indefinitely on bad audio.
+   */
+  private sendQwenCommand(cmd: Record<string, unknown>): Promise<{ ok: boolean; text?: string; error?: string }> {
+    return new Promise((resolve, reject) => {
+      if (!this.qwenProcess || !this.qwenReady) {
+        reject(new Error('Qwen server not running'));
+        return;
+      }
+
+      const timeout = setTimeout(() => {
+        this.qwenPendingResolve = null;
+        reject(new Error('Qwen server timed out (120s)'));
+      }, 120_000);
+
+      this.qwenPendingResolve = (response) => {
+        clearTimeout(timeout);
+        resolve(response);
+      };
+      const line = JSON.stringify(cmd) + '\n';
+      this.qwenProcess.stdin?.write(line, (err) => {
+        if (err) {
+          clearTimeout(timeout);
+          this.qwenPendingResolve = null;
+          reject(new Error(`Failed to write to Qwen server: ${err.message}`));
+        }
+      });
+    });
+  }
+
+  /**
+   * Transcribe audio file using Qwen3-ASR via persistent server.
+   * Starts the server on first use, auto-restarts on crash (one retry).
+   */
+  private async transcribeWithQwen(wavPath: string): Promise<string> {
+    const needTimestamps = this.screenshotMetadata.length > 0;
+
+    const doTranscribe = async (): Promise<string> => {
+      await this.startQwenServer();
+
+      const response = await this.sendQwenCommand({
+        cmd: 'transcribe',
+        audio: wavPath,
+        timestamps: needTimestamps,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Qwen transcription failed: ${response.error}`);
+      }
+
+      const rawText = response.text || '';
+
+      if (needTimestamps) {
+        return this.parseTimestampedOutput(rawText);
+      } else {
+        return rawText.trim();
+      }
+    };
+
+    try {
+      return await doTranscribe();
+    } catch (error) {
+      // One retry: restart server and try again
+      log.warn('Qwen transcription failed, restarting server: %s', (error as Error).message);
+      this.stopQwenServer();
+      return await doTranscribe();
+    }
+  }
+
+  /**
    * Transcribe audio file using whisper-cli.
    */
   private async transcribe(wavPath: string): Promise<string> {
@@ -1508,6 +1764,11 @@ export class TranscriberManager extends EventEmitter {
     if (this.status !== status) {
       this.status = status;
       this.emit('statusChanged', status);
+
+      // Resume Hot Mic listening when we return to idle
+      if (status === 'idle' && this.hotMicDelegate?.isActive) {
+        this.hotMicDelegate.resumeAfterTranscriber().catch(() => {});
+      }
     }
   }
 
@@ -2154,6 +2415,7 @@ export class TranscriberManager extends EventEmitter {
       this.whisperProcess.kill();
       this.whisperProcess = null;
     }
+    this.stopQwenServer();
     this.overlay.destroy();
   }
 }

@@ -106,6 +106,8 @@ interface TranscribeAPI {
   setAutoImproveMinWords?: (minWords: number) => Promise<void>;
   getAutoImproveStats?: () => Promise<{ wordsImproved: number; apiCalls: number; inputTokens: number; outputTokens: number }>;
   resetAutoImproveStats?: () => Promise<void>;
+  getTranscriptionEngine?: () => Promise<'whisper' | 'qwen'>;
+  setTranscriptionEngine?: (engine: 'whisper' | 'qwen') => Promise<void>;
   getDownloadingModels?: () => Promise<string[]>;
   toggleRecording?: () => Promise<void>;
   getSoundConfig?: () => Promise<SoundConfig>;
@@ -934,6 +936,27 @@ interface CommandsAPI {
 }
 
 /**
+ * Hot Mic API for continuous voice input to Claude Code terminals.
+ */
+interface HotMicAPI {
+  getState: () => Promise<string>;
+  getEnabled: () => Promise<boolean>;
+  setEnabled: (enabled: boolean) => Promise<boolean>;
+  getTargetApp: () => Promise<string | null>;
+  setTargetApp: (bundleId: string | null) => Promise<string | null>;
+  getSoundsEnabled: () => Promise<boolean>;
+  setSoundsEnabled: (enabled: boolean) => Promise<boolean>;
+  getSubmitWord: () => Promise<string>;
+  setSubmitWord: (word: string) => Promise<string>;
+  getKnownTerminals: () => Promise<Array<{ name: string; bundleId: string }>>;
+  stop: () => Promise<void>;
+  isHookInstalled: () => Promise<boolean>;
+  installHook: () => Promise<{ success: boolean; error?: string }>;
+  uninstallHook: () => Promise<{ success: boolean; error?: string }>;
+  onStateChanged: (callback: (state: string) => void) => () => void;
+}
+
+/**
  * Valid hotkey IDs that can be get/set via the hotkeyAPI.
  */
 type HotkeyId = 'superPaste' | 'commandLauncher' | 'improveText' | 'autoImprove';
@@ -1304,6 +1327,7 @@ declare global {
     metricsAPI?: MetricsAPI;
     diagnosticsAPI?: DiagnosticsAPI;
     narrationAPI?: NarrationAPI;  // Stub - feature disabled
+    hotMicAPI?: HotMicAPI;
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;
   }

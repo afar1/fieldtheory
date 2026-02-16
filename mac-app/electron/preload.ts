@@ -57,6 +57,8 @@ const TranscribeIPCChannels = {
   MODEL_DOWNLOAD_PROGRESS: 'transcribe:modelDownloadProgress',
   HOTKEY_CHANGED: 'transcribe:hotkeyChanged',
   ADD_TO_STACK: 'transcribe:addToStack',
+  GET_TRANSCRIPTION_ENGINE: 'transcribe:getTranscriptionEngine',
+  SET_TRANSCRIPTION_ENGINE: 'transcribe:setTranscriptionEngine',
 } as const;
 
 const ClipboardIPCChannels = {
@@ -547,6 +549,8 @@ export interface TranscribeAPI {
   setAutoImproveMinWords: (minWords: number) => Promise<void>;
   getAutoImproveStats: () => Promise<AutoImproveStats>;
   resetAutoImproveStats: () => Promise<void>;
+  getTranscriptionEngine: () => Promise<'whisper' | 'qwen'>;
+  setTranscriptionEngine: (engine: 'whisper' | 'qwen') => Promise<void>;
   toggleRecording: () => Promise<void>;
   getSoundConfig: () => Promise<SoundConfig>;
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
@@ -862,6 +866,14 @@ const transcribeAPI: TranscribeAPI = {
 
   resetAutoImproveStats: async (): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.RESET_AUTO_IMPROVE_STATS);
+  },
+
+  getTranscriptionEngine: async (): Promise<'whisper' | 'qwen'> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_TRANSCRIPTION_ENGINE);
+  },
+
+  setTranscriptionEngine: async (engine: 'whisper' | 'qwen'): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, engine);
   },
 
   toggleRecording: async (): Promise<void> => {
@@ -2958,6 +2970,62 @@ contextBridge.exposeInMainWorld('commandsAPI', commandsAPI);
 contextBridge.exposeInMainWorld('metricsAPI', metricsAPI);
 contextBridge.exposeInMainWorld('claudeAPI', claudeAPI);
 contextBridge.exposeInMainWorld('cursorAPI', cursorAPI);
+
+// Hot Mic API - continuous voice input for Claude Code terminals
+const hotMicAPI = {
+  getState: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getState');
+  },
+  getEnabled: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('hotmic:getEnabled');
+  },
+  setEnabled: async (enabled: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke('hotmic:setEnabled', enabled);
+  },
+  getTargetApp: async (): Promise<string | null> => {
+    return ipcRenderer.invoke('hotmic:getTargetApp');
+  },
+  setTargetApp: async (bundleId: string | null): Promise<string | null> => {
+    return ipcRenderer.invoke('hotmic:setTargetApp', bundleId);
+  },
+  getSoundsEnabled: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('hotmic:getSoundsEnabled');
+  },
+  setSoundsEnabled: async (enabled: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke('hotmic:setSoundsEnabled', enabled);
+  },
+  getSubmitWord: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getSubmitWord');
+  },
+  setSubmitWord: async (word: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setSubmitWord', word);
+  },
+  getKnownTerminals: async (): Promise<Array<{ name: string; bundleId: string }>> => {
+    return ipcRenderer.invoke('hotmic:getKnownTerminals');
+  },
+  stop: async (): Promise<void> => {
+    return ipcRenderer.invoke('hotmic:stop');
+  },
+  isHookInstalled: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('hotmic:isHookInstalled');
+  },
+  installHook: async (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('hotmic:installHook');
+  },
+  uninstallHook: async (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('hotmic:uninstallHook');
+  },
+  onStateChanged: (callback: (state: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: string) => {
+      callback(state);
+    };
+    ipcRenderer.on('hotmic:stateChanged', handler);
+    return () => {
+      ipcRenderer.removeListener('hotmic:stateChanged', handler);
+    };
+  },
+};
+contextBridge.exposeInMainWorld('hotMicAPI', hotMicAPI);
 
 // =============================================================================
 // Auto-subscribe to auth debug events for DevTools visibility
