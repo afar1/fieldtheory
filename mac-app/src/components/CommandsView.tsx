@@ -117,6 +117,9 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [headerHovered, setHeaderHovered] = useState(true);
 
+  // Context menu
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; filePath: string; name: string } | null>(null);
+
   // Text size values (smaller than Librarian for compact commands)
   const textSizes = {
     small: { base: '12px', h1: '18px', h2: '14px', h3: '13px' },
@@ -224,6 +227,12 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
     if (!selectedPopularId) return null;
     return popularCommands.find(cmd => cmd.id === selectedPopularId) || null;
   }, [popularCommands, selectedPopularId]);
+
+  // Strip leading h1 from markdown to avoid duplicate heading (we render h1 from filename)
+  const displayContent = useMemo(() => {
+    const raw = viewMode === 'mine' ? selectedCommand?.content || '' : selectedPopularCommand?.content || '';
+    return raw.replace(/^#\s+.+\n?/, '');
+  }, [viewMode, selectedCommand?.content, selectedPopularCommand?.content]);
 
   // Copy command content to clipboard
   const handleCopyContent = useCallback(async (content: string, id?: string) => {
@@ -742,6 +751,21 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
     }
   }, []);
 
+  // Close context menu on click-outside or Escape
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handleClose = () => setContextMenu(null);
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setContextMenu(null); };
+    window.addEventListener('click', handleClose);
+    window.addEventListener('keydown', handleKey);
+    window.addEventListener('scroll', handleClose, true);
+    return () => {
+      window.removeEventListener('click', handleClose);
+      window.removeEventListener('keydown', handleKey);
+      window.removeEventListener('scroll', handleClose, true);
+    };
+  }, [contextMenu]);
+
   // Common command directory paths
   const examplePaths = [
     { label: '~/.cursor/commands', path: '~/.cursor/commands' },
@@ -1075,6 +1099,10 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
                   <div
                     key={cmd.filePath}
                     onClick={() => handleSelectCommand(cmd.filePath)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setContextMenu({ x: e.clientX, y: e.clientY, filePath: cmd.filePath, name: cmd.displayName });
+                    }}
                     style={{
                       padding: '8px 8px 8px 16px',
                       cursor: 'pointer',
@@ -1558,7 +1586,7 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
                         ),
                       }}
                     >
-                      {viewMode === 'mine' ? selectedCommand?.content || '' : selectedPopularCommand?.content || ''}
+                      {displayContent}
                     </ReactMarkdown>
                   </div>
                   <div style={{ height: '50vh', flexShrink: 0 }} />
@@ -1581,6 +1609,70 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
           )}
         </div>
       </div>
+
+      {/* Context menu for command items */}
+      {contextMenu && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed',
+            top: contextMenu.y,
+            left: contextMenu.x,
+            zIndex: 9999,
+            backgroundColor: theme.isDark ? '#2a2a2a' : '#fff',
+            border: `1px solid ${theme.border}`,
+            borderRadius: '6px',
+            boxShadow: theme.isDark
+              ? '0 4px 12px rgba(0,0,0,0.5)'
+              : '0 4px 12px rgba(0,0,0,0.15)',
+            padding: '4px 0',
+            minWidth: '140px',
+          }}
+        >
+          <button
+            onClick={() => {
+              handleRenameCommand(contextMenu.filePath, contextMenu.name);
+              setContextMenu(null);
+            }}
+            style={{
+              display: 'block',
+              width: '100%',
+              padding: '6px 12px',
+              fontSize: '12px',
+              color: theme.text,
+              backgroundColor: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              textAlign: 'left',
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')}
+            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+          >
+            Rename
+          </button>
+          <button
+            onClick={() => {
+              handleDeleteCommand(contextMenu.filePath);
+              setContextMenu(null);
+            }}
+            style={{
+              display: 'block',
+              width: '100%',
+              padding: '6px 12px',
+              fontSize: '12px',
+              color: '#ef4444',
+              backgroundColor: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              textAlign: 'left',
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')}
+            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+          >
+            Delete
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -160,6 +160,14 @@ const buildStackText = (segments: TranscriptSegment[]) =>
   segments.map((segment) => segment.text).join(STACK_SEPARATOR);
 
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AppContent />
+    </SafeAreaProvider>
+  );
+}
+
+function AppContent() {
   const {
     isRecording,
     isProcessing,
@@ -455,9 +463,10 @@ export default function App() {
       }
 
       // Normal flow: create a transcript entry
+      // Use processedText so expanded commands are visible in the transcript
       const newEntry: TranscriptEntry = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        text: cleanedText, // Store original text in history
+        text: processedText,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
@@ -838,6 +847,15 @@ export default function App() {
     } catch (error) {
       console.error('Failed to save sketch:', error);
       Alert.alert('Error', 'Failed to save sketch. Please try again.');
+    }
+  }, [session]);
+
+  // Fetch commands once session is available (pre-fetch at startup may miss if session loads later)
+  useEffect(() => {
+    if (session) {
+      CommandsService.fetchCommands().catch((err) => {
+        console.log('Commands fetch after session:', err.message || 'Failed');
+      });
     }
   }, [session]);
 
@@ -1258,8 +1276,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <GestureHandlerRootView style={{ flex: 1 }}>
-        <SafeAreaProvider>
-        <View style={styles.container}>
+        <View style={[styles.container, { paddingTop: insets.top }]}>
           <StatusBar style="auto" />
 
       {/* Header removed - moved settings to bottom tab */}
@@ -1849,7 +1866,6 @@ export default function App() {
         </KeyboardAvoidingView>
       </Modal>
         </View>
-        </SafeAreaProvider>
       </GestureHandlerRootView>
     </ErrorBoundary>
   );

@@ -949,6 +949,10 @@ interface HotMicAPI {
   setSoundsEnabled: (enabled: boolean) => Promise<boolean>;
   getSubmitWord: () => Promise<string>;
   setSubmitWord: (word: string) => Promise<string>;
+  getHotkey: () => Promise<string | null>;
+  setHotkey: (hotkey: string | null) => Promise<boolean>;
+  getSwitchWords: () => Promise<string>;
+  setSwitchWords: (words: string) => Promise<string>;
   getKnownTerminals: () => Promise<Array<{ name: string; bundleId: string }>>;
   stop: () => Promise<void>;
   isHookInstalled: () => Promise<boolean>;

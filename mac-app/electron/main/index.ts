@@ -5428,8 +5428,9 @@ async function initTranscriberSystem(): Promise<void> {
     if (commandsManager) {
       await commandsManager.reinitializeForUser();
     }
-    // Auto-start Hot Mic if enabled (now that user prefs are loaded)
+    // Register Hot Mic hotkey and auto-start if enabled (now that user prefs are loaded)
     if (hotMicManager) {
+      hotMicManager.registerHotkey();
       hotMicManager.autoStartIfEnabled();
     }
   });
@@ -5713,12 +5714,30 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getSubmitWord', () => {
-      return preferencesManager?.getPreference('hotMicSubmitWord') ?? 'go';
+      return preferencesManager?.getPreference('hotMicSubmitWord') ?? 'over, go ahead, send it, submit, do it';
     });
 
     ipcMain.handle('hotmic:setSubmitWord', async (_event, word: string) => {
       await preferencesManager?.save({ hotMicSubmitWord: word });
       return word;
+    });
+
+    ipcMain.handle('hotmic:getHotkey', () => {
+      return hotMicManager?.getHotkey() ?? null;
+    });
+
+    ipcMain.handle('hotmic:setHotkey', async (_event, hotkey: string | null) => {
+      if (!hotMicManager) return false;
+      return hotMicManager.setHotkey(hotkey);
+    });
+
+    ipcMain.handle('hotmic:getSwitchWords', () => {
+      return preferencesManager?.getPreference('hotMicSwitchWords') ?? 'next, switch';
+    });
+
+    ipcMain.handle('hotmic:setSwitchWords', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicSwitchWords: words });
+      return words;
     });
 
     ipcMain.handle('hotmic:getKnownTerminals', () => {

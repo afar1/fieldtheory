@@ -3000,6 +3000,18 @@ const hotMicAPI = {
   setSubmitWord: async (word: string): Promise<string> => {
     return ipcRenderer.invoke('hotmic:setSubmitWord', word);
   },
+  getHotkey: async (): Promise<string | null> => {
+    return ipcRenderer.invoke('hotmic:getHotkey');
+  },
+  setHotkey: async (hotkey: string | null): Promise<boolean> => {
+    return ipcRenderer.invoke('hotmic:setHotkey', hotkey);
+  },
+  getSwitchWords: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getSwitchWords');
+  },
+  setSwitchWords: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setSwitchWords', words);
+  },
   getKnownTerminals: async (): Promise<Array<{ name: string; bundleId: string }>> => {
     return ipcRenderer.invoke('hotmic:getKnownTerminals');
   },
