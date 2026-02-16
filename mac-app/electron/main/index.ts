@@ -50,6 +50,7 @@ import { MetricsManager, UserMetrics } from './metricsManager';
 import { MESSAGES } from './messages';
 import { TodoStore, Todo } from './todoStore';
 import { TodoIPCChannels } from './types/todo';
+import { HotMicManager, KNOWN_TERMINALS } from './hotMicManager';
 
 const log = createLogger('Main');
 
@@ -167,6 +168,7 @@ let commandSyncService: CommandSyncService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
 let metricsManager: MetricsManager | null = null;
 let todoStore: TodoStore | null = null;
+let hotMicManager: HotMicManager | null = null;
 
 // Track pending update state so windows can query it when they open.
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
@@ -2128,6 +2130,20 @@ function setupTranscribeIPCHandlers(): void {
     });
   });
 
+  ipcMain.handle(TranscribeIPCChannels.GET_TRANSCRIPTION_ENGINE, () => {
+    if (!preferencesManager) {
+      return 'whisper';
+    }
+    return preferencesManager.getPreference('transcriptionEngine') ?? 'whisper';
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, async (_event, engine: 'whisper' | 'qwen') => {
+    if (!preferencesManager) {
+      throw new Error('PreferencesManager not initialized');
+    }
+    await preferencesManager.save({ transcriptionEngine: engine });
+  });
+
   // Sound settings handlers.
   ipcMain.handle(TranscribeIPCChannels.GET_SOUND_CONFIG, () => {
     if (!transcriberManager) {
@@ -3000,6 +3016,9 @@ function setupClipboardIPCHandlers(): void {
 
     // Clean up LibrarianManager (stop file watchers, close database)
     librarianManager?.destroy();
+
+    // Clean up TranscriberManager (kill persistent Qwen server, unregister hotkeys)
+    transcriberManager?.destroy();
 
     const fs = require('fs');
     for (const tempFile of dragTempFiles) {
@@ -5193,6 +5212,31 @@ async function initTranscriberSystem(): Promise<void> {
     });
   }
 
+  // Initialize Hot Mic manager for continuous voice input.
+  if (nativeHelper && preferencesManager) {
+    const soundMgr = transcriberManager.getSoundManager();
+    hotMicManager = new HotMicManager(nativeHelper, preferencesManager, soundMgr);
+    hotMicManager.setCursorStatusManager(cursorStatusManager);
+    hotMicManager.setTranscriberStatusGetter(() => transcriberManager?.getStatus() ?? 'idle');
+
+    // Wire hotkey delegation: when Hot Mic is active, hotkey presses go to it
+    transcriberManager.setHotMicDelegate({
+      get isActive() { return hotMicManager?.isActive ?? false; },
+      handleShortPress: () => hotMicManager?.handleShortPress() ?? Promise.resolve(),
+      yieldToTranscriber: () => hotMicManager?.yieldToTranscriber() ?? Promise.resolve(),
+      resumeAfterTranscriber: () => hotMicManager?.resumeAfterTranscriber() ?? Promise.resolve(),
+    });
+
+    // Broadcast state changes to all windows
+    hotMicManager.on('stateChanged', (state: string) => {
+      BrowserWindow.getAllWindows().forEach(win => {
+        if (!win.isDestroyed()) {
+          win.webContents.send('hotmic:stateChanged', state);
+        }
+      });
+    });
+  }
+
   // Pass transcriberManager to trayManager for auto-improve toggle
   if (trayManager) {
     trayManager.setTranscriberManager(transcriberManager);
@@ -5223,11 +5267,14 @@ async function initTranscriberSystem(): Promise<void> {
   // Initialize commands manager for portable commands feature.
   commandsManager = new CommandsManager();
 
-  // Wire up commands manager to transcriber manager for command detection.
+  // Wire up commands manager to transcriber and hot mic for command detection.
   if (transcriberManager) {
     transcriberManager.setCommandsManager(commandsManager);
     // Provide access token getter for cloud-based transcript improvement.
     transcriberManager.setAccessTokenGetter(() => authManager?.getSession()?.access_token);
+  }
+  if (hotMicManager) {
+    hotMicManager.setCommandsManager(commandsManager);
   }
 
   // Initialize multi-directory watching from settings file.
@@ -5380,6 +5427,10 @@ async function initTranscriberSystem(): Promise<void> {
     }
     if (commandsManager) {
       await commandsManager.reinitializeForUser();
+    }
+    // Auto-start Hot Mic if enabled (now that user prefs are loaded)
+    if (hotMicManager) {
+      hotMicManager.autoStartIfEnabled();
     }
   });
 
@@ -5537,6 +5588,16 @@ async function handleProtocolUrl(url: string): Promise<void> {
   try {
     const parsed = new URL(url);
 
+    // Hot Mic URL handlers
+    if (parsed.host === 'hotmic') {
+      if (parsed.pathname === '/start') {
+        hotMicManager?.start();
+      } else if (parsed.pathname === '/stop') {
+        hotMicManager?.stop();
+      }
+      return;
+    }
+
     if (parsed.host === 'librarian' && parsed.pathname === '/import') {
       const filePath = parsed.searchParams.get('file');
       const fullscreen = parsed.searchParams.get('fullscreen') === 'true';
@@ -5612,6 +5673,73 @@ if (!gotTheLock) {
     setupClipboardIPCHandlers();
     setupOnboardingIPCHandlers();
     setupDisplayListeners();
+
+    // Hot Mic IPC handlers
+    ipcMain.handle('hotmic:getState', () => {
+      return hotMicManager?.getState() ?? 'idle';
+    });
+
+    ipcMain.handle('hotmic:getEnabled', () => {
+      return preferencesManager?.getPreference('hotMicEnabled') ?? false;
+    });
+
+    ipcMain.handle('hotmic:setEnabled', async (_event, enabled: boolean) => {
+      await preferencesManager?.save({ hotMicEnabled: enabled });
+      if (!enabled && hotMicManager?.isActive) {
+        hotMicManager.stop();
+      } else if (enabled && hotMicManager && !hotMicManager.isActive) {
+        // Start listening immediately when toggled on
+        hotMicManager.activate();
+      }
+      return enabled;
+    });
+
+    ipcMain.handle('hotmic:getTargetApp', () => {
+      return preferencesManager?.getPreference('hotMicTargetBundleId') ?? null;
+    });
+
+    ipcMain.handle('hotmic:setTargetApp', async (_event, bundleId: string | null) => {
+      await preferencesManager?.save({ hotMicTargetBundleId: bundleId ?? undefined });
+      return bundleId;
+    });
+
+    ipcMain.handle('hotmic:getSoundsEnabled', () => {
+      return preferencesManager?.getPreference('hotMicSoundsEnabled') ?? true;
+    });
+
+    ipcMain.handle('hotmic:setSoundsEnabled', async (_event, enabled: boolean) => {
+      await preferencesManager?.save({ hotMicSoundsEnabled: enabled });
+      return enabled;
+    });
+
+    ipcMain.handle('hotmic:getSubmitWord', () => {
+      return preferencesManager?.getPreference('hotMicSubmitWord') ?? 'go';
+    });
+
+    ipcMain.handle('hotmic:setSubmitWord', async (_event, word: string) => {
+      await preferencesManager?.save({ hotMicSubmitWord: word });
+      return word;
+    });
+
+    ipcMain.handle('hotmic:getKnownTerminals', () => {
+      return KNOWN_TERMINALS;
+    });
+
+    ipcMain.handle('hotmic:stop', () => {
+      hotMicManager?.stop();
+    });
+
+    ipcMain.handle('hotmic:isHookInstalled', () => {
+      return hotMicManager?.isHookInstalled() ?? false;
+    });
+
+    ipcMain.handle('hotmic:installHook', () => {
+      return hotMicManager?.installHook() ?? { success: false, error: 'Not initialized' };
+    });
+
+    ipcMain.handle('hotmic:uninstallHook', () => {
+      return hotMicManager?.uninstallHook() ?? { success: false, error: 'Not initialized' };
+    });
 
     // Todo IPC handlers
     ipcMain.handle('todo:isAuthenticated', () => {

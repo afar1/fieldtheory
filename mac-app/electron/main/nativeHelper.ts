@@ -446,6 +446,74 @@ export class NativeHelper extends EventEmitter {
   }
 
   /**
+   * Type text into a specific app via pasteboard + CGEvent simulation.
+   * Used by Hot Mic to inject transcribed text into terminal apps.
+   */
+  async typeIntoApp(bundleId: string, text: string, pressEnter: boolean): Promise<{ success: boolean; error?: string }> {
+    if (!this.child || !this.child.stdin.writable) {
+      return { success: false, error: 'Helper not running' };
+    }
+
+    await this.waitForReady();
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve({ success: false, error: 'typeIntoApp timed out' });
+      }, 5000);
+
+      const onMessage = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'typeIntoAppResult') {
+          cleanup();
+          resolve({ success: msg.success, error: msg.error });
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', onMessage);
+      };
+
+      this.on('message', onMessage);
+      this.send({ type: 'typeIntoApp', bundleId, text, pressEnter });
+    });
+  }
+
+  /**
+   * Focus a specific window of an app by matching a substring in its title.
+   * Used by Hot Mic to focus the correct terminal window when multiple exist.
+   */
+  async focusWindowByTitle(bundleId: string, titleSubstring: string): Promise<{ success: boolean; error?: string }> {
+    if (!this.child || !this.child.stdin.writable) {
+      return { success: false, error: 'Helper not running' };
+    }
+
+    await this.waitForReady();
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve({ success: false, error: 'focusWindowByTitle timed out' });
+      }, 2000);
+
+      const onMessage = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'focusWindowByTitleResult') {
+          cleanup();
+          resolve({ success: msg.success, error: msg.error });
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', onMessage);
+      };
+
+      this.on('message', onMessage);
+      this.send({ type: 'focusWindowByTitle', bundleId, titleSubstring });
+    });
+  }
+
+  /**
    * Stop all currently playing sounds.
    */
   stopSounds(): void {
@@ -552,6 +620,16 @@ export class NativeHelper extends EventEmitter {
 
       case 'soundsPreloaded':
         // Response to preloadSounds - handled by promise listener.
+        this.emit('message', msg);
+        break;
+
+      case 'typeIntoAppResult':
+        // Response to typeIntoApp - handled by promise listener.
+        this.emit('message', msg);
+        break;
+
+      case 'focusWindowByTitleResult':
+        // Response to focusWindowByTitle - handled by promise listener.
         this.emit('message', msg);
         break;
 

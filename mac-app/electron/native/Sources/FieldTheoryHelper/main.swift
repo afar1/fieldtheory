@@ -38,6 +38,10 @@ enum MessageType: String, Codable {
     case preloadSounds
     case playSound
     case stopSounds
+    // Text injection
+    case typeIntoApp
+    // Window focus by title
+    case focusWindowByTitle
 }
 
 /// Message received from Electron.
@@ -46,6 +50,10 @@ struct IncomingMessage: Codable {
     let deviceId: String?
     let soundPath: String?      // For playSound
     let soundPaths: [String]?   // For preloadSounds
+    let bundleId: String?       // For typeIntoApp, focusWindowByTitle
+    let text: String?           // For typeIntoApp
+    let pressEnter: Bool?       // For typeIntoApp
+    let titleSubstring: String? // For focusWindowByTitle
 }
 
 // MARK: - Outgoing Message Types
@@ -174,6 +182,32 @@ struct SoundsPreloadedMessage: Codable {
     enum CodingKeys: String, CodingKey {
         case type
         case count
+    }
+}
+
+/// Result of typing text into an app.
+struct TypeIntoAppResultMessage: Codable {
+    let type = "typeIntoAppResult"
+    let success: Bool
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case success
+        case error
+    }
+}
+
+/// Result of focusing a window by title.
+struct FocusWindowByTitleResultMessage: Codable {
+    let type = "focusWindowByTitleResult"
+    let success: Bool
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case success
+        case error
     }
 }
 
@@ -1421,7 +1455,127 @@ final class MessageHandler {
         case .stopSounds:
             SoundHelper.shared.stopAll()
             sendLog(level: "info", message: "All sounds stopped")
+
+        case .typeIntoApp:
+            guard let bundleId = message.bundleId, let text = message.text else {
+                sendError("typeIntoApp requires bundleId and text")
+                let result = TypeIntoAppResultMessage(success: false, error: "Missing bundleId or text")
+                sendJSON(result)
+                return
+            }
+            let pressEnter = message.pressEnter ?? false
+            typeIntoApp(bundleId: bundleId, text: text, pressEnter: pressEnter)
+
+        case .focusWindowByTitle:
+            guard let bundleId = message.bundleId, let titleSubstring = message.titleSubstring else {
+                sendError("focusWindowByTitle requires bundleId and titleSubstring")
+                let result = FocusWindowByTitleResultMessage(success: false, error: "Missing bundleId or titleSubstring")
+                sendJSON(result)
+                return
+            }
+            focusWindowByTitle(bundleId: bundleId, titleSubstring: titleSubstring)
         }
+    }
+
+    /// Type text into a target application using pasteboard + CGEvent key simulation.
+    /// Strategy: write text to pasteboard, activate app, Cmd+V, optionally Enter.
+    private func typeIntoApp(bundleId: String, text: String, pressEnter: Bool) {
+        // Find the running app by bundle ID.
+        guard let targetApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleId }) else {
+            let result = TypeIntoAppResultMessage(success: false, error: "App not running: \(bundleId)")
+            sendJSON(result)
+            return
+        }
+
+        // Write text to pasteboard (don't save/restore — simpler, avoids races with ClipboardManager).
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+
+        // Activate the target app.
+        targetApp.activate(options: .activateIgnoringOtherApps)
+
+        // Brief delay for app activation.
+        usleep(100_000) // 100ms
+
+        // Simulate Cmd+V (paste).
+        let source = CGEventSource(stateID: .combinedSessionState)
+
+        // Key down: V with Command modifier
+        if let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true) {
+            keyDown.flags = .maskCommand
+            keyDown.post(tap: .cghidEventTap)
+        }
+        // Key up: V with Command modifier
+        if let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false) {
+            keyUp.flags = .maskCommand
+            keyUp.post(tap: .cghidEventTap)
+        }
+
+        // Delay for paste to complete before pressing Enter.
+        usleep(200_000) // 200ms
+
+        // Optionally press Enter (clear flags to avoid Cmd+Enter triggering fullscreen).
+        if pressEnter {
+            if let enterDown = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: true) {
+                enterDown.flags = []
+                enterDown.post(tap: .cghidEventTap)
+            }
+            if let enterUp = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: false) {
+                enterUp.flags = []
+                enterUp.post(tap: .cghidEventTap)
+            }
+        }
+
+        let result = TypeIntoAppResultMessage(success: true, error: nil)
+        sendJSON(result)
+    }
+
+    /// Focus a specific window of an app by matching a substring in its title.
+    /// Uses AXUIElement to enumerate windows and raise the matching one.
+    private func focusWindowByTitle(bundleId: String, titleSubstring: String) {
+        // Find the running app by bundle ID.
+        guard let targetApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleId }) else {
+            let result = FocusWindowByTitleResultMessage(success: false, error: "App not running: \(bundleId)")
+            sendJSON(result)
+            return
+        }
+
+        let pid = targetApp.processIdentifier
+        let appElement = AXUIElementCreateApplication(pid)
+
+        // Get windows array.
+        var windowsValue: CFTypeRef?
+        let windowsResult = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsValue)
+
+        guard windowsResult == .success, let windows = windowsValue as? [AXUIElement] else {
+            let result = FocusWindowByTitleResultMessage(success: false, error: "Cannot enumerate windows (AXError=\(windowsResult.rawValue))")
+            sendJSON(result)
+            return
+        }
+
+        // Find the window whose title contains the substring.
+        for window in windows {
+            var titleValue: CFTypeRef?
+            let titleResult = AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleValue)
+
+            guard titleResult == .success, let title = titleValue as? String else {
+                continue
+            }
+
+            if title.contains(titleSubstring) {
+                // Raise the window and activate the app.
+                AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                targetApp.activate(options: .activateIgnoringOtherApps)
+
+                let result = FocusWindowByTitleResultMessage(success: true, error: nil)
+                sendJSON(result)
+                return
+            }
+        }
+
+        let result = FocusWindowByTitleResultMessage(success: false, error: "No window with title containing '\(titleSubstring)' found")
+        sendJSON(result)
     }
 
     /// Get the bounds of the frontmost window.

@@ -112,7 +112,9 @@ export type HelperOutgoingMessageType =
   | 'appBecameFrontmost'
   | 'frontmostAppChanged'
   | 'frontmostWindowBounds'
-  | 'soundsPreloaded';
+  | 'soundsPreloaded'
+  | 'typeIntoAppResult'
+  | 'focusWindowByTitleResult';
 
 /**
  * Message types sent FROM Electron main TO the Swift helper.
@@ -129,7 +131,9 @@ export type HelperIncomingMessageType =
   | 'getFrontmostWindowBounds'
   | 'preloadSounds'
   | 'playSound'
-  | 'stopSounds';
+  | 'stopSounds'
+  | 'typeIntoApp'
+  | 'focusWindowByTitle';
 
 /**
  * Base interface for all messages from the native helper.
@@ -267,6 +271,26 @@ export interface SoundsPreloadedMessage extends HelperMessage {
 }
 
 /**
+ * Result of typeIntoApp command.
+ * Sent after text has been typed (or failed) into the target app.
+ */
+export interface TypeIntoAppResultMessage extends HelperMessage {
+  type: 'typeIntoAppResult';
+  success: boolean;
+  error?: string;
+}
+
+/**
+ * Result of focusWindowByTitle command.
+ * Sent after attempting to focus a window by title substring.
+ */
+export interface FocusWindowByTitleResultMessage extends HelperMessage {
+  type: 'focusWindowByTitleResult';
+  success: boolean;
+  error?: string;
+}
+
+/**
  * Union type of all possible messages from the helper.
  */
 export type HelperOutgoingMessage =
@@ -283,7 +307,9 @@ export type HelperOutgoingMessage =
   | AppBecameFrontmostMessage
   | FrontmostAppChangedMessage
   | FrontmostWindowBoundsMessage
-  | SoundsPreloadedMessage;
+  | SoundsPreloadedMessage
+  | TypeIntoAppResultMessage
+  | FocusWindowByTitleResultMessage;
 
 /**
  * Commands sent to the helper.
@@ -344,6 +370,25 @@ export interface StopSoundsCommand {
 }
 
 /**
+ * Command to type text into a specific app via pasteboard + CGEvent.
+ */
+export interface TypeIntoAppCommand {
+  type: 'typeIntoApp';
+  bundleId: string;
+  text: string;
+  pressEnter: boolean;
+}
+
+/**
+ * Command to focus a specific window of an app by title substring.
+ */
+export interface FocusWindowByTitleCommand {
+  type: 'focusWindowByTitle';
+  bundleId: string;
+  titleSubstring: string;
+}
+
+/**
  * Union type of all possible commands to the helper.
  */
 export type HelperIncomingCommand =
@@ -359,4 +404,6 @@ export type HelperIncomingCommand =
   | GetFrontmostWindowBoundsCommand
   | PreloadSoundsCommand
   | PlaySoundCommand
-  | StopSoundsCommand;
+  | StopSoundsCommand
+  | TypeIntoAppCommand
+  | FocusWindowByTitleCommand;

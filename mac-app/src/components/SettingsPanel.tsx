@@ -8,6 +8,7 @@ import { useEffect, useState, useCallback } from 'react';
 import AudioSettingsPanel from './AudioSettingsPanel';
 import TranscriptionSettings from './TranscriptionSettings';
 import SoundsSettings from './SoundsSettings';
+import HotMicSettings from './HotMicSettings';
 import DiagnosticsModal from './DiagnosticsModal';
 import CommandsSettings from './CommandsSettings';
 import ClaudeSettings from './ClaudeSettings';
@@ -29,7 +30,8 @@ type SettingsSection =
   | 'commands'
   | 'sounds'
   | 'stats'
-  | 'terminal-commands';
+  | 'terminal-commands'
+  | 'hot-mic';
 
 // Hotkey capture state - only one hotkey can be captured at a time
 type HotkeyCapture =
@@ -57,6 +59,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'sounds': 'Sounds',
   'stats': 'Stats',
   'terminal-commands': 'Allowlist',
+  'hot-mic': 'Hot Mic',
 };
 
 // Alphabetically ordered sections for navigation
@@ -69,6 +72,7 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'keyboard',
   'librarian',
   'commands', // Portable Commands
+  'hot-mic', // Hot Mic
   'sounds',
   'stats',
 ];
@@ -2022,6 +2026,13 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       {selectedSection === 'stats' && (
       <div style={styles.section}>
         <UserStatsPanel />
+      </div>
+      )}
+
+      {/* Hot Mic Section */}
+      {selectedSection === 'hot-mic' && (
+      <div style={styles.section}>
+        <HotMicSettings />
       </div>
       )}
 

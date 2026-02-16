@@ -271,14 +271,8 @@ export class CursorStatusManager extends EventEmitter {
    * When transitioning from transcribing to idle, briefly shows 'done' state first.
    */
   setState(state: CursorStatusState): void {
-    // #region agent log
-    fetch('http://127.0.0.1:7245/ingest/f128ded5-2e54-40f5-9bb8-ed05e5bba619',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cursorStatusManager.ts:setState',message:'setState called',data:{newState:state,currentState:this.state,enabled:this.enabled,hasDoneTimeout:!!this.doneTimeout},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1-H3'})}).catch(()=>{});
-    // #endregion
     // Clear any pending timeouts
     if (this.doneTimeout) {
-      // #region agent log
-      fetch('http://127.0.0.1:7245/ingest/f128ded5-2e54-40f5-9bb8-ed05e5bba619',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cursorStatusManager.ts:setState:clearTimeout',message:'CLEARING doneTimeout - hide will NOT be called',data:{currentState:this.state,newState:state},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3'})}).catch(()=>{});
-      // #endregion
       clearTimeout(this.doneTimeout);
       this.doneTimeout = null;
     }
@@ -293,9 +287,6 @@ export class CursorStatusManager extends EventEmitter {
     
     // When transcribing or improving finishes, show 'done' briefly before hiding
     if ((wasTranscribing || wasImproving) && state === 'idle' && this.enabled) {
-      // #region agent log
-      fetch('http://127.0.0.1:7245/ingest/f128ded5-2e54-40f5-9bb8-ed05e5bba619',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cursorStatusManager.ts:setState:done-transition',message:'Entering done state with timeout',data:{wasTranscribing,wasImproving,DONE_DURATION_MS:this.DONE_DURATION_MS},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3'})}).catch(()=>{});
-      // #endregion
       this.state = 'done';
       this.updateWindowSize('done');
       this.sendStateToRenderer('done');
@@ -308,9 +299,6 @@ export class CursorStatusManager extends EventEmitter {
       }
       
       this.doneTimeout = setTimeout(() => {
-        // #region agent log
-        fetch('http://127.0.0.1:7245/ingest/f128ded5-2e54-40f5-9bb8-ed05e5bba619',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cursorStatusManager.ts:doneTimeout',message:'Done timeout fired, calling hide',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3'})}).catch(()=>{});
-        // #endregion
         this.doneTimeout = null;
         this.state = 'idle';
         this.hide();
@@ -342,10 +330,6 @@ export class CursorStatusManager extends EventEmitter {
    * Set state with additional data (e.g., transcription text for paste-failed).
    */
   setStateWithData(state: CursorStatusState, data: { transcription?: string; pasteFailed?: boolean }): void {
-    // #region agent log
-    fetch('http://127.0.0.1:7245/ingest/f128ded5-2e54-40f5-9bb8-ed05e5bba619',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cursorStatusManager.ts:setStateWithData',message:'setStateWithData called',data:{newState:state,currentState:this.state,hasDoneTimeout:!!this.doneTimeout,pasteFailed:data.pasteFailed},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1-H5'})}).catch(()=>{});
-    // #endregion
-    
     // For 'done' state, don't call setState which would clear the existing doneTimeout.
     // Instead, just send the data to the renderer. The timeout from the idle transition will hide us.
     // However, if there's no pending timeout (e.g., called directly), set one up.
@@ -364,9 +348,6 @@ export class CursorStatusManager extends EventEmitter {
         this.sendStateToRenderer('done');
         if (this.enabled) this.show();
         this.doneTimeout = setTimeout(() => {
-          // #region agent log
-          fetch('http://127.0.0.1:7245/ingest/f128ded5-2e54-40f5-9bb8-ed05e5bba619',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cursorStatusManager.ts:setStateWithData:doneTimeout',message:'Done timeout fired from setStateWithData, calling hide',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3-fix'})}).catch(()=>{});
-          // #endregion
           this.doneTimeout = null;
           this.state = 'idle';
           this.hide();
@@ -461,7 +442,7 @@ export class CursorStatusManager extends EventEmitter {
    *
    * @param message - The message to display to the user
    */
-  showCriticalMessage(message: string): void {
+  showCriticalMessage(message: string, persistent: boolean = false): void {
     // Clear any pending timeouts from previous states.
     if (this.doneTimeout) {
       clearTimeout(this.doneTimeout);
@@ -473,26 +454,60 @@ export class CursorStatusManager extends EventEmitter {
     }
 
     this.state = 'paste-failed';
-    this.updateWindowSize('paste-failed');
+    this.show(true);  // Create window first (if needed)
 
-    // Force show the window even if cursor status is disabled (critical messages always show).
-    this.show(true);
-
-    // Send state and data to renderer.
-    this.sendStateToRenderer('paste-failed');
-    if (this.window && !this.window.isDestroyed()) {
+    // Only send size/IPC if renderer is already ready.
+    // If not ready, did-finish-load will handle it via pendingShow + pendingPasteFailedData.
+    if (this.rendererReady && this.window && !this.window.isDestroyed()) {
+      this.updateWindowSize('paste-failed');
+      this.sendStateToRenderer('paste-failed');
       this.window.webContents.send('cursor-status-data', {
         transcription: message,
         pasteFailed: true
       });
+
+      // Auto-hide after duration (unless persistent).
+      if (!persistent) {
+        this.pasteFailedTimeout = setTimeout(() => {
+          this.pasteFailedTimeout = null;
+          this.state = 'idle';
+          this.hide();
+        }, this.PASTE_FAILED_DURATION_MS);
+      }
+    } else {
+      this.pendingPasteFailedData = { transcription: message, pasteFailed: true, persistent };
+    }
+  }
+
+  /**
+   * Show persistent "Hot Mic" indicator. Uses the recording state (orange dot)
+   * with a custom label, no auto-hide, no "Saved to Field Theory" fallback.
+   */
+  showHotMic(): void {
+    if (this.doneTimeout) {
+      clearTimeout(this.doneTimeout);
+      this.doneTimeout = null;
+    }
+    if (this.pasteFailedTimeout) {
+      clearTimeout(this.pasteFailedTimeout);
+      this.pasteFailedTimeout = null;
     }
 
-    // Auto-hide after duration.
-    this.pasteFailedTimeout = setTimeout(() => {
-      this.pasteFailedTimeout = null;
-      this.state = 'idle';
-      this.hide();
-    }, this.PASTE_FAILED_DURATION_MS);
+    this.state = 'paste-failed';
+    this.show(true);  // Create window first (if needed)
+
+    // Only send size/IPC if renderer is already ready.
+    // If not ready, did-finish-load will handle it via pendingShow + pendingPasteFailedData.
+    if (this.rendererReady && this.window && !this.window.isDestroyed()) {
+      this.updateWindowSize('paste-failed');
+      this.sendStateToRenderer('paste-failed');
+      this.window.webContents.send('cursor-status-data', {
+        transcription: 'Hot Mic',
+        pasteFailed: false
+      });
+    } else {
+      this.pendingPasteFailedData = { transcription: 'Hot Mic', pasteFailed: false, persistent: true };
+    }
   }
 
   /**
@@ -552,6 +567,8 @@ export class CursorStatusManager extends EventEmitter {
   // Queue show request if renderer not ready yet
   private pendingShow: boolean = false;
   private pendingForceShow: boolean = false;
+  // Queue paste-failed data for replay after renderer is ready (used by showHotMic/showCriticalMessage)
+  private pendingPasteFailedData: { transcription: string; pasteFailed: boolean; persistent: boolean } | null = null;
 
   /**
    * Show the cursor status overlay and start tracking.
@@ -559,9 +576,6 @@ export class CursorStatusManager extends EventEmitter {
    *                    Used by showCriticalMessage() to ensure important notifications always display.
    */
   private show(forceShow: boolean = false): void {
-    // #region agent log
-    fetch('http://127.0.0.1:7245/ingest/f128ded5-2e54-40f5-9bb8-ed05e5bba619',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cursorStatusManager.ts:show',message:'show() called',data:{forceShow,enabled:this.enabled,hasWindow:!!this.window,rendererReady:this.rendererReady,state:this.state},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1-H5'})}).catch(()=>{});
-    // #endregion
     if (!this.enabled && !forceShow) {
       return;
     }
@@ -590,12 +604,10 @@ export class CursorStatusManager extends EventEmitter {
    * Hide the overlay and stop tracking.
    */
   private hide(): void {
-    // #region agent log
-    fetch('http://127.0.0.1:7245/ingest/f128ded5-2e54-40f5-9bb8-ed05e5bba619',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cursorStatusManager.ts:hide',message:'hide() called',data:{hasWindow:!!this.window,isDestroyed:this.window?.isDestroyed?.(),state:this.state,opacity:this.window?.getOpacity?.()},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1-H4'})}).catch(()=>{});
-    // #endregion
     // Clear any pending show request - user cancelled before renderer was ready
     this.pendingShow = false;
     this.pendingForceShow = false;
+    this.pendingPasteFailedData = null;
     this.stopTracking();
 
     if (this.window && !this.window.isDestroyed()) {
@@ -693,6 +705,24 @@ export class CursorStatusManager extends EventEmitter {
           this.pendingShow = false;
           // Only show if still enabled (or was force-shown)
           if (this.enabled || this.pendingForceShow) {
+            // Replay paste-failed data BEFORE showing, so window appears at correct size
+            if (this.pendingPasteFailedData) {
+              const data = this.pendingPasteFailedData;
+              this.pendingPasteFailedData = null;
+              this.updateWindowSize('paste-failed');
+              this.window.webContents.send('cursor-status-data', {
+                transcription: data.transcription,
+                pasteFailed: data.pasteFailed
+              });
+              // Set up auto-hide timeout for non-persistent messages
+              if (!data.persistent) {
+                this.pasteFailedTimeout = setTimeout(() => {
+                  this.pasteFailedTimeout = null;
+                  this.state = 'idle';
+                  this.hide();
+                }, this.PASTE_FAILED_DURATION_MS);
+              }
+            }
             // Set opacity to 1 now that content is ready - prevents white rectangle flash
             this.window.setOpacity(1);
             this.window.showInactive();
