@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor, net } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import os from 'os';
@@ -5480,9 +5480,38 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Handle system wake from sleep - check if token needs refresh.
   // Timers may not have fired while sleeping, so we check on wake.
+  // Delay to allow DNS/network to come back online before attempting refresh.
+  let wakeNetworkPoll: ReturnType<typeof setInterval> | null = null;
+  let wakeNetworkTimeout: ReturnType<typeof setTimeout> | null = null;
+
   powerMonitor.on('resume', () => {
     log.info('[PowerMonitor] System resumed from sleep, checking token expiry');
-    authManager?.refreshIfExpiringSoon();
+
+    // Cancel any previous wake poll (e.g., rapid sleep/wake cycles)
+    if (wakeNetworkPoll) { clearInterval(wakeNetworkPoll); wakeNetworkPoll = null; }
+    if (wakeNetworkTimeout) { clearTimeout(wakeNetworkTimeout); wakeNetworkTimeout = null; }
+
+    setTimeout(() => {
+      if (net.isOnline()) {
+        authManager?.refreshIfExpiringSoon();
+        return;
+      }
+
+      log.info('[PowerMonitor] Network not ready after wake, waiting for connectivity');
+      wakeNetworkPoll = setInterval(() => {
+        if (net.isOnline()) {
+          if (wakeNetworkPoll) { clearInterval(wakeNetworkPoll); wakeNetworkPoll = null; }
+          if (wakeNetworkTimeout) { clearTimeout(wakeNetworkTimeout); wakeNetworkTimeout = null; }
+          log.info('[PowerMonitor] Network restored, refreshing token');
+          authManager?.refreshIfExpiringSoon();
+        }
+      }, 5000);
+      // Give up after 2 minutes
+      wakeNetworkTimeout = setTimeout(() => {
+        if (wakeNetworkPoll) { clearInterval(wakeNetworkPoll); wakeNetworkPoll = null; }
+        log.warn('[PowerMonitor] Gave up waiting for network after wake');
+      }, 120000);
+    }, 3000);
   });
 
   // The userChanged handler handles preference reloading when session is restored.
@@ -5760,6 +5789,15 @@ if (!gotTheLock) {
       return words;
     });
 
+    ipcMain.handle('hotmic:getPrevWindowWords', () => {
+      return preferencesManager?.getPreference('hotMicPrevWindowWords') ?? 'back, previous';
+    });
+
+    ipcMain.handle('hotmic:setPrevWindowWords', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicPrevWindowWords: words });
+      return words;
+    });
+
     ipcMain.handle('hotmic:getNewWindowWords', () => {
       return preferencesManager?.getPreference('hotMicNewWindowWords') ?? 'new window';
     });
@@ -5785,6 +5823,60 @@ if (!gotTheLock) {
     ipcMain.handle('hotmic:setSwitchWords', async (_event, words: string) => {
       await preferencesManager?.save({ hotMicSwitchWords: words });
       return words;
+    });
+
+    ipcMain.handle('hotmic:getRunClaudeWords', () => {
+      return preferencesManager?.getPreference('hotMicRunClaudeWords') ?? 'start claude, start cloud, run claude';
+    });
+
+    ipcMain.handle('hotmic:setRunClaudeWords', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicRunClaudeWords: words });
+      return words;
+    });
+
+    ipcMain.handle('hotmic:getRestartServerWords', () => {
+      return preferencesManager?.getPreference('hotMicRestartServerWords') ?? 'restart server, restart dev, restart dev server';
+    });
+
+    ipcMain.handle('hotmic:setRestartServerWords', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicRestartServerWords: words });
+      return words;
+    });
+
+    ipcMain.handle('hotmic:getRestartServerCommand', () => {
+      return preferencesManager?.getPreference('hotMicRestartServerCommand') ?? '';
+    });
+
+    ipcMain.handle('hotmic:setRestartServerCommand', async (_event, command: string) => {
+      await preferencesManager?.save({ hotMicRestartServerCommand: command });
+      return command;
+    });
+
+    ipcMain.handle('hotmic:getFocusPhrases', () => {
+      return preferencesManager?.getPreference('hotMicFocusPhrases') ?? 'focus';
+    });
+
+    ipcMain.handle('hotmic:setFocusPhrases', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicFocusPhrases: words });
+      return words;
+    });
+
+    ipcMain.handle('hotmic:getCascadePhrases', () => {
+      return preferencesManager?.getPreference('hotMicCascadePhrases') ?? 'cascade, spread out';
+    });
+
+    ipcMain.handle('hotmic:setCascadePhrases', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicCascadePhrases: words });
+      return words;
+    });
+
+    ipcMain.handle('hotmic:getRectangleCommands', () => {
+      return hotMicManager?.getRectangleCommands() ?? {};
+    });
+
+    ipcMain.handle('hotmic:setRectangleCommands', async (_event, commands: Record<string, string>) => {
+      await preferencesManager?.save({ hotMicRectangleCommands: commands });
+      return commands;
     });
 
     ipcMain.handle('hotmic:getKnownTerminals', () => {

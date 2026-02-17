@@ -3024,6 +3024,12 @@ const hotMicAPI = {
   setCancelWords: async (words: string): Promise<string> => {
     return ipcRenderer.invoke('hotmic:setCancelWords', words);
   },
+  getPrevWindowWords: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getPrevWindowWords');
+  },
+  setPrevWindowWords: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setPrevWindowWords', words);
+  },
   getNewWindowWords: async (): Promise<string> => {
     return ipcRenderer.invoke('hotmic:getNewWindowWords');
   },
@@ -3041,6 +3047,42 @@ const hotMicAPI = {
   },
   setSwitchWords: async (words: string): Promise<string> => {
     return ipcRenderer.invoke('hotmic:setSwitchWords', words);
+  },
+  getRunClaudeWords: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getRunClaudeWords');
+  },
+  setRunClaudeWords: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setRunClaudeWords', words);
+  },
+  getRestartServerWords: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getRestartServerWords');
+  },
+  setRestartServerWords: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setRestartServerWords', words);
+  },
+  getRestartServerCommand: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getRestartServerCommand');
+  },
+  setRestartServerCommand: async (command: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setRestartServerCommand', command);
+  },
+  getFocusPhrases: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getFocusPhrases');
+  },
+  setFocusPhrases: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setFocusPhrases', words);
+  },
+  getCascadePhrases: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getCascadePhrases');
+  },
+  setCascadePhrases: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setCascadePhrases', words);
+  },
+  getRectangleCommands: async (): Promise<Record<string, string>> => {
+    return ipcRenderer.invoke('hotmic:getRectangleCommands');
+  },
+  setRectangleCommands: async (commands: Record<string, string>): Promise<Record<string, string>> => {
+    return ipcRenderer.invoke('hotmic:setRectangleCommands', commands);
   },
   getKnownTerminals: async (): Promise<Array<{ name: string; bundleId: string }>> => {
     return ipcRenderer.invoke('hotmic:getKnownTerminals');

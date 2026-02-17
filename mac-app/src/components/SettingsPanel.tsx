@@ -9,6 +9,7 @@ import AudioSettingsPanel from './AudioSettingsPanel';
 import TranscriptionSettings from './TranscriptionSettings';
 import SoundsSettings from './SoundsSettings';
 import HotMicSettings from './HotMicSettings';
+import RectangleSettings from './RectangleSettings';
 import DiagnosticsModal from './DiagnosticsModal';
 import CommandsSettings from './CommandsSettings';
 import ClaudeSettings from './ClaudeSettings';
@@ -31,7 +32,8 @@ type SettingsSection =
   | 'sounds'
   | 'stats'
   | 'terminal-commands'
-  | 'hot-mic';
+  | 'hot-mic'
+  | 'rectangle';
 
 // Hotkey capture state - only one hotkey can be captured at a time
 type HotkeyCapture =
@@ -61,6 +63,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'stats': 'Stats',
   'terminal-commands': 'Allowlist',
   'hot-mic': 'Hot Mic',
+  'rectangle': 'Rectangle',
 };
 
 // Alphabetically ordered sections for navigation
@@ -74,6 +77,7 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'librarian',
   'commands', // Portable Commands
   'hot-mic', // Hot Mic
+  'rectangle', // Rectangle window management
   'sounds',
   'stats',
 ];
@@ -2104,6 +2108,13 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       {selectedSection === 'hot-mic' && (
       <div style={styles.section}>
         <HotMicSettings />
+      </div>
+      )}
+
+      {/* Rectangle Section */}
+      {selectedSection === 'rectangle' && (
+      <div style={styles.section}>
+        <RectangleSettings />
       </div>
       )}
 

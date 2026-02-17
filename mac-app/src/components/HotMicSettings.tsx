@@ -21,8 +21,14 @@ export default function HotMicSettings() {
   const [pasteWords, setPasteWords] = useState('');
   const [cancelWords, setCancelWords] = useState('');
   const [switchWords, setSwitchWords] = useState('');
+  const [prevWindowWords, setPrevWindowWords] = useState('');
   const [newWindowWords, setNewWindowWords] = useState('');
   const [closeWindowWords, setCloseWindowWords] = useState('');
+  const [runClaudeWords, setRunClaudeWords] = useState('');
+  const [focusPhrases, setFocusPhrases] = useState('');
+  const [cascadePhrases, setCascadePhrases] = useState('');
+  const [restartServerWords, setRestartServerWords] = useState('');
+  const [restartServerCommand, setRestartServerCommand] = useState('');
   const [showWordCount, setShowWordCount] = useState(false);
 
   const styles = getStyles(theme);
@@ -31,7 +37,7 @@ export default function HotMicSettings() {
     if (!window.hotMicAPI) return;
 
     const load = async () => {
-      const [en, target, sounds, terminals, state, hookStatus, submit, pw, cw, sw, nww, cww, wc] = await Promise.all([
+      const [en, target, sounds, terminals, state, hookStatus, submit, pw, cw, sw, pvw, nww, cww, rcw, fp, cp, rsw, rsc, wc] = await Promise.all([
         window.hotMicAPI!.getEnabled(),
         window.hotMicAPI!.getTargetApp(),
         window.hotMicAPI!.getSoundsEnabled(),
@@ -42,8 +48,14 @@ export default function HotMicSettings() {
         window.hotMicAPI!.getPasteWords(),
         window.hotMicAPI!.getCancelWords(),
         window.hotMicAPI!.getSwitchWords(),
+        window.hotMicAPI!.getPrevWindowWords(),
         window.hotMicAPI!.getNewWindowWords(),
         window.hotMicAPI!.getCloseWindowWords(),
+        window.hotMicAPI!.getRunClaudeWords(),
+        window.hotMicAPI!.getFocusPhrases(),
+        window.hotMicAPI!.getCascadePhrases(),
+        window.hotMicAPI!.getRestartServerWords(),
+        window.hotMicAPI!.getRestartServerCommand(),
         window.hotMicAPI!.getShowWordCount(),
       ]);
       setEnabled(en);
@@ -56,8 +68,14 @@ export default function HotMicSettings() {
       setPasteWords(pw);
       setCancelWords(cw);
       setSwitchWords(sw);
+      setPrevWindowWords(pvw);
       setNewWindowWords(nww);
       setCloseWindowWords(cww);
+      setRunClaudeWords(rcw);
+      setFocusPhrases(fp);
+      setCascadePhrases(cp);
+      setRestartServerWords(rsw);
+      setRestartServerCommand(rsc);
       setShowWordCount(wc);
 
       // Check if target is a known terminal or custom
@@ -121,6 +139,11 @@ export default function HotMicSettings() {
     await window.hotMicAPI.setCancelWords(cancelWords.trim());
   }, [cancelWords]);
 
+  const handlePrevWindowWordsSave = useCallback(async () => {
+    if (!window.hotMicAPI || !prevWindowWords.trim()) return;
+    await window.hotMicAPI.setPrevWindowWords(prevWindowWords.trim());
+  }, [prevWindowWords]);
+
   const handleNewWindowWordsSave = useCallback(async () => {
     if (!window.hotMicAPI || !newWindowWords.trim()) return;
     await window.hotMicAPI.setNewWindowWords(newWindowWords.trim());
@@ -130,6 +153,31 @@ export default function HotMicSettings() {
     if (!window.hotMicAPI || !closeWindowWords.trim()) return;
     await window.hotMicAPI.setCloseWindowWords(closeWindowWords.trim());
   }, [closeWindowWords]);
+
+  const handleRunClaudeWordsSave = useCallback(async () => {
+    if (!window.hotMicAPI || !runClaudeWords.trim()) return;
+    await window.hotMicAPI.setRunClaudeWords(runClaudeWords.trim());
+  }, [runClaudeWords]);
+
+  const handleFocusPhrasesSave = useCallback(async () => {
+    if (!window.hotMicAPI || !focusPhrases.trim()) return;
+    await window.hotMicAPI.setFocusPhrases(focusPhrases.trim());
+  }, [focusPhrases]);
+
+  const handleCascadePhrasesSave = useCallback(async () => {
+    if (!window.hotMicAPI || !cascadePhrases.trim()) return;
+    await window.hotMicAPI.setCascadePhrases(cascadePhrases.trim());
+  }, [cascadePhrases]);
+
+  const handleRestartServerWordsSave = useCallback(async () => {
+    if (!window.hotMicAPI || !restartServerWords.trim()) return;
+    await window.hotMicAPI.setRestartServerWords(restartServerWords.trim());
+  }, [restartServerWords]);
+
+  const handleRestartServerCommandSave = useCallback(async () => {
+    if (!window.hotMicAPI) return;
+    await window.hotMicAPI.setRestartServerCommand(restartServerCommand.trim());
+  }, [restartServerCommand]);
 
   const handleSwitchWordsSave = useCallback(async () => {
     if (!window.hotMicAPI || !switchWords.trim()) return;
@@ -326,6 +374,25 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
+      {/* Previous window phrases */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Previous Window Words</span>
+        <input
+          type="text"
+          value={prevWindowWords}
+          onChange={(e) => setPrevWindowWords(e.target.value)}
+          placeholder="back, previous"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handlePrevWindowWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handlePrevWindowWordsSave()}
+        />
+      </div>
+      <p style={styles.description}>
+        Say any of these to cycle to the previous window (Cmd+Shift+`).
+      </p>
+
+      <div style={styles.divider} />
+
       {/* New window phrases */}
       <div style={{ padding: '4px 0' }}>
         <span style={styles.rowLabel}>New Window Phrases</span>
@@ -360,6 +427,94 @@ export default function HotMicSettings() {
       </div>
       <p style={styles.description}>
         Say any of these to close the current window (Cmd+W).
+      </p>
+
+      <div style={styles.divider} />
+
+      {/* Focus phrases (next-display + center) */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Focus Phrases</span>
+        <input
+          type="text"
+          value={focusPhrases}
+          onChange={(e) => setFocusPhrases(e.target.value)}
+          placeholder="focus"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleFocusPhrasesSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleFocusPhrasesSave()}
+        />
+      </div>
+      <p style={styles.description}>
+        Say any of these to move the current window to the next display and center it.
+      </p>
+
+      <div style={styles.divider} />
+
+      {/* Cascade phrases (cascade-active-app + center) */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Cascade Phrases</span>
+        <input
+          type="text"
+          value={cascadePhrases}
+          onChange={(e) => setCascadePhrases(e.target.value)}
+          placeholder="cascade, spread out"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleCascadePhrasesSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleCascadePhrasesSave()}
+        />
+      </div>
+      <p style={styles.description}>
+        Say any of these to cascade the current app's windows and center them on screen.
+      </p>
+
+      <div style={styles.divider} />
+
+      {/* Run Claude phrases */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Run Claude Phrases</span>
+        <input
+          type="text"
+          value={runClaudeWords}
+          onChange={(e) => setRunClaudeWords(e.target.value)}
+          placeholder="start claude, start cloud, run claude"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleRunClaudeWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleRunClaudeWordsSave()}
+        />
+      </div>
+      <p style={styles.description}>
+        Say any of these to type "claude" and press Enter (starts a Claude Code session).
+      </p>
+
+      <div style={styles.divider} />
+
+      {/* Restart server */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Restart Server Phrases</span>
+        <input
+          type="text"
+          value={restartServerWords}
+          onChange={(e) => setRestartServerWords(e.target.value)}
+          placeholder="restart server, restart dev, restart dev server"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleRestartServerWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleRestartServerWordsSave()}
+        />
+      </div>
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Restart Server Command</span>
+        <input
+          type="text"
+          value={restartServerCommand}
+          onChange={(e) => setRestartServerCommand(e.target.value)}
+          placeholder="npm run dev"
+          style={{ ...styles.input, marginTop: '6px', width: '100%', fontFamily: 'monospace' }}
+          onBlur={handleRestartServerCommandSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleRestartServerCommandSave()}
+        />
+      </div>
+      <p style={styles.description}>
+        Say any trigger phrase to send Ctrl+C then run the configured command.
       </p>
 
       <div style={styles.divider} />

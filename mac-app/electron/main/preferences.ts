@@ -153,9 +153,16 @@ interface Preferences {
   hotMicPasteWords?: string; // Comma-separated words that flush buffer without submitting
   hotMicCancelWords?: string; // Comma-separated words that send Ctrl+C to terminal
   hotMicShowWordCount?: boolean; // Show word count on cursor indicator (default: false)
+  hotMicPrevWindowWords?: string; // Comma-separated words that cycle to previous window (Cmd+Shift+`)
   hotMicNewWindowWords?: string; // Comma-separated phrases that open a new window (Cmd+N)
   hotMicCloseWindowWords?: string; // Comma-separated phrases that close the window (Cmd+W)
   hotMicSwitchWords?: string; // Comma-separated words that trigger Cmd+` window cycling
+  hotMicRunClaudeWords?: string; // Comma-separated phrases that type "claude" and submit (start a session)
+  hotMicRestartServerWords?: string; // Comma-separated phrases that trigger restart (Ctrl+C then run command)
+  hotMicFocusPhrases?: string; // Comma-separated phrases that trigger focus (next-display + center)
+  hotMicCascadePhrases?: string; // Comma-separated phrases that trigger cascade + center
+  hotMicRectangleCommands?: Record<string, string>; // Rectangle action name → comma-separated trigger phrases
+  hotMicRestartServerCommand?: string; // Terminal command to run after Ctrl+C (e.g. "npm run dev")
   hotMicHotkey?: string; // Hotkey to toggle Hot Mic on/off (unset by default)
 }
 
