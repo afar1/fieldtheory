@@ -62,9 +62,7 @@ interface Preferences {
   continuousContextEnabled?: boolean;
   continuousContextHotkey?: string;
   
-  // Todo hotkey - opens clipboard history in todo view mode
-  todoHotkey?: string;
-  // Tasks tab visibility - hidden by default, toggled via Shift+Cmd+T
+  // Tasks tab visibility - hidden by default
   tasksTabEnabled?: boolean;
 
   // Previously hardcoded hotkeys - now customizable
@@ -169,8 +167,6 @@ const DEFAULT_PREFERENCES: Preferences = {
   continuousContextHotkey: 'Shift+Alt+4', // Default: Shift + screenshot hotkey
   abandonRecordingHotkey: 'Escape', // Default: Escape key to cancel recording
   abandonRecordingConfirmation: true, // Default: confirm before abandoning if there's audio
-  todoHotkey: 'Command+Shift+T', // Default: Cmd+Shift+T for todo list
-
   // Previously hardcoded hotkeys - now customizable
   superPasteHotkey: 'Command+Shift+V',
   commandLauncherHotkey: 'Command+Shift+K',
