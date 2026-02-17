@@ -83,10 +83,13 @@ export class HotMicManager extends EventEmitter {
   private chunkReadyListener: ((filePath: string) => void) | null = null;
   private hasSpeechSinceLastHarvest: boolean = false;
 
+  // Warmup promise — awaited before first transcription to avoid race with Qwen startup
+  private warmupPromise: Promise<void> | null = null;
+
   // Transcript buffer — accumulates chunks until submit word or silence discard
   private transcriptBuffer: string[] = [];
   private bufferDiscardTimer: NodeJS.Timeout | null = null;
-  private readonly DEFAULT_BUFFER_DISCARD_MS = 15_000;
+  private readonly DEFAULT_BUFFER_DISCARD_MS = 5_000;
 
   // Local HTTP server for hook triggers
   private server: http.Server | null = null;
@@ -388,8 +391,11 @@ export class HotMicManager extends EventEmitter {
     this.transcriptBuffer = [];
     this.setState('listening');
 
-    // Warm up transcription engine in parallel with recording start
-    this.externalWarmup?.().catch((err) => {
+    // Warm up transcription engine in parallel with recording start.
+    // Store the promise so onChunkReady can await it before the first transcription,
+    // preventing a race where a chunk arrives before the server is ready.
+    this.warmupPromise = this.externalWarmup?.() ?? null;
+    this.warmupPromise?.catch((err) => {
       log.error('Hot Mic: warmup failed:', err);
     });
 
@@ -530,6 +536,7 @@ export class HotMicManager extends EventEmitter {
       if (level > this.SPEECH_LEVEL_THRESHOLD) {
         // Show orange dot immediately on speech detection (don't wait for transcription)
         if (!this.hasSpeechSinceLastHarvest && this.state === 'listening') {
+          log.info(`Hot Mic: [dot] preemptive show (speech detected, level=${level.toFixed(3)})`);
           this.cursorStatusManager?.showHotMic();
         }
         this.hasSpeechSinceLastHarvest = true;
@@ -568,11 +575,21 @@ export class HotMicManager extends EventEmitter {
       const timeout = this.getBufferDiscardTimeout();
       this.bufferDiscardTimer = setTimeout(() => {
         this.bufferDiscardTimer = null;
-        if (this.state === 'listening' && this.transcriptBuffer.length > 0) {
-          log.info('Hot Mic: silence timeout, discarding buffer (%d chunks)', this.transcriptBuffer.length);
-          this.transcriptBuffer = [];
-          // Fade out the orange dot instead of hiding instantly
-          this.cursorStatusManager?.fadeOutHotMic();
+        if (this.state === 'listening') {
+          const hadContent = this.transcriptBuffer.length > 0;
+          if (hadContent) {
+            log.info('Hot Mic: silence timeout, discarding buffer (%d chunks)', this.transcriptBuffer.length);
+            this.transcriptBuffer = [];
+            // Fade out gracefully when discarding buffered speech
+            log.info('Hot Mic: [dot] discard timer fired, fading out (had content)');
+            this.cursorStatusManager?.fadeOutHotMic();
+          } else {
+            // No buffer content — dot was shown preemptively but nothing was
+            // buffered (e.g. command executed, or hallucination already handled).
+            // Hide instantly since there's nothing to visually "discard".
+            log.info('Hot Mic: [dot] discard timer fired, hiding (empty buffer)');
+            this.updateOrangeDot();
+          }
         }
       }, timeout);
     }
@@ -600,6 +617,13 @@ export class HotMicManager extends EventEmitter {
     this.hasSpeechSinceLastHarvest = false;
 
     try {
+      // Wait for warmup to complete before first transcription — prevents race
+      // where a chunk arrives before the Qwen server finishes loading
+      if (this.warmupPromise) {
+        await this.warmupPromise;
+        this.warmupPromise = null;
+      }
+
       // Transcribe the completed chunk — audio monitoring stays active
       const transcript = (await this.transcribe(wavPath)).replace(/\([^)]*\)/g, '').trim();
       const tPost = performance.now();
@@ -615,22 +639,32 @@ export class HotMicManager extends EventEmitter {
 
       if (this.isHallucination(transcript)) {
         log.info('Hot Mic: skipping hallucinated/empty chunk');
+        // Sync orange dot with buffer state — the dot may have been shown
+        // preemptively on speech detection, but if the chunk was a hallucination
+        // and the buffer is still empty, the dot needs to be hidden.
+        this.updateOrangeDot();
         // Tell Swift to stay in current mode
         this.nativeHelper.setHarvestMode(this.transcriptBuffer.length === 0 ? 'command' : 'dictation');
         return;
       }
 
       if (this.state === 'listening') {
-        this.processListeningChunk(transcript);
+        await this.processListeningChunk(transcript);
       } else if (this.state === 'recording') {
         // Legacy direct-paste mode
         this.processTranscriptDirectPaste(transcript);
       }
 
+      // After processing, always sync the orange dot — covers commands,
+      // submit/paste, and normal buffering in a single place
+      this.updateOrangeDot();
+
       // After processing, tell Swift which silence duration to use next
       this.nativeHelper.setHarvestMode(this.transcriptBuffer.length === 0 ? 'command' : 'dictation');
     } catch (error) {
       log.error('Hot Mic chunk error:', error);
+      // Sync orange dot — a failed transcription should not leave the dot lingering
+      this.updateOrangeDot();
     }
   }
 
@@ -654,6 +688,13 @@ export class HotMicManager extends EventEmitter {
       return;
     }
 
+    // Navigation command: cycle to the previous window (Cmd+Shift+`)
+    if (this.transcriptBuffer.length === 0 && this.isPrevWindowWord(lower)) {
+      log.info('Hot Mic: prev window command "%s" — cycling window back (Cmd+Shift+`)', lower);
+      exec('osascript -e \'tell application "System Events" to keystroke "`" using {command down, shift down}\'');
+      return;
+    }
+
     // New window command: open a new terminal window (Cmd+N)
     if (this.transcriptBuffer.length === 0 && this.isNewWindowPhrase(lower)) {
       log.info('Hot Mic: new window command "%s" — sending Cmd+N', lower);
@@ -670,7 +711,7 @@ export class HotMicManager extends EventEmitter {
 
     // Start Claude: type "claude" and submit
     const startClaude = lower.replace(/[.,!?;:]+/g, '').replace(/\s+/g, ' ').trim();
-    if (this.transcriptBuffer.length === 0 && (startClaude === 'start claude' || startClaude === 'start cloud')) {
+    if (this.transcriptBuffer.length === 0 && this.isRunClaudePhrase(startClaude)) {
       const target = this.getTypeTarget();
       if (target) {
         log.info('Hot Mic: start claude command — typing "claude" and submitting');
@@ -680,11 +721,61 @@ export class HotMicManager extends EventEmitter {
       return;
     }
 
+    // Restart server: Ctrl+C then type the configured command
+    if (this.transcriptBuffer.length === 0 && this.isRestartServerPhrase(startClaude)) {
+      const command = this.preferences.getPreference('hotMicRestartServerCommand');
+      const cmd = typeof command === 'string' && command.trim() ? command.trim() : '';
+      if (cmd) {
+        const target = this.getTypeTarget();
+        if (target) {
+          log.info('Hot Mic: restart server command — Ctrl+C then "%s"', cmd);
+          exec('osascript -e \'tell application "System Events" to keystroke "c" using control down\'');
+          // Wait for the process to terminate before typing the new command
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          const result = await this.nativeHelper.typeIntoApp(target, cmd, true);
+          if (result.success) this.playSound('paste');
+        }
+      } else {
+        log.info('Hot Mic: restart server command — no command configured, ignoring');
+      }
+      return;
+    }
+
     // Cancel command: send Ctrl+C to the terminal
     if (this.transcriptBuffer.length === 0 && this.isCancelPhrase(lower)) {
       log.info('Hot Mic: cancel command "%s" — sending Ctrl+C', lower);
       exec('osascript -e \'tell application "System Events" to keystroke "c" using control down\'');
       return;
+    }
+
+    // Focus command: move to next display, then center (compound Rectangle action)
+    if (this.transcriptBuffer.length === 0 && this.isFocusPhrase(lower)) {
+      log.info('Hot Mic: focus command "%s" — next-display then center', lower);
+      exec('open "rectangle://execute-action?name=next-display"');
+      setTimeout(() => {
+        exec('open "rectangle://execute-action?name=center"');
+      }, 300);
+      return;
+    }
+
+    // Cascade command: cascade current app's windows, then center (compound Rectangle action)
+    if (this.transcriptBuffer.length === 0 && this.isCascadePhrase(lower)) {
+      log.info('Hot Mic: cascade command "%s" — cascade-active-app then center', lower);
+      exec('open "rectangle://execute-action?name=cascade-active-app"');
+      setTimeout(() => {
+        exec('open "rectangle://execute-action?name=center"');
+      }, 300);
+      return;
+    }
+
+    // Rectangle window management commands
+    if (this.transcriptBuffer.length === 0) {
+      const rectAction = this.isRectangleCommand(lower);
+      if (rectAction) {
+        log.info('Hot Mic: rectangle command "%s" — triggering %s', lower, rectAction);
+        exec(`open "rectangle://execute-action?name=${rectAction}"`);
+        return;
+      }
     }
 
     // Auto-submit: if buffer is empty and chunk is a bare number/permission word,
@@ -783,6 +874,23 @@ export class HotMicManager extends EventEmitter {
   private static readonly DEFAULT_NEW_WINDOW_PHRASES = 'new window';
   private static readonly DEFAULT_CLOSE_WINDOW_PHRASES = 'close window, close the window, close this window';
   private static readonly DEFAULT_SWITCH_WORDS = 'next, switch';
+  private static readonly DEFAULT_PREV_WINDOW_WORDS = 'back, previous';
+  private static readonly DEFAULT_RUN_CLAUDE_PHRASES = 'start claude, start cloud, run claude';
+  private static readonly DEFAULT_RESTART_SERVER_PHRASES = 'restart server, restart dev, restart dev server';
+  private static readonly DEFAULT_FOCUS_PHRASES = 'focus';
+  private static readonly DEFAULT_CASCADE_PHRASES = 'cascade, spread out';
+  static readonly DEFAULT_RECTANGLE_COMMANDS: Record<string, string> = {
+    'tile-all': 'grid, tile, tile all',
+    'cascade-active-app': '',
+    'center': 'center',
+    'maximize': 'maximize, full screen',
+    'restore': 'restore, undo',
+    'left-half': 'left, snap left',
+    'right-half': 'right, snap right',
+    'larger': 'bigger, larger',
+    'smaller': 'smaller, shrink',
+    'next-display': 'other screen, next screen',
+  };
 
   private getSubmitPhrases(): string[][] {
     const pref = this.preferences.getPreference('hotMicSubmitWord');
@@ -868,6 +976,13 @@ export class HotMicManager extends EventEmitter {
     return phrases.includes(word);
   }
 
+  private isPrevWindowWord(word: string): boolean {
+    const pref = this.preferences.getPreference('hotMicPrevWindowWords');
+    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_PREV_WINDOW_WORDS;
+    const words = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
+    return words.includes(word);
+  }
+
   private isNewWindowPhrase(word: string): boolean {
     const pref = this.preferences.getPreference('hotMicNewWindowWords');
     const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_NEW_WINDOW_PHRASES;
@@ -880,6 +995,52 @@ export class HotMicManager extends EventEmitter {
     const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_CLOSE_WINDOW_PHRASES;
     const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
     return phrases.includes(word);
+  }
+
+  private isRunClaudePhrase(word: string): boolean {
+    const pref = this.preferences.getPreference('hotMicRunClaudeWords');
+    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_RUN_CLAUDE_PHRASES;
+    const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
+    return phrases.includes(word);
+  }
+
+  private isRestartServerPhrase(word: string): boolean {
+    const pref = this.preferences.getPreference('hotMicRestartServerWords');
+    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_RESTART_SERVER_PHRASES;
+    const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
+    return phrases.includes(word);
+  }
+
+  private isFocusPhrase(word: string): boolean {
+    const pref = this.preferences.getPreference('hotMicFocusPhrases');
+    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_FOCUS_PHRASES;
+    const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
+    return phrases.includes(word);
+  }
+
+  private isCascadePhrase(word: string): boolean {
+    const pref = this.preferences.getPreference('hotMicCascadePhrases');
+    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_CASCADE_PHRASES;
+    const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
+    return phrases.includes(word);
+  }
+
+  getRectangleCommands(): Record<string, string> {
+    const pref = this.preferences.getPreference('hotMicRectangleCommands');
+    return pref && typeof pref === 'object' ? pref : { ...HotMicManager.DEFAULT_RECTANGLE_COMMANDS };
+  }
+
+  /**
+   * Check if a phrase matches any configured Rectangle command.
+   * Returns the Rectangle action name or null.
+   */
+  private isRectangleCommand(phrase: string): string | null {
+    const commands = this.getRectangleCommands();
+    for (const [action, phrasesStr] of Object.entries(commands)) {
+      const phrases = phrasesStr.split(',').map(p => p.trim().toLowerCase()).filter(p => p.length > 0);
+      if (phrases.includes(phrase)) return action;
+    }
+    return null;
   }
 
   /**
@@ -933,10 +1094,12 @@ export class HotMicManager extends EventEmitter {
     if (!this.cursorStatusManager) return;
 
     if ((this.state === 'listening' && this.transcriptBuffer.length > 0) || this.state === 'recording') {
+      log.info('Hot Mic: [dot] show (state=%s, buffer=%d)', this.state, this.transcriptBuffer.length);
       this.cursorStatusManager.showHotMic();
       const showCount = this.preferences.getPreference('hotMicShowWordCount') === true;
       this.cursorStatusManager.setHotMicWordCount(showCount ? this.getBufferWordCount() : 0);
     } else {
+      log.info('Hot Mic: [dot] hide (state=%s, buffer=%d)', this.state, this.transcriptBuffer.length);
       this.cursorStatusManager.setHotMicWordCount(0);
       this.cursorStatusManager.hideHotMic();
     }
@@ -1127,6 +1290,7 @@ export class HotMicManager extends EventEmitter {
     this.stopBufferDiscardTimer();
     this.targetBundleId = null;
     this.transcriptBuffer = [];
+    this.warmupPromise = null;
 
     if (this.whisperProcess) {
       this.whisperProcess.kill();
@@ -1160,7 +1324,10 @@ export class HotMicManager extends EventEmitter {
 
       type StopHookEntry = { hooks?: Array<{ type?: string; command?: string }> };
       return (hooks.Stop as StopHookEntry[]).some(h =>
-        h.hooks?.some(hh => hh.command === HotMicManager.HOOK_COMMAND)
+        h.hooks?.some(hh =>
+          hh.command === HotMicManager.HOOK_COMMAND ||
+          (typeof hh.command === 'string' && hh.command.includes('127.0.0.1:19847/hotmic/'))
+        )
       );
     } catch {
       return false;
@@ -1252,7 +1419,10 @@ export class HotMicManager extends EventEmitter {
       if (Array.isArray(hooks.Stop)) {
         type StopHookEntry = { hooks?: Array<{ type?: string; command?: string }> };
         hooks.Stop = (hooks.Stop as StopHookEntry[]).filter(h =>
-          !h.hooks?.some(hh => hh.command === HotMicManager.HOOK_COMMAND)
+          !h.hooks?.some(hh =>
+            hh.command === HotMicManager.HOOK_COMMAND ||
+            (typeof hh.command === 'string' && hh.command.includes('127.0.0.1:19847/hotmic/'))
+          )
         );
         if (hooks.Stop.length === 0) {
           delete hooks.Stop;

@@ -698,6 +698,8 @@ export class AuthManager extends EventEmitter {
            msg.includes('timeout') ||
            msg.includes('econnrefused') ||
            msg.includes('etimedout') ||
+           msg.includes('enotfound') ||
+           msg.includes('enetunreach') ||
            msg.includes('socket');
   }
 
