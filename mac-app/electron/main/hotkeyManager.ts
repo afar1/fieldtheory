@@ -16,7 +16,6 @@ export type HotkeyId =
   | 'transcription'
   | 'transcriptionSecondary'
   | 'abandonRecording'
-  | 'todo'
   | 'superPaste'
   | 'commandLauncher'
   | 'improveText'
@@ -93,13 +92,6 @@ export const HOTKEY_CONFIGS: Record<HotkeyId, HotkeyConfig> = {
     preferenceKey: 'abandonRecordingHotkey',
     description: 'Cancel recording',
     category: 'transcription',
-  },
-  todo: {
-    id: 'todo',
-    defaultKey: 'Command+Shift+T',
-    preferenceKey: 'todoHotkey',
-    description: 'Open TODO list',
-    category: 'navigation',
   },
   superPaste: {
     id: 'superPaste',

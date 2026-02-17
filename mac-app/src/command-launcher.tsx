@@ -140,7 +140,6 @@ const DEFAULT_HOTKEYS = {
   activeWindow: 'Shift+Alt+3',
   history: 'Option+Space',
   transcription: 'Command+\\',
-  tasks: 'Shift+Command+T',
   superPaste: 'Shift+Command+V',
 };
 
@@ -209,16 +208,6 @@ function getBuiltInActions(hotkeys: typeof DEFAULT_HOTKEYS, isDarkMode: boolean)
       hotkey: hotkeys.superPaste,
       hotkeyDisplay: formatHotkeyDisplay(hotkeys.superPaste),
       actionId: 'super-paste',
-    },
-    {
-      id: 'action-tasks',
-      type: 'action',
-      name: 'tasks',
-      displayName: 'Toggle Tasks',
-      keywords: ['tasks', 'todos', 'todo', 'list', 'checklist'],
-      hotkey: hotkeys.tasks,
-      hotkeyDisplay: formatHotkeyDisplay(hotkeys.tasks),
-      actionId: 'toggle-tasks',
     },
     {
       id: 'action-history',
@@ -379,7 +368,6 @@ function CommandLauncher() {
         activeWindow: clipboardHotkeys.activeWindow || DEFAULT_HOTKEYS.activeWindow,
         history: clipboardHotkeys.history || DEFAULT_HOTKEYS.history,
         transcription: transcriptionHotkey as string || DEFAULT_HOTKEYS.transcription,
-        tasks: DEFAULT_HOTKEYS.tasks,
         superPaste: DEFAULT_HOTKEYS.superPaste,
       });
     } catch (err) {
