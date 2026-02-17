@@ -488,6 +488,7 @@ export class CursorStatusManager extends EventEmitter {
    * with a custom label, no auto-hide, no "Saved to Field Theory" fallback.
    */
   showHotMic(): void {
+    log.info('[dot] showHotMic called (current state=%s)', this.state);
     if (this.doneTimeout) {
       clearTimeout(this.doneTimeout);
       this.doneTimeout = null;
@@ -527,6 +528,7 @@ export class CursorStatusManager extends EventEmitter {
    * Hide the Hot Mic indicator immediately (no "done" or "Saved" transition).
    */
   hideHotMic(): void {
+    log.info('[dot] hideHotMic called (current state=%s)', this.state);
     if (this.state !== 'hot-mic') return;
     if (this.fadeOutTimer) {
       clearTimeout(this.fadeOutTimer);
@@ -541,6 +543,7 @@ export class CursorStatusManager extends EventEmitter {
    * Called when the buffer is discarded due to silence timeout.
    */
   fadeOutHotMic(): void {
+    log.info('[dot] fadeOutHotMic called (current state=%s)', this.state);
     if (!this.window || this.window.isDestroyed()) return;
     if (this.fadeOutTimer) {
       clearTimeout(this.fadeOutTimer);
