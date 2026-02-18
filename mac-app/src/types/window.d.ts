@@ -1280,6 +1280,126 @@ declare global {
     removeAllListeners: (event: string) => void;
   }
 
+  // =========================================================================
+  // Squares API - Window Management (Rectangle-inspired with animations)
+  // =========================================================================
+
+  /**
+   * Window frame: position and size in screen coordinates.
+   */
+  interface SquaresWindowFrame {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }
+
+  /**
+   * Info about a macOS window.
+   */
+  interface SquaresWindowInfo {
+    windowId: number;
+    ownerName: string;
+    ownerPID: number;
+    ownerBundleId: string;
+    title: string;
+    frame: SquaresWindowFrame;
+    isOnScreen: boolean;
+  }
+
+  /**
+   * Display/screen info.
+   */
+  interface SquaresScreenInfo {
+    id: number;
+    frame: SquaresWindowFrame;
+    visibleFrame: SquaresWindowFrame;
+    isPrimary: boolean;
+  }
+
+  /**
+   * Animation style for window transitions.
+   */
+  type SquaresAnimationStyle = 'none' | 'smooth' | 'snappy';
+
+  /**
+   * Squares configuration.
+   */
+  interface SquaresConfig {
+    enabled: boolean;
+    animationStyle: SquaresAnimationStyle;
+    animationDurationMs: number;
+    animationSteps: number;
+    gapSize: number;
+    maxHistorySize: number;
+  }
+
+  /**
+   * Squares hotkey assignments.
+   */
+  interface SquaresHotkeys {
+    leftHalf: string;
+    rightHalf: string;
+    topHalf: string;
+    bottomHalf: string;
+    topLeft: string;
+    topRight: string;
+    bottomLeft: string;
+    bottomRight: string;
+    firstThird: string;
+    centerThird: string;
+    lastThird: string;
+    firstTwoThirds: string;
+    lastTwoThirds: string;
+    maximize: string;
+    almostMaximize: string;
+    center: string;
+    restore: string;
+    grid: string;
+    focus: string;
+    horizontalSpread: string;
+    verticalSpread: string;
+    cascade: string;
+  }
+
+  /**
+   * All possible Squares actions.
+   */
+  type SquaresAction =
+    | 'leftHalf' | 'rightHalf' | 'topHalf' | 'bottomHalf'
+    | 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight'
+    | 'firstThird' | 'centerThird' | 'lastThird' | 'firstTwoThirds' | 'lastTwoThirds'
+    | 'maximize' | 'almostMaximize' | 'center' | 'restore'
+    | 'grid' | 'focus' | 'horizontalSpread' | 'verticalSpread' | 'cascade';
+
+  /**
+   * Squares API for window management.
+   * Controls Rectangle-style window snapping with smooth animations.
+   */
+  interface SquaresAPI {
+    // Execute a layout action (e.g., leftHalf, grid, focus)
+    executeAction: (action: SquaresAction) => Promise<boolean>;
+
+    // Window and screen discovery
+    getWindows: () => Promise<SquaresWindowInfo[]>;
+    getScreens: () => Promise<SquaresScreenInfo[]>;
+
+    // Configuration
+    getConfig: () => Promise<SquaresConfig>;
+    setConfig: (config: Partial<SquaresConfig>) => Promise<void>;
+    getHotkeys: () => Promise<SquaresHotkeys>;
+    setHotkeys: (hotkeys: Partial<SquaresHotkeys>) => Promise<void>;
+    resetHotkeys: () => Promise<void>;
+
+    // History / undo
+    getHistoryCount: () => Promise<number>;
+    clearHistory: () => Promise<void>;
+
+    // Events
+    onActionExecuted: (callback: (action: SquaresAction) => void) => () => void;
+    onConfigChanged: (callback: (config: SquaresConfig) => void) => () => void;
+  }
+
   interface Window {
     audioAPI?: AudioAPI;
     hotkeyAPI?: HotkeyAPI;
@@ -1304,6 +1424,7 @@ declare global {
     metricsAPI?: MetricsAPI;
     diagnosticsAPI?: DiagnosticsAPI;
     narrationAPI?: NarrationAPI;  // Stub - feature disabled
+    squaresAPI?: SquaresAPI;
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;
   }
