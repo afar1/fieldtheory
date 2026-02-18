@@ -694,7 +694,7 @@ export class HotMicManager extends EventEmitter {
    * Adds to buffer, checks for submit word and shortcut commands.
    */
   private async processListeningChunk(transcript: string): Promise<void> {
-    const trimmed = transcript.trim();
+    const trimmed = this.applyWordSubstitutions(transcript.trim());
     const stripped = trimmed.replace(/[.,!?;:]+$/, '').trim();
     const lower = stripped.toLowerCase();
 
@@ -827,11 +827,12 @@ export class HotMicManager extends EventEmitter {
     }
 
     // Check for paste word (flush buffer without submitting)
-    const { shouldPaste, cleanedText: pasteCleanedText } = this.checkPastePhrases(transcript);
+    const { shouldPaste, cleanedText: pasteCleanedText } = this.checkPastePhrases(trimmed);
 
     if (shouldPaste) {
+      log.info('Hot Mic: paste phrase matched in chunk: "%s"', trimmed);
       if (pasteCleanedText.trim()) {
-        this.transcriptBuffer.push(pasteCleanedText.trim());
+        this.transcriptBuffer.push(pasteCleanedText.trim().toLowerCase().replace(/\.+$/, '').trim());
       }
 
       const fullText = this.transcriptBuffer.join(' ');
@@ -842,6 +843,8 @@ export class HotMicManager extends EventEmitter {
       if (fullText && target) {
         let mappedText = this.applyMappings(fullText);
         mappedText = this.applyCommandDetection(mappedText);
+        // Trailing space so the next dictation flows naturally
+        mappedText = mappedText + ' ';
         log.info('Hot Mic: pasting buffer (%d chars, no submit) to %s: "%s"', mappedText.length, target, mappedText);
         const result = await this.nativeHelper.typeIntoApp(target, mappedText, false);
         if (!result.success) {
@@ -856,12 +859,13 @@ export class HotMicManager extends EventEmitter {
     }
 
     // Check for submit word
-    const { shouldSubmit, cleanedText } = this.checkSubmitPhrases(transcript);
+    const { shouldSubmit, cleanedText } = this.checkSubmitPhrases(trimmed);
 
     if (shouldSubmit) {
+      log.info('Hot Mic: submit phrase matched in chunk: "%s"', trimmed);
       // Add any remaining text before the submit word to buffer
       if (cleanedText.trim()) {
-        this.transcriptBuffer.push(cleanedText.trim());
+        this.transcriptBuffer.push(cleanedText.trim().toLowerCase().replace(/\.+$/, '').trim());
       }
 
       // Flush the entire buffer
@@ -891,8 +895,12 @@ export class HotMicManager extends EventEmitter {
     }
 
     // No submit word — add to buffer
-    this.transcriptBuffer.push(trimmed);
-    log.info('Hot Mic: buffered chunk (%d total): "%s"', this.transcriptBuffer.length, trimmed);
+    // Normalize for natural dictation: lowercase and strip trailing periods
+    // (Qwen treats each chunk as a standalone utterance, adding false sentence-ending
+    // periods at chunk boundaries). Internal periods and ?/! are preserved.
+    const normalized = trimmed.toLowerCase().replace(/\.+$/, '').trim();
+    this.transcriptBuffer.push(normalized);
+    log.info('Hot Mic: buffered chunk (%d total): "%s" (no submit/paste phrase matched)', this.transcriptBuffer.length, normalized);
     this.updateOrangeDot();
     this.resetBufferDiscardTimer();
   }
@@ -932,27 +940,77 @@ export class HotMicManager extends EventEmitter {
   }
 
   /**
-   * Check if the transcript ends with any of the submit phrases.
-   * Longer phrases are checked first to avoid partial matches.
+   * Check if a command phrase appears at the end of the transcript.
+   * 1. Peel trailing sentences that are entirely a command phrase
+   *    ("blah. Go ahead. Submit." → strip "Submit.", strip "Go ahead.")
+   * 2. Strip command phrase from the tail of the last remaining sentence
+   *    ("we're going to transcribe." → strip "transcribe" → "we're going to")
+   * 3. Fallback: check tail of entire text when there's no punctuation
    */
-  private checkSubmitPhrases(transcript: string): { shouldSubmit: boolean; cleanedText: string } {
-    const trimmed = transcript.trim();
+  private checkTrailingPhrase(text: string, phrases: string[][]): { matched: boolean; cleanedText: string } {
+    const trimmed = text.trim();
+
+    // Step 1: peel trailing sentences that are entirely a command phrase
+    const sentences = trimmed.split(/(?<=[.!?])\s+/);
+    let end = sentences.length;
+
+    while (end > 0) {
+      const sent = sentences[end - 1].replace(/[.,!?;:]+$/, '').trim();
+      const sentWords = sent.split(/\s+/);
+      let peeled = false;
+
+      for (const phraseWords of phrases) {
+        if (sentWords.length === phraseWords.length &&
+            sentWords.every((w, j) => w.toLowerCase() === phraseWords[j])) {
+          end--;
+          peeled = true;
+          break;
+        }
+      }
+
+      if (!peeled) break;
+    }
+
+    if (end < sentences.length) {
+      // Step 2: also strip command phrase from the tail of the last remaining sentence
+      let cleanedText = sentences.slice(0, end).join(' ').trim();
+      if (cleanedText) {
+        const lastStripped = cleanedText.replace(/[.,!?;:]+$/, '').trim();
+        const lastWords = lastStripped.split(/\s+/);
+        for (const phraseWords of phrases) {
+          const phraseLen = phraseWords.length;
+          if (lastWords.length >= phraseLen) {
+            const tail = lastWords.slice(-phraseLen).map(w => w.toLowerCase());
+            if (tail.every((w, j) => w === phraseWords[j])) {
+              cleanedText = lastWords.slice(0, -phraseLen).join(' ').trim();
+              break;
+            }
+          }
+        }
+      }
+      return { matched: true, cleanedText };
+    }
+
+    // Step 3: fallback — check tail of entire text (no punctuation)
     const stripped = trimmed.replace(/[.,!?;:]+$/, '').trim();
     const words = stripped.split(/\s+/);
-    const phrases = this.getSubmitPhrases().sort((a, b) => b.length - a.length);
-
     for (const phraseWords of phrases) {
       const phraseLen = phraseWords.length;
       if (words.length >= phraseLen) {
         const tail = words.slice(-phraseLen).map(w => w.toLowerCase());
         if (tail.every((w, i) => w === phraseWords[i])) {
           const remaining = words.slice(0, -phraseLen);
-          return { shouldSubmit: true, cleanedText: remaining.join(' ') };
+          return { matched: true, cleanedText: remaining.join(' ') };
         }
       }
     }
 
-    return { shouldSubmit: false, cleanedText: trimmed };
+    return { matched: false, cleanedText: trimmed };
+  }
+
+  private checkSubmitPhrases(transcript: string): { shouldSubmit: boolean; cleanedText: string } {
+    const { matched, cleanedText } = this.checkTrailingPhrase(transcript, this.getSubmitPhrases());
+    return { shouldSubmit: matched, cleanedText };
   }
 
   private getPastePhrases(): string[][] {
@@ -966,23 +1024,8 @@ export class HotMicManager extends EventEmitter {
   }
 
   private checkPastePhrases(transcript: string): { shouldPaste: boolean; cleanedText: string } {
-    const trimmed = transcript.trim();
-    const stripped = trimmed.replace(/[.,!?;:]+$/, '').trim();
-    const words = stripped.split(/\s+/);
-    const phrases = this.getPastePhrases().sort((a, b) => b.length - a.length);
-
-    for (const phraseWords of phrases) {
-      const phraseLen = phraseWords.length;
-      if (words.length >= phraseLen) {
-        const tail = words.slice(-phraseLen).map(w => w.toLowerCase());
-        if (tail.every((w, i) => w === phraseWords[i])) {
-          const remaining = words.slice(0, -phraseLen);
-          return { shouldPaste: true, cleanedText: remaining.join(' ') };
-        }
-      }
-    }
-
-    return { shouldPaste: false, cleanedText: trimmed };
+    const { matched, cleanedText } = this.checkTrailingPhrase(transcript, this.getPastePhrases());
+    return { shouldPaste: matched, cleanedText };
   }
 
   /**
@@ -1073,8 +1116,26 @@ export class HotMicManager extends EventEmitter {
   }
 
   /**
-   * Apply number/permission mappings if the text is a single mapped word.
+   * Apply user-configured word substitutions (e.g., "clod" → "claude").
+   * Uses word boundaries to avoid partial matches.
    */
+  private applyWordSubstitutions(text: string): string {
+    const substitutions = this.preferences.getPreference('wordSubstitutions') ?? [];
+    if (!substitutions || substitutions.length === 0) return text;
+
+    let result = text;
+    for (const { from, to } of substitutions) {
+      if (!from || from === to) continue;
+      const regex = new RegExp(`\\b${this.escapeRegex(from)}\\b`, 'gi');
+      result = result.replace(regex, to);
+    }
+    return result;
+  }
+
+  private escapeRegex(str: string): string {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
   private applyMappings(text: string): string {
     const lower = text.trim().replace(/[.,!?;:]+$/, '').trim().toLowerCase();
     const mappedNumber = NUMBER_MAP[lower];
@@ -1139,11 +1200,11 @@ export class HotMicManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   private async processTranscriptDirectPaste(transcript: string): Promise<void> {
-    const trimmed = transcript.trim();
+    const trimmed = this.applyWordSubstitutions(transcript.trim());
     const stripped = trimmed.replace(/[.,!?;:]+$/, '').trim();
     const lower = stripped.toLowerCase();
 
-    const { shouldSubmit, cleanedText } = this.checkSubmitPhrases(transcript);
+    const { shouldSubmit, cleanedText } = this.checkSubmitPhrases(trimmed);
 
     let textToInject = cleanedText.trim();
     if (!shouldSubmit) {
