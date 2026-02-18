@@ -112,6 +112,66 @@ const AMBIGUOUS_APP_NAMES = new Set([
 ]);
 
 /**
+ * System voice commands — maps action names to their osascript implementation
+ * and default trigger phrases. Each action sends a media key or system event.
+ */
+type SystemCommand = {
+  script: string;
+  defaultPhrases: string;
+  prefKey: string;
+};
+
+const SYSTEM_COMMANDS: Record<string, SystemCommand> = {
+  'play-pause': {
+    // Use osascript with Music (if running), else Spotify (if running), else fail silently.
+    // The "is running" check prevents launching the app.
+    script: `osascript -e 'if application "Music" is running then' -e 'tell application "Music" to playpause' -e 'else if application "Spotify" is running then' -e 'tell application "Spotify" to playpause' -e 'end if'`,
+    defaultPhrases: 'play, pause, play pause, play music, pause music',
+    prefKey: 'hotMicPlayPausePhrases',
+  },
+  'next-track': {
+    script: `osascript -e 'if application "Music" is running then' -e 'tell application "Music" to next track' -e 'else if application "Spotify" is running then' -e 'tell application "Spotify" to next track' -e 'end if'`,
+    defaultPhrases: 'next track, next song, skip, skip song',
+    prefKey: 'hotMicNextTrackPhrases',
+  },
+  'previous-track': {
+    script: `osascript -e 'if application "Music" is running then' -e 'tell application "Music" to previous track' -e 'else if application "Spotify" is running then' -e 'tell application "Spotify" to previous track' -e 'end if'`,
+    defaultPhrases: 'previous track, previous song, go back a song, last song',
+    prefKey: 'hotMicPrevTrackPhrases',
+  },
+  'volume-up': {
+    script: `osascript -e 'set volume output volume ((output volume of (get volume settings)) + 10)'`,
+    defaultPhrases: 'louder, volume up, turn it up',
+    prefKey: 'hotMicVolumeUpPhrases',
+  },
+  'volume-down': {
+    script: `osascript -e 'set volume output volume ((output volume of (get volume settings)) - 10)'`,
+    defaultPhrases: 'softer, quieter, volume down, turn it down',
+    prefKey: 'hotMicVolumeDownPhrases',
+  },
+  'mute': {
+    script: `osascript -e 'set volume with output muted'`,
+    defaultPhrases: 'mute, mute audio, silence',
+    prefKey: 'hotMicMutePhrases',
+  },
+  'unmute': {
+    script: `osascript -e 'set volume without output muted'`,
+    defaultPhrases: 'unmute, unmute audio',
+    prefKey: 'hotMicUnmutePhrases',
+  },
+  'sleep': {
+    script: `osascript -e 'tell application "System Events" to sleep'`,
+    defaultPhrases: 'sleep, go to sleep, sleep computer',
+    prefKey: 'hotMicSleepPhrases',
+  },
+  'lock': {
+    script: `osascript -e 'tell application "System Events" to keystroke "q" using {command down, control down}'`,
+    defaultPhrases: 'lock, lock screen, lock computer',
+    prefKey: 'hotMicLockPhrases',
+  },
+};
+
+/**
  * HotMicManager provides always-on voice input.
  *
  * When enabled, it continuously listens and transcribes speech into a rolling buffer.
@@ -879,6 +939,17 @@ export class HotMicManager extends EventEmitter {
       return;
     }
 
+    // System commands: media controls, volume, sleep, lock
+    if (this.transcriptBuffer.length === 0) {
+      const systemScript = this.matchSystemCommand(lower);
+      if (systemScript) {
+        log.info('Hot Mic: system command "%s"', lower);
+        exec(systemScript);
+        this.playSound('paste');
+        return;
+      }
+    }
+
     // Squares window management commands (snap left, grid, focus, etc.)
     // Use exact matching to avoid false triggers on multi-sentence chunks
     // like "right. snap left" (where only "snap left" is a command).
@@ -1198,6 +1269,22 @@ export class HotMicManager extends EventEmitter {
     const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
     // Match if the text exactly equals or ends with a restart phrase
     return phrases.some(p => text === p || text.endsWith(' ' + p));
+  }
+
+  /**
+   * Check if text matches a system command (media, volume, sleep, lock).
+   * Returns the osascript to execute, or null.
+   */
+  private matchSystemCommand(text: string): string | null {
+    for (const cmd of Object.values(SYSTEM_COMMANDS)) {
+      const pref = this.preferences.getPreference(cmd.prefKey as any);
+      const raw = typeof pref === 'string' && pref.trim() ? pref : cmd.defaultPhrases;
+      const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
+      if (phrases.includes(text)) {
+        return cmd.script;
+      }
+    }
+    return null;
   }
 
   // ── App switching (voice-triggered) ─────────────────────────────────

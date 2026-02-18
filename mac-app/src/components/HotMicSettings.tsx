@@ -37,6 +37,9 @@ export default function HotMicSettings() {
   const [newAliasWords, setNewAliasWords] = useState('');
   const [runningApps, setRunningApps] = useState<Array<{ bundleId: string; name: string }>>([]);
 
+  // System commands (media, volume, sleep, lock)
+  const [systemCmds, setSystemCmds] = useState<Record<string, string>>({});
+
   const styles = getStyles(theme);
 
   useEffect(() => {
@@ -83,6 +86,11 @@ export default function HotMicSettings() {
       setRestartServerWords(rsw);
       setRestartServerCommand(rsc);
       setShowWordCount(wc);
+
+      // Load system commands
+      window.hotMicAPI!.getSystemCommands().then(cmds => {
+        setSystemCmds(cmds || {});
+      });
 
       // Load app voice aliases
       window.clipboardAPI?.getAppVoiceAliases?.().then(aliases => {
@@ -219,6 +227,13 @@ export default function HotMicSettings() {
       setHookLoading(false);
     }
   }, [hookInstalled]);
+
+  const handleSystemCmdSave = useCallback(async (action: string) => {
+    const phrases = systemCmds[action];
+    if (phrases !== undefined) {
+      await window.hotMicAPI?.setSystemCommand(action, phrases.trim());
+    }
+  }, [systemCmds]);
 
   const handleAddAppAlias = useCallback(async () => {
     if (!newAliasApp.trim() || !newAliasWords.trim()) return;
@@ -561,6 +576,39 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
+      {/* System Commands */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>System Commands</span>
+        <p style={styles.description}>
+          Voice triggers for media playback, volume, and system controls.
+        </p>
+      </div>
+      {[
+        { action: 'play-pause', label: 'Play / Pause' },
+        { action: 'next-track', label: 'Next Track' },
+        { action: 'previous-track', label: 'Previous Track' },
+        { action: 'volume-up', label: 'Volume Up' },
+        { action: 'volume-down', label: 'Volume Down' },
+        { action: 'mute', label: 'Mute' },
+        { action: 'unmute', label: 'Unmute' },
+        { action: 'lock', label: 'Lock Screen' },
+        { action: 'sleep', label: 'Sleep' },
+      ].map(({ action, label }) => (
+        <div key={action} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 0' }}>
+          <span style={{ fontSize: '12px', color: theme.text, minWidth: '100px', flexShrink: 0 }}>{label}</span>
+          <input
+            type="text"
+            value={systemCmds[action] ?? ''}
+            onChange={(e) => setSystemCmds(prev => ({ ...prev, [action]: e.target.value }))}
+            style={{ ...styles.input, fontFamily: 'monospace' }}
+            onBlur={() => handleSystemCmdSave(action)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSystemCmdSave(action)}
+          />
+        </div>
+      ))}
+
+      <div style={styles.divider} />
+
       {/* App Voice Aliases */}
       <div style={{ padding: '4px 0' }}>
         <span style={styles.rowLabel}>App Voice Aliases</span>
@@ -615,13 +663,22 @@ export default function HotMicSettings() {
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
         <select
           value={newAliasApp}
-          onChange={(e) => setNewAliasApp(e.target.value)}
+          onChange={async (e) => {
+            if (e.target.value === '__browse__') {
+              const appName = await window.clipboardAPI?.browseForApp?.();
+              if (appName) setNewAliasApp(appName);
+              else e.target.value = newAliasApp; // reset if cancelled
+            } else {
+              setNewAliasApp(e.target.value);
+            }
+          }}
           style={{ ...styles.select, flex: 0, minWidth: '140px' }}
         >
           <option value="">Select app...</option>
           {runningApps.map(app => (
             <option key={app.bundleId} value={app.name}>{app.name}</option>
           ))}
+          <option value="__browse__">Other...</option>
         </select>
         <input
           type="text"

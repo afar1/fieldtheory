@@ -3826,6 +3826,23 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
+  ipcMain.handle('clipboard:browseForApp', async () => {
+    const parentWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    const result = await dialog.showOpenDialog(parentWindow as BrowserWindow, {
+      title: 'Select Application',
+      message: 'Choose an application',
+      defaultPath: '/Applications',
+      properties: ['openFile'],
+      filters: [{ name: 'Applications', extensions: ['app'] }],
+      buttonLabel: 'Select',
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    // Extract app name from path: "/Applications/Ghostty.app" → "Ghostty"
+    const appPath = result.filePaths[0];
+    const match = appPath.match(/([^/]+)\.app$/);
+    return match ? match[1] : null;
+  });
+
   // =========================================================================
   // Data Retention - how long to keep clipboard history
   // =========================================================================
@@ -5980,6 +5997,35 @@ if (!gotTheLock) {
     ipcMain.handle('hotmic:setRestartServerCommand', async (_event, command: string) => {
       await preferencesManager?.save({ hotMicRestartServerCommand: command });
       return command;
+    });
+
+    // System commands — media, volume, sleep, lock (stored as individual prefs)
+    const SYSTEM_CMD_PREF_KEYS: Record<string, { prefKey: string; defaults: string }> = {
+      'play-pause':     { prefKey: 'hotMicPlayPausePhrases',  defaults: 'play, pause, play pause, play music, pause music' },
+      'next-track':     { prefKey: 'hotMicNextTrackPhrases',  defaults: 'next track, next song, skip, skip song' },
+      'previous-track': { prefKey: 'hotMicPrevTrackPhrases',  defaults: 'previous track, previous song, go back a song, last song' },
+      'volume-up':      { prefKey: 'hotMicVolumeUpPhrases',   defaults: 'louder, volume up, turn it up' },
+      'volume-down':    { prefKey: 'hotMicVolumeDownPhrases', defaults: 'softer, quieter, volume down, turn it down' },
+      'mute':           { prefKey: 'hotMicMutePhrases',       defaults: 'mute, mute audio, silence' },
+      'unmute':         { prefKey: 'hotMicUnmutePhrases',     defaults: 'unmute, unmute audio' },
+      'sleep':          { prefKey: 'hotMicSleepPhrases',      defaults: 'sleep, go to sleep, sleep computer' },
+      'lock':           { prefKey: 'hotMicLockPhrases',       defaults: 'lock, lock screen, lock computer' },
+    };
+
+    ipcMain.handle('hotmic:getSystemCommands', () => {
+      const result: Record<string, string> = {};
+      for (const [action, { prefKey, defaults }] of Object.entries(SYSTEM_CMD_PREF_KEYS)) {
+        const val = preferencesManager?.getPreference(prefKey as any);
+        result[action] = typeof val === 'string' && val.trim() ? val : defaults;
+      }
+      return result;
+    });
+
+    ipcMain.handle('hotmic:setSystemCommand', async (_event, action: string, phrases: string) => {
+      const entry = SYSTEM_CMD_PREF_KEYS[action];
+      if (!entry) return false;
+      await preferencesManager?.save({ [entry.prefKey]: phrases } as any);
+      return true;
     });
 
     ipcMain.handle('hotmic:getFocusPhrases', () => {
