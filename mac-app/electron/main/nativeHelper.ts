@@ -6,6 +6,8 @@ import {
   AudioDevice,
   HelperOutgoingMessage,
   HelperIncomingCommand,
+  WindowMoveSpec,
+  NativeWindowInfo,
 } from './types/audio';
 import { createLogger } from './logger';
 
@@ -557,6 +559,125 @@ export class NativeHelper extends EventEmitter {
   }
 
   /**
+   * Animate one or more windows from start to end frames.
+   * Swift runs the interpolation loop internally using AX API (<1ms per frame).
+   * Returns true if animation completed successfully.
+   */
+  async animateWindows(
+    moves: WindowMoveSpec[],
+    config: { durationMs: number; steps: number; style: 'easeOutCubic' | 'easeOutBack' }
+  ): Promise<boolean> {
+    if (!this.child || !this.child.stdin.writable) {
+      return false;
+    }
+
+    await this.waitForReady();
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve(false);
+      }, config.durationMs + 2000); // animation duration + generous buffer
+
+      const onMessage = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'animationComplete') {
+          cleanup();
+          resolve(msg.success);
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', onMessage);
+      };
+
+      this.on('message', onMessage);
+      this.send({
+        type: 'animateWindows',
+        moves,
+        durationMs: config.durationMs,
+        steps: config.steps,
+        style: config.style,
+      });
+    });
+  }
+
+  /**
+   * Set a window's frame instantly (no animation).
+   * Returns true if successful.
+   */
+  async setWindowFrame(
+    pid: number,
+    title: string,
+    x: number,
+    y: number,
+    width: number,
+    height: number
+  ): Promise<boolean> {
+    if (!this.child || !this.child.stdin.writable) {
+      return false;
+    }
+
+    await this.waitForReady();
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve(false);
+      }, 2000);
+
+      const onMessage = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'windowFrameSet') {
+          cleanup();
+          resolve(msg.success);
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', onMessage);
+      };
+
+      this.on('message', onMessage);
+      this.send({ type: 'setWindowFrame', pid, title, x, y, width, height });
+    });
+  }
+
+  /**
+   * Get all on-screen windows via CGWindowListCopyWindowInfo (native, no JXA).
+   * Returns window info including PID, bundle ID, title, and bounds.
+   */
+  async getWindowList(): Promise<NativeWindowInfo[]> {
+    if (!this.child || !this.child.stdin.writable) {
+      return [];
+    }
+
+    await this.waitForReady();
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve([]);
+      }, 2000);
+
+      const onMessage = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'windowList') {
+          cleanup();
+          resolve(msg.windows);
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', onMessage);
+      };
+
+      this.on('message', onMessage);
+      this.send({ type: 'getWindowList' });
+    });
+  }
+
+  /**
    * Stop all currently playing sounds.
    */
   stopSounds(): void {
@@ -678,6 +799,13 @@ export class NativeHelper extends EventEmitter {
 
       case 'focusWindowByTitleResult':
         // Response to focusWindowByTitle - handled by promise listener.
+        this.emit('message', msg);
+        break;
+
+      case 'animationComplete':
+      case 'windowFrameSet':
+      case 'windowList':
+        // Responses to window animation commands - handled by promise listeners.
         this.emit('message', msg);
         break;
 
