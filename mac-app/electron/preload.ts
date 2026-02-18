@@ -2895,6 +2895,71 @@ const cursorAPI = {
 type CursorAPI = typeof cursorAPI;
 
 // =============================================================================
+// Squares API - Window Management (Rectangle-inspired with animations)
+// =============================================================================
+
+const SquaresIPCChannels = {
+  EXECUTE_ACTION: 'squares:executeAction',
+  GET_WINDOWS: 'squares:getWindows',
+  GET_SCREENS: 'squares:getScreens',
+  GET_CONFIG: 'squares:getConfig',
+  SET_CONFIG: 'squares:setConfig',
+  GET_HOTKEYS: 'squares:getHotkeys',
+  SET_HOTKEYS: 'squares:setHotkeys',
+  RESET_HOTKEYS: 'squares:resetHotkeys',
+  GET_HISTORY_COUNT: 'squares:getHistoryCount',
+  CLEAR_HISTORY: 'squares:clearHistory',
+  ACTION_EXECUTED: 'squares:actionExecuted',
+  CONFIG_CHANGED: 'squares:configChanged',
+} as const;
+
+const squaresAPI = {
+  // Execute a window management action (e.g., leftHalf, grid, focus)
+  executeAction: (action: string): Promise<boolean> =>
+    ipcRenderer.invoke(SquaresIPCChannels.EXECUTE_ACTION, action),
+
+  // Get all visible windows
+  getWindows: (): Promise<any[]> =>
+    ipcRenderer.invoke(SquaresIPCChannels.GET_WINDOWS),
+
+  // Get display/screen info
+  getScreens: (): Promise<any[]> =>
+    ipcRenderer.invoke(SquaresIPCChannels.GET_SCREENS),
+
+  // Configuration
+  getConfig: (): Promise<any> =>
+    ipcRenderer.invoke(SquaresIPCChannels.GET_CONFIG),
+  setConfig: (config: Record<string, any>): Promise<void> =>
+    ipcRenderer.invoke(SquaresIPCChannels.SET_CONFIG, config),
+  getHotkeys: (): Promise<any> =>
+    ipcRenderer.invoke(SquaresIPCChannels.GET_HOTKEYS),
+  setHotkeys: (hotkeys: Record<string, any>): Promise<void> =>
+    ipcRenderer.invoke(SquaresIPCChannels.SET_HOTKEYS, hotkeys),
+  resetHotkeys: (): Promise<void> =>
+    ipcRenderer.invoke(SquaresIPCChannels.RESET_HOTKEYS),
+
+  // History / undo
+  getHistoryCount: (): Promise<number> =>
+    ipcRenderer.invoke(SquaresIPCChannels.GET_HISTORY_COUNT),
+  clearHistory: (): Promise<void> =>
+    ipcRenderer.invoke(SquaresIPCChannels.CLEAR_HISTORY),
+
+  // Events
+  onActionExecuted: (callback: (action: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, action: string) => callback(action);
+    ipcRenderer.on(SquaresIPCChannels.ACTION_EXECUTED, handler);
+    return () => ipcRenderer.removeListener(SquaresIPCChannels.ACTION_EXECUTED, handler);
+  },
+  onConfigChanged: (callback: (config: any) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, config: any) => callback(config);
+    ipcRenderer.on(SquaresIPCChannels.CONFIG_CHANGED, handler);
+    return () => ipcRenderer.removeListener(SquaresIPCChannels.CONFIG_CHANGED, handler);
+  },
+};
+
+type SquaresAPIType = typeof squaresAPI;
+
+// =============================================================================
 // Scenario Testing API - Superadmin-only testing panel
 // =============================================================================
 
@@ -2970,6 +3035,7 @@ contextBridge.exposeInMainWorld('commandsAPI', commandsAPI);
 contextBridge.exposeInMainWorld('metricsAPI', metricsAPI);
 contextBridge.exposeInMainWorld('claudeAPI', claudeAPI);
 contextBridge.exposeInMainWorld('cursorAPI', cursorAPI);
+contextBridge.exposeInMainWorld('squaresAPI', squaresAPI);
 
 // Hot Mic API - continuous voice input for Claude Code terminals
 const hotMicAPI = {
@@ -3176,6 +3242,7 @@ declare global {
     commandsAPI: CommandsAPI;
     librarianAPI: LibrarianAPI;
     metricsAPI: MetricsAPI;
+    squaresAPI: SquaresAPIType;
     scenarioAPI: ScenarioAPI;
     stripeConfig: {
       paymentLink: string;
