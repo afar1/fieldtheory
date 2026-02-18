@@ -399,7 +399,7 @@ export class TranscriberManager extends EventEmitter {
         errorMessage += '. Single keys may not be supported. Try using a modifier key combination (e.g., Alt+Space, Command+K).';
       }
 
-      this.emit('error', new Error(errorMessage));
+      log.warn('Hotkey registration skipped: %s', errorMessage);
       return false;
     }
 
@@ -451,7 +451,7 @@ export class TranscriberManager extends EventEmitter {
       } else if (!hotkey.includes('+')) {
         errorMessage += '. Single keys may not be supported. Try using a modifier key combination (e.g., Alt+Space, Command+K).';
       }
-      this.emit('error', new Error(errorMessage));
+      log.warn('Hotkey registration skipped: %s', errorMessage);
       return false;
     }
 
@@ -1578,9 +1578,11 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
-   * Stop the persistent Qwen server process.
+   * Kill the Qwen server. Called on suspend/sleep so the process doesn't
+   * freeze and hang for 120s on wake. The next transcription request will
+   * restart it automatically.
    */
-  private stopQwenServer(): void {
+  stopQwenServer(): void {
     if (this.qwenProcess) {
       this.qwenProcess.kill('SIGTERM');
       this.qwenProcess = null;

@@ -233,16 +233,45 @@ export class HotkeyManager {
     return globalShortcut.isRegistered(key);
   }
 
-  /**
-   * Register a hotkey with a callback.
-   * Returns success/failure with error details.
-   */
+  // Valid non-modifier keys for Electron's globalShortcut (Chromium accelerators).
+  // See: https://www.electronjs.org/docs/latest/api/accelerator
+  private static readonly VALID_KEYS = new Set([
+    // Letters
+    'a','b','c','d','e','f','g','h','i','j','k','l','m',
+    'n','o','p','q','r','s','t','u','v','w','x','y','z',
+    // Digits
+    '0','1','2','3','4','5','6','7','8','9',
+    // Function keys
+    'f1','f2','f3','f4','f5','f6','f7','f8','f9','f10','f11','f12',
+    'f13','f14','f15','f16','f17','f18','f19','f20','f21','f22','f23','f24',
+    // Special keys
+    'space','tab','backspace','delete','insert','return','enter','escape','esc',
+    'up','down','left','right','home','end','pageup','pagedown',
+    'volumeup','volumedown','volumemute',
+    'medianexttrack','mediaprevioustrack','mediastop','mediaplaypause',
+    'printscreen','numpadadd','numpadsubtract','numlockenter',
+    'plus','minus','=','[',']',';','\'',',','.','/','`',
+  ]);
+
   register(id: HotkeyId, key: string, callback: HotkeyCallback): HotkeyResult {
     if (!key || key.trim() === '') {
       return { success: true }; // Empty key = intentionally disabled
     }
 
     const normalizedKey = this.normalizeKey(key);
+
+    // Validate that the non-modifier key is supported by Electron
+    const parts = normalizedKey.toLowerCase().split('+');
+    const modifiers = new Set(['command', 'control', 'ctrl', 'alt', 'shift', 'super', 'meta', 'commandorcontrol', 'cmdorctrl']);
+    const nonModifiers = parts.filter(p => !modifiers.has(p));
+    if (nonModifiers.length === 0 || nonModifiers.some(k => !HotkeyManager.VALID_KEYS.has(k))) {
+      const invalid = nonModifiers.filter(k => !HotkeyManager.VALID_KEYS.has(k));
+      log.error(`Invalid key in shortcut for ${id}: "${invalid.join(', ')}" — not supported by Electron`);
+      return {
+        success: false,
+        error: `Key "${invalid.join(', ')}" is not supported. Try a letter, number, or function key.`,
+      };
+    }
 
     // Check for internal conflicts
     const conflict = this.checkConflict(normalizedKey, id);
