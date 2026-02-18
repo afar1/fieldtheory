@@ -5570,8 +5570,19 @@ async function initTranscriberSystem(): Promise<void> {
   let wakeNetworkPoll: ReturnType<typeof setInterval> | null = null;
   let wakeNetworkTimeout: ReturnType<typeof setTimeout> | null = null;
 
+  powerMonitor.on('suspend', () => {
+    log.info('[PowerMonitor] System going to sleep, stopping Qwen server');
+    transcriberManager?.stopQwenServer();
+  });
+
   powerMonitor.on('resume', () => {
     log.info('[PowerMonitor] System resumed from sleep, checking token expiry');
+
+    // Pre-warm Qwen server if Hot Mic is active so it's ready when the user speaks
+    if (hotMicManager?.isActive) {
+      log.info('[PowerMonitor] Hot Mic active, pre-warming Qwen server');
+      transcriberManager?.warmup().catch(() => {});
+    }
 
     // Cancel any previous wake poll (e.g., rapid sleep/wake cycles)
     if (wakeNetworkPoll) { clearInterval(wakeNetworkPoll); wakeNetworkPoll = null; }
