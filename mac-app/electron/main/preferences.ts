@@ -164,6 +164,17 @@ interface Preferences {
   hotMicHotkey?: string; // Hotkey to toggle Hot Mic on/off (unset by default)
   hotMicAppAliases?: Array<{ appName: string; aliases: string }>; // Voice aliases for app switching
 
+  // System voice commands — user-customizable trigger phrases
+  hotMicPlayPausePhrases?: string;
+  hotMicNextTrackPhrases?: string;
+  hotMicPrevTrackPhrases?: string;
+  hotMicVolumeUpPhrases?: string;
+  hotMicVolumeDownPhrases?: string;
+  hotMicMutePhrases?: string;
+  hotMicUnmutePhrases?: string;
+  hotMicSleepPhrases?: string;
+  hotMicLockPhrases?: string;
+
   // Squares - window management config and hotkeys.
   // Rectangle-inspired snapping with smooth animations.
   squaresConfig?: any;   // SquaresConfig from types/squares.ts
