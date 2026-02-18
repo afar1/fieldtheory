@@ -50,6 +50,7 @@ import { MetricsManager, UserMetrics } from './metricsManager';
 import { MESSAGES } from './messages';
 import { TodoStore, Todo } from './todoStore';
 import { TodoIPCChannels } from './types/todo';
+import { detectSSHSession, scpToRemote, SSHTarget } from './sshDetector';
 
 const log = createLogger('Main');
 
@@ -395,16 +396,24 @@ function registerHotkeysAfterOnboarding(): void {
       const execAsync = promisify(exec);
 
       let bundleId = '';
+      let frontmostPid = 0;
       let isTerminal = false;
       try {
         const script = `
           tell application "System Events"
             set frontApp to first application process whose frontmost is true
-            return (bundle identifier of frontApp)
+            return (bundle identifier of frontApp) & "|" & (unix id of frontApp)
           end tell
         `;
         const { stdout } = await execAsync(`osascript -e '${script}'`);
-        bundleId = stdout.trim();
+        const rawOutput = stdout.trim();
+        const pipeIdx = rawOutput.lastIndexOf('|');
+        if (pipeIdx !== -1) {
+          bundleId = rawOutput.substring(0, pipeIdx);
+          frontmostPid = parseInt(rawOutput.substring(pipeIdx + 1), 10) || 0;
+        } else {
+          bundleId = rawOutput;
+        }
 
         // If frontmost app is Field Theory itself, use the previous app instead
         // This handles cases where super paste is triggered while Field Theory UI is visible
@@ -415,6 +424,12 @@ function registerHotkeysAfterOnboarding(): void {
           const previousApp = clipboardHistoryWindow.getPreviousApp();
           if (previousApp?.bundleId) {
             bundleId = previousApp.bundleId;
+            try {
+              const safeBundleId = previousApp.bundleId.replace(/["\\]/g, '');
+              const pidScript = `tell application "System Events" to return unix id of (first application process whose bundle identifier is "${safeBundleId}")`;
+              const { stdout: pidOut } = await execAsync(`osascript -e '${pidScript}'`);
+              frontmostPid = parseInt(pidOut.trim(), 10) || 0;
+            } catch { /* frontmostPid stays 0, SSH detection skipped */ }
           }
         }
 
@@ -423,6 +438,19 @@ function registerHotkeysAfterOnboarding(): void {
       } catch (e) {
         log.error('Super Paste: failed to get frontmost app:', e);
       }
+
+      let sshTarget: SSHTarget | null = null;
+      if (isTerminal && frontmostPid) {
+        sshTarget = await detectSSHSession(frontmostPid);
+      }
+
+      const resolveImagePath = async (localPath: string): Promise<string> => {
+        if (sshTarget) {
+          const remotePath = await scpToRemote(localPath, sshTarget.destination);
+          if (remotePath) return remotePath;
+        }
+        return localPath;
+      };
 
       try {
         // If Field Theory is visible, hide it to restore previous focus state
@@ -453,8 +481,9 @@ function registerHotkeysAfterOnboarding(): void {
             for (const item of imageItems) {
               const imagePath = await clipboardManager.exportImageToCache(item);
               if (imagePath) {
+                const resolvedPath = await resolveImagePath(imagePath);
                 const label = item.figureLabel || '';
-                combinedText += `[Figure ${label}] ${imagePath}\n`;
+                combinedText += `[Figure ${label}] ${resolvedPath}\n`;
               }
             }
           }
@@ -474,7 +503,8 @@ function registerHotkeysAfterOnboarding(): void {
               if (isTerminal) {
                 const imagePath = await clipboardManager.exportImageToCache(item);
                 if (imagePath) {
-                  clipboard.writeText(imagePath);
+                  const resolvedPath = await resolveImagePath(imagePath);
+                  clipboard.writeText(resolvedPath);
                   await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
                 }
               } else {
