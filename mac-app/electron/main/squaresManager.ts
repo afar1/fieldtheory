@@ -7,7 +7,9 @@
 import { EventEmitter } from 'events';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { screen, globalShortcut } from 'electron';
+import { screen, globalShortcut, app } from 'electron';
+import path from 'path';
+import fs from 'fs';
 import { PreferencesManager } from './preferences';
 import { createLogger } from './logger';
 import {
@@ -56,14 +58,23 @@ async function runAppleScript(script: string): Promise<string> {
 
 /**
  * Run a JXA (JavaScript for Automation) script.
- * JXA is faster and more reliable than AppleScript for complex tasks.
+ * Uses a temp file to avoid shell quoting issues with complex JS.
  */
 async function runJXA(script: string): Promise<string> {
-  const { stdout } = await execAsync(
-    `osascript -l JavaScript -e '${script.replace(/'/g, "'\\''")}'`,
-    { timeout: APPLESCRIPT_TIMEOUT_MS }
-  );
-  return stdout.trim();
+  const tmpDir = app.getPath('temp');
+  const tmpFile = path.join(tmpDir, `squares-jxa-${Date.now()}.js`);
+
+  try {
+    fs.writeFileSync(tmpFile, script, 'utf-8');
+    const { stdout } = await execAsync(
+      `osascript -l JavaScript "${tmpFile}"`,
+      { timeout: APPLESCRIPT_TIMEOUT_MS }
+    );
+    return stdout.trim();
+  } finally {
+    // Clean up temp file.
+    try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+  }
 }
 
 
