@@ -51,6 +51,9 @@ import { MESSAGES } from './messages';
 import { TodoStore, Todo } from './todoStore';
 import { TodoIPCChannels } from './types/todo';
 import { HotMicManager, KNOWN_TERMINALS } from './hotMicManager';
+import { detectSSHSession, scpToRemote, SSHTarget } from './sshDetector';
+import { SquaresManager } from './squaresManager';
+import { SquaresIPCChannels, SquaresAction } from './types/squares';
 
 const log = createLogger('Main');
 
@@ -169,6 +172,7 @@ let commandLauncherWindow: CommandLauncherWindow | null = null;
 let metricsManager: MetricsManager | null = null;
 let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
+let squaresManager: SquaresManager | null = null;
 
 // Track pending update state so windows can query it when they open.
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
@@ -268,6 +272,11 @@ function registerHotkeysAfterOnboarding(): void {
   // Re-register transcription hotkeys (may have been unregistered during sign-out or onboarding reset)
   if (transcriberManager) {
     transcriberManager.reRegisterHotkeys();
+  }
+
+  // Register Squares window management hotkeys.
+  if (squaresManager) {
+    squaresManager.registerHotkeys();
   }
 
   const prefs = preferencesManager.get();
@@ -397,16 +406,24 @@ function registerHotkeysAfterOnboarding(): void {
       const execAsync = promisify(exec);
 
       let bundleId = '';
+      let frontmostPid = 0;
       let isTerminal = false;
       try {
         const script = `
           tell application "System Events"
             set frontApp to first application process whose frontmost is true
-            return (bundle identifier of frontApp)
+            return (bundle identifier of frontApp) & "|" & (unix id of frontApp)
           end tell
         `;
         const { stdout } = await execAsync(`osascript -e '${script}'`);
-        bundleId = stdout.trim();
+        const rawOutput = stdout.trim();
+        const pipeIdx = rawOutput.lastIndexOf('|');
+        if (pipeIdx !== -1) {
+          bundleId = rawOutput.substring(0, pipeIdx);
+          frontmostPid = parseInt(rawOutput.substring(pipeIdx + 1), 10) || 0;
+        } else {
+          bundleId = rawOutput;
+        }
 
         // If frontmost app is Field Theory itself, use the previous app instead
         // This handles cases where super paste is triggered while Field Theory UI is visible
@@ -417,6 +434,12 @@ function registerHotkeysAfterOnboarding(): void {
           const previousApp = clipboardHistoryWindow.getPreviousApp();
           if (previousApp?.bundleId) {
             bundleId = previousApp.bundleId;
+            try {
+              const safeBundleId = previousApp.bundleId.replace(/["\\]/g, '');
+              const pidScript = `tell application "System Events" to return unix id of (first application process whose bundle identifier is "${safeBundleId}")`;
+              const { stdout: pidOut } = await execAsync(`osascript -e '${pidScript}'`);
+              frontmostPid = parseInt(pidOut.trim(), 10) || 0;
+            } catch { /* frontmostPid stays 0, SSH detection skipped */ }
           }
         }
 
@@ -425,6 +448,19 @@ function registerHotkeysAfterOnboarding(): void {
       } catch (e) {
         log.error('Super Paste: failed to get frontmost app:', e);
       }
+
+      let sshTarget: SSHTarget | null = null;
+      if (isTerminal && frontmostPid) {
+        sshTarget = await detectSSHSession(frontmostPid);
+      }
+
+      const resolveImagePath = async (localPath: string): Promise<string> => {
+        if (sshTarget) {
+          const remotePath = await scpToRemote(localPath, sshTarget.destination);
+          if (remotePath) return remotePath;
+        }
+        return localPath;
+      };
 
       try {
         // If Field Theory is visible, hide it to restore previous focus state
@@ -455,8 +491,9 @@ function registerHotkeysAfterOnboarding(): void {
             for (const item of imageItems) {
               const imagePath = await clipboardManager.exportImageToCache(item);
               if (imagePath) {
+                const resolvedPath = await resolveImagePath(imagePath);
                 const label = item.figureLabel || '';
-                combinedText += `[Figure ${label}] ${imagePath}\n`;
+                combinedText += `[Figure ${label}] ${resolvedPath}\n`;
               }
             }
           }
@@ -476,7 +513,8 @@ function registerHotkeysAfterOnboarding(): void {
               if (isTerminal) {
                 const imagePath = await clipboardManager.exportImageToCache(item);
                 if (imagePath) {
-                  clipboard.writeText(imagePath);
+                  const resolvedPath = await resolveImagePath(imagePath);
+                  clipboard.writeText(resolvedPath);
                   await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
                 }
               } else {
@@ -1875,6 +1913,56 @@ function setupLibrarianIPCHandlers(): void {
 }
 
 /**
+ * Set up IPC handlers for Squares window management.
+ */
+function setupSquaresIPCHandlers(): void {
+  // Execute a window management action (e.g., leftHalf, grid, focus)
+  ipcMain.handle(SquaresIPCChannels.EXECUTE_ACTION, async (_event, action: SquaresAction) => {
+    return squaresManager?.executeAction(action) ?? false;
+  });
+
+  // Get all visible windows
+  ipcMain.handle(SquaresIPCChannels.GET_WINDOWS, async () => {
+    return squaresManager?.getWindows() ?? [];
+  });
+
+  // Get display/screen info
+  ipcMain.handle(SquaresIPCChannels.GET_SCREENS, () => {
+    return squaresManager?.getScreens() ?? [];
+  });
+
+  // Configuration
+  ipcMain.handle(SquaresIPCChannels.GET_CONFIG, () => {
+    return squaresManager?.getConfig() ?? null;
+  });
+
+  ipcMain.handle(SquaresIPCChannels.SET_CONFIG, async (_event, config: Record<string, any>) => {
+    await squaresManager?.setConfig(config);
+  });
+
+  ipcMain.handle(SquaresIPCChannels.GET_HOTKEYS, () => {
+    return squaresManager?.getHotkeys() ?? null;
+  });
+
+  ipcMain.handle(SquaresIPCChannels.SET_HOTKEYS, async (_event, hotkeys: Record<string, any>) => {
+    await squaresManager?.setHotkeys(hotkeys);
+  });
+
+  ipcMain.handle(SquaresIPCChannels.RESET_HOTKEYS, async () => {
+    await squaresManager?.resetHotkeys();
+  });
+
+  // History / undo
+  ipcMain.handle(SquaresIPCChannels.GET_HISTORY_COUNT, () => {
+    return squaresManager?.getHistoryCount() ?? 0;
+  });
+
+  ipcMain.handle(SquaresIPCChannels.CLEAR_HISTORY, () => {
+    squaresManager?.clearHistory();
+  });
+}
+
+/**
  * Set up all IPC handlers for transcription-related communication.
  */
 function setupTranscribeIPCHandlers(): void {
@@ -2980,6 +3068,9 @@ function setupClipboardIPCHandlers(): void {
     // Unregister all hotkeys via HotkeyManager
     const hotkeyManager = getHotkeyManager();
     hotkeyManager.unregisterAll();
+
+    // Unregister Squares window management hotkeys.
+    squaresManager?.unregisterHotkeys();
 
     // Clean up LibrarianManager (stop file watchers, close database)
     librarianManager?.destroy();
@@ -5233,11 +5324,36 @@ async function initTranscriberSystem(): Promise<void> {
     diagnosticsCollector.setAudioManager(audioManager);
   }
 
+  // Initialize Squares window management.
+  // Rectangle-inspired snapping with smooth animations.
+  squaresManager = new SquaresManager(preferencesManager);
+
+  // Broadcast Squares events to all renderer windows.
+  squaresManager.on('actionExecuted', (action: SquaresAction) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(SquaresIPCChannels.ACTION_EXECUTED, action);
+      }
+    });
+  });
+
+  squaresManager.on('configChanged', (config: any) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(SquaresIPCChannels.CONFIG_CHANGED, config);
+      }
+    });
+  });
+
   // Initialize commands manager for portable commands feature.
   commandsManager = new CommandsManager();
 
   // Wire up commands manager to transcriber and hot mic for command detection.
   if (transcriberManager) {
+    // Connect Squares for voice-triggered window management (e.g., "grid", "focus").
+    if (squaresManager) {
+      transcriberManager.setSquaresManager(squaresManager);
+    }
     transcriberManager.setCommandsManager(commandsManager);
     // Provide access token getter for cloud-based transcript improvement.
     transcriberManager.setAccessTokenGetter(() => authManager?.getSession()?.access_token);
@@ -5668,6 +5784,7 @@ if (!gotTheLock) {
     setupIPCHandlers();
     setupThemeIPCHandlers();
     setupLibrarianIPCHandlers();
+    setupSquaresIPCHandlers();
     setupTranscribeIPCHandlers();
     setupClipboardIPCHandlers();
     setupOnboardingIPCHandlers();
