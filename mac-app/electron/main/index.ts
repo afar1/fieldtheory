@@ -553,39 +553,6 @@ function registerHotkeysAfterOnboarding(): void {
     await handleImproveSelectedText();
   });
 
-  // Register Todo hotkey - toggles tasks tab visibility (hidden by default)
-  const todoHotkey = prefs.todoHotkey || 'Command+Shift+T';
-  hotkeyManager.register('todo', todoHotkey, async () => {
-    if (!preferencesManager) return;
-
-    // Toggle the tasksTabEnabled preference
-    const currentEnabled = preferencesManager.getPreference('tasksTabEnabled') ?? false;
-    const newEnabled = !currentEnabled;
-    await preferencesManager.save({ tasksTabEnabled: newEnabled });
-
-    if (!clipboardHistoryWindow) {
-      clipboardHistoryWindow = initClipboardHistoryWindow();
-    }
-
-    const win = clipboardHistoryWindow.getWindow();
-    if (!win || win.isDestroyed()) return;
-
-    // Broadcast the tab visibility change
-    win.webContents.send('clipboard:tasksTabToggled', newEnabled);
-
-    // If enabling, show the window and switch to Tasks view
-    if (newEnabled) {
-      if (!clipboardHistoryWindow.isShowing()) {
-        clipboardHistoryWindow.playOpenSound();
-        const boundsToUse = restoreClipboardHistoryBounds();
-        clipboardHistoryWindow.show(boundsToUse, false, true);
-        clipboardHistoryWindow.capturePreviousAppBeforeShow();
-      }
-      // Switch to Tasks view
-      win.webContents.send(TodoIPCChannels.SHOW_TODOS);
-    }
-  });
-
 }
 
 /**
