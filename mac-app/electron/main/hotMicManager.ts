@@ -115,6 +115,9 @@ export class HotMicManager extends EventEmitter {
   private externalTranscribe: ((wavPath: string) => Promise<string>) | null = null;
   private externalWarmup: (() => Promise<void>) | null = null;
 
+  // Squares window management (voice-triggered snapping)
+  private squaresManager: { handleVoiceCommand(text: string): Promise<boolean> } | null = null;
+
   constructor(
     nativeHelper: NativeHelper,
     preferences: PreferencesManager,
@@ -279,6 +282,10 @@ export class HotMicManager extends EventEmitter {
 
   setWarmupFunction(fn: () => Promise<void>): void {
     this.externalWarmup = fn;
+  }
+
+  setSquaresManager(manager: { handleVoiceCommand(text: string): Promise<boolean> }): void {
+    this.squaresManager = manager;
   }
 
   getState(): HotMicState {
@@ -604,7 +611,11 @@ export class HotMicManager extends EventEmitter {
 
   private getBufferDiscardTimeout(): number {
     const pref = this.preferences.getPreference('hotMicBufferDiscardMs');
-    return typeof pref === 'number' && pref > 0 ? pref : this.DEFAULT_BUFFER_DISCARD_MS;
+    const base = typeof pref === 'number' && pref > 0 ? pref : this.DEFAULT_BUFFER_DISCARD_MS;
+    // Scale timeout with buffer size — more buffered speech = more patience.
+    // Each chunk adds 2s, so 1 chunk = 7s, 5 chunks = 15s, 16 chunks = 37s.
+    const scaled = base + this.transcriptBuffer.length * 2_000;
+    return scaled;
   }
 
   // ---------------------------------------------------------------------------
@@ -766,6 +777,16 @@ export class HotMicManager extends EventEmitter {
         exec('open "rectangle://execute-action?name=center"');
       }, 300);
       return;
+    }
+
+    // Squares window management commands (snap left, grid, focus, etc.)
+    if (this.transcriptBuffer.length === 0 && this.squaresManager) {
+      const handled = await this.squaresManager.handleVoiceCommand(lower);
+      if (handled) {
+        log.info('Hot Mic: squares command "%s" executed', lower);
+        this.playSound('paste');
+        return;
+      }
     }
 
     // Rectangle window management commands
