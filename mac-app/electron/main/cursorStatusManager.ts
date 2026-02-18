@@ -539,45 +539,56 @@ export class CursorStatusManager extends EventEmitter {
   }
 
   /**
-   * Fade out the Hot Mic indicator over ~500ms, then hide.
-   * Called when the buffer is discarded due to silence timeout.
+   * Blink the Hot Mic indicator on/off for ~2 seconds, then hide.
+   * Called when the buffer is about to be discarded due to silence timeout.
+   * The blinking warns the user that their buffered speech will be lost.
    */
-  fadeOutHotMic(): void {
-    log.info('[dot] fadeOutHotMic called (current state=%s)', this.state);
+  blinkThenHideHotMic(): void {
+    log.info('[dot] blinkThenHideHotMic called (current state=%s)', this.state);
     if (!this.window || this.window.isDestroyed()) return;
     if (this.fadeOutTimer) {
       clearTimeout(this.fadeOutTimer);
       this.fadeOutTimer = null;
     }
 
-    const steps = 10;
-    const totalMs = 500;
-    const interval = totalMs / steps;
-    let step = 0;
+    const blinkOnMs = 250;
+    const blinkOffMs = 250;
+    const totalBlinks = 4; // 4 full on/off cycles = 2 seconds
+    let blink = 0;
+    let visible = true;
 
     const tick = () => {
-      step++;
       if (!this.window || this.window.isDestroyed()) {
         this.fadeOutTimer = null;
         return;
       }
-      const opacity = 1 - step / steps;
-      this.window.setOpacity(Math.max(0, opacity));
 
-      if (step >= steps) {
-        this.fadeOutTimer = null;
-        this.state = 'idle';
-        this.hide();
-        // Restore opacity for next show
-        if (this.window && !this.window.isDestroyed()) {
-          this.window.setOpacity(1);
-        }
+      if (visible) {
+        // Turn off
+        this.window.setOpacity(0);
+        visible = false;
+        this.fadeOutTimer = setTimeout(tick, blinkOffMs);
       } else {
-        this.fadeOutTimer = setTimeout(tick, interval);
+        // Turn on
+        blink++;
+        if (blink >= totalBlinks) {
+          // Done blinking — hide for good
+          this.fadeOutTimer = null;
+          this.state = 'idle';
+          this.hide();
+          if (this.window && !this.window.isDestroyed()) {
+            this.window.setOpacity(1);
+          }
+        } else {
+          this.window.setOpacity(1);
+          visible = true;
+          this.fadeOutTimer = setTimeout(tick, blinkOnMs);
+        }
       }
     };
 
-    this.fadeOutTimer = setTimeout(tick, interval);
+    // Start first blink after being visible for one on-period
+    this.fadeOutTimer = setTimeout(tick, blinkOnMs);
   }
 
   /**

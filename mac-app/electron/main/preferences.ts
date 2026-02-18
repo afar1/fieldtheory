@@ -162,6 +162,7 @@ interface Preferences {
   hotMicRectangleCommands?: Record<string, string>; // Rectangle action name → comma-separated trigger phrases
   hotMicRestartServerCommand?: string; // Terminal command to run after Ctrl+C (e.g. "npm run dev")
   hotMicHotkey?: string; // Hotkey to toggle Hot Mic on/off (unset by default)
+  hotMicAppAliases?: Array<{ appName: string; aliases: string }>; // Voice aliases for app switching
 
   // Squares - window management config and hotkeys.
   // Rectangle-inspired snapping with smooth animations.

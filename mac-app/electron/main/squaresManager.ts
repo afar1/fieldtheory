@@ -946,4 +946,29 @@ export class SquaresManager extends EventEmitter {
     log.info(`Exact voice command detected: "${text}" -> ${action}`);
     return await this.executeAction(action);
   }
+
+  /**
+   * Check if text **ends with** a Squares trigger phrase.
+   * Returns the matched action and the remaining text (everything before the command).
+   * Checks longest phrases first to avoid partial matches (e.g. "tile all" before "tile").
+   */
+  parseVoiceCommandFromTail(text: string): { action: SquaresAction; remainingText: string } | null {
+    const normalized = text.toLowerCase().trim();
+
+    // Sort by phrase length descending — longest first to avoid partial matches
+    const sortedTriggers = Object.entries(VOICE_COMMAND_TRIGGERS)
+      .sort((a, b) => b[0].length - a[0].length);
+
+    for (const [phrase, action] of sortedTriggers) {
+      if (normalized === phrase) {
+        return { action, remainingText: '' };
+      }
+      if (normalized.endsWith(' ' + phrase)) {
+        const remainingText = normalized.slice(0, -(phrase.length + 1)).trim();
+        return { action, remainingText };
+      }
+    }
+
+    return null;
+  }
 }

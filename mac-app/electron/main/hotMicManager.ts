@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { app } from 'electron';
+import { app, globalShortcut } from 'electron';
 import { spawn, ChildProcess, exec } from 'child_process';
 import http from 'http';
 import path from 'path';
@@ -58,6 +58,60 @@ const PERMISSION_MAP: Record<string, string> = {
 };
 
 /**
+ * Built-in voice aliases for common apps.
+ * Maps canonical app name → array of spoken variants (all lowercase).
+ * Speech-to-text often mangles app names, so we cover common variants.
+ */
+const APP_VOICE_ALIASES: Record<string, string[]> = {
+  'Google Chrome': ['chrome', 'google chrome'],
+  'Visual Studio Code': ['vs code', 'vscode', 'v s code', 'visual studio code', 'visual studio'],
+  'Cursor': ['cursor'],
+  'ChatGPT': ['chat gpt', 'chatgpt', 'chat g p t'],
+  'iTerm2': ['iterm', 'i term', 'iterm2'],
+  'Ghostty': ['ghostty', 'ghost tea', 'ghosty'],
+  'Terminal': ['terminal'],
+  'Finder': ['finder'],
+  'Safari': ['safari'],
+  'Firefox': ['firefox', 'fire fox'],
+  'Slack': ['slack'],
+  'Discord': ['discord'],
+  'Spotify': ['spotify'],
+  'Messages': ['messages', 'imessage', 'i message'],
+  'Mail': ['mail', 'apple mail'],
+  'Notes': ['notes', 'apple notes'],
+  'Arc': ['arc', 'arc browser'],
+  'Notion': ['notion'],
+  'Obsidian': ['obsidian'],
+  'Warp': ['warp'],
+  'Xcode': ['xcode', 'x code'],
+  'Activity Monitor': ['activity monitor'],
+  'System Settings': ['system settings', 'system preferences'],
+  'Preview': ['preview'],
+  'Calendar': ['calendar'],
+  'Reminders': ['reminders'],
+  'Photos': ['photos'],
+  'Music': ['music', 'apple music'],
+  'Maps': ['maps', 'apple maps'],
+  'Figma': ['figma'],
+  'Linear': ['linear'],
+  'Telegram': ['telegram'],
+  'WhatsApp': ['whatsapp', 'whats app'],
+  'Zoom': ['zoom'],
+  'Claude': ['claude'],
+};
+
+/**
+ * App names that are common English words — require "open" prefix to avoid false triggers.
+ * Without the prefix, saying "notes" or "mail" in conversation would switch apps.
+ */
+const AMBIGUOUS_APP_NAMES = new Set([
+  'notes', 'mail', 'music', 'news', 'pages', 'numbers',
+  'maps', 'books', 'weather', 'stocks', 'home', 'contacts',
+  'reminders', 'calendar', 'photos', 'preview', 'clips',
+  'zoom', 'linear', 'slack', 'warp', 'arc',
+]);
+
+/**
  * HotMicManager provides always-on voice input.
  *
  * When enabled, it continuously listens and transcribes speech into a rolling buffer.
@@ -91,6 +145,9 @@ export class HotMicManager extends EventEmitter {
   private bufferDiscardTimer: NodeJS.Timeout | null = null;
   private readonly DEFAULT_BUFFER_DISCARD_MS = 5_000;
 
+  // Escape key — discards buffer without deactivating hot mic
+  private escapeRegistered = false;
+
   // Local HTTP server for hook triggers
   private server: http.Server | null = null;
   private static readonly HTTP_PORT = 19847;
@@ -119,6 +176,14 @@ export class HotMicManager extends EventEmitter {
   private squaresManager: {
     handleVoiceCommand(text: string): Promise<boolean>;
     handleExactVoiceCommand(text: string): Promise<boolean>;
+    parseVoiceCommandFromTail(text: string): { action: string; remainingText: string } | null;
+    executeAction(action: string): Promise<boolean>;
+  } | null = null;
+
+  // App switching (voice-triggered app activation)
+  private appSwitcher: {
+    getRunningApps(): Promise<Array<{ bundleId: string; name: string }>>;
+    activateApp(bundleId: string): Promise<boolean>;
   } | null = null;
 
   constructor(
@@ -290,8 +355,17 @@ export class HotMicManager extends EventEmitter {
   setSquaresManager(manager: {
     handleVoiceCommand(text: string): Promise<boolean>;
     handleExactVoiceCommand(text: string): Promise<boolean>;
+    parseVoiceCommandFromTail(text: string): { action: string; remainingText: string } | null;
+    executeAction(action: string): Promise<boolean>;
   }): void {
     this.squaresManager = manager;
+  }
+
+  setAppSwitcher(switcher: {
+    getRunningApps(): Promise<Array<{ bundleId: string; name: string }>>;
+    activateApp(bundleId: string): Promise<boolean>;
+  }): void {
+    this.appSwitcher = switcher;
   }
 
   getState(): HotMicState {
@@ -421,6 +495,36 @@ export class HotMicManager extends EventEmitter {
     }
 
     this.startAudioMonitoring();
+    this.registerEscapeKey();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Escape key — discard buffer, hide dot, keep listening
+  // ---------------------------------------------------------------------------
+
+  private registerEscapeKey(): void {
+    if (this.escapeRegistered) return;
+    const registered = globalShortcut.register('Escape', () => {
+      if (this.transcriptBuffer.length > 0) {
+        log.info('Hot Mic: Escape pressed, discarding buffer (%d chunks)', this.transcriptBuffer.length);
+        this.transcriptBuffer = [];
+        this.stopBufferDiscardTimer();
+        this.cursorStatusManager?.hideHotMic();
+      }
+    });
+    this.escapeRegistered = registered;
+    if (registered) {
+      log.info('Hot Mic: registered Escape key for buffer discard');
+    } else {
+      log.warn('Hot Mic: failed to register Escape key (may be in use)');
+    }
+  }
+
+  private unregisterEscapeKey(): void {
+    if (!this.escapeRegistered) return;
+    globalShortcut.unregister('Escape');
+    this.escapeRegistered = false;
+    log.info('Hot Mic: unregistered Escape key');
   }
 
   // ---------------------------------------------------------------------------
@@ -593,9 +697,9 @@ export class HotMicManager extends EventEmitter {
           if (hadContent) {
             log.info('Hot Mic: silence timeout, discarding buffer (%d chunks)', this.transcriptBuffer.length);
             this.transcriptBuffer = [];
-            // Fade out gracefully when discarding buffered speech
-            log.info('Hot Mic: [dot] discard timer fired, fading out (had content)');
-            this.cursorStatusManager?.fadeOutHotMic();
+            // Blink to warn user, then hide
+            log.info('Hot Mic: [dot] discard timer fired, blinking out (had content)');
+            this.cursorStatusManager?.blinkThenHideHotMic();
           } else {
             // No buffer content — dot was shown preemptively but nothing was
             // buffered (e.g. command executed, or hallucination already handled).
@@ -617,11 +721,7 @@ export class HotMicManager extends EventEmitter {
 
   private getBufferDiscardTimeout(): number {
     const pref = this.preferences.getPreference('hotMicBufferDiscardMs');
-    const base = typeof pref === 'number' && pref > 0 ? pref : this.DEFAULT_BUFFER_DISCARD_MS;
-    // Scale timeout with buffer size — more buffered speech = more patience.
-    // Each chunk adds 2s, so 1 chunk = 7s, 5 chunks = 15s, 16 chunks = 37s.
-    const scaled = base + this.transcriptBuffer.length * 2_000;
-    return scaled;
+    return typeof pref === 'number' && pref > 0 ? pref : this.DEFAULT_BUFFER_DISCARD_MS;
   }
 
   // ---------------------------------------------------------------------------
@@ -738,19 +838,33 @@ export class HotMicManager extends EventEmitter {
       return;
     }
 
-    // Restart server: Ctrl+C then type the configured command
-    if (this.transcriptBuffer.length === 0 && this.isRestartServerPhrase(startClaude)) {
+    // Restart server: Ctrl+C then type the configured command (works mid-buffer too)
+    if (this.isRestartServerPhrase(startClaude)) {
       const command = this.preferences.getPreference('hotMicRestartServerCommand');
       const cmd = typeof command === 'string' && command.trim() ? command.trim() : '';
       if (cmd) {
         const target = this.getTypeTarget();
         if (target) {
-          log.info('Hot Mic: restart server command — Ctrl+C then "%s"', cmd);
-          exec('osascript -e \'tell application "System Events" to keystroke "c" using control down\'');
-          // Wait for the process to terminate before typing the new command
-          await new Promise(resolve => setTimeout(resolve, 1500));
-          const result = await this.nativeHelper.typeIntoApp(target, cmd, true);
-          if (result.success) this.playSound('paste');
+          log.info('Hot Mic: restart server command — Ctrl+C then "%s" (target: %s)', cmd, target);
+          // Spawn a detached shell script that outlives Field Theory.
+          // It sends Ctrl+C to the terminal, waits for the process to die
+          // (which kills Field Theory itself), then types the restart command.
+          const safeCmd = cmd.replace(/'/g, "'\\''");
+          const safeBundleId = target.replace(/'/g, "'\\''");
+          const script = [
+            // Send Ctrl+C to the frontmost terminal
+            `osascript -e 'tell application "System Events" to keystroke "c" using control down'`,
+            // Wait for the old process to fully terminate
+            `sleep 3`,
+            // Type the restart command into the target app via osascript
+            `osascript -e 'tell application "System Events"' -e 'delay 0.1' -e 'keystroke "${safeCmd}"' -e 'keystroke return' -e 'end tell'`,
+          ].join(' && ');
+          const child = spawn('bash', ['-c', script], {
+            detached: true,
+            stdio: 'ignore',
+          });
+          child.unref();
+          this.playSound('paste');
         }
       } else {
         log.info('Hot Mic: restart server command — no command configured, ignoring');
@@ -762,26 +876,6 @@ export class HotMicManager extends EventEmitter {
     if (this.transcriptBuffer.length === 0 && this.isCancelPhrase(lower)) {
       log.info('Hot Mic: cancel command "%s" — sending Ctrl+C', lower);
       exec('osascript -e \'tell application "System Events" to keystroke "c" using control down\'');
-      return;
-    }
-
-    // Focus command: move to next display, then center (compound Rectangle action)
-    if (this.transcriptBuffer.length === 0 && this.isFocusPhrase(lower)) {
-      log.info('Hot Mic: focus command "%s" — next-display then center', lower);
-      exec('open "rectangle://execute-action?name=next-display"');
-      setTimeout(() => {
-        exec('open "rectangle://execute-action?name=center"');
-      }, 300);
-      return;
-    }
-
-    // Cascade command: cascade current app's windows, then center (compound Rectangle action)
-    if (this.transcriptBuffer.length === 0 && this.isCascadePhrase(lower)) {
-      log.info('Hot Mic: cascade command "%s" — cascade-active-app then center', lower);
-      exec('open "rectangle://execute-action?name=cascade-active-app"');
-      setTimeout(() => {
-        exec('open "rectangle://execute-action?name=center"');
-      }, 300);
       return;
     }
 
@@ -797,12 +891,14 @@ export class HotMicManager extends EventEmitter {
       }
     }
 
-    // Rectangle window management commands
-    if (this.transcriptBuffer.length === 0) {
-      const rectAction = this.isRectangleCommand(lower);
-      if (rectAction) {
-        log.info('Hot Mic: rectangle command "%s" — triggering %s', lower, rectAction);
-        exec(`open "rectangle://execute-action?name=${rectAction}"`);
+    // App switching: exact match when buffer is empty.
+    // "open chrome", "switch to finder", or bare non-ambiguous app name.
+    if (this.transcriptBuffer.length === 0 && this.appSwitcher) {
+      const appSwitch = await this.parseAppSwitchExact(lower);
+      if (appSwitch) {
+        log.info('Hot Mic: app switch "%s" → activating %s', lower, appSwitch.appName);
+        await this.activateAppByName(appSwitch);
+        this.playSound('paste');
         return;
       }
     }
@@ -894,6 +990,41 @@ export class HotMicManager extends EventEmitter {
       return;
     }
 
+    // Check if chunk ends with a Squares window command (tail-match).
+    // This lets users say "fix the auth module grid" — buffers the text, fires the command.
+    if (this.squaresManager) {
+      const tailMatch = this.squaresManager.parseVoiceCommandFromTail(lower);
+      if (tailMatch) {
+        if (tailMatch.remainingText.trim()) {
+          const normalized = tailMatch.remainingText.trim().replace(/\.+$/, '').trim();
+          this.transcriptBuffer.push(normalized);
+          log.info('Hot Mic: buffered text before squares command: "%s"', normalized);
+        }
+        log.info('Hot Mic: tail-match squares command "%s" → executing', lower);
+        this.squaresManager.executeAction(tailMatch.action);
+        this.playSound('paste');
+        this.resetBufferDiscardTimer();
+        return;
+      }
+    }
+
+    // App switching: tail match — "fix the auth bug open chrome" → buffer text, switch app.
+    if (this.appSwitcher) {
+      const appTailMatch = await this.parseAppSwitchFromTail(lower);
+      if (appTailMatch) {
+        if (appTailMatch.remainingText.trim()) {
+          const norm = appTailMatch.remainingText.trim().replace(/\.+$/, '').trim();
+          this.transcriptBuffer.push(norm);
+          log.info('Hot Mic: buffered text before app switch: "%s"', norm);
+        }
+        log.info('Hot Mic: tail-match app switch "%s" → activating %s', lower, appTailMatch.appName);
+        await this.activateAppByName(appTailMatch);
+        this.playSound('paste');
+        this.resetBufferDiscardTimer();
+        return;
+      }
+    }
+
     // No submit word — add to buffer
     // Normalize for natural dictation: lowercase and strip trailing periods
     // (Qwen treats each chunk as a standalone utterance, adding false sentence-ending
@@ -914,21 +1045,6 @@ export class HotMicManager extends EventEmitter {
   private static readonly DEFAULT_PREV_WINDOW_WORDS = 'back, previous';
   private static readonly DEFAULT_RUN_CLAUDE_PHRASES = 'start claude, start cloud, run claude';
   private static readonly DEFAULT_RESTART_SERVER_PHRASES = 'restart server, restart dev, restart dev server';
-  private static readonly DEFAULT_FOCUS_PHRASES = 'focus';
-  private static readonly DEFAULT_CASCADE_PHRASES = 'cascade, spread out';
-  static readonly DEFAULT_RECTANGLE_COMMANDS: Record<string, string> = {
-    'tile-all': 'grid, tile, tile all',
-    'cascade-active-app': '',
-    'center': 'center',
-    'maximize': 'maximize, full screen',
-    'restore': 'restore, undo',
-    'left-half': 'left, snap left',
-    'right-half': 'right, snap right',
-    'larger': 'bigger, larger',
-    'smaller': 'smaller, shrink',
-    'next-display': 'other screen, next screen',
-  };
-
   private getSubmitPhrases(): string[][] {
     const pref = this.preferences.getPreference('hotMicSubmitWord');
     const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_SUBMIT_PHRASES;
@@ -1076,43 +1192,190 @@ export class HotMicManager extends EventEmitter {
     return phrases.includes(word);
   }
 
-  private isRestartServerPhrase(word: string): boolean {
+  private isRestartServerPhrase(text: string): boolean {
     const pref = this.preferences.getPreference('hotMicRestartServerWords');
     const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_RESTART_SERVER_PHRASES;
     const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
-    return phrases.includes(word);
+    // Match if the text exactly equals or ends with a restart phrase
+    return phrases.some(p => text === p || text.endsWith(' ' + p));
   }
 
-  private isFocusPhrase(word: string): boolean {
-    const pref = this.preferences.getPreference('hotMicFocusPhrases');
-    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_FOCUS_PHRASES;
-    const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
-    return phrases.includes(word);
-  }
+  // ── App switching (voice-triggered) ─────────────────────────────────
 
-  private isCascadePhrase(word: string): boolean {
-    const pref = this.preferences.getPreference('hotMicCascadePhrases');
-    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_CASCADE_PHRASES;
-    const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
-    return phrases.includes(word);
-  }
+  private static readonly APP_SWITCH_PREFIXES = [
+    /^open\s+(.+)$/,
+    /^switch\s+to\s+(.+)$/,
+    /^go\s+to\s+(.+)$/,
+  ];
 
-  getRectangleCommands(): Record<string, string> {
-    const pref = this.preferences.getPreference('hotMicRectangleCommands');
-    return pref && typeof pref === 'object' ? pref : { ...HotMicManager.DEFAULT_RECTANGLE_COMMANDS };
+  /**
+   * Normalize a name for fuzzy comparison: lowercase, strip non-alphanumeric, collapse spaces.
+   */
+  private normalizeAppName(name: string): string {
+    return name.toLowerCase().replace(/[^a-z0-9]/g, '');
   }
 
   /**
-   * Check if a phrase matches any configured Rectangle command.
-   * Returns the Rectangle action name or null.
+   * Fetch running apps once (cached by clipboardHistoryWindow for 5s).
    */
-  private isRectangleCommand(phrase: string): string | null {
-    const commands = this.getRectangleCommands();
-    for (const [action, phrasesStr] of Object.entries(commands)) {
-      const phrases = phrasesStr.split(',').map(p => p.trim().toLowerCase()).filter(p => p.length > 0);
-      if (phrases.includes(phrase)) return action;
+  private async getRunningApps(): Promise<Array<{ bundleId: string; name: string }>> {
+    if (!this.appSwitcher) return [];
+    return this.appSwitcher.getRunningApps();
+  }
+
+  /**
+   * Match spoken text against known app aliases and running apps.
+   * Returns { bundleId, appName } or null.
+   */
+  private matchAppName(
+    spoken: string,
+    runningApps: Array<{ bundleId: string; name: string }>,
+  ): { bundleId: string | null; appName: string } | null {
+    const cleaned = spoken.replace(/[.,!?;:]+$/, '').trim().toLowerCase();
+    if (!cleaned) return null;
+
+    // 1. Check user-configured aliases first (highest priority)
+    const userAliases = this.preferences.getPreference('hotMicAppAliases') ?? [];
+    for (const { appName, aliases } of userAliases) {
+      const aliasList = aliases.split(',').map(a => a.trim().toLowerCase()).filter(a => a.length > 0);
+      if (aliasList.includes(cleaned)) {
+        const bundleId = this.findBundleId(appName, runningApps);
+        return { bundleId, appName };
+      }
+    }
+
+    // 2. Check built-in alias map
+    for (const [canonical, aliases] of Object.entries(APP_VOICE_ALIASES)) {
+      if (aliases.includes(cleaned)) {
+        // Found alias — look up in running apps
+        const bundleId = this.findBundleId(canonical, runningApps);
+        return { bundleId, appName: canonical };
+      }
+    }
+
+    // 3. Check running apps by normalized name
+    const normalizedSpoken = this.normalizeAppName(cleaned);
+    for (const app of runningApps) {
+      if (this.normalizeAppName(app.name) === normalizedSpoken) {
+        return { bundleId: app.bundleId, appName: app.name };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Look up a canonical app name in a running apps list and return its bundle ID.
+   */
+  private findBundleId(
+    canonicalName: string,
+    runningApps: Array<{ bundleId: string; name: string }>,
+  ): string | null {
+    const normalized = this.normalizeAppName(canonicalName);
+    for (const app of runningApps) {
+      if (this.normalizeAppName(app.name) === normalized) {
+        return app.bundleId;
+      }
     }
     return null;
+  }
+
+  /**
+   * Parse exact app switch command (buffer must be empty).
+   * Matches: "open chrome", "switch to finder", or bare non-ambiguous app name.
+   */
+  private async parseAppSwitchExact(text: string): Promise<{ bundleId: string | null; appName: string } | null> {
+    const runningApps = await this.getRunningApps();
+
+    // Try prefix patterns: "open X", "switch to X", "go to X"
+    for (const pattern of HotMicManager.APP_SWITCH_PREFIXES) {
+      const match = text.match(pattern);
+      if (match) {
+        const appMatch = this.matchAppName(match[1], runningApps);
+        if (appMatch) return appMatch;
+      }
+    }
+
+    // Bare app name (no prefix) — skip ambiguous names
+    const appMatch = this.matchAppName(text, runningApps);
+    if (appMatch && !AMBIGUOUS_APP_NAMES.has(text.replace(/[.,!?;:]+$/, '').trim().toLowerCase())) {
+      return appMatch;
+    }
+
+    return null;
+  }
+
+  /**
+   * Check if text ends with "open X" / "switch to X" / "go to X".
+   * Returns matched app info + remaining text, or null.
+   */
+  private async parseAppSwitchFromTail(text: string): Promise<{ appName: string; bundleId: string | null; remainingText: string } | null> {
+    const prefixes = ['open ', 'switch to ', 'go to '];
+    const runningApps = await this.getRunningApps();
+
+    // Build all possible app phrases (user aliases + built-in aliases + running app names)
+    const phrases: Array<{ phrase: string; canonical: string }> = [];
+
+    // From user-configured aliases (highest priority)
+    const userAliases = this.preferences.getPreference('hotMicAppAliases') ?? [];
+    for (const { appName, aliases } of userAliases) {
+      const aliasList = aliases.split(',').map(a => a.trim().toLowerCase()).filter(a => a.length > 0);
+      for (const alias of aliasList) {
+        phrases.push({ phrase: alias, canonical: appName });
+      }
+    }
+
+    // From built-in alias map
+    for (const [canonical, aliases] of Object.entries(APP_VOICE_ALIASES)) {
+      for (const alias of aliases) {
+        phrases.push({ phrase: alias, canonical });
+      }
+    }
+
+    // From running apps (normalized names)
+    for (const app of runningApps) {
+      phrases.push({ phrase: app.name.toLowerCase(), canonical: app.name });
+    }
+
+    // Sort longest first to match "visual studio code" before "visual studio"
+    phrases.sort((a, b) => b.phrase.length - a.phrase.length);
+
+    for (const prefix of prefixes) {
+      for (const { phrase, canonical } of phrases) {
+        const trigger = prefix + phrase;
+        if (text === trigger) {
+          const bundleId = this.findBundleId(canonical, runningApps);
+          return { appName: canonical, bundleId, remainingText: '' };
+        }
+        if (text.endsWith(' ' + trigger)) {
+          const remaining = text.slice(0, -(trigger.length + 1)).trim();
+          const bundleId = this.findBundleId(canonical, runningApps);
+          return { appName: canonical, bundleId, remainingText: remaining };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Activate an app by bundle ID (preferred) or by name (fallback, also launches).
+   * Fails silently if app doesn't exist.
+   */
+  private async activateAppByName(match: { bundleId: string | null; appName: string }): Promise<void> {
+    try {
+      if (match.bundleId && this.appSwitcher) {
+        await this.appSwitcher.activateApp(match.bundleId);
+      } else {
+        // Fallback: open by name (launches if not running, fails silently if app doesn't exist)
+        const safeName = match.appName.replace(/"/g, '\\"');
+        await new Promise<void>((resolve) => {
+          exec(`open -a "${safeName}"`, () => resolve());
+        });
+      }
+    } catch {
+      // Fail silently
+    }
   }
 
   /**
@@ -1378,6 +1641,7 @@ export class HotMicManager extends EventEmitter {
   private cleanup(): void {
     this.stopAudioMonitoring();
     this.stopBufferDiscardTimer();
+    this.unregisterEscapeKey();
     this.targetBundleId = null;
     this.transcriptBuffer = [];
     this.warmupPromise = null;
