@@ -5353,6 +5353,9 @@ async function initTranscriberSystem(): Promise<void> {
     // Connect Squares for voice-triggered window management (e.g., "grid", "focus").
     if (squaresManager) {
       transcriberManager.setSquaresManager(squaresManager);
+      if (hotMicManager) {
+        hotMicManager.setSquaresManager(squaresManager);
+      }
     }
     transcriberManager.setCommandsManager(commandsManager);
     // Provide access token getter for cloud-based transcript improvement.
