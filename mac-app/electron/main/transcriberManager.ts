@@ -114,6 +114,7 @@ export class TranscriberManager extends EventEmitter {
   private audioManager: AudioManager | null = null;
   private cursorStatusManager: CursorStatusManager | null = null;
   private commandsManager: CommandsManager | null = null;
+  private squaresManager: any | null = null;  // SquaresManager for voice-triggered window management
   private accessTokenGetter: (() => string | undefined) | null = null;
   private hasShownQuotaMessageThisPeriod: boolean = false;
   private recordingStartTime: number = 0;
@@ -246,6 +247,15 @@ export class TranscriberManager extends EventEmitter {
    */
   setCommandsManager(manager: CommandsManager): void {
     this.commandsManager = manager;
+  }
+
+  /**
+   * Set the Squares manager for voice-triggered window management.
+   * When enabled, phrases like "grid", "focus", "horizontal" in transcriptions
+   * trigger window management actions instead of being pasted as text.
+   */
+  setSquaresManager(manager: any): void {
+    this.squaresManager = manager;
   }
 
   /**
@@ -943,6 +953,18 @@ export class TranscriberManager extends EventEmitter {
       
       // Figure references are now inserted inline during transcription parsing
       // (in parseTimestampedOutput) when screenshots were captured during recording.
+
+      // Check for Squares voice commands (e.g., "grid", "focus", "horizontal").
+      // If the transcription is a window management command, execute it and skip pasting.
+      if (this.squaresManager) {
+        const handled = await this.squaresManager.handleVoiceCommand(cleanedText);
+        if (handled) {
+          log.info(`Squares voice command executed: "${cleanedText}"`);
+          this.setStatus('idle');
+          this.handleOverlayAfterTranscription();
+          return;
+        }
+      }
 
       // Detect portable commands in the transcription.
       // If user says "use the debug command", insert [cmd:debug.md] reference.
