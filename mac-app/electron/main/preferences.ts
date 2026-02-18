@@ -134,6 +134,11 @@ interface Preferences {
   // Cached tier - persisted locally so Pro users don't get downgraded on startup.
   // Server is authoritative; this is only for offline/startup display.
   cachedTier?: 'free' | 'pro';
+
+  // Squares - window management config and hotkeys.
+  // Rectangle-inspired snapping with smooth animations.
+  squaresConfig?: any;   // SquaresConfig from types/squares.ts
+  squaresHotkeys?: any;  // SquaresHotkeys from types/squares.ts
 }
 
 const DEFAULT_PREFERENCES: Preferences = {

@@ -51,6 +51,8 @@ import { MESSAGES } from './messages';
 import { TodoStore, Todo } from './todoStore';
 import { TodoIPCChannels } from './types/todo';
 import { detectSSHSession, scpToRemote, SSHTarget } from './sshDetector';
+import { SquaresManager } from './squaresManager';
+import { SquaresIPCChannels, SquaresAction } from './types/squares';
 
 const log = createLogger('Main');
 
@@ -168,6 +170,7 @@ let commandSyncService: CommandSyncService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
 let metricsManager: MetricsManager | null = null;
 let todoStore: TodoStore | null = null;
+let squaresManager: SquaresManager | null = null;
 
 // Track pending update state so windows can query it when they open.
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
@@ -267,6 +270,11 @@ function registerHotkeysAfterOnboarding(): void {
   // Re-register transcription hotkeys (may have been unregistered during sign-out or onboarding reset)
   if (transcriberManager) {
     transcriberManager.reRegisterHotkeys();
+  }
+
+  // Register Squares window management hotkeys.
+  if (squaresManager) {
+    squaresManager.registerHotkeys();
   }
 
   const prefs = preferencesManager.get();
@@ -1903,6 +1911,56 @@ function setupLibrarianIPCHandlers(): void {
 }
 
 /**
+ * Set up IPC handlers for Squares window management.
+ */
+function setupSquaresIPCHandlers(): void {
+  // Execute a window management action (e.g., leftHalf, grid, focus)
+  ipcMain.handle(SquaresIPCChannels.EXECUTE_ACTION, async (_event, action: SquaresAction) => {
+    return squaresManager?.executeAction(action) ?? false;
+  });
+
+  // Get all visible windows
+  ipcMain.handle(SquaresIPCChannels.GET_WINDOWS, async () => {
+    return squaresManager?.getWindows() ?? [];
+  });
+
+  // Get display/screen info
+  ipcMain.handle(SquaresIPCChannels.GET_SCREENS, () => {
+    return squaresManager?.getScreens() ?? [];
+  });
+
+  // Configuration
+  ipcMain.handle(SquaresIPCChannels.GET_CONFIG, () => {
+    return squaresManager?.getConfig() ?? null;
+  });
+
+  ipcMain.handle(SquaresIPCChannels.SET_CONFIG, async (_event, config: Record<string, any>) => {
+    await squaresManager?.setConfig(config);
+  });
+
+  ipcMain.handle(SquaresIPCChannels.GET_HOTKEYS, () => {
+    return squaresManager?.getHotkeys() ?? null;
+  });
+
+  ipcMain.handle(SquaresIPCChannels.SET_HOTKEYS, async (_event, hotkeys: Record<string, any>) => {
+    await squaresManager?.setHotkeys(hotkeys);
+  });
+
+  ipcMain.handle(SquaresIPCChannels.RESET_HOTKEYS, async () => {
+    await squaresManager?.resetHotkeys();
+  });
+
+  // History / undo
+  ipcMain.handle(SquaresIPCChannels.GET_HISTORY_COUNT, () => {
+    return squaresManager?.getHistoryCount() ?? 0;
+  });
+
+  ipcMain.handle(SquaresIPCChannels.CLEAR_HISTORY, () => {
+    squaresManager?.clearHistory();
+  });
+}
+
+/**
  * Set up all IPC handlers for transcription-related communication.
  */
 function setupTranscribeIPCHandlers(): void {
@@ -2994,6 +3052,9 @@ function setupClipboardIPCHandlers(): void {
     // Unregister all hotkeys via HotkeyManager
     const hotkeyManager = getHotkeyManager();
     hotkeyManager.unregisterAll();
+
+    // Unregister Squares window management hotkeys.
+    squaresManager?.unregisterHotkeys();
 
     // Clean up LibrarianManager (stop file watchers, close database)
     librarianManager?.destroy();
@@ -5217,11 +5278,36 @@ async function initTranscriberSystem(): Promise<void> {
     diagnosticsCollector.setAudioManager(audioManager);
   }
 
+  // Initialize Squares window management.
+  // Rectangle-inspired snapping with smooth animations.
+  squaresManager = new SquaresManager(preferencesManager);
+
+  // Broadcast Squares events to all renderer windows.
+  squaresManager.on('actionExecuted', (action: SquaresAction) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(SquaresIPCChannels.ACTION_EXECUTED, action);
+      }
+    });
+  });
+
+  squaresManager.on('configChanged', (config: any) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(SquaresIPCChannels.CONFIG_CHANGED, config);
+      }
+    });
+  });
+
   // Initialize commands manager for portable commands feature.
   commandsManager = new CommandsManager();
 
   // Wire up commands manager to transcriber manager for command detection.
   if (transcriberManager) {
+    // Connect Squares for voice-triggered window management (e.g., "grid", "focus").
+    if (squaresManager) {
+      transcriberManager.setSquaresManager(squaresManager);
+    }
     transcriberManager.setCommandsManager(commandsManager);
     // Provide access token getter for cloud-based transcript improvement.
     transcriberManager.setAccessTokenGetter(() => authManager?.getSession()?.access_token);
@@ -5605,6 +5691,7 @@ if (!gotTheLock) {
     setupIPCHandlers();
     setupThemeIPCHandlers();
     setupLibrarianIPCHandlers();
+    setupSquaresIPCHandlers();
     setupTranscribeIPCHandlers();
     setupClipboardIPCHandlers();
     setupOnboardingIPCHandlers();
