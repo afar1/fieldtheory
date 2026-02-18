@@ -618,7 +618,10 @@ export class SquaresManager extends EventEmitter {
    */
   private async getFrontmostWindow(): Promise<WindowInfo | null> {
     const windows = await this.getWindows();
-    if (windows.length === 0) return null;
+    if (windows.length === 0) {
+      log.info('getFrontmostWindow: getWindows() returned empty');
+      return null;
+    }
 
     try {
       // Get the frontmost app's PID.
@@ -628,8 +631,13 @@ export class SquaresManager extends EventEmitter {
       const frontPID = parseInt(pid, 10);
 
       // Find the first window belonging to that app.
-      return windows.find(w => w.ownerPID === frontPID) || windows[0];
-    } catch {
+      const match = windows.find(w => w.ownerPID === frontPID);
+      if (!match) {
+        log.info('getFrontmostWindow: frontmost PID %d not in window list, falling back to first window (%s)', frontPID, windows[0].ownerName);
+      }
+      return match || windows[0];
+    } catch (err) {
+      log.info('getFrontmostWindow: AppleScript failed, falling back to first window: %s', err);
       return windows[0];
     }
   }
@@ -979,9 +987,14 @@ export class SquaresManager extends EventEmitter {
    * Execute a single-window action (halves, quarters, thirds, maximize, center).
    */
   private async executeSingleWindowAction(action: SquaresAction): Promise<boolean> {
-    const frontWindow = await this.getFrontmostWindow();
+    let frontWindow = await this.getFrontmostWindow();
     if (!frontWindow) {
-      log.info('No frontmost window found');
+      // Retry once — JXA/AppleScript can transiently fail under load
+      await new Promise(r => setTimeout(r, 100));
+      frontWindow = await this.getFrontmostWindow();
+    }
+    if (!frontWindow) {
+      log.info('No frontmost window found (after retry)');
       return false;
     }
 
@@ -1106,7 +1119,7 @@ export class SquaresManager extends EventEmitter {
    * Returns the action if a command phrase is found, null otherwise.
    * Uses exact phrase matching for deterministic behavior.
    */
-  parseVoiceCommand(text: string): SquaresAction | null {
+  parseVoiceCommand(text: string, exactOnly = false): SquaresAction | null {
     const normalized = text.toLowerCase().trim();
 
     // Check longest phrases first to avoid partial matches.
@@ -1115,8 +1128,12 @@ export class SquaresManager extends EventEmitter {
       .sort((a, b) => b[0].length - a[0].length);
 
     for (const [phrase, action] of sortedTriggers) {
-      if (normalized === phrase || normalized.startsWith(phrase + ' ') || normalized.endsWith(' ' + phrase)) {
-        return action;
+      if (exactOnly) {
+        if (normalized === phrase) return action;
+      } else {
+        if (normalized === phrase || normalized.startsWith(phrase + ' ') || normalized.endsWith(' ' + phrase)) {
+          return action;
+        }
       }
     }
 
@@ -1133,6 +1150,19 @@ export class SquaresManager extends EventEmitter {
     if (!action) return false;
 
     log.info(`Voice command detected: "${text}" -> ${action}`);
+    return await this.executeAction(action);
+  }
+
+  /**
+   * Exact-match voice command — only triggers if the text IS the command.
+   * Used by Hot Mic where each chunk is a short utterance and partial
+   * matching on multi-sentence chunks causes false triggers.
+   */
+  async handleExactVoiceCommand(text: string): Promise<boolean> {
+    const action = this.parseVoiceCommand(text, true);
+    if (!action) return false;
+
+    log.info(`Exact voice command detected: "${text}" -> ${action}`);
     return await this.executeAction(action);
   }
 }

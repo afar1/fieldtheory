@@ -116,7 +116,10 @@ export class HotMicManager extends EventEmitter {
   private externalWarmup: (() => Promise<void>) | null = null;
 
   // Squares window management (voice-triggered snapping)
-  private squaresManager: { handleVoiceCommand(text: string): Promise<boolean> } | null = null;
+  private squaresManager: {
+    handleVoiceCommand(text: string): Promise<boolean>;
+    handleExactVoiceCommand(text: string): Promise<boolean>;
+  } | null = null;
 
   constructor(
     nativeHelper: NativeHelper,
@@ -284,7 +287,10 @@ export class HotMicManager extends EventEmitter {
     this.externalWarmup = fn;
   }
 
-  setSquaresManager(manager: { handleVoiceCommand(text: string): Promise<boolean> }): void {
+  setSquaresManager(manager: {
+    handleVoiceCommand(text: string): Promise<boolean>;
+    handleExactVoiceCommand(text: string): Promise<boolean>;
+  }): void {
     this.squaresManager = manager;
   }
 
@@ -780,8 +786,10 @@ export class HotMicManager extends EventEmitter {
     }
 
     // Squares window management commands (snap left, grid, focus, etc.)
+    // Use exact matching to avoid false triggers on multi-sentence chunks
+    // like "right. snap left" (where only "snap left" is a command).
     if (this.transcriptBuffer.length === 0 && this.squaresManager) {
-      const handled = await this.squaresManager.handleVoiceCommand(lower);
+      const handled = await this.squaresManager.handleExactVoiceCommand(lower);
       if (handled) {
         log.info('Hot Mic: squares command "%s" executed', lower);
         this.playSound('paste');
