@@ -5292,11 +5292,16 @@ async function initTranscriberSystem(): Promise<void> {
   // This must be created before AuthManager so it can coordinate user changes.
   userDataManager = createUserDataManager();
 
+  // Restore last known user from current-user.json so per-user paths work
+  // immediately — no need to wait for auth to resolve.
+  await userDataManager.restoreCurrentUser();
+
   // Set UserDataManager on managers BEFORE authManager.init().
   // authManager.init() may emit 'userChanged' during session restoration,
   // so managers must have their userDataManager ready to use per-user paths.
   if (preferencesManager) {
     preferencesManager.setUserDataManager(userDataManager);
+    await preferencesManager.load();
   }
   if (clipboardManager) {
     clipboardManager.setUserDataManager(userDataManager);
