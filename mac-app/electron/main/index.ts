@@ -3808,6 +3808,25 @@ function setupClipboardIPCHandlers(): void {
   });
 
   // =========================================================================
+  // App Voice Aliases - custom voice trigger words for app switching
+  // =========================================================================
+
+  ipcMain.handle('clipboard:getAppVoiceAliases', async () => {
+    if (!preferencesManager) {
+      return [];
+    }
+    return preferencesManager.getPreference('hotMicAppAliases') ?? [];
+  });
+
+  ipcMain.handle('clipboard:setAppVoiceAliases', async (_event, aliases: Array<{ appName: string; aliases: string }>) => {
+    if (!preferencesManager) {
+      return false;
+    }
+    await preferencesManager.save({ hotMicAppAliases: aliases });
+    return true;
+  });
+
+  // =========================================================================
   // Data Retention - how long to keep clipboard history
   // =========================================================================
 
@@ -5363,6 +5382,19 @@ async function initTranscriberSystem(): Promise<void> {
   }
   if (hotMicManager) {
     hotMicManager.setCommandsManager(commandsManager);
+    // Connect app switcher for voice-triggered app activation (e.g., "open chrome").
+    // Use closures that read clipboardHistoryWindow at call time — it may be null during
+    // init but will be set by the time Hot Mic is actually used.
+    hotMicManager.setAppSwitcher({
+      getRunningApps: async () => {
+        if (!clipboardHistoryWindow) return [];
+        return clipboardHistoryWindow.getRunningApps();
+      },
+      activateApp: async (bundleId: string) => {
+        if (!clipboardHistoryWindow) return false;
+        return clipboardHistoryWindow.activateApp(bundleId);
+      },
+    });
   }
 
   // Initialize multi-directory watching from settings file.
@@ -5969,7 +6001,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getRectangleCommands', () => {
-      return hotMicManager?.getRectangleCommands() ?? {};
+      return {}; // Rectangle commands removed — window management handled by Squares
     });
 
     ipcMain.handle('hotmic:setRectangleCommands', async (_event, commands: Record<string, string>) => {

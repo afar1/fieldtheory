@@ -318,6 +318,10 @@ interface ClipboardAPI {
   getWordSubstitutions?: () => Promise<Array<{ from: string; to: string }>>;
   setWordSubstitutions?: (substitutions: Array<{ from: string; to: string }>) => Promise<boolean>;
 
+  // App voice aliases - custom voice trigger words for app switching
+  getAppVoiceAliases?: () => Promise<Array<{ appName: string; aliases: string }>>;
+  setAppVoiceAliases?: (aliases: Array<{ appName: string; aliases: string }>) => Promise<boolean>;
+
   // Data retention - how long to keep clipboard history
   getDataRetentionDays?: () => Promise<number>;
   setDataRetentionDays?: (days: number) => Promise<boolean>;
