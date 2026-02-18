@@ -5326,7 +5326,7 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize Squares window management.
   // Rectangle-inspired snapping with smooth animations.
-  squaresManager = new SquaresManager(preferencesManager);
+  squaresManager = new SquaresManager(preferencesManager, nativeHelper!);
 
   // Broadcast Squares events to all renderer windows.
   squaresManager.on('actionExecuted', (action: SquaresAction) => {

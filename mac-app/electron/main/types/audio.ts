@@ -116,7 +116,10 @@ export type HelperOutgoingMessageType =
   | 'frontmostWindowBounds'
   | 'soundsPreloaded'
   | 'typeIntoAppResult'
-  | 'focusWindowByTitleResult';
+  | 'focusWindowByTitleResult'
+  | 'animationComplete'
+  | 'windowFrameSet'
+  | 'windowList';
 
 /**
  * Message types sent FROM Electron main TO the Swift helper.
@@ -137,7 +140,10 @@ export type HelperIncomingMessageType =
   | 'stopSounds'
   | 'typeIntoApp'
   | 'focusWindowByTitle'
-  | 'setHarvestMode';
+  | 'setHarvestMode'
+  | 'animateWindows'
+  | 'setWindowFrame'
+  | 'getWindowList';
 
 /**
  * Base interface for all messages from the native helper.
@@ -312,6 +318,49 @@ export interface FocusWindowByTitleResultMessage extends HelperMessage {
 }
 
 /**
+ * Animation complete message from the helper.
+ * Sent after animateWindows finishes (or fails).
+ */
+export interface AnimationCompleteMessage extends HelperMessage {
+  type: 'animationComplete';
+  success: boolean;
+}
+
+/**
+ * Window frame set result from the helper.
+ * Sent after setWindowFrame completes.
+ */
+export interface WindowFrameSetMessage extends HelperMessage {
+  type: 'windowFrameSet';
+  success: boolean;
+}
+
+/**
+ * Window list entry from the helper.
+ */
+export interface NativeWindowInfo {
+  windowId: number;
+  ownerName: string;
+  ownerPID: number;
+  ownerBundleId: string;
+  title: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  layer: number;
+}
+
+/**
+ * Window list from the helper.
+ * Sent in response to getWindowList command.
+ */
+export interface WindowListMessage extends HelperMessage {
+  type: 'windowList';
+  windows: NativeWindowInfo[];
+}
+
+/**
  * Union type of all possible messages from the helper.
  */
 export type HelperOutgoingMessage =
@@ -332,7 +381,26 @@ export type HelperOutgoingMessage =
   | FrontmostWindowBoundsMessage
   | SoundsPreloadedMessage
   | TypeIntoAppResultMessage
-  | FocusWindowByTitleResultMessage;
+  | FocusWindowByTitleResultMessage
+  | AnimationCompleteMessage
+  | WindowFrameSetMessage
+  | WindowListMessage;
+
+/**
+ * A single window move specification for animateWindows.
+ */
+export interface WindowMoveSpec {
+  pid: number;
+  title: string;
+  fromX: number;
+  fromY: number;
+  fromWidth: number;
+  fromHeight: number;
+  toX: number;
+  toY: number;
+  toWidth: number;
+  toHeight: number;
+}
 
 /**
  * Commands sent to the helper.
@@ -424,6 +492,38 @@ export interface SetHarvestModeCommand {
 }
 
 /**
+ * Command to animate one or more windows from start to end frames.
+ * Swift runs the interpolation loop internally using AX API.
+ */
+export interface AnimateWindowsCommand {
+  type: 'animateWindows';
+  moves: WindowMoveSpec[];
+  durationMs: number;
+  steps: number;
+  style: 'easeOutCubic' | 'easeOutBack';
+}
+
+/**
+ * Command to set a window frame instantly (no animation).
+ */
+export interface SetWindowFrameCommand {
+  type: 'setWindowFrame';
+  pid: number;
+  title: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Command to get all on-screen windows.
+ */
+export interface GetWindowListCommand {
+  type: 'getWindowList';
+}
+
+/**
  * Union type of all possible commands to the helper.
  */
 export type HelperIncomingCommand =
@@ -443,4 +543,7 @@ export type HelperIncomingCommand =
   | StopSoundsCommand
   | TypeIntoAppCommand
   | FocusWindowByTitleCommand
-  | SetHarvestModeCommand;
+  | SetHarvestModeCommand
+  | AnimateWindowsCommand
+  | SetWindowFrameCommand
+  | GetWindowListCommand;
