@@ -14,6 +14,9 @@ export function hasReleaseNotes(version: string): boolean {
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.78': [
+    'Fixed transcription failure on M5 Macs running macOS Tahoe',
+  ],
   '0.1.77': [
     'Super paste detects SSH sessions and copies images to the remote machine',
     'Fixed Cmd+Shift+T shortcut conflict',
@@ -195,6 +198,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.78': 'Feb 18 2026',
   '0.1.77': 'Feb 17 2026',
   '0.1.76': 'Feb 17 2026',
   '0.1.75': 'Feb 11 2026',
