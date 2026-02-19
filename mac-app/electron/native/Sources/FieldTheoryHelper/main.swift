@@ -1038,8 +1038,7 @@ final class RecordingHelper {
     private var harvestMode: String = "command"  // "command" = 50ms, "dictation" = 500ms
 
     private static let SPEECH_THRESHOLD: Double = 0.02
-    private static let SILENCE_THRESHOLD: Double = 0.015
-    private static let SILENCE_COMMAND_MS: Int = 10
+    private static let SILENCE_COMMAND_MS: Int = 150
     private static let SILENCE_DICTATION_MS: Int = 500
 
     private static let wavSettings: [String: Any] = [
@@ -1086,12 +1085,9 @@ final class RecordingHelper {
             hasSpeechSinceLastHarvest = true
             silenceTimer?.cancel()
             silenceTimer = nil
-        } else if level > RecordingHelper.SILENCE_THRESHOLD {
-            // Mid-range — not silence, cancel any pending timer
-            silenceTimer?.cancel()
-            silenceTimer = nil
         } else {
-            // Below silence threshold
+            // Below speech threshold — start harvest timer if speech was detected.
+            // The 150ms command timeout debounces brief dips between syllables.
             if hasSpeechSinceLastHarvest && silenceTimer == nil {
                 let silenceMs = harvestMode == "dictation"
                     ? RecordingHelper.SILENCE_DICTATION_MS
