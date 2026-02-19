@@ -154,6 +154,9 @@ interface Preferences {
   hotMicPrevWindowWords?: string; // Comma-separated words that cycle to previous window (Cmd+Shift+`)
   hotMicNewWindowWords?: string; // Comma-separated phrases that open a new window (Cmd+N)
   hotMicCloseWindowWords?: string; // Comma-separated phrases that close the window (Cmd+W)
+  hotMicMinimizePhrases?: string; // Comma-separated phrases that minimize the window (Cmd+M)
+  hotMicHidePhrases?: string; // Comma-separated phrases that hide the app (Cmd+H)
+  hotMicQuitPhrases?: string; // Comma-separated phrases that quit the current app (Cmd+Q) or quit by name
   hotMicSwitchWords?: string; // Comma-separated words that trigger Cmd+` window cycling
   hotMicRunClaudeWords?: string; // Comma-separated phrases that type "claude" and submit (start a session)
   hotMicRestartServerWords?: string; // Comma-separated phrases that trigger restart (Ctrl+C then run command)
@@ -176,7 +179,7 @@ interface Preferences {
   hotMicLockPhrases?: string;
 
   // Squares - window management config and hotkeys.
-  // Rectangle-inspired snapping with smooth animations.
+  // Rectangle-inspired window snapping.
   squaresConfig?: any;   // SquaresConfig from types/squares.ts
   squaresHotkeys?: any;  // SquaresHotkeys from types/squares.ts
 }

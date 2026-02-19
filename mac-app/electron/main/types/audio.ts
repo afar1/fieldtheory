@@ -117,7 +117,6 @@ export type HelperOutgoingMessageType =
   | 'soundsPreloaded'
   | 'typeIntoAppResult'
   | 'focusWindowByTitleResult'
-  | 'animationComplete'
   | 'windowFrameSet'
   | 'windowList';
 
@@ -141,7 +140,6 @@ export type HelperIncomingMessageType =
   | 'typeIntoApp'
   | 'focusWindowByTitle'
   | 'setHarvestMode'
-  | 'animateWindows'
   | 'setWindowFrame'
   | 'getWindowList';
 
@@ -318,15 +316,6 @@ export interface FocusWindowByTitleResultMessage extends HelperMessage {
 }
 
 /**
- * Animation complete message from the helper.
- * Sent after animateWindows finishes (or fails).
- */
-export interface AnimationCompleteMessage extends HelperMessage {
-  type: 'animationComplete';
-  success: boolean;
-}
-
-/**
  * Window frame set result from the helper.
  * Sent after setWindowFrame completes.
  */
@@ -382,25 +371,8 @@ export type HelperOutgoingMessage =
   | SoundsPreloadedMessage
   | TypeIntoAppResultMessage
   | FocusWindowByTitleResultMessage
-  | AnimationCompleteMessage
   | WindowFrameSetMessage
   | WindowListMessage;
-
-/**
- * A single window move specification for animateWindows.
- */
-export interface WindowMoveSpec {
-  pid: number;
-  title: string;
-  fromX: number;
-  fromY: number;
-  fromWidth: number;
-  fromHeight: number;
-  toX: number;
-  toY: number;
-  toWidth: number;
-  toHeight: number;
-}
 
 /**
  * Commands sent to the helper.
@@ -492,18 +464,6 @@ export interface SetHarvestModeCommand {
 }
 
 /**
- * Command to animate one or more windows from start to end frames.
- * Swift runs the interpolation loop internally using AX API.
- */
-export interface AnimateWindowsCommand {
-  type: 'animateWindows';
-  moves: WindowMoveSpec[];
-  durationMs: number;
-  steps: number;
-  style: 'easeOutCubic' | 'easeOutBack';
-}
-
-/**
  * Command to set a window frame instantly (no animation).
  */
 export interface SetWindowFrameCommand {
@@ -544,6 +504,5 @@ export type HelperIncomingCommand =
   | TypeIntoAppCommand
   | FocusWindowByTitleCommand
   | SetHarvestModeCommand
-  | AnimateWindowsCommand
   | SetWindowFrameCommand
   | GetWindowListCommand;

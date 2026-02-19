@@ -2913,7 +2913,7 @@ const cursorAPI = {
 type CursorAPI = typeof cursorAPI;
 
 // =============================================================================
-// Squares API - Window Management (Rectangle-inspired with animations)
+// Squares API - Window Management (Rectangle-inspired instant snap)
 // =============================================================================
 
 const SquaresIPCChannels = {
@@ -3125,6 +3125,24 @@ const hotMicAPI = {
   },
   setCloseWindowWords: async (words: string): Promise<string> => {
     return ipcRenderer.invoke('hotmic:setCloseWindowWords', words);
+  },
+  getMinimizePhrases: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getMinimizePhrases');
+  },
+  setMinimizePhrases: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setMinimizePhrases', words);
+  },
+  getHidePhrases: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getHidePhrases');
+  },
+  setHidePhrases: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setHidePhrases', words);
+  },
+  getQuitPhrases: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getQuitPhrases');
+  },
+  setQuitPhrases: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setQuitPhrases', words);
   },
   getSwitchWords: async (): Promise<string> => {
     return ipcRenderer.invoke('hotmic:getSwitchWords');

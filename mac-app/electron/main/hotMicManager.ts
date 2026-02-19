@@ -112,6 +112,20 @@ const AMBIGUOUS_APP_NAMES = new Set([
 ]);
 
 /**
+ * Generic voice aliases that resolve to the first running app from a priority list.
+ * "browser" → whichever browser is running, "terminal" → whichever terminal, etc.
+ * These bypass the AMBIGUOUS_APP_NAMES check since the generic term is unambiguous in intent.
+ */
+const GENERIC_APP_ALIASES: Record<string, string[]> = {
+  'browser': ['Google Chrome', 'Arc', 'Safari', 'Firefox', 'Brave Browser'],
+  'the browser': ['Google Chrome', 'Arc', 'Safari', 'Firefox', 'Brave Browser'],
+  'my browser': ['Google Chrome', 'Arc', 'Safari', 'Firefox', 'Brave Browser'],
+  'editor': ['Cursor', 'Visual Studio Code', 'Xcode'],
+  'the editor': ['Cursor', 'Visual Studio Code', 'Xcode'],
+  'my editor': ['Cursor', 'Visual Studio Code', 'Xcode'],
+};
+
+/**
  * System voice commands — maps action names to their osascript implementation
  * and default trigger phrases. Each action sends a media key or system event.
  */
@@ -203,10 +217,9 @@ export class HotMicManager extends EventEmitter {
   // Transcript buffer — accumulates chunks until submit word or silence discard
   private transcriptBuffer: string[] = [];
   private bufferDiscardTimer: NodeJS.Timeout | null = null;
-  private readonly DEFAULT_BUFFER_DISCARD_MS = 5_000;
+  private readonly DEFAULT_BUFFER_DISCARD_MS = 3_000;
 
-  // Escape key — discards buffer without deactivating hot mic
-  private escapeRegistered = false;
+  // Escape key — reserved for future double-tap implementation
 
   // Local HTTP server for hook triggers
   private server: http.Server | null = null;
@@ -551,37 +564,8 @@ export class HotMicManager extends EventEmitter {
     }
 
     this.startAudioMonitoring();
-    this.registerEscapeKey();
   }
 
-  // ---------------------------------------------------------------------------
-  // Escape key — discard buffer, hide dot, keep listening
-  // ---------------------------------------------------------------------------
-
-  private registerEscapeKey(): void {
-    if (this.escapeRegistered) return;
-    const registered = globalShortcut.register('Escape', () => {
-      if (this.transcriptBuffer.length > 0) {
-        log.info('Hot Mic: Escape pressed, discarding buffer (%d chunks)', this.transcriptBuffer.length);
-        this.transcriptBuffer = [];
-        this.stopBufferDiscardTimer();
-        this.cursorStatusManager?.hideHotMic();
-      }
-    });
-    this.escapeRegistered = registered;
-    if (registered) {
-      log.info('Hot Mic: registered Escape key for buffer discard');
-    } else {
-      log.warn('Hot Mic: failed to register Escape key (may be in use)');
-    }
-  }
-
-  private unregisterEscapeKey(): void {
-    if (!this.escapeRegistered) return;
-    globalShortcut.unregister('Escape');
-    this.escapeRegistered = false;
-    log.info('Hot Mic: unregistered Escape key');
-  }
 
   // ---------------------------------------------------------------------------
   // Activation / Deactivation
@@ -854,23 +838,26 @@ export class HotMicManager extends EventEmitter {
     const stripped = trimmed.replace(/[.,!?;:]+$/, '').trim();
     const lower = stripped.toLowerCase();
 
-    // Auto-submit: if buffer is empty and chunk is a bare number/permission word,
-    // submit immediately without needing the submit word
-    if (this.transcriptBuffer.length === 0) {
-      const mappedNumber = NUMBER_MAP[lower];
-      const mappedPermission = PERMISSION_MAP[lower];
-      if (mappedNumber || mappedPermission) {
-        const mapped = mappedNumber || mappedPermission;
-        const target = this.getTypeTarget();
-        if (target) {
-          log.info('Hot Mic: auto-submitting shortcut "%s" → "%s"', lower, mapped);
-          const result = await this.nativeHelper.typeIntoApp(target, mapped, true);
-          if (result.success) {
-            this.playSound('paste');
-          }
+    // Auto-submit: if chunk is a bare number/permission word, submit immediately.
+    // Discards any buffered text — a standalone "two" clearly means "select option 2",
+    // not a continuation of whatever was buffered before.
+    const mappedNumber = NUMBER_MAP[lower];
+    const mappedPermission = PERMISSION_MAP[lower];
+    if (mappedNumber || mappedPermission) {
+      const mapped = mappedNumber || mappedPermission;
+      const target = this.getTypeTarget();
+      if (target) {
+        if (this.transcriptBuffer.length > 0) {
+          log.info('Hot Mic: discarding buffer (%d chunks) for shortcut "%s"', this.transcriptBuffer.length, lower);
+          this.transcriptBuffer = [];
         }
-        return;
+        log.info('Hot Mic: auto-submitting shortcut "%s" → "%s"', lower, mapped);
+        const result = await this.nativeHelper.typeIntoApp(target, mapped, true);
+        if (result.success) {
+          this.playSound('paste');
+        }
       }
+      return;
     }
 
     // Unified tail-match: navigation, system, squares, app switch, start claude, restart server
@@ -881,6 +868,31 @@ export class HotMicManager extends EventEmitter {
         this.transcriptBuffer.push(norm);
         log.info('Hot Mic: buffered text before command: "%s"', norm);
       }
+
+      // If there's buffered text, flush it before executing the command.
+      // Without this, text dictated before a mid-dictation command (e.g. "leave full screen")
+      // would sit in the buffer and eventually be discarded by the silence timeout.
+      // Cancel-type commands discard the buffer instead (user intent is to abort).
+      const isCancel = tailMatch.commandName === 'cancel';
+      if (this.transcriptBuffer.length > 0) {
+        if (isCancel) {
+          log.info('Hot Mic: discarding buffer (%d chunks) for cancel command', this.transcriptBuffer.length);
+          this.transcriptBuffer = [];
+          this.updateOrangeDot();
+        } else {
+          const fullText = this.transcriptBuffer.join(' ');
+          this.transcriptBuffer = [];
+          this.updateOrangeDot();
+          const target = this.getTypeTarget();
+          if (fullText && target) {
+            let mappedText = this.applyMappings(fullText);
+            mappedText = this.applyCommandDetection(mappedText);
+            log.info('Hot Mic: flushing buffer before command (%d chars): "%s"', mappedText.length, mappedText);
+            await this.nativeHelper.typeIntoApp(target, mappedText, false);
+          }
+        }
+      }
+
       log.info('Hot Mic: tail-match command "%s" → %s', lower, tailMatch.commandName);
       if (tailMatch.script) {
         exec(tailMatch.script);
@@ -977,6 +989,9 @@ export class HotMicManager extends EventEmitter {
   private static readonly DEFAULT_CANCEL_PHRASES = 'cancel, stop, abort';
   private static readonly DEFAULT_NEW_WINDOW_PHRASES = 'new window';
   private static readonly DEFAULT_CLOSE_WINDOW_PHRASES = 'close window, close the window, close this window';
+  private static readonly DEFAULT_MINIMIZE_PHRASES = 'minimize, minimize window, minimize the window';
+  private static readonly DEFAULT_HIDE_PHRASES = 'hide, hide app, hide this app, hide the app';
+  private static readonly DEFAULT_QUIT_PHRASES = 'quit, quit app, quit this app';
   private static readonly DEFAULT_SWITCH_WORDS = 'next, switch';
   private static readonly DEFAULT_PREV_WINDOW_WORDS = 'back, previous';
   private static readonly DEFAULT_RUN_CLAUDE_PHRASES = 'start claude, start cloud, run claude';
@@ -1100,6 +1115,26 @@ export class HotMicManager extends EventEmitter {
         script: 'osascript -e \'tell application "System Events" to keystroke "n" using command down\'' },
       { name: 'close window', phrases: this.getPhraseList('hotMicCloseWindowWords', HotMicManager.DEFAULT_CLOSE_WINDOW_PHRASES),
         script: 'osascript -e \'tell application "System Events" to keystroke "w" using command down\'' },
+      { name: 'minimize', phrases: this.getPhraseList('hotMicMinimizePhrases', HotMicManager.DEFAULT_MINIMIZE_PHRASES),
+        action: async () => {
+          if (this.squaresManager) {
+            await this.squaresManager.executeAction('minimize');
+          } else {
+            exec('osascript -e \'tell application "System Events" to keystroke "m" using command down\'');
+          }
+        },
+      },
+      { name: 'hide', phrases: this.getPhraseList('hotMicHidePhrases', HotMicManager.DEFAULT_HIDE_PHRASES),
+        action: async () => {
+          if (this.squaresManager) {
+            await this.squaresManager.executeAction('hide');
+          } else {
+            exec('osascript -e \'tell application "System Events" to keystroke "h" using command down\'');
+          }
+        },
+      },
+      { name: 'quit', phrases: this.getPhraseList('hotMicQuitPhrases', HotMicManager.DEFAULT_QUIT_PHRASES),
+        script: 'osascript -e \'tell application "System Events" to keystroke "q" using command down\'' },
       { name: 'cancel', phrases: this.getPhraseList('hotMicCancelWords', HotMicManager.DEFAULT_CANCEL_PHRASES),
         script: 'osascript -e \'tell application "System Events" to keystroke "c" using control down\'' },
       { name: 'start claude', phrases: this.getPhraseList('hotMicRunClaudeWords', HotMicManager.DEFAULT_RUN_CLAUDE_PHRASES),
@@ -1149,6 +1184,9 @@ export class HotMicManager extends EventEmitter {
     const stripped = text.replace(/[.,!?;:]+$/, '').trim();
     const words = stripped.split(/\s+/);
 
+    const allPhrases = commandSets.map(c => `${c.name}:[${c.phrases.join('|')}]`).join(', ');
+    log.info('Hot Mic: [debug] tail-match input="%s" words=%j commandSets=%s', text, words, allPhrases);
+
     for (const cmd of commandSets) {
       for (const phrase of cmd.phrases) {
         const phraseWords = phrase.split(/\s+/);
@@ -1182,6 +1220,29 @@ export class HotMicManager extends EventEmitter {
           commandName: 'app-switch:' + appTailMatch.appName,
           action: async () => { await this.activateAppByName(appTailMatch); },
           remainingText: appTailMatch.remainingText,
+        };
+      }
+    }
+
+    // Dynamic: Quit specific app by name ("quit slack", "quit the browser")
+    const quitMatch = await this.parseQuitAppFromTail(text);
+    if (quitMatch) {
+      return {
+        commandName: 'quit-app:' + quitMatch.appName,
+        action: async () => { await this.quitAppByName(quitMatch); },
+        remainingText: quitMatch.remainingText,
+      };
+    }
+
+    // Dynamic: Bare app name without prefix ("browser", "chrome", "terminal")
+    // Only matches non-ambiguous names to avoid false triggers
+    if (this.appSwitcher) {
+      const bareMatch = await this.parseBareAppFromTail(text);
+      if (bareMatch) {
+        return {
+          commandName: 'app-switch:' + bareMatch.appName,
+          action: async () => { await this.activateAppByName(bareMatch); },
+          remainingText: bareMatch.remainingText,
         };
       }
     }
@@ -1349,7 +1410,160 @@ export class HotMicManager extends EventEmitter {
         });
       }
     } catch {
-      // Fail silently
+      // App may not respond
+    }
+  }
+
+  /**
+   * Check if text ends with "quit X" / "close X" / "kill X" (app-level quit).
+   * Reuses the same app name matching as parseAppSwitchFromTail.
+   */
+  private async parseQuitAppFromTail(text: string): Promise<{ appName: string; bundleId: string | null; remainingText: string } | null> {
+    const prefixes = ['quit ', 'close ', 'kill '];
+    const runningApps = await this.getRunningApps();
+
+    // Build all possible app phrases (same logic as parseAppSwitchFromTail)
+    const phrases: Array<{ phrase: string; canonical: string }> = [];
+
+    const userAliases = this.preferences.getPreference('hotMicAppAliases') ?? [];
+    for (const { appName, aliases } of userAliases) {
+      const aliasList = aliases.split(',').map(a => a.trim().toLowerCase()).filter(a => a.length > 0);
+      for (const alias of aliasList) {
+        phrases.push({ phrase: alias, canonical: appName });
+      }
+    }
+
+    for (const [canonical, aliases] of Object.entries(APP_VOICE_ALIASES)) {
+      for (const alias of aliases) {
+        phrases.push({ phrase: alias, canonical });
+      }
+    }
+
+    for (const app of runningApps) {
+      phrases.push({ phrase: app.name.toLowerCase(), canonical: app.name });
+    }
+
+    phrases.sort((a, b) => b.phrase.length - a.phrase.length);
+
+    const articles = ['the ', 'a ', 'an '];
+    for (const prefix of prefixes) {
+      for (const { phrase, canonical } of phrases) {
+        const triggers = [prefix + phrase];
+        for (const article of articles) {
+          triggers.push(prefix + article + phrase);
+        }
+        for (const trigger of triggers) {
+          if (text === trigger) {
+            const bundleId = this.findBundleId(canonical, runningApps);
+            return { appName: canonical, bundleId, remainingText: '' };
+          }
+          if (text.endsWith(' ' + trigger)) {
+            const remaining = text.slice(0, -(trigger.length + 1)).trim();
+            const bundleId = this.findBundleId(canonical, runningApps);
+            return { appName: canonical, bundleId, remainingText: remaining };
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Check if text ends with a bare app name (no "open"/"switch to" prefix).
+   * Only matches non-ambiguous names to avoid false triggers in conversation.
+   * Also handles generic aliases like "browser" → first running browser.
+   */
+  private async parseBareAppFromTail(text: string): Promise<{ appName: string; bundleId: string | null; remainingText: string } | null> {
+    const runningApps = await this.getRunningApps();
+    const stripped = text.replace(/[.,!?;:]+$/, '').trim().toLowerCase();
+    if (!stripped) return null;
+
+    // Build candidate phrases: generic aliases + specific aliases + running app names
+    // Sort longest first so "arc browser" matches before "arc"
+    const candidates: Array<{ phrase: string; resolve: () => { appName: string; bundleId: string | null } | null }> = [];
+
+    // Generic aliases (browser, editor, terminal) — resolve to first running match
+    for (const [alias, appNames] of Object.entries(GENERIC_APP_ALIASES)) {
+      candidates.push({
+        phrase: alias,
+        resolve: () => {
+          for (const name of appNames) {
+            const bundleId = this.findBundleId(name, runningApps);
+            if (bundleId) return { appName: name, bundleId };
+          }
+          // No running match — try launching the first one
+          return { appName: appNames[0], bundleId: null };
+        },
+      });
+    }
+
+    // User-configured aliases — always trusted (user explicitly chose these words)
+    const userAliases = this.preferences.getPreference('hotMicAppAliases') ?? [];
+    for (const { appName, aliases } of userAliases) {
+      const aliasList = aliases.split(',').map(a => a.trim().toLowerCase()).filter(a => a.length > 0);
+      for (const alias of aliasList) {
+        candidates.push({
+          phrase: alias,
+          resolve: () => ({ appName, bundleId: this.findBundleId(appName, runningApps) }),
+        });
+      }
+    }
+
+    // Built-in aliases (skip ambiguous ones)
+    for (const [canonical, aliases] of Object.entries(APP_VOICE_ALIASES)) {
+      for (const alias of aliases) {
+        if (AMBIGUOUS_APP_NAMES.has(alias)) continue;
+        candidates.push({
+          phrase: alias,
+          resolve: () => ({ appName: canonical, bundleId: this.findBundleId(canonical, runningApps) }),
+        });
+      }
+    }
+
+    // Running apps by name (skip ambiguous)
+    for (const app of runningApps) {
+      const lower = app.name.toLowerCase();
+      if (AMBIGUOUS_APP_NAMES.has(lower)) continue;
+      candidates.push({
+        phrase: lower,
+        resolve: () => ({ appName: app.name, bundleId: app.bundleId }),
+      });
+    }
+
+    // Sort longest first
+    candidates.sort((a, b) => b.phrase.length - a.phrase.length);
+
+    // Match against tail of text
+    for (const { phrase, resolve } of candidates) {
+      if (stripped === phrase) {
+        const result = resolve();
+        if (result) return { ...result, remainingText: '' };
+      }
+      if (stripped.endsWith(' ' + phrase)) {
+        const result = resolve();
+        if (result) {
+          const remaining = stripped.slice(0, -(phrase.length + 1)).trim();
+          return { ...result, remainingText: remaining };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Quit an app by name. Uses AppleScript to gracefully quit.
+   */
+  private async quitAppByName(match: { bundleId: string | null; appName: string }): Promise<void> {
+    try {
+      const safeName = match.appName.replace(/'/g, "'\\''");
+      await new Promise<void>((resolve) => {
+        exec(`osascript -e 'tell application "${safeName}" to quit'`, () => resolve());
+      });
+      log.info('Hot Mic: quit app "%s"', match.appName);
+    } catch {
+      // App may not respond to quit
     }
   }
 
@@ -1616,7 +1830,6 @@ export class HotMicManager extends EventEmitter {
   private cleanup(): void {
     this.stopAudioMonitoring();
     this.stopBufferDiscardTimer();
-    this.unregisterEscapeKey();
     this.targetBundleId = null;
     this.transcriptBuffer = [];
     this.warmupPromise = null;

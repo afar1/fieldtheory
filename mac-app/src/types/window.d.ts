@@ -968,6 +968,12 @@ interface HotMicAPI {
   setNewWindowWords: (words: string) => Promise<string>;
   getCloseWindowWords: () => Promise<string>;
   setCloseWindowWords: (words: string) => Promise<string>;
+  getMinimizePhrases: () => Promise<string>;
+  setMinimizePhrases: (words: string) => Promise<string>;
+  getHidePhrases: () => Promise<string>;
+  setHidePhrases: (words: string) => Promise<string>;
+  getQuitPhrases: () => Promise<string>;
+  setQuitPhrases: (words: string) => Promise<string>;
   getSwitchWords: () => Promise<string>;
   setSwitchWords: (words: string) => Promise<string>;
   getRunClaudeWords: () => Promise<string>;
@@ -1341,7 +1347,7 @@ declare global {
   }
 
   // =========================================================================
-  // Squares API - Window Management (Rectangle-inspired with animations)
+  // Squares API - Window Management (Rectangle-inspired instant snap)
   // =========================================================================
 
   /**
@@ -1378,18 +1384,10 @@ declare global {
   }
 
   /**
-   * Animation style for window transitions.
-   */
-  type SquaresAnimationStyle = 'none' | 'smooth' | 'snappy';
-
-  /**
    * Squares configuration.
    */
   interface SquaresConfig {
     enabled: boolean;
-    animationStyle: SquaresAnimationStyle;
-    animationDurationMs: number;
-    animationSteps: number;
     gapSize: number;
     maxHistorySize: number;
   }
@@ -1434,7 +1432,7 @@ declare global {
 
   /**
    * Squares API for window management.
-   * Controls Rectangle-style window snapping with smooth animations.
+   * Controls Rectangle-style window snapping with instant snap.
    */
   interface SquaresAPI {
     // Execute a layout action (e.g., leftHalf, grid, focus)
