@@ -24,6 +24,9 @@ export default function HotMicSettings() {
   const [prevWindowWords, setPrevWindowWords] = useState('');
   const [newWindowWords, setNewWindowWords] = useState('');
   const [closeWindowWords, setCloseWindowWords] = useState('');
+  const [minimizePhrases, setMinimizePhrases] = useState('');
+  const [hidePhrases, setHidePhrases] = useState('');
+  const [quitPhrases, setQuitPhrases] = useState('');
   const [runClaudeWords, setRunClaudeWords] = useState('');
   const [focusPhrases, setFocusPhrases] = useState('');
   const [cascadePhrases, setCascadePhrases] = useState('');
@@ -46,7 +49,7 @@ export default function HotMicSettings() {
     if (!window.hotMicAPI) return;
 
     const load = async () => {
-      const [en, target, sounds, terminals, state, hookStatus, submit, pw, cw, sw, pvw, nww, cww, rcw, fp, cp, rsw, rsc, wc] = await Promise.all([
+      const [en, target, sounds, terminals, state, hookStatus, submit, pw, cw, sw, pvw, nww, cww, mp, hp, qp, rcw, fp, cp, rsw, rsc, wc] = await Promise.all([
         window.hotMicAPI!.getEnabled(),
         window.hotMicAPI!.getTargetApp(),
         window.hotMicAPI!.getSoundsEnabled(),
@@ -60,6 +63,9 @@ export default function HotMicSettings() {
         window.hotMicAPI!.getPrevWindowWords(),
         window.hotMicAPI!.getNewWindowWords(),
         window.hotMicAPI!.getCloseWindowWords(),
+        window.hotMicAPI!.getMinimizePhrases(),
+        window.hotMicAPI!.getHidePhrases(),
+        window.hotMicAPI!.getQuitPhrases(),
         window.hotMicAPI!.getRunClaudeWords(),
         window.hotMicAPI!.getFocusPhrases(),
         window.hotMicAPI!.getCascadePhrases(),
@@ -80,6 +86,9 @@ export default function HotMicSettings() {
       setPrevWindowWords(pvw);
       setNewWindowWords(nww);
       setCloseWindowWords(cww);
+      setMinimizePhrases(mp);
+      setHidePhrases(hp);
+      setQuitPhrases(qp);
       setRunClaudeWords(rcw);
       setFocusPhrases(fp);
       setCascadePhrases(cp);
@@ -176,6 +185,21 @@ export default function HotMicSettings() {
     if (!window.hotMicAPI || !closeWindowWords.trim()) return;
     await window.hotMicAPI.setCloseWindowWords(closeWindowWords.trim());
   }, [closeWindowWords]);
+
+  const handleMinimizePhrasesSave = useCallback(async () => {
+    if (!window.hotMicAPI || !minimizePhrases.trim()) return;
+    await window.hotMicAPI.setMinimizePhrases(minimizePhrases.trim());
+  }, [minimizePhrases]);
+
+  const handleHidePhrasesSave = useCallback(async () => {
+    if (!window.hotMicAPI || !hidePhrases.trim()) return;
+    await window.hotMicAPI.setHidePhrases(hidePhrases.trim());
+  }, [hidePhrases]);
+
+  const handleQuitPhrasesSave = useCallback(async () => {
+    if (!window.hotMicAPI || !quitPhrases.trim()) return;
+    await window.hotMicAPI.setQuitPhrases(quitPhrases.trim());
+  }, [quitPhrases]);
 
   const handleRunClaudeWordsSave = useCallback(async () => {
     if (!window.hotMicAPI || !runClaudeWords.trim()) return;
@@ -484,6 +508,63 @@ export default function HotMicSettings() {
       </div>
       <p style={styles.description}>
         Say any of these to close the current window (Cmd+W).
+      </p>
+
+      <div style={styles.divider} />
+
+      {/* Minimize phrases */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Minimize Phrases</span>
+        <input
+          type="text"
+          value={minimizePhrases}
+          onChange={(e) => setMinimizePhrases(e.target.value)}
+          placeholder="minimize, minimize window, minimize the window"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleMinimizePhrasesSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleMinimizePhrasesSave()}
+        />
+      </div>
+      <p style={styles.description}>
+        Say any of these to minimize the current window (Cmd+M).
+      </p>
+
+      <div style={styles.divider} />
+
+      {/* Hide phrases */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Hide App Phrases</span>
+        <input
+          type="text"
+          value={hidePhrases}
+          onChange={(e) => setHidePhrases(e.target.value)}
+          placeholder="hide, hide app, hide this app, hide the app"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleHidePhrasesSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleHidePhrasesSave()}
+        />
+      </div>
+      <p style={styles.description}>
+        Say any of these to hide the current app (Cmd+H).
+      </p>
+
+      <div style={styles.divider} />
+
+      {/* Quit phrases */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Quit Phrases</span>
+        <input
+          type="text"
+          value={quitPhrases}
+          onChange={(e) => setQuitPhrases(e.target.value)}
+          placeholder="quit, quit app, quit this app"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleQuitPhrasesSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleQuitPhrasesSave()}
+        />
+      </div>
+      <p style={styles.description}>
+        Say any of these to quit the current app (Cmd+Q). Also works with app names: "quit slack", "quit the browser".
       </p>
 
       <div style={styles.divider} />
