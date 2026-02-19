@@ -112,20 +112,6 @@ const AMBIGUOUS_APP_NAMES = new Set([
 ]);
 
 /**
- * Generic voice aliases that resolve to the first running app from a priority list.
- * "browser" → whichever browser is running, "terminal" → whichever terminal, etc.
- * These bypass the AMBIGUOUS_APP_NAMES check since the generic term is unambiguous in intent.
- */
-const GENERIC_APP_ALIASES: Record<string, string[]> = {
-  'browser': ['Google Chrome', 'Arc', 'Safari', 'Firefox', 'Brave Browser'],
-  'the browser': ['Google Chrome', 'Arc', 'Safari', 'Firefox', 'Brave Browser'],
-  'my browser': ['Google Chrome', 'Arc', 'Safari', 'Firefox', 'Brave Browser'],
-  'editor': ['Cursor', 'Visual Studio Code', 'Xcode'],
-  'the editor': ['Cursor', 'Visual Studio Code', 'Xcode'],
-  'my editor': ['Cursor', 'Visual Studio Code', 'Xcode'],
-};
-
-/**
  * System voice commands — maps action names to their osascript implementation
  * and default trigger phrases. Each action sends a media key or system event.
  */
@@ -237,6 +223,9 @@ export class HotMicManager extends EventEmitter {
     /^\s*$/,
     /^\s*\(.*\)\s*$/,
   ];
+
+  // Snap-to-toggle: track whether apps are currently hidden
+  private appsHidden = false;
 
   // Conflict resolution
   private transcriberStatusGetter: (() => string) | null = null;
@@ -606,6 +595,7 @@ export class HotMicManager extends EventEmitter {
 
   deactivate(): void {
     log.info('Hot Mic deactivated');
+    this.appsHidden = false;
     this.cleanup();
     this.setState('idle');
     this.playSound('recordingStop');
@@ -782,7 +772,11 @@ export class HotMicManager extends EventEmitter {
       }
 
       // Transcribe the completed chunk — audio monitoring stays active
-      const transcript = (await this.transcribe(wavPath)).replace(/\([^)]*\)/g, '').trim();
+      const rawTranscript = (await this.transcribe(wavPath)).trim();
+      log.info('Hot Mic: raw transcript: "%s"', rawTranscript);
+      // Detect snap gesture before stripping parentheticals
+      const hasSnap = /\(snap\)/i.test(rawTranscript);
+      const transcript = rawTranscript.replace(/\([^)]*\)/g, '').trim();
       const tPost = performance.now();
       log.info('Hot Mic: [timing] transcribe: %dms', Math.round(tPost - t0));
 
@@ -793,6 +787,17 @@ export class HotMicManager extends EventEmitter {
       } catch { /* ignore */ }
 
       if (!this.isActive) return;
+
+      // Handle snap gesture — toggle hide/show all apps
+      if (hasSnap) {
+        log.info('Hot Mic: snap detected, toggling app visibility');
+        await this.toggleAppVisibility();
+        this.playSound('paste');
+        this.updateOrangeDot();
+        this.nativeHelper.setHarvestMode(this.transcriptBuffer.length === 0 ? 'command' : 'dictation');
+        // If the snap was the only content, skip normal processing
+        if (!transcript || this.isHallucination(transcript)) return;
+      }
 
       if (this.isHallucination(transcript)) {
         log.info('Hot Mic: skipping hallucinated/empty chunk');
@@ -1472,31 +1477,16 @@ export class HotMicManager extends EventEmitter {
   /**
    * Check if text ends with a bare app name (no "open"/"switch to" prefix).
    * Only matches non-ambiguous names to avoid false triggers in conversation.
-   * Also handles generic aliases like "browser" → first running browser.
+   * User-configured aliases always match (user explicitly chose those words).
    */
   private async parseBareAppFromTail(text: string): Promise<{ appName: string; bundleId: string | null; remainingText: string } | null> {
     const runningApps = await this.getRunningApps();
     const stripped = text.replace(/[.,!?;:]+$/, '').trim().toLowerCase();
     if (!stripped) return null;
 
-    // Build candidate phrases: generic aliases + specific aliases + running app names
+    // Build candidate phrases: user aliases + built-in aliases + running app names
     // Sort longest first so "arc browser" matches before "arc"
     const candidates: Array<{ phrase: string; resolve: () => { appName: string; bundleId: string | null } | null }> = [];
-
-    // Generic aliases (browser, editor, terminal) — resolve to first running match
-    for (const [alias, appNames] of Object.entries(GENERIC_APP_ALIASES)) {
-      candidates.push({
-        phrase: alias,
-        resolve: () => {
-          for (const name of appNames) {
-            const bundleId = this.findBundleId(name, runningApps);
-            if (bundleId) return { appName: name, bundleId };
-          }
-          // No running match — try launching the first one
-          return { appName: appNames[0], bundleId: null };
-        },
-      });
-    }
 
     // User-configured aliases — always trusted (user explicitly chose these words)
     const userAliases = this.preferences.getPreference('hotMicAppAliases') ?? [];
@@ -1779,6 +1769,32 @@ export class HotMicManager extends EventEmitter {
     } else {
       const repoRoot = path.resolve(__dirname, '../../..');
       return path.join(repoRoot, 'build-whisper', 'bin', 'whisper-cli');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Snap gesture — toggle hide/show all apps
+  // ---------------------------------------------------------------------------
+
+  private async toggleAppVisibility(): Promise<void> {
+    if (this.appsHidden) {
+      // Show all apps
+      if (this.squaresManager) {
+        await this.squaresManager.executeAction('showAll');
+      } else {
+        exec(`osascript -e 'tell application "System Events" to set visible of every process whose visible is false to true'`);
+      }
+      this.appsHidden = false;
+      log.info('Hot Mic: snap → showing all apps');
+    } else {
+      // Hide all apps except frontmost
+      if (this.squaresManager) {
+        await this.squaresManager.executeAction('focus');
+      } else {
+        exec(`osascript -e 'tell application "System Events" to keystroke "h" using {command down, option down}'`);
+      }
+      this.appsHidden = true;
+      log.info('Hot Mic: snap → hiding all other apps');
     }
   }
 
