@@ -234,8 +234,6 @@ export class HotMicManager extends EventEmitter {
 
   // Squares window management (voice-triggered snapping)
   private squaresManager: {
-    handleVoiceCommand(text: string): Promise<boolean>;
-    handleExactVoiceCommand(text: string): Promise<boolean>;
     parseVoiceCommandFromTail(text: string): { action: string; remainingText: string } | null;
     executeAction(action: string): Promise<boolean>;
   } | null = null;
@@ -413,8 +411,6 @@ export class HotMicManager extends EventEmitter {
   }
 
   setSquaresManager(manager: {
-    handleVoiceCommand(text: string): Promise<boolean>;
-    handleExactVoiceCommand(text: string): Promise<boolean>;
     parseVoiceCommandFromTail(text: string): { action: string; remainingText: string } | null;
     executeAction(action: string): Promise<boolean>;
   }): void {
@@ -858,122 +854,6 @@ export class HotMicManager extends EventEmitter {
     const stripped = trimmed.replace(/[.,!?;:]+$/, '').trim();
     const lower = stripped.toLowerCase();
 
-    // Navigation command: cycle to the next window of the same app (Cmd+`)
-    if (this.transcriptBuffer.length === 0 && this.isSwitchWord(lower)) {
-      log.info('Hot Mic: switch command "%s" — cycling window (Cmd+`)', lower);
-      exec('osascript -e \'tell application "System Events" to keystroke "`" using command down\'');
-      return;
-    }
-
-    // Navigation command: cycle to the previous window (Cmd+Shift+`)
-    if (this.transcriptBuffer.length === 0 && this.isPrevWindowWord(lower)) {
-      log.info('Hot Mic: prev window command "%s" — cycling window back (Cmd+Shift+`)', lower);
-      exec('osascript -e \'tell application "System Events" to keystroke "`" using {command down, shift down}\'');
-      return;
-    }
-
-    // New window command: open a new terminal window (Cmd+N)
-    if (this.transcriptBuffer.length === 0 && this.isNewWindowPhrase(lower)) {
-      log.info('Hot Mic: new window command "%s" — sending Cmd+N', lower);
-      exec('osascript -e \'tell application "System Events" to keystroke "n" using command down\'');
-      return;
-    }
-
-    // Close window command: close the current window (Cmd+W)
-    if (this.transcriptBuffer.length === 0 && this.isCloseWindowPhrase(lower)) {
-      log.info('Hot Mic: close window command "%s" — sending Cmd+W', lower);
-      exec('osascript -e \'tell application "System Events" to keystroke "w" using command down\'');
-      return;
-    }
-
-    // Start Claude: type "claude" and submit
-    const startClaude = lower.replace(/[.,!?;:]+/g, '').replace(/\s+/g, ' ').trim();
-    if (this.transcriptBuffer.length === 0 && this.isRunClaudePhrase(startClaude)) {
-      const target = this.getTypeTarget();
-      if (target) {
-        log.info('Hot Mic: start claude command — typing "claude" and submitting');
-        const result = await this.nativeHelper.typeIntoApp(target, 'claude', true);
-        if (result.success) this.playSound('paste');
-      }
-      return;
-    }
-
-    // Restart server: Ctrl+C then type the configured command (works mid-buffer too)
-    if (this.isRestartServerPhrase(startClaude)) {
-      const command = this.preferences.getPreference('hotMicRestartServerCommand');
-      const cmd = typeof command === 'string' && command.trim() ? command.trim() : '';
-      if (cmd) {
-        const target = this.getTypeTarget();
-        if (target) {
-          log.info('Hot Mic: restart server command — Ctrl+C then "%s" (target: %s)', cmd, target);
-          // Spawn a detached shell script that outlives Field Theory.
-          // It sends Ctrl+C to the terminal, waits for the process to die
-          // (which kills Field Theory itself), then types the restart command.
-          const safeCmd = cmd.replace(/'/g, "'\\''");
-          const safeBundleId = target.replace(/'/g, "'\\''");
-          const script = [
-            // Send Ctrl+C to the frontmost terminal
-            `osascript -e 'tell application "System Events" to keystroke "c" using control down'`,
-            // Wait for the old process to fully terminate
-            `sleep 3`,
-            // Type the restart command into the target app via osascript
-            `osascript -e 'tell application "System Events"' -e 'delay 0.1' -e 'keystroke "${safeCmd}"' -e 'keystroke return' -e 'end tell'`,
-          ].join(' && ');
-          const child = spawn('bash', ['-c', script], {
-            detached: true,
-            stdio: 'ignore',
-          });
-          child.unref();
-          this.playSound('paste');
-        }
-      } else {
-        log.info('Hot Mic: restart server command — no command configured, ignoring');
-      }
-      return;
-    }
-
-    // Cancel command: send Ctrl+C to the terminal
-    if (this.transcriptBuffer.length === 0 && this.isCancelPhrase(lower)) {
-      log.info('Hot Mic: cancel command "%s" — sending Ctrl+C', lower);
-      exec('osascript -e \'tell application "System Events" to keystroke "c" using control down\'');
-      return;
-    }
-
-    // System commands: media controls, volume, sleep, lock
-    if (this.transcriptBuffer.length === 0) {
-      const systemScript = this.matchSystemCommand(lower);
-      if (systemScript) {
-        log.info('Hot Mic: system command "%s"', lower);
-        exec(systemScript);
-        this.playSound('paste');
-        return;
-      }
-    }
-
-    // Squares window management commands (snap left, grid, focus, etc.)
-    // Use exact matching to avoid false triggers on multi-sentence chunks
-    // like "right. snap left" (where only "snap left" is a command).
-    if (this.transcriptBuffer.length === 0 && this.squaresManager) {
-      const handled = await this.squaresManager.handleExactVoiceCommand(lower);
-      if (handled) {
-        log.info('Hot Mic: squares command "%s" executed', lower);
-        this.playSound('paste');
-        return;
-      }
-    }
-
-    // App switching: exact match when buffer is empty.
-    // "open chrome", "switch to finder", or bare non-ambiguous app name.
-    if (this.transcriptBuffer.length === 0 && this.appSwitcher) {
-      const appSwitch = await this.parseAppSwitchExact(lower);
-      if (appSwitch) {
-        log.info('Hot Mic: app switch "%s" → activating %s', lower, appSwitch.appName);
-        await this.activateAppByName(appSwitch);
-        this.playSound('paste');
-        return;
-      }
-    }
-
     // Auto-submit: if buffer is empty and chunk is a bare number/permission word,
     // submit immediately without needing the submit word
     if (this.transcriptBuffer.length === 0) {
@@ -991,6 +871,26 @@ export class HotMicManager extends EventEmitter {
         }
         return;
       }
+    }
+
+    // Unified tail-match: navigation, system, squares, app switch, start claude, restart server
+    const tailMatch = await this.matchTailCommand(lower);
+    if (tailMatch) {
+      if (tailMatch.remainingText.trim()) {
+        const norm = tailMatch.remainingText.trim().replace(/\.+$/, '').trim();
+        this.transcriptBuffer.push(norm);
+        log.info('Hot Mic: buffered text before command: "%s"', norm);
+      }
+      log.info('Hot Mic: tail-match command "%s" → %s', lower, tailMatch.commandName);
+      if (tailMatch.script) {
+        exec(tailMatch.script);
+      }
+      if (tailMatch.action) {
+        await tailMatch.action();
+      }
+      this.playSound('paste');
+      this.resetBufferDiscardTimer();
+      return;
     }
 
     // Check for paste word (flush buffer without submitting)
@@ -1061,41 +961,6 @@ export class HotMicManager extends EventEmitter {
       return;
     }
 
-    // Check if chunk ends with a Squares window command (tail-match).
-    // This lets users say "fix the auth module grid" — buffers the text, fires the command.
-    if (this.squaresManager) {
-      const tailMatch = this.squaresManager.parseVoiceCommandFromTail(lower);
-      if (tailMatch) {
-        if (tailMatch.remainingText.trim()) {
-          const normalized = tailMatch.remainingText.trim().replace(/\.+$/, '').trim();
-          this.transcriptBuffer.push(normalized);
-          log.info('Hot Mic: buffered text before squares command: "%s"', normalized);
-        }
-        log.info('Hot Mic: tail-match squares command "%s" → executing', lower);
-        this.squaresManager.executeAction(tailMatch.action);
-        this.playSound('paste');
-        this.resetBufferDiscardTimer();
-        return;
-      }
-    }
-
-    // App switching: tail match — "fix the auth bug open chrome" → buffer text, switch app.
-    if (this.appSwitcher) {
-      const appTailMatch = await this.parseAppSwitchFromTail(lower);
-      if (appTailMatch) {
-        if (appTailMatch.remainingText.trim()) {
-          const norm = appTailMatch.remainingText.trim().replace(/\.+$/, '').trim();
-          this.transcriptBuffer.push(norm);
-          log.info('Hot Mic: buffered text before app switch: "%s"', norm);
-        }
-        log.info('Hot Mic: tail-match app switch "%s" → activating %s', lower, appTailMatch.appName);
-        await this.activateAppByName(appTailMatch);
-        this.playSound('paste');
-        this.resetBufferDiscardTimer();
-        return;
-      }
-    }
-
     // No submit word — add to buffer
     // Normalize for natural dictation: lowercase and strip trailing periods
     // (Qwen treats each chunk as a standalone utterance, adding false sentence-ending
@@ -1103,7 +968,7 @@ export class HotMicManager extends EventEmitter {
     const normalized = trimmed.toLowerCase().replace(/\.+$/, '').trim();
     this.transcriptBuffer.push(normalized);
     log.info('Hot Mic: buffered chunk (%d total): "%s" (no submit/paste phrase matched)', this.transcriptBuffer.length, normalized);
-    this.updateOrangeDot();
+    // Orange dot update is handled by onChunkReady after this method returns
     this.resetBufferDiscardTimer();
   }
 
@@ -1216,84 +1081,124 @@ export class HotMicManager extends EventEmitter {
   }
 
   /**
-   * Check if a word is a configured switch/navigation word.
+   * Unified tail-match for all voice commands.
+   * Checks static phrase sets first, then dynamic sources (squares, app switching).
+   * Returns the command to execute and remaining text, or null.
    */
-  private isSwitchWord(word: string): boolean {
-    const pref = this.preferences.getPreference('hotMicSwitchWords');
-    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_SWITCH_WORDS;
-    const words = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
-    return words.includes(word);
-  }
+  private async matchTailCommand(text: string): Promise<{ commandName: string; script?: string; action?: () => Promise<void>; remainingText: string } | null> {
+    const commandSets: Array<{
+      name: string;
+      phrases: string[];
+      script?: string;
+      action?: () => Promise<void>;
+    }> = [
+      { name: 'switch window', phrases: this.getPhraseList('hotMicSwitchWords', HotMicManager.DEFAULT_SWITCH_WORDS),
+        script: 'osascript -e \'tell application "System Events" to keystroke "`" using command down\'' },
+      { name: 'prev window', phrases: this.getPhraseList('hotMicPrevWindowWords', HotMicManager.DEFAULT_PREV_WINDOW_WORDS),
+        script: 'osascript -e \'tell application "System Events" to keystroke "`" using {command down, shift down}\'' },
+      { name: 'new window', phrases: this.getPhraseList('hotMicNewWindowWords', HotMicManager.DEFAULT_NEW_WINDOW_PHRASES),
+        script: 'osascript -e \'tell application "System Events" to keystroke "n" using command down\'' },
+      { name: 'close window', phrases: this.getPhraseList('hotMicCloseWindowWords', HotMicManager.DEFAULT_CLOSE_WINDOW_PHRASES),
+        script: 'osascript -e \'tell application "System Events" to keystroke "w" using command down\'' },
+      { name: 'cancel', phrases: this.getPhraseList('hotMicCancelWords', HotMicManager.DEFAULT_CANCEL_PHRASES),
+        script: 'osascript -e \'tell application "System Events" to keystroke "c" using control down\'' },
+      { name: 'start claude', phrases: this.getPhraseList('hotMicRunClaudeWords', HotMicManager.DEFAULT_RUN_CLAUDE_PHRASES),
+        action: async () => {
+          const target = this.getTypeTarget();
+          if (target) {
+            await this.nativeHelper.typeIntoApp(target, 'claude', true);
+          }
+        },
+      },
+      { name: 'restart server', phrases: this.getPhraseList('hotMicRestartServerWords', HotMicManager.DEFAULT_RESTART_SERVER_PHRASES),
+        action: async () => {
+          const command = this.preferences.getPreference('hotMicRestartServerCommand');
+          const cmd = typeof command === 'string' && command.trim() ? command.trim() : '';
+          if (cmd) {
+            const target = this.getTypeTarget();
+            if (target) {
+              log.info('Hot Mic: restart server — Ctrl+C then "%s" (target: %s)', cmd, target);
+              const safeCmd = cmd.replace(/'/g, "'\\''");
+              const script = [
+                `osascript -e 'tell application "System Events" to keystroke "c" using control down'`,
+                `sleep 3`,
+                `osascript -e 'tell application "System Events"' -e 'delay 0.1' -e 'keystroke "${safeCmd}"' -e 'keystroke return' -e 'end tell'`,
+              ].join(' && ');
+              const child = spawn('bash', ['-c', script], {
+                detached: true,
+                stdio: 'ignore',
+              });
+              child.unref();
+            }
+          } else {
+            log.info('Hot Mic: restart server — no command configured, ignoring');
+          }
+        },
+      },
+    ];
 
-  /**
-   * Check if a word/phrase is a configured cancel phrase.
-   */
-  private isCancelPhrase(word: string): boolean {
-    const pref = this.preferences.getPreference('hotMicCancelWords');
-    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_CANCEL_PHRASES;
-    const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
-    return phrases.includes(word);
-  }
-
-  private isPrevWindowWord(word: string): boolean {
-    const pref = this.preferences.getPreference('hotMicPrevWindowWords');
-    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_PREV_WINDOW_WORDS;
-    const words = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
-    return words.includes(word);
-  }
-
-  private isNewWindowPhrase(word: string): boolean {
-    const pref = this.preferences.getPreference('hotMicNewWindowWords');
-    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_NEW_WINDOW_PHRASES;
-    const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
-    return phrases.includes(word);
-  }
-
-  private isCloseWindowPhrase(word: string): boolean {
-    const pref = this.preferences.getPreference('hotMicCloseWindowWords');
-    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_CLOSE_WINDOW_PHRASES;
-    const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
-    return phrases.includes(word);
-  }
-
-  private isRunClaudePhrase(word: string): boolean {
-    const pref = this.preferences.getPreference('hotMicRunClaudeWords');
-    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_RUN_CLAUDE_PHRASES;
-    const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
-    return phrases.includes(word);
-  }
-
-  private isRestartServerPhrase(text: string): boolean {
-    const pref = this.preferences.getPreference('hotMicRestartServerWords');
-    const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_RESTART_SERVER_PHRASES;
-    const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
-    // Match if the text exactly equals or ends with a restart phrase
-    return phrases.some(p => text === p || text.endsWith(' ' + p));
-  }
-
-  /**
-   * Check if text matches a system command (media, volume, sleep, lock).
-   * Returns the osascript to execute, or null.
-   */
-  private matchSystemCommand(text: string): string | null {
-    for (const cmd of Object.values(SYSTEM_COMMANDS)) {
+    // Add system commands (media, volume, etc.)
+    for (const [key, cmd] of Object.entries(SYSTEM_COMMANDS)) {
       const pref = this.preferences.getPreference(cmd.prefKey as any);
       const raw = typeof pref === 'string' && pref.trim() ? pref : cmd.defaultPhrases;
       const phrases = raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
-      if (phrases.includes(text)) {
-        return cmd.script;
+      commandSets.push({ name: key, phrases, script: cmd.script });
+    }
+
+    // Static phrase tail-matching
+    const stripped = text.replace(/[.,!?;:]+$/, '').trim();
+    const words = stripped.split(/\s+/);
+
+    for (const cmd of commandSets) {
+      for (const phrase of cmd.phrases) {
+        const phraseWords = phrase.split(/\s+/);
+        if (words.length >= phraseWords.length) {
+          const tail = words.slice(-phraseWords.length).map(w => w.toLowerCase());
+          if (tail.every((w, i) => w === phraseWords[i])) {
+            const remaining = words.slice(0, -phraseWords.length).join(' ');
+            return { commandName: cmd.name, script: cmd.script, action: cmd.action, remainingText: remaining };
+          }
+        }
       }
     }
+
+    // Dynamic: Squares window management commands
+    if (this.squaresManager) {
+      const tailMatch = this.squaresManager.parseVoiceCommandFromTail(text);
+      if (tailMatch) {
+        return {
+          commandName: 'squares:' + tailMatch.action,
+          action: async () => { this.squaresManager!.executeAction(tailMatch.action); },
+          remainingText: tailMatch.remainingText,
+        };
+      }
+    }
+
+    // Dynamic: App switching
+    if (this.appSwitcher) {
+      const appTailMatch = await this.parseAppSwitchFromTail(text);
+      if (appTailMatch) {
+        return {
+          commandName: 'app-switch:' + appTailMatch.appName,
+          action: async () => { await this.activateAppByName(appTailMatch); },
+          remainingText: appTailMatch.remainingText,
+        };
+      }
+    }
+
     return null;
   }
 
-  // ── App switching (voice-triggered) ─────────────────────────────────
+  /**
+   * Get a phrase list from preferences with a fallback default.
+   */
+  private getPhraseList(prefKey: string, defaultValue: string): string[] {
+    const pref = this.preferences.getPreference(prefKey as any);
+    const raw = typeof pref === 'string' && pref.trim() ? pref : defaultValue;
+    return raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
+  }
 
-  private static readonly APP_SWITCH_PREFIXES = [
-    /^open\s+(.+)$/,
-    /^switch\s+to\s+(.+)$/,
-    /^go\s+to\s+(.+)$/,
-  ];
+  // ── App switching (voice-triggered) ─────────────────────────────────
 
   /**
    * Normalize a name for fuzzy comparison: lowercase, strip non-alphanumeric, collapse spaces.
@@ -1368,31 +1273,6 @@ export class HotMicManager extends EventEmitter {
   }
 
   /**
-   * Parse exact app switch command (buffer must be empty).
-   * Matches: "open chrome", "switch to finder", or bare non-ambiguous app name.
-   */
-  private async parseAppSwitchExact(text: string): Promise<{ bundleId: string | null; appName: string } | null> {
-    const runningApps = await this.getRunningApps();
-
-    // Try prefix patterns: "open X", "switch to X", "go to X"
-    for (const pattern of HotMicManager.APP_SWITCH_PREFIXES) {
-      const match = text.match(pattern);
-      if (match) {
-        const appMatch = this.matchAppName(match[1], runningApps);
-        if (appMatch) return appMatch;
-      }
-    }
-
-    // Bare app name (no prefix) — skip ambiguous names
-    const appMatch = this.matchAppName(text, runningApps);
-    if (appMatch && !AMBIGUOUS_APP_NAMES.has(text.replace(/[.,!?;:]+$/, '').trim().toLowerCase())) {
-      return appMatch;
-    }
-
-    return null;
-  }
-
-  /**
    * Check if text ends with "open X" / "switch to X" / "go to X".
    * Returns matched app info + remaining text, or null.
    */
@@ -1427,17 +1307,25 @@ export class HotMicManager extends EventEmitter {
     // Sort longest first to match "visual studio code" before "visual studio"
     phrases.sort((a, b) => b.phrase.length - a.phrase.length);
 
+    // Match with optional articles ("the", "a", "an") between prefix and app name.
+    // Handles natural speech: "go to the terminal", "open the chrome", etc.
+    const articles = ['the ', 'a ', 'an '];
     for (const prefix of prefixes) {
       for (const { phrase, canonical } of phrases) {
-        const trigger = prefix + phrase;
-        if (text === trigger) {
-          const bundleId = this.findBundleId(canonical, runningApps);
-          return { appName: canonical, bundleId, remainingText: '' };
+        const triggers = [prefix + phrase];
+        for (const article of articles) {
+          triggers.push(prefix + article + phrase);
         }
-        if (text.endsWith(' ' + trigger)) {
-          const remaining = text.slice(0, -(trigger.length + 1)).trim();
-          const bundleId = this.findBundleId(canonical, runningApps);
-          return { appName: canonical, bundleId, remainingText: remaining };
+        for (const trigger of triggers) {
+          if (text === trigger) {
+            const bundleId = this.findBundleId(canonical, runningApps);
+            return { appName: canonical, bundleId, remainingText: '' };
+          }
+          if (text.endsWith(' ' + trigger)) {
+            const remaining = text.slice(0, -(trigger.length + 1)).trim();
+            const bundleId = this.findBundleId(canonical, runningApps);
+            return { appName: canonical, bundleId, remainingText: remaining };
+          }
         }
       }
     }
