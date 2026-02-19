@@ -318,6 +318,11 @@ interface ClipboardAPI {
   getWordSubstitutions?: () => Promise<Array<{ from: string; to: string }>>;
   setWordSubstitutions?: (substitutions: Array<{ from: string; to: string }>) => Promise<boolean>;
 
+  // App voice aliases - custom voice trigger words for app switching
+  getAppVoiceAliases?: () => Promise<Array<{ appName: string; aliases: string }>>;
+  setAppVoiceAliases?: (aliases: Array<{ appName: string; aliases: string }>) => Promise<boolean>;
+  browseForApp?: () => Promise<string | null>;
+
   // Data retention - how long to keep clipboard history
   getDataRetentionDays?: () => Promise<number>;
   setDataRetentionDays?: (days: number) => Promise<boolean>;
@@ -977,6 +982,8 @@ interface HotMicAPI {
   setCascadePhrases: (words: string) => Promise<string>;
   getRectangleCommands: () => Promise<Record<string, string>>;
   setRectangleCommands: (commands: Record<string, string>) => Promise<Record<string, string>>;
+  getSystemCommands: () => Promise<Record<string, string>>;
+  setSystemCommand: (action: string, phrases: string) => Promise<boolean>;
   getKnownTerminals: () => Promise<Array<{ name: string; bundleId: string }>>;
   start: () => Promise<void>;
   stop: () => Promise<void>;
