@@ -3808,6 +3808,42 @@ function setupClipboardIPCHandlers(): void {
   });
 
   // =========================================================================
+  // App Voice Aliases - custom voice trigger words for app switching
+  // =========================================================================
+
+  ipcMain.handle('clipboard:getAppVoiceAliases', async () => {
+    if (!preferencesManager) {
+      return [];
+    }
+    return preferencesManager.getPreference('hotMicAppAliases') ?? [];
+  });
+
+  ipcMain.handle('clipboard:setAppVoiceAliases', async (_event, aliases: Array<{ appName: string; aliases: string }>) => {
+    if (!preferencesManager) {
+      return false;
+    }
+    await preferencesManager.save({ hotMicAppAliases: aliases });
+    return true;
+  });
+
+  ipcMain.handle('clipboard:browseForApp', async () => {
+    const parentWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    const result = await dialog.showOpenDialog(parentWindow as BrowserWindow, {
+      title: 'Select Application',
+      message: 'Choose an application',
+      defaultPath: '/Applications',
+      properties: ['openFile'],
+      filters: [{ name: 'Applications', extensions: ['app'] }],
+      buttonLabel: 'Select',
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    // Extract app name from path: "/Applications/Ghostty.app" → "Ghostty"
+    const appPath = result.filePaths[0];
+    const match = appPath.match(/([^/]+)\.app$/);
+    return match ? match[1] : null;
+  });
+
+  // =========================================================================
   // Data Retention - how long to keep clipboard history
   // =========================================================================
 
@@ -5326,7 +5362,7 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize Squares window management.
   // Rectangle-inspired snapping with smooth animations.
-  squaresManager = new SquaresManager(preferencesManager);
+  squaresManager = new SquaresManager(preferencesManager, nativeHelper!);
 
   // Broadcast Squares events to all renderer windows.
   squaresManager.on('actionExecuted', (action: SquaresAction) => {
@@ -5363,6 +5399,19 @@ async function initTranscriberSystem(): Promise<void> {
   }
   if (hotMicManager) {
     hotMicManager.setCommandsManager(commandsManager);
+    // Connect app switcher for voice-triggered app activation (e.g., "open chrome").
+    // Use closures that read clipboardHistoryWindow at call time — it may be null during
+    // init but will be set by the time Hot Mic is actually used.
+    hotMicManager.setAppSwitcher({
+      getRunningApps: async () => {
+        if (!clipboardHistoryWindow) return [];
+        return clipboardHistoryWindow.getRunningApps();
+      },
+      activateApp: async (bundleId: string) => {
+        if (!clipboardHistoryWindow) return false;
+        return clipboardHistoryWindow.activateApp(bundleId);
+      },
+    });
   }
 
   // Initialize multi-directory watching from settings file.
@@ -5570,8 +5619,19 @@ async function initTranscriberSystem(): Promise<void> {
   let wakeNetworkPoll: ReturnType<typeof setInterval> | null = null;
   let wakeNetworkTimeout: ReturnType<typeof setTimeout> | null = null;
 
+  powerMonitor.on('suspend', () => {
+    log.info('[PowerMonitor] System going to sleep, stopping Qwen server');
+    transcriberManager?.stopQwenServer();
+  });
+
   powerMonitor.on('resume', () => {
     log.info('[PowerMonitor] System resumed from sleep, checking token expiry');
+
+    // Pre-warm Qwen server if Hot Mic is active so it's ready when the user speaks
+    if (hotMicManager?.isActive) {
+      log.info('[PowerMonitor] Hot Mic active, pre-warming Qwen server');
+      transcriberManager?.warmup().catch(() => {});
+    }
 
     // Cancel any previous wake poll (e.g., rapid sleep/wake cycles)
     if (wakeNetworkPoll) { clearInterval(wakeNetworkPoll); wakeNetworkPoll = null; }
@@ -5939,6 +5999,35 @@ if (!gotTheLock) {
       return command;
     });
 
+    // System commands — media, volume, sleep, lock (stored as individual prefs)
+    const SYSTEM_CMD_PREF_KEYS: Record<string, { prefKey: string; defaults: string }> = {
+      'play-pause':     { prefKey: 'hotMicPlayPausePhrases',  defaults: 'play, pause, play pause, play music, pause music' },
+      'next-track':     { prefKey: 'hotMicNextTrackPhrases',  defaults: 'next track, next song, skip, skip song' },
+      'previous-track': { prefKey: 'hotMicPrevTrackPhrases',  defaults: 'previous track, previous song, go back a song, last song' },
+      'volume-up':      { prefKey: 'hotMicVolumeUpPhrases',   defaults: 'louder, volume up, turn it up' },
+      'volume-down':    { prefKey: 'hotMicVolumeDownPhrases', defaults: 'softer, quieter, volume down, turn it down' },
+      'mute':           { prefKey: 'hotMicMutePhrases',       defaults: 'mute, mute audio, silence' },
+      'unmute':         { prefKey: 'hotMicUnmutePhrases',     defaults: 'unmute, unmute audio' },
+      'sleep':          { prefKey: 'hotMicSleepPhrases',      defaults: 'sleep, go to sleep, sleep computer' },
+      'lock':           { prefKey: 'hotMicLockPhrases',       defaults: 'lock, lock screen, lock computer' },
+    };
+
+    ipcMain.handle('hotmic:getSystemCommands', () => {
+      const result: Record<string, string> = {};
+      for (const [action, { prefKey, defaults }] of Object.entries(SYSTEM_CMD_PREF_KEYS)) {
+        const val = preferencesManager?.getPreference(prefKey as any);
+        result[action] = typeof val === 'string' && val.trim() ? val : defaults;
+      }
+      return result;
+    });
+
+    ipcMain.handle('hotmic:setSystemCommand', async (_event, action: string, phrases: string) => {
+      const entry = SYSTEM_CMD_PREF_KEYS[action];
+      if (!entry) return false;
+      await preferencesManager?.save({ [entry.prefKey]: phrases } as any);
+      return true;
+    });
+
     ipcMain.handle('hotmic:getFocusPhrases', () => {
       return preferencesManager?.getPreference('hotMicFocusPhrases') ?? 'focus';
     });
@@ -5958,7 +6047,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getRectangleCommands', () => {
-      return hotMicManager?.getRectangleCommands() ?? {};
+      return {}; // Rectangle commands removed — window management handled by Squares
     });
 
     ipcMain.handle('hotmic:setRectangleCommands', async (_event, commands: Record<string, string>) => {
