@@ -1,16 +1,16 @@
 // =============================================================================
 // SquaresManager - Window Management Engine
 // Rectangle-inspired window management with smooth animations for Field Theory.
-// Uses AppleScript + JXA for window manipulation on macOS.
+// Uses native Swift helper (AX API) for sub-millisecond window manipulation.
 // =============================================================================
 
 import { EventEmitter } from 'events';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { screen, globalShortcut, app } from 'electron';
-import path from 'path';
-import fs from 'fs';
+import { screen, globalShortcut } from 'electron';
 import { PreferencesManager } from './preferences';
+import { NativeHelper } from './nativeHelper';
+import { WindowMoveSpec } from './types/audio';
 import { createLogger } from './logger';
 import {
   WindowFrame,
@@ -39,14 +39,9 @@ const FIELD_THEORY_BUNDLE_IDS = [
   'com.github.Electron',
 ];
 
-
-// ============================================================================
-// AppleScript helpers for window manipulation
-// ============================================================================
-
 /**
  * Run an AppleScript command with a timeout.
- * Returns stdout trimmed. Throws on error or timeout.
+ * Only used for non-animation operations (hide/show apps).
  */
 async function runAppleScript(script: string): Promise<string> {
   const { stdout } = await execAsync(
@@ -57,69 +52,10 @@ async function runAppleScript(script: string): Promise<string> {
 }
 
 /**
- * Run a JXA (JavaScript for Automation) script.
- * Uses a temp file to avoid shell quoting issues with complex JS.
+ * Map AnimationStyle to the Swift easing function name.
  */
-async function runJXA(script: string): Promise<string> {
-  const tmpDir = app.getPath('temp');
-  const tmpFile = path.join(tmpDir, `squares-jxa-${Date.now()}.js`);
-
-  try {
-    fs.writeFileSync(tmpFile, script, 'utf-8');
-    const { stdout } = await execAsync(
-      `osascript -l JavaScript "${tmpFile}"`,
-      { timeout: APPLESCRIPT_TIMEOUT_MS }
-    );
-    return stdout.trim();
-  } finally {
-    // Clean up temp file.
-    try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
-  }
-}
-
-
-// ============================================================================
-// Animation engine - interpolates window positions smoothly
-// ============================================================================
-
-/**
- * Easing functions for window animations.
- * easeOutCubic gives a snappy deceleration feel.
- * easeOutBack gives a slight overshoot then settle (Jarvis feel).
- */
-function easeOutCubic(t: number): number {
-  return 1 - Math.pow(1 - t, 3);
-}
-
-function easeOutBack(t: number): number {
-  const c1 = 1.70158;
-  const c3 = c1 + 1;
-  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
-}
-
-/**
- * Pick the easing function based on animation style.
- */
-function getEasingFunction(style: AnimationStyle): (t: number) => number {
-  switch (style) {
-    case 'snappy': return easeOutBack;
-    case 'smooth': return easeOutCubic;
-    default: return (t: number) => t; // linear (shouldn't be used for 'none')
-  }
-}
-
-/**
- * Interpolate between two frames using an easing function.
- * t ranges from 0 (start) to 1 (end).
- */
-function interpolateFrame(from: WindowFrame, to: WindowFrame, t: number, easing: (t: number) => number): WindowFrame {
-  const e = easing(t);
-  return {
-    x: Math.round(from.x + (to.x - from.x) * e),
-    y: Math.round(from.y + (to.y - from.y) * e),
-    width: Math.round(from.width + (to.width - from.width) * e),
-    height: Math.round(from.height + (to.height - from.height) * e),
-  };
+function getEasingStyle(style: AnimationStyle): 'easeOutCubic' | 'easeOutBack' {
+  return style === 'snappy' ? 'easeOutBack' : 'easeOutCubic';
 }
 
 
@@ -129,15 +65,17 @@ function interpolateFrame(from: WindowFrame, to: WindowFrame, t: number, easing:
 
 export class SquaresManager extends EventEmitter {
   private preferences: PreferencesManager;
+  private nativeHelper: NativeHelper;
   private config: SquaresConfig;
   private hotkeys: SquaresHotkeys;
   private registeredHotkeys: Map<string, string> = new Map(); // action -> accelerator
   private history: WindowSnapshot[][] = [];  // Stack of undo states (groups of snapshots)
   private animating = false;  // Prevent concurrent animations
 
-  constructor(preferences: PreferencesManager) {
+  constructor(preferences: PreferencesManager, nativeHelper: NativeHelper) {
     super();
     this.preferences = preferences;
+    this.nativeHelper = nativeHelper;
 
     // Load config from preferences, falling back to defaults.
     const savedConfig = this.preferences.getPreference('squaresConfig' as any);
@@ -259,75 +197,22 @@ export class SquaresManager extends EventEmitter {
   // --------------------------------------------------------------------------
 
   /**
-   * Get all visible windows using JXA.
-   * Filters out Field Theory windows and non-standard windows (menus, tooltips, etc).
+   * Get all visible windows using the native Swift helper.
+   * Filters out Field Theory windows and non-standard windows.
    */
   async getWindows(): Promise<WindowInfo[]> {
     if (process.platform !== 'darwin') return [];
 
     try {
-      // Use CGWindowListCopyWindowInfo via JXA for fast window enumeration.
-      // This is much faster than AppleScript's "every window" approach.
-      const script = `
-        ObjC.import("CoreGraphics");
-        ObjC.import("Foundation");
-        var windows = $.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, $.kCGNullWindowID);
-        var count = $.CFArrayGetCount(windows);
-        var result = [];
-        for (var i = 0; i < count; i++) {
-          var win = ObjC.unwrap($.CFArrayGetValueAtIndex(windows, i));
-          var layer = win.kCGWindowLayer || 0;
-          var owner = (win.kCGWindowOwnerName || "").toString();
-          var pid = win.kCGWindowOwnerPID || 0;
-          var wid = win.kCGWindowNumber || 0;
-          var name = (win.kCGWindowName || "").toString();
-          var bounds = win.kCGWindowBounds || {};
-          if (layer === 0 && owner && bounds.Width > 50 && bounds.Height > 50) {
-            result.push({
-              windowId: wid,
-              ownerName: owner,
-              ownerPID: pid,
-              title: name,
-              x: bounds.X || 0,
-              y: bounds.Y || 0,
-              width: bounds.Width || 0,
-              height: bounds.Height || 0,
-              layer: layer
-            });
-          }
-        }
-        JSON.stringify(result);
-      `;
+      const nativeWindows = await this.nativeHelper.getWindowList();
 
-      const output = await runJXA(script);
-      if (!output) return [];
-
-      const rawWindows = JSON.parse(output) as Array<{
-        windowId: number;
-        ownerName: string;
-        ownerPID: number;
-        title: string;
-        x: number;
-        y: number;
-        width: number;
-        height: number;
-        layer: number;
-      }>;
-
-      // Get bundle IDs for each unique PID so we can filter out Field Theory.
-      const pids = [...new Set(rawWindows.map(w => w.ownerPID))];
-      const pidToBundleId = await this.getPIDBundleIds(pids);
-
-      return rawWindows
-        .filter(w => {
-          const bundleId = pidToBundleId.get(w.ownerPID) || '';
-          return !FIELD_THEORY_BUNDLE_IDS.includes(bundleId);
-        })
+      return nativeWindows
+        .filter(w => !FIELD_THEORY_BUNDLE_IDS.includes(w.ownerBundleId))
         .map(w => ({
           windowId: w.windowId,
           ownerName: w.ownerName,
           ownerPID: w.ownerPID,
-          ownerBundleId: pidToBundleId.get(w.ownerPID) || '',
+          ownerBundleId: w.ownerBundleId,
           title: w.title,
           frame: { x: w.x, y: w.y, width: w.width, height: w.height },
           isOnScreen: true,
@@ -337,42 +222,6 @@ export class SquaresManager extends EventEmitter {
       log.error('Failed to get windows:', err);
       return [];
     }
-  }
-
-  /**
-   * Get bundle IDs for a list of PIDs using a single JXA call.
-   */
-  private async getPIDBundleIds(pids: number[]): Promise<Map<number, string>> {
-    const result = new Map<number, string>();
-    if (pids.length === 0) return result;
-
-    try {
-      const script = `
-        var se = Application("System Events");
-        var procs = se.processes.whose({_not: [{bundleIdentifier: ""}]})();
-        var result = {};
-        for (var i = 0; i < procs.length; i++) {
-          try {
-            var pid = procs[i].unixId();
-            var bid = procs[i].bundleIdentifier();
-            result[pid] = bid;
-          } catch(e) {}
-        }
-        JSON.stringify(result);
-      `;
-
-      const output = await runJXA(script);
-      if (output) {
-        const parsed = JSON.parse(output) as Record<string, string>;
-        for (const [pid, bundleId] of Object.entries(parsed)) {
-          result.set(parseInt(pid, 10), bundleId);
-        }
-      }
-    } catch (err) {
-      log.error('Failed to get bundle IDs:', err);
-    }
-
-    return result;
   }
 
   /**
@@ -431,143 +280,61 @@ export class SquaresManager extends EventEmitter {
 
   /**
    * Move a window to a target frame.
-   * If animations are enabled, interpolates smoothly.
-   * Uses System Events (AppleScript) to set window position and size.
+   * If animations are enabled, delegates to Swift for smooth interpolation.
+   * Uses native AX API (<1ms per frame) instead of AppleScript (~20-50ms).
    */
   async moveWindow(pid: number, windowTitle: string, from: WindowFrame, to: WindowFrame): Promise<void> {
     if (this.config.animationStyle === 'none') {
-      await this.setWindowFrame(pid, windowTitle, to);
+      await this.nativeHelper.setWindowFrame(pid, windowTitle, to.x, to.y, to.width, to.height);
       return;
     }
 
-    // Animated move: interpolate between from and to.
-    const easing = getEasingFunction(this.config.animationStyle);
-    const steps = this.config.animationSteps;
-    const totalMs = this.config.animationDurationMs;
-    const stepMs = totalMs / steps;
+    // Single animated move via native helper.
+    const moveSpec: WindowMoveSpec = {
+      pid,
+      title: windowTitle,
+      fromX: from.x, fromY: from.y, fromWidth: from.width, fromHeight: from.height,
+      toX: to.x, toY: to.y, toWidth: to.width, toHeight: to.height,
+    };
 
-    for (let i = 1; i <= steps; i++) {
-      const t = i / steps;
-      const frame = interpolateFrame(from, to, t, easing);
-      await this.setWindowFrame(pid, windowTitle, frame);
-
-      // Small delay between frames for visual smoothness.
-      if (i < steps) {
-        await new Promise(r => setTimeout(r, stepMs));
-      }
-    }
-  }
-
-  /**
-   * Set a window's position and size in a single AppleScript call.
-   * Uses System Events for reliability.
-   */
-  private async setWindowFrame(pid: number, windowTitle: string, frame: WindowFrame): Promise<void> {
-    try {
-      // Use System Events to set position and size by PID.
-      // We target by PID rather than app name for reliability.
-      const safeTitle = windowTitle.replace(/["\\]/g, '');
-      const script = `
-        tell application "System Events"
-          set targetProcess to first process whose unix id is ${pid}
-          repeat with w in windows of targetProcess
-            try
-              if name of w is "${safeTitle}" then
-                set position of w to {${frame.x}, ${frame.y}}
-                set size of w to {${frame.width}, ${frame.height}}
-                return
-              end if
-            end try
-          end repeat
-          -- Fallback: set the first window if title didn't match
-          try
-            set frontWindow to window 1 of targetProcess
-            set position of frontWindow to {${frame.x}, ${frame.y}}
-            set size of frontWindow to {${frame.width}, ${frame.height}}
-          end try
-        end tell
-      `;
-      await runAppleScript(script);
-    } catch (err) {
-      // Silently fail individual frame sets during animation.
-      // The next frame will correct it.
-    }
+    await this.nativeHelper.animateWindows([moveSpec], {
+      durationMs: this.config.animationDurationMs,
+      steps: this.config.animationSteps,
+      style: getEasingStyle(this.config.animationStyle),
+    });
   }
 
   /**
    * Move multiple windows simultaneously for grid/spread layouts.
-   * Runs animation frames in parallel for all windows at each step.
+   * Sends all moves in a single IPC call; Swift animates them in lockstep.
    */
   async moveWindowsBatch(
     moves: Array<{ pid: number; title: string; from: WindowFrame; to: WindowFrame }>
   ): Promise<void> {
+    if (moves.length === 0) return;
+
+    const moveSpecs: WindowMoveSpec[] = moves.map(m => ({
+      pid: m.pid,
+      title: m.title,
+      fromX: m.from.x, fromY: m.from.y, fromWidth: m.from.width, fromHeight: m.from.height,
+      toX: m.to.x, toY: m.to.y, toWidth: m.to.width, toHeight: m.to.height,
+    }));
+
     if (this.config.animationStyle === 'none') {
-      // No animation: set all windows at once using a single AppleScript call.
-      await this.setWindowFramesBatch(moves.map(m => ({ pid: m.pid, title: m.title, frame: m.to })));
+      // No animation: set each window instantly.
+      await Promise.all(
+        moveSpecs.map(m =>
+          this.nativeHelper.setWindowFrame(m.pid, m.title, m.toX, m.toY, m.toWidth, m.toHeight)
+        )
+      );
       return;
     }
 
-    // Animated: step through frames for all windows simultaneously.
-    const easing = getEasingFunction(this.config.animationStyle);
-    const steps = this.config.animationSteps;
-    const totalMs = this.config.animationDurationMs;
-    const stepMs = totalMs / steps;
-
-    for (let i = 1; i <= steps; i++) {
-      const t = i / steps;
-      const frames = moves.map(m => ({
-        pid: m.pid,
-        title: m.title,
-        frame: interpolateFrame(m.from, m.to, t, easing),
-      }));
-
-      await this.setWindowFramesBatch(frames);
-
-      if (i < steps) {
-        await new Promise(r => setTimeout(r, stepMs));
-      }
-    }
-  }
-
-  /**
-   * Set frames for multiple windows in a single AppleScript call.
-   * More efficient than calling setWindowFrame() for each window.
-   */
-  private async setWindowFramesBatch(
-    windows: Array<{ pid: number; title: string; frame: WindowFrame }>
-  ): Promise<void> {
-    if (windows.length === 0) return;
-
-    try {
-      // Build a single AppleScript that sets all windows at once.
-      const windowCommands = windows.map(w => {
-        const safeTitle = w.title.replace(/["\\]/g, '');
-        return `
-          try
-            set proc to first process whose unix id is ${w.pid}
-            repeat with win in windows of proc
-              try
-                if name of win is "${safeTitle}" then
-                  set position of win to {${w.frame.x}, ${w.frame.y}}
-                  set size of win to {${w.frame.width}, ${w.frame.height}}
-                  exit repeat
-                end if
-              end try
-            end repeat
-          end try
-        `;
-      }).join('\n');
-
-      const script = `
-        tell application "System Events"
-          ${windowCommands}
-        end tell
-      `;
-
-      await runAppleScript(script);
-    } catch (err) {
-      log.error('Failed to set window frames batch:', err);
-    }
+    await this.nativeHelper.animateWindows(moveSpecs, {
+      durationMs: this.config.animationDurationMs,
+      steps: this.config.animationSteps,
+      style: getEasingStyle(this.config.animationStyle),
+    });
   }
 
   /**
@@ -615,6 +382,7 @@ export class SquaresManager extends EventEmitter {
 
   /**
    * Get the frontmost (active) window info.
+   * Uses the cached frontmost app from nativeHelper (updated on app switch, no IPC).
    */
   private async getFrontmostWindow(): Promise<WindowInfo | null> {
     const windows = await this.getWindows();
@@ -623,23 +391,28 @@ export class SquaresManager extends EventEmitter {
       return null;
     }
 
+    // Use cached frontmost app info from native helper (instant, no AppleScript).
+    // Match by bundleId (unique) rather than display name (could collide).
+    const frontApp = this.nativeHelper.getFrontmostApp();
+    if (frontApp?.bundleId) {
+      const match = windows.find(w => w.ownerBundleId === frontApp.bundleId);
+      if (match) return match;
+      log.info('getFrontmostWindow: cached frontmost app "%s" (%s) not in window list, falling back', frontApp.name, frontApp.bundleId);
+    }
+
+    // Fallback: try AppleScript if cached info unavailable.
     try {
-      // Get the frontmost app's PID.
       const pid = await runAppleScript(
         'tell application "System Events" to return unix id of (first process whose frontmost is true)'
       );
       const frontPID = parseInt(pid, 10);
-
-      // Find the first window belonging to that app.
       const match = windows.find(w => w.ownerPID === frontPID);
-      if (!match) {
-        log.info('getFrontmostWindow: frontmost PID %d not in window list, falling back to first window (%s)', frontPID, windows[0].ownerName);
-      }
-      return match || windows[0];
+      if (match) return match;
     } catch (err) {
-      log.info('getFrontmostWindow: AppleScript failed, falling back to first window: %s', err);
-      return windows[0];
+      log.info('getFrontmostWindow: AppleScript fallback failed: %s', err);
     }
+
+    return windows[0];
   }
 
   /**
@@ -649,6 +422,14 @@ export class SquaresManager extends EventEmitter {
     const windows = await this.getWindows();
     if (windows.length === 0) return [];
 
+    // Use cached frontmost app info (match by bundleId for uniqueness).
+    const frontApp = this.nativeHelper.getFrontmostApp();
+    if (frontApp?.bundleId) {
+      const appWindows = windows.filter(w => w.ownerBundleId === frontApp.bundleId);
+      if (appWindows.length > 0) return appWindows;
+    }
+
+    // Fallback to AppleScript.
     try {
       const pid = await runAppleScript(
         'tell application "System Events" to return unix id of (first process whose frontmost is true)'
@@ -1164,5 +945,30 @@ export class SquaresManager extends EventEmitter {
 
     log.info(`Exact voice command detected: "${text}" -> ${action}`);
     return await this.executeAction(action);
+  }
+
+  /**
+   * Check if text **ends with** a Squares trigger phrase.
+   * Returns the matched action and the remaining text (everything before the command).
+   * Checks longest phrases first to avoid partial matches (e.g. "tile all" before "tile").
+   */
+  parseVoiceCommandFromTail(text: string): { action: SquaresAction; remainingText: string } | null {
+    const normalized = text.toLowerCase().trim();
+
+    // Sort by phrase length descending — longest first to avoid partial matches
+    const sortedTriggers = Object.entries(VOICE_COMMAND_TRIGGERS)
+      .sort((a, b) => b[0].length - a[0].length);
+
+    for (const [phrase, action] of sortedTriggers) {
+      if (normalized === phrase) {
+        return { action, remainingText: '' };
+      }
+      if (normalized.endsWith(' ' + phrase)) {
+        const remainingText = normalized.slice(0, -(phrase.length + 1)).trim();
+        return { action, remainingText };
+      }
+    }
+
+    return null;
   }
 }

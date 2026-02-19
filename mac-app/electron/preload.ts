@@ -687,6 +687,11 @@ export interface ClipboardAPI {
   getWordSubstitutions?: () => Promise<Array<{ from: string; to: string }>>;
   setWordSubstitutions?: (substitutions: Array<{ from: string; to: string }>) => Promise<boolean>;
 
+  // App voice aliases - custom voice trigger words for app switching
+  getAppVoiceAliases?: () => Promise<Array<{ appName: string; aliases: string }>>;
+  setAppVoiceAliases?: (aliases: Array<{ appName: string; aliases: string }>) => Promise<boolean>;
+  browseForApp?: () => Promise<string | null>;
+
   // Data retention - how long to keep clipboard history
   getDataRetentionDays?: () => Promise<number>;
   setDataRetentionDays?: (days: number) => Promise<boolean>;
@@ -1416,6 +1421,19 @@ const clipboardAPI: ClipboardAPI = {
 
   setWordSubstitutions: async (substitutions: Array<{ from: string; to: string }>): Promise<boolean> => {
     return ipcRenderer.invoke('clipboard:setWordSubstitutions', substitutions);
+  },
+
+  // App voice aliases - custom voice trigger words for app switching.
+  getAppVoiceAliases: async (): Promise<Array<{ appName: string; aliases: string }>> => {
+    return ipcRenderer.invoke('clipboard:getAppVoiceAliases');
+  },
+
+  setAppVoiceAliases: async (aliases: Array<{ appName: string; aliases: string }>): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:setAppVoiceAliases', aliases);
+  },
+
+  browseForApp: async (): Promise<string | null> => {
+    return ipcRenderer.invoke('clipboard:browseForApp');
   },
 
   // Data retention - how long to keep clipboard history.
@@ -3149,6 +3167,12 @@ const hotMicAPI = {
   },
   setRectangleCommands: async (commands: Record<string, string>): Promise<Record<string, string>> => {
     return ipcRenderer.invoke('hotmic:setRectangleCommands', commands);
+  },
+  getSystemCommands: async (): Promise<Record<string, string>> => {
+    return ipcRenderer.invoke('hotmic:getSystemCommands');
+  },
+  setSystemCommand: async (action: string, phrases: string): Promise<boolean> => {
+    return ipcRenderer.invoke('hotmic:setSystemCommand', action, phrases);
   },
   getKnownTerminals: async (): Promise<Array<{ name: string; bundleId: string }>> => {
     return ipcRenderer.invoke('hotmic:getKnownTerminals');

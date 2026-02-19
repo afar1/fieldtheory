@@ -45,6 +45,24 @@ enum MessageType: String, Codable {
     case focusWindowByTitle
     // Silence detection harvest mode
     case setHarvestMode
+    // Window animation (Squares)
+    case animateWindows
+    case setWindowFrame
+    case getWindowList
+}
+
+/// A single window move for animateWindows.
+struct WindowMove: Codable {
+    let pid: Int32
+    let title: String
+    let fromX: Int
+    let fromY: Int
+    let fromWidth: Int
+    let fromHeight: Int
+    let toX: Int
+    let toY: Int
+    let toWidth: Int
+    let toHeight: Int
 }
 
 /// Message received from Electron.
@@ -58,6 +76,17 @@ struct IncomingMessage: Codable {
     let pressEnter: Bool?       // For typeIntoApp
     let titleSubstring: String? // For focusWindowByTitle
     let mode: String?           // For setHarvestMode ("command" or "dictation")
+    // Window animation (Squares)
+    let moves: [WindowMove]?    // For animateWindows
+    let durationMs: Int?        // For animateWindows
+    let steps: Int?             // For animateWindows
+    let style: String?          // For animateWindows ("easeOutCubic" or "easeOutBack")
+    let pid: Int32?             // For setWindowFrame
+    let title: String?          // For setWindowFrame
+    let x: Int?                 // For setWindowFrame
+    let y: Int?                 // For setWindowFrame
+    let width: Int?             // For setWindowFrame
+    let height: Int?            // For setWindowFrame
 }
 
 // MARK: - Outgoing Message Types
@@ -232,6 +261,269 @@ struct FocusWindowByTitleResultMessage: Codable {
         case type
         case success
         case error
+    }
+}
+
+/// Result of animateWindows command.
+struct AnimationCompleteMessage: Codable {
+    let type = "animationComplete"
+    let success: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case success
+    }
+}
+
+/// Result of setWindowFrame command.
+struct WindowFrameSetMessage: Codable {
+    let type = "windowFrameSet"
+    let success: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case success
+    }
+}
+
+/// Window info returned by getWindowList.
+struct WindowListEntry: Codable {
+    let windowId: Int
+    let ownerName: String
+    let ownerPID: Int32
+    let ownerBundleId: String
+    let title: String
+    let x: Int
+    let y: Int
+    let width: Int
+    let height: Int
+    let layer: Int
+}
+
+/// Response to getWindowList command.
+struct WindowListMessage: Codable {
+    let type = "windowList"
+    let windows: [WindowListEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case windows
+    }
+}
+
+// MARK: - Window Animator (Squares)
+
+/// Manages window frame manipulation via the Accessibility API.
+/// Provides sub-millisecond frame setting and smooth animation loops.
+final class WindowAnimator {
+
+    static let shared = WindowAnimator()
+
+    private init() {}
+
+    // MARK: - AXUIElement Resolution
+
+    /// Find the AXUIElement for a window by PID and title.
+    /// Returns nil if no matching window is found.
+    private func findWindow(pid: pid_t, title: String) -> AXUIElement? {
+        let appElement = AXUIElementCreateApplication(pid)
+
+        var windowsValue: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsValue)
+
+        guard result == .success, let windows = windowsValue as? [AXUIElement] else {
+            return nil
+        }
+
+        // Try exact title match first.
+        for window in windows {
+            var titleValue: CFTypeRef?
+            let titleResult = AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleValue)
+            if titleResult == .success, let windowTitle = titleValue as? String, windowTitle == title {
+                return window
+            }
+        }
+
+        // Fallback: return the first window (frontmost) if title didn't match.
+        return windows.first
+    }
+
+    /// Set a window's frame (position + size) using the Accessibility API.
+    /// Returns true if successful.
+    func setFrame(pid: pid_t, title: String, x: Int, y: Int, width: Int, height: Int) -> Bool {
+        guard let window = findWindow(pid: pid, title: title) else {
+            return false
+        }
+
+        return setFrameOnElement(window, x: x, y: y, width: width, height: height)
+    }
+
+    /// Set frame directly on an already-resolved AXUIElement.
+    private func setFrameOnElement(_ window: AXUIElement, x: Int, y: Int, width: Int, height: Int) -> Bool {
+        // Set position first, then size (order matters for some apps).
+        var position = CGPoint(x: CGFloat(x), y: CGFloat(y))
+        guard let posValue = AXValueCreate(.cgPoint, &position) else { return false }
+        AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posValue)
+
+        var size = CGSize(width: CGFloat(width), height: CGFloat(height))
+        guard let sizeValue = AXValueCreate(.cgSize, &size) else { return false }
+        AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue)
+
+        return true
+    }
+
+    // MARK: - Animation
+
+    /// Easing: easeOutCubic — snappy deceleration.
+    private func easeOutCubic(_ t: Double) -> Double {
+        return 1.0 - pow(1.0 - t, 3.0)
+    }
+
+    /// Easing: easeOutBack — slight overshoot then settle.
+    private func easeOutBack(_ t: Double) -> Double {
+        let c1 = 1.70158
+        let c3 = c1 + 1.0
+        return 1.0 + c3 * pow(t - 1.0, 3.0) + c1 * pow(t - 1.0, 2.0)
+    }
+
+    /// Pick easing function by name.
+    private func easingFunction(named style: String) -> (Double) -> Double {
+        switch style {
+        case "easeOutBack": return easeOutBack
+        case "easeOutCubic": return easeOutCubic
+        default: return easeOutCubic
+        }
+    }
+
+    /// Interpolate between two integer values using an eased t.
+    private func lerp(_ from: Int, _ to: Int, _ e: Double) -> Int {
+        return Int(round(Double(from) + Double(to - from) * e))
+    }
+
+    /// Animate one or more windows from their start frames to end frames.
+    /// Runs on a background thread; calls completion on main thread.
+    func animateWindows(
+        moves: [WindowMove],
+        durationMs: Int,
+        steps: Int,
+        style: String,
+        completion: @escaping (Bool) -> Void
+    ) {
+        // Pre-resolve all AXUIElements on main thread (AX calls are thread-safe
+        // but resolution is fastest from the thread that owns the app element).
+        var resolvedElements: [(AXUIElement, WindowMove)] = []
+        for move in moves {
+            if let element = findWindow(pid: pid_t(move.pid), title: move.title) {
+                resolvedElements.append((element, move))
+            }
+        }
+
+        if resolvedElements.isEmpty {
+            completion(false)
+            return
+        }
+
+        let easing = easingFunction(named: style)
+        let stepCount = max(steps, 1)
+        let totalNs = UInt64(durationMs) * 1_000_000 // total duration in nanoseconds
+
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            guard let self = self else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
+
+            let baseTime = mach_absolute_time()
+
+            // Get mach timebase for converting to nanoseconds.
+            var timebaseInfo = mach_timebase_info_data_t()
+            mach_timebase_info(&timebaseInfo)
+            let numer = Double(timebaseInfo.numer)
+            let denom = Double(timebaseInfo.denom)
+
+            for i in 1...stepCount {
+                let t = Double(i) / Double(stepCount)
+                let e = easing(t)
+
+                for (element, move) in resolvedElements {
+                    let cx = self.lerp(move.fromX, move.toX, e)
+                    let cy = self.lerp(move.fromY, move.toY, e)
+                    let cw = self.lerp(move.fromWidth, move.toWidth, e)
+                    let ch = self.lerp(move.fromHeight, move.toHeight, e)
+                    _ = self.setFrameOnElement(element, x: cx, y: cy, width: cw, height: ch)
+                }
+
+                // Sleep until the next frame's target time.
+                if i < stepCount {
+                    let targetNs = totalNs * UInt64(i) / UInt64(stepCount)
+                    let elapsedMach = mach_absolute_time() - baseTime
+                    let elapsedNs = UInt64(Double(elapsedMach) * numer / denom)
+
+                    if elapsedNs < targetNs {
+                        let sleepNs = targetNs - elapsedNs
+                        usleep(UInt32(sleepNs / 1_000)) // convert ns to µs
+                    }
+                }
+            }
+
+            DispatchQueue.main.async { completion(true) }
+        }
+    }
+
+    // MARK: - Window List
+
+    /// Get all on-screen windows with their info (replaces JXA window discovery).
+    func getWindowList() -> [WindowListEntry] {
+        guard let windowList = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else {
+            return []
+        }
+
+        // Build a PID -> bundleId map from running applications.
+        var pidToBundleId: [pid_t: String] = [:]
+        for app in NSWorkspace.shared.runningApplications {
+            if let bundleId = app.bundleIdentifier {
+                pidToBundleId[app.processIdentifier] = bundleId
+            }
+        }
+
+        var entries: [WindowListEntry] = []
+
+        for windowInfo in windowList {
+            guard let layer = windowInfo[kCGWindowLayer as String] as? Int,
+                  layer == 0,
+                  let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
+                  let boundsDict = windowInfo[kCGWindowBounds as String] as? [String: CGFloat],
+                  let bx = boundsDict["X"],
+                  let by = boundsDict["Y"],
+                  let bw = boundsDict["Width"],
+                  let bh = boundsDict["Height"],
+                  bw > 50, bh > 50 else {
+                continue
+            }
+
+            let ownerName = (windowInfo[kCGWindowOwnerName as String] as? String) ?? ""
+            let windowId = (windowInfo[kCGWindowNumber as String] as? Int) ?? 0
+            let title = (windowInfo[kCGWindowName as String] as? String) ?? ""
+            let bundleId = pidToBundleId[ownerPID] ?? ""
+
+            entries.append(WindowListEntry(
+                windowId: windowId,
+                ownerName: ownerName,
+                ownerPID: ownerPID,
+                ownerBundleId: bundleId,
+                title: title,
+                x: Int(bx),
+                y: Int(by),
+                width: Int(bw),
+                height: Int(bh),
+                layer: layer
+            ))
+        }
+
+        return entries
     }
 }
 
@@ -1035,11 +1327,11 @@ final class RecordingHelper {
     // Silence detection state (all accessed on main thread only)
     private var hasSpeechSinceLastHarvest = false
     private var silenceTimer: DispatchWorkItem?
-    private var harvestMode: String = "command"  // "command" = 50ms, "dictation" = 500ms
+    private var harvestMode: String = "command"  // "command" = 150ms, "dictation" = 750ms
 
     private static let SPEECH_THRESHOLD: Double = 0.02
     private static let SILENCE_COMMAND_MS: Int = 150
-    private static let SILENCE_DICTATION_MS: Int = 500
+    private static let SILENCE_DICTATION_MS: Int = 750
 
     private static let wavSettings: [String: Any] = [
         AVFormatIDKey: Int(kAudioFormatLinearPCM),
@@ -1675,6 +1967,55 @@ final class MessageHandler {
             } else {
                 sendError("setHarvestMode requires mode")
             }
+
+        case .animateWindows:
+            guard let moves = message.moves, !moves.isEmpty else {
+                sendError("animateWindows requires non-empty moves array")
+                let result = AnimationCompleteMessage(success: false)
+                sendJSON(result)
+                return
+            }
+            let duration = message.durationMs ?? 200
+            let steps = message.steps ?? 15
+            let style = message.style ?? "easeOutCubic"
+
+            WindowAnimator.shared.animateWindows(
+                moves: moves,
+                durationMs: duration,
+                steps: steps,
+                style: style
+            ) { success in
+                let result = AnimationCompleteMessage(success: success)
+                sendJSON(result)
+            }
+
+        case .setWindowFrame:
+            guard let pid = message.pid,
+                  let title = message.title,
+                  let x = message.x,
+                  let y = message.y,
+                  let width = message.width,
+                  let height = message.height else {
+                sendError("setWindowFrame requires pid, title, x, y, width, height")
+                let result = WindowFrameSetMessage(success: false)
+                sendJSON(result)
+                return
+            }
+            let success = WindowAnimator.shared.setFrame(
+                pid: pid_t(pid),
+                title: title,
+                x: x,
+                y: y,
+                width: width,
+                height: height
+            )
+            let result = WindowFrameSetMessage(success: success)
+            sendJSON(result)
+
+        case .getWindowList:
+            let windows = WindowAnimator.shared.getWindowList()
+            let result = WindowListMessage(windows: windows)
+            sendJSON(result)
         }
     }
 

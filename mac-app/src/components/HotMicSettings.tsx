@@ -31,6 +31,15 @@ export default function HotMicSettings() {
   const [restartServerCommand, setRestartServerCommand] = useState('');
   const [showWordCount, setShowWordCount] = useState(false);
 
+  // App voice aliases
+  const [appAliases, setAppAliases] = useState<Array<{ appName: string; aliases: string }>>([]);
+  const [newAliasApp, setNewAliasApp] = useState('');
+  const [newAliasWords, setNewAliasWords] = useState('');
+  const [runningApps, setRunningApps] = useState<Array<{ bundleId: string; name: string }>>([]);
+
+  // System commands (media, volume, sleep, lock)
+  const [systemCmds, setSystemCmds] = useState<Record<string, string>>({});
+
   const styles = getStyles(theme);
 
   useEffect(() => {
@@ -77,6 +86,20 @@ export default function HotMicSettings() {
       setRestartServerWords(rsw);
       setRestartServerCommand(rsc);
       setShowWordCount(wc);
+
+      // Load system commands
+      window.hotMicAPI!.getSystemCommands().then(cmds => {
+        setSystemCmds(cmds || {});
+      });
+
+      // Load app voice aliases
+      window.clipboardAPI?.getAppVoiceAliases?.().then(aliases => {
+        setAppAliases(aliases || []);
+      });
+      // Load running apps for the app picker dropdown
+      window.clipboardAPI?.getRunningApps?.().then(apps => {
+        setRunningApps(apps || []);
+      });
 
       // Check if target is a known terminal or custom
       if (target && !terminals.some(t => t.bundleId === target)) {
@@ -204,6 +227,40 @@ export default function HotMicSettings() {
       setHookLoading(false);
     }
   }, [hookInstalled]);
+
+  const handleSystemCmdSave = useCallback(async (action: string) => {
+    const phrases = systemCmds[action];
+    if (phrases !== undefined) {
+      await window.hotMicAPI?.setSystemCommand(action, phrases.trim());
+    }
+  }, [systemCmds]);
+
+  const handleAddAppAlias = useCallback(async () => {
+    if (!newAliasApp.trim() || !newAliasWords.trim()) return;
+    const updated = [...appAliases, { appName: newAliasApp.trim(), aliases: newAliasWords.trim() }];
+    try {
+      const success = await window.clipboardAPI?.setAppVoiceAliases?.(updated);
+      if (success) {
+        setAppAliases(updated);
+        setNewAliasApp('');
+        setNewAliasWords('');
+      }
+    } catch (err) {
+      console.error('Failed to add app alias:', err);
+    }
+  }, [appAliases, newAliasApp, newAliasWords]);
+
+  const handleRemoveAppAlias = useCallback(async (index: number) => {
+    const updated = appAliases.filter((_, i) => i !== index);
+    try {
+      const success = await window.clipboardAPI?.setAppVoiceAliases?.(updated);
+      if (success) {
+        setAppAliases(updated);
+      }
+    } catch (err) {
+      console.error('Failed to remove app alias:', err);
+    }
+  }, [appAliases]);
 
   const isActive = currentState !== 'idle';
   const targetName = knownTerminals.find(t => t.bundleId === targetBundleId)?.name || targetBundleId || 'Not set';
@@ -516,6 +573,147 @@ export default function HotMicSettings() {
       <p style={styles.description}>
         Say any trigger phrase to send Ctrl+C then run the configured command.
       </p>
+
+      <div style={styles.divider} />
+
+      {/* System Commands */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>System Commands</span>
+        <p style={styles.description}>
+          Voice triggers for media playback, volume, and system controls.
+        </p>
+      </div>
+      {[
+        { action: 'play-pause', label: 'Play / Pause' },
+        { action: 'next-track', label: 'Next Track' },
+        { action: 'previous-track', label: 'Previous Track' },
+        { action: 'volume-up', label: 'Volume Up' },
+        { action: 'volume-down', label: 'Volume Down' },
+        { action: 'mute', label: 'Mute' },
+        { action: 'unmute', label: 'Unmute' },
+        { action: 'lock', label: 'Lock Screen' },
+        { action: 'sleep', label: 'Sleep' },
+      ].map(({ action, label }) => (
+        <div key={action} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 0' }}>
+          <span style={{ fontSize: '12px', color: theme.text, minWidth: '100px', flexShrink: 0 }}>{label}</span>
+          <input
+            type="text"
+            value={systemCmds[action] ?? ''}
+            onChange={(e) => setSystemCmds(prev => ({ ...prev, [action]: e.target.value }))}
+            style={{ ...styles.input, fontFamily: 'monospace' }}
+            onBlur={() => handleSystemCmdSave(action)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSystemCmdSave(action)}
+          />
+        </div>
+      ))}
+
+      <div style={styles.divider} />
+
+      {/* App Voice Aliases */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>App Voice Aliases</span>
+        <p style={styles.description}>
+          Say an app name to switch to it. Add custom trigger words for your apps.
+          Common words (Notes, Mail, etc.) require saying "open" first.
+        </p>
+      </div>
+
+      {appAliases.length > 0 && (
+        <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          {appAliases.map((alias, index) => (
+            <div
+              key={index}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '8px 12px',
+                borderRadius: '6px',
+                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+                border: `1px solid ${theme.border}`,
+              }}
+            >
+              <span style={{ fontSize: '12px', color: theme.text, fontWeight: 500, minWidth: '80px' }}>
+                {alias.appName}
+              </span>
+              <span style={{ color: theme.textSecondary, fontSize: '12px' }}>:</span>
+              <span style={{ flex: 1, fontSize: '12px', color: theme.textSecondary, fontFamily: 'monospace' }}>
+                {alias.aliases}
+              </span>
+              <button
+                onClick={() => handleRemoveAppAlias(index)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: theme.textSecondary,
+                  cursor: 'pointer',
+                  padding: '4px',
+                  fontSize: '14px',
+                  lineHeight: 1,
+                }}
+                title="Remove"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
+        <select
+          value={newAliasApp}
+          onChange={async (e) => {
+            if (e.target.value === '__browse__') {
+              const appName = await window.clipboardAPI?.browseForApp?.();
+              if (appName) setNewAliasApp(appName);
+              else e.target.value = newAliasApp; // reset if cancelled
+            } else {
+              setNewAliasApp(e.target.value);
+            }
+          }}
+          style={{ ...styles.select, flex: 0, minWidth: '140px' }}
+        >
+          <option value="">Select app...</option>
+          {runningApps.map(app => (
+            <option key={app.bundleId} value={app.name}>{app.name}</option>
+          ))}
+          <option value="__browse__">Other...</option>
+        </select>
+        <input
+          type="text"
+          value={newAliasWords}
+          onChange={(e) => setNewAliasWords(e.target.value)}
+          placeholder="ghosty, ghost, terminal"
+          style={{ ...styles.input, fontFamily: 'monospace' }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && newAliasApp && newAliasWords.trim()) handleAddAppAlias();
+          }}
+        />
+        <button
+          onClick={handleAddAppAlias}
+          disabled={!newAliasApp || !newAliasWords.trim()}
+          style={{
+            fontSize: '12px',
+            padding: '4px 12px',
+            borderRadius: '6px',
+            border: `1px solid ${theme.border}`,
+            backgroundColor: theme.surface0,
+            color: theme.text,
+            cursor: !newAliasApp || !newAliasWords.trim() ? 'default' : 'pointer',
+            opacity: !newAliasApp || !newAliasWords.trim() ? 0.5 : 1,
+            minWidth: '50px',
+          }}
+        >
+          Add
+        </button>
+      </div>
+
+      {appAliases.length === 0 && (
+        <p style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '6px', fontStyle: 'italic' }}>
+          Example: Ghostty → "ghosty, ghost tea, ghost"
+        </p>
+      )}
 
       <div style={styles.divider} />
 
