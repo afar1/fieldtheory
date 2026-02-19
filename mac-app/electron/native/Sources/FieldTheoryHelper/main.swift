@@ -45,24 +45,9 @@ enum MessageType: String, Codable {
     case focusWindowByTitle
     // Silence detection harvest mode
     case setHarvestMode
-    // Window animation (Squares)
-    case animateWindows
+    // Window management (Squares)
     case setWindowFrame
     case getWindowList
-}
-
-/// A single window move for animateWindows.
-struct WindowMove: Codable {
-    let pid: Int32
-    let title: String
-    let fromX: Int
-    let fromY: Int
-    let fromWidth: Int
-    let fromHeight: Int
-    let toX: Int
-    let toY: Int
-    let toWidth: Int
-    let toHeight: Int
 }
 
 /// Message received from Electron.
@@ -76,11 +61,7 @@ struct IncomingMessage: Codable {
     let pressEnter: Bool?       // For typeIntoApp
     let titleSubstring: String? // For focusWindowByTitle
     let mode: String?           // For setHarvestMode ("command" or "dictation")
-    // Window animation (Squares)
-    let moves: [WindowMove]?    // For animateWindows
-    let durationMs: Int?        // For animateWindows
-    let steps: Int?             // For animateWindows
-    let style: String?          // For animateWindows ("easeOutCubic" or "easeOutBack")
+    // Window management (Squares)
     let pid: Int32?             // For setWindowFrame
     let title: String?          // For setWindowFrame
     let x: Int?                 // For setWindowFrame
@@ -264,17 +245,6 @@ struct FocusWindowByTitleResultMessage: Codable {
     }
 }
 
-/// Result of animateWindows command.
-struct AnimationCompleteMessage: Codable {
-    let type = "animationComplete"
-    let success: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case type
-        case success
-    }
-}
-
 /// Result of setWindowFrame command.
 struct WindowFrameSetMessage: Codable {
     let type = "windowFrameSet"
@@ -314,7 +284,7 @@ struct WindowListMessage: Codable {
 // MARK: - Window Animator (Squares)
 
 /// Manages window frame manipulation via the Accessibility API.
-/// Provides sub-millisecond frame setting and smooth animation loops.
+/// Provides sub-millisecond frame setting for instant window snapping.
 final class WindowAnimator {
 
     static let shared = WindowAnimator()
@@ -370,104 +340,6 @@ final class WindowAnimator {
         AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue)
 
         return true
-    }
-
-    // MARK: - Animation
-
-    /// Easing: easeOutCubic — snappy deceleration.
-    private func easeOutCubic(_ t: Double) -> Double {
-        return 1.0 - pow(1.0 - t, 3.0)
-    }
-
-    /// Easing: easeOutBack — slight overshoot then settle.
-    private func easeOutBack(_ t: Double) -> Double {
-        let c1 = 1.70158
-        let c3 = c1 + 1.0
-        return 1.0 + c3 * pow(t - 1.0, 3.0) + c1 * pow(t - 1.0, 2.0)
-    }
-
-    /// Pick easing function by name.
-    private func easingFunction(named style: String) -> (Double) -> Double {
-        switch style {
-        case "easeOutBack": return easeOutBack
-        case "easeOutCubic": return easeOutCubic
-        default: return easeOutCubic
-        }
-    }
-
-    /// Interpolate between two integer values using an eased t.
-    private func lerp(_ from: Int, _ to: Int, _ e: Double) -> Int {
-        return Int(round(Double(from) + Double(to - from) * e))
-    }
-
-    /// Animate one or more windows from their start frames to end frames.
-    /// Runs on a background thread; calls completion on main thread.
-    func animateWindows(
-        moves: [WindowMove],
-        durationMs: Int,
-        steps: Int,
-        style: String,
-        completion: @escaping (Bool) -> Void
-    ) {
-        // Pre-resolve all AXUIElements on main thread (AX calls are thread-safe
-        // but resolution is fastest from the thread that owns the app element).
-        var resolvedElements: [(AXUIElement, WindowMove)] = []
-        for move in moves {
-            if let element = findWindow(pid: pid_t(move.pid), title: move.title) {
-                resolvedElements.append((element, move))
-            }
-        }
-
-        if resolvedElements.isEmpty {
-            completion(false)
-            return
-        }
-
-        let easing = easingFunction(named: style)
-        let stepCount = max(steps, 1)
-        let totalNs = UInt64(durationMs) * 1_000_000 // total duration in nanoseconds
-
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-            guard let self = self else {
-                DispatchQueue.main.async { completion(false) }
-                return
-            }
-
-            let baseTime = mach_absolute_time()
-
-            // Get mach timebase for converting to nanoseconds.
-            var timebaseInfo = mach_timebase_info_data_t()
-            mach_timebase_info(&timebaseInfo)
-            let numer = Double(timebaseInfo.numer)
-            let denom = Double(timebaseInfo.denom)
-
-            for i in 1...stepCount {
-                let t = Double(i) / Double(stepCount)
-                let e = easing(t)
-
-                for (element, move) in resolvedElements {
-                    let cx = self.lerp(move.fromX, move.toX, e)
-                    let cy = self.lerp(move.fromY, move.toY, e)
-                    let cw = self.lerp(move.fromWidth, move.toWidth, e)
-                    let ch = self.lerp(move.fromHeight, move.toHeight, e)
-                    _ = self.setFrameOnElement(element, x: cx, y: cy, width: cw, height: ch)
-                }
-
-                // Sleep until the next frame's target time.
-                if i < stepCount {
-                    let targetNs = totalNs * UInt64(i) / UInt64(stepCount)
-                    let elapsedMach = mach_absolute_time() - baseTime
-                    let elapsedNs = UInt64(Double(elapsedMach) * numer / denom)
-
-                    if elapsedNs < targetNs {
-                        let sleepNs = targetNs - elapsedNs
-                        usleep(UInt32(sleepNs / 1_000)) // convert ns to µs
-                    }
-                }
-            }
-
-            DispatchQueue.main.async { completion(true) }
-        }
     }
 
     // MARK: - Window List
@@ -1458,6 +1330,14 @@ final class RecordingHelper {
             return false
         }
         
+        // Enable voice processing for AEC (cancels speaker audio from mic input)
+        do {
+            try inputNode.setVoiceProcessingEnabled(true)
+            sendLog(level: "info", message: "Voice processing (AEC) enabled")
+        } catch {
+            sendLog(level: "warn", message: "Failed to enable voice processing: \(error.localizedDescription)")
+        }
+
         // Install tap on input node
         let bufferSize: AVAudioFrameCount = 2048
         inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, _ in
@@ -1528,7 +1408,7 @@ final class RecordingHelper {
         }
         
         audioEngine = engine
-        
+
         // Start engine
         do {
             try engine.start()
@@ -1966,27 +1846,6 @@ final class MessageHandler {
                 sendLog(level: "info", message: "Harvest mode set to: \(mode)")
             } else {
                 sendError("setHarvestMode requires mode")
-            }
-
-        case .animateWindows:
-            guard let moves = message.moves, !moves.isEmpty else {
-                sendError("animateWindows requires non-empty moves array")
-                let result = AnimationCompleteMessage(success: false)
-                sendJSON(result)
-                return
-            }
-            let duration = message.durationMs ?? 200
-            let steps = message.steps ?? 15
-            let style = message.style ?? "easeOutCubic"
-
-            WindowAnimator.shared.animateWindows(
-                moves: moves,
-                durationMs: duration,
-                steps: steps,
-                style: style
-            ) { success in
-                let result = AnimationCompleteMessage(success: success)
-                sendJSON(result)
             }
 
         case .setWindowFrame:

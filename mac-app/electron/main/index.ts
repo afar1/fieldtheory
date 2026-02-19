@@ -5361,7 +5361,7 @@ async function initTranscriberSystem(): Promise<void> {
   }
 
   // Initialize Squares window management.
-  // Rectangle-inspired snapping with smooth animations.
+  // Rectangle-inspired window snapping.
   squaresManager = new SquaresManager(preferencesManager, nativeHelper!);
 
   // Broadcast Squares events to all renderer windows.
@@ -5960,6 +5960,33 @@ if (!gotTheLock) {
 
     ipcMain.handle('hotmic:setCloseWindowWords', async (_event, words: string) => {
       await preferencesManager?.save({ hotMicCloseWindowWords: words });
+      return words;
+    });
+
+    ipcMain.handle('hotmic:getMinimizePhrases', () => {
+      return preferencesManager?.getPreference('hotMicMinimizePhrases') ?? 'minimize, minimize window, minimize the window';
+    });
+
+    ipcMain.handle('hotmic:setMinimizePhrases', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicMinimizePhrases: words });
+      return words;
+    });
+
+    ipcMain.handle('hotmic:getHidePhrases', () => {
+      return preferencesManager?.getPreference('hotMicHidePhrases') ?? 'hide, hide app, hide this app, hide the app';
+    });
+
+    ipcMain.handle('hotmic:setHidePhrases', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicHidePhrases: words });
+      return words;
+    });
+
+    ipcMain.handle('hotmic:getQuitPhrases', () => {
+      return preferencesManager?.getPreference('hotMicQuitPhrases') ?? 'quit, quit app, quit this app';
+    });
+
+    ipcMain.handle('hotmic:setQuitPhrases', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicQuitPhrases: words });
       return words;
     });
 

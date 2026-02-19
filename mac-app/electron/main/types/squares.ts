@@ -1,6 +1,6 @@
 // =============================================================================
 // Squares - Window Management Types
-// Rectangle-inspired window management with smooth animations.
+// Rectangle-inspired window management with instant snap.
 // Named "Squares" as Field Theory's take on Rectangle-style window snapping.
 // =============================================================================
 
@@ -49,8 +49,10 @@ export interface WindowSnapshot {
   windowId: number;
   ownerPID: number;
   ownerBundleId: string;
+  title: string;
   frame: WindowFrame;
   timestamp: number;
+  actionType?: 'move' | 'focus' | 'minimize' | 'hide' | 'fullScreen';
 }
 
 /**
@@ -97,17 +99,14 @@ export type SquaresAction =
   // Squares-exclusive multi-window actions
   | 'grid'
   | 'focus'
+  | 'minimize'
+  | 'hide'
+  | 'showAll'
+  | 'fullScreen'
+  | 'exitFullScreen'
   | 'horizontalSpread'
   | 'verticalSpread'
   | 'cascade';
-
-/**
- * Animation style for window transitions.
- * - none: instant snap (like classic Rectangle)
- * - smooth: ease-out animation (~200ms, professional feel)
- * - snappy: fast spring animation (~150ms, Jarvis/Minority Report feel)
- */
-export type AnimationStyle = 'none' | 'smooth' | 'snappy';
 
 /**
  * Squares configuration.
@@ -115,9 +114,6 @@ export type AnimationStyle = 'none' | 'smooth' | 'snappy';
  */
 export interface SquaresConfig {
   enabled: boolean;
-  animationStyle: AnimationStyle;
-  animationDurationMs: number;      // Default: 200 for smooth, 150 for snappy
-  animationSteps: number;           // Number of interpolation frames (default: 15)
   gapSize: number;                  // Gap between windows in grid/spread layouts (px)
   maxHistorySize: number;           // How many undo states to keep (default: 50)
 }
@@ -127,9 +123,6 @@ export interface SquaresConfig {
  */
 export const DEFAULT_SQUARES_CONFIG: SquaresConfig = {
   enabled: true,
-  animationStyle: 'snappy',
-  animationDurationMs: 200,
-  animationSteps: 15,
   gapSize: 8,
   maxHistorySize: 50,
 };
@@ -239,8 +232,9 @@ export const VOICE_COMMAND_TRIGGERS: Record<string, SquaresAction> = {
   'tile': 'grid',
   'tile all': 'grid',
   'grid all': 'grid',
-  'show all': 'grid',
-  'show all windows': 'grid',
+  'show all': 'showAll',
+  'show all windows': 'showAll',
+  'show windows': 'showAll',
 
   // Focus
   'focus': 'focus',
@@ -263,6 +257,15 @@ export const VOICE_COMMAND_TRIGGERS: Record<string, SquaresAction> = {
   'cascade': 'cascade',
   'cascade windows': 'cascade',
 
+  // Minimize / Hide
+  'minimize': 'minimize',
+  'minimize window': 'minimize',
+  'minimize the window': 'minimize',
+  'hide': 'hide',
+  'hide app': 'hide',
+  'hide this app': 'hide',
+  'hide the app': 'hide',
+
   // Halves
   'left half': 'leftHalf',
   'right half': 'rightHalf',
@@ -279,7 +282,12 @@ export const VOICE_COMMAND_TRIGGERS: Record<string, SquaresAction> = {
 
   // Standard
   'maximize': 'maximize',
-  'full screen': 'maximize',
+  'full screen': 'fullScreen',
+  'fullscreen': 'fullScreen',
+  'enter full screen': 'fullScreen',
+  'exit full screen': 'exitFullScreen',
+  'exit fullscreen': 'exitFullScreen',
+  'leave full screen': 'exitFullScreen',
   'center': 'center',
   'center window': 'center',
   'restore': 'restore',

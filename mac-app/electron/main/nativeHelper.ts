@@ -6,7 +6,6 @@ import {
   AudioDevice,
   HelperOutgoingMessage,
   HelperIncomingCommand,
-  WindowMoveSpec,
   NativeWindowInfo,
 } from './types/audio';
 import { createLogger } from './logger';
@@ -559,50 +558,6 @@ export class NativeHelper extends EventEmitter {
   }
 
   /**
-   * Animate one or more windows from start to end frames.
-   * Swift runs the interpolation loop internally using AX API (<1ms per frame).
-   * Returns true if animation completed successfully.
-   */
-  async animateWindows(
-    moves: WindowMoveSpec[],
-    config: { durationMs: number; steps: number; style: 'easeOutCubic' | 'easeOutBack' }
-  ): Promise<boolean> {
-    if (!this.child || !this.child.stdin.writable) {
-      return false;
-    }
-
-    await this.waitForReady();
-
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        cleanup();
-        resolve(false);
-      }, config.durationMs + 2000); // animation duration + generous buffer
-
-      const onMessage = (msg: HelperOutgoingMessage) => {
-        if (msg.type === 'animationComplete') {
-          cleanup();
-          resolve(msg.success);
-        }
-      };
-
-      const cleanup = () => {
-        clearTimeout(timeout);
-        this.removeListener('message', onMessage);
-      };
-
-      this.on('message', onMessage);
-      this.send({
-        type: 'animateWindows',
-        moves,
-        durationMs: config.durationMs,
-        steps: config.steps,
-        style: config.style,
-      });
-    });
-  }
-
-  /**
    * Set a window's frame instantly (no animation).
    * Returns true if successful.
    */
@@ -736,7 +691,13 @@ export class NativeHelper extends EventEmitter {
         break;
 
       case 'log':
-        // Silently ignore helper log messages
+        if (msg.level === 'error') {
+          log.error('Helper:', msg.message);
+        } else if (msg.level === 'warn') {
+          log.warn('Helper:', msg.message);
+        } else {
+          log.info('Helper:', msg.message);
+        }
         break;
 
       case 'error':
@@ -802,10 +763,9 @@ export class NativeHelper extends EventEmitter {
         this.emit('message', msg);
         break;
 
-      case 'animationComplete':
       case 'windowFrameSet':
       case 'windowList':
-        // Responses to window animation commands - handled by promise listeners.
+        // Responses to window management commands - handled by promise listeners.
         this.emit('message', msg);
         break;
 

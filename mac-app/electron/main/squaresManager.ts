@@ -1,6 +1,6 @@
 // =============================================================================
 // SquaresManager - Window Management Engine
-// Rectangle-inspired window management with smooth animations for Field Theory.
+// Rectangle-inspired window management with instant snap for Field Theory.
 // Uses native Swift helper (AX API) for sub-millisecond window manipulation.
 // =============================================================================
 
@@ -10,7 +10,6 @@ import { promisify } from 'util';
 import { screen, globalShortcut } from 'electron';
 import { PreferencesManager } from './preferences';
 import { NativeHelper } from './nativeHelper';
-import { WindowMoveSpec } from './types/audio';
 import { createLogger } from './logger';
 import {
   WindowFrame,
@@ -20,7 +19,6 @@ import {
   SquaresAction,
   SquaresConfig,
   SquaresHotkeys,
-  AnimationStyle,
   DEFAULT_SQUARES_CONFIG,
   DEFAULT_SQUARES_HOTKEYS,
   VOICE_COMMAND_TRIGGERS,
@@ -51,14 +49,6 @@ async function runAppleScript(script: string): Promise<string> {
   return stdout.trim();
 }
 
-/**
- * Map AnimationStyle to the Swift easing function name.
- */
-function getEasingStyle(style: AnimationStyle): 'easeOutCubic' | 'easeOutBack' {
-  return style === 'snappy' ? 'easeOutBack' : 'easeOutCubic';
-}
-
-
 // ============================================================================
 // SquaresManager class
 // ============================================================================
@@ -70,7 +60,7 @@ export class SquaresManager extends EventEmitter {
   private hotkeys: SquaresHotkeys;
   private registeredHotkeys: Map<string, string> = new Map(); // action -> accelerator
   private history: WindowSnapshot[][] = [];  // Stack of undo states (groups of snapshots)
-  private animating = false;  // Prevent concurrent animations
+  private animating = false;  // Prevent concurrent operations
 
   constructor(preferences: PreferencesManager, nativeHelper: NativeHelper) {
     super();
@@ -279,62 +269,26 @@ export class SquaresManager extends EventEmitter {
   // --------------------------------------------------------------------------
 
   /**
-   * Move a window to a target frame.
-   * If animations are enabled, delegates to Swift for smooth interpolation.
-   * Uses native AX API (<1ms per frame) instead of AppleScript (~20-50ms).
+   * Move a window to a target frame (instant snap via AX API).
    */
   async moveWindow(pid: number, windowTitle: string, from: WindowFrame, to: WindowFrame): Promise<void> {
-    if (this.config.animationStyle === 'none') {
-      await this.nativeHelper.setWindowFrame(pid, windowTitle, to.x, to.y, to.width, to.height);
-      return;
-    }
-
-    // Single animated move via native helper.
-    const moveSpec: WindowMoveSpec = {
-      pid,
-      title: windowTitle,
-      fromX: from.x, fromY: from.y, fromWidth: from.width, fromHeight: from.height,
-      toX: to.x, toY: to.y, toWidth: to.width, toHeight: to.height,
-    };
-
-    await this.nativeHelper.animateWindows([moveSpec], {
-      durationMs: this.config.animationDurationMs,
-      steps: this.config.animationSteps,
-      style: getEasingStyle(this.config.animationStyle),
-    });
+    await this.nativeHelper.setWindowFrame(pid, windowTitle, to.x, to.y, to.width, to.height);
   }
 
   /**
    * Move multiple windows simultaneously for grid/spread layouts.
-   * Sends all moves in a single IPC call; Swift animates them in lockstep.
+   * Sets each window frame instantly via AX API.
    */
   async moveWindowsBatch(
     moves: Array<{ pid: number; title: string; from: WindowFrame; to: WindowFrame }>
   ): Promise<void> {
     if (moves.length === 0) return;
 
-    const moveSpecs: WindowMoveSpec[] = moves.map(m => ({
-      pid: m.pid,
-      title: m.title,
-      fromX: m.from.x, fromY: m.from.y, fromWidth: m.from.width, fromHeight: m.from.height,
-      toX: m.to.x, toY: m.to.y, toWidth: m.to.width, toHeight: m.to.height,
-    }));
-
-    if (this.config.animationStyle === 'none') {
-      // No animation: set each window instantly.
-      await Promise.all(
-        moveSpecs.map(m =>
-          this.nativeHelper.setWindowFrame(m.pid, m.title, m.toX, m.toY, m.toWidth, m.toHeight)
-        )
-      );
-      return;
-    }
-
-    await this.nativeHelper.animateWindows(moveSpecs, {
-      durationMs: this.config.animationDurationMs,
-      steps: this.config.animationSteps,
-      style: getEasingStyle(this.config.animationStyle),
-    });
+    await Promise.all(
+      moves.map(m =>
+        this.nativeHelper.setWindowFrame(m.pid, m.title, m.to.x, m.to.y, m.to.width, m.to.height)
+      )
+    );
   }
 
   /**
@@ -450,13 +404,15 @@ export class SquaresManager extends EventEmitter {
    * Save the current state of affected windows before performing an action.
    * This enables the "restore" / undo functionality.
    */
-  private saveHistory(windows: WindowInfo[]): void {
+  private saveHistory(windows: WindowInfo[], actionType?: WindowSnapshot['actionType']): void {
     const snapshots: WindowSnapshot[] = windows.map(w => ({
       windowId: w.windowId,
       ownerPID: w.ownerPID,
       ownerBundleId: w.ownerBundleId,
+      title: w.title,
       frame: { ...w.frame },
       timestamp: Date.now(),
+      actionType,
     }));
 
     this.history.push(snapshots);
@@ -477,33 +433,96 @@ export class SquaresManager extends EventEmitter {
       return false;
     }
 
-    // Show all apps first in case we're undoing a "focus" action.
-    await this.showAllApps();
+    const actionType = lastState[0]?.actionType;
 
-    // Build move commands from saved snapshots.
-    const currentWindows = await this.getWindows();
-    const moves: Array<{ pid: number; title: string; from: WindowFrame; to: WindowFrame }> = [];
+    switch (actionType) {
+      case 'minimize': {
+        // Unminimize the window
+        const snap = lastState[0];
+        try {
+          const script = `
+            tell application "System Events"
+              set targetProc to first process whose unix id is ${snap.ownerPID}
+              set miniaturized of window 1 of targetProc to false
+            end tell
+          `;
+          await runAppleScript(script);
+        } catch (err) {
+          log.error('Failed to unminimize window:', err);
+        }
+        return true;
+      }
 
-    for (const snapshot of lastState) {
-      // Find current position of this window.
-      const current = currentWindows.find(
-        w => w.ownerPID === snapshot.ownerPID && w.ownerBundleId === snapshot.ownerBundleId
-      );
-      if (current) {
-        moves.push({
-          pid: current.ownerPID,
-          title: current.title,
-          from: current.frame,
+      case 'hide': {
+        // Unhide the app
+        const snap = lastState[0];
+        try {
+          const script = `
+            tell application "System Events"
+              set targetProc to first process whose unix id is ${snap.ownerPID}
+              set visible of targetProc to true
+            end tell
+          `;
+          await runAppleScript(script);
+        } catch (err) {
+          log.error('Failed to unhide app:', err);
+        }
+        return true;
+      }
+
+      case 'fullScreen': {
+        // Exit full screen
+        const snap = lastState[0];
+        try {
+          const script = `
+            tell application "System Events"
+              set targetProc to first process whose unix id is ${snap.ownerPID}
+              set value of attribute "AXFullScreen" of window 1 of targetProc to false
+            end tell
+          `;
+          await runAppleScript(script);
+        } catch (err) {
+          log.error('Failed to exit full screen:', err);
+        }
+        return true;
+      }
+
+      case 'focus': {
+        // Show all apps
+        await this.showAllApps();
+
+        // Restore window positions directly from snapshots.
+        // We use PID+title from the snapshot rather than cross-referencing getWindows(),
+        // because off-screen windows (-30000,-30000) don't appear in CGWindowListCopyWindowInfo
+        // with .optionOnScreenOnly.
+        const moves = lastState.map(snapshot => ({
+          pid: snapshot.ownerPID,
+          title: snapshot.title,
+          from: { x: 0, y: 0, width: 0, height: 0 } as WindowFrame,
           to: snapshot.frame,
-        });
+        }));
+        if (moves.length > 0) await this.moveWindowsBatch(moves);
+        return true;
+      }
+
+      default: {
+        // 'move' or undefined — original behavior: show all apps + restore positions
+        await this.showAllApps();
+
+        const currentWindows = await this.getWindows();
+        const moves: Array<{ pid: number; title: string; from: WindowFrame; to: WindowFrame }> = [];
+        for (const snapshot of lastState) {
+          const current = currentWindows.find(
+            w => w.ownerPID === snapshot.ownerPID && w.ownerBundleId === snapshot.ownerBundleId
+          );
+          if (current) {
+            moves.push({ pid: current.ownerPID, title: current.title, from: current.frame, to: snapshot.frame });
+          }
+        }
+        if (moves.length > 0) await this.moveWindowsBatch(moves);
+        return true;
       }
     }
-
-    if (moves.length > 0) {
-      await this.moveWindowsBatch(moves);
-    }
-
-    return true;
   }
 
   getHistoryCount(): number {
@@ -634,7 +653,8 @@ export class SquaresManager extends EventEmitter {
 
   /**
    * Calculate horizontal spread layout for an app's windows.
-   * Arranges windows side-by-side, keeping their current height.
+   * Arranges windows side-by-side, preserving each window's current height
+   * and vertically centering them on screen.
    */
   private calculateHorizontalSpread(windows: WindowInfo[], screenInfo: ScreenInfo): WindowFrame[] {
     const s = screenInfo.visibleFrame;
@@ -642,15 +662,18 @@ export class SquaresManager extends EventEmitter {
     const count = windows.length;
 
     if (count === 0) return [];
-    if (count === 1) return [{ x: s.x, y: s.y, width: s.width, height: s.height }];
+    if (count === 1) {
+      const w = windows[0];
+      return [{ x: s.x, y: s.y + Math.round((s.height - w.frame.height) / 2), width: s.width, height: w.frame.height }];
+    }
 
     const windowWidth = Math.floor((s.width - gap * (count + 1)) / count);
 
-    return windows.map((_, i) => ({
+    return windows.map((w, i) => ({
       x: s.x + gap + i * (windowWidth + gap),
-      y: s.y,
+      y: s.y + Math.round((s.height - w.frame.height) / 2),
       width: windowWidth,
-      height: s.height,
+      height: w.frame.height,
     }));
   }
 
@@ -711,9 +734,9 @@ export class SquaresManager extends EventEmitter {
       return false;
     }
 
-    // Prevent concurrent animations from creating chaos.
+    // Prevent concurrent operations from interleaving.
     if (this.animating) {
-      log.info('Animation already in progress, skipping');
+      log.info('Operation already in progress, skipping');
       return false;
     }
 
@@ -732,6 +755,26 @@ export class SquaresManager extends EventEmitter {
 
         case 'focus':
           success = await this.executeFocusAction();
+          break;
+
+        case 'minimize':
+          success = await this.executeMinimizeAction();
+          break;
+
+        case 'hide':
+          success = await this.executeHideAction();
+          break;
+
+        case 'showAll':
+          success = await this.executeShowAllAction();
+          break;
+
+        case 'fullScreen':
+          success = await this.executeFullScreenAction();
+          break;
+
+        case 'exitFullScreen':
+          success = await this.executeExitFullScreenAction();
           break;
 
         case 'horizontalSpread':
@@ -791,10 +834,10 @@ export class SquaresManager extends EventEmitter {
   }
 
   /**
-   * Execute grid action - tile all visible windows.
+   * Execute grid action - tile the current app's windows into a grid.
    */
   private async executeGridAction(): Promise<boolean> {
-    const windows = await this.getWindows();
+    const windows = await this.getFrontmostAppWindows();
     if (windows.length === 0) return false;
 
     // Use the primary screen for grid layout.
@@ -827,17 +870,88 @@ export class SquaresManager extends EventEmitter {
     const frontWindow = await this.getFrontmostWindow();
     if (!frontWindow) return false;
 
-    // Save ALL windows for undo (so we can unhide them).
-    this.saveHistory(allWindows);
+    // Save ALL windows for undo (so we can unhide + unminimize them).
+    this.saveHistory(allWindows, 'focus');
 
     // Hide all other apps.
     await this.hideOtherApps(frontWindow.ownerPID);
+
+    // Hide other windows of the same app (keep only the frontmost).
+    // Move them off-screen via AX API — works on all windows including terminals
+    // that don't expose the miniaturized property. Undo restores their saved positions.
+    const appWindows = await this.getFrontmostAppWindows();
+    const otherWindows = appWindows.filter(w => w.windowId !== frontWindow.windowId);
+    if (otherWindows.length > 0) {
+      const offScreenMoves = otherWindows.map(w => ({
+        pid: w.ownerPID,
+        title: w.title,
+        from: w.frame,
+        to: { x: -30000, y: -30000, width: w.frame.width, height: w.frame.height },
+      }));
+      await this.moveWindowsBatch(offScreenMoves);
+      log.info('Focus: moved %d same-app windows off-screen', otherWindows.length);
+    }
 
     // Center the focused window on its screen.
     const targetScreen = this.getScreenForWindow(frontWindow.frame);
     const centerFrame = this.calculateSingleWindowFrame('center', frontWindow.frame, targetScreen);
 
     await this.moveWindow(frontWindow.ownerPID, frontWindow.title, frontWindow.frame, centerFrame);
+    return true;
+  }
+
+  /**
+   * Minimize the frontmost window. Undoable via restore.
+   */
+  private async executeMinimizeAction(): Promise<boolean> {
+    const frontWindow = await this.getFrontmostWindow();
+    if (!frontWindow) return false;
+
+    this.saveHistory([frontWindow], 'minimize');
+
+    try {
+      const script = `
+        tell application "System Events"
+          set targetProc to first process whose unix id is ${frontWindow.ownerPID}
+          set miniaturized of window 1 of targetProc to true
+        end tell
+      `;
+      await runAppleScript(script);
+    } catch {
+      // Some windows (e.g. terminals) don't expose the miniaturized property — fall back to Cmd+M
+      try {
+        await runAppleScript('tell application "System Events" to keystroke "m" using command down');
+      } catch (err) {
+        log.error('Failed to minimize window:', err);
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Hide the frontmost app. Undoable via restore.
+   */
+  private async executeHideAction(): Promise<boolean> {
+    const frontWindow = await this.getFrontmostWindow();
+    if (!frontWindow) return false;
+
+    this.saveHistory([frontWindow], 'hide');
+
+    try {
+      const script = `
+        tell application "System Events"
+          set targetProc to first process whose unix id is ${frontWindow.ownerPID}
+          set visible of targetProc to false
+        end tell
+      `;
+      await runAppleScript(script);
+    } catch (err) {
+      log.error('Failed to hide app:', err);
+      return false;
+    }
+
     return true;
   }
 
@@ -887,6 +1001,114 @@ export class SquaresManager extends EventEmitter {
     }));
 
     await this.moveWindowsBatch(moves);
+    return true;
+  }
+
+
+  /**
+   * Show all windows of the frontmost app (unminimize) and arrange in grid.
+   * Useful after "focus" or manual minimizing to get everything back.
+   */
+  private async executeShowAllAction(): Promise<boolean> {
+    const frontWindow = await this.getFrontmostWindow();
+    if (!frontWindow) return false;
+
+    // Save current visible windows for undo before we unminimize
+    const currentAppWindows = await this.getFrontmostAppWindows();
+    this.saveHistory(currentAppWindows.length > 0 ? currentAppWindows : [frontWindow]);
+
+    // Unminimize all windows of this app
+    try {
+      const script = `
+        tell application "System Events"
+          set targetProc to first process whose unix id is ${frontWindow.ownerPID}
+          repeat with w in windows of targetProc
+            try
+              if miniaturized of w then set miniaturized of w to false
+            end try
+          end repeat
+        end tell
+      `;
+      await runAppleScript(script);
+    } catch (err) {
+      log.error('Failed to unminimize windows:', err);
+    }
+
+    // Brief wait for windows to appear
+    await new Promise(r => setTimeout(r, 200));
+
+    // Re-fetch windows and arrange in grid
+    const allAppWindows = await this.getFrontmostAppWindows();
+    if (allAppWindows.length === 0) return true;
+
+    const primaryScreen = this.getScreens().find(s => s.isPrimary) || this.getScreens()[0];
+    const targetFrames = this.calculateGridLayout(allAppWindows, primaryScreen);
+    const moves = allAppWindows.map((w, i) => ({
+      pid: w.ownerPID,
+      title: w.title,
+      from: w.frame,
+      to: targetFrames[i],
+    }));
+
+    await this.moveWindowsBatch(moves);
+    return true;
+  }
+
+  /**
+   * Toggle native macOS full screen for the frontmost window.
+   */
+  private async executeFullScreenAction(): Promise<boolean> {
+    const frontWindow = await this.getFrontmostWindow();
+    if (!frontWindow) return false;
+
+    this.saveHistory([frontWindow], 'fullScreen');
+
+    try {
+      const script = `
+        tell application "System Events"
+          set targetProc to first process whose unix id is ${frontWindow.ownerPID}
+          set value of attribute "AXFullScreen" of window 1 of targetProc to true
+        end tell
+      `;
+      await runAppleScript(script);
+    } catch (err) {
+      log.error('Failed to enter full screen:', err);
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Exit native macOS full screen for the frontmost window.
+   * No history saved — this is a one-way exit, not undoable.
+   */
+  private async executeExitFullScreenAction(): Promise<boolean> {
+    const frontWindow = await this.getFrontmostWindow();
+    if (!frontWindow) return false;
+
+    try {
+      // Try AXFullScreen attribute first, then fall back to Ctrl+Cmd+F
+      const script = `
+        tell application "System Events"
+          set targetProc to first process whose unix id is ${frontWindow.ownerPID}
+          try
+            set isFS to value of attribute "AXFullScreen" of window 1 of targetProc
+            if isFS then
+              set value of attribute "AXFullScreen" of window 1 of targetProc to false
+              return
+            end if
+          end try
+          -- AXFullScreen didn't work or wasn't true — use keyboard shortcut
+          keystroke "f" using {control down, command down}
+        end tell
+      `;
+      await runAppleScript(script);
+    } catch (err) {
+      log.error('Failed to exit full screen:', err);
+      return false;
+    }
+
     return true;
   }
 
