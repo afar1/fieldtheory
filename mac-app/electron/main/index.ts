@@ -39,6 +39,7 @@ import {
 import { OnboardingWindow, OnboardingStep } from './onboardingWindow';
 import { OnboardingIPCChannels } from './types/onboarding';
 import { CursorStatusManager, CursorStatusState } from './cursorStatusManager';
+import { DynamicIslandManager } from './dynamicIslandManager';
 import { QuotaManager } from './quotaManager';
 import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, PortableCommand } from './commandsManager';
@@ -160,6 +161,7 @@ let userDataManager: UserDataManager | null = null;
 let feedbackManager: FeedbackManager | null = null;
 let onboardingWindow: OnboardingWindow | null = null;
 let cursorStatusManager: CursorStatusManager | null = null;
+let dynamicIslandManager: DynamicIslandManager | null = null;
 let quotaManager: QuotaManager | null = null;
 let diagnosticsCollector: DiagnosticsCollector | null = null;
 let librarianManager: LibrarianManager | null = null;
@@ -4645,6 +4647,20 @@ function broadcastTranscribeEvents(): void {
     if (cursorStatusManager) {
       cursorStatusManager.setState(status as CursorStatusState);
     }
+
+    // Update dynamic island with recording state transitions.
+    if (dynamicIslandManager) {
+      if (status === 'recording') {
+        dynamicIslandManager.setState('recording');
+      } else if (status === 'transcribing') {
+        dynamicIslandManager.setState('transcribing');
+      } else if (status === 'idle') {
+        // Don't immediately dismiss - let transcript display timeout handle it.
+        if (dynamicIslandManager.getState() !== 'showing-transcript') {
+          dynamicIslandManager.setState('idle');
+        }
+      }
+    }
     
     // Force Dock visibility when showInDock is enabled.
     if (process.platform === 'darwin' && preferencesManager) {
@@ -4663,6 +4679,9 @@ function broadcastTranscribeEvents(): void {
     });
     // Store transcription for cursor status done state display
     cursorStatusManager?.setLastTranscription(text);
+
+    // Send final transcript to the dynamic island for display.
+    dynamicIslandManager?.sendTranscript(text, true);
 
     // Record transcription metrics
     const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
@@ -5173,6 +5192,10 @@ async function initTranscriberSystem(): Promise<void> {
   cursorStatusManager.setEnabled(cursorStatusEnabled);
   const hideStatusLabels = preferencesManager.getPreference('hideStatusLabels') ?? false;
   cursorStatusManager.setHideLabels(hideStatusLabels);
+
+  // Initialize the dynamic island overlay (fixed near the notch, shows transcript + history).
+  dynamicIslandManager = new DynamicIslandManager();
+  dynamicIslandManager.setClipboardManager(clipboardManager);
 
   // Now create transcriberManager with cursorStatusManager.
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
@@ -6090,6 +6113,10 @@ if (!gotTheLock) {
 
     if (transcriberManager) {
       transcriberManager.destroy();
+    }
+
+    if (dynamicIslandManager) {
+      dynamicIslandManager.destroy();
     }
 
     if (trayManager) {
