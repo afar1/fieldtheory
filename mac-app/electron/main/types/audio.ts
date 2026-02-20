@@ -228,6 +228,7 @@ export interface RecordingCancelledMessage extends HelperMessage {
 export interface AudioLevelMessage extends HelperMessage {
   type: 'audioLevel';
   level: number; // 0.0 to 1.0
+  isSpeech?: boolean; // WebRTC VAD result (optional for backward compat with old native binary)
 }
 
 /**

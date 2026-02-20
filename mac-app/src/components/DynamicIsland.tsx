@@ -83,6 +83,10 @@ export default function DynamicIsland() {
       setHistoryVisible(false);
     });
 
+    api.onShowHistory?.(() => {
+      setHistoryVisible(true);
+    });
+
     // Request initial history.
     api.requestHistory();
 
@@ -92,6 +96,7 @@ export default function DynamicIsland() {
       api.removeAllListeners('dynamic-island-command');
       api.removeAllListeners('dynamic-island-history');
       api.removeAllListeners('dynamic-island-hide-history');
+      api.removeAllListeners('dynamic-island-show-history');
     };
   }, []);
 
@@ -126,10 +131,11 @@ export default function DynamicIsland() {
 
   const toggleHistory = useCallback(() => {
     const next = !historyVisible;
-    setHistoryVisible(next);
     (window as any).dynamicIslandAPI?.setHistoryVisible(next);
     if (next) {
       (window as any).dynamicIslandAPI?.requestHistory();
+    } else {
+      setHistoryVisible(false);
     }
   }, [historyVisible]);
 
@@ -219,8 +225,7 @@ export default function DynamicIsland() {
     return <>{parts}</>;
   };
 
-  // Don't render anything when idle and history is closed.
-  if (state === 'idle' && !historyVisible) return null;
+  const isIdle = state === 'idle' && !historyVisible;
 
   // ---------------------------------------------------------------------------
   // Layout
@@ -233,7 +238,10 @@ export default function DynamicIsland() {
   return (
     <div style={styles.outerContainer}>
       {/* The island bar */}
-      <div style={styles.island}>
+      <div style={{
+        ...styles.island,
+        ...(isIdle ? styles.islandIdle : {}),
+      }}>
         {/* Hamburger / history toggle on the left side */}
         <button
           className="di-hamburger"
@@ -251,8 +259,7 @@ export default function DynamicIsland() {
           </svg>
         </button>
 
-        {/* Status indicator + transcript area */}
-        <div style={styles.contentArea}>
+        {!isIdle && <div style={styles.contentArea}>
           {/* State dot */}
           {isActive && (
             <div style={{
@@ -285,7 +292,7 @@ export default function DynamicIsland() {
               <span style={styles.transcriptText}>{renderTranscript()}</span>
             )}
           </div>
-        </div>
+        </div>}
       </div>
 
       {/* History panel - slides down below the island */}
@@ -357,14 +364,19 @@ const styles: Record<string, React.CSSProperties> = {
     width: '100%',
     height: '42px',
     padding: '0 10px',
-    backgroundColor: 'rgba(15, 15, 15, 0.92)',
-    borderRadius: '22px',
-    backdropFilter: 'blur(40px)',
-    WebkitBackdropFilter: 'blur(40px)',
-    boxShadow: '0 2px 20px rgba(0, 0, 0, 0.4), inset 0 0.5px 0 rgba(255, 255, 255, 0.06)',
+    backgroundColor: '#000000',
+    borderRadius: '0 0 22px 22px',
+    boxShadow: 'none',
     overflow: 'hidden',
     margin: '0 auto',
     animation: 'fadeInIsland 0.2s ease-out',
+    transition: 'width 0.2s ease, padding 0.2s ease',
+  },
+
+  islandIdle: {
+    height: '38px',
+    justifyContent: 'center',
+    borderRadius: '0 0 0 16px',
   },
 
   hamburger: {
@@ -445,11 +457,9 @@ const styles: Record<string, React.CSSProperties> = {
     overflowX: 'hidden',
     marginTop: '4px',
     padding: '6px',
-    backgroundColor: 'rgba(15, 15, 15, 0.92)',
+    backgroundColor: '#000000',
     borderRadius: '14px',
-    backdropFilter: 'blur(40px)',
-    WebkitBackdropFilter: 'blur(40px)',
-    boxShadow: '0 2px 20px rgba(0, 0, 0, 0.4), inset 0 0.5px 0 rgba(255, 255, 255, 0.06)',
+    boxShadow: 'none',
     scrollbarWidth: 'thin' as any,
     scrollbarColor: 'rgba(255,255,255,0.15) transparent',
     animation: 'slideDown 0.18s ease-out',
@@ -573,6 +583,7 @@ declare global {
       onCommandDetected: (cb: (data: { phrase: string; startIndex: number; endIndex: number }) => void) => void;
       onHistoryUpdate: (cb: (history: HistoryItem[]) => void) => void;
       onHideHistory?: (cb: () => void) => void;
+      onShowHistory?: (cb: () => void) => void;
       requestHistory: () => void;
       copyAndPaste: (text: string) => void;
       copyToClipboard: (text: string) => void;
