@@ -122,6 +122,10 @@ export class TranscriberManager extends EventEmitter {
   private skipNextPasteFailedNotification: boolean = false;
   private priorityMicSkippedForQuota: boolean = false; // True when quota exhausted, skip tracking
   private autoStackLimitShownThisSession: boolean = false; // Only show limit message once per session
+
+  // GPU fallback: if whisper-cli crashes due to Metal shader compilation failure,
+  // disable GPU and retry with CPU-only mode for the rest of the session.
+  private gpuDisabled: boolean = false;
   
   // Track which hotkey started recording for cross-hotkey improvement trigger.
   // If user starts with primary and ends with secondary (or vice versa), trigger improvement.
@@ -985,6 +989,9 @@ export class TranscriberManager extends EventEmitter {
           }));
           // Emit event for each verbal command detected (for metrics tracking)
           this.detectedCommands.forEach(() => this.emit('verbalCommand'));
+
+          // Emit command names for dynamic island highlighting.
+          this.emit('commandsDetected', this.detectedCommands.map((cmd: { name: string }) => cmd.name));
         }
       }
 
@@ -1074,6 +1081,7 @@ export class TranscriberManager extends EventEmitter {
           } else {
             // Show improving state.
             this.cursorStatusManager?.setState('improving');
+            this.emit('improvingStarted');
 
             const result = await improveTranscript(cleanedText, accessToken);
 
@@ -1681,6 +1689,27 @@ export class TranscriberManager extends EventEmitter {
    * Transcribe audio file using whisper-cli.
    */
   private async transcribe(wavPath: string): Promise<string> {
+    try {
+      return await this.runWhisper(wavPath);
+    } catch (error: any) {
+      // If GPU mode crashed with a Metal error, retry with GPU disabled.
+      if (!this.gpuDisabled && this.isMetalError(error?.message || '')) {
+        log.warn('Metal GPU error detected, retrying with CPU-only mode');
+        this.gpuDisabled = true;
+        return await this.runWhisper(wavPath);
+      }
+      throw error;
+    }
+  }
+
+  private isMetalError(message: string): boolean {
+    return message.includes('MTLLibraryError') ||
+      message.includes('MetalPerformancePrimitives') ||
+      message.includes('metal_library_compile_pipeline') ||
+      message.includes('ggml_metal');
+  }
+
+  private runWhisper(wavPath: string): Promise<string> {
     const modelPath = this.modelManager.getModelPath();
     const whisperPath = this.getWhisperPath();
 
@@ -1695,10 +1724,14 @@ export class TranscriberManager extends EventEmitter {
         '-f', wavPath,
         '--language', 'en',
       ];
-      
+
       // Only skip timestamps if we don't need them for figure placement.
       if (!needTimestamps) {
         args.push('--no-timestamps');
+      }
+
+      if (this.gpuDisabled) {
+        args.push('-ng');
       }
 
       // Disable colors in whisper-cli output
