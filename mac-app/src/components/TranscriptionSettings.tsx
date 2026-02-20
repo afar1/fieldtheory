@@ -28,7 +28,11 @@ export default function TranscriptionSettings() {
   const [deletingModel, setDeletingModel] = useState<string | null>(null);
   const [modelDownloadProgress, setModelDownloadProgress] = useState<Record<string, { downloaded: number; total: number }>>({});
   const [engine, setEngine] = useState<'whisper' | 'qwen'>('whisper');
-  
+  const [qwenInstalled, setQwenInstalled] = useState(false);
+  const [appleSilicon, setAppleSilicon] = useState(true);
+  const [qwenSetupStatus, setQwenSetupStatus] = useState<'idle' | 'installing' | 'done' | 'error'>('idle');
+  const [qwenSetupError, setQwenSetupError] = useState<string | null>(null);
+
   const [abandonHotkey, setAbandonHotkey] = useState<string>('Escape');
   const [isCapturingAbandonHotkey, setIsCapturingAbandonHotkey] = useState(false);
   const [abandonHotkeyError, setAbandonHotkeyError] = useState<string | null>(null);
@@ -69,6 +73,14 @@ export default function TranscriptionSettings() {
         // Fetch transcription engine
         const currentEngine = await window.transcribeAPI!.getTranscriptionEngine?.() ?? 'whisper';
         setEngine(currentEngine);
+
+        // Fetch Qwen installation status
+        const [qi, as] = await Promise.all([
+          window.transcribeAPI!.isQwenInstalled?.() ?? false,
+          window.transcribeAPI!.isAppleSilicon?.() ?? true,
+        ]);
+        setQwenInstalled(qi);
+        setAppleSilicon(as);
       } catch (err) {
         console.error('Failed to fetch transcription status:', err);
       }
@@ -235,6 +247,30 @@ export default function TranscriptionSettings() {
     } catch (err) {
       setAbandonHotkeyError(err instanceof Error ? err.message : 'Failed to set abandon hotkey');
       console.error('Failed to set abandon hotkey:', err);
+    }
+  }, []);
+
+  const handleSetupQwen = useCallback(async () => {
+    if (!window.transcribeAPI?.setupQwen) return;
+    setQwenSetupStatus('installing');
+    setQwenSetupError(null);
+    try {
+      const result = await window.transcribeAPI.setupQwen();
+      if (result.success) {
+        setQwenSetupStatus('done');
+        setQwenInstalled(true);
+        // Auto-switch engine to Qwen
+        if (window.transcribeAPI.setTranscriptionEngine) {
+          await window.transcribeAPI.setTranscriptionEngine('qwen');
+          setEngine('qwen');
+        }
+      } else {
+        setQwenSetupStatus('error');
+        setQwenSetupError(result.error || 'Setup failed');
+      }
+    } catch (err) {
+      setQwenSetupStatus('error');
+      setQwenSetupError(err instanceof Error ? err.message : 'Setup failed');
     }
   }, []);
 
@@ -405,12 +441,45 @@ export default function TranscriptionSettings() {
             style={styles.select}
           >
             <option value="whisper">Whisper (default)</option>
-            <option value="qwen">Qwen3-ASR (experimental)</option>
+            <option value="qwen" disabled={!appleSilicon}>Qwen3-ASR{!appleSilicon ? ' (requires Apple Silicon)' : ''}</option>
           </select>
         </div>
-        {engine === 'qwen' && (
+        {!appleSilicon && engine !== 'qwen' && (
           <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '4px' }}>
-            Qwen requires one-time setup: <code style={{ fontSize: '11px' }}>cd mac-app && bash scripts/setup-qwen.sh</code>
+            Qwen requires Apple Silicon (M1 or later).
+          </div>
+        )}
+        {appleSilicon && !qwenInstalled && (
+          <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {qwenSetupStatus === 'installing' ? (
+              <span style={{ fontSize: '12px', color: theme.textSecondary }}>Installing Qwen voice model...</span>
+            ) : qwenSetupStatus === 'done' ? (
+              <span style={{ fontSize: '12px', color: theme.success }}>Installed</span>
+            ) : (
+              <button
+                onClick={handleSetupQwen}
+                style={{
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  color: '#fff',
+                  backgroundColor: theme.info,
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                }}
+              >
+                Download Qwen Voice Model
+              </button>
+            )}
+            {qwenSetupStatus === 'error' && qwenSetupError && (
+              <span style={{ fontSize: '11px', color: theme.error }}>{qwenSetupError}</span>
+            )}
+          </div>
+        )}
+        {appleSilicon && qwenInstalled && engine === 'qwen' && (
+          <div style={{ fontSize: '11px', color: theme.success, marginTop: '4px' }}>
+            Qwen voice model installed.
           </div>
         )}
       </div>

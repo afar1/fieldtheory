@@ -574,7 +574,7 @@ export class CursorStatusManager extends EventEmitter {
   }
 
   /**
-   * Slide the island back up into the notch, then hide.
+   * Yellow blink warning, then slide the island back into the notch.
    * Called when the buffer is about to be discarded due to silence timeout.
    */
   blinkThenHideHotMic(): void {
@@ -585,16 +585,24 @@ export class CursorStatusManager extends EventEmitter {
       this.fadeOutTimer = null;
     }
 
-    // Tell renderer to start slide-out animation
-    this.window.webContents.send('cursor-status-slide-out');
+    // Phase 1: yellow blink warning (1.2s)
+    this.window.webContents.send('cursor-status-warn-discard');
 
-    // Hide after slide-out animation completes
     this.fadeOutTimer = setTimeout(() => {
-      this.fadeOutTimer = null;
-      this.isDocked = false;
-      this.state = 'idle';
-      this.hide();
-    }, 400);
+      if (!this.window || this.window.isDestroyed()) {
+        this.fadeOutTimer = null;
+        return;
+      }
+      // Phase 2: slide-out animation (0.35s)
+      this.window.webContents.send('cursor-status-slide-out');
+
+      this.fadeOutTimer = setTimeout(() => {
+        this.fadeOutTimer = null;
+        this.isDocked = false;
+        this.state = 'idle';
+        this.hide();
+      }, 400);
+    }, 1200);
   }
 
   /**

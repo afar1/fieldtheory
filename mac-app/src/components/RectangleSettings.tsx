@@ -1,17 +1,17 @@
 // =============================================================================
-// RectangleSettings - Voice-triggered window management via Rectangle.
+// RectangleSettings - Voice-triggered window management commands.
 // =============================================================================
 
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
 
-/** Rectangle action metadata for display. */
+/** Window action metadata for display. */
 const ACTION_META: Record<string, { label: string; description: string }> = {
   'tile-all': { label: 'Tile All', description: 'Arrange all windows in a grid' },
   'cascade-active-app': { label: 'Cascade', description: 'Cascade current app\'s windows' },
   'center': { label: 'Center', description: 'Center window (no resize)' },
   'maximize': { label: 'Maximize', description: 'Maximize window' },
-  'restore': { label: 'Restore', description: 'Undo last Rectangle action' },
+  'restore': { label: 'Restore', description: 'Undo last action' },
   'left-half': { label: 'Left Half', description: 'Snap to left half' },
   'right-half': { label: 'Right Half', description: 'Snap to right half' },
   'larger': { label: 'Larger', description: 'Grow window incrementally' },
@@ -61,14 +61,14 @@ export default function RectangleSettings() {
   return (
     <div style={styles.container}>
       <p style={styles.headerDescription}>
-        Voice commands that trigger Rectangle window actions. Edit the comma-separated
-        trigger phrases for each action. Requires Rectangle to be installed.
+        Voice commands that trigger window management actions. Edit the comma-separated
+        trigger phrases for each action.
       </p>
 
       {allActions.map((action, i) => {
         const meta = ACTION_META[action];
         const label = meta?.label || action;
-        const desc = meta?.description || `Rectangle action: ${action}`;
+        const desc = meta?.description || `Window action: ${action}`;
 
         return (
           <div key={action}>

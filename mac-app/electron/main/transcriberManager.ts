@@ -3,6 +3,7 @@ import { app, globalShortcut, clipboard, nativeImage, Notification } from 'elect
 import { getHotkeyManager } from './hotkeyManager';
 import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
+import fs from 'fs';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import crypto from 'crypto';
@@ -1459,6 +1460,19 @@ export class TranscriberManager extends EventEmitter {
   private getQwenPythonPath(): string {
     const macAppRoot = path.resolve(__dirname, '../..');
     return path.join(macAppRoot, 'build-qwen', 'venv', 'bin', 'python');
+  }
+
+  /**
+   * Check if Qwen is installed by verifying the venv Python binary exists.
+   */
+  async isQwenInstalled(): Promise<boolean> {
+    const pythonPath = this.getQwenPythonPath();
+    try {
+      await fs.promises.access(pythonPath);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
