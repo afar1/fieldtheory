@@ -928,6 +928,9 @@ export class TranscriberManager extends EventEmitter {
           }));
           // Emit event for each verbal command detected (for metrics tracking)
           this.detectedCommands.forEach(() => this.emit('verbalCommand'));
+
+          // Emit command names for dynamic island highlighting.
+          this.emit('commandsDetected', this.detectedCommands.map((cmd: { name: string }) => cmd.name));
         }
       }
 
@@ -1017,6 +1020,7 @@ export class TranscriberManager extends EventEmitter {
           } else {
             // Show improving state.
             this.cursorStatusManager?.setState('improving');
+            this.emit('improvingStarted');
 
             const result = await improveTranscript(cleanedText, accessToken);
 
