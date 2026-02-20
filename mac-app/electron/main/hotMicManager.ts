@@ -11,6 +11,7 @@ import { ModelManager } from './modelManager';
 import { SoundManager } from './soundManager';
 import { CursorStatusManager } from './cursorStatusManager';
 import { CommandsManager } from './commandsManager';
+import { AudioManager } from './audioManager';
 import { getHotkeyManager } from './hotkeyManager';
 import { createLogger } from './logger';
 
@@ -187,6 +188,7 @@ export class HotMicManager extends EventEmitter {
   private soundManager: SoundManager;
   private cursorStatusManager: CursorStatusManager | null = null;
   private commandsManager: CommandsManager | null = null;
+  private audioManager: AudioManager | null = null;
 
   private state: HotMicState = 'idle';
   private targetBundleId: string | null = null;
@@ -203,7 +205,7 @@ export class HotMicManager extends EventEmitter {
   // Transcript buffer — accumulates chunks until submit word or silence discard
   private transcriptBuffer: string[] = [];
   private bufferDiscardTimer: NodeJS.Timeout | null = null;
-  private readonly DEFAULT_BUFFER_DISCARD_MS = 3_000;
+  private readonly DEFAULT_BUFFER_DISCARD_MS = 4_000;
 
   // Escape key — reserved for future double-tap implementation
 
@@ -400,6 +402,11 @@ export class HotMicManager extends EventEmitter {
     this.commandsManager = manager;
   }
 
+  setAudioManager(manager: AudioManager): void {
+    this.audioManager = manager;
+    log.info('Hot Mic: AudioManager wired for priority mic enforcement');
+  }
+
   setTranscriberStatusGetter(getter: () => string): void {
     this.transcriberStatusGetter = getter;
   }
@@ -447,12 +454,12 @@ export class HotMicManager extends EventEmitter {
     const frontmost = this.nativeHelper.getFrontmostApp();
     const ftBundleIds = ['com.fieldtheory.app', 'com.fieldtheory.experimental'];
     if (frontmost?.bundleId && !ftBundleIds.includes(frontmost.bundleId)) {
-      log.info('Hot Mic: typing into frontmost app: %s (%s)', frontmost.name, frontmost.bundleId);
+      log.debug('Hot Mic: typing into frontmost app: %s (%s)', frontmost.name, frontmost.bundleId);
       return frontmost.bundleId;
     }
 
     // Fall back to configured target
-    log.info('Hot Mic: falling back to configured target: %s', this.targetBundleId);
+    log.debug('Hot Mic: falling back to configured target: %s', this.targetBundleId);
     return this.targetBundleId;
   }
 
@@ -500,6 +507,9 @@ export class HotMicManager extends EventEmitter {
           await new Promise(resolve => setTimeout(resolve, 300 * attempt));
           log.info('Hot Mic: resume attempt %d', attempt + 1);
         }
+        if (this.audioManager) {
+          await this.audioManager.ensurePriorityEnforced();
+        }
         await this.nativeHelper.startRecording();
         this.startAudioMonitoring();
         return;
@@ -545,6 +555,9 @@ export class HotMicManager extends EventEmitter {
     });
 
     try {
+      if (this.audioManager) {
+        await this.audioManager.ensurePriorityEnforced();
+      }
       await this.nativeHelper.startRecording();
     } catch (error) {
       log.error('Hot Mic: failed to start recording in listening:', error);
@@ -663,6 +676,9 @@ export class HotMicManager extends EventEmitter {
     this.setState('recording');
 
     try {
+      if (this.audioManager) {
+        await this.audioManager.ensurePriorityEnforced();
+      }
       await this.nativeHelper.startRecording();
     } catch (error) {
       log.error('Failed to start recording for Hot Mic:', error);
@@ -676,18 +692,23 @@ export class HotMicManager extends EventEmitter {
   private startAudioMonitoring(): void {
     this.stopAudioMonitoring();
 
-    // Audio level listener — only for orange dot UI (silence detection is in Swift)
+    // Audio level listener — UI only (orange dot) plus one-shot fallback timer.
+    // Subsequent timer resets are driven by real transcription in processListeningChunk.
     this.audioLevelListener = (level: number) => {
       if (this.state !== 'recording' && this.state !== 'listening') return;
 
       if (level > this.SPEECH_LEVEL_THRESHOLD) {
-        // Show orange dot immediately on speech detection (don't wait for transcription)
+        // Show orange dot immediately on speech detection (don't wait for transcription).
+        // Also start a one-shot discard timer so the dot has a guaranteed minimum
+        // lifespan — hallucination chunks won't cut it short.
         if (!this.hasSpeechSinceLastHarvest && this.state === 'listening') {
-          log.info(`Hot Mic: [dot] preemptive show (speech detected, level=${level.toFixed(3)})`);
+          log.debug(`Hot Mic: [dot] preemptive show (speech detected, level=${level.toFixed(3)})`);
           this.cursorStatusManager?.showHotMic();
+          this.resetBufferDiscardTimer();
         }
         this.hasSpeechSinceLastHarvest = true;
-        this.resetBufferDiscardTimer();
+        // NOTE: Do NOT reset the timer on subsequent audio frames — only the initial
+        // detection above starts it. Real transcriptions reset it in processListeningChunk.
       }
     };
 
@@ -717,9 +738,11 @@ export class HotMicManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   private resetBufferDiscardTimer(): void {
+    const wasRunning = !!this.bufferDiscardTimer;
     this.stopBufferDiscardTimer();
     if (this.state === 'listening') {
       const timeout = this.getBufferDiscardTimeout();
+      log.debug('Hot Mic: [timer] reset discard timer (%dms, wasRunning=%s, buf=%d)', timeout, wasRunning, this.transcriptBuffer.length);
       this.bufferDiscardTimer = setTimeout(() => {
         this.bufferDiscardTimer = null;
         if (this.state === 'listening') {
@@ -727,14 +750,11 @@ export class HotMicManager extends EventEmitter {
           if (hadContent) {
             log.info('Hot Mic: silence timeout, discarding buffer (%d chunks)', this.transcriptBuffer.length);
             this.transcriptBuffer = [];
-            // Blink to warn user, then hide
-            log.info('Hot Mic: [dot] discard timer fired, blinking out (had content)');
             this.cursorStatusManager?.blinkThenHideHotMic();
           } else {
             // No buffer content — dot was shown preemptively but nothing was
             // buffered (e.g. command executed, or hallucination already handled).
             // Hide instantly since there's nothing to visually "discard".
-            log.info('Hot Mic: [dot] discard timer fired, hiding (empty buffer)');
             this.updateOrangeDot();
           }
         }
@@ -801,11 +821,10 @@ export class HotMicManager extends EventEmitter {
 
       if (this.isHallucination(transcript)) {
         log.info('Hot Mic: skipping hallucinated/empty chunk');
-        // Sync orange dot with buffer state — the dot may have been shown
-        // preemptively on speech detection, but if the chunk was a hallucination
-        // and the buffer is still empty, the dot needs to be hidden.
-        this.updateOrangeDot();
-        // Tell Swift to stay in current mode
+        // Don't call updateOrangeDot() here — the dot may have been shown
+        // preemptively on speech detection, and the buffer discard timer
+        // (started on first audio detection) guarantees it will be cleaned up.
+        // Hiding immediately would make the island disappear before the 4s window.
         this.nativeHelper.setHarvestMode(this.transcriptBuffer.length === 0 ? 'command' : 'dictation');
         return;
       }
@@ -984,7 +1003,7 @@ export class HotMicManager extends EventEmitter {
     // periods at chunk boundaries). Internal periods and ?/! are preserved.
     const normalized = trimmed.toLowerCase().replace(/\.+$/, '').trim();
     this.transcriptBuffer.push(normalized);
-    log.info('Hot Mic: buffered chunk (%d total): "%s" (no submit/paste phrase matched)', this.transcriptBuffer.length, normalized);
+    log.info('Hot Mic: buffered (%d total): "%s"', this.transcriptBuffer.length, normalized);
     // Orange dot update is handled by onChunkReady after this method returns
     this.resetBufferDiscardTimer();
   }
@@ -1189,8 +1208,7 @@ export class HotMicManager extends EventEmitter {
     const stripped = text.replace(/[.,!?;:]+$/, '').trim();
     const words = stripped.split(/\s+/);
 
-    const allPhrases = commandSets.map(c => `${c.name}:[${c.phrases.join('|')}]`).join(', ');
-    log.info('Hot Mic: [debug] tail-match input="%s" words=%j commandSets=%s', text, words, allPhrases);
+    log.debug('Hot Mic: tail-match input="%s" (%d commands)', text, commandSets.length);
 
     for (const cmd of commandSets) {
       for (const phrase of cmd.phrases) {
@@ -1622,16 +1640,24 @@ export class HotMicManager extends EventEmitter {
     return this.transcriptBuffer.join(' ').split(/\s+/).filter(w => w.length > 0).length;
   }
 
+  private getLastBufferWord(): string {
+    const all = this.transcriptBuffer.join(' ').trim();
+    if (!all) return '';
+    const words = all.split(/\s+/);
+    return words[words.length - 1] || '';
+  }
+
   private updateOrangeDot(): void {
     if (!this.cursorStatusManager) return;
 
     if ((this.state === 'listening' && this.transcriptBuffer.length > 0) || this.state === 'recording') {
-      log.info('Hot Mic: [dot] show (state=%s, buffer=%d)', this.state, this.transcriptBuffer.length);
       this.cursorStatusManager.showHotMic();
       const showCount = this.preferences.getPreference('hotMicShowWordCount') === true;
-      this.cursorStatusManager.setHotMicWordCount(showCount ? this.getBufferWordCount() : 0);
+      this.cursorStatusManager.setHotMicWordCount(
+        showCount ? this.getBufferWordCount() : 0,
+        this.getLastBufferWord()
+      );
     } else {
-      log.info('Hot Mic: [dot] hide (state=%s, buffer=%d)', this.state, this.transcriptBuffer.length);
       this.cursorStatusManager.setHotMicWordCount(0);
       this.cursorStatusManager.hideHotMic();
     }
