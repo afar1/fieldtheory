@@ -39,6 +39,7 @@ import {
 import { OnboardingWindow, OnboardingStep } from './onboardingWindow';
 import { OnboardingIPCChannels } from './types/onboarding';
 import { CursorStatusManager, CursorStatusState } from './cursorStatusManager';
+import { DynamicIslandManager } from './dynamicIslandManager';
 import { QuotaManager } from './quotaManager';
 import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, PortableCommand } from './commandsManager';
@@ -163,6 +164,7 @@ let userDataManager: UserDataManager | null = null;
 let feedbackManager: FeedbackManager | null = null;
 let onboardingWindow: OnboardingWindow | null = null;
 let cursorStatusManager: CursorStatusManager | null = null;
+let dynamicIslandManager: DynamicIslandManager | null = null;
 let quotaManager: QuotaManager | null = null;
 let diagnosticsCollector: DiagnosticsCollector | null = null;
 let librarianManager: LibrarianManager | null = null;
@@ -4787,6 +4789,20 @@ function broadcastTranscribeEvents(): void {
     if (cursorStatusManager) {
       cursorStatusManager.setState(status as CursorStatusState);
     }
+
+    // Update dynamic island with recording state transitions.
+    if (dynamicIslandManager) {
+      if (status === 'recording') {
+        dynamicIslandManager.setState('recording');
+      } else if (status === 'transcribing') {
+        dynamicIslandManager.setState('transcribing');
+      } else if (status === 'idle') {
+        // Don't immediately dismiss - let transcript display timeout handle it.
+        if (dynamicIslandManager.getState() !== 'showing-transcript') {
+          dynamicIslandManager.setState('idle');
+        }
+      }
+    }
     
     // Force Dock visibility when showInDock is enabled.
     if (process.platform === 'darwin' && preferencesManager) {
@@ -4806,6 +4822,9 @@ function broadcastTranscribeEvents(): void {
     // Store transcription for cursor status done state display
     cursorStatusManager?.setLastTranscription(text);
 
+    // Send final transcript to the dynamic island for display.
+    dynamicIslandManager?.sendTranscript(text, true);
+
     // Record transcription metrics
     const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
     metricsManager?.recordTranscription(wordCount);
@@ -4813,11 +4832,25 @@ function broadcastTranscribeEvents(): void {
 
   transcriberManager.on('verbalCommand', () => {
     metricsManager?.recordVerbalCommand();
-    quotaManager?.updateUsage('portable_commands', 1);  // Combined quota with portable commands
+    quotaManager?.updateUsage('portable_commands', 1);
+  });
+
+  // Forward detected command names to the dynamic island for highlighting.
+  transcriberManager.on('commandsDetected', (commandNames: string[]) => {
+    if (dynamicIslandManager) {
+      commandNames.forEach((name: string) => {
+        dynamicIslandManager?.sendCommandDetected(name.toLowerCase(), 0, 0);
+      });
+    }
   });
 
   transcriberManager.on('wordsImproved', (wordCount: number) => {
     metricsManager?.recordWordsImproved(wordCount);
+  });
+
+  // Show improving state on the dynamic island when AI improvement starts.
+  transcriberManager.on('improvingStarted', () => {
+    dynamicIslandManager?.setState('improving');
   });
 
   transcriberManager.on('autostackCreated', () => {
@@ -5316,6 +5349,10 @@ async function initTranscriberSystem(): Promise<void> {
   const hideStatusLabels = preferencesManager.getPreference('hideStatusLabels') ?? false;
   cursorStatusManager.setHideLabels(hideStatusLabels);
 
+  // Initialize the dynamic island overlay (fixed near the notch, shows transcript + history).
+  dynamicIslandManager = new DynamicIslandManager();
+  dynamicIslandManager.setClipboardManager(clipboardManager);
+
   // Now create transcriberManager with cursorStatusManager.
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
   await transcriberManager.init();
@@ -5508,6 +5545,10 @@ async function initTranscriberSystem(): Promise<void> {
   // Create UserDataManager for per-user data isolation.
   // This must be created before AuthManager so it can coordinate user changes.
   userDataManager = createUserDataManager();
+  await userDataManager.restoreCurrentUser();
+
+  // Restore last known user from current-user.json so per-user paths work
+  // immediately — no need to wait for auth to resolve.
   await userDataManager.restoreCurrentUser();
 
   // Set UserDataManager on managers BEFORE authManager.init().
@@ -6613,6 +6654,10 @@ if (!gotTheLock) {
 
     if (transcriberManager) {
       transcriberManager.destroy();
+    }
+
+    if (dynamicIslandManager) {
+      dynamicIslandManager.destroy();
     }
 
     if (trayManager) {
