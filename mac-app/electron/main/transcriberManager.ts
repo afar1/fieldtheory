@@ -625,6 +625,7 @@ export class TranscriberManager extends EventEmitter {
       // Play start recording sound (user-configurable).
       this.soundManager.play('recordingStart');
       
+      this.nativeHelper.setHarvestMode('off');
       await this.nativeHelper.startRecording();
       log.info('Recording started');
     } catch (error) {
@@ -744,6 +745,7 @@ export class TranscriberManager extends EventEmitter {
       // Play start recording sound.
       this.soundManager.play('recordingStart');
 
+      this.nativeHelper.setHarvestMode('off');
       await this.nativeHelper.startRecording();
       log.info('Recording started from silent stack (keeping %d existing figures)', this.screenshotMetadata.length);
     } catch (error) {

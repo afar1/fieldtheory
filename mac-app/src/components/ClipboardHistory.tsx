@@ -221,6 +221,12 @@ const StackImageThumbnail = React.memo(function StackImageThumbnail({
 export default function ClipboardHistory() {
   const { theme, toggleDarkMode } = useTheme();
   const [isVisible, setIsVisible] = useState(false);
+  const [isWindowVisible, setIsWindowVisible] = useState(document.visibilityState === 'visible');
+  useEffect(() => {
+    const handler = () => setIsWindowVisible(document.visibilityState === 'visible');
+    document.addEventListener('visibilitychange', handler);
+    return () => document.removeEventListener('visibilitychange', handler);
+  }, []);
   const [showSettings, setShowSettings] = useState(() => {
     return localStorage.getItem('fieldTheoryShowSettings') === 'true';
   });
@@ -229,6 +235,7 @@ export default function ClipboardHistory() {
   // DEBUG: Librarian count overlay
   const [librarianStatus, setLibrarianStatus] = useState<{ edits: number; threshold: number; frequency: string } | null>(null);
   useEffect(() => {
+    if (!isWindowVisible) return;
     const fetchStatus = async () => {
       const status = await window.librarianAPI?.getEditStatus();
       setLibrarianStatus(status ?? null);
@@ -236,7 +243,7 @@ export default function ClipboardHistory() {
     fetchStatus();
     const interval = setInterval(fetchStatus, 2000); // Poll every 2 seconds
     return () => clearInterval(interval);
-  }, []);
+  }, [isWindowVisible]);
 
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     // If user started a transcription, always show Fields on next open.
@@ -1627,6 +1634,8 @@ export default function ClipboardHistory() {
   // This poll is the ONLY place counter resets happen during active use.
   // Also handles showing new readings in immersive mode.
   useEffect(() => {
+    if (!isWindowVisible) return;
+
     const pollLibrarianStatus = async () => {
       const status = await window.librarianAPI?.pollStatus?.();
       if (!status) return;
@@ -1646,10 +1655,10 @@ export default function ClipboardHistory() {
     // Check immediately on mount
     pollLibrarianStatus();
 
-    // Then poll every 500ms while component is mounted
+    // Then poll every 500ms
     const interval = setInterval(pollLibrarianStatus, 500);
     return () => clearInterval(interval);
-  }, []);
+  }, [isWindowVisible]);
 
   // Handle new reading available (when window already visible, shows indicator)
   useEffect(() => {
