@@ -51,6 +51,11 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
     ipcRenderer.send('dynamic-island-history-visible', visible);
   },
 
+  // Listen for forced history hide (e.g., when window loses focus).
+  onHideHistory: (callback: () => void) => {
+    ipcRenderer.on('dynamic-island-hide-history', () => callback());
+  },
+
   removeAllListeners: (channel: string) => {
     ipcRenderer.removeAllListeners(channel);
   },

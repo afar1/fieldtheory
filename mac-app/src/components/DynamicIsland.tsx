@@ -78,6 +78,11 @@ export default function DynamicIsland() {
       setHistory(items);
     });
 
+    // Force-hide history when window loses focus.
+    api.onHideHistory?.(() => {
+      setHistoryVisible(false);
+    });
+
     // Request initial history.
     api.requestHistory();
 
@@ -86,6 +91,7 @@ export default function DynamicIsland() {
       api.removeAllListeners('dynamic-island-transcript');
       api.removeAllListeners('dynamic-island-command');
       api.removeAllListeners('dynamic-island-history');
+      api.removeAllListeners('dynamic-island-hide-history');
     };
   }, []);
 
@@ -566,6 +572,7 @@ declare global {
       onTranscriptUpdate: (cb: (data: { text: string; isFinal: boolean }) => void) => void;
       onCommandDetected: (cb: (data: { phrase: string; startIndex: number; endIndex: number }) => void) => void;
       onHistoryUpdate: (cb: (history: HistoryItem[]) => void) => void;
+      onHideHistory?: (cb: () => void) => void;
       requestHistory: () => void;
       copyAndPaste: (text: string) => void;
       copyToClipboard: (text: string) => void;

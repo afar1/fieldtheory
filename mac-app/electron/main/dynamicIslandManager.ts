@@ -126,8 +126,11 @@ export class DynamicIslandManager extends EventEmitter {
     }
     this.updateWindowSize();
 
-    // Auto-dismiss after showing the final transcript for a few seconds.
+    // When the final transcript arrives, refresh history so new item appears immediately.
     if (isFinal) {
+      // Small delay so the clipboard manager has time to store the new transcript.
+      setTimeout(() => this.sendHistory(), 300);
+
       this.dismissTimer = setTimeout(() => {
         this.dismissTimer = null;
         if (this.state === 'showing-transcript' && !this.historyVisible) {
@@ -228,7 +231,6 @@ export class DynamicIslandManager extends EventEmitter {
     this.window.setAlwaysOnTop(true, 'screen-saver', 2);
 
     // Allow mouse events for the hamburger and history interactions.
-    // But ignore mouse on the transparent regions so clicks pass through.
     this.window.setIgnoreMouseEvents(false);
 
     const startUrl = process.env.ELECTRON_START_URL;
@@ -242,6 +244,17 @@ export class DynamicIslandManager extends EventEmitter {
 
     this.window.on('closed', () => {
       this.window = null;
+    });
+
+    // Close history panel when window loses focus (user clicks elsewhere).
+    this.window.on('blur', () => {
+      if (this.historyVisible) {
+        this.historyVisible = false;
+        this.updateWindowSize();
+        if (this.window && !this.window.isDestroyed()) {
+          this.window.webContents.send('dynamic-island-hide-history');
+        }
+      }
     });
 
     this.window.webContents.once('did-finish-load', () => {
