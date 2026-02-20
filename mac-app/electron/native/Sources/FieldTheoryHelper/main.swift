@@ -1244,6 +1244,8 @@ final class RecordingHelper {
     /// Called from the tap callback via DispatchQueue.main.async.
     func processAudioLevel(_ level: Double) {
         guard isRecording else { return }
+        // "off" mode: regular transcriber owns the recording — no harvest snapshots.
+        guard harvestMode != "off" else { return }
 
         if level > RecordingHelper.SPEECH_THRESHOLD {
             hasSpeechSinceLastHarvest = true
@@ -1408,7 +1410,6 @@ final class RecordingHelper {
             hasSpeechSinceLastHarvest = false
             silenceTimer?.cancel()
             silenceTimer = nil
-            harvestMode = "command"
             prepareNextFile()
             sendLog(level: "info", message: "Recording started: \(url.path)")
             return true

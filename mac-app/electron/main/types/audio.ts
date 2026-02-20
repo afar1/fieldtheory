@@ -460,7 +460,7 @@ export interface FocusWindowByTitleCommand {
  */
 export interface SetHarvestModeCommand {
   type: 'setHarvestMode';
-  mode: 'command' | 'dictation';
+  mode: 'command' | 'dictation' | 'off';
 }
 
 /**

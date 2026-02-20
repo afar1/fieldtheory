@@ -513,6 +513,7 @@ export class HotMicManager extends EventEmitter {
         if (this.audioManager) {
           await this.audioManager.ensurePriorityEnforced();
         }
+        this.nativeHelper.setHarvestMode('command');
         await this.nativeHelper.startRecording();
         this.startAudioMonitoring();
         return;
@@ -561,6 +562,7 @@ export class HotMicManager extends EventEmitter {
       if (this.audioManager) {
         await this.audioManager.ensurePriorityEnforced();
       }
+      this.nativeHelper.setHarvestMode('command');
       await this.nativeHelper.startRecording();
     } catch (error) {
       log.error('Hot Mic: failed to start recording in listening:', error);
@@ -682,6 +684,7 @@ export class HotMicManager extends EventEmitter {
       if (this.audioManager) {
         await this.audioManager.ensurePriorityEnforced();
       }
+      this.nativeHelper.setHarvestMode('command');
       await this.nativeHelper.startRecording();
     } catch (error) {
       log.error('Failed to start recording for Hot Mic:', error);
