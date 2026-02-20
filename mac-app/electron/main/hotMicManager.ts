@@ -205,6 +205,8 @@ export class HotMicManager extends EventEmitter {
   // Transcript buffer — accumulates chunks until submit word or silence discard
   private transcriptBuffer: string[] = [];
   private bufferDiscardTimer: NodeJS.Timeout | null = null;
+  private lastTimerResetMs: number = 0;
+  private lastSpeechDetectedMs: number = 0;
   private readonly DEFAULT_BUFFER_DISCARD_MS = 4_000;
 
   // Escape key — reserved for future double-tap implementation
@@ -693,8 +695,8 @@ export class HotMicManager extends EventEmitter {
   private startAudioMonitoring(): void {
     this.stopAudioMonitoring();
 
-    // Audio level listener — UI only (orange dot) plus one-shot fallback timer.
-    // Subsequent timer resets are driven by real transcription in processListeningChunk.
+    // Audio level listener — UI (orange dot) and buffer discard timer.
+    // Timer resets on continued speech (throttled) and on transcription chunks.
     this.audioLevelListener = (level: number) => {
       if (this.state !== 'recording' && this.state !== 'listening') return;
 
@@ -705,11 +707,16 @@ export class HotMicManager extends EventEmitter {
         if (!this.hasSpeechSinceLastHarvest && this.state === 'listening') {
           log.debug(`Hot Mic: [dot] preemptive show (speech detected, level=${level.toFixed(3)})`);
           this.cursorStatusManager?.showHotMic();
-          this.resetBufferDiscardTimer();
         }
         this.hasSpeechSinceLastHarvest = true;
-        // NOTE: Do NOT reset the timer on subsequent audio frames — only the initial
-        // detection above starts it. Real transcriptions reset it in processListeningChunk.
+        this.lastSpeechDetectedMs = Date.now();
+
+        // Keep resetting the discard timer while speech is detected (throttled to 1/s).
+        const now = this.lastSpeechDetectedMs;
+        if (now - this.lastTimerResetMs >= 1000) {
+          this.lastTimerResetMs = now;
+          this.resetBufferDiscardTimer();
+        }
       }
     };
 
@@ -747,6 +754,15 @@ export class HotMicManager extends EventEmitter {
       this.bufferDiscardTimer = setTimeout(() => {
         this.bufferDiscardTimer = null;
         if (this.state === 'listening') {
+          // If speech was detected recently, restart the timer instead of discarding.
+          // This covers natural micro-pauses where RMS dips below threshold briefly.
+          const silenceMs = Date.now() - this.lastSpeechDetectedMs;
+          if (this.lastSpeechDetectedMs > 0 && silenceMs < timeout) {
+            log.debug('Hot Mic: [timer] speech detected %dms ago, restarting timer', silenceMs);
+            this.resetBufferDiscardTimer();
+            return;
+          }
+
           const hadContent = this.transcriptBuffer.length > 0;
           if (hadContent) {
             log.info('Hot Mic: silence timeout, discarding buffer (%d chunks)', this.transcriptBuffer.length);
@@ -780,6 +796,9 @@ export class HotMicManager extends EventEmitter {
     const t0 = performance.now();
     log.info('Hot Mic: chunk ready from Swift, transcribing');
     this.hasSpeechSinceLastHarvest = false;
+    this.lastTimerResetMs = 0;
+    // Don't reset lastSpeechDetectedMs — it tracks real audio activity
+    // and is used by the timer callback to survive natural pauses.
 
     try {
       // Wait for warmup to complete before first transcription — prevents race
