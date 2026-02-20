@@ -163,10 +163,12 @@ struct RecordingCancelledMessage: Codable {
 struct AudioLevelMessage: Codable {
     let type = "audioLevel"
     let level: Double  // 0.0 to 1.0
-    
+    let isSpeech: Bool
+
     enum CodingKeys: String, CodingKey {
         case type
         case level
+        case isSpeech
     }
 }
 
@@ -1179,6 +1181,65 @@ struct FrontmostAppChangedMessage: Codable {
     }
 }
 
+// MARK: - Voice Activity Detection (WebRTC VAD)
+
+import WebRTCVad
+
+/// Swift wrapper around libfvad (WebRTC VAD extraction).
+/// Accumulates variable-size Float32 buffers into fixed 160-sample (10ms at 16kHz) frames
+/// and returns the last VAD decision.
+final class VoiceActivityDetector {
+    private var inst: OpaquePointer?
+    private var frameBuffer: [Int16] = []
+    private var lastResult: Bool = false
+    private static let frameSize = 160  // 10ms at 16kHz
+
+    /// Whether the VAD instance was successfully created.
+    var isValid: Bool { inst != nil }
+
+    /// Initialize with aggressiveness mode 0-3 (default 2 = "aggressive").
+    init(mode: Int32 = 2) {
+        inst = fvad_new()
+        guard let inst = inst else { return }
+        fvad_set_mode(inst, mode)
+        fvad_set_sample_rate(inst, 16000)
+    }
+
+    deinit {
+        if let inst = inst { fvad_free(inst) }
+    }
+
+    /// Process Float32 samples (16kHz mono). Returns true if speech detected in
+    /// the most recently completed 10ms frame.
+    func process(samples: UnsafePointer<Float>, count: Int) -> Bool {
+        // Convert Float32 → Int16 and append to frame buffer
+        for i in 0..<count {
+            let clamped = max(-1.0, min(1.0, samples[i]))
+            frameBuffer.append(Int16(clamped * 32767.0))
+        }
+
+        // Process all complete 10ms frames
+        while frameBuffer.count >= VoiceActivityDetector.frameSize {
+            let frame = Array(frameBuffer.prefix(VoiceActivityDetector.frameSize))
+            frameBuffer.removeFirst(VoiceActivityDetector.frameSize)
+            let result = frame.withUnsafeBufferPointer { buf in
+                fvad_process(inst, buf.baseAddress, VoiceActivityDetector.frameSize)
+            }
+            if result >= 0 {
+                lastResult = result == 1
+            }
+        }
+        return lastResult
+    }
+
+    /// Reset internal state and frame buffer (call on recording restart).
+    func reset() {
+        frameBuffer.removeAll()
+        lastResult = false
+        if let inst = inst { fvad_reset(inst) }
+    }
+}
+
 // MARK: - Audio Recording Helper
 
 /// Manages audio recording using AVAudioEngine.
@@ -1196,12 +1257,15 @@ final class RecordingHelper {
     private var pendingAudioFile: AVAudioFile?
     private var pendingRecordingURL: URL?
 
+    // Voice activity detection
+    private let vad = VoiceActivityDetector(mode: 2)
+
     // Silence detection state (all accessed on main thread only)
     private var hasSpeechSinceLastHarvest = false
     private var silenceTimer: DispatchWorkItem?
     private var harvestMode: String = "command"  // "command" = 150ms, "dictation" = 750ms
 
-    private static let SPEECH_THRESHOLD: Double = 0.02
+    private static let SPEECH_THRESHOLD: Double = 0.02  // RMS fallback when VAD unavailable
     private static let SILENCE_COMMAND_MS: Int = 150
     private static let SILENCE_DICTATION_MS: Int = 750
 
@@ -1242,12 +1306,14 @@ final class RecordingHelper {
 
     /// Process an audio level on the main thread for silence detection.
     /// Called from the tap callback via DispatchQueue.main.async.
-    func processAudioLevel(_ level: Double) {
+    func processAudioLevel(_ level: Double, isSpeech: Bool) {
         guard isRecording else { return }
         // "off" mode: regular transcriber owns the recording — no harvest snapshots.
         guard harvestMode != "off" else { return }
 
-        if level > RecordingHelper.SPEECH_THRESHOLD {
+        // Use VAD result when available, fall back to RMS threshold
+        let speechDetected = vad.isValid ? isSpeech : (level > RecordingHelper.SPEECH_THRESHOLD)
+        if speechDetected {
             hasSpeechSinceLastHarvest = true
             silenceTimer?.cancel()
             silenceTimer = nil
@@ -1334,10 +1400,12 @@ final class RecordingHelper {
         
         // Install tap on input node
         let bufferSize: AVAudioFrameCount = 2048
+        let needsConversion = inputFormat.sampleRate != format.sampleRate || inputFormat.channelCount != format.channelCount
         inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, _ in
             guard let self = self, self.isRecording, let audioFile = self.audioFile else { return }
-            
-            // Calculate audio level (RMS) for live waveform display
+
+            // 1. Calculate RMS from raw input buffer (for UI level meter)
+            var level: Double = 0
             if let channelData = buffer.floatChannelData {
                 let channel = channelData[0]
                 let frameLength = Int(buffer.frameLength)
@@ -1347,63 +1415,69 @@ final class RecordingHelper {
                     sum += sample * sample
                 }
                 let rms = sqrt(sum / Float(frameLength))
-                // Normalize to 0-1 range (assuming max amplitude is 1.0)
-                let level = min(1.0, Double(rms))
-                
-                // Send audio level to Electron for live waveform
-                let levelMessage = AudioLevelMessage(level: level)
-                sendJSON(levelMessage)
-
-                // Dispatch to main thread for silence detection
-                DispatchQueue.main.async { [weak self] in
-                    self?.processAudioLevel(level)
-                }
+                level = min(1.0, Double(rms))
             }
-            
-            // Convert to target format if needed
-            if inputFormat.sampleRate != format.sampleRate || inputFormat.channelCount != format.channelCount {
+
+            // 2. Convert to 16kHz mono (move before VAD so we can run VAD on target format)
+            let writeBuffer: AVAudioPCMBuffer
+            if needsConversion {
                 guard let converter = AVAudioConverter(from: inputFormat, to: format) else {
                     sendLog(level: "error", message: "Failed to create audio converter")
+                    // Send level without VAD so UI meter doesn't stall
+                    sendJSON(AudioLevelMessage(level: level, isSpeech: false))
                     return
                 }
-                
+
                 let capacity = AVAudioFrameCount(Double(buffer.frameLength) * format.sampleRate / inputFormat.sampleRate)
                 guard let convertedBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else {
+                    sendJSON(AudioLevelMessage(level: level, isSpeech: false))
                     return
                 }
-                
-                var error: NSError?
+
+                var convError: NSError?
                 let inputBlock: AVAudioConverterInputBlock = { _, outStatus in
                     outStatus.pointee = .haveData
                     return buffer
                 }
-                
-                converter.convert(to: convertedBuffer, error: &error, withInputFrom: inputBlock)
-                
-                if let error = error {
-                    sendLog(level: "error", message: "Audio conversion error: \(error.localizedDescription)")
+
+                converter.convert(to: convertedBuffer, error: &convError, withInputFrom: inputBlock)
+
+                if let convError = convError {
+                    sendLog(level: "error", message: "Audio conversion error: \(convError.localizedDescription)")
+                    sendJSON(AudioLevelMessage(level: level, isSpeech: false))
                     return
                 }
-                
-                // Write converted buffer to file
-                do {
-                    try audioFile.write(from: convertedBuffer)
-                } catch {
-                    sendLog(level: "error", message: "Failed to write audio buffer: \(error.localizedDescription)")
-                }
+                writeBuffer = convertedBuffer
             } else {
-                // No conversion needed, write directly
-                do {
-                    try audioFile.write(from: buffer)
-                } catch {
-                    sendLog(level: "error", message: "Failed to write audio buffer: \(error.localizedDescription)")
-                }
+                writeBuffer = buffer
+            }
+
+            // 3. Run VAD on the converted 16kHz Float32 data
+            var isSpeech = false
+            if let channelData = writeBuffer.floatChannelData {
+                isSpeech = self.vad.process(samples: channelData[0], count: Int(writeBuffer.frameLength))
+            }
+
+            // 4. Send combined audioLevel message with both level and isSpeech
+            sendJSON(AudioLevelMessage(level: level, isSpeech: isSpeech))
+
+            // 5. Dispatch to main thread for silence detection
+            DispatchQueue.main.async { [weak self] in
+                self?.processAudioLevel(level, isSpeech: isSpeech)
+            }
+
+            // 6. Write converted buffer to file
+            do {
+                try audioFile.write(from: writeBuffer)
+            } catch {
+                sendLog(level: "error", message: "Failed to write audio buffer: \(error.localizedDescription)")
             }
         }
         
         audioEngine = engine
 
         // Start engine
+        vad.reset()
         do {
             try engine.start()
             isRecording = true

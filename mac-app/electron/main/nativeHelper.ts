@@ -720,7 +720,7 @@ export class NativeHelper extends EventEmitter {
         break;
 
       case 'audioLevel':
-        this.emit('audioLevel', msg.level);
+        this.emit('audioLevel', msg.level, msg.isSpeech ?? (msg.level > 0.02));
         break;
 
       case 'permissionsStatus':

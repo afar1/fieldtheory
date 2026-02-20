@@ -56,6 +56,10 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
     ipcRenderer.on('dynamic-island-hide-history', () => callback());
   },
 
+  onShowHistory: (callback: () => void) => {
+    ipcRenderer.on('dynamic-island-show-history', () => callback());
+  },
+
   removeAllListeners: (channel: string) => {
     ipcRenderer.removeAllListeners(channel);
   },

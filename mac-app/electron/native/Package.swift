@@ -15,9 +15,18 @@ let package = Package(
     ],
     dependencies: [],
     targets: [
+        .target(
+            name: "WebRTCVad",
+            path: "Sources/WebRTCVad",
+            sources: ["src"],
+            publicHeadersPath: "include",
+            cSettings: [
+                .headerSearchPath("src")
+            ]
+        ),
         .executableTarget(
             name: "FieldTheoryHelper",
-            dependencies: [],
+            dependencies: ["WebRTCVad"],
             path: "Sources/FieldTheoryHelper",
             linkerSettings: [
                 .linkedFramework("CoreAudio"),

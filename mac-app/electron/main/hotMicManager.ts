@@ -195,7 +195,7 @@ export class HotMicManager extends EventEmitter {
   private whisperProcess: ChildProcess | null = null;
 
   // Audio level monitoring for orange dot UI (silence detection moved to Swift)
-  private audioLevelListener: ((level: number) => void) | null = null;
+  private audioLevelListener: ((level: number, isSpeech: boolean) => void) | null = null;
   private chunkReadyListener: ((filePath: string) => void) | null = null;
   private hasSpeechSinceLastHarvest: boolean = false;
 
@@ -700,10 +700,10 @@ export class HotMicManager extends EventEmitter {
 
     // Audio level listener — UI (orange dot) and buffer discard timer.
     // Timer resets on continued speech (throttled) and on transcription chunks.
-    this.audioLevelListener = (level: number) => {
+    this.audioLevelListener = (level: number, isSpeech: boolean) => {
       if (this.state !== 'recording' && this.state !== 'listening') return;
 
-      if (level > this.SPEECH_LEVEL_THRESHOLD) {
+      if (isSpeech) {
         // Show orange dot immediately on speech detection (don't wait for transcription).
         // Also start a one-shot discard timer so the dot has a guaranteed minimum
         // lifespan — hallucination chunks won't cut it short.
