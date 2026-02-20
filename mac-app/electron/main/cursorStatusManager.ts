@@ -66,6 +66,11 @@ export class CursorStatusManager extends EventEmitter {
   private readonly SAY_ANYTHING_LABEL_THRESHOLD = 2;
   private labelsExplicitlyEnabled: boolean = false;
   
+  // Dynamic Island: docked below notch for hot-mic
+  private isDocked: boolean = false;
+  private readonly ISLAND_WIDTH = 180;
+  private readonly ISLAND_HEIGHT = 54;
+
   // Debug mode - shows blue background to prove we control the overlay window.
   private debugMode: boolean = false;
 
@@ -310,9 +315,14 @@ export class CursorStatusManager extends EventEmitter {
       return;
     }
     
+    // Reset docked state when transitioning away from hot-mic
+    if (state !== 'hot-mic') {
+      this.isDocked = false;
+    }
+
     this.state = state;
     this.updateWindowSize(state);
-    
+
     // Reset screenshot count when recording or silentStacking starts.
     if (state === 'recording' || state === 'silentStacking') {
       this.screenshotCount = 0;
@@ -488,7 +498,8 @@ export class CursorStatusManager extends EventEmitter {
    * with a custom label, no auto-hide, no "Saved to Field Theory" fallback.
    */
   showHotMic(): void {
-    log.info('[dot] showHotMic called (current state=%s)', this.state);
+    log.debug('[dot] showHotMic called (state=%s, docked=%s, rendererReady=%s, windowExists=%s)',
+      this.state, this.isDocked, this.rendererReady, !!(this.window && !this.window.isDestroyed()));
     if (this.doneTimeout) {
       clearTimeout(this.doneTimeout);
       this.doneTimeout = null;
@@ -508,19 +519,42 @@ export class CursorStatusManager extends EventEmitter {
 
     this.state = 'hot-mic';
     this.show(true);  // Create window first (if needed)
+    this.isDocked = true;
+    // Stop cursor tracking — island is statically positioned below notch
+    this.stopTracking();
 
     if (this.rendererReady && this.window && !this.window.isDestroyed()) {
       this.updateWindowSize('hot-mic');
       this.sendStateToRenderer('hot-mic');
+      this.positionBelowNotch();
     }
   }
 
   /**
-   * Update the Hot Mic word count displayed next to the orange dot.
+   * Position the window centered below the MacBook notch (Dynamic Island).
+   * Uses the primary display's work area to find the notch position.
    */
-  setHotMicWordCount(count: number): void {
+  private positionBelowNotch(): void {
+    if (!this.window || this.window.isDestroyed()) return;
+
+    // Use the display where the cursor currently is
+    const cursorPos = screen.getCursorScreenPoint();
+    const display = screen.getDisplayNearestPoint(cursorPos);
+
+    // Center horizontally on the display, position just below the menu bar
+    const x = Math.round(display.bounds.x + (display.bounds.width - this.ISLAND_WIDTH) / 2);
+    const y = display.workArea.y - 10; // Overlap into menu bar to blend with notch
+
+    this.window.setPosition(x, y, false);
+    log.debug('[dot] Docked below notch at (%d, %d) on display %dx%d', x, y, display.bounds.width, display.bounds.height);
+  }
+
+  /**
+   * Update the Hot Mic word count and last word displayed in the island.
+   */
+  setHotMicWordCount(count: number, lastWord?: string): void {
     if (this.window && !this.window.isDestroyed()) {
-      this.window.webContents.send('cursor-status-hotmic-words', count);
+      this.window.webContents.send('cursor-status-hotmic-words', count, lastWord || '');
     }
   }
 
@@ -528,67 +562,39 @@ export class CursorStatusManager extends EventEmitter {
    * Hide the Hot Mic indicator immediately (no "done" or "Saved" transition).
    */
   hideHotMic(): void {
-    log.info('[dot] hideHotMic called (current state=%s)', this.state);
+    log.debug('[dot] hideHotMic called (current state=%s)', this.state);
     if (this.state !== 'hot-mic') return;
     if (this.fadeOutTimer) {
       clearTimeout(this.fadeOutTimer);
       this.fadeOutTimer = null;
     }
+    this.isDocked = false;
     this.state = 'idle';
     this.hide();
   }
 
   /**
-   * Blink the Hot Mic indicator on/off for ~2 seconds, then hide.
+   * Slide the island back up into the notch, then hide.
    * Called when the buffer is about to be discarded due to silence timeout.
-   * The blinking warns the user that their buffered speech will be lost.
    */
   blinkThenHideHotMic(): void {
-    log.info('[dot] blinkThenHideHotMic called (current state=%s)', this.state);
+    log.debug('[dot] blinkThenHide called (state=%s)', this.state);
     if (!this.window || this.window.isDestroyed()) return;
     if (this.fadeOutTimer) {
       clearTimeout(this.fadeOutTimer);
       this.fadeOutTimer = null;
     }
 
-    const blinkOnMs = 250;
-    const blinkOffMs = 250;
-    const totalBlinks = 4; // 4 full on/off cycles = 2 seconds
-    let blink = 0;
-    let visible = true;
+    // Tell renderer to start slide-out animation
+    this.window.webContents.send('cursor-status-slide-out');
 
-    const tick = () => {
-      if (!this.window || this.window.isDestroyed()) {
-        this.fadeOutTimer = null;
-        return;
-      }
-
-      if (visible) {
-        // Turn off
-        this.window.setOpacity(0);
-        visible = false;
-        this.fadeOutTimer = setTimeout(tick, blinkOffMs);
-      } else {
-        // Turn on
-        blink++;
-        if (blink >= totalBlinks) {
-          // Done blinking — hide for good
-          this.fadeOutTimer = null;
-          this.state = 'idle';
-          this.hide();
-          if (this.window && !this.window.isDestroyed()) {
-            this.window.setOpacity(1);
-          }
-        } else {
-          this.window.setOpacity(1);
-          visible = true;
-          this.fadeOutTimer = setTimeout(tick, blinkOnMs);
-        }
-      }
-    };
-
-    // Start first blink after being visible for one on-period
-    this.fadeOutTimer = setTimeout(tick, blinkOnMs);
+    // Hide after slide-out animation completes
+    this.fadeOutTimer = setTimeout(() => {
+      this.fadeOutTimer = null;
+      this.isDocked = false;
+      this.state = 'idle';
+      this.hide();
+    }, 400);
   }
 
   /**
@@ -608,6 +614,16 @@ export class CursorStatusManager extends EventEmitter {
    */
   private updateWindowSize(state: CursorStatusState): void {
     if (!this.window || this.window.isDestroyed()) return;
+
+    // Dynamic Island: use pill dimensions when docked
+    if (state === 'hot-mic' && this.isDocked) {
+      const [currentWidth, currentHeight] = this.window.getSize();
+      if (currentWidth !== this.ISLAND_WIDTH || currentHeight !== this.ISLAND_HEIGHT) {
+        this.window.setSize(this.ISLAND_WIDTH, this.ISLAND_HEIGHT);
+      }
+      this.window.setIgnoreMouseEvents(true);
+      return;
+    }
 
     // Determine width based on content needs
     const needsWide = state === 'confirmation' || state === 'paste-failed';
@@ -804,6 +820,11 @@ export class CursorStatusManager extends EventEmitter {
                 }, this.PASTE_FAILED_DURATION_MS);
               }
             }
+            // Dynamic Island: resize and position below notch if docked
+            if (this.isDocked) {
+              this.updateWindowSize('hot-mic');
+              this.positionBelowNotch();
+            }
             // Set opacity to 1 now that content is ready - prevents white rectangle flash
             this.window.setOpacity(1);
             this.window.showInactive();
@@ -819,11 +840,13 @@ export class CursorStatusManager extends EventEmitter {
    */
   private startTracking(): void {
     if (this.pollInterval) return;
-    
+    // Don't track cursor when docked (Dynamic Island mode)
+    if (this.isDocked) return;
+
     this.lastCursorPos = screen.getCursorScreenPoint();
     this.cursorIdleTime = 0;
     this.isIdle = false;
-    
+
     this.pollInterval = setInterval(() => {
       this.updateCursorPosition();
     }, this.POLL_INTERVAL_MS);
