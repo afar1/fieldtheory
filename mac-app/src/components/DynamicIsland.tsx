@@ -146,30 +146,66 @@ export default function DynamicIsland() {
   // ---------------------------------------------------------------------------
 
   // Render transcript text with command phrase highlighting.
+  // Detects [cmd:name.md] references in the text and renders them as highlighted pills.
+  // Also highlights bare command names if they were detected by the transcriber.
   const renderTranscript = () => {
     if (!transcript) return null;
 
-    if (commands.length === 0) {
+    // Match [cmd:something.md] patterns and command names sent from main process.
+    const cmdRefPattern = /\[cmd:([^\]]+)\.md\]/gi;
+    const commandNames = commands.map(c => c.phrase.toLowerCase());
+
+    // Build a combined regex that matches both [cmd:...] refs and bare command names.
+    const patterns: Array<{ regex: RegExp; type: 'ref' | 'name' }> = [];
+    patterns.push({ regex: cmdRefPattern, type: 'ref' });
+    commandNames.forEach(name => {
+      if (name.length > 2) {
+        patterns.push({ regex: new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi'), type: 'name' });
+      }
+    });
+
+    // Find all matches with their positions.
+    const highlights: Array<{ start: number; end: number; text: string; type: string }> = [];
+    patterns.forEach(({ regex, type }) => {
+      let match;
+      regex.lastIndex = 0;
+      while ((match = regex.exec(transcript)) !== null) {
+        highlights.push({
+          start: match.index,
+          end: match.index + match[0].length,
+          text: type === 'ref' ? match[1] : match[0],
+          type,
+        });
+      }
+    });
+
+    if (highlights.length === 0) {
       return <span>{transcript}</span>;
     }
 
-    // Build highlighted segments. Commands are highlighted with a pill background.
-    const sorted = [...commands].sort((a, b) => a.startIndex - b.startIndex);
+    // Sort by position and remove overlaps.
+    highlights.sort((a, b) => a.start - b.start);
+    const deduped: typeof highlights = [];
+    for (const h of highlights) {
+      if (deduped.length === 0 || h.start >= deduped[deduped.length - 1].end) {
+        deduped.push(h);
+      }
+    }
+
+    // Build JSX with highlighted segments.
     const parts: JSX.Element[] = [];
     let cursor = 0;
-
-    sorted.forEach((cmd, i) => {
-      if (cmd.startIndex > cursor) {
-        parts.push(<span key={`t-${i}`}>{transcript.slice(cursor, cmd.startIndex)}</span>);
+    deduped.forEach((h, i) => {
+      if (h.start > cursor) {
+        parts.push(<span key={`t-${i}`}>{transcript.slice(cursor, h.start)}</span>);
       }
       parts.push(
         <span key={`c-${i}`} style={styles.commandHighlight}>
-          {transcript.slice(cmd.startIndex, cmd.endIndex)}
+          {h.text}
         </span>
       );
-      cursor = cmd.endIndex;
+      cursor = h.end;
     });
-
     if (cursor < transcript.length) {
       parts.push(<span key="tail">{transcript.slice(cursor)}</span>);
     }
@@ -194,6 +230,7 @@ export default function DynamicIsland() {
       <div style={styles.island}>
         {/* Hamburger / history toggle on the left side */}
         <button
+          className="di-hamburger"
           onClick={toggleHistory}
           style={{
             ...styles.hamburger,
@@ -255,7 +292,7 @@ export default function DynamicIsland() {
             </div>
           ) : (
             history.map((item) => (
-              <div key={item.id} style={styles.historyItem}>
+              <div key={item.id} className="di-history-item" style={styles.historyItem}>
                 <div style={styles.historyTextArea} onClick={() => handleCopyPaste(item.text, item.id)}>
                   <span style={styles.historyText}>
                     {item.text.toLowerCase().slice(0, 140)}
@@ -266,6 +303,7 @@ export default function DynamicIsland() {
                   </span>
                 </div>
                 <button
+                  className="di-copy-btn"
                   style={{
                     ...styles.copyButton,
                     backgroundColor: copiedId === item.id ? 'rgba(52, 199, 89, 0.3)' : 'rgba(255, 255, 255, 0.08)',
@@ -320,6 +358,7 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: '0 2px 20px rgba(0, 0, 0, 0.4), inset 0 0.5px 0 rgba(255, 255, 255, 0.06)',
     overflow: 'hidden',
     margin: '0 auto',
+    animation: 'fadeInIsland 0.2s ease-out',
   },
 
   hamburger: {
@@ -405,8 +444,9 @@ const styles: Record<string, React.CSSProperties> = {
     backdropFilter: 'blur(40px)',
     WebkitBackdropFilter: 'blur(40px)',
     boxShadow: '0 2px 20px rgba(0, 0, 0, 0.4), inset 0 0.5px 0 rgba(255, 255, 255, 0.06)',
-    scrollbarWidth: 'thin',
+    scrollbarWidth: 'thin' as any,
     scrollbarColor: 'rgba(255,255,255,0.15) transparent',
+    animation: 'slideDown 0.18s ease-out',
   },
 
   historyItem: {
@@ -483,28 +523,37 @@ const styles: Record<string, React.CSSProperties> = {
   },
 };
 
-// Add keyframes for the pulse animation.
+// Add keyframes and interaction styles.
 const styleSheet = document.createElement('style');
 styleSheet.textContent = `
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
   }
+  @keyframes slideDown {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes fadeInIsland {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
   /* Hide scrollbars in the transcript area */
   div::-webkit-scrollbar {
     display: none;
   }
-  /* Thin scrollbar for history */
-  .history-scroll::-webkit-scrollbar {
-    width: 4px;
-  }
-  .history-scroll::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.15);
-    border-radius: 2px;
-  }
   /* Hover state for history items */
-  div[style*="cursor: pointer"]:hover {
+  .di-history-item:hover {
     background-color: rgba(255, 255, 255, 0.06) !important;
+  }
+  .di-history-item:active {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+  }
+  .di-copy-btn:hover {
+    background-color: rgba(255, 255, 255, 0.15) !important;
+  }
+  .di-hamburger:hover {
+    background-color: rgba(255, 255, 255, 0.12) !important;
   }
 `;
 document.head.appendChild(styleSheet);

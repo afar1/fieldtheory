@@ -4690,11 +4690,25 @@ function broadcastTranscribeEvents(): void {
 
   transcriberManager.on('verbalCommand', () => {
     metricsManager?.recordVerbalCommand();
-    quotaManager?.updateUsage('portable_commands', 1);  // Combined quota with portable commands
+    quotaManager?.updateUsage('portable_commands', 1);
+  });
+
+  // Forward detected command names to the dynamic island for highlighting.
+  transcriberManager.on('commandsDetected', (commandNames: string[]) => {
+    if (dynamicIslandManager) {
+      commandNames.forEach((name: string) => {
+        dynamicIslandManager?.sendCommandDetected(name.toLowerCase(), 0, 0);
+      });
+    }
   });
 
   transcriberManager.on('wordsImproved', (wordCount: number) => {
     metricsManager?.recordWordsImproved(wordCount);
+  });
+
+  // Show improving state on the dynamic island when AI improvement starts.
+  transcriberManager.on('improvingStarted', () => {
+    dynamicIslandManager?.setState('improving');
   });
 
   transcriberManager.on('autostackCreated', () => {
