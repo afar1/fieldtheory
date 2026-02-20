@@ -172,11 +172,11 @@ export class TranscriberManager extends EventEmitter {
     
     // Listen for audio levels from native helper.
     // Track if we've detected any significant audio content.
-    this.nativeHelper.on('audioLevel', (level: number) => {
+    this.nativeHelper.on('audioLevel', (level: number, isSpeech: boolean) => {
       if (this.status === 'recording') {
         this.overlay.updateAudioLevel(level);
         // Check if this level indicates actual audio content.
-        if (level > this.audioLevelThreshold) {
+        if (isSpeech) {
           this.hasAudioContent = true;
         }
       }

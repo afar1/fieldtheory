@@ -30,10 +30,13 @@ export class DynamicIslandManager extends EventEmitter {
   // The island sits centered horizontally, just below the macOS notch area.
   // Wider than the old recording overlay to show transcript text.
   private readonly ISLAND_WIDTH = 420;
+  private readonly ISLAND_WIDTH_IDLE = 48;
   private readonly ISLAND_HEIGHT = 52;
+  private readonly ISLAND_HEIGHT_IDLE = 38; // match macOS notch/menu bar height
   private readonly ISLAND_HEIGHT_WITH_TRANSCRIPT = 88;
   private readonly ISLAND_HEIGHT_WITH_HISTORY = 380;
   private readonly NOTCH_Y_OFFSET = 6;
+  private readonly NOTCH_WIDTH = 200; // approximate macOS notch width + margin
 
   // Clipboard manager reference for querying transcript history.
   private clipboardManager: any = null;
@@ -75,11 +78,15 @@ export class DynamicIslandManager extends EventEmitter {
     ipcMain.on('dynamic-island-history-visible', (_event, visible: boolean) => {
       this.historyVisible = visible;
       this.updateWindowSize();
+      if (visible && this.window && !this.window.isDestroyed()) {
+        this.window.webContents.send('dynamic-island-show-history');
+      }
     });
   }
 
   setClipboardManager(manager: any): void {
     this.clipboardManager = manager;
+    this.show();
   }
 
   // -------------------------------------------------------------------------
@@ -98,7 +105,8 @@ export class DynamicIslandManager extends EventEmitter {
 
     if (state === 'idle') {
       this.historyVisible = false;
-      this.hide();
+      this.sendStateToRenderer(state);
+      this.updateWindowSize();
       return;
     }
 
@@ -200,13 +208,20 @@ export class DynamicIslandManager extends EventEmitter {
   private createWindow(): void {
     this.rendererReady = false;
     const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
-    const x = Math.floor((screenWidth - this.ISLAND_WIDTH) / 2);
+    const initialWidth = this.state === 'idle' ? this.ISLAND_WIDTH_IDLE : this.ISLAND_WIDTH;
+    const isIdle = this.state === 'idle';
+    const x = isIdle
+      ? Math.floor((screenWidth - this.NOTCH_WIDTH) / 2 - initialWidth)
+      : Math.floor((screenWidth - initialWidth) / 2);
+    const y = 0;
+
+    const initialHeight = isIdle ? this.ISLAND_HEIGHT_IDLE : this.ISLAND_HEIGHT;
 
     this.window = new BrowserWindow({
-      width: this.ISLAND_WIDTH,
-      height: this.ISLAND_HEIGHT,
+      width: initialWidth,
+      height: initialHeight,
       x,
-      y: this.NOTCH_Y_OFFSET,
+      y,
       frame: false,
       transparent: true,
       backgroundColor: '#00000000',
@@ -246,14 +261,14 @@ export class DynamicIslandManager extends EventEmitter {
       this.window = null;
     });
 
-    // Close history panel when window loses focus (user clicks elsewhere).
+    // Close history panel when window loses focus.
     this.window.on('blur', () => {
       if (this.historyVisible) {
         this.historyVisible = false;
-        this.updateWindowSize();
         if (this.window && !this.window.isDestroyed()) {
           this.window.webContents.send('dynamic-island-hide-history');
         }
+        this.updateWindowSize();
       }
     });
 
@@ -281,7 +296,9 @@ export class DynamicIslandManager extends EventEmitter {
   private updateWindowSize(): void {
     if (!this.window || this.window.isDestroyed()) return;
 
-    let targetHeight = this.ISLAND_HEIGHT;
+    const isIdle = this.state === 'idle' && !this.historyVisible;
+    let targetHeight = isIdle ? this.ISLAND_HEIGHT_IDLE : this.ISLAND_HEIGHT;
+    const targetWidth = isIdle ? this.ISLAND_WIDTH_IDLE : this.ISLAND_WIDTH;
 
     if (this.historyVisible) {
       targetHeight = this.ISLAND_HEIGHT_WITH_HISTORY;
@@ -289,14 +306,20 @@ export class DynamicIslandManager extends EventEmitter {
       targetHeight = this.ISLAND_HEIGHT_WITH_TRANSCRIPT;
     }
 
+    const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
+    // Idle: flush left of notch. Active: centered.
+    const x = isIdle
+      ? Math.floor((screenWidth - this.NOTCH_WIDTH) / 2 - targetWidth)
+      : Math.floor((screenWidth - targetWidth) / 2);
+    const y = 0;
+
     const [currentWidth, currentHeight] = this.window.getSize();
-    if (currentHeight !== targetHeight || currentWidth !== this.ISLAND_WIDTH) {
-      const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
-      const x = Math.floor((screenWidth - this.ISLAND_WIDTH) / 2);
+    const [currentX, currentY] = this.window.getPosition();
+    if (currentHeight !== targetHeight || currentWidth !== targetWidth || currentX !== x || currentY !== y) {
       this.window.setBounds({
         x,
-        y: this.NOTCH_Y_OFFSET,
-        width: this.ISLAND_WIDTH,
+        y,
+        width: targetWidth,
         height: targetHeight,
       });
     }
