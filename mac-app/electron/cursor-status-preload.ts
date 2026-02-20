@@ -51,9 +51,19 @@ contextBridge.exposeInMainWorld('cursorStatusAPI', {
     ipcRenderer.on('cursor-status-recording-note', (_event, note) => callback(note));
   },
 
-  // Hot Mic word count (cumulative words in buffer).
-  onHotMicWordCount: (callback: (count: number) => void) => {
-    ipcRenderer.on('cursor-status-hotmic-words', (_event, count) => callback(count));
+  // Hot Mic word count and last word (cumulative words in buffer).
+  onHotMicWordCount: (callback: (count: number, lastWord: string) => void) => {
+    ipcRenderer.on('cursor-status-hotmic-words', (_event, count, lastWord) => callback(count, lastWord));
+  },
+
+  // Hot Mic warn-discard (yellow blink before silence timeout discard).
+  onWarnDiscard: (callback: () => void) => {
+    ipcRenderer.on('cursor-status-warn-discard', () => callback());
+  },
+
+  // Hot Mic slide-out before hiding (silence timeout).
+  onSlideOut: (callback: () => void) => {
+    ipcRenderer.on('cursor-status-slide-out', () => callback());
   },
 
   // Debug mode changes (shows blue background to prove we control the overlay window).

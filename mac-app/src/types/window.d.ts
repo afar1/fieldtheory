@@ -108,6 +108,9 @@ interface TranscribeAPI {
   resetAutoImproveStats?: () => Promise<void>;
   getTranscriptionEngine?: () => Promise<'whisper' | 'qwen'>;
   setTranscriptionEngine?: (engine: 'whisper' | 'qwen') => Promise<void>;
+  isQwenInstalled?: () => Promise<boolean>;
+  isAppleSilicon?: () => Promise<boolean>;
+  setupQwen?: () => Promise<{ success: boolean; error?: string }>;
   getDownloadingModels?: () => Promise<string[]>;
   toggleRecording?: () => Promise<void>;
   getSoundConfig?: () => Promise<SoundConfig>;
@@ -711,7 +714,7 @@ interface SocialAPI {
 /**
  * Cursor status indicator state.
  */
-type CursorStatusState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'improving' | 'done' | 'confirmation' | 'paste-failed';
+type CursorStatusState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'improving' | 'done' | 'confirmation' | 'paste-failed' | 'hot-mic';
 
 /**
  * Label visibility state for progressive hiding.
@@ -736,7 +739,9 @@ interface CursorStatusAPI {
   onScreenshotModeChange?: (callback: (active: boolean) => void) => void;
   onTutorialHint?: (callback: (hint: string | null) => void) => void;
   onRecordingNote?: (callback: (note: string | null) => void) => void;
-  onHotMicWordCount?: (callback: (count: number) => void) => void;
+  onHotMicWordCount?: (callback: (count: number, lastWord: string) => void) => void;
+  onWarnDiscard?: (callback: () => void) => void;
+  onSlideOut?: (callback: () => void) => void;
   sendConfirmationResponse?: (abandon: boolean) => void;
   dismiss?: () => void;
   removeAllListeners: (channel: string) => void;
@@ -1347,7 +1352,7 @@ declare global {
   }
 
   // =========================================================================
-  // Squares API - Window Management (Rectangle-inspired instant snap)
+  // Squares API - Window Management (instant snap)
   // =========================================================================
 
   /**
@@ -1432,7 +1437,7 @@ declare global {
 
   /**
    * Squares API for window management.
-   * Controls Rectangle-style window snapping with instant snap.
+   * Controls window snapping with instant snap.
    */
   interface SquaresAPI {
     // Execute a layout action (e.g., leftHalf, grid, focus)

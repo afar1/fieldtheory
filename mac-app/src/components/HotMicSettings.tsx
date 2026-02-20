@@ -8,6 +8,9 @@ import { useTheme, Theme } from '../contexts/ThemeContext';
 export default function HotMicSettings() {
   const { theme } = useTheme();
 
+  const [qwenInstalled, setQwenInstalled] = useState(false);
+  const [appleSilicon, setAppleSilicon] = useState(true);
+  const [engine, setEngine] = useState<'whisper' | 'qwen'>('whisper');
   const [enabled, setEnabled] = useState(false);
   const [targetBundleId, setTargetBundleId] = useState<string | null>(null);
   const [soundsEnabled, setSoundsEnabled] = useState(true);
@@ -47,6 +50,17 @@ export default function HotMicSettings() {
 
   useEffect(() => {
     if (!window.hotMicAPI) return;
+
+    // Check Qwen installation status and current engine
+    Promise.all([
+      window.transcribeAPI?.isQwenInstalled?.() ?? Promise.resolve(false),
+      window.transcribeAPI?.isAppleSilicon?.() ?? Promise.resolve(true),
+      window.transcribeAPI?.getTranscriptionEngine?.() ?? Promise.resolve('whisper' as const),
+    ]).then(([qi, as, eng]) => {
+      setQwenInstalled(qi);
+      setAppleSilicon(as);
+      setEngine(eng);
+    });
 
     const load = async () => {
       const [en, target, sounds, terminals, state, hookStatus, submit, pw, cw, sw, pvw, nww, cww, mp, hp, qp, rcw, fp, cp, rsw, rsc, wc] = await Promise.all([
@@ -295,17 +309,36 @@ export default function HotMicSettings() {
       <div style={styles.row}>
         <span style={styles.rowLabel}>Enable Hot Mic</span>
         <button
-          onClick={() => handleEnabledChange(!enabled)}
-          style={{ ...styles.toggle, backgroundColor: enabled ? theme.success : '#d1d5db' }}
+          onClick={() => (appleSilicon && qwenInstalled && engine === 'qwen') && handleEnabledChange(!enabled)}
+          style={{
+            ...styles.toggle,
+            backgroundColor: enabled && engine === 'qwen' ? theme.success : '#d1d5db',
+            opacity: (appleSilicon && qwenInstalled && engine === 'qwen') ? 1 : 0.5,
+            cursor: (appleSilicon && qwenInstalled && engine === 'qwen') ? 'pointer' : 'not-allowed',
+          }}
         >
-          <span style={{ ...styles.toggleKnob, transform: enabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+          <span style={{ ...styles.toggleKnob, transform: enabled && engine === 'qwen' ? 'translateX(20px)' : 'translateX(2px)' }} />
         </button>
       </div>
-      <p style={styles.description}>
-        Hands-free voice input for multiple Claude Code terminals. When Claude finishes a turn,
-        the terminal is queued. Speak freely — your words buffer until you say the submit word
-        to flush and send. Say "skip" to cycle or "dismiss" to remove from queue.
-      </p>
+      {!appleSilicon ? (
+        <p style={{ ...styles.description, color: theme.textSecondary }}>
+          Hot Mic requires Apple Silicon (M1 or later).
+        </p>
+      ) : engine !== 'qwen' ? (
+        <p style={{ ...styles.description, color: theme.textSecondary }}>
+          Hot Mic requires the Qwen voice model. Switch to Qwen in Audio & Transcription settings.
+        </p>
+      ) : !qwenInstalled ? (
+        <p style={{ ...styles.description, color: theme.textSecondary }}>
+          Qwen voice model not installed. Download it in Audio & Transcription settings.
+        </p>
+      ) : (
+        <p style={styles.description}>
+          Hands-free voice input for multiple Claude Code terminals. When Claude finishes a turn,
+          the terminal is queued. Speak freely — your words buffer until you say the submit word
+          to flush and send. Say "skip" to cycle or "dismiss" to remove from queue.
+        </p>
+      )}
 
       <div style={styles.divider} />
 
@@ -337,9 +370,8 @@ export default function HotMicSettings() {
           />
         </div>
       )}
-      <p style={styles.description}>
-        The terminal app where transcribed text will be typed.
-      </p>
+
+
 
       <div style={styles.divider} />
 
@@ -353,29 +385,8 @@ export default function HotMicSettings() {
           <span style={{ ...styles.toggleKnob, transform: soundsEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
         </button>
       </div>
-      <p style={styles.description}>
-        Play audio feedback during Hot Mic recording cycles.
-      </p>
 
-      <div style={styles.divider} />
 
-      {/* Word count toggle */}
-      <div style={styles.row}>
-        <span style={styles.rowLabel}>Show Word Count</span>
-        <button
-          onClick={async () => {
-            const next = !showWordCount;
-            setShowWordCount(next);
-            await window.hotMicAPI?.setShowWordCount(next);
-          }}
-          style={{ ...styles.toggle, backgroundColor: showWordCount ? theme.success : '#d1d5db' }}
-        >
-          <span style={{ ...styles.toggleKnob, transform: showWordCount ? 'translateX(20px)' : 'translateX(2px)' }} />
-        </button>
-      </div>
-      <p style={styles.description}>
-        Display word count on the status indicator while buffering speech.
-      </p>
 
       <div style={styles.divider} />
 
@@ -392,9 +403,8 @@ export default function HotMicSettings() {
           onKeyDown={(e) => e.key === 'Enter' && handleSubmitWordSave()}
         />
       </div>
-      <p style={styles.description}>
-        Comma-separated words or phrases. Say any of these at the end of a sentence to submit.
-      </p>
+
+
 
       <div style={styles.divider} />
 
@@ -411,9 +421,8 @@ export default function HotMicSettings() {
           onKeyDown={(e) => e.key === 'Enter' && handlePasteWordsSave()}
         />
       </div>
-      <p style={styles.description}>
-        Say any of these to paste the buffered text without submitting (no Enter key).
-      </p>
+
+
 
       <div style={styles.divider} />
 
@@ -430,9 +439,8 @@ export default function HotMicSettings() {
           onKeyDown={(e) => e.key === 'Enter' && handleCancelWordsSave()}
         />
       </div>
-      <p style={styles.description}>
-        Say any of these to send Ctrl+C to the terminal (interrupt the current process).
-      </p>
+
+
 
       <div style={styles.divider} />
 
@@ -449,9 +457,8 @@ export default function HotMicSettings() {
           onKeyDown={(e) => e.key === 'Enter' && handleSwitchWordsSave()}
         />
       </div>
-      <p style={styles.description}>
-        Say any of these to cycle to the next window of the current app (Cmd+`).
-      </p>
+
+
 
       <div style={styles.divider} />
 
@@ -468,9 +475,8 @@ export default function HotMicSettings() {
           onKeyDown={(e) => e.key === 'Enter' && handlePrevWindowWordsSave()}
         />
       </div>
-      <p style={styles.description}>
-        Say any of these to cycle to the previous window (Cmd+Shift+`).
-      </p>
+
+
 
       <div style={styles.divider} />
 
@@ -487,9 +493,8 @@ export default function HotMicSettings() {
           onKeyDown={(e) => e.key === 'Enter' && handleNewWindowWordsSave()}
         />
       </div>
-      <p style={styles.description}>
-        Say any of these to open a new terminal window (Cmd+N).
-      </p>
+
+
 
       <div style={styles.divider} />
 
@@ -506,9 +511,8 @@ export default function HotMicSettings() {
           onKeyDown={(e) => e.key === 'Enter' && handleCloseWindowWordsSave()}
         />
       </div>
-      <p style={styles.description}>
-        Say any of these to close the current window (Cmd+W).
-      </p>
+
+
 
       <div style={styles.divider} />
 
@@ -525,9 +529,8 @@ export default function HotMicSettings() {
           onKeyDown={(e) => e.key === 'Enter' && handleMinimizePhrasesSave()}
         />
       </div>
-      <p style={styles.description}>
-        Say any of these to minimize the current window (Cmd+M).
-      </p>
+
+
 
       <div style={styles.divider} />
 
@@ -544,9 +547,8 @@ export default function HotMicSettings() {
           onKeyDown={(e) => e.key === 'Enter' && handleHidePhrasesSave()}
         />
       </div>
-      <p style={styles.description}>
-        Say any of these to hide the current app (Cmd+H).
-      </p>
+
+
 
       <div style={styles.divider} />
 
@@ -563,9 +565,8 @@ export default function HotMicSettings() {
           onKeyDown={(e) => e.key === 'Enter' && handleQuitPhrasesSave()}
         />
       </div>
-      <p style={styles.description}>
-        Say any of these to quit the current app (Cmd+Q). Also works with app names: "quit slack", "quit the browser".
-      </p>
+
+
 
       <div style={styles.divider} />
 
@@ -582,9 +583,8 @@ export default function HotMicSettings() {
           onKeyDown={(e) => e.key === 'Enter' && handleFocusPhrasesSave()}
         />
       </div>
-      <p style={styles.description}>
-        Say any of these to move the current window to the next display and center it.
-      </p>
+
+
 
       <div style={styles.divider} />
 
@@ -601,9 +601,8 @@ export default function HotMicSettings() {
           onKeyDown={(e) => e.key === 'Enter' && handleCascadePhrasesSave()}
         />
       </div>
-      <p style={styles.description}>
-        Say any of these to cascade the current app's windows and center them on screen.
-      </p>
+
+
 
       <div style={styles.divider} />
 
@@ -620,9 +619,8 @@ export default function HotMicSettings() {
           onKeyDown={(e) => e.key === 'Enter' && handleRunClaudeWordsSave()}
         />
       </div>
-      <p style={styles.description}>
-        Say any of these to type "claude" and press Enter (starts a Claude Code session).
-      </p>
+
+
 
       <div style={styles.divider} />
 
@@ -651,18 +649,14 @@ export default function HotMicSettings() {
           onKeyDown={(e) => e.key === 'Enter' && handleRestartServerCommandSave()}
         />
       </div>
-      <p style={styles.description}>
-        Say any trigger phrase to send Ctrl+C then run the configured command.
-      </p>
+
+
 
       <div style={styles.divider} />
 
       {/* System Commands */}
       <div style={{ padding: '4px 0' }}>
         <span style={styles.rowLabel}>System Commands</span>
-        <p style={styles.description}>
-          Voice triggers for media playback, volume, and system controls.
-        </p>
       </div>
       {[
         { action: 'play-pause', label: 'Play / Pause' },
@@ -693,10 +687,8 @@ export default function HotMicSettings() {
       {/* App Voice Aliases */}
       <div style={{ padding: '4px 0' }}>
         <span style={styles.rowLabel}>App Voice Aliases</span>
-        <p style={styles.description}>
-          Say an app name to switch to it. Add custom trigger words for your apps.
-          Common words (Notes, Mail, etc.) require saying "open" first.
-        </p>
+
+
       </div>
 
       {appAliases.length > 0 && (
@@ -822,31 +814,6 @@ export default function HotMicSettings() {
           Target: {targetName}
         </p>
       )}
-      <div style={styles.divider} />
-
-      {/* Claude Code hook */}
-      <div style={styles.row}>
-        <div>
-          <span style={styles.rowLabel}>Claude Code Hook</span>
-          <p style={styles.description}>
-            {hookInstalled
-              ? 'Installed — Hot Mic triggers when Claude finishes a turn.'
-              : 'Adds a Stop hook to ~/.claude/settings.json.'}
-          </p>
-        </div>
-        <button
-          onClick={handleToggleHook}
-          disabled={hookLoading}
-          style={{
-            ...styles.hookButton,
-            backgroundColor: hookInstalled ? theme.surface0 : theme.success,
-            color: hookInstalled ? theme.text : '#fff',
-            opacity: hookLoading ? 0.6 : 1,
-          }}
-        >
-          {hookLoading ? '...' : hookInstalled ? 'Remove' : 'Install'}
-        </button>
-      </div>
     </div>
   );
 }

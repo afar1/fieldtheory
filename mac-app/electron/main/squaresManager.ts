@@ -1,6 +1,6 @@
 // =============================================================================
 // SquaresManager - Window Management Engine
-// Rectangle-inspired window management with instant snap for Field Theory.
+// Window management with instant snap for Field Theory.
 // Uses native Swift helper (AX API) for sub-millisecond window manipulation.
 // =============================================================================
 

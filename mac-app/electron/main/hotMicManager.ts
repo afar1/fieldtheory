@@ -224,6 +224,7 @@ export class HotMicManager extends EventEmitter {
     /^\s*\.+\s*$/,
     /^\s*$/,
     /^\s*\(.*\)\s*$/,
+    /^(okay|ok|the|a|so|yeah|oh|well|right|uh|um|hmm|huh|ah|bye|hey|hi|it)\.?\s*$/i,
   ];
 
   // Snap-to-toggle: track whether apps are currently hidden
@@ -750,13 +751,10 @@ export class HotMicManager extends EventEmitter {
           if (hadContent) {
             log.info('Hot Mic: silence timeout, discarding buffer (%d chunks)', this.transcriptBuffer.length);
             this.transcriptBuffer = [];
-            this.cursorStatusManager?.blinkThenHideHotMic();
-          } else {
-            // No buffer content — dot was shown preemptively but nothing was
-            // buffered (e.g. command executed, or hallucination already handled).
-            // Hide instantly since there's nothing to visually "discard".
-            this.updateOrangeDot();
           }
+          // Always blink-then-hide — even if buffer was empty, the user saw
+          // the island appear so they deserve the visual warning before it goes.
+          this.cursorStatusManager?.blinkThenHideHotMic();
         }
       }, timeout);
     }

@@ -1330,14 +1330,6 @@ final class RecordingHelper {
             return false
         }
         
-        // Enable voice processing for AEC (cancels speaker audio from mic input)
-        do {
-            try inputNode.setVoiceProcessingEnabled(true)
-            sendLog(level: "info", message: "Voice processing (AEC) enabled")
-        } catch {
-            sendLog(level: "warn", message: "Failed to enable voice processing: \(error.localizedDescription)")
-        }
-
         // Install tap on input node
         let bufferSize: AVAudioFrameCount = 2048
         inputNode.installTap(onBus: 0, bufferSize: bufferSize, format: inputFormat) { [weak self] buffer, _ in

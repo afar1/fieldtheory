@@ -162,7 +162,7 @@ interface Preferences {
   hotMicRestartServerWords?: string; // Comma-separated phrases that trigger restart (Ctrl+C then run command)
   hotMicFocusPhrases?: string; // Comma-separated phrases that trigger focus (next-display + center)
   hotMicCascadePhrases?: string; // Comma-separated phrases that trigger cascade + center
-  hotMicRectangleCommands?: Record<string, string>; // Rectangle action name → comma-separated trigger phrases
+  hotMicRectangleCommands?: Record<string, string>; // Window action name → comma-separated trigger phrases
   hotMicRestartServerCommand?: string; // Terminal command to run after Ctrl+C (e.g. "npm run dev")
   hotMicHotkey?: string; // Hotkey to toggle Hot Mic on/off (unset by default)
   hotMicAppAliases?: Array<{ appName: string; aliases: string }>; // Voice aliases for app switching
@@ -179,7 +179,7 @@ interface Preferences {
   hotMicLockPhrases?: string;
 
   // Squares - window management config and hotkeys.
-  // Rectangle-inspired window snapping.
+  // Window management.
   squaresConfig?: any;   // SquaresConfig from types/squares.ts
   squaresHotkeys?: any;  // SquaresHotkeys from types/squares.ts
 }

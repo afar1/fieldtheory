@@ -63,7 +63,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'stats': 'Stats',
   'terminal-commands': 'Allowlist',
   'hot-mic': 'Hot Mic',
-  'rectangle': 'Rectangle',
+  'rectangle': 'Windows',
 };
 
 // Alphabetically ordered sections for navigation
@@ -77,7 +77,7 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'librarian',
   'commands', // Portable Commands
   'hot-mic', // Hot Mic
-  'rectangle', // Rectangle window management
+  'rectangle', // Window management
   'sounds',
   'stats',
 ];
@@ -195,6 +195,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
 
   // Hot Mic hotkey
   const [hotMicHotkey, setHotMicHotkey] = useState<string | null>(null);
+
+  // Transcription engine (hot mic requires qwen)
+  const [transcriptionEngine, setTranscriptionEngine] = useState<'whisper' | 'qwen'>('whisper');
 
   // Mobile sync state - sign-in is handled via TeamView, we just listen for session.
   const [session, setSession] = useState<Session | null>(null);
@@ -392,6 +395,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         setHotMicHotkey(hotkey);
       });
     }
+
+    // Load transcription engine (hot mic requires qwen)
+    window.transcribeAPI?.getTranscriptionEngine?.().then(eng => {
+      setTranscriptionEngine(eng ?? 'whisper');
+    });
 
     // Load transcription hotkeys
     if (window.transcribeAPI) {
@@ -1304,19 +1312,24 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       {/* Left Sidebar Navigation */}
       <div style={styles.sidebar}>
         <div style={styles.sidebarNav}>
-          {SECTIONS_ORDER.map((section) => (
+          {SECTIONS_ORDER.map((section) => {
+            const isDisabled = section === 'hot-mic' && transcriptionEngine !== 'qwen';
+            return (
             <button
               key={section}
-              onClick={() => setSelectedSection(section)}
+              onClick={() => !isDisabled && setSelectedSection(section)}
               style={{
                 ...styles.sidebarItem,
                 backgroundColor: selectedSection === section ? theme.accent : 'transparent',
-                color: selectedSection === section ? '#fff' : theme.textSecondary,
+                color: isDisabled ? theme.textSecondary : selectedSection === section ? '#fff' : theme.textSecondary,
+                opacity: isDisabled ? 0.4 : 1,
+                cursor: isDisabled ? 'not-allowed' : 'pointer',
               }}
             >
               {SECTION_LABELS[section]}
             </button>
-          ))}
+            );
+          })}
         </div>
       </div>
 
@@ -2111,7 +2124,7 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       </div>
       )}
 
-      {/* Rectangle Section */}
+      {/* Windows Section */}
       {selectedSection === 'rectangle' && (
       <div style={styles.section}>
         <RectangleSettings />

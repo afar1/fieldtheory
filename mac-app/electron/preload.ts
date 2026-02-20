@@ -59,6 +59,9 @@ const TranscribeIPCChannels = {
   ADD_TO_STACK: 'transcribe:addToStack',
   GET_TRANSCRIPTION_ENGINE: 'transcribe:getTranscriptionEngine',
   SET_TRANSCRIPTION_ENGINE: 'transcribe:setTranscriptionEngine',
+  IS_QWEN_INSTALLED: 'transcribe:isQwenInstalled',
+  IS_APPLE_SILICON: 'transcribe:isAppleSilicon',
+  SETUP_QWEN: 'transcribe:setupQwen',
 } as const;
 
 const ClipboardIPCChannels = {
@@ -551,6 +554,9 @@ export interface TranscribeAPI {
   resetAutoImproveStats: () => Promise<void>;
   getTranscriptionEngine: () => Promise<'whisper' | 'qwen'>;
   setTranscriptionEngine: (engine: 'whisper' | 'qwen') => Promise<void>;
+  isQwenInstalled: () => Promise<boolean>;
+  isAppleSilicon: () => Promise<boolean>;
+  setupQwen: () => Promise<{ success: boolean; error?: string }>;
   toggleRecording: () => Promise<void>;
   getSoundConfig: () => Promise<SoundConfig>;
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
@@ -879,6 +885,18 @@ const transcribeAPI: TranscribeAPI = {
 
   setTranscriptionEngine: async (engine: 'whisper' | 'qwen'): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, engine);
+  },
+
+  isQwenInstalled: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.IS_QWEN_INSTALLED);
+  },
+
+  isAppleSilicon: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.IS_APPLE_SILICON);
+  },
+
+  setupQwen: async (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SETUP_QWEN);
   },
 
   toggleRecording: async (): Promise<void> => {
