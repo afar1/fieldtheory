@@ -39,6 +39,11 @@ export const TranscribeIPCChannels = {
   PREVIEW_SOUND: 'transcribe:previewSound',
   PLAY_PASTE_SOUND: 'transcribe:playPasteSound',
 
+  // Qwen installation and setup
+  IS_QWEN_INSTALLED: 'transcribe:isQwenInstalled',
+  IS_APPLE_SILICON: 'transcribe:isAppleSilicon',
+  SETUP_QWEN: 'transcribe:setupQwen',
+
   // Main -> Renderer (send pattern)
   STATUS_CHANGED: 'transcribe:statusChanged',
   RESULT: 'transcribe:result',
@@ -133,6 +138,9 @@ export interface TranscribeAPI {
   resetAutoImproveStats: () => Promise<void>;
   getTranscriptionEngine: () => Promise<'whisper' | 'qwen'>;
   setTranscriptionEngine: (engine: 'whisper' | 'qwen') => Promise<void>;
+  isQwenInstalled: () => Promise<boolean>;
+  isAppleSilicon: () => Promise<boolean>;
+  setupQwen: () => Promise<{ success: boolean; error?: string }>;
   getSoundConfig: () => Promise<SoundConfig>;
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
   getAvailableSounds: () => Promise<SoundOption[]>;

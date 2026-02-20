@@ -351,6 +351,8 @@ export class AudioManager extends EventEmitter {
    * When priority mode is locked, always restore the priority device.
    */
   private async handleDefaultInputChanged(deviceId: string | null): Promise<void> {
+    const deviceName = deviceId ? this.devices.find(d => d.id === deviceId)?.name ?? deviceId : 'none';
+    log.info('Default input changed: %s (priority=%s, mode=%s)', deviceName, this.priorityDeviceId ? 'set' : 'none', this.priorityMode ? 'on' : 'off');
     this.defaultInputId = deviceId;
 
     // If priority mode is off, just update state and emit.
@@ -394,27 +396,32 @@ export class AudioManager extends EventEmitter {
   private async enforcePriority(): Promise<void> {
     // Don't enforce if priority mode is off.
     if (!this.priorityMode) {
+      log.debug('enforcePriority: skipped (priority mode off)');
       return;
     }
 
     // If no priority device is selected, nothing to enforce.
     if (!this.priorityDeviceId) {
+      log.debug('enforcePriority: skipped (no priority device)');
       return;
     }
 
     // Find the priority device.
     const priorityDevice = this.devices.find((d) => d.id === this.priorityDeviceId);
     if (!priorityDevice) {
+      log.warn('enforcePriority: priority device %s not found in device list', this.priorityDeviceId);
       return;
     }
 
     // If priority device is already the default, nothing to do.
     if (this.defaultInputId === this.priorityDeviceId) {
+      log.debug('enforcePriority: already default (%s)', priorityDevice.name);
       return;
     }
 
     // Set priority device as the default input.
     // When locked, we always enforce - ignore auto-switches from macOS.
+    log.info('enforcePriority: switching default input to "%s" (was %s)', priorityDevice.name, this.defaultInputId);
 
     // Mark that we're setting the default to avoid treating it as user override.
     this.isSettingDefaultInput = true;
@@ -428,6 +435,14 @@ export class AudioManager extends EventEmitter {
         this.isSettingDefaultInput = false;
       }, 500);
     }
+  }
+
+  /**
+   * Ensure the priority device is enforced as the default input.
+   * Called by external consumers (e.g. HotMicManager) before recording.
+   */
+  async ensurePriorityEnforced(): Promise<void> {
+    await this.enforcePriority();
   }
 
   /**

@@ -77,8 +77,13 @@ export default function CursorStatus() {
   // Used for warnings like "Note: Stacking 10+ images, some input fields may have limits"
   const [recordingNote, setRecordingNote] = useState<string | null>(null);
 
-  // Hot Mic word count - shows cumulative word count in buffer
+  // Hot Mic word count and last word
   const [hotMicWordCount, setHotMicWordCount] = useState<number>(0);
+  const [hotMicLastWord, setHotMicLastWord] = useState<string>('');
+  // Slide-out animation state
+  const [slidingOut, setSlidingOut] = useState(false);
+  // Yellow blink warning before discard
+  const [warningBlink, setWarningBlink] = useState(false);
 
   // Debug mode - shows blue background to prove we control this window
   const [debugMode, setDebugMode] = useState<boolean>(false);
@@ -96,6 +101,11 @@ export default function CursorStatus() {
     
     window.cursorStatusAPI.onStateChange((newState) => {
       setState(newState);
+      setSlidingOut(false);
+      setWarningBlink(false);
+      if (newState !== 'hot-mic') {
+        setHotMicLastWord('');
+      }
 
       // When recording or silentStacking starts, show text briefly then fade it out
       if (newState === 'recording' || newState === 'silentStacking') {
@@ -153,9 +163,21 @@ export default function CursorStatus() {
       }
     });
     
-    // Listen for hot mic word count updates
-    window.cursorStatusAPI.onHotMicWordCount?.((count: number) => {
+    // Listen for hot mic word count + last word updates
+    window.cursorStatusAPI.onHotMicWordCount?.((count: number, lastWord: string) => {
       setHotMicWordCount(count);
+      setHotMicLastWord(lastWord);
+    });
+
+    // Listen for warn-discard (yellow blink before silence timeout discard)
+    window.cursorStatusAPI.onWarnDiscard?.(() => {
+      setWarningBlink(true);
+    });
+
+    // Listen for slide-out (silence timeout — slide island back into notch)
+    window.cursorStatusAPI.onSlideOut?.(() => {
+      setWarningBlink(false);
+      setSlidingOut(true);
     });
 
     return () => {
@@ -163,6 +185,8 @@ export default function CursorStatus() {
       window.cursorStatusAPI?.removeAllListeners('cursor-status-idle');
       window.cursorStatusAPI?.removeAllListeners('cursor-status-data');
       window.cursorStatusAPI?.removeAllListeners('cursor-status-hotmic-words');
+      window.cursorStatusAPI?.removeAllListeners('cursor-status-warn-discard');
+      window.cursorStatusAPI?.removeAllListeners('cursor-status-slide-out');
       if (recordingTextTimeoutRef.current) {
         clearTimeout(recordingTextTimeoutRef.current);
       }
@@ -419,6 +443,56 @@ export default function CursorStatus() {
     return null;
   }
 
+  // Dynamic Island: render pill UI for hot-mic
+  if (state === 'hot-mic') {
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'center',
+        width: '100%',
+        height: '100%',
+        animation: slidingOut
+          ? 'islandCollapse 0.35s cubic-bezier(0.4, 0, 1, 1) forwards'
+          : 'islandExpand 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
+      }}>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          backgroundColor: '#000',
+          borderRadius: '0 0 18px 18px',
+          padding: '18px 16px 10px',
+        }}>
+          {/* Pulsing dot — orange normally, blinks yellow before discard */}
+          <div style={{
+            width: '8px',
+            height: '8px',
+            borderRadius: '50%',
+            backgroundColor: warningBlink ? '#ffd60a' : '#ff9500',
+            boxShadow: warningBlink
+              ? '0 0 6px rgba(255, 214, 10, 0.8)'
+              : '0 0 6px rgba(255, 149, 0, 0.6)',
+            animation: warningBlink
+              ? 'yellowBlink 0.35s ease-in-out infinite'
+              : 'pulse 1.8s ease-in-out infinite',
+            flexShrink: 0,
+          }} />
+          {/* Last word or ellipsis */}
+          <span style={{
+            fontSize: '13px',
+            fontWeight: 500,
+            color: 'rgba(255, 255, 255, 0.85)',
+            fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+            letterSpacing: '0.3px',
+          }}>
+            {hotMicLastWord ? `…${hotMicLastWord}` : '…'}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
   // Get text label based on state
   const getLabel = (): string => {
     // Tutorial hints override default recording text (used during onboarding).
@@ -448,9 +522,6 @@ export default function CursorStatus() {
       // Use custom message if provided, otherwise show default.
       return pasteFailedText || 'Transcript saved to Field Theory';
     }
-    if (state === 'hot-mic') {
-      return hotMicWordCount > 0 ? String(hotMicWordCount) : '';
-    }
     return '';
   };
 
@@ -466,7 +537,6 @@ export default function CursorStatus() {
   //    - "Transcribing..." shows for first 3 transcriptions, then hides
   // After thresholds, only the colored dots remain (stacks are the core mechanic).
   const showLabel = state === 'paste-failed' || state === 'confirmation' || state === 'done' ||
-    (state === 'hot-mic' && hotMicWordCount > 0) ||
     (state === 'recording' && tutorialHint) ||  // Always show tutorial hints
     (!hideLabels && (
       // "collecting" during silentStacking - respects progressive threshold
@@ -684,6 +754,34 @@ styleSheet.textContent = `
     0% { opacity: 1; }
     80% { opacity: 1; }
     100% { opacity: 0; }
+  }
+  @keyframes yellowBlink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.2; }
+  }
+  @keyframes islandCollapse {
+    from {
+      opacity: 1;
+      transform: scaleX(1) scaleY(1);
+      transform-origin: top center;
+    }
+    to {
+      opacity: 0;
+      transform: scaleX(0.5) scaleY(0.3);
+      transform-origin: top center;
+    }
+  }
+  @keyframes islandExpand {
+    from {
+      opacity: 0;
+      transform: scaleX(0.5) scaleY(0.3);
+      transform-origin: top center;
+    }
+    to {
+      opacity: 1;
+      transform: scaleX(1) scaleY(1);
+      transform-origin: top center;
+    }
   }
 `;
 document.head.appendChild(styleSheet);

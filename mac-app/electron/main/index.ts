@@ -2232,6 +2232,32 @@ function setupTranscribeIPCHandlers(): void {
     transcriberManager.getSoundManager().preview(soundId);
   });
 
+  ipcMain.handle(TranscribeIPCChannels.IS_QWEN_INSTALLED, async () => {
+    if (!transcriberManager) {
+      return false;
+    }
+    return transcriberManager.isQwenInstalled();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.IS_APPLE_SILICON, () => {
+    return process.arch === 'arm64';
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SETUP_QWEN, async () => {
+    const macAppRoot = path.resolve(__dirname, '../..');
+    const scriptPath = path.join(macAppRoot, 'scripts', 'setup-qwen.sh');
+
+    return new Promise<{ success: boolean; error?: string }>((resolve) => {
+      exec(`bash "${scriptPath}"`, { cwd: macAppRoot, timeout: 600000 }, (error: Error | null, _stdout: string, stderr: string) => {
+        if (error) {
+          resolve({ success: false, error: stderr || error.message });
+        } else {
+          resolve({ success: true });
+        }
+      });
+    });
+  });
+
   ipcMain.handle('transcribe:getStackCount', () => {
     if (!transcriberManager) {
       return 0;
@@ -5324,6 +5350,10 @@ async function initTranscriberSystem(): Promise<void> {
     });
 
     // Broadcast state changes to all windows
+    if (audioManager) {
+      hotMicManager.setAudioManager(audioManager);
+    }
+
     hotMicManager.on('stateChanged', (state: string) => {
       BrowserWindow.getAllWindows().forEach(win => {
         if (!win.isDestroyed()) {
@@ -5361,7 +5391,7 @@ async function initTranscriberSystem(): Promise<void> {
   }
 
   // Initialize Squares window management.
-  // Rectangle-inspired window snapping.
+  // Window management.
   squaresManager = new SquaresManager(preferencesManager, nativeHelper!);
 
   // Broadcast Squares events to all renderer windows.
@@ -5478,12 +5508,14 @@ async function initTranscriberSystem(): Promise<void> {
   // Create UserDataManager for per-user data isolation.
   // This must be created before AuthManager so it can coordinate user changes.
   userDataManager = createUserDataManager();
+  await userDataManager.restoreCurrentUser();
 
   // Set UserDataManager on managers BEFORE authManager.init().
   // authManager.init() may emit 'userChanged' during session restoration,
   // so managers must have their userDataManager ready to use per-user paths.
   if (preferencesManager) {
     preferencesManager.setUserDataManager(userDataManager);
+    await preferencesManager.load();
   }
   if (clipboardManager) {
     clipboardManager.setUserDataManager(userDataManager);
