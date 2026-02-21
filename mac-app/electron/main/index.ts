@@ -5374,6 +5374,12 @@ async function initTranscriberSystem(): Promise<void> {
     const soundMgr = transcriberManager.getSoundManager();
     hotMicManager = new HotMicManager(nativeHelper, preferencesManager, soundMgr);
     hotMicManager.setCursorStatusManager(cursorStatusManager);
+    if (dynamicIslandManager) {
+      hotMicManager.setDynamicIslandManager(dynamicIslandManager);
+      dynamicIslandManager.on('toggleMute', () => {
+        hotMicManager?.toggleMute();
+      });
+    }
     hotMicManager.setTranscriberStatusGetter(() => transcriberManager?.getStatus() ?? 'idle');
     hotMicManager.setTranscribeFunction((wavPath) => transcriberManager!.transcribeAudio(wavPath));
     hotMicManager.setWarmupFunction(() => transcriberManager!.warmup());

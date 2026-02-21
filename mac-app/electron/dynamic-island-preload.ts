@@ -60,6 +60,31 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
     ipcRenderer.on('dynamic-island-show-history', () => callback());
   },
 
+  // Hot-mic status updates (right pill).
+  onHotMicUpdate: (callback: (data: { active: boolean; wordCount: number; lastWord: string }) => void) => {
+    ipcRenderer.on('dynamic-island-hotmic', (_event, data) => callback(data));
+  },
+
+  // Hot-mic warn-discard blink (right pill).
+  onHotMicWarnDiscard: (callback: () => void) => {
+    ipcRenderer.on('dynamic-island-hotmic-warn-discard', () => callback());
+  },
+
+  // Hot-mic slide out (right pill).
+  onHotMicSlideOut: (callback: () => void) => {
+    ipcRenderer.on('dynamic-island-hotmic-slide-out', () => callback());
+  },
+
+  // Hot-mic mute state change (right pill).
+  onHotMicMute: (callback: (muted: boolean) => void) => {
+    ipcRenderer.on('dynamic-island-hotmic-mute', (_event, muted) => callback(muted));
+  },
+
+  // Toggle hot-mic mute (right pill → main).
+  toggleMute: () => {
+    ipcRenderer.send('dynamic-island-toggle-mute');
+  },
+
   removeAllListeners: (channel: string) => {
     ipcRenderer.removeAllListeners(channel);
   },
