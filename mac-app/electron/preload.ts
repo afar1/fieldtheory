@@ -3174,6 +3174,12 @@ const hotMicAPI = {
   setRunClaudeWords: async (words: string): Promise<string> => {
     return ipcRenderer.invoke('hotmic:setRunClaudeWords', words);
   },
+  getRunCodexWords: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getRunCodexWords');
+  },
+  setRunCodexWords: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setRunCodexWords', words);
+  },
   getRestartServerWords: async (): Promise<string> => {
     return ipcRenderer.invoke('hotmic:getRestartServerWords');
   },

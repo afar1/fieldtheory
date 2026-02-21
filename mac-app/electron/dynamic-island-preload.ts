@@ -85,6 +85,21 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
     ipcRenderer.send('dynamic-island-toggle-mute');
   },
 
+  // Open the main Field Theory clipboard/history window.
+  openFieldTheory: () => {
+    ipcRenderer.send('dynamic-island-open-field-theory');
+  },
+
+  // Drawer transcript updates (drawer pill).
+  onDrawerTranscript: (callback: (text: string) => void) => {
+    ipcRenderer.on('dynamic-island-drawer-transcript', (_event, text) => callback(text));
+  },
+
+  // Drawer live-speaking updates (for shimmer feedback).
+  onDrawerSpeaking: (callback: (speaking: boolean) => void) => {
+    ipcRenderer.on('dynamic-island-drawer-speaking', (_event, speaking) => callback(speaking));
+  },
+
   removeAllListeners: (channel: string) => {
     ipcRenderer.removeAllListeners(channel);
   },

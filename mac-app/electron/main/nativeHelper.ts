@@ -43,6 +43,7 @@ export class NativeHelper extends EventEmitter {
   private buffer = '';
   private isRunning = false;
   private isReady = false;
+  private recordingActive = false;
   private pendingDevicesResolve: ((devices: AudioDevice[]) => void) | null = null;
   private pendingDefaultInputResolve: ((deviceId: string | null) => void) | null = null;
   private devicesDebounceTimer: NodeJS.Timeout | null = null;
@@ -139,6 +140,7 @@ export class NativeHelper extends EventEmitter {
       this.child.on('exit', (code, signal) => {
         this.isRunning = false;
         this.isReady = false;
+        this.recordingActive = false;
         this.child = null;
 
         if (code !== 0 && code !== null) {
@@ -150,11 +152,13 @@ export class NativeHelper extends EventEmitter {
       this.child.on('error', (error) => {
         log.error('Failed to spawn helper:', error);
         this.isRunning = false;
+        this.recordingActive = false;
         this.child = null;
       });
     } catch (error) {
       log.error('Exception spawning helper:', error);
       this.isRunning = false;
+      this.recordingActive = false;
     }
   }
 
@@ -166,6 +170,7 @@ export class NativeHelper extends EventEmitter {
       this.child.kill('SIGTERM');
       this.child = null;
       this.isRunning = false;
+      this.recordingActive = false;
     }
   }
 
@@ -174,6 +179,14 @@ export class NativeHelper extends EventEmitter {
    */
   get running(): boolean {
     return this.isRunning;
+  }
+
+  /**
+   * Best-effort recording state tracked from helper events.
+   * Useful for avoiding duplicate startRecording attempts across managers.
+   */
+  isRecordingActive(): boolean {
+    return this.recordingActive;
   }
 
   /**
@@ -275,22 +288,30 @@ export class NativeHelper extends EventEmitter {
     await this.waitForReady();
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
+        cleanup();
         reject(new Error('startRecording timed out'));
       }, 5000);
 
       const handler = (msg: HelperOutgoingMessage) => {
         if (msg.type === 'recordingStarted') {
-          clearTimeout(timeout);
-          this.removeListener('message', handler);
+          this.recordingActive = true;
+          cleanup();
           resolve();
-        } else if (msg.type === 'error') {
-          clearTimeout(timeout);
-          this.removeListener('message', handler);
+        } else if (msg.type === 'error' && /start recording|already in progress/i.test(msg.message)) {
+          if (/already in progress/i.test(msg.message)) {
+            this.recordingActive = true;
+          }
+          cleanup();
           reject(new Error(msg.message));
         }
       };
 
-      this.once('message', handler);
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', handler);
+      };
+
+      this.on('message', handler);
       this.send({ type: 'startRecording' });
     });
   }
@@ -302,23 +323,31 @@ export class NativeHelper extends EventEmitter {
     await this.waitForReady();
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
+        cleanup();
         log.error('stopRecording timeout - no response received');
         reject(new Error('stopRecording timed out'));
       }, 10000); // Increased timeout to 10 seconds
 
       const handler = (msg: HelperOutgoingMessage) => {
         if (msg.type === 'recordingStopped') {
-          clearTimeout(timeout);
-          this.removeListener('message', handler);
+          this.recordingActive = false;
+          cleanup();
           resolve(msg.filePath);
-        } else if (msg.type === 'error') {
-          clearTimeout(timeout);
-          this.removeListener('message', handler);
+        } else if (msg.type === 'error' && /stop recording|no recording in progress/i.test(msg.message)) {
+          if (/no recording in progress/i.test(msg.message)) {
+            this.recordingActive = false;
+          }
+          cleanup();
           reject(new Error(msg.message));
         }
       };
 
-      this.once('message', handler);
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', handler);
+      };
+
+      this.on('message', handler);
       this.send({ type: 'stopRecording' });
     });
   }
@@ -360,7 +389,34 @@ export class NativeHelper extends EventEmitter {
    */
   async cancelRecording(): Promise<void> {
     await this.waitForReady();
-    this.send({ type: 'cancelRecording' });
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error('cancelRecording timed out'));
+      }, 5000);
+
+      const onMessage = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'recordingCancelled') {
+          this.recordingActive = false;
+          cleanup();
+          resolve();
+        } else if (msg.type === 'error' && /cancel recording/i.test(msg.message)) {
+          if (/no recording in progress/i.test(msg.message)) {
+            this.recordingActive = false;
+          }
+          cleanup();
+          reject(new Error(msg.message));
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', onMessage);
+      };
+
+      this.on('message', onMessage);
+      this.send({ type: 'cancelRecording' });
+    });
   }
 
   /**
@@ -709,9 +765,22 @@ export class NativeHelper extends EventEmitter {
         break;
 
       case 'recordingStarted':
+        this.recordingActive = true;
+        this.emit('message', msg);
+        break;
+
       case 'recordingStopped':
+        this.recordingActive = false;
+        this.emit('message', msg);
+        break;
+
       case 'recordingSnapshot':
+        this.recordingActive = true;
+        this.emit('message', msg);
+        break;
+
       case 'recordingCancelled':
+        this.recordingActive = false;
         this.emit('message', msg);
         break;
 

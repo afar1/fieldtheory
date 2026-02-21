@@ -1,5 +1,5 @@
 // =============================================================================
-// HotMicSettings - Continuous voice input for Claude Code terminals.
+// HotMicSettings - Continuous voice input for Claude/Codex terminals.
 // =============================================================================
 
 import { useEffect, useState, useCallback } from 'react';
@@ -31,6 +31,7 @@ export default function HotMicSettings() {
   const [hidePhrases, setHidePhrases] = useState('');
   const [quitPhrases, setQuitPhrases] = useState('');
   const [runClaudeWords, setRunClaudeWords] = useState('');
+  const [runCodexWords, setRunCodexWords] = useState('');
   const [focusPhrases, setFocusPhrases] = useState('');
   const [cascadePhrases, setCascadePhrases] = useState('');
   const [restartServerWords, setRestartServerWords] = useState('');
@@ -63,7 +64,7 @@ export default function HotMicSettings() {
     });
 
     const load = async () => {
-      const [en, target, sounds, terminals, state, hookStatus, submit, pw, cw, sw, pvw, nww, cww, mp, hp, qp, rcw, fp, cp, rsw, rsc, wc] = await Promise.all([
+      const [en, target, sounds, terminals, state, hookStatus, submit, pw, cw, sw, pvw, nww, cww, mp, hp, qp, rcw, rcdw, fp, cp, rsw, rsc, wc] = await Promise.all([
         window.hotMicAPI!.getEnabled(),
         window.hotMicAPI!.getTargetApp(),
         window.hotMicAPI!.getSoundsEnabled(),
@@ -81,6 +82,7 @@ export default function HotMicSettings() {
         window.hotMicAPI!.getHidePhrases(),
         window.hotMicAPI!.getQuitPhrases(),
         window.hotMicAPI!.getRunClaudeWords(),
+        window.hotMicAPI!.getRunCodexWords(),
         window.hotMicAPI!.getFocusPhrases(),
         window.hotMicAPI!.getCascadePhrases(),
         window.hotMicAPI!.getRestartServerWords(),
@@ -104,6 +106,7 @@ export default function HotMicSettings() {
       setHidePhrases(hp);
       setQuitPhrases(qp);
       setRunClaudeWords(rcw);
+      setRunCodexWords(rcdw);
       setFocusPhrases(fp);
       setCascadePhrases(cp);
       setRestartServerWords(rsw);
@@ -220,6 +223,11 @@ export default function HotMicSettings() {
     await window.hotMicAPI.setRunClaudeWords(runClaudeWords.trim());
   }, [runClaudeWords]);
 
+  const handleRunCodexWordsSave = useCallback(async () => {
+    if (!window.hotMicAPI || !runCodexWords.trim()) return;
+    await window.hotMicAPI.setRunCodexWords(runCodexWords.trim());
+  }, [runCodexWords]);
+
   const handleFocusPhrasesSave = useCallback(async () => {
     if (!window.hotMicAPI || !focusPhrases.trim()) return;
     await window.hotMicAPI.setFocusPhrases(focusPhrases.trim());
@@ -334,7 +342,7 @@ export default function HotMicSettings() {
         </p>
       ) : (
         <p style={styles.description}>
-          Hands-free voice input for multiple Claude Code terminals. When Claude finishes a turn,
+          Hands-free voice input for multiple Claude/Codex terminals. When Claude finishes a turn,
           the terminal is queued. Speak freely — your words buffer until you say the submit word
           to flush and send. Say "skip" to cycle or "dismiss" to remove from queue.
         </p>
@@ -617,6 +625,23 @@ export default function HotMicSettings() {
           style={{ ...styles.input, marginTop: '6px', width: '100%' }}
           onBlur={handleRunClaudeWordsSave}
           onKeyDown={(e) => e.key === 'Enter' && handleRunClaudeWordsSave()}
+        />
+      </div>
+
+
+      <div style={styles.divider} />
+
+      {/* Run Codex phrases */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Run Codex Phrases</span>
+        <input
+          type="text"
+          value={runCodexWords}
+          onChange={(e) => setRunCodexWords(e.target.value)}
+          placeholder="start codex, run codex"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleRunCodexWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleRunCodexWordsSave()}
         />
       </div>
 

@@ -142,3 +142,27 @@ export function truncateText(text: string, maxLength: number = 100): string {
   if (text.length <= maxLength) return text;
   return text.substring(0, maxLength) + '...';
 }
+
+/**
+ * Compact transcript text for small UI surfaces.
+ * Shows first N words and last N words with an ellipsis in the middle.
+ */
+export function summarizeTranscriptForIsland(
+  text: string,
+  leadingWords: number = 5,
+  trailingWords: number = leadingWords
+): string {
+  const normalized = text.trim().replace(/\s+/g, ' ');
+  if (!normalized) return '';
+
+  const words = normalized.split(' ').filter(Boolean);
+  const threshold = leadingWords + trailingWords;
+
+  if (words.length <= threshold) {
+    return normalized;
+  }
+
+  const firstWords = words.slice(0, leadingWords).join(' ');
+  const lastWords = words.slice(-trailingWords).join(' ');
+  return `${firstWords} ... ${lastWords}`;
+}

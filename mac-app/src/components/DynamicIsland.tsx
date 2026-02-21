@@ -5,6 +5,7 @@
 // =============================================================================
 
 import { useEffect, useState, useRef, useCallback } from 'react';
+import { summarizeTranscriptForIsland } from '../utils/textUtils';
 
 type IslandState = 'idle' | 'recording' | 'transcribing' | 'showing-transcript' | 'improving';
 
@@ -24,6 +25,8 @@ interface CommandHighlight {
 // Detect which pill this instance should render.
 const params = new URLSearchParams(window.location.search);
 const side = params.get('side') || 'left';
+const TRANSCRIPT_LEADING_WORDS = 3;
+const TRANSCRIPT_TRAILING_WORDS = 7;
 
 // How long ago something happened, in casual human language.
 function timeAgo(timestamp: number): string {
@@ -106,8 +109,8 @@ function RightPill() {
         {muted ? (
           /* Muted: gray circle with diagonal slash (⊘ / prohibition sign) */
           <svg className="di-right-dot" width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <circle cx="7" cy="7" r="5.5" stroke="#6b7280" strokeWidth="1.5" fill="none" />
-            <line x1="3.5" y1="10.5" x2="10.5" y2="3.5" stroke="#6b7280" strokeWidth="1.5" strokeLinecap="round" />
+            <circle cx="7" cy="7" r="5.5" stroke="rgba(255,255,255,0.7)" strokeWidth="1.5" fill="none" />
+            <line x1="3.5" y1="10.5" x2="10.5" y2="3.5" stroke="rgba(255,255,255,0.7)" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
         ) : (
           /* Active/inactive dot */
@@ -116,7 +119,6 @@ function RightPill() {
             opacity: (active || warnBlink) ? (slideOut ? 0 : 1) : 0,
             backgroundColor: dotColor,
             boxShadow: dotShadow,
-            animation: active && !warnBlink ? 'hotmicPulse 2s ease-in-out infinite' : 'none',
             transition: 'opacity 0.3s ease',
           }} />
         )}
@@ -155,6 +157,125 @@ const rightStyles: Record<string, React.CSSProperties> = {
 };
 
 // =============================================================================
+// Center filler — paints the notch gap black on non-notched primary displays
+// =============================================================================
+
+function GapFill() {
+  return <div style={gapFillStyles.fill} />;
+}
+
+const gapFillStyles: Record<string, React.CSSProperties> = {
+  fill: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#000000',
+  },
+};
+
+// =============================================================================
+// Drawer pill — live transcript text below the notch
+// =============================================================================
+
+function DrawerPill() {
+  const [text, setText] = useState('');
+  const [speaking, setSpeaking] = useState(false);
+
+  const compactText = summarizeTranscriptForIsland(
+    text,
+    TRANSCRIPT_LEADING_WORDS,
+    TRANSCRIPT_TRAILING_WORDS
+  );
+  const tokens = compactText.trim().split(/\s+/).filter(Boolean);
+  const ellipsisIndex = tokens.indexOf('...');
+
+  let leadingText = '';
+  let trailingText = '';
+  if (tokens.length > 0) {
+    if (ellipsisIndex >= 0) {
+      leadingText = tokens.slice(0, ellipsisIndex + 1).join(' ');
+      trailingText = tokens.slice(ellipsisIndex + 1).join(' ');
+    } else if (tokens.length > TRANSCRIPT_TRAILING_WORDS) {
+      leadingText = tokens.slice(0, -TRANSCRIPT_TRAILING_WORDS).join(' ');
+      trailingText = tokens.slice(-TRANSCRIPT_TRAILING_WORDS).join(' ');
+    } else {
+      trailingText = compactText;
+    }
+  }
+
+  useEffect(() => {
+    const api = (window as any).dynamicIslandAPI;
+    api?.onDrawerTranscript?.((t: string) => {
+      setText(t);
+    });
+    api?.onDrawerSpeaking?.((isSpeaking: boolean) => {
+      setSpeaking(isSpeaking);
+    });
+    return () => {
+      api?.removeAllListeners('dynamic-island-drawer-transcript');
+      api?.removeAllListeners('dynamic-island-drawer-speaking');
+    };
+  }, []);
+
+  return (
+    <div style={drawerStyles.container}>
+      <div style={drawerStyles.topZone} />
+      <div style={drawerStyles.textZone}>
+        <span style={drawerStyles.text}>
+          {leadingText && (
+            <span>
+              {leadingText}
+              {trailingText ? ' ' : ''}
+            </span>
+          )}
+          {trailingText && (
+            <span className={speaking ? 'di-drawer-tail-speaking' : undefined}>
+              {trailingText}
+            </span>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+const drawerStyles: Record<string, React.CSSProperties> = {
+  container: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#000000',
+    clipPath: 'inset(0 round 0 0 12px 12px)',
+    display: 'flex',
+    flexDirection: 'column',
+    boxSizing: 'border-box',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
+  },
+  topZone: {
+    height: '38px',
+    flexShrink: 0,
+  },
+  textZone: {
+    height: '44px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '6px 16px',
+    boxSizing: 'border-box',
+  },
+  text: {
+    fontSize: '13.5px',
+    fontWeight: 400,
+    color: 'rgba(255, 255, 255, 0.75)',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    display: 'block',
+    width: '100%',
+    textAlign: 'center',
+    lineHeight: '18px',
+  },
+};
+
+// =============================================================================
 // Left pill — hamburger + expanded transcript bar (existing behavior)
 // =============================================================================
 
@@ -187,7 +308,12 @@ function LeftPill() {
     });
 
     api.onTranscriptUpdate((data: { text: string; isFinal: boolean }) => {
-      setTranscript(data.text.toLowerCase());
+      const summarized = summarizeTranscriptForIsland(
+        data.text.toLowerCase(),
+        TRANSCRIPT_LEADING_WORDS,
+        TRANSCRIPT_TRAILING_WORDS
+      );
+      setTranscript(summarized);
       setIsFinal(data.isFinal);
     });
 
@@ -264,6 +390,10 @@ function LeftPill() {
     setCopiedId(id);
     if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
     copiedTimerRef.current = setTimeout(() => setCopiedId(null), 1500);
+  }, []);
+
+  const handleOpenFieldTheory = useCallback(() => {
+    (window as any).dynamicIslandAPI?.openFieldTheory?.();
   }, []);
 
   const renderTranscript = () => {
@@ -389,46 +519,56 @@ function LeftPill() {
 
       {historyVisible && (
         <div style={styles.historyPanel} ref={historyScrollRef}>
-          {history.length === 0 ? (
-            <div style={styles.emptyHistory}>
-              <span style={styles.emptyText}>no transcripts yet</span>
-              <span style={styles.emptySubtext}>recordings will appear here</span>
-            </div>
-          ) : (
-            history.map((item) => (
-              <div key={item.id} className="di-history-item" style={styles.historyItem}>
-                <div style={styles.historyTextArea} onClick={() => handleCopyPaste(item.text, item.id)}>
-                  <span style={styles.historyText}>
-                    {item.text.toLowerCase().slice(0, 140)}
-                    {item.text.length > 140 ? '...' : ''}
-                  </span>
-                  <span style={styles.historyMeta}>
-                    {item.wordCount} words · {timeAgo(item.createdAt)}
-                  </span>
-                </div>
-                <button
-                  className="di-copy-btn"
-                  style={{
-                    ...styles.copyButton,
-                    backgroundColor: copiedId === item.id ? 'rgba(52, 199, 89, 0.3)' : 'rgba(255, 255, 255, 0.08)',
-                  }}
-                  onClick={(e) => { e.stopPropagation(); handleCopy(item.text, item.id); }}
-                  title="copy to clipboard"
-                >
-                  {copiedId === item.id ? (
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                      <path d="M2 6L5 9L10 3" stroke="#34c759" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  ) : (
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                      <rect x="4" y="1" width="7" height="7" rx="1" stroke="rgba(255,255,255,0.5)" strokeWidth="1" />
-                      <rect x="1" y="4" width="7" height="7" rx="1" stroke="rgba(255,255,255,0.5)" strokeWidth="1" fill="rgba(0,0,0,0.3)" />
-                    </svg>
-                  )}
-                </button>
+          <div style={styles.historyList}>
+            {history.length === 0 ? (
+              <div style={styles.emptyHistory}>
+                <span style={styles.emptyText}>no transcripts yet</span>
+                <span style={styles.emptySubtext}>recordings will appear here</span>
               </div>
-            ))
-          )}
+            ) : (
+              history.map((item) => (
+                <div key={item.id} className="di-history-item" style={styles.historyItem}>
+                  <div style={styles.historyTextArea} onClick={() => handleCopyPaste(item.text, item.id)}>
+                    <span style={styles.historyText}>
+                      {item.text.toLowerCase().slice(0, 140)}
+                      {item.text.length > 140 ? '...' : ''}
+                    </span>
+                    <span style={styles.historyMeta}>
+                      {item.wordCount} words · {timeAgo(item.createdAt)}
+                    </span>
+                  </div>
+                  <button
+                    className="di-copy-btn"
+                    style={{
+                      ...styles.copyButton,
+                      backgroundColor: copiedId === item.id ? 'rgba(52, 199, 89, 0.3)' : 'rgba(255, 255, 255, 0.08)',
+                    }}
+                    onClick={(e) => { e.stopPropagation(); handleCopy(item.text, item.id); }}
+                    title="copy to clipboard"
+                  >
+                    {copiedId === item.id ? (
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                        <path d="M2 6L5 9L10 3" stroke="#34c759" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    ) : (
+                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                        <rect x="4" y="1" width="7" height="7" rx="1" stroke="rgba(255,255,255,0.5)" strokeWidth="1" />
+                        <rect x="1" y="4" width="7" height="7" rx="1" stroke="rgba(255,255,255,0.5)" strokeWidth="1" fill="rgba(0,0,0,0.3)" />
+                      </svg>
+                    )}
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+          <button
+            className="di-open-ft-btn"
+            style={styles.openFieldTheoryButton}
+            onClick={handleOpenFieldTheory}
+            title="open field theory window"
+          >
+            open field theory
+          </button>
         </div>
       )}
     </div>
@@ -505,8 +645,8 @@ const styles: Record<string, React.CSSProperties> = {
   textContainer: {
     flex: 1,
     minWidth: 0,
-    maxHeight: '36px',
-    overflowY: 'auto',
+    maxHeight: '20px',
+    overflowY: 'hidden',
     overflowX: 'hidden',
     scrollbarWidth: 'none',
   },
@@ -520,16 +660,15 @@ const styles: Record<string, React.CSSProperties> = {
   },
 
   transcriptText: {
-    fontSize: '12px',
+    fontSize: '14px',
     fontWeight: 400,
     color: 'rgba(255, 255, 255, 0.88)',
-    lineHeight: '17px',
+    lineHeight: '18px',
     letterSpacing: '0.01em',
-    display: '-webkit-box',
-    WebkitLineClamp: 2,
-    WebkitBoxOrient: 'vertical' as any,
+    display: 'block',
     overflow: 'hidden',
-    wordBreak: 'break-word',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
 
   commandHighlight: {
@@ -544,17 +683,24 @@ const styles: Record<string, React.CSSProperties> = {
   historyPanel: {
     width: 'calc(100% - 8px)',
     maxHeight: '320px',
-    overflowY: 'auto',
-    overflowX: 'hidden',
     marginTop: '4px',
     padding: '6px',
     backgroundColor: '#000000',
     WebkitMaskImage: 'radial-gradient(white, white)',
     borderRadius: '14px',
     boxShadow: 'none',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+    animation: 'slideDown 0.18s ease-out',
+  },
+
+  historyList: {
+    overflowY: 'auto',
+    overflowX: 'hidden',
     scrollbarWidth: 'thin' as any,
     scrollbarColor: 'rgba(255,255,255,0.15) transparent',
-    animation: 'slideDown 0.18s ease-out',
+    maxHeight: '272px',
   },
 
   historyItem: {
@@ -629,6 +775,21 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 400,
     color: 'rgba(255, 255, 255, 0.22)',
   },
+
+  openFieldTheoryButton: {
+    width: '100%',
+    height: '30px',
+    border: 'none',
+    borderRadius: '9px',
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    color: 'rgba(255, 255, 255, 0.86)',
+    fontSize: '11px',
+    fontWeight: 500,
+    letterSpacing: '0.01em',
+    cursor: 'pointer',
+    transition: 'background-color 0.12s ease',
+    textTransform: 'lowercase',
+  },
 };
 
 // Keyframes and interaction styles.
@@ -638,10 +799,6 @@ styleSheet.textContent = `
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
   }
-  @keyframes hotmicPulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
-  }
   @keyframes slideDown {
     from { opacity: 0; transform: translateY(-8px); }
     to { opacity: 1; transform: translateY(0); }
@@ -649,6 +806,10 @@ styleSheet.textContent = `
   @keyframes fadeInIsland {
     from { opacity: 0; transform: scale(0.95); }
     to { opacity: 1; transform: scale(1); }
+  }
+  @keyframes drawerTailSoftPulse {
+    0%, 100% { opacity: 0.96; }
+    50% { opacity: 0.78; }
   }
   div::-webkit-scrollbar {
     display: none;
@@ -662,11 +823,18 @@ styleSheet.textContent = `
   .di-copy-btn:hover {
     background-color: rgba(255, 255, 255, 0.15) !important;
   }
+  .di-open-ft-btn:hover {
+    background-color: rgba(255, 255, 255, 0.16) !important;
+  }
   .di-hamburger:hover {
     background-color: rgba(255, 255, 255, 0.12) !important;
   }
   .di-right-pill:hover .di-right-dot {
     filter: brightness(1.2);
+  }
+  .di-drawer-tail-speaking {
+    color: rgba(255, 255, 255, 0.9);
+    animation: drawerTailSoftPulse 1.5s ease-in-out infinite;
   }
 `;
 document.head.appendChild(styleSheet);
@@ -676,9 +844,9 @@ document.head.appendChild(styleSheet);
 // =============================================================================
 
 export default function DynamicIsland() {
-  if (side === 'right') {
-    return <RightPill />;
-  }
+  if (side === 'drawer') return <DrawerPill />;
+  if (side === 'right') return <RightPill />;
+  if (side === 'filler') return <GapFill />;
   return <LeftPill />;
 }
 
@@ -696,6 +864,9 @@ declare global {
       onHotMicSlideOut?: (cb: () => void) => void;
       onHotMicMute?: (cb: (muted: boolean) => void) => void;
       toggleMute?: () => void;
+      onDrawerTranscript?: (cb: (text: string) => void) => void;
+      onDrawerSpeaking?: (cb: (speaking: boolean) => void) => void;
+      openFieldTheory?: () => void;
       requestHistory: () => void;
       copyAndPaste: (text: string) => void;
       copyToClipboard: (text: string) => void;
