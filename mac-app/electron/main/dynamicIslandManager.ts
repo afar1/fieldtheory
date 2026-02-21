@@ -7,8 +7,7 @@ const log = createLogger('DynamicIsland');
 
 // =============================================================================
 // DynamicIslandManager - Fixed-position overlay near the macOS notch.
-// Shows streaming transcript text during recording, and a hamburger menu
-// for accessing transcript history with copy/paste-to-field behavior.
+// Two symmetric pills: left (hamburger + expanded states) and right (hot-mic dot).
 // =============================================================================
 
 export type DynamicIslandState = 'idle' | 'recording' | 'transcribing' | 'showing-transcript' | 'improving';
@@ -22,41 +21,42 @@ interface TranscriptHistoryItem {
 
 export class DynamicIslandManager extends EventEmitter {
   private window: BrowserWindow | null = null;
+  private rightWindow: BrowserWindow | null = null;
   private state: DynamicIslandState = 'idle';
   private rendererReady: boolean = false;
+  private rightRendererReady: boolean = false;
   private pendingShow: boolean = false;
   private historyVisible: boolean = false;
 
-  // The island sits centered horizontally, just below the macOS notch area.
-  // Wider than the old recording overlay to show transcript text.
   private readonly ISLAND_WIDTH = 420;
   private readonly ISLAND_WIDTH_IDLE = 48;
   private readonly ISLAND_HEIGHT = 52;
-  private readonly ISLAND_HEIGHT_IDLE = 38; // match macOS notch/menu bar height
+  private readonly ISLAND_HEIGHT_IDLE = 38;
   private readonly ISLAND_HEIGHT_WITH_TRANSCRIPT = 88;
   private readonly ISLAND_HEIGHT_WITH_HISTORY = 380;
-  private readonly NOTCH_Y_OFFSET = 6;
-  private readonly NOTCH_WIDTH = 200; // approximate macOS notch width + margin
+  private readonly NOTCH_WIDTH = 200;
+  private readonly RIGHT_PILL_WIDTH = 48;
+  private readonly RIGHT_PILL_HEIGHT = 38;
 
-  // Clipboard manager reference for querying transcript history.
   private clipboardManager: any = null;
 
-  // Auto-dismiss timer for the transcript display after recording.
   private dismissTimer: NodeJS.Timeout | null = null;
   private readonly TRANSCRIPT_DISPLAY_MS = 4000;
+
+  // Hot-mic state tracked for the right pill.
+  private hotMicActive: boolean = false;
+  private hotMicWordCount: number = 0;
+  private hotMicLastWord: string = '';
 
   constructor() {
     super();
 
-    // Listen for history requests from the renderer.
     ipcMain.on('dynamic-island-request-history', () => {
       this.sendHistory();
     });
 
-    // Copy text and paste into the last focused input field.
     ipcMain.on('dynamic-island-copy-paste', async (_event, text: string) => {
       clipboard.writeText(text);
-      // Sync clipboard hash so the clipboard manager doesn't re-capture this.
       this.clipboardManager?.syncClipboardHash?.();
       try {
         const { exec } = require('child_process');
@@ -68,16 +68,26 @@ export class DynamicIslandManager extends EventEmitter {
       }
     });
 
-    // Copy text to clipboard without pasting.
     ipcMain.on('dynamic-island-copy', (_event, text: string) => {
       clipboard.writeText(text);
       this.clipboardManager?.syncClipboardHash?.();
     });
 
-    // History panel visibility toggle from renderer.
+    // Mute toggle from right pill.
+    ipcMain.on('dynamic-island-toggle-mute', () => {
+      this.emit('toggleMute');
+    });
+
     ipcMain.on('dynamic-island-history-visible', (_event, visible: boolean) => {
       this.historyVisible = visible;
+      // Hide right pill before expanding left pill to avoid overlap.
+      if (visible) {
+        this.hideRightPill();
+      }
       this.updateWindowSize();
+      if (!visible && this.state === 'idle') {
+        this.showRightPill();
+      }
       if (visible && this.window && !this.window.isDestroyed()) {
         this.window.webContents.send('dynamic-island-show-history');
       }
@@ -87,6 +97,7 @@ export class DynamicIslandManager extends EventEmitter {
   setClipboardManager(manager: any): void {
     this.clipboardManager = manager;
     this.show();
+    this.createRightWindow();
   }
 
   // -------------------------------------------------------------------------
@@ -94,10 +105,8 @@ export class DynamicIslandManager extends EventEmitter {
   // -------------------------------------------------------------------------
 
   setState(state: DynamicIslandState): void {
-    const previous = this.state;
     this.state = state;
 
-    // Clear any pending dismiss timer when state changes.
     if (this.dismissTimer) {
       clearTimeout(this.dismissTimer);
       this.dismissTimer = null;
@@ -107,10 +116,13 @@ export class DynamicIslandManager extends EventEmitter {
       this.historyVisible = false;
       this.sendStateToRenderer(state);
       this.updateWindowSize();
+      this.showRightPill();
       return;
     }
 
-    // Show the island for active states.
+    // Hide right pill during expanded states.
+    this.hideRightPill();
+
     this.show();
     this.sendStateToRenderer(state);
     this.updateWindowSize();
@@ -121,10 +133,50 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   // -------------------------------------------------------------------------
+  // Hot-mic state (forwarded to right pill)
+  // -------------------------------------------------------------------------
+
+  updateHotMic(active: boolean, wordCount: number, lastWord: string): void {
+    this.hotMicActive = active;
+    this.hotMicWordCount = active ? wordCount : 0;
+    this.hotMicLastWord = active ? lastWord : '';
+    this.sendHotMicToRight();
+  }
+
+  blinkThenHideHotMic(): void {
+    this.hotMicActive = false;
+    this.hotMicWordCount = 0;
+    this.hotMicLastWord = '';
+    if (this.rightWindow && !this.rightWindow.isDestroyed()) {
+      this.rightWindow.webContents.send('dynamic-island-hotmic-warn-discard');
+      setTimeout(() => {
+        if (this.rightWindow && !this.rightWindow.isDestroyed()) {
+          this.rightWindow.webContents.send('dynamic-island-hotmic-slide-out');
+        }
+      }, 600);
+    }
+  }
+
+  sendMuteState(muted: boolean): void {
+    if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
+      this.rightWindow.webContents.send('dynamic-island-hotmic-mute', muted);
+    }
+  }
+
+  private sendHotMicToRight(): void {
+    if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
+      this.rightWindow.webContents.send('dynamic-island-hotmic', {
+        active: this.hotMicActive,
+        wordCount: this.hotMicWordCount,
+        lastWord: this.hotMicLastWord,
+      });
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Transcript data
   // -------------------------------------------------------------------------
 
-  // Send transcript text to the island (progressive or final).
   sendTranscript(text: string, isFinal: boolean): void {
     if (this.state === 'idle') {
       this.setState('showing-transcript');
@@ -134,9 +186,7 @@ export class DynamicIslandManager extends EventEmitter {
     }
     this.updateWindowSize();
 
-    // When the final transcript arrives, refresh history so new item appears immediately.
     if (isFinal) {
-      // Small delay so the clipboard manager has time to store the new transcript.
       setTimeout(() => this.sendHistory(), 300);
 
       this.dismissTimer = setTimeout(() => {
@@ -148,7 +198,6 @@ export class DynamicIslandManager extends EventEmitter {
     }
   }
 
-  // Notify the island that a command phrase was detected.
   sendCommandDetected(phrase: string, startIndex: number, endIndex: number): void {
     if (this.window && !this.window.isDestroyed()) {
       this.window.webContents.send('dynamic-island-command', { phrase, startIndex, endIndex });
@@ -162,7 +211,6 @@ export class DynamicIslandManager extends EventEmitter {
   private sendHistory(): void {
     if (!this.clipboardManager || !this.window || this.window.isDestroyed()) return;
 
-    // Query recent transcripts from clipboard history.
     const items = this.clipboardManager.queryItems({
       type: 'transcript',
       limit: 7,
@@ -180,7 +228,7 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   // -------------------------------------------------------------------------
-  // Window management
+  // Window management — left pill
   // -------------------------------------------------------------------------
 
   private show(): void {
@@ -245,17 +293,9 @@ export class DynamicIslandManager extends EventEmitter {
     this.window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     this.window.setAlwaysOnTop(true, 'screen-saver', 2);
 
-    // Allow mouse events for the hamburger and history interactions.
     this.window.setIgnoreMouseEvents(false);
 
-    const startUrl = process.env.ELECTRON_START_URL;
-    if (startUrl) {
-      const baseUrl = startUrl.endsWith('/') ? startUrl : `${startUrl}/`;
-      this.window.loadURL(`${baseUrl}dynamic-island.html`);
-    } else {
-      const htmlPath = path.join(app.getAppPath(), 'dist', 'dynamic-island.html');
-      this.window.loadFile(htmlPath);
-    }
+    this.loadWindowUrl(this.window, 'dynamic-island.html?side=left');
 
     this.window.on('closed', () => {
       this.window = null;
@@ -269,6 +309,9 @@ export class DynamicIslandManager extends EventEmitter {
           this.window.webContents.send('dynamic-island-hide-history');
         }
         this.updateWindowSize();
+        if (this.state === 'idle') {
+          this.showRightPill();
+        }
       }
     });
 
@@ -285,6 +328,92 @@ export class DynamicIslandManager extends EventEmitter {
         }
       }
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Window management — right pill
+  // -------------------------------------------------------------------------
+
+  private createRightWindow(): void {
+    if (this.rightWindow && !this.rightWindow.isDestroyed()) return;
+
+    this.rightRendererReady = false;
+    const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
+    const x = Math.floor((screenWidth + this.NOTCH_WIDTH) / 2);
+    const y = 0;
+
+    this.rightWindow = new BrowserWindow({
+      width: this.RIGHT_PILL_WIDTH,
+      height: this.RIGHT_PILL_HEIGHT,
+      x,
+      y,
+      frame: false,
+      transparent: true,
+      backgroundColor: '#00000000',
+      hasShadow: false,
+      roundedCorners: false,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      movable: false,
+      focusable: false,
+      show: false,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, '../dynamic-island-preload.js'),
+      },
+    });
+
+    this.rightWindow.setOpacity(0);
+    this.rightWindow.setBackgroundColor('#00000000');
+    this.rightWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    this.rightWindow.setAlwaysOnTop(true, 'screen-saver', 2);
+
+    // Right pill is clickable for mute toggle.
+    this.rightWindow.setIgnoreMouseEvents(false);
+
+    this.loadWindowUrl(this.rightWindow, 'dynamic-island.html?side=right');
+
+    this.rightWindow.on('closed', () => {
+      this.rightWindow = null;
+      this.rightRendererReady = false;
+    });
+
+    this.rightWindow.webContents.once('did-finish-load', () => {
+      this.rightRendererReady = true;
+      if (this.rightWindow && !this.rightWindow.isDestroyed()) {
+        this.rightWindow.setOpacity(1);
+        this.rightWindow.showInactive();
+        this.sendHotMicToRight();
+      }
+    });
+  }
+
+  private showRightPill(): void {
+    // No-op: right pill stays visible at all times so the black background
+    // never disappears. The expanded left pill paints over it when active.
+  }
+
+  private hideRightPill(): void {
+    // No-op: right pill stays visible at all times so the black background
+    // never disappears. The expanded left pill paints over it when active.
+  }
+
+  // -------------------------------------------------------------------------
+  // Shared helpers
+  // -------------------------------------------------------------------------
+
+  private loadWindowUrl(win: BrowserWindow, htmlFile: string): void {
+    const startUrl = process.env.ELECTRON_START_URL;
+    if (startUrl) {
+      const baseUrl = startUrl.endsWith('/') ? startUrl : `${startUrl}/`;
+      win.loadURL(`${baseUrl}${htmlFile}`);
+    } else {
+      const [fileName, query] = htmlFile.split('?');
+      const filePath = path.join(app.getAppPath(), 'dist', fileName);
+      win.loadFile(filePath, query ? { search: `?${query}` } : undefined);
+    }
   }
 
   private sendStateToRenderer(state: DynamicIslandState): void {
@@ -307,7 +436,6 @@ export class DynamicIslandManager extends EventEmitter {
     }
 
     const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
-    // Idle: flush left of notch. Active: centered.
     const x = isIdle
       ? Math.floor((screenWidth - this.NOTCH_WIDTH) / 2 - targetWidth)
       : Math.floor((screenWidth - targetWidth) / 2);
@@ -338,9 +466,14 @@ export class DynamicIslandManager extends EventEmitter {
       this.window.close();
     }
     this.window = null;
+    if (this.rightWindow && !this.rightWindow.isDestroyed()) {
+      this.rightWindow.close();
+    }
+    this.rightWindow = null;
     ipcMain.removeAllListeners('dynamic-island-request-history');
     ipcMain.removeAllListeners('dynamic-island-copy-paste');
     ipcMain.removeAllListeners('dynamic-island-copy');
     ipcMain.removeAllListeners('dynamic-island-history-visible');
+    ipcMain.removeAllListeners('dynamic-island-toggle-mute');
   }
 }

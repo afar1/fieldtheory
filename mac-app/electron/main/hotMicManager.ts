@@ -12,6 +12,7 @@ import { SoundManager } from './soundManager';
 import { CursorStatusManager } from './cursorStatusManager';
 import { CommandsManager } from './commandsManager';
 import { AudioManager } from './audioManager';
+import { DynamicIslandManager } from './dynamicIslandManager';
 import { getHotkeyManager } from './hotkeyManager';
 import { createLogger } from './logger';
 
@@ -189,6 +190,7 @@ export class HotMicManager extends EventEmitter {
   private cursorStatusManager: CursorStatusManager | null = null;
   private commandsManager: CommandsManager | null = null;
   private audioManager: AudioManager | null = null;
+  private dynamicIslandManager: DynamicIslandManager | null = null;
 
   private state: HotMicState = 'idle';
   private targetBundleId: string | null = null;
@@ -405,6 +407,10 @@ export class HotMicManager extends EventEmitter {
     this.commandsManager = manager;
   }
 
+  setDynamicIslandManager(manager: DynamicIslandManager): void {
+    this.dynamicIslandManager = manager;
+  }
+
   setAudioManager(manager: AudioManager): void {
     this.audioManager = manager;
     log.info('Hot Mic: AudioManager wired for priority mic enforcement');
@@ -525,6 +531,49 @@ export class HotMicManager extends EventEmitter {
   }
 
   // ---------------------------------------------------------------------------
+  // Mute/unmute — pause mic without deactivating
+  // ---------------------------------------------------------------------------
+
+  private muted: boolean = false;
+
+  get isMuted(): boolean {
+    return this.muted;
+  }
+
+  async toggleMute(): Promise<boolean> {
+    if (!this.isActive) return false;
+
+    if (this.muted) {
+      // Unmute — resume recording.
+      this.muted = false;
+      log.info('Hot Mic: unmuted');
+      try {
+        if (this.audioManager) {
+          await this.audioManager.ensurePriorityEnforced();
+        }
+        this.nativeHelper.setHarvestMode(this.transcriptBuffer.length === 0 ? 'command' : 'dictation');
+        await this.nativeHelper.startRecording();
+        this.startAudioMonitoring();
+      } catch (error) {
+        log.error('Hot Mic: failed to unmute:', error);
+      }
+      this.dynamicIslandManager?.sendMuteState(false);
+      this.dynamicIslandManager?.updateHotMic(true, this.getBufferWordCount(), this.getLastBufferWord());
+      return false;
+    } else {
+      // Mute — stop recording but stay in listening state.
+      this.muted = true;
+      log.info('Hot Mic: muted');
+      this.stopAudioMonitoring();
+      this.stopBufferDiscardTimer();
+      await this.nativeHelper.cancelRecording().catch(() => {});
+      this.dynamicIslandManager?.updateHotMic(false, 0, '');
+      this.dynamicIslandManager?.sendMuteState(true);
+      return true;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Hook trigger enqueue — starts listening if not already active
   // ---------------------------------------------------------------------------
 
@@ -613,6 +662,7 @@ export class HotMicManager extends EventEmitter {
 
   deactivate(): void {
     log.info('Hot Mic deactivated');
+    this.muted = false;
     this.appsHidden = false;
     this.cleanup();
     this.setState('idle');
@@ -709,7 +759,7 @@ export class HotMicManager extends EventEmitter {
         // lifespan — hallucination chunks won't cut it short.
         if (!this.hasSpeechSinceLastHarvest && this.state === 'listening') {
           log.debug(`Hot Mic: [dot] preemptive show (speech detected, level=${level.toFixed(3)})`);
-          this.cursorStatusManager?.showHotMic();
+          this.dynamicIslandManager?.updateHotMic(true, 0, '');
         }
         this.hasSpeechSinceLastHarvest = true;
         this.lastSpeechDetectedMs = Date.now();
@@ -773,7 +823,7 @@ export class HotMicManager extends EventEmitter {
           }
           // Always blink-then-hide — even if buffer was empty, the user saw
           // the island appear so they deserve the visual warning before it goes.
-          this.cursorStatusManager?.blinkThenHideHotMic();
+          this.dynamicIslandManager?.blinkThenHideHotMic();
         }
       }, timeout);
     }
@@ -1668,18 +1718,13 @@ export class HotMicManager extends EventEmitter {
   }
 
   private updateOrangeDot(): void {
-    if (!this.cursorStatusManager) return;
+    // Show the dot whenever hot mic is active and not muted, regardless of buffer state.
+    const isActive = (this.state === 'listening' || this.state === 'recording') && !this.muted;
 
-    if ((this.state === 'listening' && this.transcriptBuffer.length > 0) || this.state === 'recording') {
-      this.cursorStatusManager.showHotMic();
-      const showCount = this.preferences.getPreference('hotMicShowWordCount') === true;
-      this.cursorStatusManager.setHotMicWordCount(
-        showCount ? this.getBufferWordCount() : 0,
-        this.getLastBufferWord()
-      );
+    if (isActive) {
+      this.dynamicIslandManager?.updateHotMic(true, this.getBufferWordCount(), this.getLastBufferWord());
     } else {
-      this.cursorStatusManager.setHotMicWordCount(0);
-      this.cursorStatusManager.hideHotMic();
+      this.dynamicIslandManager?.updateHotMic(false, 0, '');
     }
   }
 
