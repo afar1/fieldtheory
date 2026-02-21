@@ -187,6 +187,7 @@ export class HotMicManager extends EventEmitter {
   private preferences: PreferencesManager;
   private modelManager: ModelManager;
   private soundManager: SoundManager;
+  private clipboardManager: { storeText: (...args: any[]) => Promise<number> } | null = null;
   private cursorStatusManager: CursorStatusManager | null = null;
   private commandsManager: CommandsManager | null = null;
   private audioManager: AudioManager | null = null;
@@ -199,7 +200,22 @@ export class HotMicManager extends EventEmitter {
   // Audio level monitoring for orange dot UI (silence detection moved to Swift)
   private audioLevelListener: ((level: number, isSpeech: boolean) => void) | null = null;
   private chunkReadyListener: ((filePath: string) => void) | null = null;
+  private chunkProcessingInFlight: boolean = false;
+  private pendingChunkQueue: string[] = [];
+  private forcedSnapshotTimer: NodeJS.Timeout | null = null;
+  private forcedSnapshotInFlight: boolean = false;
+  private lastChunkReadyMs: number = 0;
   private hasSpeechSinceLastHarvest: boolean = false;
+  private resumeInFlight: boolean = false;
+  private yieldedToTranscriber: boolean = false;
+  private drawerSpeaking: boolean = false;
+  private drawerSpeakingTimeout: NodeJS.Timeout | null = null;
+  private static readonly DRAWER_PREVIEW_MIN_WORDS = 3;
+  private static readonly DRAWER_SPEAKING_HOLD_MS = 320;
+  private static readonly FORCE_SNAPSHOT_CHECK_MS = 120;
+  private static readonly FORCE_SNAPSHOT_SPEECH_GRACE_MS = 220;
+  private static readonly FORCE_SNAPSHOT_COMMAND_MS = 700;
+  private static readonly FORCE_SNAPSHOT_DICTATION_MS = 900;
 
   // Warmup promise — awaited before first transcription to avoid race with Qwen startup
   private warmupPromise: Promise<void> | null = null;
@@ -210,6 +226,7 @@ export class HotMicManager extends EventEmitter {
   private lastTimerResetMs: number = 0;
   private lastSpeechDetectedMs: number = 0;
   private readonly DEFAULT_BUFFER_DISCARD_MS = 4_000;
+  private readonly MIN_HISTORY_WORDS = 6;
 
   // Escape key — reserved for future double-tap implementation
 
@@ -403,6 +420,10 @@ export class HotMicManager extends EventEmitter {
     this.cursorStatusManager = manager;
   }
 
+  setClipboardManager(manager: { storeText: (...args: any[]) => Promise<number> }): void {
+    this.clipboardManager = manager;
+  }
+
   setCommandsManager(manager: CommandsManager): void {
     this.commandsManager = manager;
   }
@@ -487,10 +508,19 @@ export class HotMicManager extends EventEmitter {
 
     this.stopAudioMonitoring();
     this.stopBufferDiscardTimer();
-    await this.nativeHelper.cancelRecording().catch(() => {});
+    this.resumeInFlight = false;
+    this.yieldedToTranscriber = false;
 
-    // Give the native helper time to fully release the audio device
-    await new Promise(resolve => setTimeout(resolve, 200));
+    if (!this.nativeHelper.isRecordingActive()) {
+      log.info('Hot Mic: yield skipped (helper was not recording)');
+      return;
+    }
+
+    await this.nativeHelper.cancelRecording().then(() => {
+      this.yieldedToTranscriber = true;
+    }).catch((error) => {
+      log.warn('Hot Mic: cancel during yield failed:', error);
+    });
 
     // Don't change state to idle — keep as listening so we know to resume
     // The transcriber status getter will prevent us from restarting until it's done
@@ -501,33 +531,57 @@ export class HotMicManager extends EventEmitter {
    */
   async resumeAfterTranscriber(): Promise<void> {
     if (this.state !== 'listening') return;
+    if (this.muted) return;
+    if (this.resumeInFlight) return;
+    if (!this.yieldedToTranscriber) return;
 
     // Verify the transcriber is actually done
     if (this.transcriberStatusGetter && this.transcriberStatusGetter() !== 'idle') {
       return;
     }
 
+    this.resumeInFlight = true;
     log.info('Hot Mic: resuming after transcriber finished');
 
     // Retry with backoff — the audio device may not be immediately available
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        if (attempt > 0) {
-          await new Promise(resolve => setTimeout(resolve, 300 * attempt));
-          log.info('Hot Mic: resume attempt %d', attempt + 1);
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (this.state !== 'listening' || this.muted) return;
+        try {
+          if (attempt > 0) {
+            await new Promise(resolve => setTimeout(resolve, 300 * attempt));
+            log.info('Hot Mic: resume attempt %d', attempt + 1);
+          }
+          if (this.nativeHelper.isRecordingActive()) {
+            log.info('Hot Mic: resume skipped (helper already recording)');
+            this.yieldedToTranscriber = false;
+            this.startAudioMonitoring();
+            return;
+          }
+          if (this.audioManager) {
+            await this.audioManager.ensurePriorityEnforced();
+          }
+          this.nativeHelper.setHarvestMode('command');
+          await this.nativeHelper.startRecording();
+          this.yieldedToTranscriber = false;
+          this.startAudioMonitoring();
+          return;
+        } catch (error) {
+          log.error('Hot Mic: failed to resume recording (attempt %d):', attempt + 1, error);
+          if (this.nativeHelper.isRecordingActive()) {
+            log.info('Hot Mic: resume recovered (helper already recording)');
+            this.yieldedToTranscriber = false;
+            this.startAudioMonitoring();
+            return;
+          }
+          // Clear stale helper state if the previous stream never fully released.
+          await this.nativeHelper.cancelRecording().catch(() => {});
         }
-        if (this.audioManager) {
-          await this.audioManager.ensurePriorityEnforced();
-        }
-        this.nativeHelper.setHarvestMode('command');
-        await this.nativeHelper.startRecording();
-        this.startAudioMonitoring();
-        return;
-      } catch (error) {
-        log.error('Hot Mic: failed to resume recording (attempt %d):', attempt + 1, error);
       }
+      log.error('Hot Mic: giving up on resume after 3 attempts');
+    } finally {
+      this.resumeInFlight = false;
     }
-    log.error('Hot Mic: giving up on resume after 3 attempts');
   }
 
   // ---------------------------------------------------------------------------
@@ -568,6 +622,8 @@ export class HotMicManager extends EventEmitter {
       this.stopBufferDiscardTimer();
       await this.nativeHelper.cancelRecording().catch(() => {});
       this.dynamicIslandManager?.updateHotMic(false, 0, '');
+      this.dynamicIslandManager?.updateDrawerTranscript('');
+      this.clearDrawerSpeakingSignal();
       this.dynamicIslandManager?.sendMuteState(true);
       return true;
     }
@@ -597,6 +653,9 @@ export class HotMicManager extends EventEmitter {
    */
   private async startListening(): Promise<void> {
     this.transcriptBuffer = [];
+    this.resumeInFlight = false;
+    this.yieldedToTranscriber = false;
+    this.clearDrawerSpeakingSignal();
     this.setState('listening');
 
     // Warm up transcription engine in parallel with recording start.
@@ -747,6 +806,7 @@ export class HotMicManager extends EventEmitter {
 
   private startAudioMonitoring(): void {
     this.stopAudioMonitoring();
+    this.lastChunkReadyMs = Date.now();
 
     // Audio level listener — UI (orange dot) and buffer discard timer.
     // Timer resets on continued speech (throttled) and on transcription chunks.
@@ -754,6 +814,7 @@ export class HotMicManager extends EventEmitter {
       if (this.state !== 'recording' && this.state !== 'listening') return;
 
       if (isSpeech) {
+        this.bumpDrawerSpeakingSignal();
         // Show orange dot immediately on speech detection (don't wait for transcription).
         // Also start a one-shot discard timer so the dot has a guaranteed minimum
         // lifespan — hallucination chunks won't cut it short.
@@ -776,11 +837,13 @@ export class HotMicManager extends EventEmitter {
     // Chunk ready listener — Swift detected silence and auto-snapshotted
     this.chunkReadyListener = (filePath: string) => {
       if (this.state !== 'recording' && this.state !== 'listening') return;
-      this.onChunkReady(filePath);
+      this.lastChunkReadyMs = Date.now();
+      this.enqueueChunkForTranscription(filePath);
     };
 
     this.nativeHelper.on('audioLevel', this.audioLevelListener);
     this.nativeHelper.on('recordingChunkReady', this.chunkReadyListener);
+    this.startForcedSnapshotLoop();
   }
 
   private stopAudioMonitoring(): void {
@@ -791,6 +854,105 @@ export class HotMicManager extends EventEmitter {
     if (this.chunkReadyListener) {
       this.nativeHelper.removeListener('recordingChunkReady', this.chunkReadyListener);
       this.chunkReadyListener = null;
+    }
+    this.stopForcedSnapshotLoop();
+    this.forcedSnapshotInFlight = false;
+  }
+
+  private setDrawerSpeakingSignal(speaking: boolean): void {
+    if (this.drawerSpeaking === speaking) return;
+    this.drawerSpeaking = speaking;
+    this.dynamicIslandManager?.updateDrawerSpeaking(speaking);
+  }
+
+  private bumpDrawerSpeakingSignal(): void {
+    this.setDrawerSpeakingSignal(true);
+
+    if (this.drawerSpeakingTimeout) {
+      clearTimeout(this.drawerSpeakingTimeout);
+    }
+
+    this.drawerSpeakingTimeout = setTimeout(() => {
+      this.drawerSpeakingTimeout = null;
+      this.setDrawerSpeakingSignal(false);
+    }, HotMicManager.DRAWER_SPEAKING_HOLD_MS);
+  }
+
+  private clearDrawerSpeakingSignal(): void {
+    if (this.drawerSpeakingTimeout) {
+      clearTimeout(this.drawerSpeakingTimeout);
+      this.drawerSpeakingTimeout = null;
+    }
+    this.setDrawerSpeakingSignal(false);
+  }
+
+  private enqueueChunkForTranscription(filePath: string): void {
+    this.pendingChunkQueue.push(filePath);
+    void this.drainChunkQueue();
+  }
+
+  private async drainChunkQueue(): Promise<void> {
+    if (this.chunkProcessingInFlight) return;
+    this.chunkProcessingInFlight = true;
+
+    try {
+      while (this.pendingChunkQueue.length > 0) {
+        const wavPath = this.pendingChunkQueue.shift();
+        if (!wavPath) continue;
+        await this.onChunkReady(wavPath);
+      }
+    } finally {
+      this.chunkProcessingInFlight = false;
+    }
+  }
+
+  private startForcedSnapshotLoop(): void {
+    this.stopForcedSnapshotLoop();
+
+    this.forcedSnapshotTimer = setInterval(() => {
+      void this.maybeForceSnapshotForContinuousSpeech();
+    }, HotMicManager.FORCE_SNAPSHOT_CHECK_MS);
+  }
+
+  private stopForcedSnapshotLoop(): void {
+    if (this.forcedSnapshotTimer) {
+      clearInterval(this.forcedSnapshotTimer);
+      this.forcedSnapshotTimer = null;
+    }
+  }
+
+  private getForcedSnapshotMaxMs(): number {
+    return this.transcriptBuffer.length === 0
+      ? HotMicManager.FORCE_SNAPSHOT_COMMAND_MS
+      : HotMicManager.FORCE_SNAPSHOT_DICTATION_MS;
+  }
+
+  private async maybeForceSnapshotForContinuousSpeech(): Promise<void> {
+    if (this.forcedSnapshotInFlight) return;
+    if (this.state !== 'recording' && this.state !== 'listening') return;
+    if (this.muted) return;
+    if (!this.hasSpeechSinceLastHarvest) return;
+    if (this.chunkProcessingInFlight || this.pendingChunkQueue.length > 0) return;
+    if (this.lastSpeechDetectedMs <= 0) return;
+
+    const now = Date.now();
+    const sinceSpeechMs = now - this.lastSpeechDetectedMs;
+    if (sinceSpeechMs > HotMicManager.FORCE_SNAPSHOT_SPEECH_GRACE_MS) return;
+
+    const maxChunkMs = this.getForcedSnapshotMaxMs();
+    const sinceChunkMs = now - this.lastChunkReadyMs;
+    if (sinceChunkMs < maxChunkMs) return;
+
+    this.forcedSnapshotInFlight = true;
+    try {
+      const wavPath = await this.nativeHelper.snapshotRecording();
+      this.lastChunkReadyMs = Date.now();
+      log.debug('Hot Mic: forced snapshot during continuous speech (%dms since last chunk)', sinceChunkMs);
+      this.enqueueChunkForTranscription(wavPath);
+    } catch (error) {
+      log.debug('Hot Mic: forced snapshot skipped/failed:', error);
+    } finally {
+      this.forcedSnapshotInFlight = false;
     }
   }
 
@@ -818,9 +980,13 @@ export class HotMicManager extends EventEmitter {
 
           const hadContent = this.transcriptBuffer.length > 0;
           if (hadContent) {
+            const discardedText = this.transcriptBuffer.join(' ');
+            void this.storeHotMicTranscript(discardedText);
             log.info('Hot Mic: silence timeout, discarding buffer (%d chunks)', this.transcriptBuffer.length);
             this.transcriptBuffer = [];
           }
+          this.clearDrawerSpeakingSignal();
+          this.dynamicIslandManager?.updateDrawerTranscript('');
           // Always blink-then-hide — even if buffer was empty, the user saw
           // the island appear so they deserve the visual warning before it goes.
           this.dynamicIslandManager?.blinkThenHideHotMic();
@@ -846,6 +1012,11 @@ export class HotMicManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   private async onChunkReady(wavPath: string): Promise<void> {
+    if (!this.isActive) {
+      await fs.promises.unlink(wavPath).catch(() => {});
+      return;
+    }
+
     const t0 = performance.now();
     log.info('Hot Mic: chunk ready from Swift, transcribing');
     this.hasSpeechSinceLastHarvest = false;
@@ -871,10 +1042,7 @@ export class HotMicManager extends EventEmitter {
       log.info('Hot Mic: [timing] transcribe: %dms', Math.round(tPost - t0));
 
       // Clean up WAV file
-      try {
-        const fsPromises = await import('fs/promises');
-        await fsPromises.unlink(wavPath);
-      } catch { /* ignore */ }
+      await fs.promises.unlink(wavPath).catch(() => {});
 
       if (!this.isActive) return;
 
@@ -945,6 +1113,7 @@ export class HotMicManager extends EventEmitter {
           log.info('Hot Mic: discarding buffer (%d chunks) for shortcut "%s"', this.transcriptBuffer.length, lower);
           this.transcriptBuffer = [];
         }
+        this.dynamicIslandManager?.updateDrawerTranscript('');
         log.info('Hot Mic: auto-submitting shortcut "%s" → "%s"', lower, mapped);
         const result = await this.nativeHelper.typeIntoApp(target, mapped, true);
         if (result.success) {
@@ -954,7 +1123,7 @@ export class HotMicManager extends EventEmitter {
       return;
     }
 
-    // Unified tail-match: navigation, system, squares, app switch, start claude, restart server
+    // Unified tail-match: navigation, system, squares, app switch, start claude/codex, restart server
     const tailMatch = await this.matchTailCommand(lower);
     if (tailMatch) {
       if (tailMatch.remainingText.trim()) {
@@ -972,17 +1141,22 @@ export class HotMicManager extends EventEmitter {
         if (isCancel) {
           log.info('Hot Mic: discarding buffer (%d chunks) for cancel command', this.transcriptBuffer.length);
           this.transcriptBuffer = [];
+          this.dynamicIslandManager?.updateDrawerTranscript('');
           this.updateOrangeDot();
         } else {
           const fullText = this.transcriptBuffer.join(' ');
           this.transcriptBuffer = [];
+          this.dynamicIslandManager?.updateDrawerTranscript('');
           this.updateOrangeDot();
-          const target = this.getTypeTarget();
-          if (fullText && target) {
+          if (fullText) {
             let mappedText = this.applyMappings(fullText);
             mappedText = this.applyCommandDetection(mappedText);
-            log.info('Hot Mic: flushing buffer before command (%d chars): "%s"', mappedText.length, mappedText);
-            await this.nativeHelper.typeIntoApp(target, mappedText, false);
+            void this.storeHotMicTranscript(mappedText);
+            const target = this.getTypeTarget();
+            if (target) {
+              log.info('Hot Mic: flushing buffer before command (%d chars): "%s"', mappedText.length, mappedText);
+              await this.nativeHelper.typeIntoApp(target, mappedText, false);
+            }
           }
         }
       }
@@ -1010,20 +1184,24 @@ export class HotMicManager extends EventEmitter {
 
       const fullText = this.transcriptBuffer.join(' ');
       this.transcriptBuffer = [];
+      this.dynamicIslandManager?.updateDrawerTranscript('');
       this.updateOrangeDot();
 
-      const target = this.getTypeTarget();
-      if (fullText && target) {
+      if (fullText) {
         let mappedText = this.applyMappings(fullText);
         mappedText = this.applyCommandDetection(mappedText);
+        void this.storeHotMicTranscript(mappedText);
         // Trailing space so the next dictation flows naturally
-        mappedText = mappedText + ' ';
-        log.info('Hot Mic: pasting buffer (%d chars, no submit) to %s: "%s"', mappedText.length, target, mappedText);
-        const result = await this.nativeHelper.typeIntoApp(target, mappedText, false);
-        if (!result.success) {
-          log.error('Hot Mic: typeIntoApp failed:', result.error);
-        } else {
-          this.playSound('paste');
+        const target = this.getTypeTarget();
+        if (target) {
+          mappedText = mappedText + ' ';
+          log.info('Hot Mic: pasting buffer (%d chars, no submit) to %s: "%s"', mappedText.length, target, mappedText);
+          const result = await this.nativeHelper.typeIntoApp(target, mappedText, false);
+          if (!result.success) {
+            log.error('Hot Mic: typeIntoApp failed:', result.error);
+          } else {
+            this.playSound('paste');
+          }
         }
       }
 
@@ -1044,20 +1222,29 @@ export class HotMicManager extends EventEmitter {
       // Flush the entire buffer
       const fullText = this.transcriptBuffer.join(' ');
       this.transcriptBuffer = [];
+      this.dynamicIslandManager?.updateDrawerTranscript('');
       this.updateOrangeDot();
 
-      const target = this.getTypeTarget();
-      if (fullText && target) {
+      if (fullText) {
         let mappedText = this.applyMappings(fullText);
         mappedText = this.applyCommandDetection(mappedText);
-        log.info('Hot Mic: submitting buffer (%d chars) to %s: "%s"', mappedText.length, target, mappedText);
-        const result = await this.nativeHelper.typeIntoApp(target, mappedText, true);
-        if (!result.success) {
-          log.error('Hot Mic: typeIntoApp failed:', result.error);
-        } else {
-          this.playSound('paste');
+        void this.storeHotMicTranscript(mappedText);
+        const target = this.getTypeTarget();
+        if (target) {
+          log.info('Hot Mic: submitting buffer (%d chars) to %s: "%s"', mappedText.length, target, mappedText);
+          const result = await this.nativeHelper.typeIntoApp(target, mappedText, true);
+          if (!result.success) {
+            log.error('Hot Mic: typeIntoApp failed:', result.error);
+          } else {
+            this.playSound('paste');
+          }
         }
-      } else if (target) {
+      } else {
+        const target = this.getTypeTarget();
+        if (!target) {
+          this.resetBufferDiscardTimer();
+          return;
+        }
         // Submit word alone — just hit Enter
         await this.nativeHelper.typeIntoApp(target, '', true);
       }
@@ -1074,6 +1261,7 @@ export class HotMicManager extends EventEmitter {
     const normalized = trimmed.toLowerCase().replace(/\.+$/, '').trim();
     this.transcriptBuffer.push(normalized);
     log.info('Hot Mic: buffered (%d total): "%s"', this.transcriptBuffer.length, normalized);
+    this.syncDrawerPreview();
     // Orange dot update is handled by onChunkReady after this method returns
     this.resetBufferDiscardTimer();
   }
@@ -1089,6 +1277,7 @@ export class HotMicManager extends EventEmitter {
   private static readonly DEFAULT_SWITCH_WORDS = 'next, switch';
   private static readonly DEFAULT_PREV_WINDOW_WORDS = 'back, previous';
   private static readonly DEFAULT_RUN_CLAUDE_PHRASES = 'start claude, start cloud, run claude';
+  private static readonly DEFAULT_RUN_CODEX_PHRASES = 'start codex, run codex';
   private static readonly DEFAULT_RESTART_SERVER_PHRASES = 'restart server, restart dev, restart dev server';
   private getSubmitPhrases(): string[][] {
     const pref = this.preferences.getPreference('hotMicSubmitWord');
@@ -1236,6 +1425,14 @@ export class HotMicManager extends EventEmitter {
           const target = this.getTypeTarget();
           if (target) {
             await this.nativeHelper.typeIntoApp(target, 'claude', true);
+          }
+        },
+      },
+      { name: 'start codex', phrases: this.getPhraseList('hotMicRunCodexWords', HotMicManager.DEFAULT_RUN_CODEX_PHRASES),
+        action: async () => {
+          const target = this.getTypeTarget();
+          if (target) {
+            await this.nativeHelper.typeIntoApp(target, 'codex', true);
           }
         },
       },
@@ -1717,6 +1914,22 @@ export class HotMicManager extends EventEmitter {
     return words[words.length - 1] || '';
   }
 
+  private getDrawerPreviewText(): string {
+    const combined = this.transcriptBuffer.join(' ').trim();
+    if (!combined) return '';
+
+    const wordCount = combined.split(/\s+/).filter(w => w.length > 0).length;
+    if (wordCount < HotMicManager.DRAWER_PREVIEW_MIN_WORDS) {
+      return '';
+    }
+
+    return combined;
+  }
+
+  private syncDrawerPreview(): void {
+    this.dynamicIslandManager?.updateDrawerTranscript(this.getDrawerPreviewText());
+  }
+
   private updateOrangeDot(): void {
     // Show the dot whenever hot mic is active and not muted, regardless of buffer state.
     const isActive = (this.state === 'listening' || this.state === 'recording') && !this.muted;
@@ -1750,6 +1963,10 @@ export class HotMicManager extends EventEmitter {
       }
     }
 
+    if (textToInject) {
+      void this.storeHotMicTranscript(textToInject);
+    }
+
     const target = this.getTypeTarget();
     if (textToInject && target) {
       if (!shouldSubmit) {
@@ -1773,6 +1990,22 @@ export class HotMicManager extends EventEmitter {
 
     if (shouldSubmit) {
       this.deactivate();
+    }
+  }
+
+  private async storeHotMicTranscript(text: string): Promise<void> {
+    if (!this.clipboardManager) return;
+
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    if (!normalized) return;
+
+    const wordCount = normalized.split(/\s+/).filter((word) => word.length > 0).length;
+    if (wordCount < this.MIN_HISTORY_WORDS) return;
+
+    try {
+      await this.clipboardManager.storeText(normalized, 'transcript');
+    } catch (error) {
+      log.error('Hot Mic: failed to store transcript in history:', error);
     }
   }
 
@@ -1937,8 +2170,19 @@ export class HotMicManager extends EventEmitter {
   private cleanup(): void {
     this.stopAudioMonitoring();
     this.stopBufferDiscardTimer();
+    this.clearDrawerSpeakingSignal();
+    this.resumeInFlight = false;
+    this.yieldedToTranscriber = false;
     this.targetBundleId = null;
     this.transcriptBuffer = [];
+    if (this.pendingChunkQueue.length > 0) {
+      for (const wavPath of this.pendingChunkQueue) {
+        void fs.promises.unlink(wavPath).catch(() => {});
+      }
+    }
+    this.pendingChunkQueue = [];
+    this.chunkProcessingInFlight = false;
+    this.dynamicIslandManager?.updateDrawerTranscript('');
     this.warmupPromise = null;
 
     if (this.whisperProcess) {

@@ -983,6 +983,8 @@ interface HotMicAPI {
   setSwitchWords: (words: string) => Promise<string>;
   getRunClaudeWords: () => Promise<string>;
   setRunClaudeWords: (words: string) => Promise<string>;
+  getRunCodexWords: () => Promise<string>;
+  setRunCodexWords: (words: string) => Promise<string>;
   getRestartServerWords: () => Promise<string>;
   setRestartServerWords: (words: string) => Promise<string>;
   getRestartServerCommand: () => Promise<string>;
