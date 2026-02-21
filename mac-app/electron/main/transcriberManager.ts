@@ -35,6 +35,8 @@ const execAsync = promisify(exec);
  */
 export type TranscriptionStatus = 'idle' | 'silentStacking' | 'recording' | 'transcribing';
 
+type QwenServerResponse = { ok: boolean; text?: string; error?: string };
+
 /**
  * Events emitted by TranscriberManager.
  */
@@ -67,7 +69,8 @@ export class TranscriberManager extends EventEmitter {
   private qwenProcess: ChildProcess | null = null;
   private qwenReady: boolean = false;
   private qwenReadyPromise: Promise<void> | null = null;
-  private qwenPendingResolve: ((response: { ok: boolean; text?: string; error?: string }) => void) | null = null;
+  private qwenPendingResolve: ((response: QwenServerResponse) => void) | null = null;
+  private qwenCommandChain: Promise<void> = Promise.resolve();
   private qwenStarting: boolean = false;
   private abandonHotkeyRegistered: boolean = false;
   private registeredAbandonHotkey: string = 'Escape'; // Track currently registered abandon hotkey
@@ -560,13 +563,18 @@ export class TranscriberManager extends EventEmitter {
     }
 
     // Yield Hot Mic's recording so we can use the audio device
+    let yieldedHotMic = false;
     if (this.hotMicDelegate?.isActive) {
       await this.hotMicDelegate.yieldToTranscriber();
+      yieldedHotMic = true;
     }
 
     // Block recording until onboarding is complete.
     const onboardingComplete = this.preferences.getPreference('onboardingComplete');
     if (!onboardingComplete) {
+      if (yieldedHotMic) {
+        this.hotMicDelegate?.resumeAfterTranscriber().catch(() => {});
+      }
       return;
     }
 
@@ -579,6 +587,9 @@ export class TranscriberManager extends EventEmitter {
         this.emit('error', new Error(errorMsg));
         // Also show a visible note to the user
         this.cursorStatusManager?.showRecordingNote(errorMsg);
+        if (yieldedHotMic) {
+          this.hotMicDelegate?.resumeAfterTranscriber().catch(() => {});
+        }
         return;
       }
     }
@@ -1607,6 +1618,10 @@ export class TranscriberManager extends EventEmitter {
    * restart it automatically.
    */
   stopQwenServer(): void {
+    if (this.qwenPendingResolve) {
+      this.qwenPendingResolve({ ok: false, error: 'Qwen server stopped' });
+      this.qwenPendingResolve = null;
+    }
     if (this.qwenProcess) {
       this.qwenProcess.kill('SIGTERM');
       this.qwenProcess = null;
@@ -1614,17 +1629,34 @@ export class TranscriberManager extends EventEmitter {
     this.qwenReady = false;
     this.qwenStarting = false;
     this.qwenReadyPromise = null;
-    this.qwenPendingResolve = null;
   }
 
   /**
    * Send a command to the Qwen server and wait for the response.
    * Times out after 120 seconds to avoid hanging indefinitely on bad audio.
    */
-  private sendQwenCommand(cmd: Record<string, unknown>): Promise<{ ok: boolean; text?: string; error?: string }> {
+  private sendQwenCommand(cmd: Record<string, unknown>): Promise<QwenServerResponse> {
+    return this.enqueueQwenCommand(() => this.sendQwenCommandInternal(cmd));
+  }
+
+  /**
+   * Serialize Qwen requests because server responses are single-line and routed
+   * through one pending resolver.
+   */
+  private enqueueQwenCommand<T>(run: () => Promise<T>): Promise<T> {
+    const queued = this.qwenCommandChain.then(run, run);
+    this.qwenCommandChain = queued.then(() => undefined, () => undefined);
+    return queued;
+  }
+
+  private sendQwenCommandInternal(cmd: Record<string, unknown>): Promise<QwenServerResponse> {
     return new Promise((resolve, reject) => {
       if (!this.qwenProcess || !this.qwenReady) {
         reject(new Error('Qwen server not running'));
+        return;
+      }
+      if (this.qwenPendingResolve) {
+        reject(new Error('Qwen server already has an in-flight command'));
         return;
       }
 
@@ -2514,4 +2546,3 @@ export class TranscriberManager extends EventEmitter {
     this.overlay.destroy();
   }
 }
-

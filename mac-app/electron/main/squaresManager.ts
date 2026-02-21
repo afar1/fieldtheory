@@ -263,6 +263,21 @@ export class SquaresManager extends EventEmitter {
     return screens.find(s => s.isPrimary) || screens[0];
   }
 
+  /**
+   * Resolve the target screen for multi-window layouts.
+   * Prefer the frontmost window of the frontmost app, then fall back to primary.
+   */
+  private getTargetScreenForAppWindows(appWindows: WindowInfo[]): ScreenInfo {
+    if (appWindows.length > 0) {
+      // getFrontmostAppWindows preserves window ordering from CGWindowList
+      // (front-to-back), so index 0 is the app's frontmost window.
+      return this.getScreenForWindow(appWindows[0].frame);
+    }
+
+    const screens = this.getScreens();
+    return screens.find(s => s.isPrimary) || screens[0];
+  }
+
 
   // --------------------------------------------------------------------------
   // Window manipulation - move and resize windows
@@ -840,15 +855,13 @@ export class SquaresManager extends EventEmitter {
     const windows = await this.getFrontmostAppWindows();
     if (windows.length === 0) return false;
 
-    // Use the primary screen for grid layout.
-    const screens = this.getScreens();
-    const primaryScreen = screens.find(s => s.isPrimary) || screens[0];
+    const targetScreen = this.getTargetScreenForAppWindows(windows);
 
     // Save state for undo.
     this.saveHistory(windows);
 
     // Calculate grid positions.
-    const targetFrames = this.calculateGridLayout(windows, primaryScreen);
+    const targetFrames = this.calculateGridLayout(windows, targetScreen);
 
     // Build move commands.
     const moves = windows.map((w, i) => ({
@@ -962,13 +975,13 @@ export class SquaresManager extends EventEmitter {
     const appWindows = await this.getFrontmostAppWindows();
     if (appWindows.length === 0) return false;
 
-    const primaryScreen = this.getScreens().find(s => s.isPrimary) || this.getScreens()[0];
+    const targetScreen = this.getTargetScreenForAppWindows(appWindows);
 
     this.saveHistory(appWindows);
 
     const targetFrames = direction === 'horizontal'
-      ? this.calculateHorizontalSpread(appWindows, primaryScreen)
-      : this.calculateVerticalSpread(appWindows, primaryScreen);
+      ? this.calculateHorizontalSpread(appWindows, targetScreen)
+      : this.calculateVerticalSpread(appWindows, targetScreen);
 
     const moves = appWindows.map((w, i) => ({
       pid: w.ownerPID,
@@ -988,11 +1001,11 @@ export class SquaresManager extends EventEmitter {
     const appWindows = await this.getFrontmostAppWindows();
     if (appWindows.length === 0) return false;
 
-    const primaryScreen = this.getScreens().find(s => s.isPrimary) || this.getScreens()[0];
+    const targetScreen = this.getTargetScreenForAppWindows(appWindows);
 
     this.saveHistory(appWindows);
 
-    const targetFrames = this.calculateCascade(appWindows, primaryScreen);
+    const targetFrames = this.calculateCascade(appWindows, targetScreen);
     const moves = appWindows.map((w, i) => ({
       pid: w.ownerPID,
       title: w.title,
@@ -1041,8 +1054,8 @@ export class SquaresManager extends EventEmitter {
     const allAppWindows = await this.getFrontmostAppWindows();
     if (allAppWindows.length === 0) return true;
 
-    const primaryScreen = this.getScreens().find(s => s.isPrimary) || this.getScreens()[0];
-    const targetFrames = this.calculateGridLayout(allAppWindows, primaryScreen);
+    const targetScreen = this.getScreenForWindow(frontWindow.frame);
+    const targetFrames = this.calculateGridLayout(allAppWindows, targetScreen);
     const moves = allAppWindows.map((w, i) => ({
       pid: w.ownerPID,
       title: w.title,

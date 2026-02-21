@@ -5374,10 +5374,25 @@ async function initTranscriberSystem(): Promise<void> {
     const soundMgr = transcriberManager.getSoundManager();
     hotMicManager = new HotMicManager(nativeHelper, preferencesManager, soundMgr);
     hotMicManager.setCursorStatusManager(cursorStatusManager);
+    if (clipboardManager) {
+      hotMicManager.setClipboardManager(clipboardManager);
+    }
     if (dynamicIslandManager) {
       hotMicManager.setDynamicIslandManager(dynamicIslandManager);
       dynamicIslandManager.on('toggleMute', () => {
         hotMicManager?.toggleMute();
+      });
+      dynamicIslandManager.on('open-field-theory', () => {
+        if (!clipboardHistoryWindow) {
+          clipboardHistoryWindow = initClipboardHistoryWindow();
+        }
+        clipboardHistoryWindow.playOpenSound();
+        const boundsToUse = restoreClipboardHistoryBounds();
+        clipboardHistoryWindow.show(boundsToUse, false, true);
+        clipboardHistoryWindow.capturePreviousAppBeforeShow();
+        // Opening clipboard history while recording can affect transparency/focus;
+        // refresh cursor status window properties to keep overlays stable.
+        cursorStatusManager?.refreshWindowProperties();
       });
     }
     hotMicManager.setTranscriberStatusGetter(() => transcriberManager?.getStatus() ?? 'idle');
@@ -6084,6 +6099,15 @@ if (!gotTheLock) {
 
     ipcMain.handle('hotmic:setRunClaudeWords', async (_event, words: string) => {
       await preferencesManager?.save({ hotMicRunClaudeWords: words });
+      return words;
+    });
+
+    ipcMain.handle('hotmic:getRunCodexWords', () => {
+      return preferencesManager?.getPreference('hotMicRunCodexWords') ?? 'start codex, run codex';
+    });
+
+    ipcMain.handle('hotmic:setRunCodexWords', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicRunCodexWords: words });
       return words;
     });
 

@@ -1263,11 +1263,20 @@ final class RecordingHelper {
     // Silence detection state (all accessed on main thread only)
     private var hasSpeechSinceLastHarvest = false
     private var silenceTimer: DispatchWorkItem?
-    private var harvestMode: String = "command"  // "command" = 150ms, "dictation" = 750ms
+    private var harvestMode: String = "command"  // "command" = snappier chunks, "dictation" = slightly longer chunks
+    private var consecutiveSpeechMs: Double = 0
+    private var voicedMsSinceLastHarvest: Double = 0
+    private var observedMsSinceLastHarvest: Double = 0
+    private var lastAudioProcessTimeNs: UInt64 = 0
 
     private static let SPEECH_THRESHOLD: Double = 0.02  // RMS fallback when VAD unavailable
-    private static let SILENCE_COMMAND_MS: Int = 150
-    private static let SILENCE_DICTATION_MS: Int = 750
+    private static let SILENCE_COMMAND_MS: Int = 200
+    private static let SILENCE_DICTATION_MS: Int = 320
+    private static let MAX_ACTIVE_CHUNK_COMMAND_MS: Double = 700
+    private static let MAX_ACTIVE_CHUNK_DICTATION_MS: Double = 900
+    private static let SPEECH_START_HOLD_MS: Double = 70
+    private static let MIN_VOICED_MS: Double = 170
+    private static let MIN_VOICED_RATIO: Double = 0.14
 
     private static let wavSettings: [String: Any] = [
         AVFormatIDKey: Int(kAudioFormatLinearPCM),
@@ -1311,27 +1320,61 @@ final class RecordingHelper {
         // "off" mode: regular transcriber owns the recording — no harvest snapshots.
         guard harvestMode != "off" else { return }
 
+        let nowNs = DispatchTime.now().uptimeNanoseconds
+        let deltaMs: Double
+        if lastAudioProcessTimeNs == 0 || nowNs < lastAudioProcessTimeNs {
+            deltaMs = 0
+        } else {
+            deltaMs = Double(nowNs - lastAudioProcessTimeNs) / 1_000_000.0
+        }
+        lastAudioProcessTimeNs = nowNs
+
         // Use VAD result when available, fall back to RMS threshold
         let speechDetected = vad.isValid ? isSpeech : (level > RecordingHelper.SPEECH_THRESHOLD)
         if speechDetected {
-            hasSpeechSinceLastHarvest = true
+            if deltaMs > 0 {
+                consecutiveSpeechMs += deltaMs
+            }
+
+            // Require a short sustained run before we treat this as real speech.
+            if !hasSpeechSinceLastHarvest && consecutiveSpeechMs >= RecordingHelper.SPEECH_START_HOLD_MS {
+                hasSpeechSinceLastHarvest = true
+                voicedMsSinceLastHarvest = consecutiveSpeechMs
+                observedMsSinceLastHarvest = consecutiveSpeechMs
+            } else if hasSpeechSinceLastHarvest {
+                voicedMsSinceLastHarvest += max(deltaMs, 0)
+                observedMsSinceLastHarvest += max(deltaMs, 0)
+            }
+
             silenceTimer?.cancel()
             silenceTimer = nil
+
+            // Force periodic harvest while user is continuously speaking so the
+            // transcript updates incrementally instead of waiting for long pauses.
+            if hasSpeechSinceLastHarvest {
+                let maxChunkMs = harvestMode == "dictation"
+                    ? RecordingHelper.MAX_ACTIVE_CHUNK_DICTATION_MS
+                    : RecordingHelper.MAX_ACTIVE_CHUNK_COMMAND_MS
+
+                if observedMsSinceLastHarvest >= maxChunkMs {
+                    emitHarvestChunk(trigger: "max-active")
+                }
+            }
         } else {
+            consecutiveSpeechMs = 0
             // Below speech threshold — start harvest timer if speech was detected.
-            // The 150ms command timeout debounces brief dips between syllables.
+            // The command timeout is intentionally longer than a micro-pause.
             if hasSpeechSinceLastHarvest && silenceTimer == nil {
+                if deltaMs > 0 {
+                    observedMsSinceLastHarvest += deltaMs
+                }
                 let silenceMs = harvestMode == "dictation"
                     ? RecordingHelper.SILENCE_DICTATION_MS
                     : RecordingHelper.SILENCE_COMMAND_MS
                 let work = DispatchWorkItem { [weak self] in
                     guard let self = self, self.isRecording else { return }
                     self.silenceTimer = nil
-                    if let filePath = self.snapshotRecording() {
-                        let message = RecordingChunkReadyMessage(filePath: filePath)
-                        sendJSON(message)
-                        self.hasSpeechSinceLastHarvest = false
-                    }
+                    self.emitHarvestChunk(trigger: "silence")
                 }
                 silenceTimer = work
                 DispatchQueue.main.asyncAfter(
@@ -1342,12 +1385,62 @@ final class RecordingHelper {
         }
     }
 
+    /// Reset speech accumulation state used by harvest chunking.
+    private func resetHarvestSpeechState() {
+        hasSpeechSinceLastHarvest = false
+        consecutiveSpeechMs = 0
+        voicedMsSinceLastHarvest = 0
+        observedMsSinceLastHarvest = 0
+    }
+
+    /// Snapshot and emit a harvest chunk when enough speech has accumulated.
+    /// If the chunk is mostly noise, it is dropped but still rotates the file so
+    /// we don't keep appending low-value audio forever.
+    private func emitHarvestChunk(trigger: String) {
+        let voicedRatio = observedMsSinceLastHarvest > 0
+            ? (voicedMsSinceLastHarvest / observedMsSinceLastHarvest)
+            : 0
+        let shouldDrop = voicedMsSinceLastHarvest < RecordingHelper.MIN_VOICED_MS
+            || voicedRatio < RecordingHelper.MIN_VOICED_RATIO
+
+        if shouldDrop {
+            _ = snapshotRecording()
+            sendLog(
+                level: "info",
+                message: String(
+                    format: "Dropping low-voice chunk (%@, voiced=%.0fms, ratio=%.2f)",
+                    trigger,
+                    voicedMsSinceLastHarvest,
+                    voicedRatio
+                )
+            )
+            resetHarvestSpeechState()
+            return
+        }
+
+        if let filePath = snapshotRecording() {
+            let message = RecordingChunkReadyMessage(filePath: filePath)
+            sendJSON(message)
+            sendLog(
+                level: "debug",
+                message: String(
+                    format: "Harvest chunk emitted (%@, voiced=%.0fms, observed=%.0fms)",
+                    trigger,
+                    voicedMsSinceLastHarvest,
+                    observedMsSinceLastHarvest
+                )
+            )
+            resetHarvestSpeechState()
+        }
+    }
+
     /// Set the harvest mode and cancel any pending silence timer.
     /// Called from MessageHandler when Node sends setHarvestMode.
     func setHarvestMode(_ mode: String) {
         harvestMode = mode
         silenceTimer?.cancel()
         silenceTimer = nil
+        resetHarvestSpeechState()
     }
 
     /// Start recording from the default input device.
@@ -1481,7 +1574,8 @@ final class RecordingHelper {
         do {
             try engine.start()
             isRecording = true
-            hasSpeechSinceLastHarvest = false
+            resetHarvestSpeechState()
+            lastAudioProcessTimeNs = 0
             silenceTimer?.cancel()
             silenceTimer = nil
             prepareNextFile()
@@ -1521,6 +1615,8 @@ final class RecordingHelper {
         isRecording = false
         silenceTimer?.cancel()
         silenceTimer = nil
+        resetHarvestSpeechState()
+        lastAudioProcessTimeNs = 0
 
         // Remove tap and stop engine
         engine.inputNode.removeTap(onBus: 0)
@@ -1622,6 +1718,8 @@ final class RecordingHelper {
         isRecording = false
         silenceTimer?.cancel()
         silenceTimer = nil
+        resetHarvestSpeechState()
+        lastAudioProcessTimeNs = 0
         
         if let engine = audioEngine {
             engine.inputNode.removeTap(onBus: 0)

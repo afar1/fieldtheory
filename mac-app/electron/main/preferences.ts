@@ -159,6 +159,7 @@ interface Preferences {
   hotMicQuitPhrases?: string; // Comma-separated phrases that quit the current app (Cmd+Q) or quit by name
   hotMicSwitchWords?: string; // Comma-separated words that trigger Cmd+` window cycling
   hotMicRunClaudeWords?: string; // Comma-separated phrases that type "claude" and submit (start a session)
+  hotMicRunCodexWords?: string; // Comma-separated phrases that type "codex" and submit (start a session)
   hotMicRestartServerWords?: string; // Comma-separated phrases that trigger restart (Ctrl+C then run command)
   hotMicFocusPhrases?: string; // Comma-separated phrases that trigger focus (next-display + center)
   hotMicCascadePhrases?: string; // Comma-separated phrases that trigger cascade + center
@@ -383,4 +384,3 @@ export class PreferencesManager {
     return this.preferences[key];
   }
 }
-
