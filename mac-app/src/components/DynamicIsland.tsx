@@ -1,7 +1,7 @@
 // =============================================================================
 // DynamicIsland - Fixed-position overlay near the macOS notch.
-// Shows live transcript text during/after recording, command highlighting,
-// and a hamburger menu for transcript history with copy/paste behavior.
+// Two pills: left (hamburger + expanded transcript bar) and right (hot-mic dot).
+// The ?side= query param determines which pill to render.
 // =============================================================================
 
 import { useEffect, useState, useRef, useCallback } from 'react';
@@ -21,6 +21,10 @@ interface CommandHighlight {
   endIndex: number;
 }
 
+// Detect which pill this instance should render.
+const params = new URLSearchParams(window.location.search);
+const side = params.get('side') || 'left';
+
 // How long ago something happened, in casual human language.
 function timeAgo(timestamp: number): string {
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
@@ -33,7 +37,128 @@ function timeAgo(timestamp: number): string {
   return `${days}d ago`;
 }
 
-export default function DynamicIsland() {
+// =============================================================================
+// Right pill — hot-mic status dot (centered, no text)
+// =============================================================================
+
+function RightPill() {
+  const [active, setActive] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [warnBlink, setWarnBlink] = useState(false);
+  const [slideOut, setSlideOut] = useState(false);
+
+  useEffect(() => {
+    const api = (window as any).dynamicIslandAPI;
+    if (!api) return;
+
+    api.onHotMicUpdate?.((data: { active: boolean; wordCount: number; lastWord: string }) => {
+      setActive(data.active);
+      if (data.active) {
+        setWarnBlink(false);
+        setSlideOut(false);
+      }
+    });
+
+    api.onHotMicWarnDiscard?.(() => {
+      setWarnBlink(true);
+      setTimeout(() => setWarnBlink(false), 600);
+    });
+
+    api.onHotMicSlideOut?.(() => {
+      setSlideOut(true);
+      setTimeout(() => {
+        setSlideOut(false);
+        setActive(false);
+      }, 400);
+    });
+
+    api.onHotMicMute?.((isMuted: boolean) => {
+      setMuted(isMuted);
+    });
+
+    return () => {
+      api.removeAllListeners('dynamic-island-hotmic');
+      api.removeAllListeners('dynamic-island-hotmic-warn-discard');
+      api.removeAllListeners('dynamic-island-hotmic-slide-out');
+      api.removeAllListeners('dynamic-island-hotmic-mute');
+    };
+  }, []);
+
+  const handleClick = useCallback(() => {
+    (window as any).dynamicIslandAPI?.toggleMute?.();
+  }, []);
+
+  const dotColor = warnBlink ? '#fbbf24' : '#f97316';
+  const dotShadow = warnBlink
+    ? '0 0 8px rgba(251, 191, 36, 0.6)'
+    : '0 0 8px rgba(249, 115, 22, 0.5)';
+
+  return (
+    <div style={rightStyles.outerContainer}>
+      <div
+        className="di-right-pill"
+        onClick={handleClick}
+        style={{
+          ...rightStyles.pill,
+          cursor: 'pointer',
+        }}
+      >
+        {muted ? (
+          /* Muted: gray circle with diagonal slash (⊘ / prohibition sign) */
+          <svg className="di-right-dot" width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <circle cx="7" cy="7" r="5.5" stroke="#6b7280" strokeWidth="1.5" fill="none" />
+            <line x1="3.5" y1="10.5" x2="10.5" y2="3.5" stroke="#6b7280" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        ) : (
+          /* Active/inactive dot */
+          <div className="di-right-dot" style={{
+            ...rightStyles.dot,
+            opacity: (active || warnBlink) ? (slideOut ? 0 : 1) : 0,
+            backgroundColor: dotColor,
+            boxShadow: dotShadow,
+            animation: active && !warnBlink ? 'hotmicPulse 2s ease-in-out infinite' : 'none',
+            transition: 'opacity 0.3s ease',
+          }} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+const rightStyles: Record<string, React.CSSProperties> = {
+  outerContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    width: '100%',
+    height: '100%',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
+  },
+  pill: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    height: '38px',
+    backgroundColor: '#000000',
+    WebkitMaskImage: 'radial-gradient(white, white)',
+    borderRadius: '0 0 16px 0',
+    overflow: 'hidden',
+  },
+  dot: {
+    width: '8px',
+    height: '8px',
+    minWidth: '8px',
+    borderRadius: '50%',
+    flexShrink: 0,
+    transition: 'opacity 0.2s ease, background-color 0.15s ease',
+  },
+};
+
+// =============================================================================
+// Left pill — hamburger + expanded transcript bar (existing behavior)
+// =============================================================================
+
+function LeftPill() {
   const [state, setState] = useState<IslandState>('idle');
   const [transcript, setTranscript] = useState<string>('');
   const [isFinal, setIsFinal] = useState<boolean>(false);
@@ -47,10 +172,6 @@ export default function DynamicIsland() {
   const historyScrollRef = useRef<HTMLDivElement>(null);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dotIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // ---------------------------------------------------------------------------
-  // IPC listeners
-  // ---------------------------------------------------------------------------
 
   useEffect(() => {
     const api = (window as any).dynamicIslandAPI;
@@ -78,7 +199,6 @@ export default function DynamicIsland() {
       setHistory(items);
     });
 
-    // Force-hide history when window loses focus.
     api.onHideHistory?.(() => {
       setHistoryVisible(false);
     });
@@ -87,7 +207,6 @@ export default function DynamicIsland() {
       setHistoryVisible(true);
     });
 
-    // Request initial history.
     api.requestHistory();
 
     return () => {
@@ -100,7 +219,6 @@ export default function DynamicIsland() {
     };
   }, []);
 
-  // Cycling dots animation for transcribing/improving states.
   useEffect(() => {
     if (state === 'transcribing' || state === 'improving') {
       dotIntervalRef.current = setInterval(() => {
@@ -118,16 +236,11 @@ export default function DynamicIsland() {
     };
   }, [state]);
 
-  // Auto-scroll the transcript container to the bottom as text streams in.
   useEffect(() => {
     if (transcriptRef.current) {
       transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
     }
   }, [transcript]);
-
-  // ---------------------------------------------------------------------------
-  // Actions
-  // ---------------------------------------------------------------------------
 
   const toggleHistory = useCallback(() => {
     const next = !historyVisible;
@@ -153,21 +266,12 @@ export default function DynamicIsland() {
     copiedTimerRef.current = setTimeout(() => setCopiedId(null), 1500);
   }, []);
 
-  // ---------------------------------------------------------------------------
-  // Render helpers
-  // ---------------------------------------------------------------------------
-
-  // Render transcript text with command phrase highlighting.
-  // Detects [cmd:name.md] references in the text and renders them as highlighted pills.
-  // Also highlights bare command names if they were detected by the transcriber.
   const renderTranscript = () => {
     if (!transcript) return null;
 
-    // Match [cmd:something.md] patterns and command names sent from main process.
     const cmdRefPattern = /\[cmd:([^\]]+)\.md\]/gi;
     const commandNames = commands.map(c => c.phrase.toLowerCase());
 
-    // Build a combined regex that matches both [cmd:...] refs and bare command names.
     const patterns: Array<{ regex: RegExp; type: 'ref' | 'name' }> = [];
     patterns.push({ regex: cmdRefPattern, type: 'ref' });
     commandNames.forEach(name => {
@@ -176,7 +280,6 @@ export default function DynamicIsland() {
       }
     });
 
-    // Find all matches with their positions.
     const highlights: Array<{ start: number; end: number; text: string; type: string }> = [];
     patterns.forEach(({ regex, type }) => {
       let match;
@@ -195,7 +298,6 @@ export default function DynamicIsland() {
       return <span>{transcript}</span>;
     }
 
-    // Sort by position and remove overlaps.
     highlights.sort((a, b) => a.start - b.start);
     const deduped: typeof highlights = [];
     for (const h of highlights) {
@@ -204,7 +306,6 @@ export default function DynamicIsland() {
       }
     }
 
-    // Build JSX with highlighted segments.
     const parts: JSX.Element[] = [];
     let cursor = 0;
     deduped.forEach((h, i) => {
@@ -226,23 +327,16 @@ export default function DynamicIsland() {
   };
 
   const isIdle = state === 'idle' && !historyVisible;
-
-  // ---------------------------------------------------------------------------
-  // Layout
-  // ---------------------------------------------------------------------------
-
   const isActive = state === 'recording' || state === 'transcribing' || state === 'improving';
   const hasTranscript = transcript.length > 0;
   const showTranscript = hasTranscript && (state === 'showing-transcript' || state === 'transcribing');
 
   return (
     <div style={styles.outerContainer}>
-      {/* The island bar */}
       <div style={{
         ...styles.island,
         ...(isIdle ? styles.islandIdle : {}),
       }}>
-        {/* Hamburger / history toggle on the left side */}
         <button
           className="di-hamburger"
           onClick={toggleHistory}
@@ -260,7 +354,6 @@ export default function DynamicIsland() {
         </button>
 
         {!isIdle && <div style={styles.contentArea}>
-          {/* State dot */}
           {isActive && (
             <div style={{
               ...styles.dot,
@@ -274,7 +367,6 @@ export default function DynamicIsland() {
             }} />
           )}
 
-          {/* Label / transcript text */}
           <div style={styles.textContainer} ref={transcriptRef}>
             {state === 'recording' && !hasTranscript && (
               <span style={styles.statusText}>recording</span>
@@ -295,7 +387,6 @@ export default function DynamicIsland() {
         </div>}
       </div>
 
-      {/* History panel - slides down below the island */}
       {historyVisible && (
         <div style={styles.historyPanel} ref={historyScrollRef}>
           {history.length === 0 ? (
@@ -345,7 +436,7 @@ export default function DynamicIsland() {
 }
 
 // =============================================================================
-// Styles - dark, rounded, macOS dynamic-island aesthetic.
+// Styles
 // =============================================================================
 
 const styles: Record<string, React.CSSProperties> = {
@@ -365,6 +456,7 @@ const styles: Record<string, React.CSSProperties> = {
     height: '42px',
     padding: '0 10px',
     backgroundColor: '#000000',
+    WebkitMaskImage: 'radial-gradient(white, white)',
     borderRadius: '0 0 22px 22px',
     boxShadow: 'none',
     overflow: 'hidden',
@@ -449,7 +541,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#d4a5ff',
   },
 
-  // History panel
   historyPanel: {
     width: 'calc(100% - 8px)',
     maxHeight: '320px',
@@ -458,6 +549,7 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: '4px',
     padding: '6px',
     backgroundColor: '#000000',
+    WebkitMaskImage: 'radial-gradient(white, white)',
     borderRadius: '14px',
     boxShadow: 'none',
     scrollbarWidth: 'thin' as any,
@@ -539,12 +631,16 @@ const styles: Record<string, React.CSSProperties> = {
   },
 };
 
-// Add keyframes and interaction styles.
+// Keyframes and interaction styles.
 const styleSheet = document.createElement('style');
 styleSheet.textContent = `
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
+  }
+  @keyframes hotmicPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
   }
   @keyframes slideDown {
     from { opacity: 0; transform: translateY(-8px); }
@@ -554,11 +650,9 @@ styleSheet.textContent = `
     from { opacity: 0; transform: scale(0.95); }
     to { opacity: 1; transform: scale(1); }
   }
-  /* Hide scrollbars in the transcript area */
   div::-webkit-scrollbar {
     display: none;
   }
-  /* Hover state for history items */
   .di-history-item:hover {
     background-color: rgba(255, 255, 255, 0.06) !important;
   }
@@ -571,10 +665,23 @@ styleSheet.textContent = `
   .di-hamburger:hover {
     background-color: rgba(255, 255, 255, 0.12) !important;
   }
+  .di-right-pill:hover .di-right-dot {
+    filter: brightness(1.2);
+  }
 `;
 document.head.appendChild(styleSheet);
 
-// Type declaration for the dynamic island preload API.
+// =============================================================================
+// Root — delegates to left or right pill based on query param
+// =============================================================================
+
+export default function DynamicIsland() {
+  if (side === 'right') {
+    return <RightPill />;
+  }
+  return <LeftPill />;
+}
+
 declare global {
   interface Window {
     dynamicIslandAPI?: {
@@ -584,6 +691,11 @@ declare global {
       onHistoryUpdate: (cb: (history: HistoryItem[]) => void) => void;
       onHideHistory?: (cb: () => void) => void;
       onShowHistory?: (cb: () => void) => void;
+      onHotMicUpdate?: (cb: (data: { active: boolean; wordCount: number; lastWord: string }) => void) => void;
+      onHotMicWarnDiscard?: (cb: () => void) => void;
+      onHotMicSlideOut?: (cb: () => void) => void;
+      onHotMicMute?: (cb: (muted: boolean) => void) => void;
+      toggleMute?: () => void;
       requestHistory: () => void;
       copyAndPaste: (text: string) => void;
       copyToClipboard: (text: string) => void;
