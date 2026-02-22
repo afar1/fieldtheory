@@ -61,6 +61,8 @@ export interface RunningApp {
  * Shows an Alfred-style popup that can appear independently of the main window.
  */
 export class ClipboardHistoryWindow {
+  private readonly DEBUG_WINDOW_EVENTS = process.env.CLIPBOARD_WINDOW_DEBUG_EVENTS === 'true';
+
   private window: BrowserWindow | null = null;
   private previouslyFocusedWindow: BrowserWindow | null = null;
   
@@ -83,6 +85,7 @@ export class ClipboardHistoryWindow {
   
   // Callback for when window bounds change (for persistence).
   private onBoundsChanged: ((bounds: { x: number; y: number; width: number; height: number }) => void) | null = null;
+  private onHidden: ((info: { reason: string; hideApp: boolean; wasVisible: boolean }) => void) | null = null;
   
   // Track if recording is active - used to keep overlay visible when dismissing clipboard history
   private isRecordingActive: boolean = false;
@@ -120,6 +123,34 @@ export class ClipboardHistoryWindow {
     const prefs = preferences || new PreferencesManager();
     this.preferencesManager = prefs;
     this.soundManager = new SoundManager(prefs);
+  }
+
+  private logLifecycle(event: string, details = ''): void {
+    if (!this.DEBUG_WINDOW_EVENTS) return;
+
+    if (!this.window || this.window.isDestroyed()) {
+      log.info(
+        '[ClipboardHistory] %s | window=none showing=%s %s',
+        event,
+        this._isShowing,
+        details
+      );
+      return;
+    }
+
+    const bounds = this.window.getBounds();
+    log.info(
+      '[ClipboardHistory] %s | visible=%s focused=%s showing=%s bounds=%d,%d %dx%d %s',
+      event,
+      this.window.isVisible(),
+      this.window.isFocused(),
+      this._isShowing,
+      bounds.x,
+      bounds.y,
+      bounds.width,
+      bounds.height,
+      details
+    );
   }
 
   /**
@@ -237,8 +268,18 @@ export class ClipboardHistoryWindow {
    * @param savedBounds Optional saved bounds to restore position/size (absolute screen coords)
    * @param showSettingsMode If true, open the window with settings panel visible
    * @param skipSound If true, skip playing open sound (used when sound was already played externally for faster feedback)
+   * @param transcriptHistoryMode If true, renderer opens directly in transcript-only history mode
    */
-  show(savedBounds?: { x: number; y: number; width: number; height: number }, showSettingsMode: boolean = false, skipSound: boolean = false): void {
+  show(
+    savedBounds?: { x: number; y: number; width: number; height: number },
+    showSettingsMode: boolean = false,
+    skipSound: boolean = false,
+    transcriptHistoryMode: boolean = false
+  ): void {
+    this.logLifecycle(
+      'show:begin',
+      `showSettingsMode=${showSettingsMode} skipSound=${skipSound} transcriptHistoryMode=${transcriptHistoryMode} savedBounds=${savedBounds ? JSON.stringify(savedBounds) : 'none'}`
+    );
     // Update internal state immediately for instant toggle.
     this._isShowing = true;
 
@@ -269,9 +310,13 @@ export class ClipboardHistoryWindow {
       // Bring window to front of window stack (important when not alwaysOnTop)
       this.window.moveTop();
       this.window.focus();
+      this.logLifecycle('show:existing-window-complete');
 
       // Notify renderer to reset search query.
       this.window.webContents.send('clipboard:showHistory');
+      if (transcriptHistoryMode) {
+        this.window.webContents.send('clipboard:showTranscriptHistory');
+      }
       if (showSettingsMode) {
         this.window.webContents.send('clipboard:showSettings');
       }
@@ -292,7 +337,8 @@ export class ClipboardHistoryWindow {
     app.show();
 
     // Create new window.
-    this.createWindow(savedBounds, showSettingsMode);
+    this.createWindow(savedBounds, showSettingsMode, false, transcriptHistoryMode);
+    this.logLifecycle('show:created-window');
 
     // Fetch app data in background (don't await).
     this.refreshAppDataInBackground();
@@ -334,7 +380,12 @@ export class ClipboardHistoryWindow {
    * @param showSettingsMode If true, send settings mode event after content loads
    * @param preloadOnly If true, don't show window after load (for background preloading)
    */
-  private createWindow(savedBounds?: { x: number; y: number; width: number; height: number }, showSettingsMode: boolean = false, preloadOnly: boolean = false): void {
+  private createWindow(
+    savedBounds?: { x: number; y: number; width: number; height: number },
+    showSettingsMode: boolean = false,
+    preloadOnly: boolean = false,
+    transcriptHistoryMode: boolean = false
+  ): void {
     // Calculate window position/size.
     // savedBounds are now in absolute screen coordinates (simpler than old overlay-relative).
     let windowX: number;
@@ -414,15 +465,31 @@ export class ClipboardHistoryWindow {
     }
 
     this.window.on('closed', () => {
+      this.logLifecycle('window:closed');
       this.window = null;
       this._isShowing = false;
     });
+
+    if (this.DEBUG_WINDOW_EVENTS) {
+      const emit = (eventName: string) => this.logLifecycle(`window:${eventName}`);
+      this.window.on('show', () => emit('show'));
+      this.window.on('hide', () => emit('hide'));
+      this.window.on('focus', () => emit('focus'));
+      this.window.on('blur', () => emit('blur-event'));
+      this.window.on('moved', () => emit('moved'));
+      this.window.on('resized', () => emit('resized'));
+      this.window.on('ready-to-show', () => emit('ready-to-show'));
+    }
 
     // Dismiss when window loses focus (Alfred behavior).
     // When showInDock is enabled, skip this entirely - user expects normal app behavior.
     // When immersive mode is active, also skip - user positioned window intentionally.
     this.window.on('blur', () => {
       const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+      this.logLifecycle(
+        'window:blur-handler',
+        `showInDock=${showInDock} immersive=${this.isImmersiveMode} sketch=${this.sketchModeActive} scenario=${this.scenarioTestingActive} recording=${this.isRecordingActive}`
+      );
 
       // When showInDock is enabled, don't auto-hide on blur.
       // User expects normal app behavior where windows stay visible.
@@ -448,8 +515,10 @@ export class ClipboardHistoryWindow {
         return;
       }
 
-      // Alfred-style: hide when clicking away.
-      this.hide(!this.isRecordingActive);
+      // Blur means another app already gained focus, so hiding the entire app is
+      // unnecessary here and can trigger compositor resets in transparent overlays.
+      this.logLifecycle('window:blur-handler-hide', 'hideApp=false');
+      this.hide(false, 'window-blur-handler');
     });
     
     // Save bounds when window is moved or resized (for persistence).
@@ -513,6 +582,9 @@ export class ClipboardHistoryWindow {
         this.window.focus();
         // Notify renderer to reset search query.
         this.window.webContents.send('clipboard:showHistory');
+        if (transcriptHistoryMode) {
+          this.window.webContents.send('clipboard:showTranscriptHistory');
+        }
         // If settings mode requested, send that event too.
         if (showSettingsMode) {
           this.window.webContents.send('clipboard:showSettings');
@@ -542,7 +614,12 @@ export class ClipboardHistoryWindow {
    * Restores focus to the previous app (including exact input field).
    * @param hideApp - Whether to hide the entire app. Set to false when other windows (like recording overlay) should remain visible.
    */
-  hide(hideApp: boolean = true): void {
+  hide(hideApp: boolean = true, reason: string = 'unspecified'): void {
+    const wasVisible = this.window !== null && !this.window.isDestroyed() && this.window.isVisible();
+    this.logLifecycle(
+      'hide:begin',
+      `reason=${reason} hideApp=${hideApp} recording=${this.isRecordingActive} immersive=${this.isImmersiveMode} sketch=${this.sketchModeActive}`
+    );
     // Update internal state immediately for instant toggle.
     this._isShowing = false;
 
@@ -593,8 +670,13 @@ export class ClipboardHistoryWindow {
         app.dock.hide();
       }
       app.hide();
+      this.logLifecycle('hide:app-hidden');
     }
     this.previouslyFocusedWindow = null;
+    if (this.onHidden) {
+      this.onHidden({ reason, hideApp, wasVisible });
+    }
+    this.logLifecycle('hide:complete');
   }
 
   /**
@@ -686,6 +768,10 @@ export class ClipboardHistoryWindow {
    */
   setOnBoundsChanged(callback: (bounds: { x: number; y: number; width: number; height: number }) => void): void {
     this.onBoundsChanged = callback;
+  }
+
+  setOnHidden(callback: (info: { reason: string; hideApp: boolean; wasVisible: boolean }) => void): void {
+    this.onHidden = callback;
   }
 
   /**
@@ -1130,4 +1216,3 @@ export class ClipboardHistoryWindow {
     }
   }
 }
-

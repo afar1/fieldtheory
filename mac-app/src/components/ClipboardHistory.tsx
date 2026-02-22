@@ -1121,6 +1121,10 @@ export default function ClipboardHistory() {
         offset: reset ? 0 : currentOffset,
       };
 
+      if (filter === 'transcript') {
+        queryOptions.type = 'transcript';
+      }
+
       if (sourceFilter !== 'all') {
         queryOptions.source = sourceFilter;
       }
@@ -1157,7 +1161,7 @@ export default function ClipboardHistory() {
       const loadEndTime = performance.now();
       console.log(`[Performance] Total loadItems duration: ${(loadEndTime - loadStartTime).toFixed(2)}ms`);
     }
-  }, [isMacOS, debouncedSearchQuery, sourceFilter]);
+  }, [isMacOS, debouncedSearchQuery, sourceFilter, filter]);
 
   // Check if sharing is enabled.
   // Feature is disabled by default, unlocked via Cmd+Shift+S secret toggle.
@@ -1468,6 +1472,7 @@ export default function ClipboardHistory() {
       setSelectedIndex(0);
       setSelectedIds(new Set());
       setIsMultiSelect(false);
+      setFilter('all');
 
       // Restore showSettings from localStorage - ensures we return to settings if that was the last view
       const savedSettings = localStorage.getItem('fieldTheoryShowSettings') === 'true';
@@ -1500,6 +1505,18 @@ export default function ClipboardHistory() {
       }
     });
 
+    const unsubscribeShowTranscriptHistory = window.clipboardAPI.onShowTranscriptHistory?.(() => {
+      setSearchQuery('');
+      setDebouncedSearchQuery('');
+      setSelectedIndex(0);
+      setSelectedIds(new Set());
+      setIsMultiSelect(false);
+      setShowSettings(false);
+      setViewMode('clipboard');
+      setFilter('transcript');
+      setPendingReadingPath(null);
+    });
+
     const unsubscribeShowSettings = window.clipboardAPI.onShowSettings?.(() => {
       setShowSettings(true);
     });
@@ -1512,6 +1529,7 @@ export default function ClipboardHistory() {
     // Listen for reset-to-clipboard event (triggered when window hides while in immersive mode)
     // This ensures re-opening the window shows clipboard, not the artifact
     const unsubscribeResetToClipboard = window.clipboardAPI.onResetToClipboardView?.(() => {
+      setShowSettings(false);
       setLibrarianImmersive(false);
       setViewMode('clipboard');
       setPendingReadingPath(null);
@@ -1609,6 +1627,7 @@ export default function ClipboardHistory() {
 
     return () => {
       unsubscribeShowHistory();
+      unsubscribeShowTranscriptHistory?.();
       unsubscribeShowSettings?.();
       unsubscribeCollapseImmersive?.();
       unsubscribeResetToClipboard?.();
@@ -2596,7 +2615,6 @@ export default function ClipboardHistory() {
         if (selectedIds.size > 0) {
           // Paste multi-selected items
           window.clipboardAPI?.pasteStack(Array.from(selectedIds), pasteBundleId);
-          window.clipboardAPI?.closeWindow();
           setSelectedIds(new Set());
           setIsMultiSelect(false);
         } else {
@@ -2606,11 +2624,9 @@ export default function ClipboardHistory() {
             // Paste all items in the stack
             const itemIds = selectedRow.items.map(i => i.id);
             window.clipboardAPI?.pasteStack(itemIds, pasteBundleId);
-            window.clipboardAPI?.closeWindow();
           } else if (selectedRow?.type === 'item') {
             // Paste single item to target app
             window.clipboardAPI?.pasteItem(selectedRow.item.id, pasteBundleId, selectedRow.item.useImprovedVersion);
-            window.clipboardAPI?.closeWindow();
           }
         }
         return;
@@ -3015,7 +3031,6 @@ export default function ClipboardHistory() {
       }
 
       window.clipboardAPI?.pasteItem(item.id, pasteBundleId, item.useImprovedVersion);
-      window.clipboardAPI?.closeWindow();
     }
   };
 
@@ -4514,7 +4529,6 @@ export default function ClipboardHistory() {
                       // Paste all items in the stack
                       const itemIds = stackItems.map(i => i.id);
                       window.clipboardAPI?.pasteStack(itemIds, pasteBundleId);
-                      window.clipboardAPI?.closeWindow();
                     }}
                     style={{
                       padding: '10px 16px 6px 16px',
@@ -5016,7 +5030,6 @@ export default function ClipboardHistory() {
                             // Paste stack content
                             const itemIds = stackItems.map(i => i.id);
                             window.clipboardAPI?.pasteStack(itemIds, pasteBundleId);
-                            window.clipboardAPI?.closeWindow();
                           }}
                           style={{
                             padding: '4px 6px',
@@ -7003,7 +7016,6 @@ export default function ClipboardHistory() {
                     if (selectedRow?.type === 'item' && window.clipboardAPI) {
                       const bundleId = targetAppInfo?.previousApp?.bundleId;
                       await window.clipboardAPI.pasteItem(selectedRow.item.id, bundleId, selectedRow.item.useImprovedVersion);
-                      window.clipboardAPI.closeWindow();
                     }
                   }},
                   { label: 'copy', key: 'c', action: async () => {
@@ -7174,4 +7186,3 @@ export default function ClipboardHistory() {
     </>
   );
 }
-

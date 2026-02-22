@@ -5,7 +5,7 @@
 // =============================================================================
 
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { summarizeTranscriptForIsland } from '../utils/textUtils';
+import { estimateWordsPerLine, summarizeTranscriptForHistory, summarizeTranscriptForIsland } from '../utils/textUtils';
 
 type IslandState = 'idle' | 'recording' | 'transcribing' | 'showing-transcript' | 'improving';
 
@@ -22,11 +22,54 @@ interface CommandHighlight {
   endIndex: number;
 }
 
+interface HotMicFilterMeter {
+  enabled: boolean;
+  strength: number;
+  rawLevel: number;
+  acceptedLevel: number;
+  threshold: number;
+  speechRatio: number;
+  chunkSuppressed: boolean;
+}
+
 // Detect which pill this instance should render.
 const params = new URLSearchParams(window.location.search);
 const side = params.get('side') || 'left';
-const TRANSCRIPT_LEADING_WORDS = 3;
+const TRANSCRIPT_LEADING_WORDS = 5;
 const TRANSCRIPT_TRAILING_WORDS = 7;
+const HISTORY_PREVIEW_TRAILING_WORDS = 5;
+const HISTORY_PREVIEW_MAX_LINES = 3;
+const HISTORY_PILL_OFFSET_PX = 82;
+const HISTORY_LAYOUT_MIN_WIDTH_PX = 120;
+
+function forceTransparentPageBacking(): void {
+  document.documentElement.style.setProperty('background', 'transparent', 'important');
+  document.documentElement.style.setProperty('background-color', 'transparent', 'important');
+  document.body.style.setProperty('background', 'transparent', 'important');
+  document.body.style.setProperty('background-color', 'transparent', 'important');
+  const root = document.getElementById('root');
+  if (root) {
+    root.style.setProperty('background', 'transparent', 'important');
+    root.style.setProperty('background-color', 'transparent', 'important');
+  }
+}
+
+function useTransparentBackingGuard(): void {
+  useEffect(() => {
+    const apply = () => forceTransparentPageBacking();
+
+    apply();
+    document.addEventListener('visibilitychange', apply);
+    window.addEventListener('focus', apply);
+    window.addEventListener('blur', apply);
+
+    return () => {
+      document.removeEventListener('visibilitychange', apply);
+      window.removeEventListener('focus', apply);
+      window.removeEventListener('blur', apply);
+    };
+  }, []);
+}
 
 // How long ago something happened, in casual human language.
 function timeAgo(timestamp: number): string {
@@ -47,8 +90,8 @@ function timeAgo(timestamp: number): string {
 function RightPill() {
   const [active, setActive] = useState(false);
   const [muted, setMuted] = useState(false);
-  const [warnBlink, setWarnBlink] = useState(false);
-  const [slideOut, setSlideOut] = useState(false);
+  const [hasTranscript, setHasTranscript] = useState(false);
+  const [recording, setRecording] = useState(false);
 
   useEffect(() => {
     const api = (window as any).dynamicIslandAPI;
@@ -56,27 +99,18 @@ function RightPill() {
 
     api.onHotMicUpdate?.((data: { active: boolean; wordCount: number; lastWord: string }) => {
       setActive(data.active);
-      if (data.active) {
-        setWarnBlink(false);
-        setSlideOut(false);
-      }
-    });
-
-    api.onHotMicWarnDiscard?.(() => {
-      setWarnBlink(true);
-      setTimeout(() => setWarnBlink(false), 600);
-    });
-
-    api.onHotMicSlideOut?.(() => {
-      setSlideOut(true);
-      setTimeout(() => {
-        setSlideOut(false);
-        setActive(false);
-      }, 400);
     });
 
     api.onHotMicMute?.((isMuted: boolean) => {
       setMuted(isMuted);
+    });
+
+    api.onStateChange?.((state: string) => {
+      setRecording(state === 'recording');
+    });
+
+    api.onDrawerTranscript?.((text: string) => {
+      setHasTranscript(text.trim().length > 0);
     });
 
     return () => {
@@ -84,43 +118,65 @@ function RightPill() {
       api.removeAllListeners('dynamic-island-hotmic-warn-discard');
       api.removeAllListeners('dynamic-island-hotmic-slide-out');
       api.removeAllListeners('dynamic-island-hotmic-mute');
+      api.removeAllListeners('dynamic-island-state');
+      api.removeAllListeners('dynamic-island-drawer-transcript');
     };
   }, []);
 
-  const handleClick = useCallback(() => {
+  const handleDotClick = useCallback(() => {
     (window as any).dynamicIslandAPI?.toggleMute?.();
   }, []);
 
-  const dotColor = warnBlink ? '#fbbf24' : '#f97316';
-  const dotShadow = warnBlink
-    ? '0 0 8px rgba(251, 191, 36, 0.6)'
-    : '0 0 8px rgba(249, 115, 22, 0.5)';
+  const handleDismissClick = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    (window as any).dynamicIslandAPI?.dismissTranscript?.();
+  }, []);
+
+  const dotColor = '#f97316';
+  const dotShadow = '0 0 8px rgba(249, 115, 22, 0.5)';
+  const showDot = active || recording || muted;
 
   return (
     <div style={rightStyles.outerContainer}>
       <div
         className="di-right-pill"
-        onClick={handleClick}
         style={{
           ...rightStyles.pill,
-          cursor: 'pointer',
         }}
       >
-        {muted ? (
-          /* Muted: gray circle with diagonal slash (⊘ / prohibition sign) */
-          <svg className="di-right-dot" width="14" height="14" viewBox="0 0 14 14" fill="none">
-            <circle cx="7" cy="7" r="5.5" stroke="rgba(255,255,255,0.7)" strokeWidth="1.5" fill="none" />
-            <line x1="3.5" y1="10.5" x2="10.5" y2="3.5" stroke="rgba(255,255,255,0.7)" strokeWidth="1.5" strokeLinecap="round" />
-          </svg>
-        ) : (
-          /* Active/inactive dot */
-          <div className="di-right-dot" style={{
-            ...rightStyles.dot,
-            opacity: (active || warnBlink) ? (slideOut ? 0 : 1) : 0,
-            backgroundColor: dotColor,
-            boxShadow: dotShadow,
-            transition: 'opacity 0.3s ease',
-          }} />
+        <button
+          className="di-right-dot-btn"
+          onClick={handleDotClick}
+          style={rightStyles.iconButton}
+          title={muted ? 'unmute hot mic' : 'mute hot mic'}
+        >
+          {muted ? (
+            <svg className="di-right-dot" width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <circle cx="7" cy="7" r="5.5" stroke="rgba(255,255,255,0.7)" strokeWidth="1.5" fill="none" />
+              <line x1="3.5" y1="10.5" x2="10.5" y2="3.5" stroke="rgba(255,255,255,0.7)" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <div className="di-right-dot" style={{
+              ...rightStyles.dot,
+              opacity: showDot ? 1 : 0,
+              backgroundColor: dotColor,
+              boxShadow: showDot ? dotShadow : 'none',
+              transition: 'opacity 0.2s ease',
+            }} />
+          )}
+        </button>
+        {hasTranscript && (
+          <button
+            className="di-right-dismiss-btn"
+            onClick={handleDismissClick}
+            style={rightStyles.dismissButton}
+            title="dismiss transcript"
+          >
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true">
+              <circle cx="5.5" cy="5.5" r="5" stroke="rgba(255,255,255,0.55)" strokeWidth="1" />
+              <path d="M3.8 3.8L7.2 7.2M7.2 3.8L3.8 7.2" stroke="rgba(255,255,255,0.65)" strokeWidth="1" strokeLinecap="round" />
+            </svg>
+          </button>
         )}
       </div>
     </div>
@@ -139,12 +195,25 @@ const rightStyles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: '6px',
     width: '100%',
-    height: '38px',
+    height: '100%',
+    boxSizing: 'border-box',
     backgroundColor: '#000000',
-    WebkitMaskImage: 'radial-gradient(white, white)',
     borderRadius: '0 0 16px 0',
     overflow: 'hidden',
+  },
+  iconButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '18px',
+    height: '18px',
+    padding: 0,
+    border: 'none',
+    borderRadius: '999px',
+    backgroundColor: 'transparent',
+    cursor: 'pointer',
   },
   dot: {
     width: '8px',
@@ -154,6 +223,18 @@ const rightStyles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
     transition: 'opacity 0.2s ease, background-color 0.15s ease',
   },
+  dismissButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '16px',
+    height: '16px',
+    padding: 0,
+    border: 'none',
+    borderRadius: '999px',
+    backgroundColor: 'transparent',
+    cursor: 'pointer',
+  },
 };
 
 // =============================================================================
@@ -161,7 +242,7 @@ const rightStyles: Record<string, React.CSSProperties> = {
 // =============================================================================
 
 function GapFill() {
-  return <div style={gapFillStyles.fill} />;
+  return <div className="di-gap-fill" style={gapFillStyles.fill} />;
 }
 
 const gapFillStyles: Record<string, React.CSSProperties> = {
@@ -217,7 +298,7 @@ function DrawerPill() {
   }, []);
 
   return (
-    <div style={drawerStyles.container}>
+    <div className="di-drawer-container" style={drawerStyles.container}>
       <div style={drawerStyles.topZone} />
       <div style={drawerStyles.textZone}>
         <span style={drawerStyles.text}>
@@ -243,7 +324,9 @@ const drawerStyles: Record<string, React.CSSProperties> = {
     width: '100%',
     height: '100%',
     backgroundColor: '#000000',
-    clipPath: 'inset(0 round 0 0 12px 12px)',
+    borderRadius: '0 0 16px 16px',
+    clipPath: 'inset(0 round 0 0 16px 16px)',
+    overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
     boxSizing: 'border-box',
@@ -257,7 +340,7 @@ const drawerStyles: Record<string, React.CSSProperties> = {
     height: '44px',
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     padding: '6px 16px',
     boxSizing: 'border-box',
   },
@@ -270,7 +353,7 @@ const drawerStyles: Record<string, React.CSSProperties> = {
     textOverflow: 'ellipsis',
     display: 'block',
     width: '100%',
-    textAlign: 'center',
+    textAlign: 'left',
     lineHeight: '18px',
   },
 };
@@ -287,11 +370,28 @@ function LeftPill() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyVisible, setHistoryVisible] = useState(false);
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [deletedId, setDeletedId] = useState<number | null>(null);
   const [dotCount, setDotCount] = useState(1);
+  const [historyWordsPerLine, setHistoryWordsPerLine] = useState(10);
+  const [voiceTuningVisible, setVoiceTuningVisible] = useState(false);
+  const [backgroundFilterEnabled, setBackgroundFilterEnabled] = useState(false);
+  const [backgroundFilterStrength, setBackgroundFilterStrength] = useState(50);
+  const [compactPillWidth, setCompactPillWidth] = useState<number>(() => window.innerWidth);
+  const [compactPillHeight, setCompactPillHeight] = useState<number>(() => window.innerHeight);
+  const [filterMeter, setFilterMeter] = useState<HotMicFilterMeter>({
+    enabled: false,
+    strength: 50,
+    rawLevel: 0,
+    acceptedLevel: 0,
+    threshold: 0,
+    speechRatio: 0,
+    chunkSuppressed: false,
+  });
 
   const transcriptRef = useRef<HTMLDivElement>(null);
   const historyScrollRef = useRef<HTMLDivElement>(null);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deletedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dotIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -329,8 +429,19 @@ function LeftPill() {
       setHistoryVisible(false);
     });
 
-    api.onShowHistory?.(() => {
-      setHistoryVisible(true);
+    void api.getHotMicBackgroundFilterEnabled?.().then((enabled: boolean) => {
+      setBackgroundFilterEnabled(enabled);
+      setFilterMeter((prev) => ({ ...prev, enabled }));
+    });
+    void api.getHotMicBackgroundFilterStrength?.().then((strength: number) => {
+      const normalized = Math.max(0, Math.min(100, Math.round(strength)));
+      setBackgroundFilterStrength(normalized);
+      setFilterMeter((prev) => ({ ...prev, strength: normalized }));
+    });
+    api.onHotMicFilterMeter?.((data: HotMicFilterMeter) => {
+      setFilterMeter(data);
+      setBackgroundFilterEnabled(data.enabled);
+      setBackgroundFilterStrength(Math.max(0, Math.min(100, Math.round(data.strength))));
     });
 
     api.requestHistory();
@@ -342,6 +453,15 @@ function LeftPill() {
       api.removeAllListeners('dynamic-island-history');
       api.removeAllListeners('dynamic-island-hide-history');
       api.removeAllListeners('dynamic-island-show-history');
+      api.removeAllListeners('dynamic-island-hotmic-filter-meter');
+      if (copiedTimerRef.current) {
+        clearTimeout(copiedTimerRef.current);
+        copiedTimerRef.current = null;
+      }
+      if (deletedTimerRef.current) {
+        clearTimeout(deletedTimerRef.current);
+        deletedTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -368,15 +488,44 @@ function LeftPill() {
     }
   }, [transcript]);
 
-  const toggleHistory = useCallback(() => {
-    const next = !historyVisible;
-    (window as any).dynamicIslandAPI?.setHistoryVisible(next);
-    if (next) {
-      (window as any).dynamicIslandAPI?.requestHistory();
-    } else {
-      setHistoryVisible(false);
+  useEffect(() => {
+    if (!historyVisible) return;
+    const panel = historyScrollRef.current;
+    if (!panel) return;
+
+    const updateEstimate = () => {
+      setHistoryWordsPerLine(estimateWordsPerLine(panel.clientWidth || null));
+    };
+
+    updateEstimate();
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(() => updateEstimate());
+      observer.observe(panel);
+      return () => observer.disconnect();
     }
+
+    window.addEventListener('resize', updateEstimate);
+    return () => window.removeEventListener('resize', updateEstimate);
   }, [historyVisible]);
+
+  useEffect(() => {
+    const syncCompactPillSize = () => {
+      if (historyVisible) return;
+      setCompactPillWidth(window.innerWidth);
+      setCompactPillHeight(window.innerHeight);
+    };
+
+    syncCompactPillSize();
+    window.addEventListener('resize', syncCompactPillSize);
+    return () => window.removeEventListener('resize', syncCompactPillSize);
+  }, [historyVisible]);
+
+  const toggleHistory = useCallback(() => {
+    // Keep hamburger decoupled from left-pill geometry:
+    // it only toggles the main history window now.
+    (window as any).dynamicIslandAPI?.openFieldTheory?.();
+  }, []);
 
   const handleCopyPaste = useCallback((text: string, id: number) => {
     (window as any).dynamicIslandAPI?.copyAndPaste(text);
@@ -392,8 +541,41 @@ function LeftPill() {
     copiedTimerRef.current = setTimeout(() => setCopiedId(null), 1500);
   }, []);
 
+  const handleDelete = useCallback((id: number) => {
+    (window as any).dynamicIslandAPI?.deleteHistoryItem?.(id);
+    setDeletedId(id);
+    setHistory(prev => prev.filter(item => item.id !== id));
+    if (deletedTimerRef.current) clearTimeout(deletedTimerRef.current);
+    deletedTimerRef.current = setTimeout(() => setDeletedId(null), 1500);
+  }, []);
+
   const handleOpenFieldTheory = useCallback(() => {
     (window as any).dynamicIslandAPI?.openFieldTheory?.();
+  }, []);
+
+  const handleBackgroundFilterToggle = useCallback(() => {
+    const next = !backgroundFilterEnabled;
+    setBackgroundFilterEnabled(next);
+    setFilterMeter((prev) => ({ ...prev, enabled: next }));
+    void (window as any).dynamicIslandAPI
+      ?.setHotMicBackgroundFilterEnabled?.(next)
+      .then((saved: boolean) => {
+        setBackgroundFilterEnabled(saved);
+        setFilterMeter((prev) => ({ ...prev, enabled: saved }));
+      });
+  }, [backgroundFilterEnabled]);
+
+  const handleBackgroundFilterStrengthChange = useCallback((value: number) => {
+    const normalized = Math.max(0, Math.min(100, Math.round(value)));
+    setBackgroundFilterStrength(normalized);
+    setFilterMeter((prev) => ({ ...prev, strength: normalized }));
+    void (window as any).dynamicIslandAPI
+      ?.setHotMicBackgroundFilterStrength?.(normalized)
+      .then((saved: number) => {
+        const clamped = Math.max(0, Math.min(100, Math.round(saved)));
+        setBackgroundFilterStrength(clamped);
+        setFilterMeter((prev) => ({ ...prev, strength: clamped }));
+      });
   }, []);
 
   const renderTranscript = () => {
@@ -456,17 +638,22 @@ function LeftPill() {
     return <>{parts}</>;
   };
 
-  const isIdle = state === 'idle' && !historyVisible;
-  const isActive = state === 'recording' || state === 'transcribing' || state === 'improving';
-  const hasTranscript = transcript.length > 0;
-  const showTranscript = hasTranscript && (state === 'showing-transcript' || state === 'transcribing');
+  const incomingPct = Math.round(Math.max(0, Math.min(1, filterMeter.rawLevel)) * 100);
+  const acceptedPct = Math.round(Math.max(0, Math.min(1, filterMeter.acceptedLevel)) * 100);
+  const thresholdPct = Math.round(Math.max(0, Math.min(1, filterMeter.threshold)) * 100);
+  const speechRatioPct = Math.round(Math.max(0, Math.min(1, filterMeter.speechRatio)) * 100);
 
   return (
     <div style={styles.outerContainer}>
-      <div style={{
-        ...styles.island,
-        ...(isIdle ? styles.islandIdle : {}),
-      }}>
+      <div
+        className="di-left-pill"
+        style={{
+          ...styles.island,
+          ...styles.islandIdle,
+          width: `${compactPillWidth}px`,
+          height: `${compactPillHeight}px`,
+        }}
+      >
         <button
           className="di-hamburger"
           onClick={toggleHistory}
@@ -476,49 +663,17 @@ function LeftPill() {
           }}
           title="transcript history"
         >
-          <svg width="14" height="10" viewBox="0 0 14 10" fill="none">
-            <rect y="0" width="14" height="1.5" rx="0.75" fill="rgba(255,255,255,0.7)" />
-            <rect y="4" width="10" height="1.5" rx="0.75" fill="rgba(255,255,255,0.7)" />
-            <rect y="8" width="14" height="1.5" rx="0.75" fill="rgba(255,255,255,0.7)" />
+          <svg width="14" height="10" viewBox="0 0 14 10" fill="none" shapeRendering="crispEdges" aria-hidden="true">
+            <path d="M0 1H14V2H0V1Z" fill="rgba(255,255,255,0.78)" />
+            <path d="M0 5H10V6H0V5Z" fill="rgba(255,255,255,0.78)" />
+            <path d="M0 9H14V10H0V9Z" fill="rgba(255,255,255,0.78)" />
           </svg>
         </button>
 
-        {!isIdle && <div style={styles.contentArea}>
-          {isActive && (
-            <div style={{
-              ...styles.dot,
-              backgroundColor: state === 'recording' ? '#ff3b30'
-                : state === 'improving' ? '#007aff'
-                : '#af52de',
-              boxShadow: state === 'recording' ? '0 0 8px rgba(255, 59, 48, 0.5)'
-                : state === 'improving' ? '0 0 8px rgba(0, 122, 255, 0.5)'
-                : '0 0 8px rgba(175, 82, 222, 0.5)',
-              animation: state === 'recording' ? 'pulse 1.8s ease-in-out infinite' : 'none',
-            }} />
-          )}
-
-          <div style={styles.textContainer} ref={transcriptRef}>
-            {state === 'recording' && !hasTranscript && (
-              <span style={styles.statusText}>recording</span>
-            )}
-            {state === 'transcribing' && !hasTranscript && (
-              <span style={styles.statusText}>transcribing{'.'.repeat(dotCount)}</span>
-            )}
-            {state === 'improving' && (
-              <span style={styles.statusText}>improving{'.'.repeat(dotCount)}</span>
-            )}
-            {showTranscript && (
-              <span style={styles.transcriptText}>{renderTranscript()}</span>
-            )}
-            {state === 'recording' && hasTranscript && (
-              <span style={styles.transcriptText}>{renderTranscript()}</span>
-            )}
-          </div>
-        </div>}
       </div>
 
       {historyVisible && (
-        <div style={styles.historyPanel} ref={historyScrollRef}>
+        <div className="di-history-panel" style={styles.historyPanel} ref={historyScrollRef}>
           <div style={styles.historyList}>
             {history.length === 0 ? (
               <div style={styles.emptyHistory}>
@@ -530,13 +685,32 @@ function LeftPill() {
                 <div key={item.id} className="di-history-item" style={styles.historyItem}>
                   <div style={styles.historyTextArea} onClick={() => handleCopyPaste(item.text, item.id)}>
                     <span style={styles.historyText}>
-                      {item.text.toLowerCase().slice(0, 140)}
-                      {item.text.length > 140 ? '...' : ''}
+                      {summarizeTranscriptForHistory(
+                        item.text.toLowerCase(),
+                        historyWordsPerLine,
+                        HISTORY_PREVIEW_TRAILING_WORDS,
+                        HISTORY_PREVIEW_MAX_LINES
+                      )}
                     </span>
                     <span style={styles.historyMeta}>
                       {item.wordCount} words · {timeAgo(item.createdAt)}
                     </span>
                   </div>
+                  <button
+                    className="di-delete-btn"
+                    style={{
+                      ...styles.deleteButton,
+                      backgroundColor: deletedId === item.id ? 'rgba(255, 69, 58, 0.35)' : 'rgba(255, 255, 255, 0.08)',
+                    }}
+                    onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }}
+                    title="delete transcript"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                      <path d="M4 1.5H8L8.6 2.4H10.5V3.4H1.5V2.4H3.4L4 1.5Z" fill="rgba(255,255,255,0.7)" />
+                      <path d="M3 4.2H9V9.2C9 9.75 8.55 10.2 8 10.2H4C3.45 10.2 3 9.75 3 9.2V4.2Z" stroke="rgba(255,255,255,0.7)" strokeWidth="0.9" />
+                      <path d="M5 5.2V8.4M7 5.2V8.4" stroke="rgba(255,255,255,0.7)" strokeWidth="0.9" strokeLinecap="round" />
+                    </svg>
+                  </button>
                   <button
                     className="di-copy-btn"
                     style={{
@@ -562,6 +736,69 @@ function LeftPill() {
             )}
           </div>
           <button
+            className="di-voice-tuning-btn"
+            style={styles.voiceTuningButton}
+            onClick={() => setVoiceTuningVisible((prev) => !prev)}
+            title="hot mic voice tuning"
+          >
+            {voiceTuningVisible ? 'hide voice tuning' : 'voice tuning'}
+          </button>
+          {voiceTuningVisible && (
+            <div style={styles.voiceTuningPanel}>
+              <div style={styles.voiceTuningRow}>
+                <span style={styles.voiceTuningLabel}>background voice filter</span>
+                <button
+                  onClick={handleBackgroundFilterToggle}
+                  style={{
+                    ...styles.smallToggle,
+                    backgroundColor: backgroundFilterEnabled ? 'rgba(52, 199, 89, 0.9)' : 'rgba(255, 255, 255, 0.2)',
+                  }}
+                >
+                  <span style={{
+                    ...styles.smallToggleKnob,
+                    transform: backgroundFilterEnabled ? 'translateX(14px)' : 'translateX(2px)',
+                  }}
+                  />
+                </button>
+              </div>
+              <div style={styles.voiceTuningSliderWrap}>
+                <div style={styles.voiceMetaRow}>
+                  <span style={styles.voiceMetaLabel}>strictness</span>
+                  <span style={styles.voiceMetaValue}>{backgroundFilterStrength}%</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={backgroundFilterStrength}
+                  onChange={(e) => handleBackgroundFilterStrengthChange(Number(e.target.value))}
+                  style={styles.voiceSlider}
+                />
+              </div>
+              <div style={styles.voiceMeters}>
+                <div style={styles.voiceMetaRow}>
+                  <span style={styles.voiceMetaLabel}>incoming</span>
+                  <span style={styles.voiceMetaValue}>{incomingPct}%</span>
+                </div>
+                <div style={styles.voiceMeterTrack}>
+                  <div style={{ ...styles.voiceMeterFillIncoming, width: `${incomingPct}%` }} />
+                </div>
+                <div style={styles.voiceMetaRow}>
+                  <span style={styles.voiceMetaLabel}>accepted</span>
+                  <span style={styles.voiceMetaValue}>{acceptedPct}%</span>
+                </div>
+                <div style={styles.voiceMeterTrack}>
+                  <div style={{ ...styles.voiceMeterFillAccepted, width: `${acceptedPct}%` }} />
+                </div>
+                <div style={styles.voiceStats}>
+                  threshold {thresholdPct}% · speech {speechRatioPct}%
+                  {filterMeter.chunkSuppressed ? ' · suppressed chunk' : ''}
+                </div>
+              </div>
+            </div>
+          )}
+          <button
             className="di-open-ft-btn"
             style={styles.openFieldTheoryButton}
             onClick={handleOpenFieldTheory}
@@ -583,7 +820,7 @@ const styles: Record<string, React.CSSProperties> = {
   outerContainer: {
     display: 'flex',
     flexDirection: 'column',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     width: '100%',
     fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
   },
@@ -592,17 +829,16 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
-    width: '100%',
-    height: '42px',
+    width: '48px',
+    height: '38px',
     padding: '0 10px',
+    boxSizing: 'border-box',
     backgroundColor: '#000000',
-    WebkitMaskImage: 'radial-gradient(white, white)',
     borderRadius: '0 0 22px 22px',
     boxShadow: 'none',
     overflow: 'hidden',
-    margin: '0 auto',
+    margin: '0',
     animation: 'fadeInIsland 0.2s ease-out',
-    transition: 'width 0.2s ease, padding 0.2s ease',
   },
 
   islandIdle: {
@@ -686,7 +922,6 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: '4px',
     padding: '6px',
     backgroundColor: '#000000',
-    WebkitMaskImage: 'radial-gradient(white, white)',
     borderRadius: '14px',
     boxShadow: 'none',
     display: 'flex',
@@ -727,11 +962,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 400,
     color: 'rgba(255, 255, 255, 0.82)',
     lineHeight: '16px',
+    whiteSpace: 'normal',
     overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    display: '-webkit-box',
-    WebkitLineClamp: 2,
-    WebkitBoxOrient: 'vertical' as any,
+    display: 'block',
+    maxHeight: '48px',
     wordBreak: 'break-word',
   },
 
@@ -742,6 +976,20 @@ const styles: Record<string, React.CSSProperties> = {
   },
 
   copyButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '28px',
+    height: '28px',
+    minWidth: '28px',
+    borderRadius: '7px',
+    border: 'none',
+    cursor: 'pointer',
+    transition: 'background-color 0.15s ease',
+    flexShrink: 0,
+  },
+
+  deleteButton: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -776,15 +1024,139 @@ const styles: Record<string, React.CSSProperties> = {
     color: 'rgba(255, 255, 255, 0.22)',
   },
 
+  voiceTuningButton: {
+    width: '100%',
+    height: '36px',
+    border: 'none',
+    borderRadius: '11px',
+    backgroundColor: 'rgba(255, 255, 255, 0.09)',
+    color: 'rgba(255, 255, 255, 0.86)',
+    fontSize: '12px',
+    fontWeight: 560,
+    letterSpacing: '0.01em',
+    cursor: 'pointer',
+    transition: 'background-color 0.12s ease',
+    textTransform: 'lowercase',
+  },
+
+  voiceTuningPanel: {
+    width: '100%',
+    padding: '8px 10px',
+    borderRadius: '10px',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
+
+  voiceTuningRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '8px',
+  },
+
+  voiceTuningLabel: {
+    fontSize: '10.5px',
+    color: 'rgba(255, 255, 255, 0.84)',
+    textTransform: 'lowercase',
+  },
+
+  smallToggle: {
+    position: 'relative',
+    width: '34px',
+    height: '20px',
+    border: 'none',
+    borderRadius: '12px',
+    padding: 0,
+    cursor: 'pointer',
+    transition: 'background-color 0.12s ease',
+  },
+
+  smallToggleKnob: {
+    position: 'absolute',
+    top: '2px',
+    left: 0,
+    width: '16px',
+    height: '16px',
+    borderRadius: '50%',
+    backgroundColor: '#ffffff',
+    transition: 'transform 0.12s ease',
+  },
+
+  voiceTuningSliderWrap: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '5px',
+  },
+
+  voiceSlider: {
+    width: '100%',
+    accentColor: '#34c759',
+  },
+
+  voiceMetaRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+
+  voiceMetaLabel: {
+    fontSize: '10px',
+    color: 'rgba(255, 255, 255, 0.54)',
+    textTransform: 'lowercase',
+  },
+
+  voiceMetaValue: {
+    fontSize: '10px',
+    color: 'rgba(255, 255, 255, 0.78)',
+    fontVariantNumeric: 'tabular-nums',
+  },
+
+  voiceMeters: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+  },
+
+  voiceMeterTrack: {
+    width: '100%',
+    height: '6px',
+    borderRadius: '999px',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    overflow: 'hidden',
+  },
+
+  voiceMeterFillIncoming: {
+    height: '100%',
+    borderRadius: '999px',
+    backgroundColor: 'rgba(255, 193, 7, 0.95)',
+    transition: 'width 80ms linear',
+  },
+
+  voiceMeterFillAccepted: {
+    height: '100%',
+    borderRadius: '999px',
+    backgroundColor: 'rgba(52, 199, 89, 0.95)',
+    transition: 'width 80ms linear',
+  },
+
+  voiceStats: {
+    marginTop: '2px',
+    fontSize: '9.5px',
+    color: 'rgba(255, 255, 255, 0.48)',
+    textTransform: 'lowercase',
+  },
+
   openFieldTheoryButton: {
     width: '100%',
-    height: '30px',
+    height: '40px',
     border: 'none',
-    borderRadius: '9px',
+    borderRadius: '11px',
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
     color: 'rgba(255, 255, 255, 0.86)',
-    fontSize: '11px',
-    fontWeight: 500,
+    fontSize: '12.5px',
+    fontWeight: 560,
     letterSpacing: '0.01em',
     cursor: 'pointer',
     transition: 'background-color 0.12s ease',
@@ -795,6 +1167,17 @@ const styles: Record<string, React.CSSProperties> = {
 // Keyframes and interaction styles.
 const styleSheet = document.createElement('style');
 styleSheet.textContent = `
+  :root, html, body, #root {
+    background: transparent !important;
+  }
+  .di-left-pill {
+    margin-left: 0 !important;
+  }
+  @media (min-width: ${HISTORY_LAYOUT_MIN_WIDTH_PX}px) {
+    .di-left-pill {
+      margin-left: ${HISTORY_PILL_OFFSET_PX}px !important;
+    }
+  }
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
@@ -823,7 +1206,13 @@ styleSheet.textContent = `
   .di-copy-btn:hover {
     background-color: rgba(255, 255, 255, 0.15) !important;
   }
+  .di-delete-btn:hover {
+    background-color: rgba(255, 69, 58, 0.25) !important;
+  }
   .di-open-ft-btn:hover {
+    background-color: rgba(255, 255, 255, 0.16) !important;
+  }
+  .di-voice-tuning-btn:hover {
     background-color: rgba(255, 255, 255, 0.16) !important;
   }
   .di-hamburger:hover {
@@ -844,6 +1233,8 @@ document.head.appendChild(styleSheet);
 // =============================================================================
 
 export default function DynamicIsland() {
+  useTransparentBackingGuard();
+
   if (side === 'drawer') return <DrawerPill />;
   if (side === 'right') return <RightPill />;
   if (side === 'filler') return <GapFill />;
@@ -863,13 +1254,20 @@ declare global {
       onHotMicWarnDiscard?: (cb: () => void) => void;
       onHotMicSlideOut?: (cb: () => void) => void;
       onHotMicMute?: (cb: (muted: boolean) => void) => void;
+      onHotMicFilterMeter?: (cb: (data: HotMicFilterMeter) => void) => void;
       toggleMute?: () => void;
+      dismissTranscript?: () => void;
       onDrawerTranscript?: (cb: (text: string) => void) => void;
       onDrawerSpeaking?: (cb: (speaking: boolean) => void) => void;
+      getHotMicBackgroundFilterEnabled?: () => Promise<boolean>;
+      setHotMicBackgroundFilterEnabled?: (enabled: boolean) => Promise<boolean>;
+      getHotMicBackgroundFilterStrength?: () => Promise<number>;
+      setHotMicBackgroundFilterStrength?: (strength: number) => Promise<number>;
       openFieldTheory?: () => void;
       requestHistory: () => void;
       copyAndPaste: (text: string) => void;
       copyToClipboard: (text: string) => void;
+      deleteHistoryItem?: (id: number) => void;
       toggleHistory: () => void;
       setHistoryVisible: (visible: boolean) => void;
       removeAllListeners: (channel: string) => void;
