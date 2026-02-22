@@ -248,6 +248,7 @@ interface ClipboardAPI {
   onItemAdded: (callback: (id: number) => void) => () => void;
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
+  onShowTranscriptHistory?: (callback: () => void) => () => void;
   onShowSettings?: (callback: () => void) => () => void;
   onCollapseImmersive?: (callback: () => void) => () => void;
   onResetToClipboardView?: (callback: () => void) => () => void;
@@ -957,6 +958,37 @@ interface HotMicAPI {
   setTargetApp: (bundleId: string | null) => Promise<string | null>;
   getSoundsEnabled: () => Promise<boolean>;
   setSoundsEnabled: (enabled: boolean) => Promise<boolean>;
+  getBackgroundFilterEnabled: () => Promise<boolean>;
+  setBackgroundFilterEnabled: (enabled: boolean) => Promise<boolean>;
+  getBackgroundFilterStrength: () => Promise<number>;
+  setBackgroundFilterStrength: (strength: number) => Promise<number>;
+  getIslandGeometry: () => Promise<{
+    notchWidthOverride: number;
+    pillWidth: number;
+    pillHeight: number;
+    offsetX: number;
+    offsetY: number;
+  }>;
+  setIslandGeometry: (geometry: Partial<{
+    notchWidthOverride: number;
+    pillWidth: number;
+    pillHeight: number;
+    offsetX: number;
+    offsetY: number;
+  }>) => Promise<{
+    notchWidthOverride: number;
+    pillWidth: number;
+    pillHeight: number;
+    offsetX: number;
+    offsetY: number;
+  }>;
+  resetIslandGeometry: () => Promise<{
+    notchWidthOverride: number;
+    pillWidth: number;
+    pillHeight: number;
+    offsetX: number;
+    offsetY: number;
+  }>;
   getSubmitWord: () => Promise<string>;
   setSubmitWord: (word: string) => Promise<string>;
   getHotkey: () => Promise<string | null>;
@@ -981,6 +1013,10 @@ interface HotMicAPI {
   setQuitPhrases: (words: string) => Promise<string>;
   getSwitchWords: () => Promise<string>;
   setSwitchWords: (words: string) => Promise<string>;
+  getOpenAppPrefixes: () => Promise<string>;
+  setOpenAppPrefixes: (words: string) => Promise<string>;
+  getQuitAppPrefixes: () => Promise<string>;
+  setQuitAppPrefixes: (words: string) => Promise<string>;
   getRunClaudeWords: () => Promise<string>;
   setRunClaudeWords: (words: string) => Promise<string>;
   getRunCodexWords: () => Promise<string>;
@@ -1003,6 +1039,7 @@ interface HotMicAPI {
   isHookInstalled: () => Promise<boolean>;
   installHook: () => Promise<{ success: boolean; error?: string }>;
   uninstallHook: () => Promise<{ success: boolean; error?: string }>;
+  resetCommandDefaults: () => Promise<boolean>;
   onStateChanged: (callback: (state: string) => void) => () => void;
 }
 
