@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hot Mic - Field Theory</title>
+  <meta name="description" content="Hot Mic setup guide and default voice commands for Field Theory.">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .hotmic-content h2 {
+      margin-top: var(--space-xl);
+      margin-bottom: var(--space-sm);
+      font-size: 1.35rem;
+    }
+
+    .hotmic-content h3 {
+      margin-top: var(--space-md);
+      margin-bottom: 0.35rem;
+      font-size: 1.05rem;
+      font-weight: 600;
+    }
+
+    .hotmic-content ul,
+    .hotmic-content ol {
+      margin: 0.25rem 0 var(--space-md) 1.4rem;
+      padding-left: 0.7rem;
+    }
+
+    .hotmic-content li {
+      margin: 0.15rem 0;
+      line-height: 1.65;
+    }
+
+    .hotmic-content code {
+      font-size: 0.92em;
+    }
+
+    .hotmic-content .command-group {
+      border-left: 2px solid var(--color-border);
+      padding-left: var(--space-sm);
+      margin: var(--space-md) 0 var(--space-lg);
+    }
+
+    .hotmic-content .helper-note {
+      color: var(--color-text-muted);
+      font-size: 0.95rem;
+      margin-top: calc(var(--space-sm) * -1);
+    }
+
+    .hotmic-content .command-label {
+      display: inline-block;
+      margin-right: 0.35rem;
+      color: var(--color-text);
+      font-weight: 500;
+    }
+
+    .hotmic-content .chip-row {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      vertical-align: middle;
+    }
+
+    .hotmic-content .phrase-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.1rem 0.5rem;
+      border-radius: 999px;
+      background: var(--color-bg-alt);
+      border: 1px solid var(--color-border);
+      color: var(--color-text);
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+      line-height: 1.45;
+      white-space: nowrap;
+    }
+
+    .hotmic-content li.has-chip-row {
+      margin-bottom: 0.4rem;
+    }
+  </style>
+  <script defer src="/_vercel/insights/script.js"></script>
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav class="nav">
+    <div class="container nav-inner">
+      <a href="/" class="nav-logo"><img id="nav-logo-img" src="images/fieldtheory-logo-black.png" alt="Field Theory" class="nav-logo-img"></a>
+      <button class="theme-toggle theme-toggle-mobile" onclick="toggleTheme()">◐</button>
+      <button class="nav-toggle" onclick="toggleNav()" aria-label="Toggle navigation">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round">
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+      <ul class="nav-links" id="nav-links">
+        <li><a href="/#pricing">Pricing</a></li>
+        <li><a href="/#download">Download</a></li>
+        <li><a href="theory.html">Theory</a></li>
+        <li><a href="hot-mic.html">Hot Mic</a></li>
+        <li><button class="theme-toggle" onclick="toggleTheme()">◐</button></li>
+      </ul>
+    </div>
+  </nav>
+
+  <!-- Hot Mic Content -->
+  <main class="theory-content">
+    <h1>Hot Mic</h1>
+    <p class="theory-subtitle">Always-on voice commands and dictation for Field Theory.</p>
+
+    <div class="theory-body hotmic-content">
+      <p>Hot Mic is Field Theory's always-on voice layer for command-first, hands-free workflows. If push-to-talk is for intentional capture, Hot Mic is for continuous flow: speak naturally, then trigger submit, paste, or action phrases.</p>
+
+      <p>Hot Mic is very experimental and actively improving. Please <a href="https://x.com/andrewfarah" class="link-primary">@andrewfarah</a> on X if you have feedback.</p>
+
+      <hr class="dotted-line">
+
+      <h2>Requirements</h2>
+      <ul>
+        <li>macOS 14+</li>
+        <li>Apple Silicon (M1 or later)</li>
+        <li>Qwen transcription engine selected in Field Theory</li>
+        <li>Qwen voice model installed (open source, runs fully offline)</li>
+        <li>Microphone and accessibility permissions granted</li>
+      </ul>
+
+      <h2>Quick Start</h2>
+      <ol>
+        <li>Open <code>Settings -&gt; Audio &amp; Transcription</code> and select <code>Qwen</code>.</li>
+        <li>Install Qwen if prompted.</li>
+        <li>Open <code>Settings -&gt; Hot Mic</code> and enable Hot Mic.</li>
+        <li>Speak naturally.</li>
+        <li>End with a submit phrase (for example, <code>go ahead</code>) to send.</li>
+      </ol>
+
+      <hr class="dotted-line">
+
+      <h2>Default Voice Commands (Editable)</h2>
+      <p class="helper-note">Each group below is editable in <code>Settings -&gt; Hot Mic</code>.</p>
+
+      <section class="command-group">
+        <h3>1) Dictation Control</h3>
+        <ul>
+          <li>Submit buffered text: <code>go ahead</code>, <code>send it</code>, <code>submit</code>, <code>do it</code></li>
+          <li>Paste buffered text without submit: <code>paste</code>, <code>paste it</code>, <code>transcribe</code></li>
+          <li>Cancel/interrupt (clears buffer): <code>stop</code>, <code>abort</code></li>
+        </ul>
+      </section>
+
+      <section class="command-group">
+        <h3>2) Window and Terminal Workflow</h3>
+        <ul>
+          <li>Next window: <code>next window</code>, <code>switch</code></li>
+          <li>Previous window: <code>previous window</code></li>
+          <li>New window: <code>new window</code></li>
+          <li>Close window: <code>close window</code>, <code>close the window</code>, <code>close this window</code></li>
+          <li>Minimize: <code>minimize</code>, <code>minimize window</code>, <code>minimize the window</code></li>
+          <li>Hide app: <code>hide</code>, <code>hide app</code>, <code>hide this app</code>, <code>hide the app</code></li>
+          <li>Quit current app shortcut: <code>quit app</code>, <code>quit this app</code></li>
+          <li>Start Claude: <code>start claude</code>, <code>start cloud</code>, <code>run claude</code>, <code>start clod</code></li>
+          <li>Start Codex: <code>start codex</code>, <code>run codex</code></li>
+          <li>Restart server: <code>restart server</code>, <code>restart dev</code>, <code>restart dev server</code></li>
+        </ul>
+        <p><code>restart server</code> requires a configured command (for example, <code>npm run dev</code>).</p>
+      </section>
+
+      <section class="command-group">
+        <h3>3) Media and System Controls</h3>
+        <ul>
+          <li>Play/pause: <code>play</code>, <code>pause</code>, <code>play pause</code>, <code>play music</code>, <code>pause music</code></li>
+          <li>Next track: <code>next track</code>, <code>next song</code>, <code>skip song</code></li>
+          <li>Previous track: <code>previous track</code>, <code>previous song</code>, <code>go back a song</code>, <code>last song</code></li>
+          <li>Volume up: <code>louder</code>, <code>volume up</code>, <code>turn it up</code></li>
+          <li>Volume down: <code>softer</code>, <code>quieter</code>, <code>volume down</code>, <code>turn it down</code></li>
+          <li>Mute: <code>mute</code>, <code>mute audio</code></li>
+          <li>Unmute: <code>unmute</code>, <code>unmute audio</code></li>
+          <li>Sleep Mac: <code>go to sleep</code>, <code>sleep computer</code></li>
+          <li>Lock screen: <code>lock screen</code>, <code>lock computer</code></li>
+        </ul>
+      </section>
+
+      <section class="command-group">
+        <h3>4) App Switching and App Quit by Name</h3>
+        <p>Hot Mic supports phrase prefixes plus app names and aliases.</p>
+        <ul>
+          <li>Open/switch prefixes: <code>open</code>, <code>switch to</code>, <code>go to</code></li>
+          <li>Hide-by-name prefix: <code>hide</code></li>
+          <li>Quit prefixes: <code>quit</code>, <code>close</code>, <code>kill</code></li>
+        </ul>
+        <p>Examples: <code>open chrome</code>, <code>switch to terminal</code>, <code>go to cursor</code>, <code>hide slack</code>, <code>quit slack</code>, <code>close spotify</code>.</p>
+      </section>
+
+      <section class="command-group">
+        <h3>5) Window Layout Commands (Squares)</h3>
+        <ul>
+          <li>Grid/tile: <code>grid</code>, <code>tile</code>, <code>tile all</code>, <code>grid all</code></li>
+          <li>Show windows: <code>show all</code>, <code>show all windows</code>, <code>show windows</code></li>
+          <li>Focus mode: <code>focus</code>, <code>focus mode</code>, <code>center focus</code>, <code>hide others</code>, <code>hide other windows</code></li>
+          <li>Layouts: <code>horizontal</code>, <code>spread horizontal</code>, <code>side by side</code>, <code>vertical</code>, <code>spread vertical</code>, <code>stack windows</code>, <code>cascade</code>, <code>cascade windows</code></li>
+          <li>Position: <code>snap left</code>, <code>snap right</code></li>
+          <li>Corners: <code>top left corner</code>, <code>top right corner</code>, <code>bottom left corner</code>, <code>bottom right corner</code></li>
+          <li>Screen/restore: <code>maximize</code>, <code>full screen</code>, <code>fullscreen</code>, <code>enter full screen</code>, <code>exit full screen</code>, <code>leave full screen</code>, <code>center</code>, <code>center window</code>, <code>restore</code></li>
+        </ul>
+      </section>
+
+      <section class="command-group">
+        <h3>6) Portable Command Files</h3>
+        <ul>
+          <li>Single command file: <code>use the &lt;name&gt; command</code></li>
+          <li>Multiple command files: <code>use the commands &lt;a&gt;, &lt;b&gt;, and &lt;c&gt;</code></li>
+        </ul>
+      </section>
+
+      <section class="command-group">
+        <h3>7) Fast Reply Shortcuts</h3>
+        <ul>
+          <li><code>first option</code> -&gt; <code>1</code></li>
+          <li><code>second option</code> -&gt; <code>2</code></li>
+          <li><code>third option</code> -&gt; <code>3</code></li>
+          <li><code>fourth option</code> -&gt; <code>4</code></li>
+          <li><code>allow</code> or <code>approve</code> -&gt; <code>y</code></li>
+          <li><code>always</code> -&gt; <code>a</code></li>
+          <li><code>deny</code> -&gt; <code>n</code></li>
+        </ul>
+      </section>
+
+      <hr class="dotted-line">
+
+      <h2>Context Stacking</h2>
+      <ul>
+        <li>Hot Mic currently focuses on voice dictation and voice commands.</li>
+        <li>Screenshot context stacking is not supported yet in Hot Mic mode.</li>
+        <li>For now, take screenshots and paste them manually.</li>
+        <li>In terminals like Claude Code or Codex, use <code>Command+Shift+V</code> (Super Paste) for images. This pastes image file paths the terminal workflow can reference.</li>
+      </ul>
+
+      <h2>Customize and Reset</h2>
+      <p>Everything is editable in <code>Settings -&gt; Hot Mic</code>, including submit/paste/cancel phrases, app prefixes, system command phrases, restart-server behavior, and app voice aliases.</p>
+      <p>If things drift, click <code>Reset Voice Defaults</code> to restore the default phrase sets.</p>
+
+      <h2>Customize Voice Commands Outside Default Settings</h2>
+      <p>Modifying default phrase groups is encouraged, but do it carefully.</p>
+      <ul>
+        <li>Single-word commands are more likely to fire accidentally during normal dictation.</li>
+        <li>There is always a tradeoff between fast command triggers and clean conversational dictation.</li>
+        <li>You may trigger a command when you meant to keep talking. Hot Mic has guardrails, but mileage may vary.</li>
+        <li>Strong recommendation: add phrase-based commands first, then test single-word commands incrementally.</li>
+        <li>Avoid changing many commands at once. Small edits preserve flow and make regressions easier to isolate.</li>
+      </ul>
+
+      <h2>Dynamic Island</h2>
+      <ul>
+        <li>The orange dot means Hot Mic is actively listening.</li>
+        <li>The transcript dropdown appears after the first five words to reduce early hallucinated fragments.</li>
+        <li>Your first five words are still captured. The display is delayed; transcription is not.</li>
+        <li>Speak naturally. You do not need to pause or repeat the start of a sentence.</li>
+        <li>You can recover recent entries from Dynamic Island transcript history (up to 25).</li>
+      </ul>
+
+      <h2>Hot Mic vs Push-To-Talk</h2>
+      <ul>
+        <li>Hot Mic: ambient, command-driven, continuous buffering.</li>
+        <li>Push-to-talk: intentional, bounded by hotkey press/release.</li>
+      </ul>
+
+      <h2>Privacy</h2>
+      <p>Hot Mic command detection and transcription behavior are local-first. Auto-improve is not available in Hot Mic mode.</p>
+
+      <h2>Safety and Recovery</h2>
+      <ul>
+        <li>Commands are matched at the end of utterances.</li>
+        <li>If buffered text exists when a command is detected, Field Theory flushes text first.</li>
+        <li>Cancel phrases intentionally discard buffered text.</li>
+      </ul>
+
+      <h2>Voice Tuning (Background Voice Filter)</h2>
+      <p>In <code>Settings -&gt; Hot Mic</code>, use the <code>Background Voice Filter</code> toggle and strictness slider (0-100) when nearby voices cause false triggers. Filtering is off by default and strictness defaults to <code>4</code>.</p>
+      <ul>
+        <li>This is an especially hard problem and still an active area of work.</li>
+        <li>Please calibrate expectations in noisy environments. Hot Mic may not work reliably when other people are talking nearby.</li>
+        <li>If it works well in a noisy space, great. But today, quiet environments are still the most reliable setup.</li>
+      </ul>
+    </div>
+
+    <hr class="dotted-line">
+
+    <p class="cta">
+      <a href="/" class="btn btn-primary">Back home</a>
+    </p>
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container footer-inner">
+      <div class="footer-content">
+        <p class="footer-copyright"><span class="footer-brand">Field Theory</span> &copy; 2026 <span class="footer-divider">|</span> <a href="mailto:support@fieldtheory.dev" class="footer-email">support@fieldtheory.dev</a></p>
+        <ul class="footer-links">
+          <li><a href="/#pricing">Pricing</a></li>
+          <li><a href="/#download">Download</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+          <li><a href="theory.html">Theory</a></li>
+          <li><a href="hot-mic.html">Hot Mic</a></li>
+          <li><a href="about.html">About</a></li>
+          <li><button class="theme-toggle" onclick="toggleTheme()">◐</button></li>
+        </ul>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Theme toggle script -->
+  <script>
+    if (localStorage.getItem('theme') === 'dark') {
+      document.body.classList.add('dark');
+    }
+
+    function toggleNav() {
+      const navLinks = document.getElementById('nav-links');
+      if (navLinks) {
+        navLinks.classList.toggle('open');
+      }
+    }
+
+    function toggleTheme() {
+      document.body.classList.toggle('dark');
+      const isDark = document.body.classList.contains('dark');
+      localStorage.setItem('theme', isDark ? 'dark' : 'light');
+      // Update logo based on theme
+      const logoImg = document.getElementById('nav-logo-img');
+      if (logoImg) {
+        logoImg.src = isDark ? 'images/fieldtheory-logo-white.png' : 'images/fieldtheory-logo-black.png';
+      }
+    }
+
+    // Update logo on page load based on saved theme
+    (function() {
+      const isDark = document.body.classList.contains('dark');
+      const logoImg = document.getElementById('nav-logo-img');
+      if (logoImg) {
+        logoImg.src = isDark ? 'images/fieldtheory-logo-white.png' : 'images/fieldtheory-logo-black.png';
+      }
+    })();
+
+    // Convert command phrase lists into visual chips.
+    (function() {
+      const commandItems = document.querySelectorAll('.command-group li');
+      commandItems.forEach((item) => {
+        const codeNodes = Array.from(item.querySelectorAll('code'));
+        if (codeNodes.length === 0) return;
+
+        const firstCode = codeNodes[0];
+        const fullText = item.textContent || '';
+        const firstPhrase = firstCode.textContent || '';
+        const splitIndex = fullText.indexOf(firstPhrase);
+        if (splitIndex <= 0) return;
+
+        const label = fullText.slice(0, splitIndex).trim();
+        if (!label.endsWith(':')) return;
+
+        const phrases = codeNodes
+          .map((node) => (node.textContent || '').trim())
+          .filter((phrase) => phrase.length > 0);
+        if (phrases.length === 0) return;
+
+        const labelSpan = document.createElement('span');
+        labelSpan.className = 'command-label';
+        labelSpan.textContent = label;
+
+        const chipRow = document.createElement('span');
+        chipRow.className = 'chip-row';
+        phrases.forEach((phrase) => {
+          const chip = document.createElement('span');
+          chip.className = 'phrase-chip';
+          chip.textContent = phrase;
+          chipRow.appendChild(chip);
+        });
+
+        item.innerHTML = '';
+        item.classList.add('has-chip-row');
+        item.appendChild(labelSpan);
+        item.appendChild(chipRow);
+      });
+    })();
+  </script>
+
+</body>
+</html>
