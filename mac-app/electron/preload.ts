@@ -595,6 +595,7 @@ export interface ClipboardAPI {
   onItemAdded: (callback: (id: number) => void) => () => void;
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
+  onShowTranscriptHistory: (callback: () => void) => () => void;
   onShowSettings: (callback: () => void) => () => void;
   onCollapseImmersive: (callback: () => void) => () => void;
   onResetToClipboardView: (callback: () => void) => () => void;
@@ -1101,6 +1102,16 @@ const clipboardAPI: ClipboardAPI = {
     ipcRenderer.on('clipboard:showHistory', handler);
     return () => {
       ipcRenderer.removeListener('clipboard:showHistory', handler);
+    };
+  },
+
+  onShowTranscriptHistory: (callback: () => void): (() => void) => {
+    const handler = () => {
+      callback();
+    };
+    ipcRenderer.on('clipboard:showTranscriptHistory', handler);
+    return () => {
+      ipcRenderer.removeListener('clipboard:showTranscriptHistory', handler);
     };
   },
 
@@ -3096,6 +3107,51 @@ const hotMicAPI = {
   setSoundsEnabled: async (enabled: boolean): Promise<boolean> => {
     return ipcRenderer.invoke('hotmic:setSoundsEnabled', enabled);
   },
+  getBackgroundFilterEnabled: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('hotmic:getBackgroundFilterEnabled');
+  },
+  setBackgroundFilterEnabled: async (enabled: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke('hotmic:setBackgroundFilterEnabled', enabled);
+  },
+  getBackgroundFilterStrength: async (): Promise<number> => {
+    return ipcRenderer.invoke('hotmic:getBackgroundFilterStrength');
+  },
+  setBackgroundFilterStrength: async (strength: number): Promise<number> => {
+    return ipcRenderer.invoke('hotmic:setBackgroundFilterStrength', strength);
+  },
+  getIslandGeometry: async (): Promise<{
+    notchWidthOverride: number;
+    pillWidth: number;
+    pillHeight: number;
+    offsetX: number;
+    offsetY: number;
+  }> => {
+    return ipcRenderer.invoke('hotmic:getIslandGeometry');
+  },
+  setIslandGeometry: async (geometry: Partial<{
+    notchWidthOverride: number;
+    pillWidth: number;
+    pillHeight: number;
+    offsetX: number;
+    offsetY: number;
+  }>): Promise<{
+    notchWidthOverride: number;
+    pillWidth: number;
+    pillHeight: number;
+    offsetX: number;
+    offsetY: number;
+  }> => {
+    return ipcRenderer.invoke('hotmic:setIslandGeometry', geometry);
+  },
+  resetIslandGeometry: async (): Promise<{
+    notchWidthOverride: number;
+    pillWidth: number;
+    pillHeight: number;
+    offsetX: number;
+    offsetY: number;
+  }> => {
+    return ipcRenderer.invoke('hotmic:resetIslandGeometry');
+  },
   getSubmitWord: async (): Promise<string> => {
     return ipcRenderer.invoke('hotmic:getSubmitWord');
   },
@@ -3168,6 +3224,18 @@ const hotMicAPI = {
   setSwitchWords: async (words: string): Promise<string> => {
     return ipcRenderer.invoke('hotmic:setSwitchWords', words);
   },
+  getOpenAppPrefixes: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getOpenAppPrefixes');
+  },
+  setOpenAppPrefixes: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setOpenAppPrefixes', words);
+  },
+  getQuitAppPrefixes: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getQuitAppPrefixes');
+  },
+  setQuitAppPrefixes: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setQuitAppPrefixes', words);
+  },
   getRunClaudeWords: async (): Promise<string> => {
     return ipcRenderer.invoke('hotmic:getRunClaudeWords');
   },
@@ -3233,6 +3301,9 @@ const hotMicAPI = {
   },
   uninstallHook: async (): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('hotmic:uninstallHook');
+  },
+  resetCommandDefaults: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('hotmic:resetCommandDefaults');
   },
   onStateChanged: (callback: (state: string) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: string) => {

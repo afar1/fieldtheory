@@ -5,6 +5,36 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
 
+interface IslandGeometrySettings {
+  notchWidthOverride: number;
+  pillWidth: number;
+  pillHeight: number;
+  offsetX: number;
+  offsetY: number;
+}
+
+const DEFAULT_ISLAND_GEOMETRY: IslandGeometrySettings = {
+  notchWidthOverride: 0,
+  pillWidth: 48,
+  pillHeight: 38,
+  offsetX: 0,
+  offsetY: 0,
+};
+
+const ISLAND_GEOMETRY_LIMITS = {
+  notchWidthOverride: { min: 0, max: 320, step: 1 },
+  pillWidth: { min: 32, max: 120, step: 1 },
+  pillHeight: { min: 24, max: 120, step: 1 },
+  offsetX: { min: -240, max: 240, step: 1 },
+  offsetY: { min: -160, max: 160, step: 1 },
+} as const;
+
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  const rounded = Math.round(value);
+  return Math.max(min, Math.min(max, rounded));
+}
+
 export default function HotMicSettings() {
   const { theme } = useTheme();
 
@@ -12,11 +42,8 @@ export default function HotMicSettings() {
   const [appleSilicon, setAppleSilicon] = useState(true);
   const [engine, setEngine] = useState<'whisper' | 'qwen'>('whisper');
   const [enabled, setEnabled] = useState(false);
-  const [targetBundleId, setTargetBundleId] = useState<string | null>(null);
-  const [soundsEnabled, setSoundsEnabled] = useState(true);
-  const [knownTerminals, setKnownTerminals] = useState<Array<{ name: string; bundleId: string }>>([]);
-  const [customBundleId, setCustomBundleId] = useState('');
-  const [showCustom, setShowCustom] = useState(false);
+  const [backgroundFilterEnabled, setBackgroundFilterEnabled] = useState(false);
+  const [backgroundFilterStrength, setBackgroundFilterStrength] = useState(4);
   const [currentState, setCurrentState] = useState('idle');
   const [hookInstalled, setHookInstalled] = useState(false);
   const [hookLoading, setHookLoading] = useState(false);
@@ -24,6 +51,8 @@ export default function HotMicSettings() {
   const [pasteWords, setPasteWords] = useState('');
   const [cancelWords, setCancelWords] = useState('');
   const [switchWords, setSwitchWords] = useState('');
+  const [openAppPrefixes, setOpenAppPrefixes] = useState('');
+  const [quitAppPrefixes, setQuitAppPrefixes] = useState('');
   const [prevWindowWords, setPrevWindowWords] = useState('');
   const [newWindowWords, setNewWindowWords] = useState('');
   const [closeWindowWords, setCloseWindowWords] = useState('');
@@ -37,15 +66,17 @@ export default function HotMicSettings() {
   const [restartServerWords, setRestartServerWords] = useState('');
   const [restartServerCommand, setRestartServerCommand] = useState('');
   const [showWordCount, setShowWordCount] = useState(false);
+  const [islandGeometry, setIslandGeometry] = useState<IslandGeometrySettings>(DEFAULT_ISLAND_GEOMETRY);
+  const [islandGeometryExpanded, setIslandGeometryExpanded] = useState(false);
 
   // App voice aliases
   const [appAliases, setAppAliases] = useState<Array<{ appName: string; aliases: string }>>([]);
   const [newAliasApp, setNewAliasApp] = useState('');
   const [newAliasWords, setNewAliasWords] = useState('');
-  const [runningApps, setRunningApps] = useState<Array<{ bundleId: string; name: string }>>([]);
 
   // System commands (media, volume, sleep, lock)
   const [systemCmds, setSystemCmds] = useState<Record<string, string>>({});
+  const [resettingDefaults, setResettingDefaults] = useState(false);
 
   const styles = getStyles(theme);
 
@@ -64,17 +95,44 @@ export default function HotMicSettings() {
     });
 
     const load = async () => {
-      const [en, target, sounds, terminals, state, hookStatus, submit, pw, cw, sw, pvw, nww, cww, mp, hp, qp, rcw, rcdw, fp, cp, rsw, rsc, wc] = await Promise.all([
+      const [
+        en,
+        bgFilterEnabled,
+        bgFilterStrengthValue,
+        state,
+        hookStatus,
+        submit,
+        pw,
+        cw,
+        sw,
+        openPrefixes,
+        quitPrefixes,
+        pvw,
+        nww,
+        cww,
+        mp,
+        hp,
+        qp,
+        rcw,
+        rcdw,
+        fp,
+        cp,
+        rsw,
+        rsc,
+        wc,
+        geometry,
+      ] = await Promise.all([
         window.hotMicAPI!.getEnabled(),
-        window.hotMicAPI!.getTargetApp(),
-        window.hotMicAPI!.getSoundsEnabled(),
-        window.hotMicAPI!.getKnownTerminals(),
+        window.hotMicAPI!.getBackgroundFilterEnabled(),
+        window.hotMicAPI!.getBackgroundFilterStrength(),
         window.hotMicAPI!.getState(),
         window.hotMicAPI!.isHookInstalled(),
         window.hotMicAPI!.getSubmitWord(),
         window.hotMicAPI!.getPasteWords(),
         window.hotMicAPI!.getCancelWords(),
         window.hotMicAPI!.getSwitchWords(),
+        window.hotMicAPI!.getOpenAppPrefixes(),
+        window.hotMicAPI!.getQuitAppPrefixes(),
         window.hotMicAPI!.getPrevWindowWords(),
         window.hotMicAPI!.getNewWindowWords(),
         window.hotMicAPI!.getCloseWindowWords(),
@@ -88,17 +146,19 @@ export default function HotMicSettings() {
         window.hotMicAPI!.getRestartServerWords(),
         window.hotMicAPI!.getRestartServerCommand(),
         window.hotMicAPI!.getShowWordCount(),
+        window.hotMicAPI!.getIslandGeometry(),
       ]);
       setEnabled(en);
-      setTargetBundleId(target);
-      setSoundsEnabled(sounds);
-      setKnownTerminals(terminals);
+      setBackgroundFilterEnabled(bgFilterEnabled);
+      setBackgroundFilterStrength(Math.max(0, Math.min(100, Math.round(bgFilterStrengthValue))));
       setCurrentState(state);
       setHookInstalled(hookStatus);
       setSubmitWord(submit);
       setPasteWords(pw);
       setCancelWords(cw);
       setSwitchWords(sw);
+      setOpenAppPrefixes(openPrefixes);
+      setQuitAppPrefixes(quitPrefixes);
       setPrevWindowWords(pvw);
       setNewWindowWords(nww);
       setCloseWindowWords(cww);
@@ -112,6 +172,7 @@ export default function HotMicSettings() {
       setRestartServerWords(rsw);
       setRestartServerCommand(rsc);
       setShowWordCount(wc);
+      setIslandGeometry(geometry ?? DEFAULT_ISLAND_GEOMETRY);
 
       // Load system commands
       window.hotMicAPI!.getSystemCommands().then(cmds => {
@@ -122,16 +183,6 @@ export default function HotMicSettings() {
       window.clipboardAPI?.getAppVoiceAliases?.().then(aliases => {
         setAppAliases(aliases || []);
       });
-      // Load running apps for the app picker dropdown
-      window.clipboardAPI?.getRunningApps?.().then(apps => {
-        setRunningApps(apps || []);
-      });
-
-      // Check if target is a known terminal or custom
-      if (target && !terminals.some(t => t.bundleId === target)) {
-        setShowCustom(true);
-        setCustomBundleId(target);
-      }
     };
 
     load();
@@ -149,28 +200,34 @@ export default function HotMicSettings() {
     await window.hotMicAPI.setEnabled(value);
   }, []);
 
-  const handleTargetChange = useCallback(async (bundleId: string) => {
+  const handleBackgroundFilterEnabledChange = useCallback(async (value: boolean) => {
     if (!window.hotMicAPI) return;
-    if (bundleId === '__custom__') {
-      setShowCustom(true);
-      return;
-    }
-    setShowCustom(false);
-    setTargetBundleId(bundleId);
-    await window.hotMicAPI.setTargetApp(bundleId);
+    setBackgroundFilterEnabled(value);
+    await window.hotMicAPI.setBackgroundFilterEnabled(value);
   }, []);
 
-  const handleCustomBundleIdSave = useCallback(async () => {
-    if (!window.hotMicAPI || !customBundleId.trim()) return;
-    const id = customBundleId.trim();
-    setTargetBundleId(id);
-    await window.hotMicAPI.setTargetApp(id);
-  }, [customBundleId]);
-
-  const handleSoundsChange = useCallback(async (value: boolean) => {
+  const handleBackgroundFilterStrengthChange = useCallback(async (value: number) => {
     if (!window.hotMicAPI) return;
-    setSoundsEnabled(value);
-    await window.hotMicAPI.setSoundsEnabled(value);
+    const normalized = Math.max(0, Math.min(100, Math.round(value)));
+    setBackgroundFilterStrength(normalized);
+    const saved = await window.hotMicAPI.setBackgroundFilterStrength(normalized);
+    setBackgroundFilterStrength(Math.max(0, Math.min(100, Math.round(saved))));
+  }, []);
+
+  const handleIslandGeometryChange = useCallback((
+    key: keyof IslandGeometrySettings,
+    value: number
+  ) => {
+    const limits = ISLAND_GEOMETRY_LIMITS[key];
+    const normalized = clampInt(value, limits.min, limits.max);
+    setIslandGeometry((prev) => ({ ...prev, [key]: normalized }));
+    void window.hotMicAPI?.setIslandGeometry({ [key]: normalized });
+  }, []);
+
+  const handleResetIslandGeometry = useCallback(async () => {
+    if (!window.hotMicAPI) return;
+    const reset = await window.hotMicAPI.resetIslandGeometry();
+    setIslandGeometry(reset ?? DEFAULT_ISLAND_GEOMETRY);
   }, []);
 
   const handleSubmitWordSave = useCallback(async () => {
@@ -253,6 +310,16 @@ export default function HotMicSettings() {
     await window.hotMicAPI.setSwitchWords(switchWords.trim());
   }, [switchWords]);
 
+  const handleOpenAppPrefixesSave = useCallback(async () => {
+    if (!window.hotMicAPI || !openAppPrefixes.trim()) return;
+    await window.hotMicAPI.setOpenAppPrefixes(openAppPrefixes.trim());
+  }, [openAppPrefixes]);
+
+  const handleQuitAppPrefixesSave = useCallback(async () => {
+    if (!window.hotMicAPI || !quitAppPrefixes.trim()) return;
+    await window.hotMicAPI.setQuitAppPrefixes(quitAppPrefixes.trim());
+  }, [quitAppPrefixes]);
+
   const handleStop = useCallback(async () => {
     if (!window.hotMicAPI) return;
     await window.hotMicAPI.stop();
@@ -280,6 +347,59 @@ export default function HotMicSettings() {
       await window.hotMicAPI?.setSystemCommand(action, phrases.trim());
     }
   }, [systemCmds]);
+
+  const handleResetDefaults = useCallback(async () => {
+    if (!window.hotMicAPI || resettingDefaults) return;
+    setResettingDefaults(true);
+    try {
+      await window.hotMicAPI.resetCommandDefaults();
+      const [submit, pw, cw, sw, openPrefixes, quitPrefixes, pvw, nww, cww, mp, hp, qp, rcw, rcdw, fp, cp, rsw, rsc, wc, cmds] = await Promise.all([
+        window.hotMicAPI.getSubmitWord(),
+        window.hotMicAPI.getPasteWords(),
+        window.hotMicAPI.getCancelWords(),
+        window.hotMicAPI.getSwitchWords(),
+        window.hotMicAPI.getOpenAppPrefixes(),
+        window.hotMicAPI.getQuitAppPrefixes(),
+        window.hotMicAPI.getPrevWindowWords(),
+        window.hotMicAPI.getNewWindowWords(),
+        window.hotMicAPI.getCloseWindowWords(),
+        window.hotMicAPI.getMinimizePhrases(),
+        window.hotMicAPI.getHidePhrases(),
+        window.hotMicAPI.getQuitPhrases(),
+        window.hotMicAPI.getRunClaudeWords(),
+        window.hotMicAPI.getRunCodexWords(),
+        window.hotMicAPI.getFocusPhrases(),
+        window.hotMicAPI.getCascadePhrases(),
+        window.hotMicAPI.getRestartServerWords(),
+        window.hotMicAPI.getRestartServerCommand(),
+        window.hotMicAPI.getShowWordCount(),
+        window.hotMicAPI.getSystemCommands(),
+      ]);
+
+      setSubmitWord(submit);
+      setPasteWords(pw);
+      setCancelWords(cw);
+      setSwitchWords(sw);
+      setOpenAppPrefixes(openPrefixes);
+      setQuitAppPrefixes(quitPrefixes);
+      setPrevWindowWords(pvw);
+      setNewWindowWords(nww);
+      setCloseWindowWords(cww);
+      setMinimizePhrases(mp);
+      setHidePhrases(hp);
+      setQuitPhrases(qp);
+      setRunClaudeWords(rcw);
+      setRunCodexWords(rcdw);
+      setFocusPhrases(fp);
+      setCascadePhrases(cp);
+      setRestartServerWords(rsw);
+      setRestartServerCommand(rsc);
+      setShowWordCount(wc);
+      setSystemCmds(cmds || {});
+    } finally {
+      setResettingDefaults(false);
+    }
+  }, [resettingDefaults]);
 
   const handleAddAppAlias = useCallback(async () => {
     if (!newAliasApp.trim() || !newAliasWords.trim()) return;
@@ -309,7 +429,13 @@ export default function HotMicSettings() {
   }, [appAliases]);
 
   const isActive = currentState !== 'idle';
-  const targetName = knownTerminals.find(t => t.bundleId === targetBundleId)?.name || targetBundleId || 'Not set';
+
+  const handleBrowseAliasApp = useCallback(async () => {
+    const appName = await window.clipboardAPI?.browseForApp?.();
+    if (appName) {
+      setNewAliasApp(appName);
+    }
+  }, []);
 
   return (
     <div style={styles.container}>
@@ -350,62 +476,127 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
-      {/* Target app */}
+      {/* Background voice filter */}
       <div style={styles.row}>
-        <span style={styles.rowLabel}>Target Terminal</span>
-        <select
-          value={showCustom ? '__custom__' : (targetBundleId || '')}
-          onChange={(e) => handleTargetChange(e.target.value)}
-          style={styles.select}
-        >
-          <option value="">Select...</option>
-          {knownTerminals.map(t => (
-            <option key={t.bundleId} value={t.bundleId}>{t.name}</option>
-          ))}
-          <option value="__custom__">Custom...</option>
-        </select>
-      </div>
-      {showCustom && (
-        <div style={{ ...styles.row, marginTop: '4px' }}>
-          <input
-            type="text"
-            value={customBundleId}
-            onChange={(e) => setCustomBundleId(e.target.value)}
-            placeholder="com.example.terminal"
-            style={styles.input}
-            onBlur={handleCustomBundleIdSave}
-            onKeyDown={(e) => e.key === 'Enter' && handleCustomBundleIdSave()}
-          />
-        </div>
-      )}
-
-
-
-      <div style={styles.divider} />
-
-      {/* Sounds toggle */}
-      <div style={styles.row}>
-        <span style={styles.rowLabel}>Hot Mic Sounds</span>
+        <span style={styles.rowLabel}>Background Voice Filter</span>
         <button
-          onClick={() => handleSoundsChange(!soundsEnabled)}
-          style={{ ...styles.toggle, backgroundColor: soundsEnabled ? theme.success : '#d1d5db' }}
+          onClick={() => handleBackgroundFilterEnabledChange(!backgroundFilterEnabled)}
+          style={{ ...styles.toggle, backgroundColor: backgroundFilterEnabled ? theme.success : '#d1d5db' }}
         >
-          <span style={{ ...styles.toggleKnob, transform: soundsEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+          <span style={{ ...styles.toggleKnob, transform: backgroundFilterEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
         </button>
       </div>
-
-
+      <div style={{ padding: '4px 0' }}>
+        <div style={styles.rangeHeader}>
+          <span style={styles.rangeLabel}>Strictness</span>
+          <span style={styles.rangeValue}>{backgroundFilterStrength}%</span>
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={backgroundFilterStrength}
+          onChange={(e) => void handleBackgroundFilterStrengthChange(Number(e.target.value))}
+          style={styles.rangeInput}
+        />
+        <p style={{ ...styles.description, marginTop: 6 }}>
+          Higher values reject more far-field speech. Set to 0 or disable if your voice is being filtered out.
+        </p>
+      </div>
 
       <div style={styles.divider} />
 
-      {/* Submit phrases */}
+      {/* Dynamic Island geometry tuning */}
       <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Submit Phrases</span>
+        <button
+          onClick={() => setIslandGeometryExpanded((prev) => !prev)}
+          style={styles.sectionToggle}
+          aria-expanded={islandGeometryExpanded}
+        >
+          <span style={styles.rowLabel}>Dynamic Island Geometry</span>
+          <span style={styles.sectionToggleIndicator}>
+            {islandGeometryExpanded ? 'Hide' : 'Show'}
+          </span>
+        </button>
+        <p style={styles.description}>
+          Tune notch hugging live. Changes apply immediately.
+        </p>
+      </div>
+      {islandGeometryExpanded && (
+        <>
+          {([
+            {
+              key: 'notchWidthOverride',
+              label: 'Notch Width',
+              help: '0 = auto profile',
+            },
+            {
+              key: 'pillWidth',
+              label: 'Pill Width',
+              help: '',
+            },
+            {
+              key: 'pillHeight',
+              label: 'Pill Height',
+              help: '',
+            },
+            {
+              key: 'offsetX',
+              label: 'Horizontal Offset',
+              help: '',
+            },
+            {
+              key: 'offsetY',
+              label: 'Vertical Offset',
+              help: '',
+            },
+          ] as Array<{ key: keyof IslandGeometrySettings; label: string; help: string }>).map(({ key, label, help }) => (
+            <div key={key} style={{ padding: '4px 0' }}>
+              <div style={styles.rangeHeader}>
+                <span style={styles.rangeLabel}>{label}</span>
+                <span style={styles.rangeValue}>
+                  {islandGeometry[key]}
+                  {help ? ` (${help})` : ''}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={ISLAND_GEOMETRY_LIMITS[key].min}
+                max={ISLAND_GEOMETRY_LIMITS[key].max}
+                step={ISLAND_GEOMETRY_LIMITS[key].step}
+                value={islandGeometry[key]}
+                onChange={(e) => handleIslandGeometryChange(key, Number(e.target.value))}
+                style={styles.rangeInput}
+              />
+            </div>
+          ))}
+          <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'flex-start' }}>
+            <button
+              onClick={() => void handleResetIslandGeometry()}
+              style={{
+                ...styles.hookButton,
+                backgroundColor: theme.surface0,
+                color: theme.text,
+                border: `1px solid ${theme.border}`,
+              }}
+            >
+              Reset Island Geometry
+            </button>
+          </div>
+        </>
+      )}
+
+      <div style={styles.divider} />
+
+      {/* Submit */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Submit</span>
         <input
           type="text"
           value={submitWord}
           onChange={(e) => setSubmitWord(e.target.value)}
-          placeholder="over, go ahead, send it, submit, do it"
+          placeholder="go ahead, send it, submit, do it"
           style={{ ...styles.input, marginTop: '6px', width: '100%' }}
           onBlur={handleSubmitWordSave}
           onKeyDown={(e) => e.key === 'Enter' && handleSubmitWordSave()}
@@ -416,9 +607,9 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
-      {/* Paste phrases */}
+      {/* Paste */}
       <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Paste Phrases</span>
+        <span style={styles.rowLabel}>Paste</span>
         <input
           type="text"
           value={pasteWords}
@@ -434,14 +625,14 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
-      {/* Cancel phrases */}
+      {/* Cancel */}
       <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Cancel Phrases</span>
+        <span style={styles.rowLabel}>Cancel</span>
         <input
           type="text"
           value={cancelWords}
           onChange={(e) => setCancelWords(e.target.value)}
-          placeholder="cancel, stop, abort"
+          placeholder="stop, abort"
           style={{ ...styles.input, marginTop: '6px', width: '100%' }}
           onBlur={handleCancelWordsSave}
           onKeyDown={(e) => e.key === 'Enter' && handleCancelWordsSave()}
@@ -452,17 +643,49 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
-      {/* Switch words */}
+      {/* Switch window */}
       <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Switch Window Words</span>
+        <span style={styles.rowLabel}>Switch Window</span>
         <input
           type="text"
           value={switchWords}
           onChange={(e) => setSwitchWords(e.target.value)}
-          placeholder="next, switch"
+          placeholder="next window, switch"
           style={{ ...styles.input, marginTop: '6px', width: '100%' }}
           onBlur={handleSwitchWordsSave}
           onKeyDown={(e) => e.key === 'Enter' && handleSwitchWordsSave()}
+        />
+      </div>
+
+      <div style={styles.divider} />
+
+      {/* App open prefixes */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Open App Prefixes</span>
+        <input
+          type="text"
+          value={openAppPrefixes}
+          onChange={(e) => setOpenAppPrefixes(e.target.value)}
+          placeholder="open, switch to, go to"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleOpenAppPrefixesSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleOpenAppPrefixesSave()}
+        />
+      </div>
+
+      <div style={styles.divider} />
+
+      {/* App quit prefixes */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Quit App Prefixes</span>
+        <input
+          type="text"
+          value={quitAppPrefixes}
+          onChange={(e) => setQuitAppPrefixes(e.target.value)}
+          placeholder="quit, close, kill"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleQuitAppPrefixesSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleQuitAppPrefixesSave()}
         />
       </div>
 
@@ -470,14 +693,14 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
-      {/* Previous window phrases */}
+      {/* Previous window */}
       <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Previous Window Words</span>
+        <span style={styles.rowLabel}>Previous Window</span>
         <input
           type="text"
           value={prevWindowWords}
           onChange={(e) => setPrevWindowWords(e.target.value)}
-          placeholder="back, previous"
+          placeholder="previous window"
           style={{ ...styles.input, marginTop: '6px', width: '100%' }}
           onBlur={handlePrevWindowWordsSave}
           onKeyDown={(e) => e.key === 'Enter' && handlePrevWindowWordsSave()}
@@ -488,9 +711,9 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
-      {/* New window phrases */}
+      {/* New window */}
       <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>New Window Phrases</span>
+        <span style={styles.rowLabel}>New Window</span>
         <input
           type="text"
           value={newWindowWords}
@@ -506,9 +729,9 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
-      {/* Close window phrases */}
+      {/* Close window */}
       <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Close Window Phrases</span>
+        <span style={styles.rowLabel}>Close Window</span>
         <input
           type="text"
           value={closeWindowWords}
@@ -524,9 +747,9 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
-      {/* Minimize phrases */}
+      {/* Minimize */}
       <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Minimize Phrases</span>
+        <span style={styles.rowLabel}>Minimize</span>
         <input
           type="text"
           value={minimizePhrases}
@@ -542,9 +765,9 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
-      {/* Hide phrases */}
+      {/* Hide app */}
       <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Hide App Phrases</span>
+        <span style={styles.rowLabel}>Hide App</span>
         <input
           type="text"
           value={hidePhrases}
@@ -560,14 +783,14 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
-      {/* Quit phrases */}
+      {/* Quit */}
       <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Quit Phrases</span>
+        <span style={styles.rowLabel}>Quit</span>
         <input
           type="text"
           value={quitPhrases}
           onChange={(e) => setQuitPhrases(e.target.value)}
-          placeholder="quit, quit app, quit this app"
+          placeholder="quit app, quit this app"
           style={{ ...styles.input, marginTop: '6px', width: '100%' }}
           onBlur={handleQuitPhrasesSave}
           onKeyDown={(e) => e.key === 'Enter' && handleQuitPhrasesSave()}
@@ -578,9 +801,9 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
-      {/* Focus phrases (next-display + center) */}
+      {/* Focus (next-display + center) */}
       <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Focus Phrases</span>
+        <span style={styles.rowLabel}>Focus</span>
         <input
           type="text"
           value={focusPhrases}
@@ -596,9 +819,9 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
-      {/* Cascade phrases (cascade-active-app + center) */}
+      {/* Cascade (cascade-active-app + center) */}
       <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Cascade Phrases</span>
+        <span style={styles.rowLabel}>Cascade</span>
         <input
           type="text"
           value={cascadePhrases}
@@ -614,14 +837,14 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
-      {/* Run Claude phrases */}
+      {/* Run Claude */}
       <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Run Claude Phrases</span>
+        <span style={styles.rowLabel}>Run Claude</span>
         <input
           type="text"
           value={runClaudeWords}
           onChange={(e) => setRunClaudeWords(e.target.value)}
-          placeholder="start claude, start cloud, run claude"
+          placeholder="start claude, start cloud, run claude, start clod"
           style={{ ...styles.input, marginTop: '6px', width: '100%' }}
           onBlur={handleRunClaudeWordsSave}
           onKeyDown={(e) => e.key === 'Enter' && handleRunClaudeWordsSave()}
@@ -631,9 +854,9 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
-      {/* Run Codex phrases */}
+      {/* Run Codex */}
       <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Run Codex Phrases</span>
+        <span style={styles.rowLabel}>Run Codex</span>
         <input
           type="text"
           value={runCodexWords}
@@ -651,7 +874,7 @@ export default function HotMicSettings() {
 
       {/* Restart server */}
       <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Restart Server Phrases</span>
+        <span style={styles.rowLabel}>Restart Server</span>
         <input
           type="text"
           value={restartServerWords}
@@ -707,13 +930,32 @@ export default function HotMicSettings() {
         </div>
       ))}
 
+      <div style={{ marginTop: '10px', display: 'flex', justifyContent: 'flex-start' }}>
+        <button
+          onClick={handleResetDefaults}
+          disabled={resettingDefaults}
+          style={{
+            ...styles.hookButton,
+            backgroundColor: theme.surface0,
+            color: theme.text,
+            border: `1px solid ${theme.border}`,
+            opacity: resettingDefaults ? 0.6 : 1,
+            cursor: resettingDefaults ? 'default' : 'pointer',
+          }}
+        >
+          {resettingDefaults ? 'Resetting...' : 'Reset Voice Defaults'}
+        </button>
+      </div>
+
       <div style={styles.divider} />
 
       {/* App Voice Aliases */}
       <div style={{ padding: '4px 0' }}>
         <span style={styles.rowLabel}>App Voice Aliases</span>
-
-
+        <p style={styles.description}>
+          Say "open &lt;app&gt;" to switch/launch an app. Example: app "Ghostty" with aliases
+          "ghosty, ghost tea" lets you say "open ghosty". Prefix words come from Open App Prefixes.
+        </p>
       </div>
 
       {appAliases.length > 0 && (
@@ -759,25 +1001,21 @@ export default function HotMicSettings() {
       )}
 
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
-        <select
-          value={newAliasApp}
-          onChange={async (e) => {
-            if (e.target.value === '__browse__') {
-              const appName = await window.clipboardAPI?.browseForApp?.();
-              if (appName) setNewAliasApp(appName);
-              else e.target.value = newAliasApp; // reset if cancelled
-            } else {
-              setNewAliasApp(e.target.value);
-            }
+        <button
+          onClick={() => { void handleBrowseAliasApp(); }}
+          style={{
+            ...styles.select,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-start',
+            flex: 0,
+            minWidth: '140px',
+            textAlign: 'left',
           }}
-          style={{ ...styles.select, flex: 0, minWidth: '140px' }}
+          title="Select app"
         >
-          <option value="">Select app...</option>
-          {runningApps.map(app => (
-            <option key={app.bundleId} value={app.name}>{app.name}</option>
-          ))}
-          <option value="__browse__">Other...</option>
-        </select>
+          {newAliasApp || 'Select app...'}
+        </button>
         <input
           type="text"
           value={newAliasWords}
@@ -834,11 +1072,6 @@ export default function HotMicSettings() {
           )}
         </div>
       </div>
-      {isActive && (
-        <p style={styles.description}>
-          Target: {targetName}
-        </p>
-      )}
     </div>
   );
 }
@@ -867,6 +1100,21 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     fontSize: '12px',
     color: theme.text,
     fontWeight: 400,
+  },
+  sectionToggle: {
+    width: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 0,
+    border: 'none',
+    background: 'transparent',
+    cursor: 'pointer',
+    textAlign: 'left',
+  },
+  sectionToggleIndicator: {
+    fontSize: '11px',
+    color: theme.textSecondary,
   },
   toggle: {
     position: 'relative' as const,
@@ -921,6 +1169,25 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     backgroundColor: theme.surface0,
     color: theme.text,
     flex: 1,
+  },
+  rangeHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: '4px',
+  },
+  rangeLabel: {
+    fontSize: '11px',
+    color: theme.textSecondary,
+  },
+  rangeValue: {
+    fontSize: '11px',
+    color: theme.text,
+    fontVariantNumeric: 'tabular-nums',
+  },
+  rangeInput: {
+    width: '100%',
+    accentColor: theme.success,
   },
   stateBadge: {
     fontSize: '10px',

@@ -39,7 +39,11 @@ import {
 import { OnboardingWindow, OnboardingStep } from './onboardingWindow';
 import { OnboardingIPCChannels } from './types/onboarding';
 import { CursorStatusManager, CursorStatusState } from './cursorStatusManager';
-import { DynamicIslandManager } from './dynamicIslandManager';
+import {
+  DynamicIslandManager,
+  DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING,
+  type DynamicIslandGeometryTuning,
+} from './dynamicIslandManager';
 import { QuotaManager } from './quotaManager';
 import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, PortableCommand } from './commandsManager';
@@ -52,6 +56,7 @@ import { MESSAGES } from './messages';
 import { TodoStore, Todo } from './todoStore';
 import { TodoIPCChannels } from './types/todo';
 import { HotMicManager, KNOWN_TERMINALS } from './hotMicManager';
+import { HOT_MIC_DEFAULTS, HOT_MIC_DEFAULT_SYSTEM_COMMANDS, HOT_MIC_DEFAULT_WINDOW_COMMANDS } from './hotMicDefaults';
 import { detectSSHSession, scpToRemote, SSHTarget } from './sshDetector';
 import { SquaresManager } from './squaresManager';
 import { SquaresIPCChannels, SquaresAction } from './types/squares';
@@ -175,6 +180,91 @@ let metricsManager: MetricsManager | null = null;
 let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
 let squaresManager: SquaresManager | null = null;
+let clipboardHistoryLastHideAt = 0;
+let clipboardHistoryLastHideReason: string | null = null;
+const DYNAMIC_ISLAND_BLUR_TOGGLE_SUPPRESS_MS = 450;
+
+const HOT_MIC_ISLAND_GEOMETRY_LIMITS = {
+  notchWidthOverride: { min: 0, max: 320 },
+  pillWidth: { min: 32, max: 120 },
+  pillHeight: { min: 24, max: 120 },
+  offsetX: { min: -240, max: 240 },
+  offsetY: { min: -160, max: 160 },
+} as const;
+
+function clampIslandGeometryInt(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  const rounded = Math.round(value);
+  return Math.max(min, Math.min(max, rounded));
+}
+
+function normalizeHotMicIslandGeometry(
+  geometry: Partial<DynamicIslandGeometryTuning> | null | undefined
+): DynamicIslandGeometryTuning {
+  const input = geometry ?? {};
+  return {
+    notchWidthOverride: clampIslandGeometryInt(
+      input.notchWidthOverride,
+      HOT_MIC_ISLAND_GEOMETRY_LIMITS.notchWidthOverride.min,
+      HOT_MIC_ISLAND_GEOMETRY_LIMITS.notchWidthOverride.max,
+      DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING.notchWidthOverride
+    ),
+    pillWidth: clampIslandGeometryInt(
+      input.pillWidth,
+      HOT_MIC_ISLAND_GEOMETRY_LIMITS.pillWidth.min,
+      HOT_MIC_ISLAND_GEOMETRY_LIMITS.pillWidth.max,
+      DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING.pillWidth
+    ),
+    pillHeight: clampIslandGeometryInt(
+      input.pillHeight,
+      HOT_MIC_ISLAND_GEOMETRY_LIMITS.pillHeight.min,
+      HOT_MIC_ISLAND_GEOMETRY_LIMITS.pillHeight.max,
+      DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING.pillHeight
+    ),
+    offsetX: clampIslandGeometryInt(
+      input.offsetX,
+      HOT_MIC_ISLAND_GEOMETRY_LIMITS.offsetX.min,
+      HOT_MIC_ISLAND_GEOMETRY_LIMITS.offsetX.max,
+      DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING.offsetX
+    ),
+    offsetY: clampIslandGeometryInt(
+      input.offsetY,
+      HOT_MIC_ISLAND_GEOMETRY_LIMITS.offsetY.min,
+      HOT_MIC_ISLAND_GEOMETRY_LIMITS.offsetY.max,
+      DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING.offsetY
+    ),
+  };
+}
+
+function getHotMicIslandGeometryFromPreferences(): DynamicIslandGeometryTuning {
+  return normalizeHotMicIslandGeometry({
+    notchWidthOverride: preferencesManager?.getPreference('hotMicIslandNotchWidthOverride'),
+    pillWidth: preferencesManager?.getPreference('hotMicIslandPillWidth'),
+    pillHeight: preferencesManager?.getPreference('hotMicIslandPillHeight'),
+    offsetX: preferencesManager?.getPreference('hotMicIslandOffsetX'),
+    offsetY: preferencesManager?.getPreference('hotMicIslandOffsetY'),
+  });
+}
+
+async function saveAndApplyHotMicIslandGeometry(
+  geometry: Partial<DynamicIslandGeometryTuning>
+): Promise<DynamicIslandGeometryTuning> {
+  const current = getHotMicIslandGeometryFromPreferences();
+  const next = normalizeHotMicIslandGeometry({ ...current, ...geometry });
+
+  if (preferencesManager) {
+    await preferencesManager.save({
+      hotMicIslandNotchWidthOverride: next.notchWidthOverride,
+      hotMicIslandPillWidth: next.pillWidth,
+      hotMicIslandPillHeight: next.pillHeight,
+      hotMicIslandOffsetX: next.offsetX,
+      hotMicIslandOffsetY: next.offsetY,
+    });
+  }
+
+  dynamicIslandManager?.setGeometryTuning(next);
+  return next;
+}
 
 // Track pending update state so windows can query it when they open.
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
@@ -347,16 +437,20 @@ function registerHotkeysAfterOnboarding(): void {
       const boundsToUse = restoreClipboardHistoryBounds();
       clipboardHistoryWindow.show(boundsToUse, false, true);
       clipboardHistoryWindow.capturePreviousAppBeforeShow();
-      // Refresh cursor status window properties to prevent white rectangle bug.
-      // Opening clipboard history during recording can corrupt window transparency.
+      // Opening clipboard history during recording can corrupt transparent
+      // overlay backing on some macOS compositor paths.
       cursorStatusManager?.refreshWindowProperties();
+      dynamicIslandManager?.refreshWindowProperties('clipboard-history:show-hotkey');
     } else if (!showInDock) {
       // If in immersive mode, exit fullscreen instead of hiding (like pressing ESC)
       if (clipboardHistoryWindow.getImmersiveMode()) {
         clipboardHistoryWindow.sendExitFullscreen();
       } else {
-        const overlayVisible = transcriberManager?.isRecordingOverlayVisible() ?? false;
-        clipboardHistoryWindow.hide(!overlayVisible);
+        // Match blur-dismiss behavior: avoid app.hide() here because that compositor
+        // path can reintroduce white corner artifacts on transparent island windows.
+        clipboardHistoryWindow.hide(false, 'hotkey-toggle-hide');
+        cursorStatusManager?.refreshWindowProperties();
+        dynamicIslandManager?.refreshWindowProperties('clipboard-history:hide-hotkey');
       }
     }
   });
@@ -974,6 +1068,12 @@ function initClipboardHistoryWindow(): ClipboardHistoryWindow {
     });
   });
 
+  window.setOnHidden(({ reason }) => {
+    clipboardHistoryLastHideAt = Date.now();
+    clipboardHistoryLastHideReason = reason;
+    dynamicIslandManager?.refreshWindowProperties(`clipboard-history:hidden:${reason}`);
+  });
+
   return window;
 }
 
@@ -1027,8 +1127,9 @@ function showClipboardHistoryOnActivate(): void {
   // Show the clipboard window when app is activated (e.g., Dock icon click).
   const boundsToUse = restoreClipboardHistoryBounds();
   clipboardHistoryWindow.show(boundsToUse);
-  // Refresh cursor status window properties to prevent white rectangle bug.
+  // Re-assert transparent overlay properties after clipboard window show.
   cursorStatusManager?.refreshWindowProperties();
+  dynamicIslandManager?.refreshWindowProperties('clipboard-history:show-app-activate');
 }
 
 /**
@@ -2496,15 +2597,15 @@ function setupClipboardIPCHandlers(): void {
       // Determine the target bundle ID for terminal detection
       let effectiveBundleId: string | null = targetBundleId || null;
       if (!effectiveBundleId && clipboardHistoryWindow) {
-        const previousApp = clipboardHistoryWindow.getPreviousApp();
-        effectiveBundleId = previousApp?.bundleId || null;
+        const targetApp = clipboardHistoryWindow.getTargetApp() ?? clipboardHistoryWindow.getPreviousApp();
+        effectiveBundleId = targetApp?.bundleId || null;
       }
 
       // Skip pasting to Finder - it doesn't handle Cmd+V well and causes stalls
       if (isFinder(effectiveBundleId)) {
         log.info('pasteItem: skipping paste to Finder');
         if (clipboardHistoryWindow) {
-          clipboardHistoryWindow.hide();
+          clipboardHistoryWindow.hide(false, 'paste-item-finder-skip');
         }
         return;
       }
@@ -2579,16 +2680,18 @@ function setupClipboardIPCHandlers(): void {
 
       // Hide window first.
       if (clipboardHistoryWindow) {
-        clipboardHistoryWindow.hide(); // This includes app.hide() to restore focus
+        // Keep app alive and explicitly target the destination app for paste.
+        clipboardHistoryWindow.hide(false, 'paste-item');
       }
 
       // If a specific target app was provided, activate it and paste there.
       // Otherwise, use the default behavior (paste to previous app).
       if (targetBundleId && clipboardHistoryWindow) {
         await clipboardHistoryWindow.pasteToApp(targetBundleId);
+      } else if (effectiveBundleId && clipboardHistoryWindow) {
+        await clipboardHistoryWindow.pasteToApp(effectiveBundleId);
       } else {
-        // Default behavior: paste to previous app (focus restored by hide()).
-        // Use timeout to prevent hang if target app is unresponsive (e.g., Finder).
+        // Last-resort paste when no known target app is available.
         try {
           await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
         } catch { /* Silently fail if paste times out */ }
@@ -2653,25 +2756,41 @@ function setupClipboardIPCHandlers(): void {
         return;
       }
       
-      // Hide window and restore focus BEFORE pasting
+      let effectiveBundleId: string | null = null;
       if (clipboardHistoryWindow) {
-        clipboardHistoryWindow.hide();
+        const targetApp = clipboardHistoryWindow.getTargetApp() ?? clipboardHistoryWindow.getPreviousApp();
+        effectiveBundleId = targetApp?.bundleId || null;
+      }
+
+      // Hide only the window to avoid compositor instability on transparent overlays.
+      if (clipboardHistoryWindow) {
+        clipboardHistoryWindow.hide(false, 'paste-stack');
       }
       
       const { nativeImage } = require('electron');
 
-      // Detect frontmost app to check for terminal or Finder.
-      let frontmostBundleId: string | null = null;
+      // Detect target app to check for terminal or Finder.
+      let frontmostBundleId: string | null = effectiveBundleId;
       let isTerminal = false;
-      try {
-        const { stdout } = await execWithTimeout(
-          'osascript -e \'tell application "System Events" to get bundle identifier of first process whose frontmost is true\'',
-          3000
-        );
-        frontmostBundleId = stdout.trim();
+      if (frontmostBundleId) {
         isTerminal = isTerminalApp(frontmostBundleId);
-      } catch {
-        // Default to non-terminal if detection fails or times out
+      } else {
+        try {
+          const { stdout } = await execWithTimeout(
+            'osascript -e \'tell application "System Events" to get bundle identifier of first process whose frontmost is true\'',
+            3000
+          );
+          frontmostBundleId = stdout.trim();
+          isTerminal = isTerminalApp(frontmostBundleId);
+        } catch {
+          // Default to non-terminal if detection fails or times out
+        }
+      }
+
+      if (frontmostBundleId && clipboardHistoryWindow && !isFinder(frontmostBundleId)) {
+        await clipboardHistoryWindow.activateApp(frontmostBundleId);
+        // Give macOS a short moment to settle focus before synthetic paste events.
+        await new Promise(resolve => setTimeout(resolve, 50));
       }
 
       // Skip pasting to Finder - it doesn't handle Cmd+V well
@@ -2799,16 +2918,32 @@ function setupClipboardIPCHandlers(): void {
       
       if (clipboardManager) clipboardManager.syncClipboardHash();
       
-      // Hide window first
+      let effectiveBundleId: string | null = targetBundleId || null;
+      if (!effectiveBundleId && clipboardHistoryWindow) {
+        const targetApp = clipboardHistoryWindow.getTargetApp() ?? clipboardHistoryWindow.getPreviousApp();
+        effectiveBundleId = targetApp?.bundleId || null;
+      }
+
+      if (isFinder(effectiveBundleId)) {
+        log.info('pasteText: skipping paste to Finder');
+        if (clipboardHistoryWindow) {
+          clipboardHistoryWindow.hide(false, 'paste-text-finder-skip');
+        }
+        return;
+      }
+
+      // Hide only the window; paste will explicitly target an app.
       if (clipboardHistoryWindow) {
-        clipboardHistoryWindow.hide();
+        clipboardHistoryWindow.hide(false, 'paste-text');
       }
       
       // If a specific target app was provided, activate it and paste there
       if (targetBundleId && clipboardHistoryWindow) {
         await clipboardHistoryWindow.pasteToApp(targetBundleId);
+      } else if (effectiveBundleId && clipboardHistoryWindow) {
+        await clipboardHistoryWindow.pasteToApp(effectiveBundleId);
       } else {
-        // Default behavior: paste to previous app
+        // Last-resort paste when no known target app is available.
         // Use timeout to prevent hang if target app is unresponsive.
         try {
           await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
@@ -2881,21 +3016,26 @@ function setupClipboardIPCHandlers(): void {
     // Skip pasting to Finder - it doesn't handle Cmd+V well and causes stalls
     if (isFinder(bundleId)) {
       log.info('pasteToApp: skipping paste to Finder');
-      clipboardHistoryWindow.hide();
+      clipboardHistoryWindow.hide(false, 'paste-to-app-finder-skip');
       return false;
     }
 
     // Hide our window first.
-    clipboardHistoryWindow.hide();
+    clipboardHistoryWindow.hide(false, 'paste-to-app');
 
     // Paste to the target app.
     return clipboardHistoryWindow.pasteToApp(bundleId);
   });
 
   ipcMain.on('clipboard:closeWindow', async () => {
-    // Use clipboardHistoryWindow.hide() to properly restore focus to previous app
+    // Avoid app.hide() here: that compositor path can destabilize transparent
+    // overlay corners. Hide only the window, then explicitly restore focus.
     if (clipboardHistoryWindow) {
-      clipboardHistoryWindow.hide();
+      const previousApp = clipboardHistoryWindow.getPreviousApp();
+      clipboardHistoryWindow.hide(false, 'ipc-close-window');
+      if (previousApp?.bundleId) {
+        await clipboardHistoryWindow.activateApp(previousApp.bundleId);
+      }
     }
   });
 
@@ -3854,16 +3994,31 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
-  ipcMain.handle('clipboard:browseForApp', async () => {
-    const parentWindow = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
-    const result = await dialog.showOpenDialog(parentWindow as BrowserWindow, {
-      title: 'Select Application',
-      message: 'Choose an application',
-      defaultPath: '/Applications',
-      properties: ['openFile'],
-      filters: [{ name: 'Applications', extensions: ['app'] }],
-      buttonLabel: 'Select',
-    });
+  ipcMain.handle('clipboard:browseForApp', async (event) => {
+    // Use the caller window as parent so macOS presents this as a modal sheet.
+    // This avoids panel blur-dismiss races when opening "Other..." from settings.
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    const parentWindow = senderWindow && !senderWindow.isDestroyed()
+      ? senderWindow
+      : (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+
+    const result = parentWindow
+      ? await dialog.showOpenDialog(parentWindow, {
+          title: 'Select Application',
+          message: 'Choose an application',
+          defaultPath: '/Applications',
+          properties: ['openFile'],
+          filters: [{ name: 'Applications', extensions: ['app'] }],
+          buttonLabel: 'Select',
+        })
+      : await dialog.showOpenDialog({
+          title: 'Select Application',
+          message: 'Choose an application',
+          defaultPath: '/Applications',
+          properties: ['openFile'],
+          filters: [{ name: 'Applications', extensions: ['app'] }],
+          buttonLabel: 'Select',
+        });
     if (result.canceled || result.filePaths.length === 0) return null;
     // Extract app name from path: "/Applications/Ghostty.app" → "Ghostty"
     const appPath = result.filePaths[0];
@@ -5004,9 +5159,11 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
     setTimeout(() => {
       const focusedWindow = BrowserWindow.getFocusedWindow();
 
-      // If no Field Theory window has focus, another app is active - hide
+      // If no Field Theory window has focus, another app is active - hide.
+      // Do not call app.hide() here: focus already transferred away, and
+      // forcing an app-level hide can destabilize transparent overlay surfaces.
       if (!focusedWindow && clipboardHistoryWindow?.isVisible()) {
-        clipboardHistoryWindow.hide();
+        clipboardHistoryWindow.hide(false, 'app-browser-window-blur');
       }
     }, 50);
   });
@@ -5352,6 +5509,7 @@ async function initTranscriberSystem(): Promise<void> {
   // Initialize the dynamic island overlay (fixed near the notch, shows transcript + history).
   dynamicIslandManager = new DynamicIslandManager();
   dynamicIslandManager.setClipboardManager(clipboardManager);
+  dynamicIslandManager.setGeometryTuning(getHotMicIslandGeometryFromPreferences());
 
   // Now create transcriberManager with cursorStatusManager.
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
@@ -5374,6 +5532,9 @@ async function initTranscriberSystem(): Promise<void> {
     const soundMgr = transcriberManager.getSoundManager();
     hotMicManager = new HotMicManager(nativeHelper, preferencesManager, soundMgr);
     hotMicManager.setCursorStatusManager(cursorStatusManager);
+    hotMicManager.setMetricsWordsRecorder((wordCount: number) => {
+      metricsManager?.recordHotMicTranscribedWords(wordCount);
+    });
     if (clipboardManager) {
       hotMicManager.setClipboardManager(clipboardManager);
     }
@@ -5382,17 +5543,37 @@ async function initTranscriberSystem(): Promise<void> {
       dynamicIslandManager.on('toggleMute', () => {
         hotMicManager?.toggleMute();
       });
+      dynamicIslandManager.on('dismiss-transcript', () => {
+        hotMicManager?.dismissCurrentTranscript();
+      });
       dynamicIslandManager.on('open-field-theory', () => {
         if (!clipboardHistoryWindow) {
           clipboardHistoryWindow = initClipboardHistoryWindow();
         }
+        if (clipboardHistoryWindow.isShowing()) {
+          clipboardHistoryWindow.hide(false, 'dynamic-island-toggle-history-window');
+          cursorStatusManager?.refreshWindowProperties();
+          dynamicIslandManager?.refreshWindowProperties('clipboard-history:hide-open-field-theory');
+          return;
+        }
+
+        // Clicking the Dynamic Island while Field Theory is focused causes a blur-hide
+        // first; suppress immediate reopen so second click behaves like a true toggle-close.
+        if (
+          clipboardHistoryLastHideReason === 'window-blur-handler' &&
+          Date.now() - clipboardHistoryLastHideAt <= DYNAMIC_ISLAND_BLUR_TOGGLE_SUPPRESS_MS
+        ) {
+          return;
+        }
+
         clipboardHistoryWindow.playOpenSound();
         const boundsToUse = restoreClipboardHistoryBounds();
-        clipboardHistoryWindow.show(boundsToUse, false, true);
+        clipboardHistoryWindow.show(boundsToUse, false, true, true);
         clipboardHistoryWindow.capturePreviousAppBeforeShow();
-        // Opening clipboard history while recording can affect transparency/focus;
-        // refresh cursor status window properties to keep overlays stable.
+        // Opening clipboard history while recording can affect overlay transparency;
+        // refresh transparent overlay window properties to keep them stable.
         cursorStatusManager?.refreshWindowProperties();
+        dynamicIslandManager?.refreshWindowProperties('clipboard-history:show-open-field-theory');
       });
     }
     hotMicManager.setTranscriberStatusGetter(() => transcriberManager?.getStatus() ?? 'idle');
@@ -5556,7 +5737,7 @@ async function initTranscriberSystem(): Promise<void> {
   
   // Listen for dismiss event from escape key handler
   transcriberManager.on('dismiss-clipboard-history', () => {
-    clipboardHistoryWindow?.hide(false); // false = don't hide the app (recording continues)
+    clipboardHistoryWindow?.hide(false, 'transcriber-dismiss'); // false = don't hide the app (recording continues)
   });
 
   // Initialize auth manager first - single source of truth for authentication.
@@ -5638,6 +5819,9 @@ async function initTranscriberSystem(): Promise<void> {
         }
         log.info('Reloaded favorite device from user prefs:', prefs.favoriteDeviceName);
       }
+
+      // Re-apply per-user Dynamic Island tuning after preferences reload.
+      dynamicIslandManager?.setGeometryTuning(getHotMicIslandGeometryFromPreferences());
     }
     if (clipboardManager) {
       await clipboardManager.reinitializeForUser();
@@ -5671,6 +5855,7 @@ async function initTranscriberSystem(): Promise<void> {
     if (preferencesManager) {
       preferencesManager.reset();
     }
+    dynamicIslandManager?.setGeometryTuning(DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING);
     if (clipboardManager) {
       clipboardManager.onUserLoggedOut();
     }
@@ -5985,8 +6170,43 @@ if (!gotTheLock) {
       return enabled;
     });
 
+    ipcMain.handle('hotmic:getBackgroundFilterEnabled', () => {
+      return preferencesManager?.getPreference('hotMicBackgroundFilterEnabled') ?? false;
+    });
+
+    ipcMain.handle('hotmic:setBackgroundFilterEnabled', async (_event, enabled: boolean) => {
+      await preferencesManager?.save({ hotMicBackgroundFilterEnabled: !!enabled });
+      return !!enabled;
+    });
+
+    ipcMain.handle('hotmic:getBackgroundFilterStrength', () => {
+      const value = preferencesManager?.getPreference('hotMicBackgroundFilterStrength');
+      if (typeof value !== 'number' || Number.isNaN(value)) return 4;
+      return Math.max(0, Math.min(100, Math.round(value)));
+    });
+
+    ipcMain.handle('hotmic:setBackgroundFilterStrength', async (_event, strength: number) => {
+      const normalized = Number.isFinite(strength)
+        ? Math.max(0, Math.min(100, Math.round(strength)))
+        : 4;
+      await preferencesManager?.save({ hotMicBackgroundFilterStrength: normalized });
+      return normalized;
+    });
+
+    ipcMain.handle('hotmic:getIslandGeometry', () => {
+      return getHotMicIslandGeometryFromPreferences();
+    });
+
+    ipcMain.handle('hotmic:setIslandGeometry', async (_event, geometry: Partial<DynamicIslandGeometryTuning>) => {
+      return await saveAndApplyHotMicIslandGeometry(geometry ?? {});
+    });
+
+    ipcMain.handle('hotmic:resetIslandGeometry', async () => {
+      return await saveAndApplyHotMicIslandGeometry(DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING);
+    });
+
     ipcMain.handle('hotmic:getSubmitWord', () => {
-      return preferencesManager?.getPreference('hotMicSubmitWord') ?? 'over, go ahead, send it, submit, do it';
+      return preferencesManager?.getPreference('hotMicSubmitWord') ?? HOT_MIC_DEFAULTS.submitPhrases;
     });
 
     ipcMain.handle('hotmic:setSubmitWord', async (_event, word: string) => {
@@ -6004,7 +6224,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getPasteWords', () => {
-      return preferencesManager?.getPreference('hotMicPasteWords') ?? 'paste, paste it, transcribe';
+      return preferencesManager?.getPreference('hotMicPasteWords') ?? HOT_MIC_DEFAULTS.pastePhrases;
     });
 
     ipcMain.handle('hotmic:setPasteWords', async (_event, words: string) => {
@@ -6022,7 +6242,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getCancelWords', () => {
-      return preferencesManager?.getPreference('hotMicCancelWords') ?? 'cancel, stop, abort';
+      return preferencesManager?.getPreference('hotMicCancelWords') ?? HOT_MIC_DEFAULTS.cancelPhrases;
     });
 
     ipcMain.handle('hotmic:setCancelWords', async (_event, words: string) => {
@@ -6031,7 +6251,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getPrevWindowWords', () => {
-      return preferencesManager?.getPreference('hotMicPrevWindowWords') ?? 'back, previous';
+      return preferencesManager?.getPreference('hotMicPrevWindowWords') ?? HOT_MIC_DEFAULTS.prevWindowPhrases;
     });
 
     ipcMain.handle('hotmic:setPrevWindowWords', async (_event, words: string) => {
@@ -6040,7 +6260,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getNewWindowWords', () => {
-      return preferencesManager?.getPreference('hotMicNewWindowWords') ?? 'new window';
+      return preferencesManager?.getPreference('hotMicNewWindowWords') ?? HOT_MIC_DEFAULTS.newWindowPhrases;
     });
 
     ipcMain.handle('hotmic:setNewWindowWords', async (_event, words: string) => {
@@ -6049,7 +6269,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getCloseWindowWords', () => {
-      return preferencesManager?.getPreference('hotMicCloseWindowWords') ?? 'close window, close the window, close this window';
+      return preferencesManager?.getPreference('hotMicCloseWindowWords') ?? HOT_MIC_DEFAULTS.closeWindowPhrases;
     });
 
     ipcMain.handle('hotmic:setCloseWindowWords', async (_event, words: string) => {
@@ -6058,7 +6278,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getMinimizePhrases', () => {
-      return preferencesManager?.getPreference('hotMicMinimizePhrases') ?? 'minimize, minimize window, minimize the window';
+      return preferencesManager?.getPreference('hotMicMinimizePhrases') ?? HOT_MIC_DEFAULTS.minimizePhrases;
     });
 
     ipcMain.handle('hotmic:setMinimizePhrases', async (_event, words: string) => {
@@ -6067,7 +6287,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getHidePhrases', () => {
-      return preferencesManager?.getPreference('hotMicHidePhrases') ?? 'hide, hide app, hide this app, hide the app';
+      return preferencesManager?.getPreference('hotMicHidePhrases') ?? HOT_MIC_DEFAULTS.hidePhrases;
     });
 
     ipcMain.handle('hotmic:setHidePhrases', async (_event, words: string) => {
@@ -6076,7 +6296,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getQuitPhrases', () => {
-      return preferencesManager?.getPreference('hotMicQuitPhrases') ?? 'quit, quit app, quit this app';
+      return preferencesManager?.getPreference('hotMicQuitPhrases') ?? HOT_MIC_DEFAULTS.quitPhrases;
     });
 
     ipcMain.handle('hotmic:setQuitPhrases', async (_event, words: string) => {
@@ -6085,7 +6305,25 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getSwitchWords', () => {
-      return preferencesManager?.getPreference('hotMicSwitchWords') ?? 'next, switch';
+      return preferencesManager?.getPreference('hotMicSwitchWords') ?? HOT_MIC_DEFAULTS.switchWindowPhrases;
+    });
+
+    ipcMain.handle('hotmic:getOpenAppPrefixes', () => {
+      return preferencesManager?.getPreference('hotMicOpenAppPrefixes') ?? HOT_MIC_DEFAULTS.appOpenPrefixes;
+    });
+
+    ipcMain.handle('hotmic:setOpenAppPrefixes', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicOpenAppPrefixes: words });
+      return words;
+    });
+
+    ipcMain.handle('hotmic:getQuitAppPrefixes', () => {
+      return preferencesManager?.getPreference('hotMicQuitAppPrefixes') ?? HOT_MIC_DEFAULTS.appQuitPrefixes;
+    });
+
+    ipcMain.handle('hotmic:setQuitAppPrefixes', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicQuitAppPrefixes: words });
+      return words;
     });
 
     ipcMain.handle('hotmic:setSwitchWords', async (_event, words: string) => {
@@ -6094,7 +6332,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getRunClaudeWords', () => {
-      return preferencesManager?.getPreference('hotMicRunClaudeWords') ?? 'start claude, start cloud, run claude';
+      return preferencesManager?.getPreference('hotMicRunClaudeWords') ?? HOT_MIC_DEFAULTS.runClaudePhrases;
     });
 
     ipcMain.handle('hotmic:setRunClaudeWords', async (_event, words: string) => {
@@ -6103,7 +6341,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getRunCodexWords', () => {
-      return preferencesManager?.getPreference('hotMicRunCodexWords') ?? 'start codex, run codex';
+      return preferencesManager?.getPreference('hotMicRunCodexWords') ?? HOT_MIC_DEFAULTS.runCodexPhrases;
     });
 
     ipcMain.handle('hotmic:setRunCodexWords', async (_event, words: string) => {
@@ -6112,7 +6350,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getRestartServerWords', () => {
-      return preferencesManager?.getPreference('hotMicRestartServerWords') ?? 'restart server, restart dev, restart dev server';
+      return preferencesManager?.getPreference('hotMicRestartServerWords') ?? HOT_MIC_DEFAULTS.restartServerPhrases;
     });
 
     ipcMain.handle('hotmic:setRestartServerWords', async (_event, words: string) => {
@@ -6131,15 +6369,15 @@ if (!gotTheLock) {
 
     // System commands — media, volume, sleep, lock (stored as individual prefs)
     const SYSTEM_CMD_PREF_KEYS: Record<string, { prefKey: string; defaults: string }> = {
-      'play-pause':     { prefKey: 'hotMicPlayPausePhrases',  defaults: 'play, pause, play pause, play music, pause music' },
-      'next-track':     { prefKey: 'hotMicNextTrackPhrases',  defaults: 'next track, next song, skip, skip song' },
-      'previous-track': { prefKey: 'hotMicPrevTrackPhrases',  defaults: 'previous track, previous song, go back a song, last song' },
-      'volume-up':      { prefKey: 'hotMicVolumeUpPhrases',   defaults: 'louder, volume up, turn it up' },
-      'volume-down':    { prefKey: 'hotMicVolumeDownPhrases', defaults: 'softer, quieter, volume down, turn it down' },
-      'mute':           { prefKey: 'hotMicMutePhrases',       defaults: 'mute, mute audio, silence' },
-      'unmute':         { prefKey: 'hotMicUnmutePhrases',     defaults: 'unmute, unmute audio' },
-      'sleep':          { prefKey: 'hotMicSleepPhrases',      defaults: 'sleep, go to sleep, sleep computer' },
-      'lock':           { prefKey: 'hotMicLockPhrases',       defaults: 'lock, lock screen, lock computer' },
+      'play-pause':     { prefKey: 'hotMicPlayPausePhrases',  defaults: HOT_MIC_DEFAULT_SYSTEM_COMMANDS['play-pause'] },
+      'next-track':     { prefKey: 'hotMicNextTrackPhrases',  defaults: HOT_MIC_DEFAULT_SYSTEM_COMMANDS['next-track'] },
+      'previous-track': { prefKey: 'hotMicPrevTrackPhrases',  defaults: HOT_MIC_DEFAULT_SYSTEM_COMMANDS['previous-track'] },
+      'volume-up':      { prefKey: 'hotMicVolumeUpPhrases',   defaults: HOT_MIC_DEFAULT_SYSTEM_COMMANDS['volume-up'] },
+      'volume-down':    { prefKey: 'hotMicVolumeDownPhrases', defaults: HOT_MIC_DEFAULT_SYSTEM_COMMANDS['volume-down'] },
+      'mute':           { prefKey: 'hotMicMutePhrases',       defaults: HOT_MIC_DEFAULT_SYSTEM_COMMANDS.mute },
+      'unmute':         { prefKey: 'hotMicUnmutePhrases',     defaults: HOT_MIC_DEFAULT_SYSTEM_COMMANDS.unmute },
+      'sleep':          { prefKey: 'hotMicSleepPhrases',      defaults: HOT_MIC_DEFAULT_SYSTEM_COMMANDS.sleep },
+      'lock':           { prefKey: 'hotMicLockPhrases',       defaults: HOT_MIC_DEFAULT_SYSTEM_COMMANDS.lock },
     };
 
     ipcMain.handle('hotmic:getSystemCommands', () => {
@@ -6159,30 +6397,89 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getFocusPhrases', () => {
-      return preferencesManager?.getPreference('hotMicFocusPhrases') ?? 'focus';
+      const explicit = preferencesManager?.getPreference('hotMicFocusPhrases');
+      if (typeof explicit === 'string' && explicit.trim()) return explicit;
+      const savedWindow = preferencesManager?.getPreference('hotMicRectangleCommands')?.focus;
+      if (typeof savedWindow === 'string' && savedWindow.trim()) return savedWindow;
+      return HOT_MIC_DEFAULT_WINDOW_COMMANDS.focus;
     });
 
     ipcMain.handle('hotmic:setFocusPhrases', async (_event, words: string) => {
-      await preferencesManager?.save({ hotMicFocusPhrases: words });
+      const existingWindowCommands = preferencesManager?.getPreference('hotMicRectangleCommands') ?? {};
+      await preferencesManager?.save({
+        hotMicFocusPhrases: words,
+        hotMicRectangleCommands: { ...existingWindowCommands, focus: words },
+      });
       return words;
     });
 
     ipcMain.handle('hotmic:getCascadePhrases', () => {
-      return preferencesManager?.getPreference('hotMicCascadePhrases') ?? 'cascade, spread out';
+      const explicit = preferencesManager?.getPreference('hotMicCascadePhrases');
+      if (typeof explicit === 'string' && explicit.trim()) return explicit;
+      const savedWindow = preferencesManager?.getPreference('hotMicRectangleCommands')?.cascade;
+      if (typeof savedWindow === 'string' && savedWindow.trim()) return savedWindow;
+      return HOT_MIC_DEFAULT_WINDOW_COMMANDS.cascade;
     });
 
     ipcMain.handle('hotmic:setCascadePhrases', async (_event, words: string) => {
-      await preferencesManager?.save({ hotMicCascadePhrases: words });
+      const existingWindowCommands = preferencesManager?.getPreference('hotMicRectangleCommands') ?? {};
+      await preferencesManager?.save({
+        hotMicCascadePhrases: words,
+        hotMicRectangleCommands: { ...existingWindowCommands, cascade: words },
+      });
       return words;
     });
 
     ipcMain.handle('hotmic:getRectangleCommands', () => {
-      return {}; // Rectangle commands removed — window management handled by Squares
+      const saved = preferencesManager?.getPreference('hotMicRectangleCommands') ?? {};
+      return { ...HOT_MIC_DEFAULT_WINDOW_COMMANDS, ...saved };
     });
 
     ipcMain.handle('hotmic:setRectangleCommands', async (_event, commands: Record<string, string>) => {
-      await preferencesManager?.save({ hotMicRectangleCommands: commands });
+      const payload: Record<string, unknown> = { hotMicRectangleCommands: commands };
+      if (typeof commands.focus === 'string' && commands.focus.trim()) {
+        payload.hotMicFocusPhrases = commands.focus;
+      }
+      if (typeof commands.cascade === 'string' && commands.cascade.trim()) {
+        payload.hotMicCascadePhrases = commands.cascade;
+      }
+      await preferencesManager?.save(payload as any);
       return commands;
+    });
+
+    ipcMain.handle('hotmic:resetCommandDefaults', async () => {
+      const resetPayload: Record<string, unknown> = {
+        hotMicSubmitWord: HOT_MIC_DEFAULTS.submitPhrases,
+        hotMicPasteWords: HOT_MIC_DEFAULTS.pastePhrases,
+        hotMicCancelWords: HOT_MIC_DEFAULTS.cancelPhrases,
+        hotMicPrevWindowWords: HOT_MIC_DEFAULTS.prevWindowPhrases,
+        hotMicNewWindowWords: HOT_MIC_DEFAULTS.newWindowPhrases,
+        hotMicCloseWindowWords: HOT_MIC_DEFAULTS.closeWindowPhrases,
+        hotMicMinimizePhrases: HOT_MIC_DEFAULTS.minimizePhrases,
+        hotMicHidePhrases: HOT_MIC_DEFAULTS.hidePhrases,
+        hotMicQuitPhrases: HOT_MIC_DEFAULTS.quitPhrases,
+        hotMicSwitchWords: HOT_MIC_DEFAULTS.switchWindowPhrases,
+        hotMicOpenAppPrefixes: HOT_MIC_DEFAULTS.appOpenPrefixes,
+        hotMicQuitAppPrefixes: HOT_MIC_DEFAULTS.appQuitPrefixes,
+        hotMicRunClaudeWords: HOT_MIC_DEFAULTS.runClaudePhrases,
+        hotMicRunCodexWords: HOT_MIC_DEFAULTS.runCodexPhrases,
+        hotMicRestartServerWords: HOT_MIC_DEFAULTS.restartServerPhrases,
+        hotMicPlayPausePhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS['play-pause'],
+        hotMicNextTrackPhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS['next-track'],
+        hotMicPrevTrackPhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS['previous-track'],
+        hotMicVolumeUpPhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS['volume-up'],
+        hotMicVolumeDownPhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS['volume-down'],
+        hotMicMutePhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS.mute,
+        hotMicUnmutePhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS.unmute,
+        hotMicSleepPhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS.sleep,
+        hotMicLockPhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS.lock,
+        hotMicRectangleCommands: { ...HOT_MIC_DEFAULT_WINDOW_COMMANDS },
+        hotMicFocusPhrases: HOT_MIC_DEFAULT_WINDOW_COMMANDS.focus,
+        hotMicCascadePhrases: HOT_MIC_DEFAULT_WINDOW_COMMANDS.cascade,
+      };
+
+      await preferencesManager?.save(resetPayload as any);
+      return true;
     });
 
     ipcMain.handle('hotmic:getKnownTerminals', () => {
