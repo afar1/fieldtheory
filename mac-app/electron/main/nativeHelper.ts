@@ -623,7 +623,8 @@ export class NativeHelper extends EventEmitter {
     x: number,
     y: number,
     width: number,
-    height: number
+    height: number,
+    sourceFrame?: { x: number; y: number; width: number; height: number }
   ): Promise<boolean> {
     if (!this.child || !this.child.stdin.writable) {
       return false;
@@ -650,7 +651,19 @@ export class NativeHelper extends EventEmitter {
       };
 
       this.on('message', onMessage);
-      this.send({ type: 'setWindowFrame', pid, title, x, y, width, height });
+      this.send({
+        type: 'setWindowFrame',
+        pid,
+        title,
+        x,
+        y,
+        width,
+        height,
+        sourceX: sourceFrame?.x,
+        sourceY: sourceFrame?.y,
+        sourceWidth: sourceFrame?.width,
+        sourceHeight: sourceFrame?.height,
+      });
     });
   }
 

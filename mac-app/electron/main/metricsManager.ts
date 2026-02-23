@@ -267,6 +267,11 @@ export class MetricsManager {
     this.increment('words_transcribed', wordCount);
   }
 
+  recordHotMicTranscribedWords(wordCount: number): void {
+    if (!Number.isFinite(wordCount) || wordCount <= 0) return;
+    this.increment('words_transcribed', Math.floor(wordCount));
+  }
+
   recordWordsImproved(wordCount: number): void {
     this.increment('words_improved', wordCount);
   }

@@ -1,6 +1,7 @@
 {
   "appId": "com.fieldtheory.experimental",
   "productName": "Field Theory Experimental",
+  "beforeBuild": "scripts/electron-builder-before-build.js",
   "mac": {
     "category": "public.app-category.productivity",
     "minimumSystemVersion": "13.0",
@@ -23,6 +24,14 @@
       {
         "from": "../../build-whisper/bin/whisper-cli",
         "to": "whisper-cli"
+      },
+      {
+        "from": "scripts/qwen-transcribe.py",
+        "to": "scripts/qwen-transcribe.py"
+      },
+      {
+        "from": "scripts/setup-qwen.sh",
+        "to": "scripts/setup-qwen.sh"
       }
     ]
   },
@@ -34,4 +43,3 @@
     "output": "release-experimental"
   }
 }
-

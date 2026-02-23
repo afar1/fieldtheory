@@ -7,22 +7,44 @@ import { useTheme, Theme } from '../contexts/ThemeContext';
 
 /** Window action metadata for display. */
 const ACTION_META: Record<string, { label: string; description: string }> = {
-  'tile-all': { label: 'Tile All', description: 'Arrange all windows in a grid' },
-  'cascade-active-app': { label: 'Cascade', description: 'Cascade current app\'s windows' },
-  'center': { label: 'Center', description: 'Center window (no resize)' },
-  'maximize': { label: 'Maximize', description: 'Maximize window' },
-  'restore': { label: 'Restore', description: 'Undo last action' },
-  'left-half': { label: 'Left Half', description: 'Snap to left half' },
-  'right-half': { label: 'Right Half', description: 'Snap to right half' },
-  'larger': { label: 'Larger', description: 'Grow window incrementally' },
-  'smaller': { label: 'Smaller', description: 'Shrink window incrementally' },
-  'next-display': { label: 'Next Display', description: 'Move to next display' },
+  grid: { label: 'Grid / Tile', description: 'Arrange all windows in a grid layout' },
+  showAll: { label: 'Show All', description: 'Show all windows/apps after focus mode' },
+  focus: { label: 'Focus', description: 'Hide other windows and focus current app' },
+  horizontalSpread: { label: 'Horizontal', description: 'Spread windows horizontally' },
+  verticalSpread: { label: 'Vertical', description: 'Stack windows vertically' },
+  cascade: { label: 'Cascade', description: 'Cascade windows diagonally' },
+  leftHalf: { label: 'Snap Left', description: 'Snap active window to left side' },
+  rightHalf: { label: 'Snap Right', description: 'Snap active window to right side' },
+  topLeft: { label: 'Top Left Corner', description: 'Move active window to top-left corner' },
+  topRight: { label: 'Top Right Corner', description: 'Move active window to top-right corner' },
+  bottomLeft: { label: 'Bottom Left Corner', description: 'Move active window to bottom-left corner' },
+  bottomRight: { label: 'Bottom Right Corner', description: 'Move active window to bottom-right corner' },
+  maximize: { label: 'Maximize', description: 'Maximize active window' },
+  fullScreen: { label: 'Enter Full Screen', description: 'Enter macOS full-screen mode' },
+  exitFullScreen: { label: 'Exit Full Screen', description: 'Exit macOS full-screen mode' },
+  center: { label: 'Center', description: 'Center active window without resizing' },
+  restore: { label: 'Restore', description: 'Restore previous window state' },
 };
 
 /** Ordered list of actions for consistent rendering. */
 const ACTION_ORDER = [
-  'tile-all', 'cascade-active-app', 'center', 'maximize', 'restore',
-  'left-half', 'right-half', 'larger', 'smaller', 'next-display',
+  'grid',
+  'showAll',
+  'focus',
+  'horizontalSpread',
+  'verticalSpread',
+  'cascade',
+  'leftHalf',
+  'rightHalf',
+  'topLeft',
+  'topRight',
+  'bottomLeft',
+  'bottomRight',
+  'maximize',
+  'fullScreen',
+  'exitFullScreen',
+  'center',
+  'restore',
 ];
 
 export default function RectangleSettings() {

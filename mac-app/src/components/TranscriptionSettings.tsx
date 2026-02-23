@@ -32,6 +32,8 @@ export default function TranscriptionSettings() {
   const [appleSilicon, setAppleSilicon] = useState(true);
   const [qwenSetupStatus, setQwenSetupStatus] = useState<'idle' | 'installing' | 'done' | 'error'>('idle');
   const [qwenSetupError, setQwenSetupError] = useState<string | null>(null);
+  const [qwenSetupTick, setQwenSetupTick] = useState(0);
+  const [copiedError, setCopiedError] = useState<'qwen' | 'general' | null>(null);
 
   const [abandonHotkey, setAbandonHotkey] = useState<string>('Escape');
   const [isCapturingAbandonHotkey, setIsCapturingAbandonHotkey] = useState(false);
@@ -285,6 +287,21 @@ export default function TranscriptionSettings() {
     }
   }, [engine]);
 
+  useEffect(() => {
+    if (qwenSetupStatus !== 'installing') {
+      setQwenSetupTick(0);
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setQwenSetupTick((prev) => (prev + 1) % 3);
+    }, 400);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [qwenSetupStatus]);
+
   const handleStartCaptureHotkey = useCallback(() => {
     setIsCapturingHotkey(true);
     setHotkeyError(null);
@@ -304,6 +321,30 @@ export default function TranscriptionSettings() {
     } catch (err) {
       setHotkeyError(err instanceof Error ? err.message : 'Failed to set hotkey');
       console.error('Failed to set hotkey:', err);
+    }
+  }, []);
+
+  const copyErrorText = useCallback(async (text: string, source: 'qwen' | 'general') => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopiedError(source);
+      window.setTimeout(() => {
+        setCopiedError((current) => (current === source ? null : current));
+      }, 1800);
+    } catch (err) {
+      console.error('Failed to copy error text:', err);
     }
   }, []);
 
@@ -450,31 +491,53 @@ export default function TranscriptionSettings() {
           </div>
         )}
         {appleSilicon && !qwenInstalled && (
-          <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {qwenSetupStatus === 'installing' ? (
-              <span style={{ fontSize: '12px', color: theme.textSecondary }}>Installing Qwen voice model...</span>
-            ) : qwenSetupStatus === 'done' ? (
-              <span style={{ fontSize: '12px', color: theme.success }}>Installed</span>
-            ) : (
-              <button
-                onClick={handleSetupQwen}
-                style={{
-                  padding: '6px 14px',
-                  fontSize: '12px',
-                  fontWeight: 500,
-                  color: '#fff',
-                  backgroundColor: theme.info,
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                }}
-              >
-                Download Qwen Voice Model
-              </button>
+          <div style={{ marginTop: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {qwenSetupStatus === 'installing' ? (
+                <span style={{ fontSize: '12px', color: theme.textSecondary }}>
+                  Installing Qwen voice model{'.'.repeat(qwenSetupTick + 1)}
+                </span>
+              ) : qwenSetupStatus === 'done' ? (
+                <span style={{ fontSize: '12px', color: theme.success }}>Installed</span>
+              ) : (
+                <button
+                  onClick={handleSetupQwen}
+                  style={{
+                    padding: '6px 14px',
+                    fontSize: '12px',
+                    fontWeight: 500,
+                    color: '#fff',
+                    backgroundColor: theme.info,
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Download Qwen Voice Model
+                </button>
+              )}
+              {qwenSetupStatus === 'error' && qwenSetupError && (
+                <div style={styles.copyableErrorBlock}>
+                  <pre style={styles.copyableErrorText}>{qwenSetupError}</pre>
+                  <button
+                    onClick={() => copyErrorText(qwenSetupError, 'qwen')}
+                    style={styles.copyErrorButton}
+                  >
+                    {copiedError === 'qwen' ? 'Copied' : 'Copy error'}
+                  </button>
+                </div>
+              )}
+            </div>
+            {qwenSetupStatus === 'installing' && (
+              <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '6px' }}>
+                Download in progress. This can take a few minutes.
+              </div>
             )}
-            {qwenSetupStatus === 'error' && qwenSetupError && (
-              <span style={{ fontSize: '11px', color: theme.error }}>{qwenSetupError}</span>
-            )}
+            <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '6px' }}>
+              Requires Python 3. If setup says python is missing, run{' '}
+              <code style={{ fontFamily: 'monospace' }}>brew install python</code>{' '}
+              in Terminal, then try again.
+            </div>
           </div>
         )}
         {appleSilicon && qwenInstalled && engine === 'qwen' && (
@@ -585,7 +648,17 @@ export default function TranscriptionSettings() {
         </div>
       </div>
 
-      {error && <p style={styles.error}>{error}</p>}
+      {error && (
+        <div style={styles.copyableErrorBlock}>
+          <pre style={styles.copyableErrorText}>{error}</pre>
+          <button
+            onClick={() => copyErrorText(error, 'general')}
+            style={styles.copyErrorButton}
+          >
+            {copiedError === 'general' ? 'Copied' : 'Copy error'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -710,6 +783,33 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     color: theme.error,
     margin: '4px 0',
   },
+  copyableErrorBlock: {
+    marginTop: '6px',
+    border: `1px solid ${theme.error}`,
+    backgroundColor: theme.errorBg,
+    borderRadius: '6px',
+    padding: '8px',
+  },
+  copyableErrorText: {
+    margin: 0,
+    color: theme.error,
+    fontSize: '11px',
+    lineHeight: 1.35,
+    whiteSpace: 'pre-wrap' as const,
+    wordBreak: 'break-word' as const,
+    userSelect: 'text' as const,
+  },
+  copyErrorButton: {
+    marginTop: '8px',
+    padding: '4px 10px',
+    fontSize: '11px',
+    fontWeight: 500,
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
+    borderRadius: '6px',
+    cursor: 'pointer',
+  },
 
   // Models section.
   modelsSection: {
@@ -800,4 +900,3 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     color: theme.textSecondary,
   },
 });
-

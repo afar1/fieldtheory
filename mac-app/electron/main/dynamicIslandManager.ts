@@ -57,6 +57,7 @@ export class DynamicIslandManager extends EventEmitter {
   private window: BrowserWindow | null = null;
   private rightWindow: BrowserWindow | null = null;
   private gapFillWindow: BrowserWindow | null = null;
+  private enabled: boolean = true;
   private state: DynamicIslandState = 'idle';
   private rendererReady: boolean = false;
   private rightRendererReady: boolean = false;
@@ -196,10 +197,37 @@ export class DynamicIslandManager extends EventEmitter {
 
   setClipboardManager(manager: any): void {
     this.clipboardManager = manager;
+    if (!this.enabled) return;
     this.show();
     this.createRightWindow();
     this.syncGapFillWindow();
     this.createDrawerWindow();
+  }
+
+  setEnabled(enabled: boolean): void {
+    const next = !!enabled;
+    if (this.enabled === next) return;
+
+    this.enabled = next;
+    if (!this.enabled) {
+      this.historyVisible = false;
+      this.hideAllWindows();
+      return;
+    }
+
+    if (!this.clipboardManager) return;
+    this.show();
+    this.showRightWindow();
+    this.syncGapFillWindow();
+    if (!this.drawerWindow || this.drawerWindow.isDestroyed()) {
+      this.createDrawerWindow();
+    } else {
+      this.updateDrawerWindowPosition();
+    }
+    this.updateDrawerTranscript(this.drawerTranscriptText);
+    this.updateWindowSize();
+    this.sendStateToRenderer(this.state);
+    this.sendHotMicToRight();
   }
 
   setGeometryTuning(tuning: Partial<DynamicIslandGeometryTuning>): DynamicIslandGeometryTuning {
@@ -246,6 +274,11 @@ export class DynamicIslandManager extends EventEmitter {
       this.dismissTimer = null;
     }
 
+    if (!this.enabled) {
+      this.hideAllWindows();
+      return;
+    }
+
     if (state === 'idle') {
       this.historyVisible = false;
       this.sendStateToRenderer(state);
@@ -274,6 +307,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.hotMicActive = active;
     this.hotMicWordCount = active ? wordCount : 0;
     this.hotMicLastWord = active ? lastWord : '';
+    if (!this.enabled) return;
     this.sendHotMicToRight();
   }
 
@@ -281,6 +315,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.hotMicActive = false;
     this.hotMicWordCount = 0;
     this.hotMicLastWord = '';
+    if (!this.enabled) return;
     if (this.rightWindow && !this.rightWindow.isDestroyed()) {
       this.rightWindow.webContents.send('dynamic-island-hotmic-warn-discard');
       setTimeout(() => {
@@ -292,12 +327,14 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   sendMuteState(muted: boolean): void {
+    if (!this.enabled) return;
     if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
       this.rightWindow.webContents.send('dynamic-island-hotmic-mute', muted);
     }
   }
 
   updateHotMicBackgroundFilterMeter(data: HotMicBackgroundFilterMeter): void {
+    if (!this.enabled) return;
     if (this.window && !this.window.isDestroyed() && this.rendererReady) {
       this.window.webContents.send('dynamic-island-hotmic-filter-meter', data);
     }
@@ -318,6 +355,7 @@ export class DynamicIslandManager extends EventEmitter {
   // -------------------------------------------------------------------------
 
   sendTranscript(text: string, isFinal: boolean): void {
+    if (!this.enabled) return;
     if (this.state === 'idle') {
       this.setState('showing-transcript');
     }
@@ -339,6 +377,7 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   sendCommandDetected(phrase: string, startIndex: number, endIndex: number): void {
+    if (!this.enabled) return;
     if (this.window && !this.window.isDestroyed()) {
       this.window.webContents.send('dynamic-island-command', { phrase, startIndex, endIndex });
     }
@@ -372,6 +411,7 @@ export class DynamicIslandManager extends EventEmitter {
   // -------------------------------------------------------------------------
 
   private show(): void {
+    if (!this.enabled) return;
     if (!this.window || this.window.isDestroyed()) {
       this.createWindow();
     }
@@ -451,6 +491,10 @@ export class DynamicIslandManager extends EventEmitter {
     this.window.webContents.once('did-finish-load', () => {
       this.rendererReady = true;
       if (this.window && !this.window.isDestroyed()) {
+        if (!this.enabled) {
+          this.window.hide();
+          return;
+        }
         this.sendStateToRenderer(this.state);
         this.sendHistory();
 
@@ -521,6 +565,10 @@ export class DynamicIslandManager extends EventEmitter {
     this.rightWindow.webContents.once('did-finish-load', () => {
       this.rightRendererReady = true;
       if (this.rightWindow && !this.rightWindow.isDestroyed()) {
+        if (!this.enabled) {
+          this.rightWindow.hide();
+          return;
+        }
         this.updateRightWindowPosition();
         this.reinforceWindowBacking('right', 'right-ready-show');
         this.rightWindow.setOpacity(1);
@@ -530,6 +578,25 @@ export class DynamicIslandManager extends EventEmitter {
         this.rightWindow.webContents.send('dynamic-island-state', this.state);
       }
     });
+  }
+
+  private showRightWindow(): void {
+    if (!this.enabled) return;
+    if (!this.rightWindow || this.rightWindow.isDestroyed()) {
+      this.createRightWindow();
+      return;
+    }
+
+    this.updateRightWindowPosition();
+    this.reinforceWindowBacking('right', 'right-show-enabled');
+    this.rightWindow.setOpacity(1);
+    this.rightWindow.showInactive();
+
+    if (this.rightRendererReady) {
+      this.rightWindow.webContents.send('dynamic-island-drawer-transcript', this.drawerTranscriptText);
+      this.sendHotMicToRight();
+      this.rightWindow.webContents.send('dynamic-island-state', this.state);
+    }
   }
 
   private createGapFillWindow(): void {
@@ -1109,6 +1176,13 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   private syncGapFillWindow(): void {
+    if (!this.enabled) {
+      if (this.gapFillWindow && !this.gapFillWindow.isDestroyed()) {
+        this.gapFillWindow.hide();
+      }
+      return;
+    }
+
     if (!this.shouldShowGapFill()) {
       if (this.gapFillWindow && !this.gapFillWindow.isDestroyed()) {
         this.gapFillWindow.hide();
@@ -1149,6 +1223,11 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   private updateWindowSize(): void {
+    if (!this.enabled) {
+      this.hideAllWindows();
+      return;
+    }
+
     this.updateRightWindowPosition();
     this.updateDrawerWindowPosition();
     this.syncGapFillWindow();
@@ -1178,6 +1257,22 @@ export class DynamicIslandManager extends EventEmitter {
         height: targetHeight,
       });
       this.reinforceWindowBacking('left', 'left-set-bounds');
+    }
+  }
+
+  private hideAllWindows(): void {
+    this.pendingShow = false;
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.hide();
+    }
+    if (this.rightWindow && !this.rightWindow.isDestroyed()) {
+      this.rightWindow.hide();
+    }
+    if (this.gapFillWindow && !this.gapFillWindow.isDestroyed()) {
+      this.gapFillWindow.hide();
+    }
+    if (this.drawerWindow && !this.drawerWindow.isDestroyed()) {
+      this.drawerWindow.hide();
     }
   }
 

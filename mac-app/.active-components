@@ -1,0 +1,15 @@
+# Active logger components for `npm run dev:active`
+# One component per line (or comma-separated).
+# Use `*` to capture all components.
+#
+# Common component names:
+# Main
+# HotMic
+# Transcriber
+# Auth
+# Native
+#
+# Example:
+# HotMic
+# Transcriber
+DynamicIsland

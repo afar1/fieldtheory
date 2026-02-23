@@ -184,6 +184,20 @@ interface ContinuousContextState {
 }
 
 /**
+ * Lightweight process performance snapshot for the in-app HUD.
+ */
+interface ProcessPerformanceSnapshot {
+  timestampMs: number;
+  cpuPercent: number;
+  cpuCoresUsed: number;
+  cpuSystemPercent: number;
+  totalCores: number;
+  memoryUsedMb: number;
+  memorySystemPercent: number;
+  totalMemoryGb: number;
+}
+
+/**
  * Clipboard query options.
  */
 interface ClipboardQueryOptions {
@@ -297,6 +311,11 @@ interface ClipboardAPI {
   // Cursor status indicator settings
   getCursorStatusEnabled?: () => Promise<boolean>;
   setCursorStatusEnabled?: (enabled: boolean) => Promise<boolean>;
+  
+  // Performance HUD settings and process telemetry
+  getPerformanceHudEnabled?: () => Promise<boolean>;
+  setPerformanceHudEnabled?: (enabled: boolean) => Promise<boolean>;
+  getPerformanceSnapshot?: () => Promise<ProcessPerformanceSnapshot>;
   getHideStatusLabels?: () => Promise<boolean>;
   setHideStatusLabels?: (hide: boolean) => Promise<boolean>;
   getCursorStatusDebugMode?: () => Promise<boolean>;
@@ -313,6 +332,11 @@ interface ClipboardAPI {
   // Show fieldtheory.dev link in footer
   getShowFieldTheoryLink?: () => Promise<boolean>;
   setShowFieldTheoryLink?: (show: boolean) => Promise<boolean>;
+
+  // Tasks tab (experimental feature)
+  getTasksTabEnabled?: () => Promise<boolean>;
+  setTasksTabEnabled?: (enabled: boolean) => Promise<boolean>;
+  onTasksTabToggled?: (callback: (enabled: boolean) => void) => () => void;
 
   // Launch at login
   getLaunchAtLogin?: () => Promise<boolean>;
@@ -435,6 +459,7 @@ interface OnboardingAPI {
   getAIIntegrationStatus?: () => Promise<AIIntegrationStatus>;
   installClaudeHook?: () => Promise<{ success: boolean; message: string }>;
   installCursorHook?: () => Promise<{ success: boolean; message: string }>;
+  showSignIn: () => Promise<boolean>;
 }
 
 /**
@@ -743,6 +768,7 @@ interface CursorStatusAPI {
   onHotMicWordCount?: (callback: (count: number, lastWord: string) => void) => void;
   onWarnDiscard?: (callback: () => void) => void;
   onSlideOut?: (callback: () => void) => void;
+  onDebugModeChange?: (callback: (enabled: boolean) => void) => void;
   sendConfirmationResponse?: (abandon: boolean) => void;
   dismiss?: () => void;
   removeAllListeners: (channel: string) => void;
@@ -953,6 +979,12 @@ interface CommandsAPI {
 interface HotMicAPI {
   getState: () => Promise<string>;
   getEnabled: () => Promise<boolean>;
+  getTranscriptionEngineMode: () => Promise<'default' | 'whisper' | 'qwen'>;
+  setTranscriptionEngineMode: (mode: 'default' | 'whisper' | 'qwen') => Promise<'default' | 'whisper' | 'qwen'>;
+  getAllowWhisperFallback: () => Promise<boolean>;
+  setAllowWhisperFallback: (enabled: boolean) => Promise<boolean>;
+  getWhisperModel: () => Promise<string>;
+  setWhisperModel: (model: string) => Promise<string>;
   setEnabled: (enabled: boolean) => Promise<boolean>;
   getTargetApp: () => Promise<string | null>;
   setTargetApp: (bundleId: string | null) => Promise<string | null>;

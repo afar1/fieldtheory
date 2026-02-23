@@ -277,6 +277,69 @@ function logUserState(_context: string) {
 // Track pending reading to show in immersive mode. Renderer polls for this.
 let pendingImmersiveReading: string | null = null;
 
+/**
+ * Lightweight process performance snapshot for in-app HUD rendering.
+ */
+type ProcessPerformanceSnapshot = {
+  timestampMs: number;
+  cpuPercent: number;
+  cpuCoresUsed: number;
+  cpuSystemPercent: number;
+  totalCores: number;
+  memoryUsedMb: number;
+  memorySystemPercent: number;
+  totalMemoryGb: number;
+};
+
+let lastPerformanceCpuSample: { usage: NodeJS.CpuUsage; hrtimeNs: bigint } | null = null;
+const TOTAL_SYSTEM_CORES = Math.max(1, os.cpus().length);
+const TOTAL_SYSTEM_MEMORY_BYTES = os.totalmem();
+
+async function collectProcessPerformanceSnapshot(): Promise<ProcessPerformanceSnapshot> {
+  const nowNs = process.hrtime.bigint();
+  const usage = process.cpuUsage();
+
+  let cpuCoresUsed = 0;
+  if (lastPerformanceCpuSample) {
+    const elapsedUs = Number(nowNs - lastPerformanceCpuSample.hrtimeNs) / 1000;
+    const deltaUserUs = usage.user - lastPerformanceCpuSample.usage.user;
+    const deltaSystemUs = usage.system - lastPerformanceCpuSample.usage.system;
+    const consumedUs = Math.max(0, deltaUserUs + deltaSystemUs);
+    if (elapsedUs > 0) {
+      cpuCoresUsed = consumedUs / elapsedUs;
+    }
+  }
+  lastPerformanceCpuSample = { usage, hrtimeNs: nowNs };
+
+  let memoryKb = 0;
+  try {
+    const processMemory = await process.getProcessMemoryInfo();
+    memoryKb = typeof processMemory.residentSet === 'number'
+      ? processMemory.residentSet
+      : (typeof processMemory.private === 'number' ? processMemory.private : 0);
+  } catch {
+    memoryKb = Math.round(process.memoryUsage().rss / 1024);
+  }
+
+  const memoryUsedMb = memoryKb / 1024;
+  const cpuPercent = cpuCoresUsed * 100;
+  const cpuSystemPercent = (cpuCoresUsed / TOTAL_SYSTEM_CORES) * 100;
+  const memorySystemPercent = TOTAL_SYSTEM_MEMORY_BYTES > 0
+    ? ((memoryUsedMb * 1024 * 1024) / TOTAL_SYSTEM_MEMORY_BYTES) * 100
+    : 0;
+
+  return {
+    timestampMs: Date.now(),
+    cpuPercent: Number(cpuPercent.toFixed(1)),
+    cpuCoresUsed: Number(cpuCoresUsed.toFixed(2)),
+    cpuSystemPercent: Number(cpuSystemPercent.toFixed(1)),
+    totalCores: TOTAL_SYSTEM_CORES,
+    memoryUsedMb: Number(memoryUsedMb.toFixed(1)),
+    memorySystemPercent: Number(memorySystemPercent.toFixed(1)),
+    totalMemoryGb: Number((TOTAL_SYSTEM_MEMORY_BYTES / (1024 ** 3)).toFixed(1)),
+  };
+}
+
 
 /**
  * Migrate data from legacy app directories to the current Field Theory location.
@@ -2348,12 +2411,20 @@ function setupTranscribeIPCHandlers(): void {
 
   ipcMain.handle(TranscribeIPCChannels.SETUP_QWEN, async () => {
     const macAppRoot = path.resolve(__dirname, '../..');
-    const scriptPath = path.join(macAppRoot, 'scripts', 'setup-qwen.sh');
+    const scriptPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'scripts', 'setup-qwen.sh')
+      : path.join(macAppRoot, 'scripts', 'setup-qwen.sh');
+    const setupCwd = app.isPackaged ? app.getPath('userData') : macAppRoot;
+
+    if (!fs.existsSync(scriptPath)) {
+      return { success: false, error: `Qwen setup script not found at: ${scriptPath}` };
+    }
 
     return new Promise<{ success: boolean; error?: string }>((resolve) => {
-      exec(`bash "${scriptPath}"`, { cwd: macAppRoot, timeout: 600000 }, (error: Error | null, _stdout: string, stderr: string) => {
+      exec(`bash "${scriptPath}"`, { cwd: setupCwd, timeout: 600000 }, (error: Error | null, stdout: string, stderr: string) => {
         if (error) {
-          resolve({ success: false, error: stderr || error.message });
+          const details = [stderr?.trim(), stdout?.trim(), error.message].filter(Boolean).join('\n');
+          resolve({ success: false, error: details });
         } else {
           resolve({ success: true });
         }
@@ -3782,6 +3853,27 @@ function setupClipboardIPCHandlers(): void {
     await preferencesManager.save({ cursorStatusEnabled: enabled });
     cursorStatusManager?.setEnabled(enabled);
     return true;
+  });
+
+  // Performance HUD - lightweight in-app CPU/RAM/FPS overlay toggle.
+  ipcMain.handle(ClipboardIPCChannels.GET_PERFORMANCE_HUD_ENABLED, async () => {
+    if (!preferencesManager) {
+      return false;
+    }
+    return preferencesManager.getPreference('performanceHudEnabled') ?? false;
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SET_PERFORMANCE_HUD_ENABLED, async (_event, enabled: boolean) => {
+    if (!preferencesManager) {
+      return false;
+    }
+    await preferencesManager.save({ performanceHudEnabled: enabled });
+    return true;
+  });
+
+  // Performance HUD telemetry snapshot (sampled by renderer at low frequency).
+  ipcMain.handle(ClipboardIPCChannels.GET_PERFORMANCE_SNAPSHOT, async () => {
+    return collectProcessPerformanceSnapshot();
   });
 
   // Hide status labels - show only colored dots (red/purple/green).
@@ -5508,6 +5600,8 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize the dynamic island overlay (fixed near the notch, shows transcript + history).
   dynamicIslandManager = new DynamicIslandManager();
+  const hotMicEnabledOnLaunch = preferencesManager.getPreference('hotMicEnabled') ?? false;
+  dynamicIslandManager.setEnabled(hotMicEnabledOnLaunch);
   dynamicIslandManager.setClipboardManager(clipboardManager);
   dynamicIslandManager.setGeometryTuning(getHotMicIslandGeometryFromPreferences());
 
@@ -5577,8 +5671,8 @@ async function initTranscriberSystem(): Promise<void> {
       });
     }
     hotMicManager.setTranscriberStatusGetter(() => transcriberManager?.getStatus() ?? 'idle');
-    hotMicManager.setTranscribeFunction((wavPath) => transcriberManager!.transcribeAudio(wavPath));
-    hotMicManager.setWarmupFunction(() => transcriberManager!.warmup());
+    hotMicManager.setTranscribeFunction((wavPath) => transcriberManager!.transcribeAudioForHotMic(wavPath));
+    hotMicManager.setWarmupFunction(() => transcriberManager!.warmupForHotMic());
 
     // Wire hotkey delegation: when Hot Mic is active, hotkey presses go to it
     transcriberManager.setHotMicDelegate({
@@ -5822,6 +5916,7 @@ async function initTranscriberSystem(): Promise<void> {
 
       // Re-apply per-user Dynamic Island tuning after preferences reload.
       dynamicIslandManager?.setGeometryTuning(getHotMicIslandGeometryFromPreferences());
+      dynamicIslandManager?.setEnabled(prefs.hotMicEnabled ?? false);
     }
     if (clipboardManager) {
       await clipboardManager.reinitializeForUser();
@@ -5855,6 +5950,7 @@ async function initTranscriberSystem(): Promise<void> {
     if (preferencesManager) {
       preferencesManager.reset();
     }
+    dynamicIslandManager?.setEnabled(false);
     dynamicIslandManager?.setGeometryTuning(DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING);
     if (clipboardManager) {
       clipboardManager.onUserLoggedOut();
@@ -6141,8 +6237,40 @@ if (!gotTheLock) {
       return preferencesManager?.getPreference('hotMicEnabled') ?? false;
     });
 
+    ipcMain.handle('hotmic:getTranscriptionEngineMode', () => {
+      return preferencesManager?.getPreference('hotMicTranscriptionEngine') ?? 'default';
+    });
+
+    ipcMain.handle('hotmic:setTranscriptionEngineMode', async (_event, mode: 'default' | 'whisper' | 'qwen') => {
+      const normalized = mode === 'whisper' || mode === 'qwen' ? mode : 'default';
+      await preferencesManager?.save({ hotMicTranscriptionEngine: normalized });
+      return normalized;
+    });
+
+    ipcMain.handle('hotmic:getAllowWhisperFallback', () => {
+      return preferencesManager?.getPreference('hotMicAllowWhisperFallback') ?? true;
+    });
+
+    ipcMain.handle('hotmic:setAllowWhisperFallback', async (_event, enabled: boolean) => {
+      const normalized = enabled !== false;
+      await preferencesManager?.save({ hotMicAllowWhisperFallback: normalized });
+      return normalized;
+    });
+
+    ipcMain.handle('hotmic:getWhisperModel', () => {
+      return preferencesManager?.getPreference('hotMicWhisperModel') ?? 'small';
+    });
+
+    ipcMain.handle('hotmic:setWhisperModel', async (_event, model: ModelSize) => {
+      const validModels: ModelSize[] = ['small'];
+      const normalized: ModelSize = validModels.includes(model) ? model : 'small';
+      await preferencesManager?.save({ hotMicWhisperModel: normalized });
+      return normalized;
+    });
+
     ipcMain.handle('hotmic:setEnabled', async (_event, enabled: boolean) => {
       await preferencesManager?.save({ hotMicEnabled: enabled });
+      dynamicIslandManager?.setEnabled(enabled);
       if (!enabled && hotMicManager?.isActive) {
         hotMicManager.stop();
       } else if (enabled && hotMicManager && !hotMicManager.isActive) {

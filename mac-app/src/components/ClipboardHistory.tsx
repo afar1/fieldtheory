@@ -12,6 +12,7 @@ import CommandsView from './CommandsView';
 import ReleaseNotesPopup, { hasReleaseNotes } from './ReleaseNotesPopup';
 import LibrarianView from './LibrarianView';
 import DebugConsole from './DebugConsole';
+import PerformanceHud from './PerformanceHud';
 import type { SketchViewHandle } from './SketchView';
 import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { rendererSoundManager } from '../utils/rendererSoundManager';
@@ -630,6 +631,9 @@ export default function ClipboardHistory() {
   // Show fieldtheory.dev link in footer.
   const [showFieldTheoryLink, setShowFieldTheoryLink] = useState(true);
 
+  // In-app performance HUD visibility.
+  const [performanceHudEnabled, setPerformanceHudEnabled] = useState(false);
+
   // Show release notes once after app update (not on fresh install)
   useEffect(() => {
     const lastSeenVersion = localStorage.getItem('lastSeenReleaseNotesVersion');
@@ -682,6 +686,13 @@ export default function ClipboardHistory() {
   useEffect(() => {
     window.clipboardAPI?.getShowFieldTheoryLink?.().then(show => {
       setShowFieldTheoryLink(show);
+    });
+  }, [isVisible]);
+
+  // Load in-app performance HUD setting.
+  useEffect(() => {
+    window.clipboardAPI?.getPerformanceHudEnabled?.().then(enabled => {
+      setPerformanceHudEnabled(enabled);
     });
   }, [isVisible]);
   
@@ -3972,6 +3983,7 @@ export default function ClipboardHistory() {
           }}
           librarianEnabled={librarianEnabled}
           onLibrarianEnabledChange={setLibrarianEnabled}
+          onPerformanceHudEnabledChange={setPerformanceHudEnabled}
           initialSection={settingsSection as any}
         />
       ) : viewMode === 'todo' ? (
@@ -7168,6 +7180,8 @@ export default function ClipboardHistory() {
       )}
 
     </div>
+
+    <PerformanceHud enabled={performanceHudEnabled} />
 
     {/* Release notes popup - shows after app update, on first install, or on version hover */}
     {showReleaseNotes && (

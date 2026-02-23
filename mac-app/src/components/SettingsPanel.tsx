@@ -87,6 +87,7 @@ interface SettingsPanelProps {
   onNavigateToFeedback?: () => void;
   librarianEnabled?: boolean;
   onLibrarianEnabledChange?: (enabled: boolean) => void;
+  onPerformanceHudEnabledChange?: (enabled: boolean) => void;
   initialSection?: SettingsSection;
 }
 
@@ -95,7 +96,14 @@ interface SettingsPanelProps {
  * Keeps the same functionality as the original App.tsx settings, but styled for the
  * clipboard history context.
  */
-export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback, librarianEnabled, onLibrarianEnabledChange, initialSection }: SettingsPanelProps) {
+export default function SettingsPanel({
+  onNavigateToSignIn,
+  onNavigateToFeedback,
+  librarianEnabled,
+  onLibrarianEnabledChange,
+  onPerformanceHudEnabledChange,
+  initialSection,
+}: SettingsPanelProps) {
   const { theme, toggleDarkMode, accentPreset, setAccentPreset, darkModeIntensity, setDarkModeIntensity } = useTheme();
 
   // Selected section state for sidebar navigation
@@ -196,9 +204,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
   // Hot Mic hotkey
   const [hotMicHotkey, setHotMicHotkey] = useState<string | null>(null);
 
-  // Transcription engine (hot mic requires qwen)
-  const [transcriptionEngine, setTranscriptionEngine] = useState<'whisper' | 'qwen'>('whisper');
-
   // Mobile sync state - sign-in is handled via TeamView, we just listen for session.
   const [session, setSession] = useState<Session | null>(null);
   const [initialAuthLoading, setInitialAuthLoading] = useState(true);
@@ -248,6 +253,9 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
 
   // Show fieldtheory.dev link in footer.
   const [showFieldTheoryLink, setShowFieldTheoryLink] = useState(true);
+
+  // In-app performance HUD toggle.
+  const [performanceHudEnabled, setPerformanceHudEnabled] = useState(false);
 
   // Launch at login - start app when macOS starts.
   const [launchAtLogin, setLaunchAtLogin] = useState(true);
@@ -373,6 +381,11 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         setShowFieldTheoryLink(show);
       });
 
+      // Load in-app performance HUD setting.
+      window.clipboardAPI.getPerformanceHudEnabled?.().then(enabled => {
+        setPerformanceHudEnabled(enabled);
+      });
+
       // Load launch at login setting
       window.clipboardAPI.getLaunchAtLogin?.().then(enabled => {
         setLaunchAtLogin(enabled);
@@ -395,11 +408,6 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
         setHotMicHotkey(hotkey);
       });
     }
-
-    // Load transcription engine (hot mic requires qwen)
-    window.transcribeAPI?.getTranscriptionEngine?.().then(eng => {
-      setTranscriptionEngine(eng ?? 'whisper');
-    });
 
     // Load transcription hotkeys
     if (window.transcribeAPI) {
@@ -634,6 +642,21 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       }
     } catch (err) {
       console.error('Failed to change data retention:', err);
+    }
+  };
+
+  // Handler for toggling in-app performance HUD.
+  const handleTogglePerformanceHud = async (enabled: boolean) => {
+    if (!window.clipboardAPI?.setPerformanceHudEnabled) return;
+
+    try {
+      const success = await window.clipboardAPI.setPerformanceHudEnabled(enabled);
+      if (success) {
+        setPerformanceHudEnabled(enabled);
+        onPerformanceHudEnabledChange?.(enabled);
+      }
+    } catch (err) {
+      console.error('Failed to toggle performance HUD:', err);
     }
   };
   
@@ -1313,17 +1336,15 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
       <div style={styles.sidebar}>
         <div style={styles.sidebarNav}>
           {SECTIONS_ORDER.map((section) => {
-            const isDisabled = section === 'hot-mic' && transcriptionEngine !== 'qwen';
             return (
             <button
               key={section}
-              onClick={() => !isDisabled && setSelectedSection(section)}
+              onClick={() => setSelectedSection(section)}
               style={{
                 ...styles.sidebarItem,
                 backgroundColor: selectedSection === section ? theme.accent : 'transparent',
-                color: isDisabled ? theme.textSecondary : selectedSection === section ? '#fff' : theme.textSecondary,
-                opacity: isDisabled ? 0.4 : 1,
-                cursor: isDisabled ? 'not-allowed' : 'pointer',
+                color: selectedSection === section ? '#fff' : theme.textSecondary,
+                cursor: 'pointer',
               }}
             >
               {SECTION_LABELS[section]}
@@ -1439,6 +1460,22 @@ export default function SettingsPanel({ onNavigateToSignIn, onNavigateToFeedback
             style={{ ...styles.toggle, backgroundColor: showFieldTheoryLink ? theme.success : '#d1d5db' }}
           >
             <span style={{ ...styles.toggleKnob, transform: showFieldTheoryLink ? 'translateX(20px)' : 'translateX(2px)' }} />
+          </button>
+        </div>
+
+        {/* In-app Performance HUD */}
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={styles.rowLabel}>Performance HUD</span>
+            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+              Show CPU, RAM, and FPS overlay while using the app
+            </span>
+          </div>
+          <button
+            onClick={() => handleTogglePerformanceHud(!performanceHudEnabled)}
+            style={{ ...styles.toggle, backgroundColor: performanceHudEnabled ? theme.success : '#d1d5db' }}
+          >
+            <span style={{ ...styles.toggleKnob, transform: performanceHudEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
           </button>
         </div>
       </div>

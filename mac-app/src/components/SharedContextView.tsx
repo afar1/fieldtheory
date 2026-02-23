@@ -888,7 +888,6 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
     const localId = await window.sharedClipboardAPI.copyToPersonal(item.id);
     if (localId) {
       await window.clipboardAPI.pasteItem(localId);
-      await window.clipboardAPI.closeWindow();
     }
   }, []);
 
@@ -903,7 +902,6 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
     }
     if (localIds.length > 0) {
       await window.clipboardAPI.pasteStack?.(localIds);
-      await window.clipboardAPI.closeWindow();
     }
   }, []);
 
