@@ -23,6 +23,7 @@ import * as plist from 'plist';
 import { createLogger } from './logger';
 
 const log = createLogger('Transcriber');
+const LOG_TRANSCRIPT_PAYLOADS = process.env.LOG_TRANSCRIPT_PAYLOADS === 'true';
 
 // Feature flag for live transcript improvement.
 // When enabled, users can trigger AI improvement by ending recording with a different hotkey than started.
@@ -36,6 +37,10 @@ const execAsync = promisify(exec);
 export type TranscriptionStatus = 'idle' | 'silentStacking' | 'recording' | 'transcribing';
 
 type QwenServerResponse = { ok: boolean; text?: string; error?: string };
+type TranscribeWithEngineOptions = {
+  allowWhisperFallback?: boolean;
+  whisperModelOverride?: ModelSize;
+};
 
 /**
  * Events emitted by TranscriberManager.
@@ -72,6 +77,8 @@ export class TranscriberManager extends EventEmitter {
   private qwenPendingResolve: ((response: QwenServerResponse) => void) | null = null;
   private qwenCommandChain: Promise<void> = Promise.resolve();
   private qwenStarting: boolean = false;
+  private qwenDisabledReason: string | null = null;
+  private qwenFallbackLoggedForDisabledReason: boolean = false;
   private abandonHotkeyRegistered: boolean = false;
   private registeredAbandonHotkey: string = 'Escape'; // Track currently registered abandon hotkey
   
@@ -933,9 +940,7 @@ export class TranscriberManager extends EventEmitter {
 
       // Transcribe using configured engine
       const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
-      const text = engine === 'qwen'
-        ? await this.transcribeWithQwen(wavPath)
-        : await this.transcribe(wavPath);
+      const text = await this.transcribeWithEngineFallback(wavPath, engine);
       
       // Check for silence (empty or whitespace-only text)
       const trimmedText = text ? text.trim() : '';
@@ -1469,6 +1474,9 @@ export class TranscriberManager extends EventEmitter {
    * Get the path to the Qwen transcription Python script.
    */
   private getQwenScriptPath(): string {
+    if (app.isPackaged) {
+      return path.join(process.resourcesPath, 'scripts', 'qwen-transcribe.py');
+    }
     // __dirname in compiled code is mac-app/electron-dist/main
     // So we need to go up 2 levels: main -> electron-dist -> mac-app
     const macAppRoot = path.resolve(__dirname, '../..');
@@ -1479,6 +1487,10 @@ export class TranscriberManager extends EventEmitter {
    * Get the path to the Python interpreter in the Qwen venv.
    */
   private getQwenPythonPath(): string {
+    if (app.isPackaged) {
+      // In production the app bundle is read-only, so install the venv in userData.
+      return path.join(app.getPath('userData'), 'build-qwen', 'venv', 'bin', 'python');
+    }
     const macAppRoot = path.resolve(__dirname, '../..');
     return path.join(macAppRoot, 'build-qwen', 'venv', 'bin', 'python');
   }
@@ -1490,9 +1502,94 @@ export class TranscriberManager extends EventEmitter {
     const pythonPath = this.getQwenPythonPath();
     try {
       await fs.promises.access(pythonPath);
+      await this.ensureQwenPythonCompatible(pythonPath);
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Run a lightweight python probe to get major/minor version for Qwen runtime checks.
+   * We intentionally avoid importing mlx here to prevent crash loops on bad environments.
+   */
+  private probeQwenPythonVersion(pythonPath: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const proc = spawn(
+        pythonPath,
+        ['-c', 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")'],
+        { stdio: ['ignore', 'pipe', 'pipe'] }
+      );
+
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+
+      const done = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        fn();
+      };
+
+      const timeout = setTimeout(() => {
+        done(() => {
+          proc.kill('SIGTERM');
+          reject(new Error('Timed out while probing Qwen Python runtime'));
+        });
+      }, 5000);
+
+      proc.stdout?.on('data', (data: Buffer) => {
+        stdout += data.toString();
+      });
+      proc.stderr?.on('data', (data: Buffer) => {
+        stderr += data.toString();
+      });
+      proc.on('error', (error) => {
+        done(() => {
+          reject(new Error(`Failed to launch Qwen Python probe: ${error.message}`));
+        });
+      });
+      proc.on('close', (code, signal) => {
+        done(() => {
+          if (code !== 0) {
+            const details = stderr.trim() || stdout.trim() || `exit code ${code ?? 'unknown'}`;
+            const signalSuffix = signal ? `, signal ${signal}` : '';
+            reject(new Error(`Qwen Python probe failed (${details}${signalSuffix})`));
+            return;
+          }
+          const version = stdout.trim();
+          if (!version) {
+            reject(new Error('Qwen Python probe returned an empty version string'));
+            return;
+          }
+          resolve(version);
+        });
+      });
+    });
+  }
+
+  private async ensureQwenPythonCompatible(pythonPath: string): Promise<void> {
+    const version = await this.probeQwenPythonVersion(pythonPath);
+    const match = version.match(/^(\d+)\.(\d+)\./);
+    if (!match) {
+      throw new Error(`Unable to parse Qwen Python version "${version}"`);
+    }
+
+    const major = Number(match[1]);
+    const minor = Number(match[2]);
+    if (major < 3 || (major === 3 && minor < 10)) {
+      throw new Error(
+        `Qwen requires Python 3.10+ in its virtual environment (found ${version}). ` +
+        'Run Qwen setup from Settings > Transcription after installing Homebrew Python (brew install python).'
+      );
+    }
+
+    if (major > 3 || (major === 3 && minor >= 14)) {
+      throw new Error(
+        `Qwen currently supports Python 3.10-3.13 in its virtual environment (found ${version}). ` +
+        'Install Python 3.12 (brew install python@3.12), then rerun Qwen setup from Settings > Transcription.'
+      );
     }
   }
 
@@ -1501,6 +1598,10 @@ export class TranscriberManager extends EventEmitter {
    * Spawns the Python script with --server flag and waits for the ready signal.
    */
   private startQwenServer(): Promise<void> {
+    if (this.qwenDisabledReason) {
+      return Promise.reject(new Error(this.qwenDisabledReason));
+    }
+
     if (this.qwenReady && this.qwenProcess) {
       return Promise.resolve();
     }
@@ -1513,73 +1614,91 @@ export class TranscriberManager extends EventEmitter {
     const scriptPath = this.getQwenScriptPath();
 
     this.qwenReadyPromise = new Promise<void>((resolve, reject) => {
-      const proc = spawn(pythonPath, [scriptPath, '--server'], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-
-      this.qwenProcess = proc;
-      let buffer = '';
-
-      const onData = (data: Buffer) => {
-        buffer += data.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const msg = JSON.parse(line);
-            if (msg.ready) {
-              // Server is ready — model loaded
-              this.qwenReady = true;
-              this.qwenStarting = false;
-              // Switch from startup handler to normal line handler
-              proc.stdout?.removeListener('data', onData);
-              this.setupQwenLineHandler(proc, buffer);
-              buffer = '';
-              log.info('Qwen server ready');
-              resolve();
-              return;
-            }
-          } catch {
-            // Not JSON, ignore during startup
-          }
+      const launch = async () => {
+        try {
+          await this.ensureQwenPythonCompatible(pythonPath);
+        } catch (error) {
+          this.qwenProcess = null;
+          this.qwenReady = false;
+          this.qwenStarting = false;
+          this.qwenReadyPromise = null;
+          reject(error as Error);
+          return;
         }
+
+        const proc = spawn(pythonPath, [scriptPath, '--server'], {
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+
+        this.qwenProcess = proc;
+        let buffer = '';
+
+        const onData = (data: Buffer) => {
+          buffer += data.toString();
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const msg = JSON.parse(line);
+              if (msg.ready) {
+                // Server is ready — model loaded
+                this.qwenReady = true;
+                this.qwenStarting = false;
+                // Switch from startup handler to normal line handler
+                proc.stdout?.removeListener('data', onData);
+                this.setupQwenLineHandler(proc, buffer);
+                buffer = '';
+                log.info('Qwen server ready');
+                resolve();
+                return;
+              }
+            } catch {
+              // Not JSON, ignore during startup
+            }
+          }
+        };
+
+        proc.stdout?.on('data', onData);
+
+        proc.stderr?.on('data', (data: Buffer) => {
+          log.info('[Qwen stderr] %s', data.toString().trim());
+        });
+
+        proc.on('error', (error) => {
+          this.qwenProcess = null;
+          this.qwenReady = false;
+          this.qwenStarting = false;
+          this.qwenReadyPromise = null;
+          reject(new Error(`Failed to start qwen server: ${error.message}. Run Qwen setup from Settings > Transcription.`));
+        });
+
+        proc.on('close', (code) => {
+          const wasReady = this.qwenReady;
+          this.qwenProcess = null;
+          this.qwenReady = false;
+          this.qwenStarting = false;
+          this.qwenReadyPromise = null;
+
+          // Reject any pending transcription request
+          if (this.qwenPendingResolve) {
+            this.qwenPendingResolve({ ok: false, error: `Qwen server exited with code ${code}` });
+            this.qwenPendingResolve = null;
+          }
+
+          if (!wasReady) {
+            const hint = code === 134
+              ? ' (MLX runtime crashed; rerun Qwen setup from Settings to rebuild the environment)'
+              : '';
+            reject(new Error(`Qwen server exited during startup with code ${code}${hint}`));
+          } else {
+            log.warn('Qwen server process exited (code %d), will restart on next transcription', code);
+          }
+        });
       };
 
-      proc.stdout?.on('data', onData);
-
-      proc.stderr?.on('data', (data: Buffer) => {
-        log.info('[Qwen stderr] %s', data.toString().trim());
-      });
-
-      proc.on('error', (error) => {
-        this.qwenProcess = null;
-        this.qwenReady = false;
-        this.qwenStarting = false;
-        this.qwenReadyPromise = null;
-        reject(new Error(`Failed to start qwen server: ${error.message}. Run: cd mac-app && bash scripts/setup-qwen.sh`));
-      });
-
-      proc.on('close', (code) => {
-        const wasReady = this.qwenReady;
-        this.qwenProcess = null;
-        this.qwenReady = false;
-        this.qwenStarting = false;
-        this.qwenReadyPromise = null;
-
-        // Reject any pending transcription request
-        if (this.qwenPendingResolve) {
-          this.qwenPendingResolve({ ok: false, error: `Qwen server exited with code ${code}` });
-          this.qwenPendingResolve = null;
-        }
-
-        if (!wasReady) {
-          reject(new Error(`Qwen server exited during startup with code ${code}`));
-        } else {
-          log.warn('Qwen server process exited (code %d), will restart on next transcription', code);
-        }
-      });
+      void launch();
     });
 
     return this.qwenReadyPromise;
@@ -1712,6 +1831,22 @@ export class TranscriberManager extends EventEmitter {
     try {
       return await doTranscribe();
     } catch (error) {
+      const message = (error as Error)?.message || '';
+      const isFatalQwenRuntimeError =
+        message.includes('Qwen requires Python 3.10+') ||
+        message.includes('Qwen currently supports Python 3.10-3.13') ||
+        message.includes('Qwen server exited during startup with code 134') ||
+        message.includes('Qwen server exited with code 134') ||
+        message.includes('MLX runtime crashed');
+      const shouldRetry = !isFatalQwenRuntimeError;
+      if (!shouldRetry) {
+        if (!this.qwenDisabledReason) {
+          this.qwenDisabledReason = message || 'Qwen runtime is unavailable in this session';
+          log.warn('Disabling Qwen for this app session after fatal runtime error: %s', this.qwenDisabledReason);
+        }
+        throw error;
+      }
+
       // One retry: restart server and try again
       log.warn('Qwen transcription failed, restarting server: %s', (error as Error).message);
       this.stopQwenServer();
@@ -1720,17 +1855,69 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
+   * Transcribe with the configured engine, falling back to Whisper if Qwen fails
+   * and a Whisper model is available locally.
+   */
+  private async transcribeWithEngineFallback(
+    wavPath: string,
+    engine: 'whisper' | 'qwen',
+    options: TranscribeWithEngineOptions = {}
+  ): Promise<string> {
+    const allowWhisperFallback = options.allowWhisperFallback ?? true;
+    const whisperModelOverride = options.whisperModelOverride;
+
+    if (engine !== 'qwen') {
+      return this.transcribe(wavPath, whisperModelOverride);
+    }
+
+    try {
+      return await this.transcribeWithQwen(wavPath);
+    } catch (qwenError) {
+      if (!allowWhisperFallback) {
+        throw qwenError;
+      }
+
+      const whisperAvailable = whisperModelOverride
+        ? await this.modelManager.isModelAvailableForSize(whisperModelOverride)
+        : await this.modelManager.isModelAvailable();
+      if (!whisperAvailable) {
+        throw qwenError;
+      }
+
+      const qwenMessage = (qwenError as Error).message;
+      const isDisabledReason = this.qwenDisabledReason !== null && qwenMessage === this.qwenDisabledReason;
+      if (!isDisabledReason || !this.qwenFallbackLoggedForDisabledReason) {
+        log.warn(
+          'Qwen transcription failed, falling back to Whisper: %s',
+          qwenMessage
+        );
+        if (isDisabledReason) {
+          this.qwenFallbackLoggedForDisabledReason = true;
+        }
+      }
+
+      try {
+        return await this.transcribe(wavPath, whisperModelOverride);
+      } catch (whisperError) {
+        throw new Error(
+          `Qwen failed: ${(qwenError as Error).message}; Whisper fallback failed: ${(whisperError as Error).message}`
+        );
+      }
+    }
+  }
+
+  /**
    * Transcribe audio file using whisper-cli.
    */
-  private async transcribe(wavPath: string): Promise<string> {
+  private async transcribe(wavPath: string, whisperModelOverride?: ModelSize): Promise<string> {
     try {
-      return await this.runWhisper(wavPath);
+      return await this.runWhisper(wavPath, whisperModelOverride);
     } catch (error: any) {
       // If GPU mode crashed with a Metal error, retry with GPU disabled.
       if (!this.gpuDisabled && this.isMetalError(error?.message || '')) {
         log.warn('Metal GPU error detected, retrying with CPU-only mode');
         this.gpuDisabled = true;
-        return await this.runWhisper(wavPath);
+        return await this.runWhisper(wavPath, whisperModelOverride);
       }
       throw error;
     }
@@ -1743,8 +1930,10 @@ export class TranscriberManager extends EventEmitter {
       message.includes('ggml_metal');
   }
 
-  private runWhisper(wavPath: string): Promise<string> {
-    const modelPath = this.modelManager.getModelPath();
+  private runWhisper(wavPath: string, whisperModelOverride?: ModelSize): Promise<string> {
+    const modelPath = whisperModelOverride
+      ? this.modelManager.getModelPathForSize(whisperModelOverride)
+      : this.modelManager.getModelPath();
     const whisperPath = this.getWhisperPath();
 
     // If screenshots were captured, we need timestamps to insert figure refs inline.
@@ -1909,15 +2098,53 @@ export class TranscriberManager extends EventEmitter {
     }
   }
 
+  private resolveHotMicTranscriptionEngine(): 'whisper' | 'qwen' {
+    const override = this.preferences.getPreference('hotMicTranscriptionEngine');
+    if (override === 'whisper' || override === 'qwen') {
+      return override;
+    }
+    return this.preferences.getPreference('transcriptionEngine') || 'whisper';
+  }
+
+  private resolveHotMicWhisperModel(): ModelSize {
+    const configured = this.preferences.getPreference('hotMicWhisperModel');
+    const availableModels = this.modelManager.getAvailableModels();
+    if (configured && Object.prototype.hasOwnProperty.call(availableModels, configured)) {
+      return configured;
+    }
+    return this.modelManager.getSelectedModel();
+  }
+
+  /**
+   * Pre-start transcription runtime for Hot Mic according to its engine override.
+   */
+  async warmupForHotMic(): Promise<void> {
+    const engine = this.resolveHotMicTranscriptionEngine();
+    if (engine === 'qwen') {
+      await this.startQwenServer();
+    }
+  }
+
+  /**
+   * Transcribe for Hot Mic using Hot Mic-specific engine, fallback, and whisper model settings.
+   */
+  async transcribeAudioForHotMic(wavPath: string): Promise<string> {
+    const engine = this.resolveHotMicTranscriptionEngine();
+    const allowWhisperFallback = this.preferences.getPreference('hotMicAllowWhisperFallback') ?? true;
+    const whisperModel = this.resolveHotMicWhisperModel();
+    return this.transcribeWithEngineFallback(wavPath, engine, {
+      allowWhisperFallback,
+      whisperModelOverride: whisperModel,
+    });
+  }
+
   /**
    * Transcribe an audio file using the user's configured engine (whisper or qwen).
    * Exposed for HotMicManager so it can share the persistent Qwen server.
    */
   async transcribeAudio(wavPath: string): Promise<string> {
     const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
-    return engine === 'qwen'
-      ? this.transcribeWithQwen(wavPath)
-      : this.transcribe(wavPath);
+    return this.transcribeWithEngineFallback(wavPath, engine);
   }
 
   /**
@@ -2447,9 +2674,17 @@ export class TranscriberManager extends EventEmitter {
         } else if (this.detectedCommands.length > 0) {
           // For other multimodal apps, format command references as [cmd1: name]
           // Files will be pasted as attachments below
-          log.info(`Before formatCommandReferences: "${textContent}"`);
+          if (LOG_TRANSCRIPT_PAYLOADS) {
+            log.debug(`Before formatCommandReferences: "${textContent}"`);
+          } else {
+            log.debug('Formatting command references (%d chars, payload redacted)', textContent.length);
+          }
           textContent = this.formatCommandReferences(textContent);
-          log.info(`After formatCommandReferences: "${textContent}"`);
+          if (LOG_TRANSCRIPT_PAYLOADS) {
+            log.debug(`After formatCommandReferences: "${textContent}"`);
+          } else {
+            log.debug('Formatted command references (%d chars, payload redacted)', textContent.length);
+          }
         }
 
         clipboard.writeText(textContent);

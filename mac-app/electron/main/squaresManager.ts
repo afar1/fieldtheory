@@ -11,6 +11,7 @@ import { screen, globalShortcut } from 'electron';
 import { PreferencesManager } from './preferences';
 import { NativeHelper } from './nativeHelper';
 import { createLogger } from './logger';
+import { HOT_MIC_DEFAULT_WINDOW_COMMANDS } from './hotMicDefaults';
 import {
   WindowFrame,
   WindowInfo,
@@ -21,7 +22,6 @@ import {
   SquaresHotkeys,
   DEFAULT_SQUARES_CONFIG,
   DEFAULT_SQUARES_HOTKEYS,
-  VOICE_COMMAND_TRIGGERS,
 } from './types/squares';
 
 const log = createLogger('Squares');
@@ -36,6 +36,53 @@ const FIELD_THEORY_BUNDLE_IDS = [
   'com.fieldtheory.experimental',
   'com.github.Electron',
 ];
+
+const VALID_SQUARES_VOICE_ACTIONS = new Set<SquaresAction>([
+  'leftHalf',
+  'rightHalf',
+  'topHalf',
+  'bottomHalf',
+  'topLeft',
+  'topRight',
+  'bottomLeft',
+  'bottomRight',
+  'firstThird',
+  'centerThird',
+  'lastThird',
+  'firstTwoThirds',
+  'lastTwoThirds',
+  'maximize',
+  'almostMaximize',
+  'center',
+  'restore',
+  'grid',
+  'focus',
+  'minimize',
+  'hide',
+  'showAll',
+  'fullScreen',
+  'exitFullScreen',
+  'horizontalSpread',
+  'verticalSpread',
+  'cascade',
+]);
+
+const LEGACY_WINDOW_COMMAND_ACTIONS: Record<string, SquaresAction> = {
+  'tile-all': 'grid',
+  'show-all': 'showAll',
+  'focus-mode': 'focus',
+  'cascade-active-app': 'cascade',
+  'left-half': 'leftHalf',
+  'right-half': 'rightHalf',
+  'top-left': 'topLeft',
+  'top-right': 'topRight',
+  'bottom-left': 'bottomLeft',
+  'bottom-right': 'bottomRight',
+  fullscreen: 'fullScreen',
+  'exit-fullscreen': 'exitFullScreen',
+  'horizontal-spread': 'horizontalSpread',
+  'vertical-spread': 'verticalSpread',
+};
 
 /**
  * Run an AppleScript command with a timeout.
@@ -287,7 +334,24 @@ export class SquaresManager extends EventEmitter {
    * Move a window to a target frame (instant snap via AX API).
    */
   async moveWindow(pid: number, windowTitle: string, from: WindowFrame, to: WindowFrame): Promise<void> {
-    await this.nativeHelper.setWindowFrame(pid, windowTitle, to.x, to.y, to.width, to.height);
+    const success = await this.nativeHelper.setWindowFrame(
+      pid,
+      windowTitle,
+      to.x,
+      to.y,
+      to.width,
+      to.height,
+      from
+    );
+    if (!success) {
+      log.warn(
+        'Squares moveWindow failed: pid=%d title="%s" from=%o to=%o',
+        pid,
+        windowTitle,
+        from,
+        to
+      );
+    }
   }
 
   /**
@@ -299,11 +363,43 @@ export class SquaresManager extends EventEmitter {
   ): Promise<void> {
     if (moves.length === 0) return;
 
-    await Promise.all(
-      moves.map(m =>
-        this.nativeHelper.setWindowFrame(m.pid, m.title, m.to.x, m.to.y, m.to.width, m.to.height)
-      )
-    );
+    const results: Array<{
+      move: { pid: number; title: string; from: WindowFrame; to: WindowFrame };
+      success: boolean;
+    }> = [];
+
+    // Execute sequentially so disambiguation by source frame remains stable
+    // even when multiple windows share the same title and overlapping bounds.
+    for (const m of moves) {
+      const success = await this.nativeHelper.setWindowFrame(
+        m.pid,
+        m.title,
+        m.to.x,
+        m.to.y,
+        m.to.width,
+        m.to.height,
+        m.from
+      );
+      results.push({ move: m, success });
+    }
+
+    const failed = results.filter((r) => !r.success);
+    if (failed.length > 0) {
+      log.warn(
+        'Squares moveWindowsBatch partial failure: %d/%d failed',
+        failed.length,
+        moves.length
+      );
+      for (const entry of failed.slice(0, 5)) {
+        log.warn(
+          'Squares failed move: pid=%d title="%s" from=%o to=%o',
+          entry.move.pid,
+          entry.move.title,
+          entry.move.from,
+          entry.move.to
+        );
+      }
+    }
   }
 
   /**
@@ -1130,6 +1226,42 @@ export class SquaresManager extends EventEmitter {
   // Voice command integration
   // --------------------------------------------------------------------------
 
+  private resolveVoiceAction(actionName: string): SquaresAction | null {
+    if (VALID_SQUARES_VOICE_ACTIONS.has(actionName as SquaresAction)) {
+      return actionName as SquaresAction;
+    }
+    return LEGACY_WINDOW_COMMAND_ACTIONS[actionName] ?? null;
+  }
+
+  private getVoiceCommandTriggers(): Record<string, SquaresAction> {
+    const saved = this.preferences.getPreference('hotMicRectangleCommands') ?? {};
+    const merged: Record<string, string> = {
+      ...HOT_MIC_DEFAULT_WINDOW_COMMANDS,
+      ...saved,
+    };
+
+    const focusOverride = this.preferences.getPreference('hotMicFocusPhrases');
+    if (typeof focusOverride === 'string' && focusOverride.trim()) {
+      merged.focus = focusOverride;
+    }
+    const cascadeOverride = this.preferences.getPreference('hotMicCascadePhrases');
+    if (typeof cascadeOverride === 'string' && cascadeOverride.trim()) {
+      merged.cascade = cascadeOverride;
+    }
+
+    const triggers: Record<string, SquaresAction> = {};
+    for (const [actionName, csv] of Object.entries(merged)) {
+      const action = this.resolveVoiceAction(actionName);
+      if (!action || typeof csv !== 'string') continue;
+      const phrases = csv.split(',').map(p => p.trim().toLowerCase()).filter(p => p.length > 0);
+      for (const phrase of phrases) {
+        triggers[phrase] = action;
+      }
+    }
+
+    return triggers;
+  }
+
   /**
    * Parse transcribed text for Squares voice commands.
    * Returns the action if a command phrase is found, null otherwise.
@@ -1137,10 +1269,11 @@ export class SquaresManager extends EventEmitter {
    */
   parseVoiceCommand(text: string, exactOnly = false): SquaresAction | null {
     const normalized = text.toLowerCase().trim();
+    const voiceTriggers = this.getVoiceCommandTriggers();
 
     // Check longest phrases first to avoid partial matches.
     // e.g., "tile all" should match before "tile".
-    const sortedTriggers = Object.entries(VOICE_COMMAND_TRIGGERS)
+    const sortedTriggers = Object.entries(voiceTriggers)
       .sort((a, b) => b[0].length - a[0].length);
 
     for (const [phrase, action] of sortedTriggers) {
@@ -1189,9 +1322,10 @@ export class SquaresManager extends EventEmitter {
    */
   parseVoiceCommandFromTail(text: string): { action: SquaresAction; remainingText: string } | null {
     const normalized = text.toLowerCase().trim();
+    const voiceTriggers = this.getVoiceCommandTriggers();
 
     // Sort by phrase length descending — longest first to avoid partial matches
-    const sortedTriggers = Object.entries(VOICE_COMMAND_TRIGGERS)
+    const sortedTriggers = Object.entries(voiceTriggers)
       .sort((a, b) => b[0].length - a[0].length);
 
     for (const [phrase, action] of sortedTriggers) {

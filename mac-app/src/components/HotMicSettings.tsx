@@ -13,6 +13,13 @@ interface IslandGeometrySettings {
   offsetY: number;
 }
 
+interface WhisperModelInfo {
+  name: string;
+  url: string;
+  sizeBytes: number;
+  description: string;
+}
+
 const DEFAULT_ISLAND_GEOMETRY: IslandGeometrySettings = {
   notchWidthOverride: 0,
   pillWidth: 48,
@@ -41,6 +48,10 @@ export default function HotMicSettings() {
   const [qwenInstalled, setQwenInstalled] = useState(false);
   const [appleSilicon, setAppleSilicon] = useState(true);
   const [engine, setEngine] = useState<'whisper' | 'qwen'>('whisper');
+  const [hotMicEngineMode, setHotMicEngineMode] = useState<'default' | 'whisper' | 'qwen'>('default');
+  const [allowWhisperFallback, setAllowWhisperFallback] = useState(true);
+  const [hotMicWhisperModel, setHotMicWhisperModel] = useState('small');
+  const [availableWhisperModels, setAvailableWhisperModels] = useState<Record<string, WhisperModelInfo>>({});
   const [enabled, setEnabled] = useState(false);
   const [backgroundFilterEnabled, setBackgroundFilterEnabled] = useState(false);
   const [backgroundFilterStrength, setBackgroundFilterStrength] = useState(4);
@@ -79,24 +90,38 @@ export default function HotMicSettings() {
   const [resettingDefaults, setResettingDefaults] = useState(false);
 
   const styles = getStyles(theme);
+  const resolvedEngine: 'whisper' | 'qwen' = hotMicEngineMode === 'default' ? engine : hotMicEngineMode;
+  const canEnableHotMic = resolvedEngine === 'qwen' ? (appleSilicon && qwenInstalled) : true;
+  const canToggleHotMic = enabled || canEnableHotMic;
 
   useEffect(() => {
     if (!window.hotMicAPI) return;
 
-    // Check Qwen installation status and current engine
+    // Check runtime availability and engine preferences
     Promise.all([
       window.transcribeAPI?.isQwenInstalled?.() ?? Promise.resolve(false),
       window.transcribeAPI?.isAppleSilicon?.() ?? Promise.resolve(true),
       window.transcribeAPI?.getTranscriptionEngine?.() ?? Promise.resolve('whisper' as const),
-    ]).then(([qi, as, eng]) => {
+      window.hotMicAPI?.getTranscriptionEngineMode?.() ?? Promise.resolve('default' as const),
+      window.hotMicAPI?.getAllowWhisperFallback?.() ?? Promise.resolve(true),
+      window.hotMicAPI?.getWhisperModel?.() ?? Promise.resolve('small'),
+      window.transcribeAPI?.getAvailableModels?.() ?? Promise.resolve({} as Record<string, WhisperModelInfo>),
+    ]).then(([qi, as, eng, hotMicMode, fallbackEnabled, whisperModel, availableModels]) => {
       setQwenInstalled(qi);
       setAppleSilicon(as);
       setEngine(eng);
+      setHotMicEngineMode(hotMicMode);
+      setAllowWhisperFallback(fallbackEnabled);
+      setHotMicWhisperModel(whisperModel);
+      setAvailableWhisperModels(availableModels);
     });
 
     const load = async () => {
       const [
         en,
+        hotMicMode,
+        fallbackEnabled,
+        whisperModel,
         bgFilterEnabled,
         bgFilterStrengthValue,
         state,
@@ -123,6 +148,9 @@ export default function HotMicSettings() {
         geometry,
       ] = await Promise.all([
         window.hotMicAPI!.getEnabled(),
+        window.hotMicAPI!.getTranscriptionEngineMode(),
+        window.hotMicAPI!.getAllowWhisperFallback(),
+        window.hotMicAPI!.getWhisperModel(),
         window.hotMicAPI!.getBackgroundFilterEnabled(),
         window.hotMicAPI!.getBackgroundFilterStrength(),
         window.hotMicAPI!.getState(),
@@ -149,6 +177,9 @@ export default function HotMicSettings() {
         window.hotMicAPI!.getIslandGeometry(),
       ]);
       setEnabled(en);
+      setHotMicEngineMode(hotMicMode);
+      setAllowWhisperFallback(fallbackEnabled);
+      setHotMicWhisperModel(whisperModel);
       setBackgroundFilterEnabled(bgFilterEnabled);
       setBackgroundFilterStrength(Math.max(0, Math.min(100, Math.round(bgFilterStrengthValue))));
       setCurrentState(state);
@@ -198,6 +229,24 @@ export default function HotMicSettings() {
     if (!window.hotMicAPI) return;
     setEnabled(value);
     await window.hotMicAPI.setEnabled(value);
+  }, []);
+
+  const handleHotMicEngineModeChange = useCallback(async (mode: 'default' | 'whisper' | 'qwen') => {
+    if (!window.hotMicAPI?.setTranscriptionEngineMode) return;
+    setHotMicEngineMode(mode);
+    await window.hotMicAPI.setTranscriptionEngineMode(mode);
+  }, []);
+
+  const handleAllowWhisperFallbackChange = useCallback(async (value: boolean) => {
+    if (!window.hotMicAPI?.setAllowWhisperFallback) return;
+    setAllowWhisperFallback(value);
+    await window.hotMicAPI.setAllowWhisperFallback(value);
+  }, []);
+
+  const handleHotMicWhisperModelChange = useCallback(async (model: string) => {
+    if (!window.hotMicAPI?.setWhisperModel) return;
+    setHotMicWhisperModel(model);
+    await window.hotMicAPI.setWhisperModel(model);
   }, []);
 
   const handleBackgroundFilterEnabledChange = useCallback(async (value: boolean) => {
@@ -443,34 +492,85 @@ export default function HotMicSettings() {
       <div style={styles.row}>
         <span style={styles.rowLabel}>Enable Hot Mic</span>
         <button
-          onClick={() => (appleSilicon && qwenInstalled && engine === 'qwen') && handleEnabledChange(!enabled)}
+          onClick={() => canToggleHotMic && handleEnabledChange(!enabled)}
           style={{
             ...styles.toggle,
-            backgroundColor: enabled && engine === 'qwen' ? theme.success : '#d1d5db',
-            opacity: (appleSilicon && qwenInstalled && engine === 'qwen') ? 1 : 0.5,
-            cursor: (appleSilicon && qwenInstalled && engine === 'qwen') ? 'pointer' : 'not-allowed',
+            backgroundColor: enabled ? theme.success : '#d1d5db',
+            opacity: canToggleHotMic ? 1 : 0.5,
+            cursor: canToggleHotMic ? 'pointer' : 'not-allowed',
           }}
         >
-          <span style={{ ...styles.toggleKnob, transform: enabled && engine === 'qwen' ? 'translateX(20px)' : 'translateX(2px)' }} />
+          <span style={{ ...styles.toggleKnob, transform: enabled ? 'translateX(20px)' : 'translateX(2px)' }} />
         </button>
       </div>
-      {!appleSilicon ? (
+
+      {/* Hot Mic engine mode */}
+      <div style={styles.row}>
+        <span style={styles.rowLabel}>Hot Mic Engine</span>
+        <select
+          value={hotMicEngineMode}
+          onChange={(e) => void handleHotMicEngineModeChange(e.target.value as 'default' | 'whisper' | 'qwen')}
+          style={styles.select}
+        >
+          <option value="default">Use app default ({engine})</option>
+          <option value="whisper">Whisper</option>
+          <option value="qwen">Qwen</option>
+        </select>
+      </div>
+
+      {resolvedEngine === 'whisper' && (
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Whisper Model</span>
+          <select
+            value={hotMicWhisperModel}
+            onChange={(e) => void handleHotMicWhisperModelChange(e.target.value)}
+            style={styles.select}
+          >
+            {Object.entries(availableWhisperModels).map(([modelKey, modelInfo]) => (
+              <option key={modelKey} value={modelKey}>
+                {modelKey} ({Math.round(modelInfo.sizeBytes / (1024 * 1024))}MB)
+              </option>
+            ))}
+            {Object.keys(availableWhisperModels).length === 0 && (
+              <option value="small">small</option>
+            )}
+          </select>
+        </div>
+      )}
+
+      <div style={styles.row}>
+        <span style={styles.rowLabel}>Fallback to Whisper</span>
+        <button
+          onClick={() => resolvedEngine === 'qwen' && handleAllowWhisperFallbackChange(!allowWhisperFallback)}
+          style={{
+            ...styles.toggle,
+            backgroundColor: allowWhisperFallback ? theme.success : '#d1d5db',
+            opacity: resolvedEngine === 'qwen' ? 1 : 0.5,
+            cursor: resolvedEngine === 'qwen' ? 'pointer' : 'not-allowed',
+          }}
+        >
+          <span style={{ ...styles.toggleKnob, transform: allowWhisperFallback ? 'translateX(20px)' : 'translateX(2px)' }} />
+        </button>
+      </div>
+
+      {resolvedEngine === 'qwen' && !appleSilicon ? (
         <p style={{ ...styles.description, color: theme.textSecondary }}>
           Hot Mic requires Apple Silicon (M1 or later).
         </p>
-      ) : engine !== 'qwen' ? (
+      ) : resolvedEngine === 'qwen' && !qwenInstalled ? (
         <p style={{ ...styles.description, color: theme.textSecondary }}>
-          Hot Mic requires the Qwen voice model. Switch to Qwen in Audio & Transcription settings.
-        </p>
-      ) : !qwenInstalled ? (
-        <p style={{ ...styles.description, color: theme.textSecondary }}>
-          Qwen voice model not installed. Download it in Audio & Transcription settings.
+          Qwen voice model not installed. Run Qwen setup in Audio & Transcription settings.
         </p>
       ) : (
         <p style={styles.description}>
           Hands-free voice input for multiple Claude/Codex terminals. When Claude finishes a turn,
           the terminal is queued. Speak freely — your words buffer until you say the submit word
           to flush and send. Say "skip" to cycle or "dismiss" to remove from queue.
+        </p>
+      )}
+      {resolvedEngine === 'qwen' && !allowWhisperFallback && (
+        <p style={{ ...styles.description, color: theme.warning ?? theme.textSecondary }}>
+          Fallback is off. Qwen failures will stay visible instead of auto-switching to Whisper.
         </p>
       )}
 

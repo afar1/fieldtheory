@@ -12,11 +12,36 @@ import { SoundManager } from './soundManager';
 import { CursorStatusManager } from './cursorStatusManager';
 import { CommandsManager } from './commandsManager';
 import { AudioManager } from './audioManager';
-import { DynamicIslandManager } from './dynamicIslandManager';
+import { DynamicIslandManager, type HotMicBackgroundFilterMeter } from './dynamicIslandManager';
+import { HOT_MIC_DEFAULTS, HOT_MIC_DEFAULT_SYSTEM_COMMANDS } from './hotMicDefaults';
 import { getHotkeyManager } from './hotkeyManager';
 import { createLogger } from './logger';
 
 const log = createLogger('HotMic');
+const LOG_TRANSCRIPT_PAYLOADS = process.env.LOG_TRANSCRIPT_PAYLOADS === 'true';
+
+function logTranscriptPayload(label: string, text: string): void {
+  if (LOG_TRANSCRIPT_PAYLOADS) {
+    log.debug('%s: "%s"', label, text);
+    return;
+  }
+  log.debug('%s (%d chars, payload redacted)', label, text.length);
+}
+
+interface ChunkAudioStats {
+  sampleCount: number;
+  speechSamples: number;
+  speechRatio: number;
+  rawAverage: number;
+  speechAverage: number;
+  rawPeak: number;
+  speechPeak: number;
+}
+
+interface PendingChunk {
+  filePath: string;
+  audioStats: ChunkAudioStats;
+}
 
 /**
  * Hot Mic states:
@@ -44,19 +69,20 @@ export const KNOWN_TERMINALS: Array<{ name: string; bundleId: string }> = [
  * Number word → digit mapping for voice shortcuts.
  */
 const NUMBER_MAP: Record<string, string> = {
-  'one': '1', 'first': '1', 'option one': '1',
-  'two': '2', 'second': '2', 'option two': '2',
-  'three': '3', 'third': '3', 'option three': '3',
-  'four': '4', 'fourth': '4', 'option four': '4',
+  'first option': '1',
+  'second option': '2',
+  'third option': '3',
+  'fourth option': '4',
 };
 
 /**
  * Permission word → key mapping for voice shortcuts.
  */
 const PERMISSION_MAP: Record<string, string> = {
-  'yes': 'y', 'allow': 'y', 'approve': 'y',
-  'always': 'a', 'always allow': 'a',
-  'no': 'n', 'deny': 'n',
+  'allow': 'y',
+  'approve': 'y',
+  'always': 'a',
+  'deny': 'n',
 };
 
 /**
@@ -103,17 +129,6 @@ const APP_VOICE_ALIASES: Record<string, string[]> = {
 };
 
 /**
- * App names that are common English words — require "open" prefix to avoid false triggers.
- * Without the prefix, saying "notes" or "mail" in conversation would switch apps.
- */
-const AMBIGUOUS_APP_NAMES = new Set([
-  'notes', 'mail', 'music', 'news', 'pages', 'numbers',
-  'maps', 'books', 'weather', 'stocks', 'home', 'contacts',
-  'reminders', 'calendar', 'photos', 'preview', 'clips',
-  'zoom', 'linear', 'slack', 'warp', 'arc',
-]);
-
-/**
  * System voice commands — maps action names to their osascript implementation
  * and default trigger phrases. Each action sends a media key or system event.
  */
@@ -128,47 +143,47 @@ const SYSTEM_COMMANDS: Record<string, SystemCommand> = {
     // Use osascript with Music (if running), else Spotify (if running), else fail silently.
     // The "is running" check prevents launching the app.
     script: `osascript -e 'if application "Music" is running then' -e 'tell application "Music" to playpause' -e 'else if application "Spotify" is running then' -e 'tell application "Spotify" to playpause' -e 'end if'`,
-    defaultPhrases: 'play, pause, play pause, play music, pause music',
+    defaultPhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS['play-pause'],
     prefKey: 'hotMicPlayPausePhrases',
   },
   'next-track': {
     script: `osascript -e 'if application "Music" is running then' -e 'tell application "Music" to next track' -e 'else if application "Spotify" is running then' -e 'tell application "Spotify" to next track' -e 'end if'`,
-    defaultPhrases: 'next track, next song, skip, skip song',
+    defaultPhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS['next-track'],
     prefKey: 'hotMicNextTrackPhrases',
   },
   'previous-track': {
     script: `osascript -e 'if application "Music" is running then' -e 'tell application "Music" to previous track' -e 'else if application "Spotify" is running then' -e 'tell application "Spotify" to previous track' -e 'end if'`,
-    defaultPhrases: 'previous track, previous song, go back a song, last song',
+    defaultPhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS['previous-track'],
     prefKey: 'hotMicPrevTrackPhrases',
   },
   'volume-up': {
     script: `osascript -e 'set volume output volume ((output volume of (get volume settings)) + 10)'`,
-    defaultPhrases: 'louder, volume up, turn it up',
+    defaultPhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS['volume-up'],
     prefKey: 'hotMicVolumeUpPhrases',
   },
   'volume-down': {
     script: `osascript -e 'set volume output volume ((output volume of (get volume settings)) - 10)'`,
-    defaultPhrases: 'softer, quieter, volume down, turn it down',
+    defaultPhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS['volume-down'],
     prefKey: 'hotMicVolumeDownPhrases',
   },
   'mute': {
     script: `osascript -e 'set volume with output muted'`,
-    defaultPhrases: 'mute, mute audio, silence',
+    defaultPhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS.mute,
     prefKey: 'hotMicMutePhrases',
   },
   'unmute': {
     script: `osascript -e 'set volume without output muted'`,
-    defaultPhrases: 'unmute, unmute audio',
+    defaultPhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS.unmute,
     prefKey: 'hotMicUnmutePhrases',
   },
   'sleep': {
     script: `osascript -e 'tell application "System Events" to sleep'`,
-    defaultPhrases: 'sleep, go to sleep, sleep computer',
+    defaultPhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS.sleep,
     prefKey: 'hotMicSleepPhrases',
   },
   'lock': {
     script: `osascript -e 'tell application "System Events" to keystroke "q" using {command down, control down}'`,
-    defaultPhrases: 'lock, lock screen, lock computer',
+    defaultPhrases: HOT_MIC_DEFAULT_SYSTEM_COMMANDS.lock,
     prefKey: 'hotMicLockPhrases',
   },
 };
@@ -187,11 +202,16 @@ export class HotMicManager extends EventEmitter {
   private preferences: PreferencesManager;
   private modelManager: ModelManager;
   private soundManager: SoundManager;
-  private clipboardManager: { storeText: (...args: any[]) => Promise<number> } | null = null;
+  private clipboardManager: {
+    storeText: (...args: any[]) => Promise<number>;
+    setClipboardHashFromText?: (text: string) => void;
+    syncClipboardHash?: () => void;
+  } | null = null;
   private cursorStatusManager: CursorStatusManager | null = null;
   private commandsManager: CommandsManager | null = null;
   private audioManager: AudioManager | null = null;
   private dynamicIslandManager: DynamicIslandManager | null = null;
+  private metricsWordsRecorder: ((wordCount: number) => void) | null = null;
 
   private state: HotMicState = 'idle';
   private targetBundleId: string | null = null;
@@ -201,7 +221,7 @@ export class HotMicManager extends EventEmitter {
   private audioLevelListener: ((level: number, isSpeech: boolean) => void) | null = null;
   private chunkReadyListener: ((filePath: string) => void) | null = null;
   private chunkProcessingInFlight: boolean = false;
-  private pendingChunkQueue: string[] = [];
+  private pendingChunkQueue: PendingChunk[] = [];
   private forcedSnapshotTimer: NodeJS.Timeout | null = null;
   private forcedSnapshotInFlight: boolean = false;
   private lastChunkReadyMs: number = 0;
@@ -216,6 +236,7 @@ export class HotMicManager extends EventEmitter {
   private static readonly FORCE_SNAPSHOT_SPEECH_GRACE_MS = 220;
   private static readonly FORCE_SNAPSHOT_COMMAND_MS = 700;
   private static readonly FORCE_SNAPSHOT_DICTATION_MS = 900;
+  private static readonly FILTER_METER_UPDATE_MS = 90;
 
   // Warmup promise — awaited before first transcription to avoid race with Qwen startup
   private warmupPromise: Promise<void> | null = null;
@@ -236,6 +257,15 @@ export class HotMicManager extends EventEmitter {
 
   // Speech level threshold for orange dot (silence detection thresholds moved to Swift)
   private readonly SPEECH_LEVEL_THRESHOLD = 0.02;
+
+  // Background voice filtering metrics (tracked per chunk).
+  private chunkSampleCount: number = 0;
+  private chunkSpeechSampleCount: number = 0;
+  private chunkRawLevelSum: number = 0;
+  private chunkSpeechLevelSum: number = 0;
+  private chunkRawPeakLevel: number = 0;
+  private chunkSpeechPeakLevel: number = 0;
+  private lastFilterMeterEmitMs: number = 0;
 
   // Known whisper hallucination patterns (empty/silence audio)
   private readonly HALLUCINATION_PATTERNS = [
@@ -420,7 +450,11 @@ export class HotMicManager extends EventEmitter {
     this.cursorStatusManager = manager;
   }
 
-  setClipboardManager(manager: { storeText: (...args: any[]) => Promise<number> }): void {
+  setClipboardManager(manager: {
+    storeText: (...args: any[]) => Promise<number>;
+    setClipboardHashFromText?: (text: string) => void;
+    syncClipboardHash?: () => void;
+  }): void {
     this.clipboardManager = manager;
   }
 
@@ -430,6 +464,10 @@ export class HotMicManager extends EventEmitter {
 
   setDynamicIslandManager(manager: DynamicIslandManager): void {
     this.dynamicIslandManager = manager;
+  }
+
+  setMetricsWordsRecorder(recorder: (wordCount: number) => void): void {
+    this.metricsWordsRecorder = recorder;
   }
 
   setAudioManager(manager: AudioManager): void {
@@ -475,6 +513,14 @@ export class HotMicManager extends EventEmitter {
     return this.targetBundleId;
   }
 
+  private getConfiguredTranscriptionEngineForLogs(): 'whisper' | 'qwen' {
+    const mode = this.preferences.getPreference('hotMicTranscriptionEngine');
+    if (mode === 'whisper' || mode === 'qwen') {
+      return mode;
+    }
+    return this.preferences.getPreference('transcriptionEngine') ?? 'whisper';
+  }
+
   /**
    * Resolve which app to type into. In always-on mode, uses the frontmost app.
    * In queue mode, uses the pre-set target bundle ID.
@@ -491,6 +537,23 @@ export class HotMicManager extends EventEmitter {
     // Fall back to configured target
     log.debug('Hot Mic: falling back to configured target: %s', this.targetBundleId);
     return this.targetBundleId;
+  }
+
+  private async typeIntoAppWithClipboardSync(
+    bundleId: string,
+    text: string,
+    pressEnter: boolean
+  ): Promise<{ success: boolean; error?: string }> {
+    const clipboardManager = this.clipboardManager;
+    if (text) {
+      clipboardManager?.setClipboardHashFromText?.(text);
+    }
+    const result = await this.nativeHelper.typeIntoApp(bundleId, text, pressEnter);
+    if (!result.success && text) {
+      // Restore hash state from real clipboard content if helper injection failed.
+      clipboardManager?.syncClipboardHash?.();
+    }
+    return result;
   }
 
   // ---------------------------------------------------------------------------
@@ -629,6 +692,30 @@ export class HotMicManager extends EventEmitter {
     }
   }
 
+  /**
+   * Dismiss the current live transcript buffer without deactivating Hot Mic.
+   * Triggered from Dynamic Island explicit "x" control.
+   */
+  dismissCurrentTranscript(): void {
+    if (!this.isActive) return;
+
+    if (this.transcriptBuffer.length > 0) {
+      log.info('Hot Mic: dismissed live transcript buffer (%d chunks)', this.transcriptBuffer.length);
+    }
+
+    this.transcriptBuffer = [];
+    this.stopBufferDiscardTimer();
+    this.lastTimerResetMs = 0;
+    this.lastSpeechDetectedMs = 0;
+    this.clearDrawerSpeakingSignal();
+    this.dynamicIslandManager?.updateDrawerTranscript('');
+
+    if (!this.muted) {
+      this.nativeHelper.setHarvestMode('command');
+    }
+    this.updateOrangeDot();
+  }
+
   // ---------------------------------------------------------------------------
   // Hook trigger enqueue — starts listening if not already active
   // ---------------------------------------------------------------------------
@@ -661,10 +748,12 @@ export class HotMicManager extends EventEmitter {
     // Warm up transcription engine in parallel with recording start.
     // Store the promise so onChunkReady can await it before the first transcription,
     // preventing a race where a chunk arrives before the server is ready.
-    this.warmupPromise = this.externalWarmup?.() ?? null;
-    this.warmupPromise?.catch((err) => {
-      log.error('Hot Mic: warmup failed:', err);
-    });
+    this.warmupPromise = this.externalWarmup
+      ? this.externalWarmup().catch((err) => {
+          // Keep chunk processing alive so engine-level fallback can still run.
+          log.error('Hot Mic: warmup failed:', err);
+        })
+      : null;
 
     try {
       if (this.audioManager) {
@@ -804,14 +893,157 @@ export class HotMicManager extends EventEmitter {
     this.startAudioMonitoring();
   }
 
+  private getBackgroundFilterEnabled(): boolean {
+    return this.preferences.getPreference('hotMicBackgroundFilterEnabled') === true;
+  }
+
+  private getBackgroundFilterStrength(): number {
+    const value = this.preferences.getPreference('hotMicBackgroundFilterStrength');
+    if (typeof value !== 'number' || Number.isNaN(value)) return 4;
+    return Math.max(0, Math.min(100, Math.round(value)));
+  }
+
+  private getBackgroundFilterThreshold(strength: number): number {
+    const normalized = Math.max(0, Math.min(100, strength)) / 100;
+    // Lower values pass through; higher values progressively reject low-amplitude speech.
+    return 0.012 + normalized * 0.105;
+  }
+
+  private resetChunkAudioStats(): void {
+    this.chunkSampleCount = 0;
+    this.chunkSpeechSampleCount = 0;
+    this.chunkRawLevelSum = 0;
+    this.chunkSpeechLevelSum = 0;
+    this.chunkRawPeakLevel = 0;
+    this.chunkSpeechPeakLevel = 0;
+  }
+
+  private captureChunkAudioStats(): ChunkAudioStats {
+    const sampleCount = this.chunkSampleCount;
+    const speechSamples = this.chunkSpeechSampleCount;
+    const stats: ChunkAudioStats = {
+      sampleCount,
+      speechSamples,
+      speechRatio: sampleCount > 0 ? speechSamples / sampleCount : 0,
+      rawAverage: sampleCount > 0 ? this.chunkRawLevelSum / sampleCount : 0,
+      speechAverage: speechSamples > 0 ? this.chunkSpeechLevelSum / speechSamples : 0,
+      rawPeak: this.chunkRawPeakLevel,
+      speechPeak: this.chunkSpeechPeakLevel,
+    };
+    this.resetChunkAudioStats();
+    return stats;
+  }
+
+  private publishBackgroundFilterMeter(
+    rawLevel: number,
+    acceptedLevel: number,
+    speechRatio: number,
+    chunkSuppressed: boolean,
+  ): void {
+    const strength = this.getBackgroundFilterStrength();
+    const payload: HotMicBackgroundFilterMeter = {
+      enabled: this.getBackgroundFilterEnabled(),
+      strength,
+      rawLevel: Math.max(0, Math.min(1, rawLevel)),
+      acceptedLevel: Math.max(0, Math.min(1, acceptedLevel)),
+      threshold: this.getBackgroundFilterThreshold(strength),
+      speechRatio: Math.max(0, Math.min(1, speechRatio)),
+      chunkSuppressed,
+    };
+    this.dynamicIslandManager?.updateHotMicBackgroundFilterMeter?.(payload);
+  }
+
+  private maybePublishLiveBackgroundFilterMeter(level: number, isSpeech: boolean): void {
+    const now = Date.now();
+    if (now - this.lastFilterMeterEmitMs < HotMicManager.FILTER_METER_UPDATE_MS) return;
+    this.lastFilterMeterEmitMs = now;
+
+    const strength = this.getBackgroundFilterStrength();
+    const threshold = this.getBackgroundFilterThreshold(strength);
+    const acceptedLevel = isSpeech && level >= threshold
+      ? (level - threshold) / Math.max(1e-6, (1 - threshold))
+      : 0;
+    this.publishBackgroundFilterMeter(level, acceptedLevel, isSpeech ? 1 : 0, false);
+  }
+
+  private evaluateChunkBackgroundFilter(stats: ChunkAudioStats): {
+    suppressed: boolean;
+    acceptedLevel: number;
+    speechRatio: number;
+  } {
+    const enabled = this.getBackgroundFilterEnabled();
+    if (!enabled) {
+      return {
+        suppressed: false,
+        acceptedLevel: stats.rawAverage,
+        speechRatio: stats.speechRatio,
+      };
+    }
+
+    if (stats.sampleCount === 0) {
+      return {
+        suppressed: true,
+        acceptedLevel: 0,
+        speechRatio: 0,
+      };
+    }
+
+    const strength = this.getBackgroundFilterStrength();
+    const normalized = strength / 100;
+    const threshold = this.getBackgroundFilterThreshold(strength);
+    const ratioThreshold = 0.04 + (normalized * 0.28);
+    const minSpeechSamples = 2 + Math.round(normalized * 6);
+    const peakThreshold = threshold * (1.2 + normalized * 0.35);
+    const nearFieldPeakThreshold = threshold * 1.65;
+
+    const hasEnoughSpeechFrames = stats.speechSamples >= minSpeechSamples;
+    const hasSustainedSpeech = stats.speechRatio >= ratioThreshold;
+    const hasEnergy = stats.speechAverage >= threshold || stats.speechPeak >= peakThreshold;
+    const hasNearFieldPeak = stats.speechPeak >= nearFieldPeakThreshold;
+    const accepted = hasEnergy && (hasSustainedSpeech || (hasEnoughSpeechFrames && hasNearFieldPeak));
+    const normalizedAcceptedLevel = accepted
+      ? Math.max(0, (stats.speechAverage - threshold) / Math.max(1e-6, (1 - threshold)))
+      : 0;
+
+    return {
+      suppressed: !accepted,
+      acceptedLevel: normalizedAcceptedLevel,
+      speechRatio: stats.speechRatio,
+    };
+  }
+
+  private trackChunkAudioLevel(level: number, isSpeech: boolean): void {
+    const boundedLevel = Math.max(0, Math.min(1, level));
+
+    this.chunkSampleCount += 1;
+    this.chunkRawLevelSum += boundedLevel;
+    if (boundedLevel > this.chunkRawPeakLevel) {
+      this.chunkRawPeakLevel = boundedLevel;
+    }
+
+    if (isSpeech) {
+      this.chunkSpeechSampleCount += 1;
+      this.chunkSpeechLevelSum += boundedLevel;
+      if (boundedLevel > this.chunkSpeechPeakLevel) {
+        this.chunkSpeechPeakLevel = boundedLevel;
+      }
+    }
+
+    this.maybePublishLiveBackgroundFilterMeter(boundedLevel, isSpeech);
+  }
+
   private startAudioMonitoring(): void {
     this.stopAudioMonitoring();
     this.lastChunkReadyMs = Date.now();
+    this.lastFilterMeterEmitMs = 0;
+    this.resetChunkAudioStats();
+    this.publishBackgroundFilterMeter(0, 0, 0, false);
 
     // Audio level listener — UI (orange dot) and buffer discard timer.
     // Timer resets on continued speech (throttled) and on transcription chunks.
     this.audioLevelListener = (level: number, isSpeech: boolean) => {
       if (this.state !== 'recording' && this.state !== 'listening') return;
+      this.trackChunkAudioLevel(level, isSpeech);
 
       if (isSpeech) {
         this.bumpDrawerSpeakingSignal();
@@ -838,7 +1070,7 @@ export class HotMicManager extends EventEmitter {
     this.chunkReadyListener = (filePath: string) => {
       if (this.state !== 'recording' && this.state !== 'listening') return;
       this.lastChunkReadyMs = Date.now();
-      this.enqueueChunkForTranscription(filePath);
+      this.enqueueChunkForTranscription(filePath, this.captureChunkAudioStats());
     };
 
     this.nativeHelper.on('audioLevel', this.audioLevelListener);
@@ -857,6 +1089,8 @@ export class HotMicManager extends EventEmitter {
     }
     this.stopForcedSnapshotLoop();
     this.forcedSnapshotInFlight = false;
+    this.resetChunkAudioStats();
+    this.publishBackgroundFilterMeter(0, 0, 0, false);
   }
 
   private setDrawerSpeakingSignal(speaking: boolean): void {
@@ -886,8 +1120,8 @@ export class HotMicManager extends EventEmitter {
     this.setDrawerSpeakingSignal(false);
   }
 
-  private enqueueChunkForTranscription(filePath: string): void {
-    this.pendingChunkQueue.push(filePath);
+  private enqueueChunkForTranscription(filePath: string, audioStats: ChunkAudioStats): void {
+    this.pendingChunkQueue.push({ filePath, audioStats });
     void this.drainChunkQueue();
   }
 
@@ -897,9 +1131,9 @@ export class HotMicManager extends EventEmitter {
 
     try {
       while (this.pendingChunkQueue.length > 0) {
-        const wavPath = this.pendingChunkQueue.shift();
-        if (!wavPath) continue;
-        await this.onChunkReady(wavPath);
+        const chunk = this.pendingChunkQueue.shift();
+        if (!chunk) continue;
+        await this.onChunkReady(chunk);
       }
     } finally {
       this.chunkProcessingInFlight = false;
@@ -948,7 +1182,7 @@ export class HotMicManager extends EventEmitter {
       const wavPath = await this.nativeHelper.snapshotRecording();
       this.lastChunkReadyMs = Date.now();
       log.debug('Hot Mic: forced snapshot during continuous speech (%dms since last chunk)', sinceChunkMs);
-      this.enqueueChunkForTranscription(wavPath);
+      this.enqueueChunkForTranscription(wavPath, this.captureChunkAudioStats());
     } catch (error) {
       log.debug('Hot Mic: forced snapshot skipped/failed:', error);
     } finally {
@@ -987,9 +1221,7 @@ export class HotMicManager extends EventEmitter {
           }
           this.clearDrawerSpeakingSignal();
           this.dynamicIslandManager?.updateDrawerTranscript('');
-          // Always blink-then-hide — even if buffer was empty, the user saw
-          // the island appear so they deserve the visual warning before it goes.
-          this.dynamicIslandManager?.blinkThenHideHotMic();
+          this.updateOrangeDot();
         }
       }, timeout);
     }
@@ -1011,9 +1243,31 @@ export class HotMicManager extends EventEmitter {
   // Chunk ready — Swift detected silence and auto-snapshotted
   // ---------------------------------------------------------------------------
 
-  private async onChunkReady(wavPath: string): Promise<void> {
+  private async onChunkReady(chunk: PendingChunk): Promise<void> {
+    const wavPath = chunk.filePath;
+
     if (!this.isActive) {
       await fs.promises.unlink(wavPath).catch(() => {});
+      return;
+    }
+
+    const filterResult = this.evaluateChunkBackgroundFilter(chunk.audioStats);
+    this.publishBackgroundFilterMeter(
+      chunk.audioStats.rawAverage,
+      filterResult.acceptedLevel,
+      filterResult.speechRatio,
+      filterResult.suppressed,
+    );
+
+    if (filterResult.suppressed) {
+      log.info(
+        'Hot Mic: suppressed background chunk (speechRatio=%.3f, speechAvg=%.3f, speechPeak=%.3f)',
+        chunk.audioStats.speechRatio,
+        chunk.audioStats.speechAverage,
+        chunk.audioStats.speechPeak,
+      );
+      await fs.promises.unlink(wavPath).catch(() => {});
+      this.nativeHelper.setHarvestMode(this.transcriptBuffer.length === 0 ? 'command' : 'dictation');
       return;
     }
 
@@ -1034,12 +1288,17 @@ export class HotMicManager extends EventEmitter {
 
       // Transcribe the completed chunk — audio monitoring stays active
       const rawTranscript = (await this.transcribe(wavPath)).trim();
-      log.info('Hot Mic: raw transcript: "%s"', rawTranscript);
+      logTranscriptPayload('Hot Mic: raw transcript', rawTranscript);
       // Detect snap gesture before stripping parentheticals
       const hasSnap = /\(snap\)/i.test(rawTranscript);
       const transcript = rawTranscript.replace(/\([^)]*\)/g, '').trim();
       const tPost = performance.now();
-      log.info('Hot Mic: [timing] transcribe: %dms', Math.round(tPost - t0));
+      log.info(
+        'Hot Mic: [timing] transcribe: %dms (engine=%s, qwenFallback=%s)',
+        Math.round(tPost - t0),
+        this.getConfiguredTranscriptionEngineForLogs(),
+        (this.preferences.getPreference('hotMicAllowWhisperFallback') ?? true) ? 'on' : 'off'
+      );
 
       // Clean up WAV file
       await fs.promises.unlink(wavPath).catch(() => {});
@@ -1115,7 +1374,7 @@ export class HotMicManager extends EventEmitter {
         }
         this.dynamicIslandManager?.updateDrawerTranscript('');
         log.info('Hot Mic: auto-submitting shortcut "%s" → "%s"', lower, mapped);
-        const result = await this.nativeHelper.typeIntoApp(target, mapped, true);
+        const result = await this.typeIntoAppWithClipboardSync(target, mapped, true);
         if (result.success) {
           this.playSound('paste');
         }
@@ -1129,7 +1388,7 @@ export class HotMicManager extends EventEmitter {
       if (tailMatch.remainingText.trim()) {
         const norm = tailMatch.remainingText.trim().replace(/\.+$/, '').trim();
         this.transcriptBuffer.push(norm);
-        log.info('Hot Mic: buffered text before command: "%s"', norm);
+        logTranscriptPayload('Hot Mic: buffered text before command', norm);
       }
 
       // If there's buffered text, flush it before executing the command.
@@ -1154,14 +1413,21 @@ export class HotMicManager extends EventEmitter {
             void this.storeHotMicTranscript(mappedText);
             const target = this.getTypeTarget();
             if (target) {
-              log.info('Hot Mic: flushing buffer before command (%d chars): "%s"', mappedText.length, mappedText);
-              await this.nativeHelper.typeIntoApp(target, mappedText, false);
+              log.info('Hot Mic: flushing buffer before command (%d chars)', mappedText.length);
+              if (LOG_TRANSCRIPT_PAYLOADS) {
+                log.debug('Hot Mic: flushing buffer payload: "%s"', mappedText);
+              }
+              await this.typeIntoAppWithClipboardSync(target, mappedText, false);
             }
           }
         }
       }
 
-      log.info('Hot Mic: tail-match command "%s" → %s', lower, tailMatch.commandName);
+      if (LOG_TRANSCRIPT_PAYLOADS) {
+        log.info('Hot Mic: tail-match command "%s" → %s', lower, tailMatch.commandName);
+      } else {
+        log.info('Hot Mic: tail-match command → %s', tailMatch.commandName);
+      }
       if (tailMatch.script) {
         exec(tailMatch.script);
       }
@@ -1177,7 +1443,10 @@ export class HotMicManager extends EventEmitter {
     const { shouldPaste, cleanedText: pasteCleanedText } = this.checkPastePhrases(trimmed);
 
     if (shouldPaste) {
-      log.info('Hot Mic: paste phrase matched in chunk: "%s"', trimmed);
+      log.info('Hot Mic: paste phrase matched in chunk');
+      if (LOG_TRANSCRIPT_PAYLOADS) {
+        log.debug('Hot Mic: paste phrase chunk: "%s"', trimmed);
+      }
       if (pasteCleanedText.trim()) {
         this.transcriptBuffer.push(pasteCleanedText.trim().toLowerCase().replace(/\.+$/, '').trim());
       }
@@ -1195,8 +1464,11 @@ export class HotMicManager extends EventEmitter {
         const target = this.getTypeTarget();
         if (target) {
           mappedText = mappedText + ' ';
-          log.info('Hot Mic: pasting buffer (%d chars, no submit) to %s: "%s"', mappedText.length, target, mappedText);
-          const result = await this.nativeHelper.typeIntoApp(target, mappedText, false);
+          log.info('Hot Mic: pasting buffer (%d chars, no submit) to %s', mappedText.length, target);
+          if (LOG_TRANSCRIPT_PAYLOADS) {
+            log.debug('Hot Mic: pasting buffer payload: "%s"', mappedText);
+          }
+          const result = await this.typeIntoAppWithClipboardSync(target, mappedText, false);
           if (!result.success) {
             log.error('Hot Mic: typeIntoApp failed:', result.error);
           } else {
@@ -1213,7 +1485,10 @@ export class HotMicManager extends EventEmitter {
     const { shouldSubmit, cleanedText } = this.checkSubmitPhrases(trimmed);
 
     if (shouldSubmit) {
-      log.info('Hot Mic: submit phrase matched in chunk: "%s"', trimmed);
+      log.info('Hot Mic: submit phrase matched in chunk');
+      if (LOG_TRANSCRIPT_PAYLOADS) {
+        log.debug('Hot Mic: submit phrase chunk: "%s"', trimmed);
+      }
       // Add any remaining text before the submit word to buffer
       if (cleanedText.trim()) {
         this.transcriptBuffer.push(cleanedText.trim().toLowerCase().replace(/\.+$/, '').trim());
@@ -1231,8 +1506,11 @@ export class HotMicManager extends EventEmitter {
         void this.storeHotMicTranscript(mappedText);
         const target = this.getTypeTarget();
         if (target) {
-          log.info('Hot Mic: submitting buffer (%d chars) to %s: "%s"', mappedText.length, target, mappedText);
-          const result = await this.nativeHelper.typeIntoApp(target, mappedText, true);
+          log.info('Hot Mic: submitting buffer (%d chars) to %s', mappedText.length, target);
+          if (LOG_TRANSCRIPT_PAYLOADS) {
+            log.debug('Hot Mic: submitting buffer payload: "%s"', mappedText);
+          }
+          const result = await this.typeIntoAppWithClipboardSync(target, mappedText, true);
           if (!result.success) {
             log.error('Hot Mic: typeIntoApp failed:', result.error);
           } else {
@@ -1260,25 +1538,31 @@ export class HotMicManager extends EventEmitter {
     // periods at chunk boundaries). Internal periods and ?/! are preserved.
     const normalized = trimmed.toLowerCase().replace(/\.+$/, '').trim();
     this.transcriptBuffer.push(normalized);
-    log.info('Hot Mic: buffered (%d total): "%s"', this.transcriptBuffer.length, normalized);
+    if (LOG_TRANSCRIPT_PAYLOADS) {
+      log.debug('Hot Mic: buffered (%d total): "%s"', this.transcriptBuffer.length, normalized);
+    } else {
+      log.debug('Hot Mic: buffered (%d total, %d chars)', this.transcriptBuffer.length, normalized.length);
+    }
     this.syncDrawerPreview();
     // Orange dot update is handled by onChunkReady after this method returns
     this.resetBufferDiscardTimer();
   }
 
-  private static readonly DEFAULT_SUBMIT_PHRASES = 'over, go ahead, send it, submit, do it';
-  private static readonly DEFAULT_PASTE_PHRASES = 'paste, paste it, transcribe';
-  private static readonly DEFAULT_CANCEL_PHRASES = 'cancel, stop, abort';
-  private static readonly DEFAULT_NEW_WINDOW_PHRASES = 'new window';
-  private static readonly DEFAULT_CLOSE_WINDOW_PHRASES = 'close window, close the window, close this window';
-  private static readonly DEFAULT_MINIMIZE_PHRASES = 'minimize, minimize window, minimize the window';
-  private static readonly DEFAULT_HIDE_PHRASES = 'hide, hide app, hide this app, hide the app';
-  private static readonly DEFAULT_QUIT_PHRASES = 'quit, quit app, quit this app';
-  private static readonly DEFAULT_SWITCH_WORDS = 'next, switch';
-  private static readonly DEFAULT_PREV_WINDOW_WORDS = 'back, previous';
-  private static readonly DEFAULT_RUN_CLAUDE_PHRASES = 'start claude, start cloud, run claude';
-  private static readonly DEFAULT_RUN_CODEX_PHRASES = 'start codex, run codex';
-  private static readonly DEFAULT_RESTART_SERVER_PHRASES = 'restart server, restart dev, restart dev server';
+  private static readonly DEFAULT_SUBMIT_PHRASES = HOT_MIC_DEFAULTS.submitPhrases;
+  private static readonly DEFAULT_PASTE_PHRASES = HOT_MIC_DEFAULTS.pastePhrases;
+  private static readonly DEFAULT_CANCEL_PHRASES = HOT_MIC_DEFAULTS.cancelPhrases;
+  private static readonly DEFAULT_NEW_WINDOW_PHRASES = HOT_MIC_DEFAULTS.newWindowPhrases;
+  private static readonly DEFAULT_CLOSE_WINDOW_PHRASES = HOT_MIC_DEFAULTS.closeWindowPhrases;
+  private static readonly DEFAULT_MINIMIZE_PHRASES = HOT_MIC_DEFAULTS.minimizePhrases;
+  private static readonly DEFAULT_HIDE_PHRASES = HOT_MIC_DEFAULTS.hidePhrases;
+  private static readonly DEFAULT_QUIT_PHRASES = HOT_MIC_DEFAULTS.quitPhrases;
+  private static readonly DEFAULT_SWITCH_WORDS = HOT_MIC_DEFAULTS.switchWindowPhrases;
+  private static readonly DEFAULT_PREV_WINDOW_WORDS = HOT_MIC_DEFAULTS.prevWindowPhrases;
+  private static readonly DEFAULT_OPEN_APP_PREFIXES = HOT_MIC_DEFAULTS.appOpenPrefixes;
+  private static readonly DEFAULT_QUIT_APP_PREFIXES = HOT_MIC_DEFAULTS.appQuitPrefixes;
+  private static readonly DEFAULT_RUN_CLAUDE_PHRASES = HOT_MIC_DEFAULTS.runClaudePhrases;
+  private static readonly DEFAULT_RUN_CODEX_PHRASES = HOT_MIC_DEFAULTS.runCodexPhrases;
+  private static readonly DEFAULT_RESTART_SERVER_PHRASES = HOT_MIC_DEFAULTS.restartServerPhrases;
   private getSubmitPhrases(): string[][] {
     const pref = this.preferences.getPreference('hotMicSubmitWord');
     const raw = typeof pref === 'string' && pref.trim() ? pref : HotMicManager.DEFAULT_SUBMIT_PHRASES;
@@ -1424,7 +1708,7 @@ export class HotMicManager extends EventEmitter {
         action: async () => {
           const target = this.getTypeTarget();
           if (target) {
-            await this.nativeHelper.typeIntoApp(target, 'claude', true);
+            await this.typeIntoAppWithClipboardSync(target, 'claude', true);
           }
         },
       },
@@ -1432,7 +1716,7 @@ export class HotMicManager extends EventEmitter {
         action: async () => {
           const target = this.getTypeTarget();
           if (target) {
-            await this.nativeHelper.typeIntoApp(target, 'codex', true);
+            await this.typeIntoAppWithClipboardSync(target, 'codex', true);
           }
         },
       },
@@ -1514,6 +1798,16 @@ export class HotMicManager extends EventEmitter {
       }
     }
 
+    // Dynamic: Hide specific app by name ("hide slack", "hide the browser")
+    const hideMatch = await this.parseHideAppFromTail(text);
+    if (hideMatch) {
+      return {
+        commandName: 'hide-app:' + hideMatch.appName,
+        action: async () => { await this.hideAppByName(hideMatch); },
+        remainingText: hideMatch.remainingText,
+      };
+    }
+
     // Dynamic: Quit specific app by name ("quit slack", "quit the browser")
     const quitMatch = await this.parseQuitAppFromTail(text);
     if (quitMatch) {
@@ -1522,19 +1816,6 @@ export class HotMicManager extends EventEmitter {
         action: async () => { await this.quitAppByName(quitMatch); },
         remainingText: quitMatch.remainingText,
       };
-    }
-
-    // Dynamic: Bare app name without prefix ("browser", "chrome", "terminal")
-    // Only matches non-ambiguous names to avoid false triggers
-    if (this.appSwitcher) {
-      const bareMatch = await this.parseBareAppFromTail(text);
-      if (bareMatch) {
-        return {
-          commandName: 'app-switch:' + bareMatch.appName,
-          action: async () => { await this.activateAppByName(bareMatch); },
-          remainingText: bareMatch.remainingText,
-        };
-      }
     }
 
     return null;
@@ -1547,6 +1828,26 @@ export class HotMicManager extends EventEmitter {
     const pref = this.preferences.getPreference(prefKey as any);
     const raw = typeof pref === 'string' && pref.trim() ? pref : defaultValue;
     return raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
+  }
+
+  private getAppOpenPrefixes(): string[] {
+    return this.getPhraseList('hotMicOpenAppPrefixes', HotMicManager.DEFAULT_OPEN_APP_PREFIXES);
+  }
+
+  private getAppQuitPrefixes(): string[] {
+    return this.getPhraseList('hotMicQuitAppPrefixes', HotMicManager.DEFAULT_QUIT_APP_PREFIXES);
+  }
+
+  private getAppHidePrefixes(): string[] {
+    // Reuse hide phrases so custom vocabulary ("conceal", etc.) can opt in.
+    // Keep "hide" always available for natural commands like "hide slack".
+    const hidePhrases = this.getPhraseList('hotMicHidePhrases', HotMicManager.DEFAULT_HIDE_PHRASES);
+    const prefixes = new Set<string>(['hide']);
+    for (const phrase of hidePhrases) {
+      if (phrase === 'hide this app' || phrase === 'hide the app') continue;
+      prefixes.add(phrase);
+    }
+    return Array.from(prefixes);
   }
 
   // ── App switching (voice-triggered) ─────────────────────────────────
@@ -1628,7 +1929,7 @@ export class HotMicManager extends EventEmitter {
    * Returns matched app info + remaining text, or null.
    */
   private async parseAppSwitchFromTail(text: string): Promise<{ appName: string; bundleId: string | null; remainingText: string } | null> {
-    const prefixes = ['open ', 'switch to ', 'go to '];
+    const prefixes = this.getAppOpenPrefixes();
     const runningApps = await this.getRunningApps();
 
     // Build all possible app phrases (user aliases + built-in aliases + running app names)
@@ -1662,10 +1963,11 @@ export class HotMicManager extends EventEmitter {
     // Handles natural speech: "go to the terminal", "open the chrome", etc.
     const articles = ['the ', 'a ', 'an '];
     for (const prefix of prefixes) {
+      const prefixWithSpace = `${prefix} `;
       for (const { phrase, canonical } of phrases) {
-        const triggers = [prefix + phrase];
+        const triggers = [prefixWithSpace + phrase];
         for (const article of articles) {
-          triggers.push(prefix + article + phrase);
+          triggers.push(prefixWithSpace + article + phrase);
         }
         for (const trigger of triggers) {
           if (text === trigger) {
@@ -1709,7 +2011,7 @@ export class HotMicManager extends EventEmitter {
    * Reuses the same app name matching as parseAppSwitchFromTail.
    */
   private async parseQuitAppFromTail(text: string): Promise<{ appName: string; bundleId: string | null; remainingText: string } | null> {
-    const prefixes = ['quit ', 'close ', 'kill '];
+    const prefixes = this.getAppQuitPrefixes();
     const runningApps = await this.getRunningApps();
 
     // Build all possible app phrases (same logic as parseAppSwitchFromTail)
@@ -1737,10 +2039,11 @@ export class HotMicManager extends EventEmitter {
 
     const articles = ['the ', 'a ', 'an '];
     for (const prefix of prefixes) {
+      const prefixWithSpace = `${prefix} `;
       for (const { phrase, canonical } of phrases) {
-        const triggers = [prefix + phrase];
+        const triggers = [prefixWithSpace + phrase];
         for (const article of articles) {
-          triggers.push(prefix + article + phrase);
+          triggers.push(prefixWithSpace + article + phrase);
         }
         for (const trigger of triggers) {
           if (text === trigger) {
@@ -1760,66 +2063,53 @@ export class HotMicManager extends EventEmitter {
   }
 
   /**
-   * Check if text ends with a bare app name (no "open"/"switch to" prefix).
-   * Only matches non-ambiguous names to avoid false triggers in conversation.
-   * User-configured aliases always match (user explicitly chose those words).
+   * Check if text ends with hide-prefix + app name (e.g. "hide slack").
+   * Reuses the same app matching logic as app-switch / app-quit.
    */
-  private async parseBareAppFromTail(text: string): Promise<{ appName: string; bundleId: string | null; remainingText: string } | null> {
+  private async parseHideAppFromTail(text: string): Promise<{ appName: string; bundleId: string | null; remainingText: string } | null> {
+    const prefixes = this.getAppHidePrefixes();
     const runningApps = await this.getRunningApps();
-    const stripped = text.replace(/[.,!?;:]+$/, '').trim().toLowerCase();
-    if (!stripped) return null;
 
-    // Build candidate phrases: user aliases + built-in aliases + running app names
-    // Sort longest first so "arc browser" matches before "arc"
-    const candidates: Array<{ phrase: string; resolve: () => { appName: string; bundleId: string | null } | null }> = [];
+    const phrases: Array<{ phrase: string; canonical: string }> = [];
 
-    // User-configured aliases — always trusted (user explicitly chose these words)
     const userAliases = this.preferences.getPreference('hotMicAppAliases') ?? [];
     for (const { appName, aliases } of userAliases) {
       const aliasList = aliases.split(',').map(a => a.trim().toLowerCase()).filter(a => a.length > 0);
       for (const alias of aliasList) {
-        candidates.push({
-          phrase: alias,
-          resolve: () => ({ appName, bundleId: this.findBundleId(appName, runningApps) }),
-        });
+        phrases.push({ phrase: alias, canonical: appName });
       }
     }
 
-    // Built-in aliases (skip ambiguous ones)
     for (const [canonical, aliases] of Object.entries(APP_VOICE_ALIASES)) {
       for (const alias of aliases) {
-        if (AMBIGUOUS_APP_NAMES.has(alias)) continue;
-        candidates.push({
-          phrase: alias,
-          resolve: () => ({ appName: canonical, bundleId: this.findBundleId(canonical, runningApps) }),
-        });
+        phrases.push({ phrase: alias, canonical });
       }
     }
 
-    // Running apps by name (skip ambiguous)
     for (const app of runningApps) {
-      const lower = app.name.toLowerCase();
-      if (AMBIGUOUS_APP_NAMES.has(lower)) continue;
-      candidates.push({
-        phrase: lower,
-        resolve: () => ({ appName: app.name, bundleId: app.bundleId }),
-      });
+      phrases.push({ phrase: app.name.toLowerCase(), canonical: app.name });
     }
 
-    // Sort longest first
-    candidates.sort((a, b) => b.phrase.length - a.phrase.length);
+    phrases.sort((a, b) => b.phrase.length - a.phrase.length);
 
-    // Match against tail of text
-    for (const { phrase, resolve } of candidates) {
-      if (stripped === phrase) {
-        const result = resolve();
-        if (result) return { ...result, remainingText: '' };
-      }
-      if (stripped.endsWith(' ' + phrase)) {
-        const result = resolve();
-        if (result) {
-          const remaining = stripped.slice(0, -(phrase.length + 1)).trim();
-          return { ...result, remainingText: remaining };
+    const articles = ['the ', 'a ', 'an '];
+    for (const prefix of prefixes) {
+      const prefixWithSpace = `${prefix} `;
+      for (const { phrase, canonical } of phrases) {
+        const triggers = [prefixWithSpace + phrase];
+        for (const article of articles) {
+          triggers.push(prefixWithSpace + article + phrase);
+        }
+        for (const trigger of triggers) {
+          if (text === trigger) {
+            const bundleId = this.findBundleId(canonical, runningApps);
+            return { appName: canonical, bundleId, remainingText: '' };
+          }
+          if (text.endsWith(' ' + trigger)) {
+            const remaining = text.slice(0, -(trigger.length + 1)).trim();
+            const bundleId = this.findBundleId(canonical, runningApps);
+            return { appName: canonical, bundleId, remainingText: remaining };
+          }
         }
       }
     }
@@ -1839,6 +2129,34 @@ export class HotMicManager extends EventEmitter {
       log.info('Hot Mic: quit app "%s"', match.appName);
     } catch {
       // App may not respond to quit
+    }
+  }
+
+  /**
+   * Hide an app by name without quitting it.
+   */
+  private async hideAppByName(match: { bundleId: string | null; appName: string }): Promise<void> {
+    try {
+      if (match.bundleId) {
+        const safeBundleId = match.bundleId.replace(/"/g, '\\"');
+        await new Promise<void>((resolve) => {
+          exec(
+            `osascript -e 'tell application "System Events" to set visible of (first process whose bundle identifier is "${safeBundleId}") to false'`,
+            () => resolve()
+          );
+        });
+      } else {
+        const safeName = match.appName.replace(/"/g, '\\"');
+        await new Promise<void>((resolve) => {
+          exec(
+            `osascript -e 'tell application "System Events" to set visible of process "${safeName}" to false'`,
+            () => resolve()
+          );
+        });
+      }
+      log.info('Hot Mic: hide app "%s"', match.appName);
+    } catch {
+      // App may not respond to hide
     }
   }
 
@@ -1972,8 +2290,11 @@ export class HotMicManager extends EventEmitter {
       if (!shouldSubmit) {
         textToInject = textToInject + ' ';
       }
-      log.info('Hot Mic: pasting chunk (%d chars, enter=%s): "%s"', textToInject.length, shouldSubmit, textToInject);
-      const result = await this.nativeHelper.typeIntoApp(target, textToInject, shouldSubmit);
+      log.info('Hot Mic: pasting chunk (%d chars, enter=%s)', textToInject.length, shouldSubmit);
+      if (LOG_TRANSCRIPT_PAYLOADS) {
+        log.debug('Hot Mic: pasting chunk payload: "%s"', textToInject);
+      }
+      const result = await this.typeIntoAppWithClipboardSync(target, textToInject, shouldSubmit);
       if (!result.success) {
         log.error('Hot Mic: typeIntoApp failed:', result.error);
         this.cursorStatusManager?.showCriticalMessage(`Hot Mic: ${result.error || 'Injection failed'}`);
@@ -1994,12 +2315,14 @@ export class HotMicManager extends EventEmitter {
   }
 
   private async storeHotMicTranscript(text: string): Promise<void> {
-    if (!this.clipboardManager) return;
-
     const normalized = text.replace(/\s+/g, ' ').trim();
     if (!normalized) return;
 
     const wordCount = normalized.split(/\s+/).filter((word) => word.length > 0).length;
+    if (wordCount > 0) {
+      this.metricsWordsRecorder?.(wordCount);
+    }
+    if (!this.clipboardManager) return;
     if (wordCount < this.MIN_HISTORY_WORDS) return;
 
     try {
@@ -2176,8 +2499,8 @@ export class HotMicManager extends EventEmitter {
     this.targetBundleId = null;
     this.transcriptBuffer = [];
     if (this.pendingChunkQueue.length > 0) {
-      for (const wavPath of this.pendingChunkQueue) {
-        void fs.promises.unlink(wavPath).catch(() => {});
+      for (const chunk of this.pendingChunkQueue) {
+        void fs.promises.unlink(chunk.filePath).catch(() => {});
       }
     }
     this.pendingChunkQueue = [];

@@ -118,6 +118,9 @@ const ClipboardIPCChannels = {
   SET_HIDE_SCREEN_RECORDING_BANNER: 'clipboard:setHideScreenRecordingBanner',
   GET_CURSOR_STATUS_ENABLED: 'clipboard:getCursorStatusEnabled',
   SET_CURSOR_STATUS_ENABLED: 'clipboard:setCursorStatusEnabled',
+  GET_PERFORMANCE_HUD_ENABLED: 'clipboard:getPerformanceHudEnabled',
+  SET_PERFORMANCE_HUD_ENABLED: 'clipboard:setPerformanceHudEnabled',
+  GET_PERFORMANCE_SNAPSHOT: 'clipboard:getPerformanceSnapshot',
 } as const;
 
 const OnboardingIPCChannels = {
@@ -656,6 +659,20 @@ export interface ClipboardAPI {
   // Cursor status indicator settings
   getCursorStatusEnabled: () => Promise<boolean>;
   setCursorStatusEnabled: (enabled: boolean) => Promise<boolean>;
+
+  // Performance HUD settings and process telemetry
+  getPerformanceHudEnabled?: () => Promise<boolean>;
+  setPerformanceHudEnabled?: (enabled: boolean) => Promise<boolean>;
+  getPerformanceSnapshot?: () => Promise<{
+    timestampMs: number;
+    cpuPercent: number;
+    cpuCoresUsed: number;
+    cpuSystemPercent: number;
+    totalCores: number;
+    memoryUsedMb: number;
+    memorySystemPercent: number;
+    totalMemoryGb: number;
+  }>;
   
   // Hide status labels (show only colored dots)
   getHideStatusLabels?: () => Promise<boolean>;
@@ -1359,6 +1376,28 @@ const clipboardAPI: ClipboardAPI = {
 
   setCursorStatusEnabled: async (enabled: boolean): Promise<boolean> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.SET_CURSOR_STATUS_ENABLED, enabled);
+  },
+
+  // Performance HUD settings and process telemetry.
+  getPerformanceHudEnabled: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_PERFORMANCE_HUD_ENABLED);
+  },
+
+  setPerformanceHudEnabled: async (enabled: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SET_PERFORMANCE_HUD_ENABLED, enabled);
+  },
+
+  getPerformanceSnapshot: async (): Promise<{
+    timestampMs: number;
+    cpuPercent: number;
+    cpuCoresUsed: number;
+    cpuSystemPercent: number;
+    totalCores: number;
+    memoryUsedMb: number;
+    memorySystemPercent: number;
+    totalMemoryGb: number;
+  }> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_PERFORMANCE_SNAPSHOT);
   },
 
   // Hide status labels (show only colored dots).
@@ -3091,6 +3130,24 @@ const hotMicAPI = {
   },
   getEnabled: async (): Promise<boolean> => {
     return ipcRenderer.invoke('hotmic:getEnabled');
+  },
+  getTranscriptionEngineMode: async (): Promise<'default' | 'whisper' | 'qwen'> => {
+    return ipcRenderer.invoke('hotmic:getTranscriptionEngineMode');
+  },
+  setTranscriptionEngineMode: async (mode: 'default' | 'whisper' | 'qwen'): Promise<'default' | 'whisper' | 'qwen'> => {
+    return ipcRenderer.invoke('hotmic:setTranscriptionEngineMode', mode);
+  },
+  getAllowWhisperFallback: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('hotmic:getAllowWhisperFallback');
+  },
+  setAllowWhisperFallback: async (enabled: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke('hotmic:setAllowWhisperFallback', enabled);
+  },
+  getWhisperModel: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getWhisperModel');
+  },
+  setWhisperModel: async (model: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setWhisperModel', model);
   },
   setEnabled: async (enabled: boolean): Promise<boolean> => {
     return ipcRenderer.invoke('hotmic:setEnabled', enabled);

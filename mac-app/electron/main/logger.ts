@@ -21,6 +21,10 @@
  * See: .cursor/commands/logs.md for full conventions
  */
 
+import fs from 'fs';
+import path from 'path';
+import { format as utilFormat } from 'util';
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 const LEVELS: Record<LogLevel, number> = {
@@ -37,7 +41,76 @@ const PREFIXES: Record<LogLevel, string> = {
   error: 'ERR'
 };
 
-let currentLevel: LogLevel = process.env.NODE_ENV === 'development' ? 'debug' : 'info';
+function parseLogLevel(value: string | undefined): LogLevel | null {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'debug' || normalized === 'info' || normalized === 'warn' || normalized === 'error') {
+    return normalized;
+  }
+  return null;
+}
+
+const envLevel = parseLogLevel(process.env.LOG_LEVEL);
+let currentLevel: LogLevel = envLevel ?? (process.env.NODE_ENV === 'development' ? 'debug' : 'info');
+
+function parseActiveComponents(raw: string): string[] {
+  return raw
+    .split(/[\n,]/)
+    .map((entry) => entry.split('#')[0].trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function readActiveComponentsFromFile(filePath: string | undefined): Set<string> {
+  if (!filePath) return new Set();
+  try {
+    const absolutePath = path.isAbsolute(filePath) ? filePath : path.join(process.cwd(), filePath);
+    if (!fs.existsSync(absolutePath)) return new Set();
+    const content = fs.readFileSync(absolutePath, 'utf-8');
+    return new Set(parseActiveComponents(content));
+  } catch {
+    return new Set();
+  }
+}
+
+const activeFromEnv = process.env.LOG_ACTIVE ?? '';
+const activeFromFile = readActiveComponentsFromFile(process.env.LOG_ACTIVE_COMPONENTS_FILE);
+const activeComponents = new Set<string>([
+  ...parseActiveComponents(activeFromEnv),
+  ...activeFromFile,
+]);
+const activeAllComponents = activeComponents.has('*');
+
+const activeLogFileRaw = process.env.LOG_ACTIVE_FILE?.trim();
+const activeLogFile = activeLogFileRaw
+  ? (path.isAbsolute(activeLogFileRaw) ? activeLogFileRaw : path.join(process.cwd(), activeLogFileRaw))
+  : null;
+let activeLogFileInitialized = false;
+
+function initActiveLogFile(): void {
+  if (!activeLogFile || activeLogFileInitialized) return;
+  try {
+    fs.mkdirSync(path.dirname(activeLogFile), { recursive: true });
+    if (process.env.LOG_ACTIVE_RESET === 'true') {
+      fs.writeFileSync(activeLogFile, '');
+    }
+    activeLogFileInitialized = true;
+  } catch {
+    activeLogFileInitialized = false;
+  }
+}
+
+function writeActiveLog(line: string): void {
+  if (!activeLogFile) return;
+  initActiveLogFile();
+  if (!activeLogFileInitialized) return;
+  try {
+    fs.appendFileSync(activeLogFile, `${line}\n`, 'utf-8');
+  } catch {
+    // Ignore file write issues during development.
+  }
+}
+
+initActiveLogFile();
 
 /**
  * Set the minimum log level. Logs below this level are suppressed.
@@ -58,8 +131,9 @@ export function getLogLevel(): LogLevel {
  */
 export function createLogger(component: string) {
   const shouldLog = (level: LogLevel) => LEVELS[level] >= LEVELS[currentLevel];
+  const isActiveComponent = activeAllComponents || activeComponents.has(component);
 
-  const format = (level: LogLevel, msg: string) => {
+  const formatMessage = (level: LogLevel, msg: string) => {
     const timestamp = new Date().toISOString().slice(11, 23);
     return `${timestamp} ${PREFIXES[level]} [${component}] ${msg}`;
   };
@@ -68,18 +142,27 @@ export function createLogger(component: string) {
     try { fn(...args); } catch { /* EPIPE during shutdown */ }
   };
 
+  const emit = (level: LogLevel, fn: (...args: unknown[]) => void, msg: string, ...args: unknown[]) => {
+    if (!isActiveComponent && !shouldLog(level)) return;
+    const formattedMessage = formatMessage(level, msg);
+    safeLog(fn, formattedMessage, ...args);
+    if (isActiveComponent) {
+      writeActiveLog(utilFormat(formattedMessage, ...args));
+    }
+  };
+
   return {
     debug: (msg: string, ...args: unknown[]) => {
-      if (shouldLog('debug')) safeLog(console.debug, format('debug', msg), ...args);
+      emit('debug', console.debug, msg, ...args);
     },
     info: (msg: string, ...args: unknown[]) => {
-      if (shouldLog('info')) safeLog(console.log, format('info', msg), ...args);
+      emit('info', console.log, msg, ...args);
     },
     warn: (msg: string, ...args: unknown[]) => {
-      if (shouldLog('warn')) safeLog(console.warn, format('warn', msg), ...args);
+      emit('warn', console.warn, msg, ...args);
     },
     error: (msg: string, ...args: unknown[]) => {
-      if (shouldLog('error')) safeLog(console.error, format('error', msg), ...args);
+      emit('error', console.error, msg, ...args);
     },
   };
 }

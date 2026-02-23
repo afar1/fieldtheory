@@ -14,6 +14,31 @@ export function hasReleaseNotes(version: string): boolean {
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.84': [
+    'Qwen setup now finds Homebrew python@3.12/3.13 even when python3 points to 3.14',
+    'Added one-click "Copy error" for Qwen setup/transcription failures in Settings',
+    'Improved Qwen compatibility guidance for faster recovery on new machines',
+  ],
+  '0.1.83': [
+    'Qwen setup now avoids incompatible Python 3.14 environments',
+    'Improved setup/runtime errors with clear Python 3.12 guidance',
+    'Prevented repeated Qwen startup retry loops on fatal runtime failures',
+  ],
+  '0.1.82': [
+    'Qwen setup now auto-rebuilds incompatible Python environments',
+    'Fixed repeated Python crash loops when Qwen runtime is invalid in production',
+    'Improved Qwen startup errors with clearer setup guidance',
+  ],
+  '0.1.81': [
+    'Qwen3-ASR setup now works in packaged production builds',
+    'Dynamic Island is fully hidden when Hot Mic is disabled',
+    'Fixed right-pill visibility returning after re-enabling Hot Mic',
+  ],
+  '0.1.80': [
+    'Hot Mic hamburger now toggles transcript history and closes on second click',
+    'Transcript history opening is decoupled from Dynamic Island resizing',
+    'Dynamic Island Geometry controls are now collapsible in Hot Mic settings',
+  ],
   '0.1.79': [
     'Fixed transcription failure on M5 Macs running macOS Tahoe',
     'Fixed custom hotkeys reverting to defaults on startup',
@@ -199,6 +224,11 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.84': 'Feb 22 2026',
+  '0.1.83': 'Feb 22 2026',
+  '0.1.82': 'Feb 22 2026',
+  '0.1.81': 'Feb 22 2026',
+  '0.1.80': 'Feb 22 2026',
   '0.1.79': 'Feb 18 2026',
   '0.1.77': 'Feb 17 2026',
   '0.1.76': 'Feb 17 2026',

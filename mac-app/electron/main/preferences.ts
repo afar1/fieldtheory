@@ -113,6 +113,9 @@ interface Preferences {
   // Show fieldtheory.dev link in footer - toggleable per user preference.
   showFieldTheoryLink?: boolean;
 
+  // In-app Performance HUD - lightweight CPU/RAM/FPS overlay for debugging.
+  performanceHudEnabled?: boolean;
+
   // Launch at login - start Field Theory automatically when macOS starts.
   launchAtLogin?: boolean;
 
@@ -143,6 +146,9 @@ interface Preferences {
   // Hot Mic - continuous voice input for Claude Code terminals.
   // When enabled, auto-records voice fragments and injects them into a target terminal.
   hotMicEnabled?: boolean;
+  hotMicTranscriptionEngine?: 'default' | 'whisper' | 'qwen'; // Engine override for Hot Mic only
+  hotMicAllowWhisperFallback?: boolean; // If false, do not fall back to Whisper when Qwen fails
+  hotMicWhisperModel?: ModelSize; // Whisper model override for Hot Mic-only transcription
   hotMicTargetBundleId?: string; // e.g., "com.mitchellh.ghostty"
   hotMicSoundsEnabled?: boolean;
   hotMicWakeWord?: string; // Deprecated — use hotMicSubmitWord
@@ -158,11 +164,15 @@ interface Preferences {
   hotMicHidePhrases?: string; // Comma-separated phrases that hide the app (Cmd+H)
   hotMicQuitPhrases?: string; // Comma-separated phrases that quit the current app (Cmd+Q) or quit by name
   hotMicSwitchWords?: string; // Comma-separated words that trigger Cmd+` window cycling
+  hotMicOpenAppPrefixes?: string; // Comma-separated app-open prefixes (e.g. "open, switch to, go to")
+  hotMicQuitAppPrefixes?: string; // Comma-separated app-quit prefixes (e.g. "quit, close, kill")
   hotMicRunClaudeWords?: string; // Comma-separated phrases that type "claude" and submit (start a session)
   hotMicRunCodexWords?: string; // Comma-separated phrases that type "codex" and submit (start a session)
   hotMicRestartServerWords?: string; // Comma-separated phrases that trigger restart (Ctrl+C then run command)
   hotMicFocusPhrases?: string; // Comma-separated phrases that trigger focus (next-display + center)
   hotMicCascadePhrases?: string; // Comma-separated phrases that trigger cascade + center
+  hotMicBackgroundFilterEnabled?: boolean; // Filter ambient/far-field speech before chunk transcription
+  hotMicBackgroundFilterStrength?: number; // 0-100 strictness slider for background filtering
   hotMicRectangleCommands?: Record<string, string>; // Window action name → comma-separated trigger phrases
   hotMicRestartServerCommand?: string; // Terminal command to run after Ctrl+C (e.g. "npm run dev")
   hotMicHotkey?: string; // Hotkey to toggle Hot Mic on/off (unset by default)
@@ -178,6 +188,14 @@ interface Preferences {
   hotMicUnmutePhrases?: string;
   hotMicSleepPhrases?: string;
   hotMicLockPhrases?: string;
+
+  // Dynamic Island geometry tuning (Hot Mic settings).
+  // notchWidthOverride: 0 means automatic profile-based notch width.
+  hotMicIslandNotchWidthOverride?: number;
+  hotMicIslandPillWidth?: number;
+  hotMicIslandPillHeight?: number;
+  hotMicIslandOffsetX?: number;
+  hotMicIslandOffsetY?: number;
 
   // Squares - window management config and hotkeys.
   // Window management.
@@ -217,11 +235,26 @@ const DEFAULT_PREFERENCES: Preferences = {
   // Dark mode - disabled by default (light mode).
   darkMode: false,
 
+  // Performance HUD - disabled by default.
+  performanceHudEnabled: false,
+
   // Word substitutions - empty by default.
   wordSubstitutions: [],
 
   // Data retention - never delete by default.
   dataRetentionDays: -1,
+
+  // Hot Mic background filtering is opt-in by default.
+  hotMicTranscriptionEngine: 'default',
+  hotMicAllowWhisperFallback: true,
+  hotMicWhisperModel: 'small',
+  hotMicBackgroundFilterEnabled: false,
+  hotMicBackgroundFilterStrength: 4,
+  hotMicIslandNotchWidthOverride: 0,
+  hotMicIslandPillWidth: 48,
+  hotMicIslandPillHeight: 38,
+  hotMicIslandOffsetX: 0,
+  hotMicIslandOffsetY: 0,
 };
 
 /**

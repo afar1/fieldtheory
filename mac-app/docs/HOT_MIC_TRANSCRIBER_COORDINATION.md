@@ -49,6 +49,27 @@ To prevent response collisions, `TranscriberManager` now serializes commands:
 
 This applies to all callers, including shared use by Hot Mic via `transcribeAudio()`.
 
+## Background Voice Filtering (User-Tunable)
+
+Hot Mic now supports an optional chunk-level background voice filter before transcription:
+
+- `hotMicBackgroundFilterEnabled` (default `false`)
+- `hotMicBackgroundFilterStrength` (0-100, default `4`)
+
+Behavior:
+
+- Audio levels are tracked per harvested chunk.
+- When filtering is enabled, weak/far-field chunks can be suppressed before they hit Qwen/Whisper.
+- Strong sustained near-field speech still passes through.
+
+User controls:
+
+- **Settings → Hot Mic**: toggle + strictness slider.
+- **Dynamic Island history panel**: "voice tuning" drawer with:
+  - same toggle + slider
+  - live incoming vs accepted level meters
+  - threshold and speech-ratio readout
+
 ## Primary Validation Signals
 
 ### Healthy handoff

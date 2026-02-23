@@ -68,6 +68,10 @@ struct IncomingMessage: Codable {
     let y: Int?                 // For setWindowFrame
     let width: Int?             // For setWindowFrame
     let height: Int?            // For setWindowFrame
+    let sourceX: Int?           // Optional source frame for disambiguating duplicate titles
+    let sourceY: Int?           // Optional source frame for disambiguating duplicate titles
+    let sourceWidth: Int?       // Optional source frame for disambiguating duplicate titles
+    let sourceHeight: Int?      // Optional source frame for disambiguating duplicate titles
 }
 
 // MARK: - Outgoing Message Types
@@ -296,8 +300,9 @@ final class WindowAnimator {
     // MARK: - AXUIElement Resolution
 
     /// Find the AXUIElement for a window by PID and title.
+    /// If sourceFrame is provided, use it to disambiguate duplicate titles.
     /// Returns nil if no matching window is found.
-    private func findWindow(pid: pid_t, title: String) -> AXUIElement? {
+    private func findWindow(pid: pid_t, title: String, sourceFrame: CGRect?) -> AXUIElement? {
         let appElement = AXUIElementCreateApplication(pid)
 
         var windowsValue: CFTypeRef?
@@ -308,22 +313,96 @@ final class WindowAnimator {
         }
 
         // Try exact title match first.
+        var titleMatches: [AXUIElement] = []
         for window in windows {
             var titleValue: CFTypeRef?
             let titleResult = AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleValue)
             if titleResult == .success, let windowTitle = titleValue as? String, windowTitle == title {
-                return window
+                titleMatches.append(window)
             }
+        }
+
+        // If we know the source frame, use it to disambiguate duplicate titles.
+        if let sourceFrame {
+            if let exactTitleAndFrame = titleMatches.first(where: { window in
+                guard let frame = getWindowFrame(window) else { return false }
+                return frameApproximatelyEqual(frame, sourceFrame)
+            }) {
+                return exactTitleAndFrame
+            }
+
+            // Title may have changed between discovery and move; fall back to frame-only match.
+            if let frameOnlyMatch = windows.first(where: { window in
+                guard let frame = getWindowFrame(window) else { return false }
+                return frameApproximatelyEqual(frame, sourceFrame)
+            }) {
+                return frameOnlyMatch
+            }
+        }
+
+        if let firstTitleMatch = titleMatches.first {
+            return firstTitleMatch
         }
 
         // Fallback: return the first window (frontmost) if title didn't match.
         return windows.first
     }
 
+    /// Read a window's current frame from AX attributes.
+    private func getWindowFrame(_ window: AXUIElement) -> CGRect? {
+        var posValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        let posResult = AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &posValue)
+        let sizeResult = AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeValue)
+
+        guard
+            posResult == .success,
+            sizeResult == .success,
+            let posRef = posValue,
+            let sizeRef = sizeValue,
+            CFGetTypeID(posRef) == AXValueGetTypeID(),
+            CFGetTypeID(sizeRef) == AXValueGetTypeID()
+        else {
+            return nil
+        }
+
+        let posAX = unsafeBitCast(posRef, to: AXValue.self)
+        let sizeAX = unsafeBitCast(sizeRef, to: AXValue.self)
+
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        guard
+            AXValueGetType(posAX) == .cgPoint,
+            AXValueGetType(sizeAX) == .cgSize,
+            AXValueGetValue(posAX, .cgPoint, &position),
+            AXValueGetValue(sizeAX, .cgSize, &size)
+        else {
+            return nil
+        }
+
+        return CGRect(origin: position, size: size)
+    }
+
+    /// Tolerant frame comparison (avoids sub-pixel / rounding mismatches).
+    private func frameApproximatelyEqual(_ a: CGRect, _ b: CGRect, tolerance: CGFloat = 2.0) -> Bool {
+        abs(a.origin.x - b.origin.x) <= tolerance &&
+        abs(a.origin.y - b.origin.y) <= tolerance &&
+        abs(a.size.width - b.size.width) <= tolerance &&
+        abs(a.size.height - b.size.height) <= tolerance
+    }
+
     /// Set a window's frame (position + size) using the Accessibility API.
     /// Returns true if successful.
-    func setFrame(pid: pid_t, title: String, x: Int, y: Int, width: Int, height: Int) -> Bool {
-        guard let window = findWindow(pid: pid, title: title) else {
+    func setFrame(
+        pid: pid_t,
+        title: String,
+        x: Int,
+        y: Int,
+        width: Int,
+        height: Int,
+        sourceFrame: CGRect? = nil
+    ) -> Bool {
+        guard let window = findWindow(pid: pid, title: title, sourceFrame: sourceFrame) else {
             return false
         }
 
@@ -2025,13 +2104,28 @@ final class MessageHandler {
                 sendJSON(result)
                 return
             }
+            let sourceFrame: CGRect?
+            if let sourceX = message.sourceX,
+               let sourceY = message.sourceY,
+               let sourceWidth = message.sourceWidth,
+               let sourceHeight = message.sourceHeight {
+                sourceFrame = CGRect(
+                    x: CGFloat(sourceX),
+                    y: CGFloat(sourceY),
+                    width: CGFloat(sourceWidth),
+                    height: CGFloat(sourceHeight)
+                )
+            } else {
+                sourceFrame = nil
+            }
             let success = WindowAnimator.shared.setFrame(
                 pid: pid_t(pid),
                 title: title,
                 x: x,
                 y: y,
                 width: width,
-                height: height
+                height: height,
+                sourceFrame: sourceFrame
             )
             let result = WindowFrameSetMessage(success: success)
             sendJSON(result)

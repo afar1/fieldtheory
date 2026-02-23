@@ -257,28 +257,15 @@ export const VOICE_COMMAND_TRIGGERS: Record<string, SquaresAction> = {
   'cascade': 'cascade',
   'cascade windows': 'cascade',
 
-  // Minimize / Hide
-  'minimize': 'minimize',
-  'minimize window': 'minimize',
-  'minimize the window': 'minimize',
-  'hide': 'hide',
-  'hide app': 'hide',
-  'hide this app': 'hide',
-  'hide the app': 'hide',
-
   // Halves
-  'left half': 'leftHalf',
-  'right half': 'rightHalf',
-  'top half': 'topHalf',
-  'bottom half': 'bottomHalf',
   'snap left': 'leftHalf',
   'snap right': 'rightHalf',
 
   // Quarters
-  'top left': 'topLeft',
-  'top right': 'topRight',
-  'bottom left': 'bottomLeft',
-  'bottom right': 'bottomRight',
+  'top left corner': 'topLeft',
+  'top right corner': 'topRight',
+  'bottom left corner': 'bottomLeft',
+  'bottom right corner': 'bottomRight',
 
   // Standard
   'maximize': 'maximize',
@@ -286,11 +273,8 @@ export const VOICE_COMMAND_TRIGGERS: Record<string, SquaresAction> = {
   'fullscreen': 'fullScreen',
   'enter full screen': 'fullScreen',
   'exit full screen': 'exitFullScreen',
-  'exit fullscreen': 'exitFullScreen',
   'leave full screen': 'exitFullScreen',
   'center': 'center',
   'center window': 'center',
   'restore': 'restore',
-  'undo': 'restore',
-  'go back': 'restore',
 };

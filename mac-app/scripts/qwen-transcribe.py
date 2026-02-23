@@ -92,9 +92,21 @@ def main():
         parser.error("Either --audio or --server is required")
 
     try:
-        from mlx_audio.stt import load_model
-    except ImportError:
-        print("mlx-audio is not installed. Run: bash scripts/setup-qwen.sh", file=sys.stderr)
+        # Older mlx-audio versions expose load_model from mlx_audio.stt
+        # while newer releases moved it to mlx_audio.stt.utils.
+        try:
+            from mlx_audio.stt import load_model  # type: ignore
+        except Exception:
+            from mlx_audio.stt.utils import load_model  # type: ignore
+    except Exception as e:
+        print(
+            (
+                f"mlx-audio STT backend is unavailable ({e}). "
+                "Rerun Qwen setup from Field Theory Settings > Transcription. "
+                "From source, run: bash scripts/setup-qwen.sh"
+            ),
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Load model once

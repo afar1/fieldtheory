@@ -71,6 +71,11 @@ export const ClipboardIPCChannels = {
   GET_CURSOR_STATUS_ENABLED: 'clipboard:getCursorStatusEnabled',
   SET_CURSOR_STATUS_ENABLED: 'clipboard:setCursorStatusEnabled',
 
+  // Performance HUD settings and telemetry snapshot
+  GET_PERFORMANCE_HUD_ENABLED: 'clipboard:getPerformanceHudEnabled',
+  SET_PERFORMANCE_HUD_ENABLED: 'clipboard:setPerformanceHudEnabled',
+  GET_PERFORMANCE_SNAPSHOT: 'clipboard:getPerformanceSnapshot',
+
   // Mobile sync operations
   SET_SYNC_SESSION: 'clipboard:setSyncSession',
   CLEAR_SYNC_SESSION: 'clipboard:clearSyncSession',
@@ -292,6 +297,18 @@ export interface ClipboardAPI {
   copyItem: (id: number) => Promise<void>;
   pasteStack: (ids: number[], targetBundleId?: string) => Promise<void>;
   separateIntoTasks: (id: number) => Promise<void>;
+  getPerformanceHudEnabled?: () => Promise<boolean>;
+  setPerformanceHudEnabled?: (enabled: boolean) => Promise<boolean>;
+  getPerformanceSnapshot?: () => Promise<{
+    timestampMs: number;
+    cpuPercent: number;
+    cpuCoresUsed: number;
+    cpuSystemPercent: number;
+    totalCores: number;
+    memoryUsedMb: number;
+    memorySystemPercent: number;
+    totalMemoryGb: number;
+  }>;
   onItemAdded: (callback: (item: ClipboardItem) => void) => () => void;
   onItemDeleted: (callback: (id: number) => void) => () => void;
   
@@ -301,4 +318,3 @@ export interface ClipboardAPI {
   updateStackId: (itemIds: number[], stackId: string | null) => Promise<void>;
   startDrag: (stackId: string) => Promise<void>;
 }
-
