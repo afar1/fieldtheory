@@ -166,3 +166,43 @@ export function summarizeTranscriptForIsland(
   const lastWords = words.slice(-trailingWords).join(' ');
   return `${firstWords} ... ${lastWords}`;
 }
+
+/**
+ * Summarize transcript text for history rows.
+ * Keeps as much leading context as possible within the max line budget, then
+ * appends an inline ellipsis and the final trailing words.
+ */
+export function summarizeTranscriptForHistory(
+  text: string,
+  wordsPerLine: number = 10,
+  trailingWords: number = 5,
+  maxLines: number = 3
+): string {
+  const sentenceCase = (value: string): string => {
+    if (!value) return '';
+    return value.charAt(0).toUpperCase() + value.slice(1);
+  };
+
+  const normalized = text.trim().replace(/\s+/g, ' ');
+  if (!normalized) return '';
+
+  const words = normalized.split(' ').filter(Boolean);
+  const safeWordsPerLine = Math.max(1, Math.floor(wordsPerLine));
+  const safeTrailingWords = Math.max(1, Math.floor(trailingWords));
+  const safeMaxLines = Math.max(1, Math.floor(maxLines));
+  const maxVisibleWords = safeWordsPerLine * safeMaxLines;
+  const truncateThreshold = maxVisibleWords;
+
+  if (words.length <= truncateThreshold) {
+    return sentenceCase(normalized);
+  }
+
+  // Keep enough room for "... " and trailing words while maximizing leading context.
+  const leadingWordBudget = Math.max(
+    safeWordsPerLine,
+    maxVisibleWords - safeTrailingWords - 1
+  );
+  const firstWords = words.slice(0, leadingWordBudget).join(' ');
+  const lastWords = words.slice(-safeTrailingWords).join(' ');
+  return sentenceCase(`${firstWords} ... ${lastWords}`);
+}

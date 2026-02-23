@@ -264,6 +264,24 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(filler?.isVisible()).toBe(true);
   });
 
+  it('does not create island windows while disabled until re-enabled', () => {
+    manager = new DynamicIslandManager();
+    manager.setEnabled(false);
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    expect(testState.getWindowBySide('left')).toBeUndefined();
+    expect(testState.getWindowBySide('right')).toBeUndefined();
+    expect(testState.getWindowBySide('drawer')).toBeUndefined();
+
+    manager.setEnabled(true);
+
+    expect(testState.getWindowBySide('left')).toBeDefined();
+    expect(testState.getWindowBySide('right')).toBeDefined();
+    expect(testState.getWindowBySide('drawer')).toBeDefined();
+  });
+
   it('documents that switching primary back to internal hides the center filler immediately', () => {
     testState.setPrimaryInternal(false);
 
@@ -281,6 +299,32 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     expect(filler?.isVisible()).toBe(false);
     expect(filler?.hideCalls).toBeGreaterThan(0);
+  });
+
+  it('restores the right pill visibility when hot mic is re-enabled', () => {
+    manager = new DynamicIslandManager();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    const left = testState.getWindowBySide('left');
+    const right = testState.getWindowBySide('right');
+    expect(left).toBeDefined();
+    expect(right).toBeDefined();
+    expect(left?.isVisible()).toBe(true);
+    expect(right?.isVisible()).toBe(true);
+    const rightShowCallsBeforeDisable = right?.showInactiveCalls ?? 0;
+
+    manager.setEnabled(false);
+    expect(left?.isVisible()).toBe(false);
+    expect(right?.isVisible()).toBe(false);
+    expect(left?.hideCalls).toBeGreaterThan(0);
+    expect(right?.hideCalls).toBeGreaterThan(0);
+
+    manager.setEnabled(true);
+    expect(left?.isVisible()).toBe(true);
+    expect(right?.isVisible()).toBe(true);
+    expect((right?.showInactiveCalls ?? 0)).toBeGreaterThan(rightShowCallsBeforeDisable);
   });
 
   it('documents that dynamic-island IPC can request opening the main Field Theory window', () => {

@@ -41,6 +41,11 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
     ipcRenderer.send('dynamic-island-copy', text);
   },
 
+  // Delete a transcript history item by id.
+  deleteHistoryItem: (id: number) => {
+    ipcRenderer.send('dynamic-island-delete-history-item', id);
+  },
+
   // Toggle history panel visibility.
   toggleHistory: () => {
     ipcRenderer.send('dynamic-island-toggle-history');
@@ -80,9 +85,27 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
     ipcRenderer.on('dynamic-island-hotmic-mute', (_event, muted) => callback(muted));
   },
 
+  // Live background-filter meter updates for tuning UI in the history drawer.
+  onHotMicFilterMeter: (callback: (data: {
+    enabled: boolean;
+    strength: number;
+    rawLevel: number;
+    acceptedLevel: number;
+    threshold: number;
+    speechRatio: number;
+    chunkSuppressed: boolean;
+  }) => void) => {
+    ipcRenderer.on('dynamic-island-hotmic-filter-meter', (_event, data) => callback(data));
+  },
+
   // Toggle hot-mic mute (right pill → main).
   toggleMute: () => {
     ipcRenderer.send('dynamic-island-toggle-mute');
+  },
+
+  // Dismiss current live transcript buffer (right pill → main).
+  dismissTranscript: () => {
+    ipcRenderer.send('dynamic-island-dismiss-transcript');
   },
 
   // Open the main Field Theory clipboard/history window.
@@ -99,6 +122,12 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
   onDrawerSpeaking: (callback: (speaking: boolean) => void) => {
     ipcRenderer.on('dynamic-island-drawer-speaking', (_event, speaking) => callback(speaking));
   },
+
+  // Hot-mic background filter controls.
+  getHotMicBackgroundFilterEnabled: () => ipcRenderer.invoke('hotmic:getBackgroundFilterEnabled'),
+  setHotMicBackgroundFilterEnabled: (enabled: boolean) => ipcRenderer.invoke('hotmic:setBackgroundFilterEnabled', enabled),
+  getHotMicBackgroundFilterStrength: () => ipcRenderer.invoke('hotmic:getBackgroundFilterStrength'),
+  setHotMicBackgroundFilterStrength: (strength: number) => ipcRenderer.invoke('hotmic:setBackgroundFilterStrength', strength),
 
   removeAllListeners: (channel: string) => {
     ipcRenderer.removeAllListeners(channel);

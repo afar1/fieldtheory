@@ -475,6 +475,10 @@ export interface SetWindowFrameCommand {
   y: number;
   width: number;
   height: number;
+  sourceX?: number;
+  sourceY?: number;
+  sourceWidth?: number;
+  sourceHeight?: number;
 }
 
 /**

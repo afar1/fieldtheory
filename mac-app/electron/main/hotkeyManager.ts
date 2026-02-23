@@ -250,7 +250,7 @@ export class HotkeyManager {
     'volumeup','volumedown','volumemute',
     'medianexttrack','mediaprevioustrack','mediastop','mediaplaypause',
     'printscreen','numpadadd','numpadsubtract','numlockenter',
-    'plus','minus','=','[',']',';','\'',',','.','/','`',
+    'plus','minus','=','[',']','\\',';','\'',',','.','/','`',
   ]);
 
   register(id: HotkeyId, key: string, callback: HotkeyCallback): HotkeyResult {

@@ -728,6 +728,22 @@ export class ClipboardManager extends EventEmitter {
 
     const sourceAppName = sourceApp ? await this.getAppName(sourceApp) : null;
 
+    // Re-check dedupe right before insert to avoid async races:
+    // another caller may have inserted the same hash while we awaited app metadata.
+    if (!stackId) {
+      const existingLate = this.db
+        .prepare('SELECT id, source FROM clipboard_items WHERE content_hash = ?')
+        .get(hash) as { id: number; source: string } | undefined;
+
+      if (existingLate) {
+        if (source === 'ios' && existingLate.source === 'mac') {
+          this.db.prepare('UPDATE clipboard_items SET source = ? WHERE id = ?')
+            .run('ios', existingLate.id);
+        }
+        return existingLate.id;
+      }
+    }
+
     // Check ignore list (only for Mac items)
     if (source === 'mac' && sourceApp && this.config.ignoreApps?.includes(sourceApp)) {
       return -1; // Ignored
@@ -2105,4 +2121,3 @@ export class ClipboardManager extends EventEmitter {
     }
   }
 }
-
