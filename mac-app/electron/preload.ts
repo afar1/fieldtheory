@@ -3176,6 +3176,12 @@ const hotMicAPI = {
   setBackgroundFilterStrength: async (strength: number): Promise<number> => {
     return ipcRenderer.invoke('hotmic:setBackgroundFilterStrength', strength);
   },
+  getDrawerTextSize: async (): Promise<number> => {
+    return ipcRenderer.invoke('hotmic:getDrawerTextSize');
+  },
+  setDrawerTextSize: async (size: number): Promise<number> => {
+    return ipcRenderer.invoke('hotmic:setDrawerTextSize', size);
+  },
   getIslandGeometry: async (): Promise<{
     notchWidthOverride: number;
     pillWidth: number;

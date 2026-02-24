@@ -123,11 +123,17 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
     ipcRenderer.on('dynamic-island-drawer-speaking', (_event, speaking) => callback(speaking));
   },
 
+  // Drawer transcript text size updates.
+  onDrawerTextSize: (callback: (size: number) => void) => {
+    ipcRenderer.on('dynamic-island-drawer-text-size', (_event, size) => callback(size));
+  },
+
   // Hot-mic background filter controls.
   getHotMicBackgroundFilterEnabled: () => ipcRenderer.invoke('hotmic:getBackgroundFilterEnabled'),
   setHotMicBackgroundFilterEnabled: (enabled: boolean) => ipcRenderer.invoke('hotmic:setBackgroundFilterEnabled', enabled),
   getHotMicBackgroundFilterStrength: () => ipcRenderer.invoke('hotmic:getBackgroundFilterStrength'),
   setHotMicBackgroundFilterStrength: (strength: number) => ipcRenderer.invoke('hotmic:setBackgroundFilterStrength', strength),
+  getHotMicDrawerTextSize: () => ipcRenderer.invoke('hotmic:getDrawerTextSize'),
 
   removeAllListeners: (channel: string) => {
     ipcRenderer.removeAllListeners(channel);

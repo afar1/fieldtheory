@@ -547,7 +547,7 @@ interface SharedClipboardItem {
   type: ClipboardItemType;
   content: string | null;
   imageData: string | null;    // Legacy: base64 from bytea column.
-  imagePath: string | null;    // New: path in Supabase Storage bucket.
+  imagePath: string | null;    // Stored path; may be legacy path or "bucket::path".
   imageUrl: string | null;     // New: signed URL for storage bucket access.
   imageWidth: number | null;
   imageHeight: number | null;
@@ -994,6 +994,8 @@ interface HotMicAPI {
   setBackgroundFilterEnabled: (enabled: boolean) => Promise<boolean>;
   getBackgroundFilterStrength: () => Promise<number>;
   setBackgroundFilterStrength: (strength: number) => Promise<number>;
+  getDrawerTextSize: () => Promise<number>;
+  setDrawerTextSize: (size: number) => Promise<number>;
   getIslandGeometry: () => Promise<{
     notchWidthOverride: number;
     pillWidth: number;

@@ -41,6 +41,15 @@ const HISTORY_PREVIEW_TRAILING_WORDS = 5;
 const HISTORY_PREVIEW_MAX_LINES = 3;
 const HISTORY_PILL_OFFSET_PX = 82;
 const HISTORY_LAYOUT_MIN_WIDTH_PX = 120;
+const DRAWER_TEXT_SIZE_DEFAULT = 14;
+const DRAWER_TEXT_SIZE_MIN = 11;
+const DRAWER_TEXT_SIZE_MAX = 22;
+
+function clampDrawerTextSize(value: number): number {
+  if (!Number.isFinite(value)) return DRAWER_TEXT_SIZE_DEFAULT;
+  const rounded = Math.round(value);
+  return Math.max(DRAWER_TEXT_SIZE_MIN, Math.min(DRAWER_TEXT_SIZE_MAX, rounded));
+}
 
 function forceTransparentPageBacking(): void {
   document.documentElement.style.setProperty('background', 'transparent', 'important');
@@ -84,14 +93,17 @@ function timeAgo(timestamp: number): string {
 }
 
 // =============================================================================
-// Right pill — hot-mic status dot (centered, no text)
+// Right pill — hot-mic status dot + drawer controls
 // =============================================================================
 
 function RightPill() {
   const [active, setActive] = useState(false);
   const [muted, setMuted] = useState(false);
-  const [hasTranscript, setHasTranscript] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [drawerTranscript, setDrawerTranscript] = useState('');
+  const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasTranscript = drawerTranscript.trim().length > 0;
 
   useEffect(() => {
     const api = (window as any).dynamicIslandAPI;
@@ -110,7 +122,10 @@ function RightPill() {
     });
 
     api.onDrawerTranscript?.((text: string) => {
-      setHasTranscript(text.trim().length > 0);
+      setDrawerTranscript(text);
+      if (!text.trim()) {
+        setCopied(false);
+      }
     });
 
     return () => {
@@ -120,6 +135,10 @@ function RightPill() {
       api.removeAllListeners('dynamic-island-hotmic-mute');
       api.removeAllListeners('dynamic-island-state');
       api.removeAllListeners('dynamic-island-drawer-transcript');
+      if (copiedTimerRef.current) {
+        clearTimeout(copiedTimerRef.current);
+        copiedTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -132,6 +151,28 @@ function RightPill() {
     (window as any).dynamicIslandAPI?.dismissTranscript?.();
   }, []);
 
+  const handleCopyClick = useCallback(async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    const text = drawerTranscript.trim();
+    if (!text) return;
+
+    try {
+      const api = (window as any).dynamicIslandAPI;
+      if (api?.copyToClipboard) {
+        api.copyToClipboard(text);
+      } else if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        return;
+      }
+      setCopied(true);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = setTimeout(() => setCopied(false), 900);
+    } catch (error) {
+      console.error('Failed to copy drawer transcript:', error);
+    }
+  }, [drawerTranscript]);
+
   const dotColor = '#f97316';
   const dotShadow = '0 0 8px rgba(249, 115, 22, 0.5)';
   const showDot = active || recording || muted;
@@ -142,6 +183,7 @@ function RightPill() {
         className="di-right-pill"
         style={{
           ...rightStyles.pill,
+          justifyContent: hasTranscript ? 'flex-end' : 'center',
         }}
       >
         <button
@@ -151,9 +193,9 @@ function RightPill() {
           title={muted ? 'unmute hot mic' : 'mute hot mic'}
         >
           {muted ? (
-            <svg className="di-right-dot" width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <circle cx="7" cy="7" r="5.5" stroke="rgba(255,255,255,0.7)" strokeWidth="1.5" fill="none" />
-              <line x1="3.5" y1="10.5" x2="10.5" y2="3.5" stroke="rgba(255,255,255,0.7)" strokeWidth="1.5" strokeLinecap="round" />
+            <svg className="di-right-dot" width="13" height="13" viewBox="0 0 14 14" fill="none">
+              <circle cx="7" cy="7" r="5.5" stroke="rgba(255,255,255,0.7)" strokeWidth="1.4" fill="none" />
+              <line x1="3.5" y1="10.5" x2="10.5" y2="3.5" stroke="rgba(255,255,255,0.7)" strokeWidth="1.4" strokeLinecap="round" />
             </svg>
           ) : (
             <div className="di-right-dot" style={{
@@ -178,6 +220,25 @@ function RightPill() {
             </svg>
           </button>
         )}
+        {hasTranscript && (
+          <button
+            className="di-right-copy-btn"
+            onClick={handleCopyClick}
+            style={rightStyles.copyButton}
+            title={copied ? 'copied' : 'copy transcript'}
+          >
+            {copied ? (
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                <path d="M2.2 6.2L4.8 8.8L9.8 3.8" stroke="#34c759" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            ) : (
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                <rect x="4" y="1.2" width="6.2" height="6.2" rx="1" stroke="rgba(255,255,255,0.6)" strokeWidth="1" />
+                <rect x="1.8" y="3.6" width="6.2" height="6.2" rx="1" stroke="rgba(255,255,255,0.6)" strokeWidth="1" fill="rgba(0,0,0,0.35)" />
+              </svg>
+            )}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -195,9 +256,10 @@ const rightStyles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '6px',
+    gap: '4px',
     width: '100%',
     height: '100%',
+    padding: '0 2px',
     boxSizing: 'border-box',
     backgroundColor: '#000000',
     borderRadius: '0 0 16px 0',
@@ -207,8 +269,9 @@ const rightStyles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '18px',
-    height: '18px',
+    width: '16px',
+    height: '16px',
+    flexShrink: 0,
     padding: 0,
     border: 'none',
     borderRadius: '999px',
@@ -227,8 +290,22 @@ const rightStyles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '16px',
-    height: '16px',
+    width: '12px',
+    height: '12px',
+    flexShrink: 0,
+    padding: 0,
+    border: 'none',
+    borderRadius: '999px',
+    backgroundColor: 'transparent',
+    cursor: 'pointer',
+  },
+  copyButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '12px',
+    height: '12px',
+    flexShrink: 0,
     padding: 0,
     border: 'none',
     borderRadius: '999px',
@@ -260,6 +337,7 @@ const gapFillStyles: Record<string, React.CSSProperties> = {
 function DrawerPill() {
   const [text, setText] = useState('');
   const [speaking, setSpeaking] = useState(false);
+  const [drawerTextSize, setDrawerTextSize] = useState(DRAWER_TEXT_SIZE_DEFAULT);
 
   const compactText = summarizeTranscriptForIsland(
     text,
@@ -271,6 +349,8 @@ function DrawerPill() {
 
   let leadingText = '';
   let trailingText = '';
+  const normalizedDrawerTextSize = clampDrawerTextSize(drawerTextSize);
+  const drawerLineHeight = Math.max(16, Math.round(normalizedDrawerTextSize * 1.3));
   if (tokens.length > 0) {
     if (ellipsisIndex >= 0) {
       leadingText = tokens.slice(0, ellipsisIndex + 1).join(' ');
@@ -291,9 +371,18 @@ function DrawerPill() {
     api?.onDrawerSpeaking?.((isSpeaking: boolean) => {
       setSpeaking(isSpeaking);
     });
+    api?.onDrawerTextSize?.((size: number) => {
+      setDrawerTextSize(clampDrawerTextSize(size));
+    });
+    if (api?.getHotMicDrawerTextSize) {
+      void api.getHotMicDrawerTextSize().then((size: number) => {
+        setDrawerTextSize(clampDrawerTextSize(size));
+      });
+    }
     return () => {
       api?.removeAllListeners('dynamic-island-drawer-transcript');
       api?.removeAllListeners('dynamic-island-drawer-speaking');
+      api?.removeAllListeners('dynamic-island-drawer-text-size');
     };
   }, []);
 
@@ -301,7 +390,13 @@ function DrawerPill() {
     <div className="di-drawer-container" style={drawerStyles.container}>
       <div style={drawerStyles.topZone} />
       <div style={drawerStyles.textZone}>
-        <span style={drawerStyles.text}>
+        <span
+          style={{
+            ...drawerStyles.text,
+            fontSize: `${normalizedDrawerTextSize}px`,
+            lineHeight: `${drawerLineHeight}px`,
+          }}
+        >
           {leadingText && (
             <span>
               {leadingText}
@@ -1221,6 +1316,10 @@ styleSheet.textContent = `
   .di-right-pill:hover .di-right-dot {
     filter: brightness(1.2);
   }
+  .di-right-dismiss-btn:hover,
+  .di-right-copy-btn:hover {
+    background-color: rgba(255, 255, 255, 0.12) !important;
+  }
   .di-drawer-tail-speaking {
     color: rgba(255, 255, 255, 0.9);
     animation: drawerTailSoftPulse 1.5s ease-in-out infinite;
@@ -1259,10 +1358,12 @@ declare global {
       dismissTranscript?: () => void;
       onDrawerTranscript?: (cb: (text: string) => void) => void;
       onDrawerSpeaking?: (cb: (speaking: boolean) => void) => void;
+      onDrawerTextSize?: (cb: (size: number) => void) => void;
       getHotMicBackgroundFilterEnabled?: () => Promise<boolean>;
       setHotMicBackgroundFilterEnabled?: (enabled: boolean) => Promise<boolean>;
       getHotMicBackgroundFilterStrength?: () => Promise<number>;
       setHotMicBackgroundFilterStrength?: (strength: number) => Promise<number>;
+      getHotMicDrawerTextSize?: () => Promise<number>;
       openFieldTheory?: () => void;
       requestHistory: () => void;
       copyAndPaste: (text: string) => void;
