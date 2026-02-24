@@ -342,14 +342,14 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(openFieldTheoryHandler).toBeDefined();
 
     const left = testState.getWindowBySide('left');
-    expect(left?.getSize()).toEqual([48, 38]);
+    expect(left?.getSize()).toEqual([72, 38]);
 
     const listener = vi.fn();
     manager.on('open-field-theory', listener);
     openFieldTheoryHandler?.();
 
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(left?.getSize()).toEqual([48, 38]);
+    expect(left?.getSize()).toEqual([72, 38]);
     expect(left?.constructorOptions.transparent).toBe(true);
     expect(left?.backgroundColorCalls).toEqual([]);
   });
@@ -482,13 +482,13 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     const left = testState.getWindowBySide('left');
     expect(left).toBeDefined();
-    expect(left?.getSize()).toEqual([48, 38]);
+    expect(left?.getSize()).toEqual([72, 38]);
 
     manager.setState('recording');
-    expect(left?.getSize()).toEqual([48, 38]);
+    expect(left?.getSize()).toEqual([72, 38]);
 
     manager.setState('transcribing');
-    expect(left?.getSize()).toEqual([48, 38]);
+    expect(left?.getSize()).toEqual([72, 38]);
   });
 
   it('applies runtime geometry tuning updates to pill size and notch alignment', () => {
@@ -504,7 +504,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     const updated = manager.setGeometryTuning({
       notchWidthOverride: 100,
-      pillWidth: 60,
+      pillWidth: 84,
       pillHeight: 42,
       offsetX: 10,
       offsetY: 6,
@@ -512,14 +512,14 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     expect(updated).toEqual({
       notchWidthOverride: 100,
-      pillWidth: 60,
+      pillWidth: 84,
       pillHeight: 42,
       offsetX: 10,
       offsetY: 6,
     });
-    expect(left?.getSize()).toEqual([60, 42]);
-    expect(right?.getSize()).toEqual([60, 42]);
-    expect(left?.getPosition()).toEqual([1180, 6]);
+    expect(left?.getSize()).toEqual([84, 42]);
+    expect(right?.getSize()).toEqual([84, 42]);
+    expect(left?.getPosition()).toEqual([1156, 6]);
     expect(right?.getPosition()).toEqual([1340, 6]);
   });
 
@@ -541,10 +541,10 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(right).toBeDefined();
 
     // 1728 width maps to the profile notch width 140.
-    expect(left?.getPosition()).toEqual([746, 0]);
+    expect(left?.getPosition()).toEqual([722, 0]);
     expect(right?.getPosition()).toEqual([934, 0]);
-    expect(left?.getSize()).toEqual([48, 38]);
-    expect(right?.getSize()).toEqual([48, 38]);
+    expect(left?.getSize()).toEqual([72, 38]);
+    expect(right?.getSize()).toEqual([72, 38]);
   });
 
   it('redirects legacy history-visible open requests to the main history window without expanding the left pill', () => {
@@ -555,7 +555,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     const left = testState.getWindowBySide('left');
     expect(left).toBeDefined();
-    expect(left?.getSize()).toEqual([48, 38]);
+    expect(left?.getSize()).toEqual([72, 38]);
     const initialPosition = left?.getPosition();
 
     const historyVisibleCall = testState.ipcMainMock.on.mock.calls.find(
@@ -569,11 +569,11 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     historyVisibleHandler?.({}, true);
     expect(openFieldTheoryListener).toHaveBeenCalledTimes(1);
-    expect(left?.getSize()).toEqual([48, 38]);
+    expect(left?.getSize()).toEqual([72, 38]);
     expect(left?.getPosition()).toEqual(initialPosition);
 
     historyVisibleHandler?.({}, false);
-    expect(left?.getSize()).toEqual([48, 38]);
+    expect(left?.getSize()).toEqual([72, 38]);
     expect(left?.getPosition()).toEqual(initialPosition);
   });
 

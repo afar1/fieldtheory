@@ -13,6 +13,10 @@ import crypto from 'crypto';
 import { createLogger } from './logger';
 
 const log = createLogger('Feedback');
+const FEEDBACK_IMAGE_BUCKET = 'feedback-images';
+const LEGACY_IMAGE_BUCKET = 'team-clipboard-images';
+const IMAGE_PATH_BUCKET_SEPARATOR = '::';
+const KNOWN_IMAGE_BUCKETS = new Set([FEEDBACK_IMAGE_BUCKET, LEGACY_IMAGE_BUCKET]);
 
 // =============================================================================
 // Types
@@ -111,6 +115,7 @@ export class FeedbackManager extends EventEmitter {
   private clipboardManager: ClipboardManager;
   private authManager: AuthManager;
   private profileCache: Map<string, UserProfile> = new Map();
+  private warnedFeedbackBucketFallback = false;
 
   constructor(authManager: AuthManager, clipboardManager: ClipboardManager) {
     super();
@@ -140,6 +145,91 @@ export class FeedbackManager extends EventEmitter {
 
   private getUserEmail(): string | null {
     return this.session?.user?.email || null;
+  }
+
+  private encodeStoredImagePath(bucket: string, path: string): string {
+    return `${bucket}${IMAGE_PATH_BUCKET_SEPARATOR}${path}`;
+  }
+
+  private decodeStoredImagePath(storedPath: string): { bucket: string; path: string } {
+    const separatorIndex = storedPath.indexOf(IMAGE_PATH_BUCKET_SEPARATOR);
+    if (separatorIndex > 0) {
+      const bucket = storedPath.slice(0, separatorIndex);
+      const path = storedPath.slice(separatorIndex + IMAGE_PATH_BUCKET_SEPARATOR.length);
+      if (KNOWN_IMAGE_BUCKETS.has(bucket) && path) {
+        return { bucket, path };
+      }
+    }
+
+    // Legacy rows stored only the object path and always used the team bucket.
+    return { bucket: LEGACY_IMAGE_BUCKET, path: storedPath };
+  }
+
+  private async createSignedImageUrl(storedPath: string): Promise<string | null> {
+    if (!this.supabase) return null;
+
+    const parsed = this.decodeStoredImagePath(storedPath);
+    const fallbackBucket = parsed.bucket === FEEDBACK_IMAGE_BUCKET
+      ? LEGACY_IMAGE_BUCKET
+      : FEEDBACK_IMAGE_BUCKET;
+    const attempts = [
+      { bucket: parsed.bucket, path: parsed.path },
+      { bucket: fallbackBucket, path: parsed.path },
+    ];
+
+    for (const attempt of attempts) {
+      try {
+        const { data, error } = await this.supabase.storage
+          .from(attempt.bucket)
+          .createSignedUrl(attempt.path, 3600);
+        if (!error && data?.signedUrl) {
+          return data.signedUrl;
+        }
+      } catch {
+        // Try the fallback bucket.
+      }
+    }
+
+    return null;
+  }
+
+  private async uploadFeedbackImage(imageBuffer: Buffer, userId: string): Promise<string | null> {
+    if (!this.supabase) return null;
+
+    const itemId = crypto.randomUUID();
+    const objectPath = `${userId}/${itemId}.png`;
+
+    const primaryUpload = await this.supabase.storage
+      .from(FEEDBACK_IMAGE_BUCKET)
+      .upload(objectPath, imageBuffer, {
+        contentType: 'image/png',
+        upsert: false,
+      });
+
+    if (!primaryUpload.error) {
+      return this.encodeStoredImagePath(FEEDBACK_IMAGE_BUCKET, objectPath);
+    }
+
+    const legacyUpload = await this.supabase.storage
+      .from(LEGACY_IMAGE_BUCKET)
+      .upload(objectPath, imageBuffer, {
+        contentType: 'image/png',
+        upsert: false,
+      });
+
+    if (!legacyUpload.error) {
+      if (!this.warnedFeedbackBucketFallback) {
+        this.warnedFeedbackBucketFallback = true;
+        log.warn(
+          'Feedback bucket unavailable; falling back to legacy bucket "%s".',
+          LEGACY_IMAGE_BUCKET
+        );
+      }
+      return this.encodeStoredImagePath(LEGACY_IMAGE_BUCKET, objectPath);
+    }
+
+    log.error('Feedback image upload failed in both buckets:', primaryUpload.error, legacyUpload.error);
+    return null;
   }
 
   // ===========================================================================
@@ -225,16 +315,7 @@ export class FeedbackManager extends EventEmitter {
 
     let imageUrl: string | null = null;
     if (row.image_path && this.supabase) {
-      try {
-        const { data } = await this.supabase.storage
-          .from('team-clipboard-images')
-          .createSignedUrl(row.image_path, 3600);
-        if (data) {
-          imageUrl = data.signedUrl;
-        }
-      } catch (err) {
-        log.error('Failed to create signed URL:', err);
-      }
+      imageUrl = await this.createSignedImageUrl(row.image_path);
     }
 
     return {
@@ -357,20 +438,7 @@ export class FeedbackManager extends EventEmitter {
 
       let imagePath: string | null = null;
       if (isImage && localItem.imageData) {
-        const itemId = crypto.randomUUID();
-        imagePath = `${userId}/${itemId}.png`;
-
-        const { error: uploadError } = await this.supabase!.storage
-          .from('team-clipboard-images')
-          .upload(imagePath, localItem.imageData, {
-            contentType: 'image/png',
-            upsert: false,
-          });
-
-        if (uploadError) {
-          log.error('Image upload failed:', uploadError);
-          imagePath = null;
-        }
+        imagePath = await this.uploadFeedbackImage(localItem.imageData, userId);
       }
 
       const insertData = {
@@ -461,18 +529,9 @@ export class FeedbackManager extends EventEmitter {
 
     try {
       const imageBuffer = Buffer.from(imageBase64, 'base64');
-      const itemId = crypto.randomUUID();
-      const imagePath = `${userId}/${itemId}.png`;
-
-      const { error: uploadError } = await this.supabase!.storage
-        .from('team-clipboard-images')
-        .upload(imagePath, imageBuffer, {
-          contentType: 'image/png',
-          upsert: false,
-        });
-
-      if (uploadError) {
-        log.error('Image feedback upload failed:', uploadError);
+      const imagePath = await this.uploadFeedbackImage(imageBuffer, userId);
+      if (!imagePath) {
+        log.error('Image feedback upload failed');
         return null;
       }
 
@@ -658,18 +717,9 @@ export class FeedbackManager extends EventEmitter {
 
     try {
       const imageBuffer = Buffer.from(imageBase64, 'base64');
-      const itemId = crypto.randomUUID();
-      const imagePath = `${userId}/${itemId}.png`;
-
-      const { error: uploadError } = await this.supabase!.storage
-        .from('team-clipboard-images')
-        .upload(imagePath, imageBuffer, {
-          contentType: 'image/png',
-          upsert: false,
-        });
-
-      if (uploadError) {
-        log.error('Image reply upload failed:', uploadError);
+      const imagePath = await this.uploadFeedbackImage(imageBuffer, userId);
+      if (!imagePath) {
+        log.error('Image reply upload failed');
         return null;
       }
 

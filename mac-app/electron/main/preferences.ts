@@ -173,6 +173,7 @@ interface Preferences {
   hotMicCascadePhrases?: string; // Comma-separated phrases that trigger cascade + center
   hotMicBackgroundFilterEnabled?: boolean; // Filter ambient/far-field speech before chunk transcription
   hotMicBackgroundFilterStrength?: number; // 0-100 strictness slider for background filtering
+  hotMicDrawerTextSize?: number; // Drawer transcript text size in px
   hotMicRectangleCommands?: Record<string, string>; // Window action name → comma-separated trigger phrases
   hotMicRestartServerCommand?: string; // Terminal command to run after Ctrl+C (e.g. "npm run dev")
   hotMicHotkey?: string; // Hotkey to toggle Hot Mic on/off (unset by default)
@@ -250,8 +251,9 @@ const DEFAULT_PREFERENCES: Preferences = {
   hotMicWhisperModel: 'small',
   hotMicBackgroundFilterEnabled: false,
   hotMicBackgroundFilterStrength: 4,
+  hotMicDrawerTextSize: 14,
   hotMicIslandNotchWidthOverride: 0,
-  hotMicIslandPillWidth: 48,
+  hotMicIslandPillWidth: 72,
   hotMicIslandPillHeight: 38,
   hotMicIslandOffsetX: 0,
   hotMicIslandOffsetY: 0,

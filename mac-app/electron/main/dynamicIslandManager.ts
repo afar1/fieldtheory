@@ -39,7 +39,7 @@ export interface DynamicIslandGeometryTuning {
 
 export const DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING: DynamicIslandGeometryTuning = {
   notchWidthOverride: 0,
-  pillWidth: 48,
+  pillWidth: 72,
   pillHeight: 38,
   offsetX: 0,
   offsetY: 0,
@@ -66,7 +66,7 @@ export class DynamicIslandManager extends EventEmitter {
   private historyVisible: boolean = false;
 
   private readonly ISLAND_WIDTH = 460;
-  private readonly ISLAND_WIDTH_IDLE = 48;
+  private readonly ISLAND_WIDTH_IDLE = 72;
   private readonly ISLAND_HEIGHT = 52;
   private readonly ISLAND_HEIGHT_IDLE = 38;
   private readonly ISLAND_HEIGHT_WITH_TRANSCRIPT = 64;
@@ -86,11 +86,14 @@ export class DynamicIslandManager extends EventEmitter {
     { modeWidth: 2056, notchWidth: 167, pillY: 0 },
   ];
   private readonly CENTER_JOIN_OVERLAP_PX = 1;
-  private readonly RIGHT_PILL_WIDTH = 48;
+  private readonly RIGHT_PILL_WIDTH = 72;
   private readonly RIGHT_PILL_HEIGHT = 38;
   private readonly DRAWER_WIDTH = 360;
   private readonly DRAWER_HEIGHT = 82;   // 38px backdrop + 44px text
   private readonly DRAWER_Y = 0;
+  private readonly DRAWER_TEXT_SIZE_DEFAULT = 14;
+  private readonly DRAWER_TEXT_SIZE_MIN = 11;
+  private readonly DRAWER_TEXT_SIZE_MAX = 22;
   // Default backing for non-corner windows.
   private readonly USE_TRANSPARENT_WINDOWS = false;
   // Keep side pills transparent so their rounded outside corners are visible.
@@ -112,6 +115,7 @@ export class DynamicIslandManager extends EventEmitter {
   private drawerRendererReady: boolean = false;
   private drawerSpeaking: boolean = false;
   private drawerTranscriptText: string = '';
+  private drawerTextSize: number = this.DRAWER_TEXT_SIZE_DEFAULT;
 
   private clipboardManager: any = null;
 
@@ -238,7 +242,7 @@ export class DynamicIslandManager extends EventEmitter {
         320,
         this.geometryTuning.notchWidthOverride
       ),
-      pillWidth: this.clampInt(tuning.pillWidth, 32, 120, this.geometryTuning.pillWidth),
+      pillWidth: this.clampInt(tuning.pillWidth, 72, 120, this.geometryTuning.pillWidth),
       pillHeight: this.clampInt(tuning.pillHeight, 24, 120, this.geometryTuning.pillHeight),
       offsetX: this.clampInt(tuning.offsetX, -240, 240, this.geometryTuning.offsetX),
       offsetY: this.clampInt(tuning.offsetY, -160, 160, this.geometryTuning.offsetY),
@@ -718,6 +722,7 @@ export class DynamicIslandManager extends EventEmitter {
       if (this.drawerWindow && !this.drawerWindow.isDestroyed()) {
         this.drawerWindow.webContents.send('dynamic-island-drawer-transcript', this.drawerTranscriptText);
         this.drawerWindow.webContents.send('dynamic-island-drawer-speaking', this.drawerSpeaking);
+        this.sendDrawerTextSize();
       }
     });
   }
@@ -748,6 +753,28 @@ export class DynamicIslandManager extends EventEmitter {
     this.drawerSpeaking = speaking;
     if (this.drawerWindow && !this.drawerWindow.isDestroyed() && this.drawerRendererReady) {
       this.drawerWindow.webContents.send('dynamic-island-drawer-speaking', speaking);
+    }
+  }
+
+  setDrawerTextSize(size: number): number {
+    const normalized = this.clampInt(
+      size,
+      this.DRAWER_TEXT_SIZE_MIN,
+      this.DRAWER_TEXT_SIZE_MAX,
+      this.DRAWER_TEXT_SIZE_DEFAULT
+    );
+    this.drawerTextSize = normalized;
+    this.sendDrawerTextSize();
+    return this.drawerTextSize;
+  }
+
+  getDrawerTextSize(): number {
+    return this.drawerTextSize;
+  }
+
+  private sendDrawerTextSize(): void {
+    if (this.drawerWindow && !this.drawerWindow.isDestroyed() && this.drawerRendererReady) {
+      this.drawerWindow.webContents.send('dynamic-island-drawer-text-size', this.drawerTextSize);
     }
   }
 

@@ -186,11 +186,14 @@ const DYNAMIC_ISLAND_BLUR_TOGGLE_SUPPRESS_MS = 450;
 
 const HOT_MIC_ISLAND_GEOMETRY_LIMITS = {
   notchWidthOverride: { min: 0, max: 320 },
-  pillWidth: { min: 32, max: 120 },
+  pillWidth: { min: 72, max: 120 },
   pillHeight: { min: 24, max: 120 },
   offsetX: { min: -240, max: 240 },
   offsetY: { min: -160, max: 160 },
 } as const;
+const HOT_MIC_DRAWER_TEXT_SIZE_DEFAULT = 14;
+const HOT_MIC_DRAWER_TEXT_SIZE_MIN = 11;
+const HOT_MIC_DRAWER_TEXT_SIZE_MAX = 22;
 
 function clampIslandGeometryInt(value: unknown, min: number, max: number, fallback: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
@@ -263,6 +266,27 @@ async function saveAndApplyHotMicIslandGeometry(
   }
 
   dynamicIslandManager?.setGeometryTuning(next);
+  return next;
+}
+
+function normalizeHotMicDrawerTextSize(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return HOT_MIC_DRAWER_TEXT_SIZE_DEFAULT;
+  }
+  const rounded = Math.round(value);
+  return Math.max(HOT_MIC_DRAWER_TEXT_SIZE_MIN, Math.min(HOT_MIC_DRAWER_TEXT_SIZE_MAX, rounded));
+}
+
+function getHotMicDrawerTextSizeFromPreferences(): number {
+  return normalizeHotMicDrawerTextSize(preferencesManager?.getPreference('hotMicDrawerTextSize'));
+}
+
+async function saveAndApplyHotMicDrawerTextSize(value: unknown): Promise<number> {
+  const next = normalizeHotMicDrawerTextSize(value);
+  if (preferencesManager) {
+    await preferencesManager.save({ hotMicDrawerTextSize: next });
+  }
+  dynamicIslandManager?.setDrawerTextSize(next);
   return next;
 }
 
@@ -5604,6 +5628,7 @@ async function initTranscriberSystem(): Promise<void> {
   dynamicIslandManager.setEnabled(hotMicEnabledOnLaunch);
   dynamicIslandManager.setClipboardManager(clipboardManager);
   dynamicIslandManager.setGeometryTuning(getHotMicIslandGeometryFromPreferences());
+  dynamicIslandManager.setDrawerTextSize(getHotMicDrawerTextSizeFromPreferences());
 
   // Now create transcriberManager with cursorStatusManager.
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
@@ -5916,6 +5941,7 @@ async function initTranscriberSystem(): Promise<void> {
 
       // Re-apply per-user Dynamic Island tuning after preferences reload.
       dynamicIslandManager?.setGeometryTuning(getHotMicIslandGeometryFromPreferences());
+      dynamicIslandManager?.setDrawerTextSize(getHotMicDrawerTextSizeFromPreferences());
       dynamicIslandManager?.setEnabled(prefs.hotMicEnabled ?? false);
     }
     if (clipboardManager) {
@@ -5952,6 +5978,7 @@ async function initTranscriberSystem(): Promise<void> {
     }
     dynamicIslandManager?.setEnabled(false);
     dynamicIslandManager?.setGeometryTuning(DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING);
+    dynamicIslandManager?.setDrawerTextSize(HOT_MIC_DRAWER_TEXT_SIZE_DEFAULT);
     if (clipboardManager) {
       clipboardManager.onUserLoggedOut();
     }
@@ -6319,6 +6346,14 @@ if (!gotTheLock) {
         : 4;
       await preferencesManager?.save({ hotMicBackgroundFilterStrength: normalized });
       return normalized;
+    });
+
+    ipcMain.handle('hotmic:getDrawerTextSize', () => {
+      return getHotMicDrawerTextSizeFromPreferences();
+    });
+
+    ipcMain.handle('hotmic:setDrawerTextSize', async (_event, size: number) => {
+      return await saveAndApplyHotMicDrawerTextSize(size);
     });
 
     ipcMain.handle('hotmic:getIslandGeometry', () => {
