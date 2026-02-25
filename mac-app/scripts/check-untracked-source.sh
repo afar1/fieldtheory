@@ -5,6 +5,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+if [ -L "$ROOT_DIR/node_modules" ]; then
+  echo "Packaging blocked: node_modules is a symlink." >&2
+  echo "Run \`npm ci\` in this checkout so electron-builder can bundle runtime deps." >&2
+  exit 1
+fi
+
 UNTRACKED_FILES="$(git ls-files --others --exclude-standard)"
 if [ -z "$UNTRACKED_FILES" ]; then
   exit 0
