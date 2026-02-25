@@ -205,7 +205,7 @@ interface Preferences {
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
-  transcriptionHotkey: 'Command+\\',
+  transcriptionHotkey: 'Option+/',
   selectedModel: 'small',
   clipboardScreenshotHotkey: 'Alt+4',
   clipboardDesktopScreenshotHotkey: 'Alt+3',
@@ -219,6 +219,7 @@ const DEFAULT_PREFERENCES: Preferences = {
   commandLauncherHotkey: 'Command+Shift+K',
   improveTextHotkey: 'Command+Shift+I',
   autoImproveHotkey: 'Command+Shift+\\',
+  autoImproveTranscripts: false,
 
   // Sound settings - librarian sound ON by default, other sounds OFF by default
   soundsEnabled: false,  // Other sounds (recording, window, paste) - off by default

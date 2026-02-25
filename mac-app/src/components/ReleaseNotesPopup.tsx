@@ -14,6 +14,12 @@ export function hasReleaseNotes(version: string): boolean {
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.85': [
+    'Fixed startup crashes tied to invalid transcription hotkeys and diagnostics collection',
+    'Improved Qwen reliability across sleep/wake and startup warmup paths',
+    'Default transcription hotkey is now Option+/ and auto-improve starts disabled by default',
+    'Reduced production log noise and fixed missing startup sound preload warnings',
+  ],
   '0.1.84': [
     'Qwen setup now finds Homebrew python@3.12/3.13 even when python3 points to 3.14',
     'Added one-click "Copy error" for Qwen setup/transcription failures in Settings',
@@ -224,6 +230,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.85': 'Feb 25 2026',
   '0.1.84': 'Feb 22 2026',
   '0.1.83': 'Feb 22 2026',
   '0.1.82': 'Feb 22 2026',
