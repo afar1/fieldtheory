@@ -2261,7 +2261,7 @@ function setupTranscribeIPCHandlers(): void {
 
   ipcMain.handle(TranscribeIPCChannels.GET_HOTKEY, () => {
     if (!transcriberManager) {
-      return 'Command+\\';
+      return 'Option+/';
     }
     return transcriberManager.getHotkey();
   });

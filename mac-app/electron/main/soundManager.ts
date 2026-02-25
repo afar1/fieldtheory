@@ -13,13 +13,13 @@ export type SoundEvent = 'recordingStart' | 'recordingStop' | 'recordingCancel' 
  * Default sound files for each event type.
  */
 const DEFAULT_SOUNDS: Record<SoundEvent, string> = {
-  recordingStart: 'click.wav',
-  recordingStop: 'click.wav',
-  recordingCancel: 'error.wav',
-  windowOpen: 'tab.wav',
-  windowClose: 'tab.wav',
-  paste: 'click.wav',
-  transcribing: 'click.wav',
+  recordingStart: 'ButtonClickDown.mp3',
+  recordingStop: 'ButtonClickUp.mp3',
+  recordingCancel: 'AlertBonk.mp3',
+  windowOpen: 'WindowOpen.mp3',
+  windowClose: 'WindowClose.mp3',
+  paste: 'Click.mp3',
+  transcribing: 'Click.mp3',
   artifactDiscovery: 'ArtifactDiscovery.wav',
 };
 

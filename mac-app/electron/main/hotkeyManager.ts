@@ -75,7 +75,7 @@ export const HOTKEY_CONFIGS: Record<HotkeyId, HotkeyConfig> = {
   },
   transcription: {
     id: 'transcription',
-    defaultKey: 'Command+\\',
+    defaultKey: 'Option+/',
     preferenceKey: 'transcriptionHotkey',
     description: 'Start/stop transcription',
     category: 'transcription',

@@ -1230,7 +1230,7 @@ function formatHotkeyDisplay(hotkeyStr: string): string {
 function ShortcutsPhase({ onFinish, theme, styles }: ShortcutsPhaseProps) {
   // Current hotkey values
   const [historyHotkey, setHistoryHotkey] = useState('Alt+Space');
-  const [transcriptionHotkey, setTranscriptionHotkey] = useState('\\');
+  const [transcriptionHotkey, setTranscriptionHotkey] = useState('Option+/');
   const [screenshotHotkey, setScreenshotHotkey] = useState('Command+4');
 
   // Capture state

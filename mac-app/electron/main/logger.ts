@@ -51,7 +51,10 @@ function parseLogLevel(value: string | undefined): LogLevel | null {
 }
 
 const envLevel = parseLogLevel(process.env.LOG_LEVEL);
-let currentLevel: LogLevel = envLevel ?? (process.env.NODE_ENV === 'development' ? 'debug' : 'info');
+const isDevelopment = process.env.NODE_ENV === 'development';
+const quietProductionByDefault = process.env.LOG_QUIET_PROD !== 'false';
+const defaultLevel: LogLevel = isDevelopment ? 'debug' : (quietProductionByDefault ? 'warn' : 'info');
+let currentLevel: LogLevel = envLevel ?? defaultLevel;
 
 function parseActiveComponents(raw: string): string[] {
   return raw

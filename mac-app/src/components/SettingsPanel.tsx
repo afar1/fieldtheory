@@ -195,7 +195,7 @@ export default function SettingsPanel({
   const [commandLauncherHotkey, setCommandLauncherHotkey] = useState('Command+Shift+K');
 
   // Transcription hotkey configuration
-  const [transcriptionHotkey, setTranscriptionHotkey] = useState('Command+\\');
+  const [transcriptionHotkey, setTranscriptionHotkey] = useState('Option+/');
   const [secondaryTranscriptionHotkey, setSecondaryTranscriptionHotkey] = useState<string | null>(null);
 
   // Abandon recording hotkey configuration
