@@ -139,7 +139,9 @@
     },
     "files": [
       "dist/**/*",
-      "electron-dist/**/*"
+      "electron-dist/**/*",
+      "package.json",
+      "node_modules/**/*"
     ],
     "directories": {
       "output": "release"
