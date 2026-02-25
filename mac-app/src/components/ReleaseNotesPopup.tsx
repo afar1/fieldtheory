@@ -14,6 +14,10 @@ export function hasReleaseNotes(version: string): boolean {
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.86': [
+    'Fixed startup crash on some downloaded builds caused by missing runtime updater module',
+    'Packaging now blocks symlinked node_modules to prevent broken release artifacts',
+  ],
   '0.1.85': [
     'Fixed startup crashes tied to invalid transcription hotkeys and diagnostics collection',
     'Improved Qwen reliability across sleep/wake and startup warmup paths',
@@ -230,6 +234,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.86': 'Feb 25 2026',
   '0.1.85': 'Feb 25 2026',
   '0.1.84': 'Feb 22 2026',
   '0.1.83': 'Feb 22 2026',
