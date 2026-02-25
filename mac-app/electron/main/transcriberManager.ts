@@ -30,6 +30,7 @@ const LOG_TRANSCRIPT_PAYLOADS = process.env.LOG_TRANSCRIPT_PAYLOADS === 'true';
 const FEATURE_IMPROVE_ENABLED = true;
 
 const execAsync = promisify(exec);
+const SAFE_FALLBACK_TRANSCRIPTION_HOTKEY = 'Option+Shift+Space';
 
 /**
  * Transcription status states.
@@ -66,7 +67,7 @@ export class TranscriberManager extends EventEmitter {
   private overlay: RecordingOverlay;
   private clipboardManager: ClipboardManager | null = null;
   private status: TranscriptionStatus = 'idle';
-  private hotkey: string = 'Command+\\'; // Command+Backslash on macOS
+  private hotkey: string = 'Option+/'; // Option+Slash on macOS
   private registeredHotkey: string | null = null; // Track currently registered transcription hotkey
   private secondaryHotkey: string | null = null; // Optional secondary hotkey for transcription
   private registeredSecondaryHotkey: string | null = null; // Track currently registered secondary hotkey
@@ -77,6 +78,7 @@ export class TranscriberManager extends EventEmitter {
   private qwenPendingResolve: ((response: QwenServerResponse) => void) | null = null;
   private qwenCommandChain: Promise<void> = Promise.resolve();
   private qwenStarting: boolean = false;
+  private qwenLifecycleGeneration: number = 0;
   private qwenDisabledReason: string | null = null;
   private qwenFallbackLoggedForDisabledReason: boolean = false;
   private abandonHotkeyRegistered: boolean = false;
@@ -304,8 +306,8 @@ export class TranscriberManager extends EventEmitter {
     // Overlay style hardcoded to 'rectangle' (cursor status indicator is primary UI)
     this.overlay.setOverlayStyle('rectangle');
 
-    // Register global hotkey for normal transcription
-    await this.registerHotkey(this.hotkey);
+    // Register global hotkey for normal transcription with a safe fallback
+    await this.registerPrimaryHotkeyWithFallback(this.hotkey, true);
 
     // Register secondary hotkey if configured
     if (this.secondaryHotkey) {
@@ -331,10 +333,37 @@ export class TranscriberManager extends EventEmitter {
     this.hotkey = this.preferences.getPreference('transcriptionHotkey');
     this.secondaryHotkey = this.preferences.getPreference('transcriptionSecondaryHotkey') || null;
 
-    this.registerHotkey(this.hotkey);
+    void this.registerPrimaryHotkeyWithFallback(this.hotkey, false);
     if (this.secondaryHotkey) {
-      this.registerSecondaryHotkey(this.secondaryHotkey);
+      void this.registerSecondaryHotkey(this.secondaryHotkey);
     }
+  }
+
+  private async registerPrimaryHotkeyWithFallback(hotkey: string, persistFallback: boolean): Promise<void> {
+    const success = await this.registerHotkey(hotkey);
+    if (success || !hotkey) {
+      return;
+    }
+
+    if (hotkey === SAFE_FALLBACK_TRANSCRIPTION_HOTKEY) {
+      return;
+    }
+
+    log.warn(
+      'Primary hotkey "%s" is unavailable; falling back to %s',
+      hotkey,
+      SAFE_FALLBACK_TRANSCRIPTION_HOTKEY
+    );
+
+    const fallbackRegistered = await this.registerHotkey(SAFE_FALLBACK_TRANSCRIPTION_HOTKEY);
+    if (!fallbackRegistered) {
+      return;
+    }
+
+    if (persistFallback) {
+      await this.preferences.save({ transcriptionHotkey: SAFE_FALLBACK_TRANSCRIPTION_HOTKEY });
+    }
+    this.emit('hotkeyChanged', SAFE_FALLBACK_TRANSCRIPTION_HOTKEY);
   }
 
   /**
@@ -1403,10 +1432,10 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Get whether auto-improve is enabled for transcripts.
-   * Default is true (enabled) for new users.
+   * Default is false (disabled) for new users.
    */
   getAutoImprove(): boolean {
-    return this.preferences.getPreference('autoImproveTranscripts') ?? true;
+    return this.preferences.getPreference('autoImproveTranscripts') ?? false;
   }
 
   /**
@@ -1610,14 +1639,21 @@ export class TranscriberManager extends EventEmitter {
     }
 
     this.qwenStarting = true;
+    const startupGeneration = this.qwenLifecycleGeneration;
     const pythonPath = this.getQwenPythonPath();
     const scriptPath = this.getQwenScriptPath();
 
     this.qwenReadyPromise = new Promise<void>((resolve, reject) => {
+      const startupInvalidated = (): boolean => startupGeneration !== this.qwenLifecycleGeneration;
+
       const launch = async () => {
         try {
           await this.ensureQwenPythonCompatible(pythonPath);
         } catch (error) {
+          if (startupInvalidated()) {
+            reject(new Error('Qwen startup cancelled'));
+            return;
+          }
           this.qwenProcess = null;
           this.qwenReady = false;
           this.qwenStarting = false;
@@ -1626,9 +1662,20 @@ export class TranscriberManager extends EventEmitter {
           return;
         }
 
+        if (startupInvalidated()) {
+          reject(new Error('Qwen startup cancelled'));
+          return;
+        }
+
         const proc = spawn(pythonPath, [scriptPath, '--server'], {
           stdio: ['pipe', 'pipe', 'pipe'],
         });
+
+        if (startupInvalidated()) {
+          proc.kill('SIGTERM');
+          reject(new Error('Qwen startup cancelled'));
+          return;
+        }
 
         this.qwenProcess = proc;
         let buffer = '';
@@ -1643,6 +1690,11 @@ export class TranscriberManager extends EventEmitter {
             try {
               const msg = JSON.parse(line);
               if (msg.ready) {
+                if (startupInvalidated()) {
+                  proc.kill('SIGTERM');
+                  reject(new Error('Qwen startup cancelled'));
+                  return;
+                }
                 // Server is ready — model loaded
                 this.qwenReady = true;
                 this.qwenStarting = false;
@@ -1667,6 +1719,10 @@ export class TranscriberManager extends EventEmitter {
         });
 
         proc.on('error', (error) => {
+          if (startupInvalidated()) {
+            reject(new Error('Qwen startup cancelled'));
+            return;
+          }
           this.qwenProcess = null;
           this.qwenReady = false;
           this.qwenStarting = false;
@@ -1675,6 +1731,11 @@ export class TranscriberManager extends EventEmitter {
         });
 
         proc.on('close', (code) => {
+          if (startupInvalidated()) {
+            reject(new Error('Qwen startup cancelled'));
+            return;
+          }
+
           const wasReady = this.qwenReady;
           this.qwenProcess = null;
           this.qwenReady = false;
@@ -1737,6 +1798,7 @@ export class TranscriberManager extends EventEmitter {
    * restart it automatically.
    */
   stopQwenServer(): void {
+    this.qwenLifecycleGeneration += 1;
     if (this.qwenPendingResolve) {
       this.qwenPendingResolve({ ok: false, error: 'Qwen server stopped' });
       this.qwenPendingResolve = null;
@@ -2092,8 +2154,9 @@ export class TranscriberManager extends EventEmitter {
    * No-op if already running or if engine is not qwen.
    */
   async warmup(): Promise<void> {
-    const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
-    if (engine === 'qwen') {
+    const primaryEngine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+    const hotMicEngine = this.resolveHotMicTranscriptionEngine();
+    if (primaryEngine === 'qwen' || hotMicEngine === 'qwen') {
       await this.startQwenServer();
     }
   }

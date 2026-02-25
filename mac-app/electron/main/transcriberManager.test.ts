@@ -56,6 +56,18 @@ function createQwenHarness(
   return { manager, write };
 }
 
+function createWarmupHarness(prefValues: Record<string, unknown>): { manager: any; startQwenServer: ReturnType<typeof vi.fn> } {
+  const startQwenServer = vi.fn(async () => {});
+  const manager: any = {
+    preferences: {
+      getPreference: (key: string) => prefValues[key],
+    },
+    startQwenServer,
+  };
+  Object.setPrototypeOf(manager, TranscriberManager.prototype);
+  return { manager, startQwenServer };
+}
+
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -117,5 +129,44 @@ describe('TranscriberManager Qwen command queue', () => {
     resolveSecond({ ok: true, text: 'second-result' });
 
     await expect(secondPromise).resolves.toEqual({ ok: true, text: 'second-result' });
+  });
+});
+
+describe('TranscriberManager warmup', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('warms Qwen when primary transcription engine is qwen', async () => {
+    const { manager, startQwenServer } = createWarmupHarness({
+      transcriptionEngine: 'qwen',
+      hotMicTranscriptionEngine: 'default',
+    });
+
+    await manager.warmup();
+
+    expect(startQwenServer).toHaveBeenCalledTimes(1);
+  });
+
+  it('warms Qwen when Hot Mic override engine is qwen', async () => {
+    const { manager, startQwenServer } = createWarmupHarness({
+      transcriptionEngine: 'whisper',
+      hotMicTranscriptionEngine: 'qwen',
+    });
+
+    await manager.warmup();
+
+    expect(startQwenServer).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips Qwen warmup when neither engine path uses qwen', async () => {
+    const { manager, startQwenServer } = createWarmupHarness({
+      transcriptionEngine: 'whisper',
+      hotMicTranscriptionEngine: 'whisper',
+    });
+
+    await manager.warmup();
+
+    expect(startQwenServer).not.toHaveBeenCalled();
   });
 });

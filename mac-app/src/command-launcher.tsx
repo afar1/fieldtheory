@@ -139,7 +139,7 @@ const DEFAULT_HOTKEYS = {
   fullScreen: 'Alt+3',
   activeWindow: 'Shift+Alt+3',
   history: 'Option+Space',
-  transcription: 'Command+\\',
+  transcription: 'Option+/',
   superPaste: 'Shift+Command+V',
 };
 
