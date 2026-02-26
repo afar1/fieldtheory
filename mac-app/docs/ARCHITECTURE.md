@@ -51,8 +51,8 @@ Field's Mac app is an **Electron application** with three main layers:
                                  │
                     ┌────────────▼────────────┐
                     │     Swift Native        │
-                    │   (LittleOneHelper)     │
-                    │  CoreAudio, Recording   │
+                    │   (FieldTheoryHelper)   │
+                    │ CoreAudio + Gaze Vision │
                     └─────────────────────────┘
 ```
 
@@ -219,6 +219,7 @@ Each "domain" has a dedicated manager class:
 | `SocialSync` | DMs, Hot Mic, Contacts | Yes | **Yes** |
 | `TranscriberManager` | Whisper transcription | No | No |
 | `VisionProcessor` | MLX image captioning | No | No |
+| `GazeTrackingManager` | Gaze capture/vision lifecycle + stream rebroadcast | No | No |
 | `AudioManager` | Priority mic, device mgmt | No | No |
 | `PreferencesManager` | User settings (JSON file) | No | No |
 
@@ -304,6 +305,44 @@ export class SharedClipboardSync extends EventEmitter {
 
 ---
 
+### Gaze Tracking (Phase 1-4)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      GAZE PIPELINE FLOW                              │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  Renderer invoke        Main managers            Swift helper       │
+│  gaze:setEnabled ─────> GazeTrackingManager ───> AVCapture + Vision│
+│                         + FocusManager            (normalized sample)│
+│                                │                        │           │
+│                                │ sample stream          │           │
+│                                ▼                        │           │
+│                     DwellEngine + WindowCache           │           │
+│                                │                        │           │
+│                                ▼                        │           │
+│                     gaze:dwellTriggered (internal/UI)   │           │
+│                     optional focus/highlight action     │           │
+│                                │                        │           │
+│                     Debug overlay manager               │           │
+│                     (floating camera + landmarks)       │           │
+│                                │                        │           │
+│                      IPC broadcast to all windows <─────┘           │
+│                      gaze:statusChanged / gaze:sample               │
+│                      gaze:dwellTriggered / gaze:highlightWindow     │
+│                      gaze:debugOverlayStateChanged                  │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+Reference docs:
+- `docs/GAZE_TRACKING_PHASE1.md`
+- `docs/GAZE_TRACKING_PHASE2_CALIBRATION.md`
+- `docs/GAZE_TRACKING_PHASE3_DWELL_WINDOW_FOCUS.md`
+- `docs/GAZE_TRACKING_PHASE4_DEBUG_OVERLAY.md`
+
+---
+
 ## Directory Structure
 
 ```
@@ -316,6 +355,14 @@ mac-app/
 │   │   ├── mobileSync.ts        # iOS transcript sync
 │   │   ├── socialSync.ts        # DMs, Hot Mic (Supabase + Realtime)
 │   │   ├── transcriberManager.ts # Whisper voice transcription
+│   │   ├── gaze/                 # Gaze capture/calibration/focus managers
+│   │   │   ├── gazeTrackingManager.ts
+│   │   │   ├── gazeCalibrationEngine.ts
+│   │   │   ├── gazeDwellEngine.ts
+│   │   │   ├── gazeDebugOverlayManager.ts
+│   │   │   ├── gazeScreenOverlayManager.ts
+│   │   │   ├── gazeWindowFocusManager.ts
+│   │   │   └── gazeWindowListCache.ts
 │   │   ├── visionProcessor.ts   # MLX image captioning
 │   │   ├── audioManager.ts      # CoreAudio, priority mic
 │   │   ├── preferences.ts       # User settings
@@ -325,7 +372,8 @@ mac-app/
 │   │       ├── social.ts
 │   │       └── ...
 │   ├── preload.ts               # contextBridge API exposure
-│   └── native/                  # Swift native helper (CoreAudio, recording)
+│   └── native/                  # Swift native helper (CoreAudio, recording, gaze)
+│       └── Sources/FieldTheoryHelper/GazeTrackingHelper.swift
 │
 ├── src/                         # Renderer process (React)
 │   ├── App.tsx                  # Root component
@@ -333,9 +381,14 @@ mac-app/
 │   │   ├── ClipboardHistory.tsx # Main clipboard UI
 │   │   ├── SharedContextView.tsx # Team clipboard UI
 │   │   ├── SettingsPanel.tsx    # Settings UI
+│   │   ├── VisionSettings.tsx   # Eye tracking calibration + preview
+│   │   ├── GazeDebugOverlay.tsx # Floating debug overlay renderer
+│   │   ├── GazeScreenOverlay.tsx # Full-screen crosshair overlay renderer
 │   │   ├── TodoView.tsx         # Task management
 │   │   ├── DMsView.tsx          # Direct messages
 │   │   └── ...
+│   ├── lib/
+│   │   └── gazeTrackingDiagnostics.ts # Tracking health metrics
 │   ├── contexts/
 │   │   └── ThemeContext.tsx     # Dark/light theme
 │   └── types/
@@ -343,6 +396,7 @@ mac-app/
 │
 └── docs/                        # Documentation
     ├── ARCHITECTURE.md          # This file
+    ├── GAZE_TRACKING_TROUBLESHOOTING.md
     └── ...
 ```
 
@@ -482,4 +536,4 @@ npm run package
 
 ---
 
-*Last updated: December 2024*
+*Last updated: February 24, 2026*
