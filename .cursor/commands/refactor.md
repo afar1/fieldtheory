@@ -1,1 +1,1 @@
-I want you to review the changes that I have made on this branch, not the entire project, for a refactor and proposed plan. Please remind yourself of our engineering principles before doing so.
+Now that you've done some work are there any parts you would go back and refactor? Any tests that you think should be written along the way?

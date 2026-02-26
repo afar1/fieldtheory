@@ -5,6 +5,10 @@ import path from 'path';
 import { PreferencesManager } from './preferences';
 import { ModelManager, ModelSize } from './modelManager';
 import { AudioManager } from './audioManager';
+import { AudioDevice } from './types/audio';
+import { createLogger } from './logger';
+
+const log = createLogger('Diagnostics');
 
 /**
  * Diagnostic information about a Whisper model.
@@ -270,15 +274,33 @@ export class DiagnosticsCollector {
     }
 
     const state = this.audioManager.getState();
-    const priorityDevice = state.devices.find(d => d.id === state.priorityDeviceId);
-    const defaultDevice = state.devices.find(d => d.id === state.defaultInputId);
+    const rawDevices: unknown[] = Array.isArray(state.devices) ? state.devices : [];
+    const devices = rawDevices.filter((device): device is AudioDevice => {
+      if (!device || typeof device !== 'object') {
+        return false;
+      }
+      const candidate = device as Partial<AudioDevice>;
+      return (
+        typeof candidate.id === 'string' &&
+        typeof candidate.name === 'string' &&
+        typeof candidate.isInput === 'boolean' &&
+        typeof candidate.isOutput === 'boolean'
+      );
+    });
+    const droppedDevices = rawDevices.length - devices.length;
+    if (droppedDevices > 0) {
+      log.warn('Diagnostics dropped %d malformed audio device entries', droppedDevices);
+    }
+
+    const priorityDevice = devices.find(d => d.id === state.priorityDeviceId);
+    const defaultDevice = devices.find(d => d.id === state.defaultInputId);
 
     return {
       priorityMode: state.priorityMode,
       priorityDeviceId: state.priorityDeviceId,
       priorityDeviceName: priorityDevice?.name ?? null,
       currentDefaultInput: defaultDevice?.name ?? null,
-      devices: state.devices.map(d => ({
+      devices: devices.map(d => ({
         id: d.id,
         name: d.name,
         isInput: d.isInput,
