@@ -255,6 +255,89 @@ export class AuthManager extends EventEmitter {
   }
 
   /**
+   * Validate whether a persisted Supabase session file appears usable.
+   * We require at least one auth token entry with a parseable token payload.
+   */
+  private isSessionFileUsable(filePath: string): boolean {
+    try {
+      if (!fs.existsSync(filePath)) return false;
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (!parsed || typeof parsed !== 'object') return false;
+
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value !== 'string') continue;
+        if (!key.includes('auth-token') && !key.includes('supabase.auth.token') && !key.includes('session')) {
+          continue;
+        }
+        try {
+          const tokenPayload = JSON.parse(value) as { access_token?: unknown; refresh_token?: unknown };
+          if (typeof tokenPayload.access_token === 'string' || typeof tokenPayload.refresh_token === 'string') {
+            return true;
+          }
+        } catch {
+          // Ignore malformed entries and keep scanning.
+        }
+      }
+    } catch {
+      // Ignore and treat as unusable.
+    }
+    return false;
+  }
+
+  /**
+   * Best-effort migration for session storage when app-data directory names changed
+   * across releases (e.g. field-theory -> fieldtheory-mac).
+   *
+   * This keeps users signed in after manual drag-replace installs.
+   */
+  private migrateLegacySessionStorageIfNeeded(targetUserDataPath: string): void {
+    // Experimental builds intentionally isolate data from production.
+    if (process.env.EXPERIMENTAL === 'true') {
+      return;
+    }
+
+    const targetSessionPath = path.join(targetUserDataPath, 'supabase-session.json');
+    if (this.isSessionFileUsable(targetSessionPath)) {
+      return;
+    }
+
+    const appDataRoot = app.getPath('appData');
+    const knownAppDataNames = [
+      'fieldtheory-mac',
+      'field-theory',
+      'Field Theory',
+      'littleai-mac',
+      'Oscar',
+    ];
+
+    const targetResolved = path.resolve(targetUserDataPath);
+    for (const dirName of knownAppDataNames) {
+      const legacyDir = path.join(appDataRoot, dirName);
+      if (path.resolve(legacyDir) === targetResolved) continue;
+
+      const legacySessionPath = path.join(legacyDir, 'supabase-session.json');
+      if (!this.isSessionFileUsable(legacySessionPath)) continue;
+
+      try {
+        fs.mkdirSync(targetUserDataPath, { recursive: true });
+        fs.copyFileSync(legacySessionPath, targetSessionPath);
+
+        const targetCurrentUserPath = path.join(targetUserDataPath, 'current-user.json');
+        const legacyCurrentUserPath = path.join(legacyDir, 'current-user.json');
+        if (!fs.existsSync(targetCurrentUserPath) && fs.existsSync(legacyCurrentUserPath)) {
+          fs.copyFileSync(legacyCurrentUserPath, targetCurrentUserPath);
+        }
+
+        log.info('Migrated auth session from legacy path:', legacySessionPath);
+        return;
+      } catch (err) {
+        log.warn('Failed migrating session from legacy path:', legacySessionPath, err);
+      }
+    }
+  }
+
+  /**
    * Initialize the auth manager with Supabase credentials.
    */
   async init(supabaseUrl?: string, supabaseAnonKey?: string): Promise<void> {
@@ -267,6 +350,7 @@ export class AuthManager extends EventEmitter {
     }
 
     const userDataPath = app.getPath('userData');
+    this.migrateLegacySessionStorageIfNeeded(userDataPath);
     this.fileStorage = new FileStorage(userDataPath);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

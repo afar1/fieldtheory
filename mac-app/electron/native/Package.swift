@@ -29,8 +29,10 @@ let package = Package(
             dependencies: ["WebRTCVad"],
             path: "Sources/FieldTheoryHelper",
             linkerSettings: [
+                .linkedFramework("AVFoundation"),
                 .linkedFramework("CoreAudio"),
-                .linkedFramework("AudioToolbox")
+                .linkedFramework("AudioToolbox"),
+                .linkedFramework("Vision")
             ]
         )
     ]

@@ -48,6 +48,10 @@ enum MessageType: String, Codable {
     // Window management (Squares)
     case setWindowFrame
     case getWindowList
+    // Gaze tracking
+    case startGazeTracking
+    case stopGazeTracking
+    case getGazeTrackingStatus
 }
 
 /// Message received from Electron.
@@ -72,6 +76,7 @@ struct IncomingMessage: Codable {
     let sourceY: Int?           // Optional source frame for disambiguating duplicate titles
     let sourceWidth: Int?       // Optional source frame for disambiguating duplicate titles
     let sourceHeight: Int?      // Optional source frame for disambiguating duplicate titles
+    let targetFps: Int?         // For startGazeTracking
 }
 
 // MARK: - Outgoing Message Types
@@ -1089,7 +1094,8 @@ final class AppActivationMonitor {
     
     static let shared = AppActivationMonitor()
     
-    private var observer: NSObjectProtocol?
+    private var activationObserver: NSObjectProtocol?
+    private var activeSpaceObserver: NSObjectProtocol?
     private var isMonitoring = false
     
     private init() {}
@@ -1101,12 +1107,22 @@ final class AppActivationMonitor {
         }
         
         // Listen for when our app becomes active (frontmost).
-        observer = NSWorkspace.shared.notificationCenter.addObserver(
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
         ) { [weak self] notification in
             self?.handleAppActivation(notification: notification)
+        }
+
+        // Listen for Mission Control / Space changes and notify Electron so
+        // window caches can refresh immediately (in addition to polling).
+        activeSpaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleActiveSpaceChanged()
         }
         
         isMonitoring = true
@@ -1118,9 +1134,14 @@ final class AppActivationMonitor {
     func stopMonitoring() {
         guard isMonitoring else { return }
 
-        if let observer = observer {
-            NSWorkspace.shared.notificationCenter.removeObserver(observer)
-            self.observer = nil
+        if let activationObserver = activationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(activationObserver)
+            self.activationObserver = nil
+        }
+
+        if let activeSpaceObserver = activeSpaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(activeSpaceObserver)
+            self.activeSpaceObserver = nil
         }
 
         isMonitoring = false
@@ -1185,6 +1206,12 @@ final class AppActivationMonitor {
             sendLog(level: "debug", message: "Field Theory (parent process) became frontmost app")
             sendJSON(AppBecameFrontmostMessage())
         }
+    }
+
+    /// Handle active Space/desktop changes.
+    private func handleActiveSpaceChanged() {
+        sendJSON(ActiveSpaceChangedMessage())
+        broadcastCurrentFrontmostApp()
     }
 
     /// Get the bounds of the frontmost window for a given app PID.
@@ -1257,6 +1284,15 @@ struct FrontmostAppChangedMessage: Codable {
         case bundleId
         case name
         case windowBounds
+    }
+}
+
+/// Message sent when the user changes active macOS Space/Desktop.
+struct ActiveSpaceChangedMessage: Codable {
+    let type = "activeSpaceChanged"
+
+    enum CodingKeys: String, CodingKey {
+        case type
     }
 }
 
@@ -2134,6 +2170,20 @@ final class MessageHandler {
             let windows = WindowAnimator.shared.getWindowList()
             let result = WindowListMessage(windows: windows)
             sendJSON(result)
+
+        case .startGazeTracking:
+            let targetFps = message.targetFps ?? 15
+            GazeTrackingHelper.shared.start(targetFps: targetFps) { status in
+                sendJSON(status)
+            }
+
+        case .stopGazeTracking:
+            let status = GazeTrackingHelper.shared.stop()
+            sendJSON(status)
+
+        case .getGazeTrackingStatus:
+            let status = GazeTrackingHelper.shared.status()
+            sendJSON(status)
         }
     }
 

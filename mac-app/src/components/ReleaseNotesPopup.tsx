@@ -14,6 +14,11 @@ export function hasReleaseNotes(version: string): boolean {
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.87': [
+    'Improved login persistence across installs by hardening session restore paths',
+    'Windows settings now include editable/clearable Squares keyboard shortcuts',
+    'Separated window keyboard shortcuts from Hot Mic voice window commands',
+  ],
   '0.1.86': [
     'Fixed startup crash on some downloaded builds caused by missing runtime updater module',
     'Packaging now blocks symlinked node_modules to prevent broken release artifacts',
@@ -234,6 +239,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.87': 'Feb 26 2026',
   '0.1.86': 'Feb 25 2026',
   '0.1.85': 'Feb 25 2026',
   '0.1.84': 'Feb 22 2026',

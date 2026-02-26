@@ -1,6 +1,6 @@
 {
   "name": "fieldtheory-mac",
-  "version": "0.1.86",
+  "version": "0.1.87",
   "private": true,
   "main": "electron-dist/main/index.js",
   "scripts": {
@@ -99,6 +99,7 @@
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Field Theory needs microphone access to transcribe your voice into text.",
+        "NSCameraUsageDescription": "Used locally to detect gaze direction for window focus. No video is recorded or transmitted.",
         "NSScreenCaptureDescription": "Field Theory needs screen recording permission to capture screenshots for AI context.",
         "NSAppleEventsUsageDescription": "Field Theory needs automation permission to paste transcribed text into other applications."
       },

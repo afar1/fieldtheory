@@ -7,12 +7,16 @@ import {
   HelperOutgoingMessage,
   HelperIncomingCommand,
   NativeWindowInfo,
+  GazeTrackingStatusMessage,
+  GazeSampleMessage,
 } from './types/audio';
 import { createLogger } from './logger';
+import { DEFAULT_GAZE_TARGET_FPS } from './types/gaze';
 
 const log = createLogger('Native');
 
 const DEBOUNCE_DELAY_MS = 200;
+const GAZE_STATUS_TIMEOUT_MS = 30000;
 
 /**
  * NativeHelper manages the Swift CLI helper process that interfaces with CoreAudio.
@@ -702,6 +706,78 @@ export class NativeHelper extends EventEmitter {
   }
 
   /**
+   * Start gaze tracking in the native helper.
+   */
+  async startGazeTracking(targetFps: number = DEFAULT_GAZE_TARGET_FPS): Promise<GazeTrackingStatusMessage> {
+    if (!this.child || !this.child.stdin.writable) {
+      return this.createUnavailableGazeStatus('Helper not running', targetFps);
+    }
+
+    await this.waitForReady();
+    return this.waitForGazeStatusMessage({ type: 'startGazeTracking', targetFps });
+  }
+
+  /**
+   * Stop gaze tracking in the native helper.
+   */
+  async stopGazeTracking(): Promise<GazeTrackingStatusMessage> {
+    if (!this.child || !this.child.stdin.writable) {
+      return this.createUnavailableGazeStatus('Helper not running');
+    }
+
+    await this.waitForReady();
+    return this.waitForGazeStatusMessage({ type: 'stopGazeTracking' });
+  }
+
+  /**
+   * Get current gaze tracking status from the native helper.
+   */
+  async getGazeTrackingStatus(): Promise<GazeTrackingStatusMessage> {
+    if (!this.child || !this.child.stdin.writable) {
+      return this.createUnavailableGazeStatus('Helper not running');
+    }
+
+    await this.waitForReady();
+    return this.waitForGazeStatusMessage({ type: 'getGazeTrackingStatus' });
+  }
+
+  private async waitForGazeStatusMessage(
+    command: { type: 'startGazeTracking'; targetFps: number } | { type: 'stopGazeTracking' } | { type: 'getGazeTrackingStatus' }
+  ): Promise<GazeTrackingStatusMessage> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error(`${command.type} timed out`));
+      }, GAZE_STATUS_TIMEOUT_MS);
+
+      const onMessage = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'gazeTrackingStatus') {
+          cleanup();
+          resolve(msg);
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', onMessage);
+      };
+
+      this.on('message', onMessage);
+      this.send(command);
+    });
+  }
+
+  private createUnavailableGazeStatus(reason: string, targetFps: number = DEFAULT_GAZE_TARGET_FPS): GazeTrackingStatusMessage {
+    return {
+      type: 'gazeTrackingStatus',
+      running: false,
+      cameraAuthorized: false,
+      targetFps,
+      reason,
+    };
+  }
+
+  /**
    * Stop all currently playing sounds.
    */
   stopSounds(): void {
@@ -823,6 +899,11 @@ export class NativeHelper extends EventEmitter {
           name: msg.name || null,
           windowBounds: msg.windowBounds || null,
         };
+        this.emit('frontmostAppChanged', this.cachedFrontmostApp);
+        break;
+
+      case 'activeSpaceChanged':
+        this.emit('activeSpaceChanged');
         break;
 
       case 'frontmostWindowBounds':
@@ -849,6 +930,15 @@ export class NativeHelper extends EventEmitter {
       case 'windowList':
         // Responses to window management commands - handled by promise listeners.
         this.emit('message', msg);
+        break;
+
+      case 'gazeTrackingStatus':
+        this.emit('gazeTrackingStatus', msg as GazeTrackingStatusMessage);
+        this.emit('message', msg);
+        break;
+
+      case 'gazeSample':
+        this.emit('gazeSample', msg as GazeSampleMessage);
         break;
 
       default:
