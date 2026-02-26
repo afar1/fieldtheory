@@ -20,6 +20,30 @@ const AudioIPCChannels = {
   STATE_CHANGED: 'audio:stateChanged',
 } as const;
 
+const GazeIPCChannels = {
+  GET_STATUS: 'gaze:getStatus',
+  SET_ENABLED: 'gaze:setEnabled',
+  GET_LATEST_SAMPLE: 'gaze:getLatestSample',
+  GET_CALIBRATION_STATE: 'gaze:getCalibrationState',
+  START_CALIBRATION: 'gaze:startCalibration',
+  CANCEL_CALIBRATION: 'gaze:cancelCalibration',
+  RESET_EYE_TRACKING_DATA: 'gaze:resetEyeTrackingData',
+  APPLY_MANUAL_CORRECTION: 'gaze:applyManualCorrection',
+  GET_FOCUS_CONFIG: 'gaze:getFocusConfig',
+  SET_FOCUS_CONFIG: 'gaze:setFocusConfig',
+  GET_DEBUG_OVERLAY_STATE: 'gaze:getDebugOverlayState',
+  SET_DEBUG_OVERLAY_ENABLED: 'gaze:setDebugOverlayEnabled',
+  GET_SCREEN_OVERLAY_STATE: 'gaze:getScreenOverlayState',
+  SET_SCREEN_OVERLAY_ENABLED: 'gaze:setScreenOverlayEnabled',
+  STATUS_CHANGED: 'gaze:statusChanged',
+  SAMPLE: 'gaze:sample',
+  CALIBRATION_CHANGED: 'gaze:calibrationChanged',
+  DWELL_TRIGGERED: 'gaze:dwellTriggered',
+  HIGHLIGHT_WINDOW: 'gaze:highlightWindow',
+  DEBUG_OVERLAY_STATE_CHANGED: 'gaze:debugOverlayStateChanged',
+  SCREEN_OVERLAY_STATE_CHANGED: 'gaze:screenOverlayStateChanged',
+} as const;
+
 const TranscribeIPCChannels = {
   GET_STATUS: 'transcribe:getStatus',
   GET_MODEL_STATUS: 'transcribe:getModelStatus',
@@ -195,6 +219,133 @@ type AudioState = {
   priorityMode: boolean;
   priorityDeviceId: string | null;
   userOverrideId: string | null;
+};
+
+type GazeTrackingStatus = {
+  enabled: boolean;
+  running: boolean;
+  cameraAuthorized: boolean;
+  targetFps: number;
+  reason: string | null;
+  lastSampleAtMs: number | null;
+};
+
+type GazeSample = {
+  timestampMs: number;
+  confidence: number;
+  leftEye: { x: number; y: number };
+  rightEye: { x: number; y: number };
+  combinedEye: { x: number; y: number };
+  calibratedCombinedEye: { x: number; y: number };
+  calibrationApplied: boolean;
+  headPose: { yaw: number; pitch: number; roll: number };
+  gazeVector: { x: number; y: number; z: number };
+  faceBounds: { x: number; y: number; width: number; height: number };
+  faceSize: number;
+  distanceScale: number;
+  activeDisplayId?: number | null;
+  mappedScreenPoint?: { x: number; y: number } | null;
+  landmarks?: {
+    leftEye: {
+      medialCanthus: { x: number; y: number };
+      lateralCanthus: { x: number; y: number };
+      irisCenter: { x: number; y: number };
+    };
+    rightEye: {
+      medialCanthus: { x: number; y: number };
+      lateralCanthus: { x: number; y: number };
+      irisCenter: { x: number; y: number };
+    };
+  } | null;
+};
+
+type GazeCalibrationPointId =
+  | 'center'
+  | 'topLeft'
+  | 'topRight'
+  | 'bottomLeft'
+  | 'bottomRight';
+
+type GazeCalibrationState = {
+  active: boolean;
+  currentPointId: GazeCalibrationPointId | null;
+  currentPointIndex: number;
+  totalPoints: number;
+  stableForMs: number;
+  currentVariance: number;
+  samplesCollected: number;
+  manualCorrectionCount: number;
+  collectedPoints: Array<{
+    pointId: GazeCalibrationPointId;
+    target: { x: number; y: number };
+    observedCombined: { x: number; y: number };
+    observedLeft: { x: number; y: number };
+    observedRight: { x: number; y: number };
+    variance: number;
+  }>;
+  personalOffsets: {
+    version: 1;
+    horizontalOffset: number;
+    verticalOffset: number;
+    eyeDominance: number;
+    referenceFaceSize: number;
+    updatedAtMs: number;
+  } | null;
+  lastCalibratedAtMs: number | null;
+  accuracy: {
+    label: 'good' | 'fair' | 'poor';
+    meanError: number;
+    estimatedErrorPx: number;
+    message: string;
+  } | null;
+  needsRecalibrationPrompt: boolean;
+  recalibrationReason: string | null;
+};
+
+type GazeDwellAction = 'highlightBorder' | 'bringToFront' | 'eventOnly';
+
+type GazeWindowFocusConfig = {
+  dwellDurationMs: number;
+  confidenceThreshold: number;
+  deadZonePx: number;
+  cooldownMs: number;
+  dwellAction: GazeDwellAction;
+};
+
+type GazeWindowSnapshot = {
+  windowId: number;
+  ownerName: string;
+  ownerBundleId: string;
+  ownerPID: number;
+  title: string;
+  bounds: { x: number; y: number; width: number; height: number };
+  layer: number;
+};
+
+type GazeDwellEvent = {
+  timestampMs: number;
+  confidence: number;
+  stability: number;
+  gazePoint: { x: number; y: number };
+  activeDisplayId: number;
+  window: GazeWindowSnapshot;
+  action: GazeDwellAction;
+};
+
+type GazeDebugOverlayState = {
+  enabled: boolean;
+  visible: boolean;
+  bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null;
+};
+
+type GazeScreenOverlayState = {
+  enabled: boolean;
+  visible: boolean;
 };
 
 type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
@@ -510,6 +661,30 @@ export interface AudioAPI {
   clearFavoriteDevice: () => Promise<void>;
 }
 
+export interface GazeAPI {
+  getStatus: () => Promise<GazeTrackingStatus>;
+  setEnabled: (enabled: boolean) => Promise<GazeTrackingStatus>;
+  getLatestSample: () => Promise<GazeSample | null>;
+  getCalibrationState: () => Promise<GazeCalibrationState>;
+  startCalibration: () => Promise<GazeCalibrationState>;
+  cancelCalibration: () => Promise<GazeCalibrationState>;
+  resetEyeTrackingData: () => Promise<GazeCalibrationState>;
+  applyManualCorrection: (target: { x: number; y: number }) => Promise<GazeCalibrationState>;
+  getFocusConfig: () => Promise<GazeWindowFocusConfig>;
+  setFocusConfig: (config: Partial<GazeWindowFocusConfig>) => Promise<GazeWindowFocusConfig>;
+  getDebugOverlayState: () => Promise<GazeDebugOverlayState>;
+  setDebugOverlayEnabled: (enabled: boolean) => Promise<GazeDebugOverlayState>;
+  getScreenOverlayState: () => Promise<GazeScreenOverlayState>;
+  setScreenOverlayEnabled: (enabled: boolean) => Promise<GazeScreenOverlayState>;
+  onStatusChanged: (callback: (status: GazeTrackingStatus) => void) => () => void;
+  onSample: (callback: (sample: GazeSample) => void) => () => void;
+  onCalibrationChanged: (callback: (state: GazeCalibrationState) => void) => () => void;
+  onDwellTriggered: (callback: (event: GazeDwellEvent) => void) => () => void;
+  onHighlightWindow: (callback: (window: GazeWindowSnapshot) => void) => () => void;
+  onDebugOverlayStateChanged: (callback: (state: GazeDebugOverlayState) => void) => () => void;
+  onScreenOverlayStateChanged: (callback: (state: GazeScreenOverlayState) => void) => () => void;
+}
+
 // Valid hotkey IDs that can be get/set via the hotkeyAPI
 export type HotkeyId = 'superPaste' | 'commandLauncher' | 'improveText' | 'autoImprove';
 
@@ -771,6 +946,148 @@ const audioAPI: AudioAPI = {
 
   clearFavoriteDevice: async (): Promise<void> => {
     return ipcRenderer.invoke(AudioIPCChannels.CLEAR_FAVORITE_DEVICE);
+  },
+};
+
+const gazeAPI: GazeAPI = {
+  getStatus: async (): Promise<GazeTrackingStatus> => {
+    return ipcRenderer.invoke(GazeIPCChannels.GET_STATUS);
+  },
+
+  setEnabled: async (enabled: boolean): Promise<GazeTrackingStatus> => {
+    return ipcRenderer.invoke(GazeIPCChannels.SET_ENABLED, enabled);
+  },
+
+  getLatestSample: async (): Promise<GazeSample | null> => {
+    return ipcRenderer.invoke(GazeIPCChannels.GET_LATEST_SAMPLE);
+  },
+
+  getCalibrationState: async (): Promise<GazeCalibrationState> => {
+    return ipcRenderer.invoke(GazeIPCChannels.GET_CALIBRATION_STATE);
+  },
+
+  startCalibration: async (): Promise<GazeCalibrationState> => {
+    return ipcRenderer.invoke(GazeIPCChannels.START_CALIBRATION);
+  },
+
+  cancelCalibration: async (): Promise<GazeCalibrationState> => {
+    return ipcRenderer.invoke(GazeIPCChannels.CANCEL_CALIBRATION);
+  },
+
+  resetEyeTrackingData: async (): Promise<GazeCalibrationState> => {
+    return ipcRenderer.invoke(GazeIPCChannels.RESET_EYE_TRACKING_DATA);
+  },
+
+  applyManualCorrection: async (target: { x: number; y: number }): Promise<GazeCalibrationState> => {
+    return ipcRenderer.invoke(GazeIPCChannels.APPLY_MANUAL_CORRECTION, target);
+  },
+
+  getFocusConfig: async (): Promise<GazeWindowFocusConfig> => {
+    return ipcRenderer.invoke(GazeIPCChannels.GET_FOCUS_CONFIG);
+  },
+
+  setFocusConfig: async (config: Partial<GazeWindowFocusConfig>): Promise<GazeWindowFocusConfig> => {
+    return ipcRenderer.invoke(GazeIPCChannels.SET_FOCUS_CONFIG, config);
+  },
+
+  getDebugOverlayState: async (): Promise<GazeDebugOverlayState> => {
+    return ipcRenderer.invoke(GazeIPCChannels.GET_DEBUG_OVERLAY_STATE);
+  },
+
+  setDebugOverlayEnabled: async (enabled: boolean): Promise<GazeDebugOverlayState> => {
+    return ipcRenderer.invoke(GazeIPCChannels.SET_DEBUG_OVERLAY_ENABLED, enabled);
+  },
+
+  getScreenOverlayState: async (): Promise<GazeScreenOverlayState> => {
+    return ipcRenderer.invoke(GazeIPCChannels.GET_SCREEN_OVERLAY_STATE);
+  },
+
+  setScreenOverlayEnabled: async (enabled: boolean): Promise<GazeScreenOverlayState> => {
+    return ipcRenderer.invoke(GazeIPCChannels.SET_SCREEN_OVERLAY_ENABLED, enabled);
+  },
+
+  onStatusChanged: (callback: (status: GazeTrackingStatus) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: GazeTrackingStatus) => {
+      callback(status);
+    };
+
+    ipcRenderer.on(GazeIPCChannels.STATUS_CHANGED, handler);
+
+    return () => {
+      ipcRenderer.removeListener(GazeIPCChannels.STATUS_CHANGED, handler);
+    };
+  },
+
+  onSample: (callback: (sample: GazeSample) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, sample: GazeSample) => {
+      callback(sample);
+    };
+
+    ipcRenderer.on(GazeIPCChannels.SAMPLE, handler);
+
+    return () => {
+      ipcRenderer.removeListener(GazeIPCChannels.SAMPLE, handler);
+    };
+  },
+
+  onCalibrationChanged: (callback: (state: GazeCalibrationState) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: GazeCalibrationState) => {
+      callback(state);
+    };
+
+    ipcRenderer.on(GazeIPCChannels.CALIBRATION_CHANGED, handler);
+
+    return () => {
+      ipcRenderer.removeListener(GazeIPCChannels.CALIBRATION_CHANGED, handler);
+    };
+  },
+
+  onDwellTriggered: (callback: (event: GazeDwellEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, event: GazeDwellEvent) => {
+      callback(event);
+    };
+
+    ipcRenderer.on(GazeIPCChannels.DWELL_TRIGGERED, handler);
+
+    return () => {
+      ipcRenderer.removeListener(GazeIPCChannels.DWELL_TRIGGERED, handler);
+    };
+  },
+
+  onHighlightWindow: (callback: (window: GazeWindowSnapshot) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, window: GazeWindowSnapshot) => {
+      callback(window);
+    };
+
+    ipcRenderer.on(GazeIPCChannels.HIGHLIGHT_WINDOW, handler);
+
+    return () => {
+      ipcRenderer.removeListener(GazeIPCChannels.HIGHLIGHT_WINDOW, handler);
+    };
+  },
+
+  onDebugOverlayStateChanged: (callback: (state: GazeDebugOverlayState) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: GazeDebugOverlayState) => {
+      callback(state);
+    };
+
+    ipcRenderer.on(GazeIPCChannels.DEBUG_OVERLAY_STATE_CHANGED, handler);
+
+    return () => {
+      ipcRenderer.removeListener(GazeIPCChannels.DEBUG_OVERLAY_STATE_CHANGED, handler);
+    };
+  },
+
+  onScreenOverlayStateChanged: (callback: (state: GazeScreenOverlayState) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: GazeScreenOverlayState) => {
+      callback(state);
+    };
+
+    ipcRenderer.on(GazeIPCChannels.SCREEN_OVERLAY_STATE_CHANGED, handler);
+
+    return () => {
+      ipcRenderer.removeListener(GazeIPCChannels.SCREEN_OVERLAY_STATE_CHANGED, handler);
+    };
   },
 };
 
@@ -3107,6 +3424,7 @@ contextBridge.exposeInMainWorld('shellAPI', shellAPI);
 contextBridge.exposeInMainWorld('diagnosticsAPI', diagnosticsAPI);
 contextBridge.exposeInMainWorld('quotaAPI', quotaAPI);
 contextBridge.exposeInMainWorld('audioAPI', audioAPI);
+contextBridge.exposeInMainWorld('gazeAPI', gazeAPI);
 contextBridge.exposeInMainWorld('hotkeyAPI', hotkeyAPI);
 contextBridge.exposeInMainWorld('transcribeAPI', transcribeAPI);
 contextBridge.exposeInMainWorld('clipboardAPI', clipboardAPI);
@@ -3427,6 +3745,7 @@ contextBridge.exposeInMainWorld('stripeConfig', {
 declare global {
   interface Window {
     audioAPI: AudioAPI;
+    gazeAPI: GazeAPI;
     transcribeAPI: TranscribeAPI;
     clipboardAPI: ClipboardAPI;
     permissionsAPI: PermissionsAPI;

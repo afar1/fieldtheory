@@ -14,6 +14,7 @@ import DiagnosticsModal from './DiagnosticsModal';
 import CommandsSettings from './CommandsSettings';
 import ClaudeSettings from './ClaudeSettings';
 import LibrarianSettings from './LibrarianSettings';
+import VisionSettings from './VisionSettings';
 import UserStatsPanel from './UserStatsPanel';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
@@ -33,7 +34,8 @@ type SettingsSection =
   | 'stats'
   | 'terminal-commands'
   | 'hot-mic'
-  | 'rectangle';
+  | 'rectangle'
+  | 'vision';
 
 // Hotkey capture state - only one hotkey can be captured at a time
 type HotkeyCapture =
@@ -64,6 +66,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'terminal-commands': 'Allowlist',
   'hot-mic': 'Hot Mic',
   'rectangle': 'Windows',
+  'vision': 'Vision',
 };
 
 // Alphabetically ordered sections for navigation
@@ -78,6 +81,7 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'commands', // Portable Commands
   'hot-mic', // Hot Mic
   'rectangle', // Window management
+  'vision',
   'sounds',
   'stats',
 ];
@@ -1954,6 +1958,23 @@ export default function SettingsPanel({
           </div>
         </div>
 
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={styles.rowLabel}>Window Management Shortcuts</span>
+            <span style={styles.rowHint}>
+              Configure/clear Squares keyboard shortcuts in Windows. Hot Mic voice actions remain available.
+            </span>
+          </div>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => setSelectedSection('rectangle')}
+              style={styles.btn}
+            >
+              Open Windows
+            </button>
+          </div>
+        </div>
+
         {/* Show in Dock - WIP feature, hidden until ready */}
         {/* Permission Reminders - removed, always show until permissions granted */}
         {/* Cursor Status Indicator - removed, always show the dot */}
@@ -2165,6 +2186,14 @@ export default function SettingsPanel({
       {selectedSection === 'rectangle' && (
       <div style={styles.section}>
         <RectangleSettings />
+      </div>
+      )}
+
+      {/* Vision Section */}
+      {selectedSection === 'vision' && (
+      <div style={styles.section}>
+        <SectionHeader title="Vision" />
+        <VisionSettings />
       </div>
       )}
 

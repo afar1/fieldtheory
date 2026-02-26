@@ -10,6 +10,12 @@
       "zip"
     ],
     "icon": "electron/assets/icon.icns",
+    "extendInfo": {
+      "NSMicrophoneUsageDescription": "Field Theory needs microphone access to transcribe your voice into text.",
+      "NSCameraUsageDescription": "Used locally to detect gaze direction for window focus. No video is recorded or transmitted.",
+      "NSScreenCaptureDescription": "Field Theory needs screen recording permission to capture screenshots for AI context.",
+      "NSAppleEventsUsageDescription": "Field Theory needs automation permission to paste transcribed text into other applications."
+    },
     "hardenedRuntime": true,
     "gatekeeperAssess": false,
     "extraResources": [
