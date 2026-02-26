@@ -232,8 +232,26 @@ export class TrayManager {
     this.tray.setToolTip(tooltip);
 
     const menuItems = this.buildContextMenu(state);
-    const contextMenu = Menu.buildFromTemplate(menuItems);
-    this.tray.setContextMenu(contextMenu);
+    try {
+      const contextMenu = Menu.buildFromTemplate(menuItems);
+      this.tray.setContextMenu(contextMenu);
+    } catch (error) {
+      log.error('Failed to build tray menu with accelerators:', error);
+      const fallbackMenuItems = this.stripAccelerators(menuItems);
+      const contextMenu = Menu.buildFromTemplate(fallbackMenuItems);
+      this.tray.setContextMenu(contextMenu);
+    }
+  }
+
+  private stripAccelerators(items: MenuItemConstructorOptions[]): MenuItemConstructorOptions[] {
+    return items.map((item) => {
+      const stripped = { ...(item as Record<string, unknown>) };
+      delete stripped.accelerator;
+      if (Array.isArray(stripped.submenu)) {
+        stripped.submenu = this.stripAccelerators(stripped.submenu as MenuItemConstructorOptions[]);
+      }
+      return stripped as MenuItemConstructorOptions;
+    });
   }
 
   /**

@@ -60,6 +60,18 @@ import { HOT_MIC_DEFAULTS, HOT_MIC_DEFAULT_SYSTEM_COMMANDS, HOT_MIC_DEFAULT_WIND
 import { detectSSHSession, scpToRemote, SSHTarget } from './sshDetector';
 import { SquaresManager } from './squaresManager';
 import { SquaresIPCChannels, SquaresAction } from './types/squares';
+import { GazeTrackingManager } from './gaze/gazeTrackingManager';
+import { GazeDebugOverlayManager } from './gaze/gazeDebugOverlayManager';
+import { GazeScreenOverlayManager } from './gaze/gazeScreenOverlayManager';
+import {
+  createDefaultGazeWindowFocusConfig,
+  createUnavailableCalibrationState,
+  createUnavailableDebugOverlayState,
+  createUnavailableScreenOverlayState,
+  createUnavailableGazeStatus,
+  GazeIPCChannels,
+  type GazeWindowFocusConfig,
+} from './types/gaze';
 
 const log = createLogger('Main');
 
@@ -139,7 +151,7 @@ function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
   };
 }
 
-// Override userData path for experimental builds to isolate data from production.
+// Pin userData paths explicitly so auth/session storage is stable across package-name changes.
 // This must happen before app.whenReady() and before any code calls app.getPath('userData').
 if (process.env.EXPERIMENTAL === 'true') {
   const experimentalUserData = path.join(
@@ -148,6 +160,9 @@ if (process.env.EXPERIMENTAL === 'true') {
   );
   app.setPath('userData', experimentalUserData);
   app.setName('Field Theory Experimental');
+} else {
+  const productionUserData = path.join(app.getPath('appData'), 'fieldtheory-mac');
+  app.setPath('userData', productionUserData);
 }
 
 // Configure autoUpdater for manual update flow.
@@ -180,6 +195,9 @@ let metricsManager: MetricsManager | null = null;
 let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
 let squaresManager: SquaresManager | null = null;
+let gazeTrackingManager: GazeTrackingManager | null = null;
+let gazeDebugOverlayManager: GazeDebugOverlayManager | null = null;
+let gazeScreenOverlayManager: GazeScreenOverlayManager | null = null;
 let clipboardHistoryLastHideAt = 0;
 let clipboardHistoryLastHideReason: string | null = null;
 const DYNAMIC_ISLAND_BLUR_TOGGLE_SUPPRESS_MS = 450;
@@ -969,6 +987,8 @@ function showMainWindow(): void {
  * Handle display changes - move clipboard history window if its display is removed.
  */
 function handleDisplayRemoved(_event: Electron.Event, removedDisplay: Electron.Display): void {
+  gazeTrackingManager?.noteScreenParametersChanged();
+
   if (!clipboardHistoryWindow || !clipboardHistoryWindow.isVisible()) {
     return;
   }
@@ -1028,6 +1048,8 @@ let displayMetricsDebounceTimer: ReturnType<typeof setTimeout> | null = null;
  * Debounced since display changes fire many events in quick succession.
  */
 function handleDisplayMetricsChanged(_event: Electron.Event, _changedDisplay: Electron.Display): void {
+  gazeTrackingManager?.noteScreenParametersChanged();
+
   if (!clipboardHistoryWindow || !clipboardHistoryWindow.isVisible()) {
     return;
   }
@@ -2153,6 +2175,121 @@ function setupSquaresIPCHandlers(): void {
 }
 
 /**
+ * Set up IPC handlers for gaze tracking pipeline.
+ * Phases 1-4: status/sample, calibration, dwell/window focus config, debug overlay.
+ */
+function setupGazeIPCHandlers(): void {
+  ipcMain.handle(GazeIPCChannels.GET_STATUS, () => {
+    return gazeTrackingManager?.getStatus() ?? createUnavailableGazeStatus();
+  });
+
+  ipcMain.handle(GazeIPCChannels.SET_ENABLED, async (_event, enabled: boolean) => {
+    if (!gazeTrackingManager) {
+      return createUnavailableGazeStatus();
+    }
+    return await gazeTrackingManager.setEnabled(!!enabled);
+  });
+
+  ipcMain.handle(GazeIPCChannels.GET_LATEST_SAMPLE, () => {
+    return gazeTrackingManager?.getLatestSample() ?? null;
+  });
+
+  ipcMain.handle(GazeIPCChannels.GET_CALIBRATION_STATE, () => {
+    return gazeTrackingManager?.getCalibrationState() ?? createUnavailableCalibrationState();
+  });
+
+  ipcMain.handle(GazeIPCChannels.START_CALIBRATION, async () => {
+    if (!gazeTrackingManager) {
+      return createUnavailableCalibrationState();
+    }
+    return await gazeTrackingManager.startCalibration();
+  });
+
+  ipcMain.handle(GazeIPCChannels.CANCEL_CALIBRATION, () => {
+    if (!gazeTrackingManager) {
+      return createUnavailableCalibrationState();
+    }
+    return gazeTrackingManager.cancelCalibration();
+  });
+
+  ipcMain.handle(GazeIPCChannels.RESET_EYE_TRACKING_DATA, async () => {
+    if (!gazeTrackingManager) {
+      return createUnavailableCalibrationState();
+    }
+    return await gazeTrackingManager.resetEyeTrackingData();
+  });
+
+  ipcMain.handle(
+    GazeIPCChannels.APPLY_MANUAL_CORRECTION,
+    async (_event, target: { x: number; y: number }) => {
+      if (!gazeTrackingManager) {
+        return createUnavailableCalibrationState();
+      }
+      if (!target || typeof target.x !== 'number' || typeof target.y !== 'number') {
+        return gazeTrackingManager.getCalibrationState();
+      }
+      return await gazeTrackingManager.applyManualCorrection({
+        x: target.x,
+        y: target.y,
+      });
+    }
+  );
+
+  ipcMain.handle(GazeIPCChannels.GET_FOCUS_CONFIG, () => {
+    return gazeTrackingManager?.getFocusConfig() ?? createDefaultGazeWindowFocusConfig();
+  });
+
+  ipcMain.handle(
+    GazeIPCChannels.SET_FOCUS_CONFIG,
+    async (_event, config: Partial<GazeWindowFocusConfig> | null | undefined) => {
+      if (!gazeTrackingManager) {
+        return createDefaultGazeWindowFocusConfig();
+      }
+      return await gazeTrackingManager.setFocusConfig(config ?? {});
+    }
+  );
+
+  ipcMain.handle(GazeIPCChannels.GET_DEBUG_OVERLAY_STATE, () => {
+    return gazeDebugOverlayManager?.getState() ?? createUnavailableDebugOverlayState();
+  });
+
+  ipcMain.handle(GazeIPCChannels.SET_DEBUG_OVERLAY_ENABLED, async (_event, enabled: boolean) => {
+    if (!gazeDebugOverlayManager) {
+      return createUnavailableDebugOverlayState();
+    }
+    const next = await gazeDebugOverlayManager.setEnabled(!!enabled);
+    if (enabled && gazeTrackingManager) {
+      gazeDebugOverlayManager.updateStatus(gazeTrackingManager.getStatus());
+      gazeDebugOverlayManager.updateCalibration(gazeTrackingManager.getCalibrationState());
+      const latestSample = gazeTrackingManager.getLatestSample();
+      if (latestSample) {
+        gazeDebugOverlayManager.updateSample(latestSample);
+      }
+    }
+    return next;
+  });
+
+  ipcMain.handle(GazeIPCChannels.GET_SCREEN_OVERLAY_STATE, () => {
+    return gazeScreenOverlayManager?.getState() ?? createUnavailableScreenOverlayState();
+  });
+
+  ipcMain.handle(GazeIPCChannels.SET_SCREEN_OVERLAY_ENABLED, async (_event, enabled: boolean) => {
+    if (!gazeScreenOverlayManager) {
+      return createUnavailableScreenOverlayState();
+    }
+    const next = await gazeScreenOverlayManager.setEnabled(!!enabled);
+    if (enabled && gazeTrackingManager) {
+      gazeScreenOverlayManager.updateStatus(gazeTrackingManager.getStatus());
+      const latestSample = gazeTrackingManager.getLatestSample();
+      if (latestSample) {
+        gazeScreenOverlayManager.updateSample(latestSample);
+      }
+    }
+    return next;
+  });
+}
+
+/**
  * Set up all IPC handlers for transcription-related communication.
  */
 function setupTranscribeIPCHandlers(): void {
@@ -2261,7 +2398,7 @@ function setupTranscribeIPCHandlers(): void {
 
   ipcMain.handle(TranscribeIPCChannels.GET_HOTKEY, () => {
     if (!transcriberManager) {
-      return 'Command+\\';
+      return 'Option+/';
     }
     return transcriberManager.getHotkey();
   });
@@ -5426,6 +5563,90 @@ async function initTranscriberSystem(): Promise<void> {
     await preferencesManager.load();
   }
 
+  if (!gazeDebugOverlayManager) {
+    gazeDebugOverlayManager = new GazeDebugOverlayManager(preferencesManager);
+    gazeDebugOverlayManager.on('stateChanged', (state) => {
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(GazeIPCChannels.DEBUG_OVERLAY_STATE_CHANGED, state);
+        }
+      });
+    });
+    await gazeDebugOverlayManager.initFromPreferences();
+  }
+
+  if (!gazeScreenOverlayManager) {
+    gazeScreenOverlayManager = new GazeScreenOverlayManager(preferencesManager);
+    gazeScreenOverlayManager.on('stateChanged', (state) => {
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(GazeIPCChannels.SCREEN_OVERLAY_STATE_CHANGED, state);
+        }
+      });
+    });
+    await gazeScreenOverlayManager.initFromPreferences();
+  }
+
+  // Initialize gaze tracking manager (capture + calibration + dwell/focus).
+  if (!gazeTrackingManager) {
+    gazeTrackingManager = new GazeTrackingManager(nativeHelper, preferencesManager);
+
+    gazeTrackingManager.on('statusChanged', (status) => {
+      gazeDebugOverlayManager?.updateStatus(status);
+      gazeScreenOverlayManager?.updateStatus(status);
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(GazeIPCChannels.STATUS_CHANGED, status);
+        }
+      });
+    });
+
+    gazeTrackingManager.on('sample', (sample) => {
+      gazeDebugOverlayManager?.updateSample(sample);
+      gazeScreenOverlayManager?.updateSample(sample);
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(GazeIPCChannels.SAMPLE, sample);
+        }
+      });
+    });
+
+    gazeTrackingManager.on('calibrationChanged', (state) => {
+      gazeDebugOverlayManager?.updateCalibration(state);
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(GazeIPCChannels.CALIBRATION_CHANGED, state);
+        }
+      });
+    });
+
+    gazeTrackingManager.on('dwellTriggered', (event) => {
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(GazeIPCChannels.DWELL_TRIGGERED, event);
+        }
+      });
+    });
+
+    gazeTrackingManager.on('highlightWindow', (windowSnapshot) => {
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send(GazeIPCChannels.HIGHLIGHT_WINDOW, windowSnapshot);
+        }
+      });
+    });
+
+    await gazeTrackingManager.init();
+    gazeDebugOverlayManager?.updateStatus(gazeTrackingManager.getStatus());
+    gazeScreenOverlayManager?.updateStatus(gazeTrackingManager.getStatus());
+    gazeDebugOverlayManager?.updateCalibration(gazeTrackingManager.getCalibrationState());
+    const latestSample = gazeTrackingManager.getLatestSample();
+    if (latestSample) {
+      gazeDebugOverlayManager?.updateSample(latestSample);
+      gazeScreenOverlayManager?.updateSample(latestSample);
+    }
+  }
+
   // Initialize clipboard manager with hotkeys from preferences
   clipboardManager = new ClipboardManager();
   
@@ -5943,6 +6164,9 @@ async function initTranscriberSystem(): Promise<void> {
       dynamicIslandManager?.setGeometryTuning(getHotMicIslandGeometryFromPreferences());
       dynamicIslandManager?.setDrawerTextSize(getHotMicDrawerTextSizeFromPreferences());
       dynamicIslandManager?.setEnabled(prefs.hotMicEnabled ?? false);
+      await gazeTrackingManager?.reloadFromPreferences();
+      await gazeDebugOverlayManager?.reloadFromPreferences();
+      await gazeScreenOverlayManager?.reloadFromPreferences();
     }
     if (clipboardManager) {
       await clipboardManager.reinitializeForUser();
@@ -5979,6 +6203,9 @@ async function initTranscriberSystem(): Promise<void> {
     dynamicIslandManager?.setEnabled(false);
     dynamicIslandManager?.setGeometryTuning(DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING);
     dynamicIslandManager?.setDrawerTextSize(HOT_MIC_DRAWER_TEXT_SIZE_DEFAULT);
+    await gazeTrackingManager?.setEnabled(false);
+    await gazeDebugOverlayManager?.setEnabled(false);
+    await gazeScreenOverlayManager?.setEnabled(false);
     if (clipboardManager) {
       clipboardManager.onUserLoggedOut();
     }
@@ -6250,6 +6477,7 @@ if (!gotTheLock) {
     setupThemeIPCHandlers();
     setupLibrarianIPCHandlers();
     setupSquaresIPCHandlers();
+    setupGazeIPCHandlers();
     setupTranscribeIPCHandlers();
     setupClipboardIPCHandlers();
     setupOnboardingIPCHandlers();
@@ -7148,6 +7376,20 @@ if (!gotTheLock) {
 
     if (dynamicIslandManager) {
       dynamicIslandManager.destroy();
+    }
+
+    if (gazeTrackingManager) {
+      gazeTrackingManager.destroy().catch(() => {});
+    }
+
+    if (gazeDebugOverlayManager) {
+      gazeDebugOverlayManager.destroy();
+      gazeDebugOverlayManager = null;
+    }
+
+    if (gazeScreenOverlayManager) {
+      gazeScreenOverlayManager.destroy();
+      gazeScreenOverlayManager = null;
     }
 
     if (trayManager) {
