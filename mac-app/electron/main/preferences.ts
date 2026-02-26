@@ -4,6 +4,12 @@ import path from 'path';
 
 import { createLogger } from './logger';
 import { ModelSize } from './modelManager';
+import {
+  createDefaultGazeWindowFocusConfig,
+  type GazeDebugOverlayBounds,
+  type GazePersonalOffsets,
+  type GazeWindowFocusConfig,
+} from './types/gaze';
 
 const log = createLogger('Preferences');
 import { UserDataManager, getUserDataManager } from './userDataManager';
@@ -202,6 +208,16 @@ interface Preferences {
   // Window management.
   squaresConfig?: any;   // SquaresConfig from types/squares.ts
   squaresHotkeys?: any;  // SquaresHotkeys from types/squares.ts
+
+  // Eye tracking / gaze pipeline.
+  // Disabled by default and only starts capture when explicitly enabled.
+  gazeTrackingEnabled?: boolean;
+  gazePersonalOffsets?: GazePersonalOffsets | null;
+  gazeLastCalibratedAtMs?: number | null;
+  gazeWindowFocusConfig?: GazeWindowFocusConfig;
+  gazeDebugOverlayEnabled?: boolean;
+  gazeDebugOverlayBounds?: GazeDebugOverlayBounds | null;
+  gazeScreenOverlayEnabled?: boolean;
 }
 
 const DEFAULT_PREFERENCES: Preferences = {
@@ -258,6 +274,15 @@ const DEFAULT_PREFERENCES: Preferences = {
   hotMicIslandPillHeight: 38,
   hotMicIslandOffsetX: 0,
   hotMicIslandOffsetY: 0,
+
+  // Gaze tracking is opt-in.
+  gazeTrackingEnabled: false,
+  gazePersonalOffsets: null,
+  gazeLastCalibratedAtMs: null,
+  gazeWindowFocusConfig: createDefaultGazeWindowFocusConfig(),
+  gazeDebugOverlayEnabled: false,
+  gazeDebugOverlayBounds: null,
+  gazeScreenOverlayEnabled: false,
 };
 
 /**

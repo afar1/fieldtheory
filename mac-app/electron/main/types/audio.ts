@@ -113,12 +113,15 @@ export type HelperOutgoingMessageType =
   | 'focusedTextInputStatus'
   | 'appBecameFrontmost'
   | 'frontmostAppChanged'
+  | 'activeSpaceChanged'
   | 'frontmostWindowBounds'
   | 'soundsPreloaded'
   | 'typeIntoAppResult'
   | 'focusWindowByTitleResult'
   | 'windowFrameSet'
-  | 'windowList';
+  | 'windowList'
+  | 'gazeTrackingStatus'
+  | 'gazeSample';
 
 /**
  * Message types sent FROM Electron main TO the Swift helper.
@@ -141,7 +144,10 @@ export type HelperIncomingMessageType =
   | 'focusWindowByTitle'
   | 'setHarvestMode'
   | 'setWindowFrame'
-  | 'getWindowList';
+  | 'getWindowList'
+  | 'startGazeTracking'
+  | 'stopGazeTracking'
+  | 'getGazeTrackingStatus';
 
 /**
  * Base interface for all messages from the native helper.
@@ -274,6 +280,14 @@ export interface FrontmostAppChangedMessage extends HelperMessage {
 }
 
 /**
+ * Active Space changed message.
+ * Sent when the user switches macOS spaces/desktops.
+ */
+export interface ActiveSpaceChangedMessage extends HelperMessage {
+  type: 'activeSpaceChanged';
+}
+
+/**
  * Frontmost window bounds message (on-demand response).
  * Sent in response to getFrontmostWindowBounds command.
  */
@@ -351,6 +365,75 @@ export interface WindowListMessage extends HelperMessage {
 }
 
 /**
+ * Native helper status for gaze tracking pipeline.
+ */
+export interface GazeTrackingStatusMessage extends HelperMessage {
+  type: 'gazeTrackingStatus';
+  running: boolean;
+  cameraAuthorized: boolean;
+  targetFps: number;
+  reason?: string | null;
+}
+
+export interface GazeNormalizedEyePosition {
+  x: number;
+  y: number;
+}
+
+export interface GazeHeadPoseMessage {
+  yaw: number;
+  pitch: number;
+  roll: number;
+}
+
+export interface GazeVectorMessage {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface GazeFaceBoundsMessage {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface GazeLandmarkPointMessage {
+  x: number;
+  y: number;
+}
+
+export interface GazeEyeGeometryMessage {
+  medialCanthus: GazeLandmarkPointMessage;
+  lateralCanthus: GazeLandmarkPointMessage;
+  irisCenter: GazeLandmarkPointMessage;
+}
+
+export interface GazeLandmarksMessage {
+  leftEye: GazeEyeGeometryMessage;
+  rightEye: GazeEyeGeometryMessage;
+}
+
+/**
+ * Per-frame normalized gaze sample emitted by the native helper.
+ */
+export interface GazeSampleMessage extends HelperMessage {
+  type: 'gazeSample';
+  timestampMs: number;
+  confidence: number;
+  leftEye: GazeNormalizedEyePosition;
+  rightEye: GazeNormalizedEyePosition;
+  combinedEye: GazeNormalizedEyePosition;
+  headPose: GazeHeadPoseMessage;
+  gazeVector: GazeVectorMessage;
+  faceBounds: GazeFaceBoundsMessage;
+  faceSize: number;
+  distanceScale: number;
+  landmarks?: GazeLandmarksMessage;
+}
+
+/**
  * Union type of all possible messages from the helper.
  */
 export type HelperOutgoingMessage =
@@ -368,12 +451,15 @@ export type HelperOutgoingMessage =
   | FocusedTextInputStatusMessage
   | AppBecameFrontmostMessage
   | FrontmostAppChangedMessage
+  | ActiveSpaceChangedMessage
   | FrontmostWindowBoundsMessage
   | SoundsPreloadedMessage
   | TypeIntoAppResultMessage
   | FocusWindowByTitleResultMessage
   | WindowFrameSetMessage
-  | WindowListMessage;
+  | WindowListMessage
+  | GazeTrackingStatusMessage
+  | GazeSampleMessage;
 
 /**
  * Commands sent to the helper.
@@ -488,6 +574,19 @@ export interface GetWindowListCommand {
   type: 'getWindowList';
 }
 
+export interface StartGazeTrackingCommand {
+  type: 'startGazeTracking';
+  targetFps?: number;
+}
+
+export interface StopGazeTrackingCommand {
+  type: 'stopGazeTracking';
+}
+
+export interface GetGazeTrackingStatusCommand {
+  type: 'getGazeTrackingStatus';
+}
+
 /**
  * Union type of all possible commands to the helper.
  */
@@ -510,4 +609,7 @@ export type HelperIncomingCommand =
   | FocusWindowByTitleCommand
   | SetHarvestModeCommand
   | SetWindowFrameCommand
-  | GetWindowListCommand;
+  | GetWindowListCommand
+  | StartGazeTrackingCommand
+  | StopGazeTrackingCommand
+  | GetGazeTrackingStatusCommand;
