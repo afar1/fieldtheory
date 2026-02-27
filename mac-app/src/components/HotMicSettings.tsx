@@ -13,6 +13,17 @@ interface IslandGeometrySettings {
   offsetY: number;
 }
 
+interface HotMicRuntimeStatus {
+  state: string;
+  condition: string | null;
+  engineReady: boolean;
+  whisperFallbackActive: boolean;
+  queueDepth: number;
+  lastChunkAgeMs: number | null;
+  chunksReceived: number;
+  micHealthy: boolean;
+}
+
 interface WhisperModelInfo {
   name: string;
   url: string;
@@ -58,6 +69,7 @@ export default function HotMicSettings() {
   const [backgroundFilterStrength, setBackgroundFilterStrength] = useState(4);
   const [drawerTextSize, setDrawerTextSize] = useState(14);
   const [currentState, setCurrentState] = useState('idle');
+  const [runtimeStatus, setRuntimeStatus] = useState<HotMicRuntimeStatus | null>(null);
   const [hookInstalled, setHookInstalled] = useState(false);
   const [hookLoading, setHookLoading] = useState(false);
   const [submitWord, setSubmitWord] = useState('');
@@ -227,11 +239,23 @@ export default function HotMicSettings() {
 
     load();
 
+    // Fetch initial runtime status.
+    window.hotMicAPI!.getRuntimeStatus?.().then((status) => {
+      if (status) setRuntimeStatus(status);
+    });
+
     const unsub = window.hotMicAPI!.onStateChanged((state) => {
       setCurrentState(state);
     });
 
-    return unsub;
+    const unsubRuntime = window.hotMicAPI!.onRuntimeStatusChanged?.((status) => {
+      setRuntimeStatus(status);
+    });
+
+    return () => {
+      unsub();
+      unsubRuntime?.();
+    };
   }, []);
 
   const handleEnabledChange = useCallback(async (value: boolean) => {
@@ -1198,6 +1222,11 @@ export default function HotMicSettings() {
           <span style={{ ...styles.stateBadge, backgroundColor: getStateColor(currentState) }}>
             {currentState}
           </span>
+          {runtimeStatus?.condition && (
+            <span style={{ ...styles.stateBadge, backgroundColor: getConditionColor(runtimeStatus.condition), fontSize: '10px' }}>
+              {runtimeStatus.condition}
+            </span>
+          )}
           {isActive ? (
             <button onClick={handleStop} style={styles.stopButton}>Stop</button>
           ) : (
@@ -1210,8 +1239,37 @@ export default function HotMicSettings() {
           )}
         </div>
       </div>
+
+      {/* Runtime health — only shown when active */}
+      {isActive && runtimeStatus && (
+        <div style={{ ...styles.row, flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
+          <span style={{ ...styles.rowLabel, marginBottom: '2px' }}>Health</span>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', fontSize: '11px', color: theme.textSecondary }}>
+            <span>engine: {runtimeStatus.engineReady ? 'ready' : 'loading'}</span>
+            <span>queue: {runtimeStatus.queueDepth}</span>
+            <span>chunks: {runtimeStatus.chunksReceived}</span>
+            {runtimeStatus.whisperFallbackActive && (
+              <span style={{ color: '#f59e0b' }}>whisper fallback</span>
+            )}
+            <span style={{ color: runtimeStatus.micHealthy ? '#10b981' : '#ef4444' }}>
+              mic: {runtimeStatus.micHealthy ? 'healthy' : 'stale'}
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+function getConditionColor(condition: string): string {
+  switch (condition) {
+    case 'warming': return '#f59e0b';
+    case 'ready': return '#10b981';
+    case 'degraded': return '#ef4444';
+    case 'yielded': return '#3b82f6';
+    case 'muted': return '#6b7280';
+    default: return '#6b7280';
+  }
 }
 
 function getStateColor(state: string): string {
