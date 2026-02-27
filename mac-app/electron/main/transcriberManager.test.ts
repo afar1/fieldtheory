@@ -170,3 +170,33 @@ describe('TranscriberManager warmup', () => {
     expect(startQwenServer).not.toHaveBeenCalled();
   });
 });
+
+describe('TranscriberManager fallback tracking', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('exposes isQwenDisabledForSession as false by default', () => {
+    const manager: any = {
+      qwenDisabledReason: null,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+    expect(manager.isQwenDisabledForSession()).toBe(false);
+  });
+
+  it('reports qwen as disabled when qwenDisabledReason is set', () => {
+    const manager: any = {
+      qwenDisabledReason: 'MLX runtime crashed',
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+    expect(manager.isQwenDisabledForSession()).toBe(true);
+  });
+
+  it('initializes lastHotMicUsedWhisperFallback to false', () => {
+    const manager: any = {
+      lastHotMicUsedWhisperFallback: false,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+    expect(manager.lastHotMicUsedWhisperFallback).toBe(false);
+  });
+});

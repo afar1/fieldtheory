@@ -431,3 +431,343 @@ describe('HotMicManager transcriber handoff', () => {
     manager.destroy();
   });
 });
+
+// ===========================================================================
+// Runtime condition tracking
+// ===========================================================================
+
+describe('HotMicManager runtime condition', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('starts with null condition when idle', () => {
+    const { manager } = createManager();
+    expect(manager.getCondition()).toBe(null);
+    manager.destroy();
+  });
+
+  it('transitions to warming then ready when warmup function is provided', async () => {
+    const { manager } = createManager();
+    const conditions: (string | null)[] = [];
+    manager.on('runtimeStatusChanged', (status: any) => {
+      conditions.push(status.condition);
+    });
+
+    let resolveWarmup!: () => void;
+    const warmupPromise = new Promise<void>(r => { resolveWarmup = r; });
+    manager.setWarmupFunction(() => warmupPromise);
+
+    (manager as any).targetBundleId = 'com.test.app';
+    await (manager as any).startListening();
+
+    expect(manager.getCondition()).toBe('warming');
+
+    resolveWarmup();
+    await warmupPromise;
+    await Promise.resolve();
+
+    expect(manager.getCondition()).toBe('ready');
+    expect(conditions).toContain('warming');
+    expect(conditions).toContain('ready');
+
+    manager.destroy();
+  });
+
+  it('transitions to degraded when warmup fails', async () => {
+    const { manager } = createManager();
+    manager.setWarmupFunction(() => Promise.reject(new Error('warmup failed')));
+
+    (manager as any).targetBundleId = 'com.test.app';
+    await (manager as any).startListening();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(manager.getCondition()).toBe('degraded');
+    manager.destroy();
+  });
+
+  it('sets condition to ready immediately when no warmup function', async () => {
+    const { manager } = createManager();
+    (manager as any).targetBundleId = 'com.test.app';
+    await (manager as any).startListening();
+
+    expect(manager.getCondition()).toBe('ready');
+    manager.destroy();
+  });
+
+  it('sets condition to yielded during transcriber handoff', async () => {
+    const { manager, nativeHelper } = createManager();
+    (manager as any).state = 'listening';
+    nativeHelper.isRecordingActive.mockReturnValueOnce(true);
+
+    await manager.yieldToTranscriber();
+    expect(manager.getCondition()).toBe('yielded');
+    manager.destroy();
+  });
+
+  it('restores condition to ready after resume from yield', async () => {
+    const { manager, nativeHelper } = createManager();
+    (manager as any).state = 'listening';
+    nativeHelper.isRecordingActive
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+
+    await manager.yieldToTranscriber();
+    expect(manager.getCondition()).toBe('yielded');
+
+    await manager.resumeAfterTranscriber();
+    expect(manager.getCondition()).toBe('ready');
+    manager.destroy();
+  });
+
+  it('sets condition to muted on mute and back to ready on unmute', async () => {
+    const { manager, nativeHelper } = createManager();
+    (manager as any).state = 'listening';
+    nativeHelper.isRecordingActive.mockReturnValue(false);
+
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateHotMicBackgroundFilterMeter: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+    };
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+
+    await manager.toggleMute();
+    expect(manager.getCondition()).toBe('muted');
+
+    await manager.toggleMute();
+    expect(manager.getCondition()).toBe('ready');
+    manager.destroy();
+  });
+
+  it('clears condition to null when state returns to idle', () => {
+    const { manager } = createManager();
+    (manager as any).state = 'listening';
+    (manager as any).setCondition('ready');
+    expect(manager.getCondition()).toBe('ready');
+
+    (manager as any).setState('idle');
+    expect(manager.getCondition()).toBe(null);
+    manager.destroy();
+  });
+});
+
+// ===========================================================================
+// Runtime status
+// ===========================================================================
+
+describe('HotMicManager runtime status', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns a complete runtime status object', () => {
+    const { manager } = createManager();
+    const status = manager.getRuntimeStatus();
+
+    expect(status).toMatchObject({
+      state: 'idle',
+      condition: null,
+      engineReady: false,
+      whisperFallbackActive: false,
+      queueDepth: 0,
+      chunksReceived: 0,
+      micHealthy: true,
+    });
+    expect(status.lastChunkAgeMs).toBe(null);
+    manager.destroy();
+  });
+
+  it('emits runtimeStatusChanged on condition transitions', () => {
+    const { manager } = createManager();
+    const statuses: any[] = [];
+    manager.on('runtimeStatusChanged', (s: any) => statuses.push(s));
+
+    (manager as any).setCondition('warming');
+    (manager as any).setCondition('ready');
+
+    expect(statuses).toHaveLength(2);
+    expect(statuses[0].condition).toBe('warming');
+    expect(statuses[1].condition).toBe('ready');
+    manager.destroy();
+  });
+
+  it('reports mic as unhealthy when last chunk is stale', () => {
+    const { manager } = createManager();
+    (manager as any).state = 'listening';
+    (manager as any).condition = 'ready';
+    (manager as any).lastChunkReadyMs = Date.now() - 15_000;
+
+    const status = manager.getRuntimeStatus();
+    expect(status.micHealthy).toBe(false);
+    manager.destroy();
+  });
+
+  it('reports mic as healthy when last chunk is recent', () => {
+    const { manager } = createManager();
+    (manager as any).state = 'listening';
+    (manager as any).condition = 'ready';
+    (manager as any).lastChunkReadyMs = Date.now() - 2_000;
+
+    const status = manager.getRuntimeStatus();
+    expect(status.micHealthy).toBe(true);
+    manager.destroy();
+  });
+
+  it('always reports mic as healthy when idle', () => {
+    const { manager } = createManager();
+    (manager as any).lastChunkReadyMs = Date.now() - 999_999;
+
+    const status = manager.getRuntimeStatus();
+    expect(status.micHealthy).toBe(true);
+    manager.destroy();
+  });
+
+  it('always reports mic as healthy when yielded', () => {
+    const { manager } = createManager();
+    (manager as any).state = 'listening';
+    (manager as any).condition = 'yielded';
+    (manager as any).lastChunkReadyMs = Date.now() - 999_999;
+
+    const status = manager.getRuntimeStatus();
+    expect(status.micHealthy).toBe(true);
+    manager.destroy();
+  });
+
+  it('tracks chunks received count', () => {
+    const { manager } = createManager();
+    (manager as any).chunksReceivedCount = 42;
+
+    const status = manager.getRuntimeStatus();
+    expect(status.chunksReceived).toBe(42);
+    manager.destroy();
+  });
+});
+
+// ===========================================================================
+// Chunk queue backpressure
+// ===========================================================================
+
+describe('HotMicManager chunk queue backpressure', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('drops oldest chunks when queue exceeds MAX_CHUNK_QUEUE_DEPTH', () => {
+    const { manager } = createManager();
+    const queue = (manager as any).pendingChunkQueue;
+    const maxDepth = (HotMicManager as any).MAX_CHUNK_QUEUE_DEPTH ?? 8;
+
+    for (let i = 0; i < maxDepth; i++) {
+      queue.push({ filePath: `/tmp/chunk-${i}.wav`, audioStats: {} });
+    }
+    expect(queue.length).toBe(maxDepth);
+
+    (manager as any).enqueueChunkForTranscription(`/tmp/chunk-overflow.wav`, {
+      sampleCount: 10, speechSamples: 5, speechRatio: 0.5,
+      rawAverage: 0.1, speechAverage: 0.1, rawPeak: 0.2, speechPeak: 0.2,
+    });
+
+    expect(queue.length).toBeLessThanOrEqual(maxDepth);
+    const paths = queue.map((c: any) => c.filePath);
+    expect(paths).not.toContain('/tmp/chunk-0.wav');
+    expect(paths).toContain('/tmp/chunk-overflow.wav');
+    manager.destroy();
+  });
+
+  it('increments chunksReceivedCount on every enqueue', () => {
+    const { manager } = createManager();
+    expect((manager as any).chunksReceivedCount).toBe(0);
+
+    (manager as any).enqueueChunkForTranscription('/tmp/c1.wav', {
+      sampleCount: 10, speechSamples: 5, speechRatio: 0.5,
+      rawAverage: 0.1, speechAverage: 0.1, rawPeak: 0.2, speechPeak: 0.2,
+    });
+
+    expect((manager as any).chunksReceivedCount).toBe(1);
+    manager.destroy();
+  });
+
+  it('reports queue depth in runtime status', () => {
+    const { manager } = createManager();
+    const queue = (manager as any).pendingChunkQueue;
+    queue.push({ filePath: '/tmp/a.wav', audioStats: {} });
+    queue.push({ filePath: '/tmp/b.wav', audioStats: {} });
+
+    const status = manager.getRuntimeStatus();
+    expect(status.queueDepth).toBe(2);
+    manager.destroy();
+  });
+});
+
+// ===========================================================================
+// Whisper fallback tracking
+// ===========================================================================
+
+describe('HotMicManager whisper fallback detection', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('sets condition to degraded when fallback check returns true after transcription', async () => {
+    const { manager } = createManager();
+    (manager as any).state = 'listening';
+    (manager as any).condition = 'ready';
+
+    manager.setFallbackCheckFunction(() => true);
+    manager.setTranscribeFunction(async () => 'hello world');
+
+    await (manager as any).onChunkReady({
+      filePath: '/tmp/test.wav',
+      audioStats: {
+        sampleCount: 20, speechSamples: 10, speechRatio: 0.5,
+        rawAverage: 0.1, speechAverage: 0.1, rawPeak: 0.3, speechPeak: 0.3,
+      },
+    });
+
+    expect(manager.getCondition()).toBe('degraded');
+    expect((manager as any).whisperFallbackActive).toBe(true);
+    manager.destroy();
+  });
+
+  it('stays ready when fallback check returns false', async () => {
+    const { manager } = createManager();
+    (manager as any).state = 'listening';
+    (manager as any).condition = 'ready';
+
+    manager.setFallbackCheckFunction(() => false);
+    manager.setTranscribeFunction(async () => 'hello world');
+
+    await (manager as any).onChunkReady({
+      filePath: '/tmp/test.wav',
+      audioStats: {
+        sampleCount: 20, speechSamples: 10, speechRatio: 0.5,
+        rawAverage: 0.1, speechAverage: 0.1, rawPeak: 0.3, speechPeak: 0.3,
+      },
+    });
+
+    expect(manager.getCondition()).toBe('ready');
+    expect((manager as any).whisperFallbackActive).toBe(false);
+    manager.destroy();
+  });
+
+  it('reflects whisperFallbackActive in runtime status', () => {
+    const { manager } = createManager();
+    (manager as any).whisperFallbackActive = true;
+
+    const status = manager.getRuntimeStatus();
+    expect(status.whisperFallbackActive).toBe(true);
+    manager.destroy();
+  });
+
+  it('resets whisperFallbackActive on cleanup', () => {
+    const { manager } = createManager();
+    (manager as any).whisperFallbackActive = true;
+    (manager as any).cleanup();
+
+    expect((manager as any).whisperFallbackActive).toBe(false);
+    manager.destroy();
+  });
+});
