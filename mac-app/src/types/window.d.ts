@@ -1125,10 +1125,31 @@ interface CommandsAPI {
 }
 
 /**
+ * Fine-grained operational condition for hot mic, overlaid on the base state.
+ */
+type HotMicCondition = 'warming' | 'ready' | 'degraded' | 'yielded' | 'muted';
+
+/**
+ * Full observable runtime status for hot mic operational health.
+ */
+interface HotMicRuntimeStatus {
+  state: string;
+  condition: HotMicCondition | null;
+  engineReady: boolean;
+  whisperFallbackActive: boolean;
+  queueDepth: number;
+  lastChunkAgeMs: number | null;
+  chunksReceived: number;
+  micHealthy: boolean;
+}
+
+/**
  * Hot Mic API for continuous voice input to Claude Code terminals.
  */
 interface HotMicAPI {
   getState: () => Promise<string>;
+  getRuntimeStatus: () => Promise<HotMicRuntimeStatus>;
+  onRuntimeStatusChanged: (handler: (status: HotMicRuntimeStatus) => void) => () => void;
   getEnabled: () => Promise<boolean>;
   getTranscriptionEngineMode: () => Promise<'default' | 'whisper' | 'qwen'>;
   setTranscriptionEngineMode: (mode: 'default' | 'whisper' | 'qwen') => Promise<'default' | 'whisper' | 'qwen'>;

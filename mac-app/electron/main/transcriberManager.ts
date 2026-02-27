@@ -1958,6 +1958,8 @@ export class TranscriberManager extends EventEmitter {
         }
       }
 
+      this.lastHotMicUsedWhisperFallback = true;
+
       try {
         return await this.transcribe(wavPath, whisperModelOverride);
       } catch (whisperError) {
@@ -2190,16 +2192,41 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Transcribe for Hot Mic using Hot Mic-specific engine, fallback, and whisper model settings.
+   * After each call, check lastHotMicUsedWhisperFallback to know if fallback was triggered.
    */
   async transcribeAudioForHotMic(wavPath: string): Promise<string> {
+    this.lastHotMicUsedWhisperFallback = false;
     const engine = this.resolveHotMicTranscriptionEngine();
     const allowWhisperFallback = this.preferences.getPreference('hotMicAllowWhisperFallback') ?? true;
     const whisperModel = this.resolveHotMicWhisperModel();
-    return this.transcribeWithEngineFallback(wavPath, engine, {
-      allowWhisperFallback,
-      whisperModelOverride: whisperModel,
-    });
+
+    if (engine !== 'qwen') {
+      return this.transcribeWithEngineFallback(wavPath, engine, {
+        allowWhisperFallback,
+        whisperModelOverride: whisperModel,
+      });
+    }
+
+    try {
+      return await this.transcribeWithEngineFallback(wavPath, engine, {
+        allowWhisperFallback,
+        whisperModelOverride: whisperModel,
+      });
+    } catch (error) {
+      // If Qwen failed and fallback was not allowed, we still want callers
+      // to know this was a Qwen failure they may want to surface.
+      throw error;
+    }
   }
+
+  /**
+   * Whether Qwen is permanently disabled for this session (fatal runtime error).
+   */
+  isQwenDisabledForSession(): boolean {
+    return this.qwenDisabledReason !== null;
+  }
+
+  lastHotMicUsedWhisperFallback: boolean = false;
 
   /**
    * Transcribe an audio file using the user's configured engine (whisper or qwen).

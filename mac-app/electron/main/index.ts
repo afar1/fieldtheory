@@ -194,6 +194,22 @@ let commandLauncherWindow: CommandLauncherWindow | null = null;
 let metricsManager: MetricsManager | null = null;
 let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
+
+/**
+ * Shared entry point for all hot mic mode transitions.
+ * Routes UI-triggered, IPC-triggered, and hook-triggered start/stop
+ * through a single atomic path so mode is always persisted and broadcast.
+ */
+function applyHotMicMode(action: 'activate' | 'deactivate' | 'start'): void {
+  if (!hotMicManager) return;
+  if (action === 'activate') {
+    hotMicManager.activate();
+  } else if (action === 'start') {
+    hotMicManager.start();
+  } else {
+    hotMicManager.stop();
+  }
+}
 let squaresManager: SquaresManager | null = null;
 let gazeTrackingManager: GazeTrackingManager | null = null;
 let gazeDebugOverlayManager: GazeDebugOverlayManager | null = null;
@@ -5919,6 +5935,7 @@ async function initTranscriberSystem(): Promise<void> {
     hotMicManager.setTranscriberStatusGetter(() => transcriberManager?.getStatus() ?? 'idle');
     hotMicManager.setTranscribeFunction((wavPath) => transcriberManager!.transcribeAudioForHotMic(wavPath));
     hotMicManager.setWarmupFunction(() => transcriberManager!.warmupForHotMic());
+    hotMicManager.setFallbackCheckFunction(() => transcriberManager?.lastHotMicUsedWhisperFallback ?? false);
 
     // Wire hotkey delegation: when Hot Mic is active, hotkey presses go to it
     transcriberManager.setHotMicDelegate({
@@ -5937,6 +5954,14 @@ async function initTranscriberSystem(): Promise<void> {
       BrowserWindow.getAllWindows().forEach(win => {
         if (!win.isDestroyed()) {
           win.webContents.send('hotmic:stateChanged', state);
+        }
+      });
+    });
+
+    hotMicManager.on('runtimeStatusChanged', (status: import('./hotMicManager').HotMicRuntimeStatus) => {
+      BrowserWindow.getAllWindows().forEach(win => {
+        if (!win.isDestroyed()) {
+          win.webContents.send('hotmic:runtimeStatusChanged', status);
         }
       });
     });
@@ -6398,9 +6423,9 @@ async function handleProtocolUrl(url: string): Promise<void> {
     // Hot Mic URL handlers
     if (parsed.host === 'hotmic') {
       if (parsed.pathname === '/start') {
-        hotMicManager?.start();
+        applyHotMicMode('start');
       } else if (parsed.pathname === '/stop') {
-        hotMicManager?.stop();
+        applyHotMicMode('deactivate');
       }
       return;
     }
@@ -6486,6 +6511,19 @@ if (!gotTheLock) {
     // Hot Mic IPC handlers
     ipcMain.handle('hotmic:getState', () => {
       return hotMicManager?.getState() ?? 'idle';
+    });
+
+    ipcMain.handle('hotmic:getRuntimeStatus', () => {
+      return hotMicManager?.getRuntimeStatus() ?? {
+        state: 'idle',
+        condition: null,
+        engineReady: false,
+        whisperFallbackActive: false,
+        queueDepth: 0,
+        lastChunkAgeMs: null,
+        chunksReceived: 0,
+        micHealthy: true,
+      };
     });
 
     ipcMain.handle('hotmic:getEnabled', () => {
@@ -6878,11 +6916,11 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:start', () => {
-      hotMicManager?.activate();
+      applyHotMicMode('activate');
     });
 
     ipcMain.handle('hotmic:stop', () => {
-      hotMicManager?.stop();
+      applyHotMicMode('deactivate');
     });
 
     ipcMain.handle('hotmic:isHookInstalled', () => {
