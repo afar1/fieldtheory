@@ -3695,6 +3695,18 @@ const hotMicAPI = {
       ipcRenderer.removeListener('hotmic:stateChanged', handler);
     };
   },
+  getRuntimeStatus: async () => {
+    return ipcRenderer.invoke('hotmic:getRuntimeStatus');
+  },
+  onRuntimeStatusChanged: (callback: (status: any) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: any) => {
+      callback(status);
+    };
+    ipcRenderer.on('hotmic:runtimeStatusChanged', handler);
+    return () => {
+      ipcRenderer.removeListener('hotmic:runtimeStatusChanged', handler);
+    };
+  },
 };
 contextBridge.exposeInMainWorld('hotMicAPI', hotMicAPI);
 

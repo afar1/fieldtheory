@@ -53,6 +53,32 @@ interface PendingChunk {
 export type HotMicState = 'idle' | 'armed' | 'listening' | 'recording';
 
 /**
+ * Fine-grained operational condition overlaid on the base state.
+ * Tells the UI/IPC exactly what's happening inside the hot mic session:
+ * - warming: transcription engine is starting up (e.g. Qwen server loading)
+ * - ready: engine warm, processing chunks normally
+ * - degraded: primary engine failed, fell back to Whisper
+ * - yielded: temporarily paused while the standard transcriber records
+ * - muted: user-muted, mic paused but session alive
+ */
+export type HotMicCondition = 'warming' | 'ready' | 'degraded' | 'yielded' | 'muted';
+
+/**
+ * Observable runtime status exposed to UI/IPC. This is the full picture
+ * of hot mic operational health beyond the coarse state enum.
+ */
+export interface HotMicRuntimeStatus {
+  state: HotMicState;
+  condition: HotMicCondition | null;
+  engineReady: boolean;
+  whisperFallbackActive: boolean;
+  queueDepth: number;
+  lastChunkAgeMs: number | null;
+  chunksReceived: number;
+  micHealthy: boolean;
+}
+
+/**
  * Known terminal apps with their bundle IDs.
  */
 export const KNOWN_TERMINALS: Array<{ name: string; bundleId: string }> = [
@@ -214,6 +240,7 @@ export class HotMicManager extends EventEmitter {
   private metricsWordsRecorder: ((wordCount: number) => void) | null = null;
 
   private state: HotMicState = 'idle';
+  private condition: HotMicCondition | null = null;
   private targetBundleId: string | null = null;
   private whisperProcess: ChildProcess | null = null;
 
@@ -228,6 +255,12 @@ export class HotMicManager extends EventEmitter {
   private hasSpeechSinceLastHarvest: boolean = false;
   private resumeInFlight: boolean = false;
   private yieldedToTranscriber: boolean = false;
+
+  // Runtime health tracking — exposed via getRuntimeStatus()
+  private engineReady: boolean = false;
+  private whisperFallbackActive: boolean = false;
+  private chunksReceivedCount: number = 0;
+  private static readonly MAX_CHUNK_QUEUE_DEPTH = 8;
   private drawerSpeaking: boolean = false;
   private drawerSpeakingTimeout: NodeJS.Timeout | null = null;
   private static readonly DRAWER_PREVIEW_MIN_WORDS = 3;
@@ -287,6 +320,7 @@ export class HotMicManager extends EventEmitter {
   // External transcription function (uses user's configured engine via TranscriberManager)
   private externalTranscribe: ((wavPath: string) => Promise<string>) | null = null;
   private externalWarmup: (() => Promise<void>) | null = null;
+  private externalFallbackCheck: (() => boolean) | null = null;
 
   // Squares window management (voice-triggered snapping)
   private squaresManager: {
@@ -487,6 +521,10 @@ export class HotMicManager extends EventEmitter {
     this.externalWarmup = fn;
   }
 
+  setFallbackCheckFunction(fn: () => boolean): void {
+    this.externalFallbackCheck = fn;
+  }
+
   setSquaresManager(manager: {
     parseVoiceCommandFromTail(text: string): { action: string; remainingText: string } | null;
     executeAction(action: string): Promise<boolean>;
@@ -503,6 +541,36 @@ export class HotMicManager extends EventEmitter {
 
   getState(): HotMicState {
     return this.state;
+  }
+
+  getCondition(): HotMicCondition | null {
+    return this.condition;
+  }
+
+  /**
+   * Full observable runtime status. Gives the UI everything it needs
+   * to show operational health beyond the coarse state enum.
+   */
+  getRuntimeStatus(): HotMicRuntimeStatus {
+    const now = Date.now();
+    const lastChunkAgeMs = this.lastChunkReadyMs > 0 ? now - this.lastChunkReadyMs : null;
+
+    // Mic is healthy if we've received a chunk within the last 10 seconds
+    // while in an active state — stale chunks suggest routing or VAD problems.
+    const micHealthy = this.state === 'idle' || this.condition === 'yielded'
+      ? true
+      : lastChunkAgeMs === null || lastChunkAgeMs < 10_000;
+
+    return {
+      state: this.state,
+      condition: this.condition,
+      engineReady: this.engineReady,
+      whisperFallbackActive: this.whisperFallbackActive,
+      queueDepth: this.pendingChunkQueue.length,
+      lastChunkAgeMs,
+      chunksReceived: this.chunksReceivedCount,
+      micHealthy,
+    };
   }
 
   get isActive(): boolean {
@@ -581,12 +649,13 @@ export class HotMicManager extends EventEmitter {
 
     await this.nativeHelper.cancelRecording().then(() => {
       this.yieldedToTranscriber = true;
+      this.setCondition('yielded');
     }).catch((error) => {
       log.warn('Hot Mic: cancel during yield failed:', error);
     });
 
-    // Don't change state to idle — keep as listening so we know to resume
-    // The transcriber status getter will prevent us from restarting until it's done
+    // Don't change state to idle — keep as listening so we know to resume.
+    // The transcriber status getter will prevent us from restarting until it's done.
   }
 
   /**
@@ -618,6 +687,7 @@ export class HotMicManager extends EventEmitter {
           if (this.nativeHelper.isRecordingActive()) {
             log.info('Hot Mic: resume skipped (helper already recording)');
             this.yieldedToTranscriber = false;
+            this.setCondition(this.whisperFallbackActive ? 'degraded' : 'ready');
             this.startAudioMonitoring();
             return;
           }
@@ -627,6 +697,7 @@ export class HotMicManager extends EventEmitter {
           this.nativeHelper.setHarvestMode('command');
           await this.nativeHelper.startRecording();
           this.yieldedToTranscriber = false;
+          this.setCondition(this.whisperFallbackActive ? 'degraded' : 'ready');
           this.startAudioMonitoring();
           return;
         } catch (error) {
@@ -634,6 +705,7 @@ export class HotMicManager extends EventEmitter {
           if (this.nativeHelper.isRecordingActive()) {
             log.info('Hot Mic: resume recovered (helper already recording)');
             this.yieldedToTranscriber = false;
+            this.setCondition(this.whisperFallbackActive ? 'degraded' : 'ready');
             this.startAudioMonitoring();
             return;
           }
@@ -663,6 +735,7 @@ export class HotMicManager extends EventEmitter {
     if (this.muted) {
       // Unmute — resume recording.
       this.muted = false;
+      this.setCondition(this.whisperFallbackActive ? 'degraded' : 'ready');
       log.info('Hot Mic: unmuted');
       try {
         if (this.audioManager) {
@@ -680,6 +753,7 @@ export class HotMicManager extends EventEmitter {
     } else {
       // Mute — stop recording but stay in listening state.
       this.muted = true;
+      this.setCondition('muted');
       log.info('Hot Mic: muted');
       this.stopAudioMonitoring();
       this.stopBufferDiscardTimer();
@@ -742,18 +816,38 @@ export class HotMicManager extends EventEmitter {
     this.transcriptBuffer = [];
     this.resumeInFlight = false;
     this.yieldedToTranscriber = false;
+    this.whisperFallbackActive = false;
+    this.chunksReceivedCount = 0;
     this.clearDrawerSpeakingSignal();
     this.setState('listening');
 
     // Warm up transcription engine in parallel with recording start.
     // Store the promise so onChunkReady can await it before the first transcription,
     // preventing a race where a chunk arrives before the server is ready.
+    const hasWarmup = !!this.externalWarmup;
+    if (hasWarmup) {
+      this.setCondition('warming');
+      this.engineReady = false;
+    }
+
     this.warmupPromise = this.externalWarmup
-      ? this.externalWarmup().catch((err) => {
+      ? this.externalWarmup().then(() => {
+          this.engineReady = true;
+          if (this.condition === 'warming') {
+            this.setCondition('ready');
+          }
+        }).catch((err) => {
           // Keep chunk processing alive so engine-level fallback can still run.
           log.error('Hot Mic: warmup failed:', err);
+          this.engineReady = false;
+          this.setCondition('degraded');
         })
       : null;
+
+    if (!hasWarmup) {
+      this.engineReady = true;
+      this.setCondition('ready');
+    }
 
     try {
       if (this.audioManager) {
@@ -1121,7 +1215,21 @@ export class HotMicManager extends EventEmitter {
   }
 
   private enqueueChunkForTranscription(filePath: string, audioStats: ChunkAudioStats): void {
+    this.chunksReceivedCount++;
+
+    // Backpressure: if the queue is at capacity, drop the oldest chunk
+    // to prevent unbounded growth when transcription stalls.
+    while (this.pendingChunkQueue.length >= HotMicManager.MAX_CHUNK_QUEUE_DEPTH) {
+      const dropped = this.pendingChunkQueue.shift();
+      if (dropped) {
+        log.warn('Hot Mic: chunk queue full (%d), dropping oldest chunk: %s',
+          HotMicManager.MAX_CHUNK_QUEUE_DEPTH, dropped.filePath);
+        void fs.promises.unlink(dropped.filePath).catch(() => {});
+      }
+    }
+
     this.pendingChunkQueue.push({ filePath, audioStats });
+    this.emitRuntimeStatus();
     void this.drainChunkQueue();
   }
 
@@ -1288,6 +1396,14 @@ export class HotMicManager extends EventEmitter {
 
       // Transcribe the completed chunk — audio monitoring stays active
       const rawTranscript = (await this.transcribe(wavPath)).trim();
+
+      // Check if this transcription used Whisper fallback and update condition.
+      const usedFallback = this.externalFallbackCheck?.() ?? false;
+      if (usedFallback && !this.whisperFallbackActive) {
+        this.whisperFallbackActive = true;
+        this.setCondition('degraded');
+      }
+
       logTranscriptPayload('Hot Mic: raw transcript', rawTranscript);
       // Detect snap gesture before stripping parentheticals
       const hasSnap = /\(snap\)/i.test(rawTranscript);
@@ -1341,6 +1457,10 @@ export class HotMicManager extends EventEmitter {
       this.nativeHelper.setHarvestMode(this.transcriptBuffer.length === 0 ? 'command' : 'dictation');
     } catch (error) {
       log.error('Hot Mic chunk error:', error);
+      // A transcription failure that wasn't caught by fallback means degraded state.
+      if (!this.whisperFallbackActive) {
+        this.setCondition('degraded');
+      }
       // Sync orange dot — a failed transcription should not leave the dot lingering
       this.updateOrangeDot();
     }
@@ -2483,7 +2603,25 @@ export class HotMicManager extends EventEmitter {
     log.info('Hot Mic state: %s → %s', prev, state);
     this.emit('stateChanged', state);
 
+    // Auto-derive condition from state transitions.
+    if (state === 'idle') {
+      this.setCondition(null);
+    }
+
     this.updateOrangeDot();
+  }
+
+  private setCondition(cond: HotMicCondition | null): void {
+    if (this.condition === cond) return;
+    const prev = this.condition;
+    this.condition = cond;
+    log.info('Hot Mic condition: %s → %s', prev ?? 'none', cond ?? 'none');
+    this.emitRuntimeStatus();
+  }
+
+  private emitRuntimeStatus(): void {
+    const status = this.getRuntimeStatus();
+    this.emit('runtimeStatusChanged', status);
   }
 
   // ---------------------------------------------------------------------------
@@ -2498,6 +2636,8 @@ export class HotMicManager extends EventEmitter {
     this.yieldedToTranscriber = false;
     this.targetBundleId = null;
     this.transcriptBuffer = [];
+    this.engineReady = false;
+    this.whisperFallbackActive = false;
     if (this.pendingChunkQueue.length > 0) {
       for (const chunk of this.pendingChunkQueue) {
         void fs.promises.unlink(chunk.filePath).catch(() => {});
