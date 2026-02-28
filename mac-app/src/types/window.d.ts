@@ -257,11 +257,13 @@ interface TranscribeAPI {
   setAutoImproveMinWords?: (minWords: number) => Promise<void>;
   getAutoImproveStats?: () => Promise<{ wordsImproved: number; apiCalls: number; inputTokens: number; outputTokens: number }>;
   resetAutoImproveStats?: () => Promise<void>;
-  getTranscriptionEngine?: () => Promise<'whisper' | 'qwen'>;
-  setTranscriptionEngine?: (engine: 'whisper' | 'qwen') => Promise<void>;
+  getTranscriptionEngine?: () => Promise<'whisper' | 'qwen' | 'mlx-whisper'>;
+  setTranscriptionEngine?: (engine: 'whisper' | 'qwen' | 'mlx-whisper') => Promise<void>;
   isQwenInstalled?: () => Promise<boolean>;
+  isMlxWhisperInstalled?: () => Promise<boolean>;
   isAppleSilicon?: () => Promise<boolean>;
   setupQwen?: () => Promise<{ success: boolean; error?: string }>;
+  setupMlxWhisper?: () => Promise<{ success: boolean; error?: string }>;
   getDownloadingModels?: () => Promise<string[]>;
   toggleRecording?: () => Promise<void>;
   getSoundConfig?: () => Promise<SoundConfig>;
@@ -1143,6 +1145,22 @@ interface HotMicRuntimeStatus {
   lastChunkAgeMs: number | null;
   chunksReceived: number;
   micHealthy: boolean;
+  engine: {
+    selectedEngine: 'whisper' | 'qwen' | 'mlx-whisper';
+    source: 'global';
+    whisperModel: string | null;
+    readiness:
+      | 'ready'
+      | 'warming'
+      | 'cold'
+      | 'not-installed'
+      | 'not-downloaded'
+      | 'corrupt'
+      | 'unsupported-arch'
+      | 'disabled';
+    detail: string | null;
+    fallbackAvailable: boolean;
+  } | null;
 }
 
 /**
@@ -1157,8 +1175,8 @@ interface HotMicAPI {
   onRuntimeStatusChanged: (handler: (status: HotMicRuntimeStatus) => void) => () => void;
   getMuted: () => Promise<boolean>;
   getEnabled: () => Promise<boolean>;
-  getTranscriptionEngineMode: () => Promise<'default' | 'whisper' | 'qwen'>;
-  setTranscriptionEngineMode: (mode: 'default' | 'whisper' | 'qwen') => Promise<'default' | 'whisper' | 'qwen'>;
+  getTranscriptionEngineMode: () => Promise<'default' | 'whisper' | 'qwen' | 'mlx-whisper'>;
+  setTranscriptionEngineMode: (mode: 'default' | 'whisper' | 'qwen' | 'mlx-whisper') => Promise<'default' | 'whisper' | 'qwen' | 'mlx-whisper'>;
   getWhisperModel: () => Promise<string>;
   setWhisperModel: (model: string) => Promise<string>;
   setEnabled: (enabled: boolean) => Promise<boolean>;
@@ -1209,6 +1227,8 @@ interface HotMicAPI {
   setShowWordCount: (enabled: boolean) => Promise<boolean>;
   getCancelWords: () => Promise<string>;
   setCancelWords: (words: string) => Promise<string>;
+  getScrapWords: () => Promise<string>;
+  setScrapWords: (words: string) => Promise<string>;
   getPrevWindowWords: () => Promise<string>;
   setPrevWindowWords: (words: string) => Promise<string>;
   getNewWindowWords: () => Promise<string>;

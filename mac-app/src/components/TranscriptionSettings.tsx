@@ -27,13 +27,16 @@ export default function TranscriptionSettings() {
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [deletingModel, setDeletingModel] = useState<string | null>(null);
   const [modelDownloadProgress, setModelDownloadProgress] = useState<Record<string, { downloaded: number; total: number }>>({});
-  const [engine, setEngine] = useState<'whisper' | 'qwen'>('whisper');
+  const [engine, setEngine] = useState<'whisper' | 'qwen' | 'mlx-whisper'>('whisper');
   const [qwenInstalled, setQwenInstalled] = useState(false);
+  const [mlxWhisperInstalled, setMlxWhisperInstalled] = useState(false);
   const [appleSilicon, setAppleSilicon] = useState(true);
   const [qwenSetupStatus, setQwenSetupStatus] = useState<'idle' | 'installing' | 'done' | 'error'>('idle');
   const [qwenSetupError, setQwenSetupError] = useState<string | null>(null);
+  const [mlxWhisperSetupStatus, setMlxWhisperSetupStatus] = useState<'idle' | 'installing' | 'done' | 'error'>('idle');
+  const [mlxWhisperSetupError, setMlxWhisperSetupError] = useState<string | null>(null);
   const [qwenSetupTick, setQwenSetupTick] = useState(0);
-  const [copiedError, setCopiedError] = useState<'qwen' | 'general' | null>(null);
+  const [copiedError, setCopiedError] = useState<'qwen' | 'mlx-whisper' | 'general' | null>(null);
 
   const [abandonHotkey, setAbandonHotkey] = useState<string>('Escape');
   const [isCapturingAbandonHotkey, setIsCapturingAbandonHotkey] = useState(false);
@@ -76,12 +79,14 @@ export default function TranscriptionSettings() {
         const currentEngine = await window.transcribeAPI!.getTranscriptionEngine?.() ?? 'whisper';
         setEngine(currentEngine);
 
-        // Fetch Qwen installation status
-        const [qi, as] = await Promise.all([
+        // Fetch engine installation statuses
+        const [qi, mwi, as] = await Promise.all([
           window.transcribeAPI!.isQwenInstalled?.() ?? false,
+          window.transcribeAPI!.isMlxWhisperInstalled?.() ?? false,
           window.transcribeAPI!.isAppleSilicon?.() ?? true,
         ]);
         setQwenInstalled(qi);
+        setMlxWhisperInstalled(mwi);
         setAppleSilicon(as);
       } catch (err) {
         console.error('Failed to fetch transcription status:', err);
@@ -276,16 +281,39 @@ export default function TranscriptionSettings() {
     }
   }, []);
 
-  const handleEngineChange = useCallback(async (newEngine: 'whisper' | 'qwen') => {
+  const handleEngineChange = useCallback(async (newEngine: 'whisper' | 'qwen' | 'mlx-whisper') => {
     if (!window.transcribeAPI?.setTranscriptionEngine) return;
     setEngine(newEngine);
     try {
       await window.transcribeAPI.setTranscriptionEngine(newEngine);
     } catch (err) {
       console.error('Failed to set transcription engine:', err);
-      setEngine(engine); // revert on failure
+      setEngine(engine);
     }
   }, [engine]);
+
+  const handleMlxWhisperSetup = useCallback(async () => {
+    if (!window.transcribeAPI?.setupMlxWhisper) return;
+    setMlxWhisperSetupStatus('installing');
+    setMlxWhisperSetupError(null);
+    try {
+      const result = await window.transcribeAPI.setupMlxWhisper();
+      if (result.success) {
+        setMlxWhisperSetupStatus('done');
+        setMlxWhisperInstalled(true);
+        if (window.transcribeAPI.setTranscriptionEngine) {
+          await window.transcribeAPI.setTranscriptionEngine('mlx-whisper');
+          setEngine('mlx-whisper');
+        }
+      } else {
+        setMlxWhisperSetupStatus('error');
+        setMlxWhisperSetupError(result.error || 'Setup failed');
+      }
+    } catch (err) {
+      setMlxWhisperSetupStatus('error');
+      setMlxWhisperSetupError(err instanceof Error ? err.message : 'Setup failed');
+    }
+  }, []);
 
   useEffect(() => {
     if (qwenSetupStatus !== 'installing') {
@@ -324,7 +352,7 @@ export default function TranscriptionSettings() {
     }
   }, []);
 
-  const copyErrorText = useCallback(async (text: string, source: 'qwen' | 'general') => {
+  const copyErrorText = useCallback(async (text: string, source: 'qwen' | 'mlx-whisper' | 'general') => {
     try {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(text);
@@ -478,10 +506,11 @@ export default function TranscriptionSettings() {
           <span style={styles.rowLabel}>Engine</span>
           <select
             value={engine}
-            onChange={(e) => handleEngineChange(e.target.value as 'whisper' | 'qwen')}
+            onChange={(e) => handleEngineChange(e.target.value as 'whisper' | 'qwen' | 'mlx-whisper')}
             style={styles.select}
           >
             <option value="whisper">Whisper (default)</option>
+            <option value="mlx-whisper" disabled={!appleSilicon}>MLX Whisper (large-v3-turbo){!appleSilicon ? ' (requires Apple Silicon)' : ''}</option>
             <option value="qwen" disabled={!appleSilicon}>Qwen3-ASR{!appleSilicon ? ' (requires Apple Silicon)' : ''}</option>
           </select>
         </div>
@@ -545,9 +574,63 @@ export default function TranscriptionSettings() {
             Qwen voice model installed.
           </div>
         )}
+        {appleSilicon && !mlxWhisperInstalled && engine === 'mlx-whisper' && (
+          <div style={{ marginTop: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {mlxWhisperSetupStatus === 'installing' ? (
+                <span style={{ fontSize: '12px', color: theme.textSecondary }}>
+                  Installing MLX Whisper model{'.'.repeat(qwenSetupTick + 1)}
+                </span>
+              ) : mlxWhisperSetupStatus === 'done' ? (
+                <span style={{ fontSize: '12px', color: theme.success }}>Installed</span>
+              ) : (
+                <button
+                  onClick={handleMlxWhisperSetup}
+                  style={{
+                    padding: '6px 14px',
+                    fontSize: '12px',
+                    fontWeight: 500,
+                    color: '#fff',
+                    backgroundColor: theme.info,
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Download MLX Whisper Model (~1.6 GB)
+                </button>
+              )}
+              {mlxWhisperSetupStatus === 'error' && mlxWhisperSetupError && (
+                <div style={styles.copyableErrorBlock}>
+                  <pre style={styles.copyableErrorText}>{mlxWhisperSetupError}</pre>
+                  <button
+                    onClick={() => copyErrorText(mlxWhisperSetupError, 'mlx-whisper')}
+                    style={styles.copyErrorButton}
+                  >
+                    {copiedError === 'mlx-whisper' ? 'Copied' : 'Copy error'}
+                  </button>
+                </div>
+              )}
+            </div>
+            {mlxWhisperSetupStatus === 'installing' && (
+              <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '6px' }}>
+                Download in progress. This can take a few minutes (~1.6 GB model).
+              </div>
+            )}
+            <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '6px' }}>
+              Whisper large-v3-turbo running natively on MLX. Higher quality and faster than whisper.cpp.
+              Requires Apple Silicon and Python 3.
+            </div>
+          </div>
+        )}
+        {appleSilicon && mlxWhisperInstalled && engine === 'mlx-whisper' && (
+          <div style={{ fontSize: '11px', color: theme.success, marginTop: '4px' }}>
+            MLX Whisper model installed.
+          </div>
+        )}
       </div>
 
-      <div style={{ ...styles.modelsSection, opacity: engine === 'qwen' ? 0.4 : 1, pointerEvents: engine === 'qwen' ? 'none' : 'auto' }}>
+      <div style={{ ...styles.modelsSection, opacity: engine !== 'whisper' ? 0.4 : 1, pointerEvents: engine !== 'whisper' ? 'none' : 'auto' }}>
         <div style={styles.sectionHeader}>
           <span style={styles.sectionTitle}>LOCAL TRANSCRIPTION MODELS</span>
           <div style={styles.sectionLine} />

@@ -474,6 +474,32 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(transcriptEvents[transcriptEvents.length - 1]?.args[0]).toBe('hello world again');
   });
 
+  it('recreates the drawer window when transcript updates arrive after drawer teardown', () => {
+    manager = new DynamicIslandManager();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    const isDrawerWindow = (win: { loadTarget: { search?: string; url?: string } }) =>
+      win.loadTarget.search === '?side=drawer' || win.loadTarget.url?.includes('side=drawer') === true;
+
+    const drawerWindowsBefore = testState.MockBrowserWindow.instances.filter(isDrawerWindow);
+    const originalDrawer = drawerWindowsBefore[drawerWindowsBefore.length - 1];
+    expect(originalDrawer).toBeDefined();
+
+    originalDrawer.close();
+    manager.updateDrawerTranscript('drawer recovered');
+
+    const drawerWindowsAfter = testState.MockBrowserWindow.instances.filter(isDrawerWindow);
+    expect(drawerWindowsAfter.length).toBeGreaterThan(drawerWindowsBefore.length);
+
+    const latestDrawer = drawerWindowsAfter[drawerWindowsAfter.length - 1];
+    const transcriptEvents = latestDrawer.webContents.sent.filter(
+      (entry) => entry.channel === 'dynamic-island-drawer-transcript'
+    );
+    expect(transcriptEvents[transcriptEvents.length - 1]?.args[0]).toBe('drawer recovered');
+  });
+
   it('includes mute state in right-pill hot-mic payloads', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({

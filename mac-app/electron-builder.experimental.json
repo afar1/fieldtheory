@@ -32,12 +32,28 @@
         "to": "whisper-cli"
       },
       {
+        "from": "../../build-whisper/bin/whisper-server",
+        "to": "whisper-server"
+      },
+      {
         "from": "scripts/qwen-transcribe.py",
         "to": "scripts/qwen-transcribe.py"
       },
       {
         "from": "scripts/setup-qwen.sh",
         "to": "scripts/setup-qwen.sh"
+      },
+      {
+        "from": "scripts/find-mlx-python.sh",
+        "to": "scripts/find-mlx-python.sh"
+      },
+      {
+        "from": "scripts/mlx-whisper-transcribe.py",
+        "to": "scripts/mlx-whisper-transcribe.py"
+      },
+      {
+        "from": "scripts/setup-mlx-whisper.sh",
+        "to": "scripts/setup-mlx-whisper.sh"
       }
     ]
   },

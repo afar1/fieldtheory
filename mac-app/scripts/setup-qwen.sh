@@ -12,104 +12,13 @@ export PATH="/opt/homebrew/opt/python@3.13/bin:/opt/homebrew/opt/python@3.13/lib
 VENV_DIR="build-qwen/venv"
 MIN_PYTHON="3.10"
 MAX_PYTHON_EXCLUSIVE="3.14"
-PYPI_EXTRA_INDEX_URL="https://pypi.org/simple"
+PYPI_EXTRA_INDEX_URL="${PYPI_EXTRA_INDEX_URL:-https://pypi.org/simple}"
 
-python_supports_qwen() {
-  local py="$1"
-  "$py" - <<'PY' >/dev/null 2>&1
-import sys
-raise SystemExit(0 if (3, 10) <= sys.version_info[:2] < (3, 14) else 1)
-PY
-}
+# Source shared Python-finding logic used by all MLX-based engines.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/find-mlx-python.sh"
 
-python_version_string() {
-  local py="$1"
-  "$py" - <<'PY'
-import sys
-print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
-PY
-}
-
-python_machine() {
-  local py="$1"
-  "$py" - <<'PY'
-import platform
-print(platform.machine())
-PY
-}
-
-python_can_resolve_mlx() {
-  local py="$1"
-  local tmp_dir
-  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/fieldtheory-mlx.XXXXXX")"
-  if "$py" -m pip download \
-    --disable-pip-version-check \
-    --no-deps \
-    --only-binary=:all: \
-    --dest "$tmp_dir" \
-    --extra-index-url "$PYPI_EXTRA_INDEX_URL" \
-    "mlx>=0.30.0" >/dev/null 2>&1; then
-    rm -rf "$tmp_dir"
-    return 0
-  fi
-  rm -rf "$tmp_dir"
-  return 1
-}
-
-choose_python() {
-  local candidate
-  for candidate in \
-    /opt/homebrew/opt/python@3.13/bin/python3.13 \
-    /opt/homebrew/opt/python@3.13/bin/python3 \
-    /opt/homebrew/opt/python@3.13/libexec/bin/python3 \
-    /opt/homebrew/opt/python@3.12/bin/python3.12 \
-    /opt/homebrew/opt/python@3.12/bin/python3 \
-    /opt/homebrew/opt/python@3.12/libexec/bin/python3 \
-    /opt/homebrew/opt/python@3.11/bin/python3.11 \
-    /opt/homebrew/opt/python@3.11/bin/python3 \
-    /opt/homebrew/opt/python@3.11/libexec/bin/python3 \
-    /opt/homebrew/opt/python@3.10/bin/python3.10 \
-    /opt/homebrew/opt/python@3.10/bin/python3 \
-    /opt/homebrew/opt/python@3.10/libexec/bin/python3 \
-    /opt/homebrew/bin/python3.13 \
-    /opt/homebrew/bin/python3.12 \
-    /opt/homebrew/bin/python3.11 \
-    /opt/homebrew/bin/python3.10 \
-    /opt/homebrew/bin/python3 \
-    /usr/local/opt/python@3.13/bin/python3.13 \
-    /usr/local/opt/python@3.13/bin/python3 \
-    /usr/local/opt/python@3.13/libexec/bin/python3 \
-    /usr/local/opt/python@3.12/bin/python3.12 \
-    /usr/local/opt/python@3.12/bin/python3 \
-    /usr/local/opt/python@3.12/libexec/bin/python3 \
-    /usr/local/opt/python@3.11/bin/python3.11 \
-    /usr/local/opt/python@3.11/bin/python3 \
-    /usr/local/opt/python@3.11/libexec/bin/python3 \
-    /usr/local/opt/python@3.10/bin/python3.10 \
-    /usr/local/opt/python@3.10/bin/python3 \
-    /usr/local/opt/python@3.10/libexec/bin/python3 \
-    /usr/local/bin/python3.13 \
-    /usr/local/bin/python3.12 \
-    /usr/local/bin/python3.11 \
-    /usr/local/bin/python3.10 \
-    /usr/local/bin/python3 \
-    "$(command -v python3.13 2>/dev/null || true)" \
-    "$(command -v python3.12 2>/dev/null || true)" \
-    "$(command -v python3.11 2>/dev/null || true)" \
-    "$(command -v python3.10 2>/dev/null || true)" \
-    "$(command -v python3 2>/dev/null || true)"; do
-    [ -n "$candidate" ] || continue
-    [ -x "$candidate" ] || continue
-    python_supports_qwen "$candidate" || continue
-    [ "$(python_machine "$candidate")" = "arm64" ] || continue
-    python_can_resolve_mlx "$candidate" || continue
-    echo "$candidate"
-    return 0
-  done
-  return 1
-}
-
-if ! PYTHON_BIN="$(choose_python)"; then
+if ! PYTHON_BIN="$(choose_mlx_python)"; then
   CURRENT_PYTHON="$(command -v python3 2>/dev/null || true)"
   CURRENT_VERSION=""
   CURRENT_MACHINE=""
@@ -122,7 +31,7 @@ if ! PYTHON_BIN="$(choose_python)"; then
   fi
 
   if [ -n "$CURRENT_PYTHON" ] && [ -x "$CURRENT_PYTHON" ]; then
-    if python_supports_qwen "$CURRENT_PYTHON" && [ "$CURRENT_MACHINE" = "arm64" ] && ! python_can_resolve_mlx "$CURRENT_PYTHON"; then
+    if python_supports_mlx_range "$CURRENT_PYTHON" && [ "$CURRENT_MACHINE" = "arm64" ] && ! python_can_resolve_mlx "$CURRENT_PYTHON"; then
       echo "Detected compatible Python version/architecture, but pip could not resolve an MLX wheel." >&2
       echo "This is likely an MLX wheel/index/network issue, not a Python version-range issue." >&2
       echo "Try the following:" >&2
@@ -146,7 +55,7 @@ if [ -d "$VENV_DIR" ]; then
   if [ ! -x "$VENV_DIR/bin/python" ]; then
     echo "Existing Qwen venv is incomplete. Recreating..."
     RECREATE_VENV=1
-  elif ! python_supports_qwen "$VENV_DIR/bin/python"; then
+  elif ! python_supports_mlx_range "$VENV_DIR/bin/python"; then
     echo "Existing Qwen venv uses unsupported Python (requires >= $MIN_PYTHON and < $MAX_PYTHON_EXCLUSIVE). Recreating..."
     RECREATE_VENV=1
   fi
