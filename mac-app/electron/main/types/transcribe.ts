@@ -1,4 +1,13 @@
 /**
+ * Transcription engine identifiers. Defined once, used everywhere.
+ * 'whisper': whisper.cpp (local binary, CPU/Metal)
+ * 'qwen': Qwen3-ASR-0.6B via mlx-audio (Apple Silicon)
+ * 'mlx-whisper': Whisper large-v3-turbo via mlx-whisper (Apple Silicon)
+ */
+export type TranscriptionEngine = 'whisper' | 'qwen' | 'mlx-whisper';
+export type HotMicEngine = 'default' | TranscriptionEngine;
+
+/**
  * IPC channels for transcription functionality.
  */
 export const TranscribeIPCChannels = {
@@ -39,10 +48,12 @@ export const TranscribeIPCChannels = {
   PREVIEW_SOUND: 'transcribe:previewSound',
   PLAY_PASTE_SOUND: 'transcribe:playPasteSound',
 
-  // Qwen installation and setup
+  // Engine installation and setup
   IS_QWEN_INSTALLED: 'transcribe:isQwenInstalled',
+  IS_MLX_WHISPER_INSTALLED: 'transcribe:isMlxWhisperInstalled',
   IS_APPLE_SILICON: 'transcribe:isAppleSilicon',
   SETUP_QWEN: 'transcribe:setupQwen',
+  SETUP_MLX_WHISPER: 'transcribe:setupMlxWhisper',
 
   // Main -> Renderer (send pattern)
   STATUS_CHANGED: 'transcribe:statusChanged',
@@ -136,11 +147,13 @@ export interface TranscribeAPI {
   setAutoImproveMinWords: (minWords: number) => Promise<void>;
   getAutoImproveStats: () => Promise<AutoImproveStats>;
   resetAutoImproveStats: () => Promise<void>;
-  getTranscriptionEngine: () => Promise<'whisper' | 'qwen'>;
-  setTranscriptionEngine: (engine: 'whisper' | 'qwen') => Promise<void>;
+  getTranscriptionEngine: () => Promise<'whisper' | 'qwen' | 'mlx-whisper'>;
+  setTranscriptionEngine: (engine: 'whisper' | 'qwen' | 'mlx-whisper') => Promise<void>;
   isQwenInstalled: () => Promise<boolean>;
+  isMlxWhisperInstalled: () => Promise<boolean>;
   isAppleSilicon: () => Promise<boolean>;
   setupQwen: () => Promise<{ success: boolean; error?: string }>;
+  setupMlxWhisper: () => Promise<{ success: boolean; error?: string }>;
   getSoundConfig: () => Promise<SoundConfig>;
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
   getAvailableSounds: () => Promise<SoundOption[]>;

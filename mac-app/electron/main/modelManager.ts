@@ -1,6 +1,6 @@
 import { app } from 'electron';
 import fs from 'fs/promises';
-import { createWriteStream } from 'fs';
+import { createWriteStream, existsSync, statSync } from 'fs';
 import path from 'path';
 import https from 'https';
 import { createLogger } from './logger';
@@ -21,6 +21,16 @@ interface ModelInfo {
   url: string;
   sizeBytes: number;
   description: string;
+}
+
+export type ModelHealthStatus = 'ready' | 'missing' | 'corrupt';
+
+export interface ModelHealth {
+  status: ModelHealthStatus;
+  modelPath: string;
+  fileSizeBytes: number | null;
+  expectedSizeBytes: number;
+  minValidSizeBytes: number;
 }
 
 /**
@@ -158,26 +168,52 @@ export class ModelManager {
    * Check if a specific model size is downloaded and valid.
    */
   async isModelAvailableForSize(size: ModelSize): Promise<boolean> {
+    const health = this.getModelHealthForSizeSync(size);
+    this.loggedModelStatus.add(size);
+    return health.status === 'ready';
+  }
+
+  getModelHealthForSizeSync(size: ModelSize): ModelHealth {
     const modelPath = this.getModelPathForSize(size);
     const modelInfo = MODELS[size];
-    
-    try {
-      const stats = await fs.stat(modelPath);
-      const fileSizeMB = stats.size / 1024 / 1024;
-      
-      // Minimum size sanity check - file should be at least 50% of expected size.
-      // This catches incomplete downloads while being lenient with size variations.
-      const minSize = modelInfo.sizeBytes * 0.5;
-      
-      if (stats.size < minSize) {
-        return false;
-      }
+    const minValidSizeBytes = Math.floor(modelInfo.sizeBytes * 0.5);
 
-      this.loggedModelStatus.add(size);
-      return true;
-    } catch (error: any) {
-      this.loggedModelStatus.add(size);
-      return false;
+    if (!existsSync(modelPath)) {
+      return {
+        status: 'missing',
+        modelPath,
+        fileSizeBytes: null,
+        expectedSizeBytes: modelInfo.sizeBytes,
+        minValidSizeBytes,
+      };
+    }
+
+    try {
+      const stats = statSync(modelPath);
+      if (stats.size < minValidSizeBytes) {
+        return {
+          status: 'corrupt',
+          modelPath,
+          fileSizeBytes: stats.size,
+          expectedSizeBytes: modelInfo.sizeBytes,
+          minValidSizeBytes,
+        };
+      }
+      return {
+        status: 'ready',
+        modelPath,
+        fileSizeBytes: stats.size,
+        expectedSizeBytes: modelInfo.sizeBytes,
+        minValidSizeBytes,
+      };
+    } catch {
+      return {
+        status: 'missing',
+        modelPath,
+        fileSizeBytes: null,
+        expectedSizeBytes: modelInfo.sizeBytes,
+        minValidSizeBytes,
+      };
     }
   }
 
@@ -342,4 +378,3 @@ export class ModelManager {
     }
   }
 }
-
