@@ -3583,6 +3583,12 @@ const hotMicAPI = {
   setCancelWords: async (words: string): Promise<string> => {
     return ipcRenderer.invoke('hotmic:setCancelWords', words);
   },
+  getScrapWords: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getScrapWords');
+  },
+  setScrapWords: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setScrapWords', words);
+  },
   getPrevWindowWords: async (): Promise<string> => {
     return ipcRenderer.invoke('hotmic:getPrevWindowWords');
   },

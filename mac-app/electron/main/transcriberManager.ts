@@ -22,6 +22,7 @@ import { CommandsManager } from './commandsManager';
 import { MESSAGES } from './messages';
 import { StdioJsonServer } from './stdioJsonServer';
 import type { TranscriptionEngine, HotMicEngine } from './types/transcribe';
+import type { HotMicEngineReadiness, HotMicEngineStatus } from './types/hotMic';
 import * as plist from 'plist';
 import { createLogger } from './logger';
 
@@ -40,6 +41,8 @@ type TranscribeWithEngineOptions = {
   allowWhisperFallback?: boolean;
   whisperModelOverride?: ModelSize;
 };
+
+export type { HotMicEngineReadiness, HotMicEngineStatus };
 
 /**
  * Events emitted by TranscriberManager.
@@ -893,7 +896,8 @@ export class TranscriberManager extends EventEmitter {
         .trim();
 
       this.emit('standardLiveTranscript', this.standardLiveTranscript);
-      this.nativeHelper.setHarvestMode(this.standardLiveTranscript.length === 0 ? 'command' : 'dictation');
+      // Keep the harvest cadence in command mode for faster live transcript updates.
+      this.nativeHelper.setHarvestMode('command');
 
       if (this.squaresManager) {
         const tailMatch = this.squaresManager.parseVoiceCommandFromTail(this.standardLiveTranscript.toLowerCase());
@@ -1648,6 +1652,14 @@ export class TranscriberManager extends EventEmitter {
     }
   }
 
+  private isQwenInstalledSync(): boolean {
+    try {
+      return fs.existsSync(this.getQwenPythonPath()) && fs.existsSync(this.getQwenScriptPath());
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * Run a lightweight python probe to get major/minor version for Qwen runtime checks.
    * We intentionally avoid importing mlx here to prevent crash loops on bad environments.
@@ -2246,14 +2258,18 @@ export class TranscriberManager extends EventEmitter {
     if (app.isPackaged) {
       return path.join(app.getPath('userData'), 'build-mlx-whisper', 'venv', 'bin', 'python');
     }
-    return path.join(path.resolve(__dirname, '../../..'), 'build-mlx-whisper', 'venv', 'bin', 'python');
+    // __dirname in compiled code is mac-app/electron-dist/main.
+    // Use mac-app root so dev runtime matches setup-mlx-whisper.sh output.
+    const macAppRoot = path.resolve(__dirname, '../..');
+    return path.join(macAppRoot, 'build-mlx-whisper', 'venv', 'bin', 'python');
   }
 
   private getMlxWhisperScriptPath(): string {
     if (app.isPackaged) {
       return path.join(process.resourcesPath, 'scripts', 'mlx-whisper-transcribe.py');
     }
-    return path.join(path.resolve(__dirname, '../../..'), 'scripts', 'mlx-whisper-transcribe.py');
+    const macAppRoot = path.resolve(__dirname, '../..');
+    return path.join(macAppRoot, 'scripts', 'mlx-whisper-transcribe.py');
   }
 
   isMlxWhisperInstalled(): boolean {
@@ -2544,22 +2560,18 @@ export class TranscriberManager extends EventEmitter {
    * whisper-server if Whisper is selected and the server binary is available.
    */
   async warmup(): Promise<void> {
-    const primaryEngine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+    const primaryEngine = this.getConfiguredTranscriptionEngine();
     const hotMicEngine = this.resolveHotMicTranscriptionEngine();
-    const engines = [primaryEngine, hotMicEngine];
+    const engines = Array.from(new Set<TranscriptionEngine>([primaryEngine, hotMicEngine]));
 
     if (engines.includes('qwen')) {
       await this.startQwenServer();
     }
     if (engines.includes('mlx-whisper') && this.isMlxWhisperInstalled()) {
-      this.startMlxWhisperServer().catch((err) => {
-        log.warn('MLX Whisper warmup failed: %s', (err as Error).message);
-      });
+      await this.startMlxWhisperServer();
     }
     if (engines.includes('whisper') && this.isWhisperServerAvailable()) {
-      this.startWhisperServer().catch((err) => {
-        log.warn('whisper-server warmup failed (will fall back to whisper-cli): %s', (err as Error).message);
-      });
+      await this.startWhisperServer();
     }
   }
 
@@ -2571,63 +2583,253 @@ export class TranscriberManager extends EventEmitter {
     this.stopMlxWhisperServer();
     this.stopWhisperServer();
 
-    const primaryEngine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+    const primaryEngine = this.getConfiguredTranscriptionEngine();
     const hotMicEngine = this.resolveHotMicTranscriptionEngine();
-    const engines = [primaryEngine, hotMicEngine];
+    const engines = Array.from(new Set<TranscriptionEngine>([primaryEngine, hotMicEngine]));
 
     if (engines.includes('qwen')) {
       await this.startQwenServer();
     }
     if (engines.includes('mlx-whisper') && this.isMlxWhisperInstalled()) {
-      this.startMlxWhisperServer().catch((err) => {
-        log.warn('MLX Whisper restart failed: %s', (err as Error).message);
-      });
+      await this.startMlxWhisperServer();
     }
     if (engines.includes('whisper') && this.isWhisperServerAvailable()) {
-      this.startWhisperServer().catch((err) => {
-        log.warn('whisper-server restart failed (will fall back to whisper-cli): %s', (err as Error).message);
-      });
+      await this.startWhisperServer();
     }
+  }
+
+  private getConfiguredTranscriptionEngine(): TranscriptionEngine {
+    const configured = this.preferences.getPreference('transcriptionEngine');
+    if (configured === 'qwen' || configured === 'mlx-whisper') {
+      return configured;
+    }
+    return 'whisper';
   }
 
   private resolveHotMicTranscriptionEngine(): TranscriptionEngine {
-    const override = this.preferences.getPreference('hotMicTranscriptionEngine');
-    if (override === 'whisper' || override === 'qwen' || override === 'mlx-whisper') {
-      return override;
-    }
-    return this.preferences.getPreference('transcriptionEngine') || 'whisper';
+    // Hot Mic now always uses the global transcription engine.
+    return this.getConfiguredTranscriptionEngine();
   }
 
   private resolveHotMicWhisperModel(): ModelSize {
-    const configured = this.preferences.getPreference('hotMicWhisperModel');
-    const availableModels = this.modelManager.getAvailableModels();
-    if (configured && Object.prototype.hasOwnProperty.call(availableModels, configured)) {
-      return configured;
-    }
+    // Hot Mic now follows the global Whisper model selection.
     return this.modelManager.getSelectedModel();
   }
 
+  private buildHotMicEngineStatus(
+    selectedEngine: TranscriptionEngine,
+    whisperModel: ModelSize,
+    fallbackAvailable: boolean,
+    readiness: HotMicEngineReadiness,
+    detail: string | null
+  ): HotMicEngineStatus {
+    return {
+      selectedEngine,
+      source: 'global',
+      whisperModel,
+      readiness,
+      detail,
+      fallbackAvailable,
+    };
+  }
+
+  getHotMicEngineStatus(): HotMicEngineStatus {
+    const selectedEngine = this.resolveHotMicTranscriptionEngine();
+    const whisperModel = this.modelManager.getSelectedModel();
+    const whisperHealth = this.modelManager.getModelHealthForSizeSync(whisperModel);
+    const fallbackAvailable = whisperHealth.status === 'ready';
+
+    if (selectedEngine === 'whisper') {
+      if (whisperHealth.status === 'missing') {
+        return this.buildHotMicEngineStatus(
+          selectedEngine,
+          whisperModel,
+          fallbackAvailable,
+          'not-downloaded',
+          `Whisper model "${whisperModel}" is not downloaded`
+        );
+      }
+      if (whisperHealth.status === 'corrupt') {
+        return this.buildHotMicEngineStatus(
+          selectedEngine,
+          whisperModel,
+          fallbackAvailable,
+          'corrupt',
+          `Whisper model "${whisperModel}" appears incomplete or corrupted`
+        );
+      }
+      if (this.whisperServerReady) {
+        return this.buildHotMicEngineStatus(
+          selectedEngine,
+          whisperModel,
+          fallbackAvailable,
+          'ready',
+          'Whisper server is ready'
+        );
+      }
+      if (this.whisperServerReadyPromise) {
+        return this.buildHotMicEngineStatus(
+          selectedEngine,
+          whisperModel,
+          fallbackAvailable,
+          'warming',
+          'Whisper server is warming up'
+        );
+      }
+      if (this.whisperServerDisabledReason) {
+        return this.buildHotMicEngineStatus(
+          selectedEngine,
+          whisperModel,
+          fallbackAvailable,
+          'ready',
+          `Whisper server disabled; using whisper-cli (${this.whisperServerDisabledReason})`
+        );
+      }
+      if (this.isWhisperServerAvailable()) {
+        return this.buildHotMicEngineStatus(
+          selectedEngine,
+          whisperModel,
+          fallbackAvailable,
+          'cold',
+          'Whisper server is idle (starts on first chunk)'
+        );
+      }
+      return this.buildHotMicEngineStatus(
+        selectedEngine,
+        whisperModel,
+        fallbackAvailable,
+        'ready',
+        'Using whisper-cli (persistent server unavailable)'
+      );
+    }
+
+    if (process.arch !== 'arm64') {
+      return this.buildHotMicEngineStatus(
+        selectedEngine,
+        whisperModel,
+        fallbackAvailable,
+        'unsupported-arch',
+        `${selectedEngine} requires Apple Silicon`
+      );
+    }
+
+    if (selectedEngine === 'qwen') {
+      if (!this.isQwenInstalledSync()) {
+        return this.buildHotMicEngineStatus(
+          selectedEngine,
+          whisperModel,
+          fallbackAvailable,
+          'not-installed',
+          'Qwen runtime is not installed'
+        );
+      }
+      if (this.qwenServer?.disabledReason) {
+        return this.buildHotMicEngineStatus(
+          selectedEngine,
+          whisperModel,
+          fallbackAvailable,
+          'disabled',
+          this.qwenServer.disabledReason
+        );
+      }
+      if (this.qwenServer?.isReady) {
+        return this.buildHotMicEngineStatus(
+          selectedEngine,
+          whisperModel,
+          fallbackAvailable,
+          'ready',
+          'Qwen server is ready'
+        );
+      }
+      if (this.qwenServer?.isStarting) {
+        return this.buildHotMicEngineStatus(
+          selectedEngine,
+          whisperModel,
+          fallbackAvailable,
+          'warming',
+          'Qwen server is warming up'
+        );
+      }
+      return this.buildHotMicEngineStatus(
+        selectedEngine,
+        whisperModel,
+        fallbackAvailable,
+        'cold',
+        'Qwen server is idle (starts on first chunk)'
+      );
+    }
+
+    if (!this.isMlxWhisperInstalled()) {
+      return this.buildHotMicEngineStatus(
+        selectedEngine,
+        whisperModel,
+        fallbackAvailable,
+        'not-installed',
+        'MLX Whisper runtime is not installed'
+      );
+    }
+    if (this.mlxWhisperServer?.disabledReason) {
+      return this.buildHotMicEngineStatus(
+        selectedEngine,
+        whisperModel,
+        fallbackAvailable,
+        'disabled',
+        this.mlxWhisperServer.disabledReason
+      );
+    }
+    if (this.mlxWhisperServer?.isReady) {
+      return this.buildHotMicEngineStatus(
+        selectedEngine,
+        whisperModel,
+        fallbackAvailable,
+        'ready',
+        'MLX Whisper server is ready'
+      );
+    }
+    if (this.mlxWhisperServer?.isStarting) {
+      return this.buildHotMicEngineStatus(
+        selectedEngine,
+        whisperModel,
+        fallbackAvailable,
+        'warming',
+        'MLX Whisper server is warming up'
+      );
+    }
+    return this.buildHotMicEngineStatus(
+      selectedEngine,
+      whisperModel,
+      fallbackAvailable,
+      'cold',
+      'MLX Whisper server is idle (starts on first chunk)'
+    );
+  }
+
   /**
-   * Pre-start transcription runtime for Hot Mic according to its engine override.
+   * Pre-start transcription runtime for Hot Mic using the global engine selection.
    */
   async warmupForHotMic(): Promise<void> {
     const engine = this.resolveHotMicTranscriptionEngine();
     if (engine === 'qwen') {
       await this.startQwenServer();
-    } else if (engine === 'mlx-whisper' && this.isMlxWhisperInstalled()) {
-      this.startMlxWhisperServer().catch((err) => {
-        log.warn('MLX Whisper warmup for Hot Mic failed: %s', (err as Error).message);
-      });
-    } else if (engine === 'whisper' && this.isWhisperServerAvailable()) {
+      return;
+    }
+
+    if (engine === 'mlx-whisper') {
+      if (!this.isMlxWhisperInstalled()) {
+        return;
+      }
+      await this.startMlxWhisperServer();
+      return;
+    }
+
+    if (engine === 'whisper' && this.isWhisperServerAvailable()) {
       const whisperModel = this.resolveHotMicWhisperModel();
-      this.startWhisperServer(whisperModel).catch((err) => {
-        log.warn('whisper-server warmup for Hot Mic failed: %s', (err as Error).message);
-      });
+      await this.startWhisperServer(whisperModel);
     }
   }
 
   /**
-   * Transcribe for Hot Mic using Hot Mic-specific engine, fallback, and whisper model settings.
+   * Transcribe for Hot Mic using the global engine and Whisper model settings.
    * After each call, check lastHotMicUsedWhisperFallback to know if fallback was triggered.
    */
   async transcribeAudioForHotMic(wavPath: string): Promise<string> {

@@ -751,7 +751,9 @@ export class DynamicIslandManager extends EventEmitter {
       this.updateDrawerWindowPosition();
       this.reinforceWindowBacking('drawer', 'drawer-ready');
       if (this.drawerWindow && !this.drawerWindow.isDestroyed()) {
-        this.drawerWindow.webContents.send('dynamic-island-drawer-transcript', this.drawerTranscriptText);
+        // Re-apply transcript state through the shared updater so visibility
+        // and speaking indicators stay consistent when renderer readiness races.
+        this.updateDrawerTranscript(this.drawerTranscriptText);
         this.drawerWindow.webContents.send('dynamic-island-drawer-speaking', this.drawerSpeaking);
         this.sendDrawerTextSize();
       }
@@ -763,6 +765,9 @@ export class DynamicIslandManager extends EventEmitter {
 
     if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
       this.rightWindow.webContents.send('dynamic-island-drawer-transcript', text);
+    }
+    if ((!this.drawerWindow || this.drawerWindow.isDestroyed()) && text && this.enabled) {
+      this.createDrawerWindow();
     }
     if (!this.drawerWindow || this.drawerWindow.isDestroyed()) return;
 

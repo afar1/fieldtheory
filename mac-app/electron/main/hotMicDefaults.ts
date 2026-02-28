@@ -7,6 +7,7 @@ export const HOT_MIC_DEFAULTS = {
   submitPhrases: 'go ahead, send it, submit, do it',
   pastePhrases: 'paste, paste it, transcribe',
   cancelPhrases: 'stop, abort',
+  scrapPhrases: 'scrap, scrap that',
   newWindowPhrases: 'new window',
   closeWindowPhrases: 'close window, close the window, close this window',
   minimizePhrases: 'minimize, minimize window, minimize the window',
