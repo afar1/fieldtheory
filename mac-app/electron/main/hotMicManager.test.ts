@@ -136,6 +136,15 @@ describe('HotMicManager run-command phrases', () => {
 
     manager.destroy();
   });
+
+  it('matches scrap phrase as a dedicated draft-clear command', async () => {
+    const { manager } = createManager();
+
+    const tailMatch = await (manager as any).matchTailCommand('scrap');
+    expect(tailMatch?.commandName).toBe('scrap');
+
+    manager.destroy();
+  });
 });
 
 describe('HotMicManager clipboard hash sync', () => {
@@ -374,7 +383,7 @@ describe('HotMicManager drawer preview threshold', () => {
     vi.clearAllMocks();
   });
 
-  it('only shows drawer transcript after at least 3 buffered words', async () => {
+  it('shows drawer transcript from the first buffered word', async () => {
     const { manager } = createManager();
     const dynamicIslandManager = {
       sendMuteState: vi.fn(),
@@ -385,10 +394,10 @@ describe('HotMicManager drawer preview threshold', () => {
     manager.setDynamicIslandManager(dynamicIslandManager as any);
 
     await (manager as any).processListeningChunk('hello');
-    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenLastCalledWith('');
+    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenLastCalledWith('hello');
 
     await (manager as any).processListeningChunk('world');
-    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenLastCalledWith('');
+    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenLastCalledWith('hello world');
 
     await (manager as any).processListeningChunk('again');
     expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenLastCalledWith('hello world again');
@@ -396,7 +405,7 @@ describe('HotMicManager drawer preview threshold', () => {
     manager.destroy();
   });
 
-  it('truncates drawer transcript to first 3 and last 7 words', async () => {
+  it('keeps full drawer transcript text and lets renderer handle summarization', async () => {
     const { manager } = createManager();
     const dynamicIslandManager = {
       sendMuteState: vi.fn(),
@@ -407,7 +416,42 @@ describe('HotMicManager drawer preview threshold', () => {
     manager.setDynamicIslandManager(dynamicIslandManager as any);
 
     await (manager as any).processListeningChunk('one two three four five six seven eight nine ten eleven');
-    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenLastCalledWith('one two three ... five six seven eight nine ten eleven');
+    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenLastCalledWith('one two three four five six seven eight nine ten eleven');
+
+    manager.destroy();
+  });
+
+  it('strips bracketed metadata artifacts before updating drawer transcript', async () => {
+    const { manager } = createManager();
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMicBackgroundFilterMeter: vi.fn(),
+    };
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+
+    await (manager as any).processListeningChunk('[take vo] vo this should render cleanly');
+
+    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenLastCalledWith('this should render cleanly');
+
+    manager.destroy();
+  });
+
+  it('drops artifact-only chunks that become empty after sanitization', async () => {
+    const { manager } = createManager();
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMicBackgroundFilterMeter: vi.fn(),
+    };
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+
+    await (manager as any).processListeningChunk('[take vo] vo');
+
+    expect(dynamicIslandManager.updateDrawerTranscript).not.toHaveBeenCalled();
+    expect((manager as any).transcriptBuffer).toEqual([]);
 
     manager.destroy();
   });
@@ -441,11 +485,162 @@ describe('HotMicManager transcript dismissal', () => {
 
     manager.destroy();
   });
+
+  it('clears the live draft buffer on spoken scrap without sending Ctrl+C', async () => {
+    const { manager } = createManager();
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateHotMicBackgroundFilterMeter: vi.fn(),
+    };
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+    (manager as any).state = 'listening';
+    (manager as any).muted = false;
+    (manager as any).transcriptBuffer = ['alpha beta gamma'];
+    testState.exec.mockClear();
+
+    await (manager as any).processListeningChunk('scrap');
+
+    expect((manager as any).transcriptBuffer).toEqual([]);
+    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenCalledWith('');
+    expect(testState.exec).not.toHaveBeenCalledWith(
+      expect.stringContaining('keystroke "c" using control down'),
+      expect.any(Function)
+    );
+
+    manager.destroy();
+  });
+});
+
+describe('HotMicManager hallucination guards', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('classifies repeated short-unit gibberish as hallucination', () => {
+    const { manager } = createManager();
+    const repeated = 'dom'.repeat(160);
+
+    expect((manager as any).isHallucination(repeated)).toBe(true);
+
+    manager.destroy();
+  });
+
+  it('classifies repeated-word loops as hallucination', () => {
+    const { manager } = createManager();
+    const repeatedWords = Array(14).fill('dom').join(' ');
+
+    expect((manager as any).isHallucination(repeatedWords)).toBe(true);
+
+    manager.destroy();
+  });
+
+  it('classifies repeated long single-token bursts as hallucination', () => {
+    const { manager } = createManager();
+
+    expect((manager as any).isHallucination('millennium millennium')).toBe(true);
+
+    manager.destroy();
+  });
+
+  it('keeps short conversational repeats and command repeats', () => {
+    const { manager } = createManager();
+
+    expect((manager as any).isHallucination('hello hello')).toBe(false);
+    expect((manager as any).isHallucination('scrap scrap')).toBe(false);
+
+    manager.destroy();
+  });
+
+  it('keeps normal dictation chunks', () => {
+    const { manager } = createManager();
+    const text = 'can you hear me we are testing normal dictation quality now';
+
+    expect((manager as any).isHallucination(text)).toBe(false);
+
+    manager.destroy();
+  });
+
+  it('drops repetition artifacts before buffering in listening mode', async () => {
+    const { manager } = createManager();
+    (manager as any).state = 'listening';
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMicBackgroundFilterMeter: vi.fn(),
+    };
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+
+    await (manager as any).processListeningChunk('dom'.repeat(120));
+
+    expect((manager as any).transcriptBuffer).toEqual([]);
+    expect(dynamicIslandManager.updateDrawerTranscript).not.toHaveBeenCalled();
+
+    manager.destroy();
+  });
+
+  it('drops long repeated-word bursts before buffering in listening mode', async () => {
+    const { manager } = createManager();
+    (manager as any).state = 'listening';
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMicBackgroundFilterMeter: vi.fn(),
+    };
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+
+    await (manager as any).processListeningChunk('millennium millennium');
+
+    expect((manager as any).transcriptBuffer).toEqual([]);
+    expect(dynamicIslandManager.updateDrawerTranscript).not.toHaveBeenCalled();
+
+    manager.destroy();
+  });
+
+  it('keeps repeated long words when they are part of a normal sentence', () => {
+    const { manager } = createManager();
+
+    expect((manager as any).isHallucination('millennium project hit a milestone this week')).toBe(false);
+
+    manager.destroy();
+  });
 });
 
 describe('HotMicManager background voice filter', () => {
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('keeps very low strictness threshold permissive', () => {
+    const { manager } = createManager({
+      hotMicBackgroundFilterEnabled: true,
+      hotMicBackgroundFilterStrength: 0,
+    });
+
+    const threshold = (manager as any).getBackgroundFilterThreshold(0);
+    expect(threshold).toBeCloseTo(0.004, 5);
+
+    manager.destroy();
+  });
+
+  it('raises filter gate thresholds as strictness increases', () => {
+    const { manager } = createManager({
+      hotMicBackgroundFilterEnabled: true,
+      hotMicBackgroundFilterStrength: 50,
+    });
+
+    const lowGate = (manager as any).getBackgroundFilterGate(0);
+    const highGate = (manager as any).getBackgroundFilterGate(100);
+
+    expect(highGate.threshold).toBeGreaterThan(lowGate.threshold);
+    expect(highGate.ratioThreshold).toBeGreaterThan(lowGate.ratioThreshold);
+    expect(highGate.minSpeechSamples).toBeGreaterThan(lowGate.minSpeechSamples);
+    expect(highGate.peakThreshold).toBeGreaterThan(lowGate.peakThreshold);
+
+    manager.destroy();
   });
 
   it('keeps chunks when background filter is disabled', () => {
@@ -502,6 +697,26 @@ describe('HotMicManager background voice filter', () => {
       speechAverage: 0.16,
       rawPeak: 0.32,
       speechPeak: 0.32,
+    });
+
+    expect(result.suppressed).toBe(false);
+    manager.destroy();
+  });
+
+  it('does not over-suppress near-field speech at very low strictness', () => {
+    const { manager } = createManager({
+      hotMicBackgroundFilterEnabled: true,
+      hotMicBackgroundFilterStrength: 2,
+    });
+
+    const result = (manager as any).evaluateChunkBackgroundFilter({
+      sampleCount: 30,
+      speechSamples: 24,
+      speechRatio: 0.8,
+      rawAverage: 0.006,
+      speechAverage: 0.0062,
+      rawPeak: 0.01,
+      speechPeak: 0.0105,
     });
 
     expect(result.suppressed).toBe(false);
@@ -785,6 +1000,42 @@ describe('HotMicManager runtime status', () => {
     manager.destroy();
   });
 
+  it('includes engine status from the injected getter', () => {
+    const { manager } = createManager();
+    const engineStatus = {
+      selectedEngine: 'qwen',
+      source: 'global',
+      whisperModel: 'small',
+      readiness: 'warming',
+      detail: 'Qwen server is warming up',
+      fallbackAvailable: true,
+    } as const;
+
+    manager.setEngineStatusGetter(() => engineStatus);
+    const status = manager.getRuntimeStatus();
+
+    expect(status.engine).toEqual(engineStatus);
+    manager.destroy();
+  });
+
+  it('reports a disabled engine status if the getter throws', () => {
+    const { manager } = createManager({ transcriptionEngine: 'mlx-whisper' });
+    manager.setEngineStatusGetter(() => {
+      throw new Error('engine probe failed');
+    });
+
+    const status = manager.getRuntimeStatus();
+
+    expect(status.engine).toMatchObject({
+      selectedEngine: 'mlx-whisper',
+      source: 'global',
+      readiness: 'disabled',
+      fallbackAvailable: false,
+    });
+    expect(status.engine?.detail).toContain('engine probe failed');
+    manager.destroy();
+  });
+
   it('emits runtimeStatusChanged on condition transitions', () => {
     const { manager } = createManager();
     const statuses: any[] = [];
@@ -914,6 +1165,57 @@ describe('HotMicManager chunk queue backpressure', () => {
 
     const status = manager.getRuntimeStatus();
     expect(status.queueDepth).toBe(2);
+    manager.destroy();
+  });
+
+  it('switches harvest mode to dictation under queue pressure', () => {
+    const { manager, nativeHelper } = createManager();
+    const queue = (manager as any).pendingChunkQueue;
+    queue.push({ filePath: '/tmp/a.wav', audioStats: {} });
+    queue.push({ filePath: '/tmp/b.wav', audioStats: {} });
+
+    (manager as any).setRealtimeHarvestMode();
+
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation');
+    manager.destroy();
+  });
+
+  it('avoids duplicate harvest mode updates when mode does not change', () => {
+    const { manager, nativeHelper } = createManager();
+
+    (manager as any).setRealtimeHarvestMode();
+    (manager as any).setRealtimeHarvestMode();
+
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledTimes(1);
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('command');
+    manager.destroy();
+  });
+
+  it('returns harvest mode to command after queue pressure clears', () => {
+    const { manager, nativeHelper } = createManager({ transcriptionEngine: 'mlx-whisper' });
+    const queue = (manager as any).pendingChunkQueue;
+    queue.push({ filePath: '/tmp/a.wav', audioStats: {} });
+    queue.push({ filePath: '/tmp/b.wav', audioStats: {} });
+
+    (manager as any).setRealtimeHarvestMode();
+    queue.length = 0;
+    (manager as any).chunkProcessingInFlight = false;
+    (manager as any).setRealtimeHarvestMode();
+
+    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(1, 'dictation');
+    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(2, 'command');
+    manager.destroy();
+  });
+
+  it('uses longer forced snapshot interval for mlx and under queue pressure', () => {
+    const { manager } = createManager({ transcriptionEngine: 'mlx-whisper' });
+    const queue = (manager as any).pendingChunkQueue;
+
+    expect((manager as any).getForcedSnapshotMaxMs()).toBe(1000);
+
+    queue.push({ filePath: '/tmp/a.wav', audioStats: {} });
+    expect((manager as any).getForcedSnapshotMaxMs()).toBe(1400);
+
     manager.destroy();
   });
 });

@@ -150,9 +150,9 @@ interface Preferences {
   // When enabled, auto-records voice fragments and injects them into a target terminal.
   hotMicEnabled?: boolean;
   hotMicMuted?: boolean;
-  hotMicTranscriptionEngine?: 'default' | 'whisper' | 'qwen' | 'mlx-whisper'; // Engine override for Hot Mic only
+  hotMicTranscriptionEngine?: 'default' | 'whisper' | 'qwen' | 'mlx-whisper'; // Deprecated: Hot Mic now follows transcriptionEngine
   hotMicAllowWhisperFallback?: boolean; // Allow Qwen->Whisper fallback for Hot Mic when Qwen fails
-  hotMicWhisperModel?: ModelSize; // Whisper model override for Hot Mic-only transcription
+  hotMicWhisperModel?: ModelSize; // Deprecated: Hot Mic now follows selectedModel
   hotMicTargetBundleId?: string; // e.g., "com.mitchellh.ghostty"
   hotMicSoundsEnabled?: boolean;
   hotMicWakeWord?: string; // Deprecated — use hotMicSubmitWord
@@ -160,6 +160,7 @@ interface Preferences {
   hotMicBufferDiscardMs?: number; // Silence timeout to discard buffer (default: 15000)
   hotMicPasteWords?: string; // Comma-separated words that flush buffer without submitting
   hotMicCancelWords?: string; // Comma-separated words that send Ctrl+C to terminal
+  hotMicScrapWords?: string; // Comma-separated words that clear current hot mic draft text
   hotMicShowWordCount?: boolean; // Show word count on cursor indicator (default: false)
   hotMicPrevWindowWords?: string; // Comma-separated words that cycle to previous window (Cmd+Shift+`)
   hotMicNewWindowWords?: string; // Comma-separated phrases that open a new window (Cmd+N)

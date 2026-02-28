@@ -1145,6 +1145,22 @@ interface HotMicRuntimeStatus {
   lastChunkAgeMs: number | null;
   chunksReceived: number;
   micHealthy: boolean;
+  engine: {
+    selectedEngine: 'whisper' | 'qwen' | 'mlx-whisper';
+    source: 'global';
+    whisperModel: string | null;
+    readiness:
+      | 'ready'
+      | 'warming'
+      | 'cold'
+      | 'not-installed'
+      | 'not-downloaded'
+      | 'corrupt'
+      | 'unsupported-arch'
+      | 'disabled';
+    detail: string | null;
+    fallbackAvailable: boolean;
+  } | null;
 }
 
 /**
@@ -1211,6 +1227,8 @@ interface HotMicAPI {
   setShowWordCount: (enabled: boolean) => Promise<boolean>;
   getCancelWords: () => Promise<string>;
   setCancelWords: (words: string) => Promise<string>;
+  getScrapWords: () => Promise<string>;
+  setScrapWords: (words: string) => Promise<string>;
   getPrevWindowWords: () => Promise<string>;
   setPrevWindowWords: (words: string) => Promise<string>;
   getNewWindowWords: () => Promise<string>;

@@ -76,6 +76,27 @@ function createRestartHarness(prefValues: Record<string, unknown>) {
   return { manager, stopQwenServer, stopMlxWhisperServer, stopWhisperServer, startQwenServer, startMlxWhisperServer, startWhisperServer };
 }
 
+function createHotMicWarmupHarness(prefValues: Record<string, unknown>) {
+  const startQwenServer = vi.fn(async () => {});
+  const startMlxWhisperServer = vi.fn(async () => {});
+  const startWhisperServer = vi.fn(async () => {});
+  const manager: any = {
+    preferences: {
+      getPreference: (key: string) => prefValues[key],
+    },
+    modelManager: {
+      getSelectedModel: () => 'small',
+    },
+    startQwenServer,
+    startMlxWhisperServer,
+    startWhisperServer,
+    isMlxWhisperInstalled: () => true,
+    isWhisperServerAvailable: () => true,
+  };
+  Object.setPrototypeOf(manager, TranscriberManager.prototype);
+  return { manager, startQwenServer, startMlxWhisperServer, startWhisperServer };
+}
+
 describe('TranscriberManager warmup', () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -93,15 +114,16 @@ describe('TranscriberManager warmup', () => {
     expect(startMlxWhisperServer).not.toHaveBeenCalled();
   });
 
-  it('warms Qwen when Hot Mic override engine is qwen', async () => {
-    const { manager, startQwenServer } = createWarmupHarness({
+  it('ignores Hot Mic override and warms only the global engine', async () => {
+    const { manager, startQwenServer, startWhisperServer } = createWarmupHarness({
       transcriptionEngine: 'whisper',
       hotMicTranscriptionEngine: 'qwen',
     });
 
     await manager.warmup();
 
-    expect(startQwenServer).toHaveBeenCalledTimes(1);
+    expect(startQwenServer).not.toHaveBeenCalled();
+    expect(startWhisperServer).toHaveBeenCalledTimes(1);
   });
 
   it('warms MLX Whisper when primary engine is mlx-whisper', async () => {
@@ -116,7 +138,7 @@ describe('TranscriberManager warmup', () => {
     expect(startQwenServer).not.toHaveBeenCalled();
   });
 
-  it('warms MLX Whisper when Hot Mic override engine is mlx-whisper', async () => {
+  it('ignores Hot Mic MLX override and uses global whisper warmup path', async () => {
     const { manager, startMlxWhisperServer, startWhisperServer } = createWarmupHarness({
       transcriptionEngine: 'whisper',
       hotMicTranscriptionEngine: 'mlx-whisper',
@@ -124,7 +146,7 @@ describe('TranscriberManager warmup', () => {
 
     await manager.warmup();
 
-    expect(startMlxWhisperServer).toHaveBeenCalledTimes(1);
+    expect(startMlxWhisperServer).not.toHaveBeenCalled();
     expect(startWhisperServer).toHaveBeenCalledTimes(1);
   });
 
@@ -173,12 +195,66 @@ describe('TranscriberManager fallback tracking', () => {
   });
 });
 
+describe('TranscriberManager hot mic warmup', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('awaits MLX Whisper startup before resolving', async () => {
+    let releaseStart!: () => void;
+    const { manager, startMlxWhisperServer } = createHotMicWarmupHarness({
+      transcriptionEngine: 'mlx-whisper',
+    });
+
+    startMlxWhisperServer.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseStart = () => resolve(); })
+    );
+
+    let settled = false;
+    const warmupPromise = manager.warmupForHotMic().then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(startMlxWhisperServer).toHaveBeenCalledTimes(1);
+
+    releaseStart();
+    await warmupPromise;
+    expect(settled).toBe(true);
+  });
+
+  it('awaits Whisper server startup before resolving', async () => {
+    let releaseStart!: () => void;
+    const { manager, startWhisperServer } = createHotMicWarmupHarness({
+      transcriptionEngine: 'whisper',
+    });
+
+    startWhisperServer.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseStart = () => resolve(); })
+    );
+
+    let settled = false;
+    const warmupPromise = manager.warmupForHotMic().then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(startWhisperServer).toHaveBeenCalledWith('small');
+
+    releaseStart();
+    await warmupPromise;
+    expect(settled).toBe(true);
+  });
+});
+
 describe('TranscriberManager runtime restart', () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  it('stops all servers and restarts only the active engine', async () => {
+  it('restarts only the global engine and ignores Hot Mic override', async () => {
     const h = createRestartHarness({
       transcriptionEngine: 'whisper',
       hotMicTranscriptionEngine: 'qwen',
@@ -192,7 +268,7 @@ describe('TranscriberManager runtime restart', () => {
     expect(h.stopWhisperServer).toHaveBeenCalledTimes(1);
 
     // Only the active engines should be re-started.
-    expect(h.startQwenServer).toHaveBeenCalledTimes(1);
+    expect(h.startQwenServer).not.toHaveBeenCalled();
     expect(h.startWhisperServer).toHaveBeenCalledTimes(1);
     expect(h.startMlxWhisperServer).not.toHaveBeenCalled();
   });
@@ -281,6 +357,137 @@ describe('TranscriberManager hot mic fallback behavior', () => {
       allowWhisperFallback: true,
       whisperModelOverride: 'small',
     });
+  });
+
+  it('uses the global engine for Hot Mic even when override is set', async () => {
+    const transcribeWithEngineFallback = vi.fn(async () => 'ok');
+    const manager: any = {
+      preferences: {
+        getPreference: (key: string) => {
+          if (key === 'transcriptionEngine') return 'whisper';
+          if (key === 'hotMicTranscriptionEngine') return 'qwen';
+          return undefined;
+        },
+      },
+      modelManager: {
+        getSelectedModel: () => 'small',
+      },
+      transcribeWithEngineFallback,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.transcribeAudioForHotMic('/tmp/test.wav');
+
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/test.wav', 'whisper', {
+      allowWhisperFallback: true,
+      whisperModelOverride: 'small',
+    });
+  });
+});
+
+describe('TranscriberManager Hot Mic engine status', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('reports not-downloaded when global Whisper model is missing', () => {
+    const manager: any = {
+      preferences: {
+        getPreference: (key: string) => key === 'transcriptionEngine' ? 'whisper' : undefined,
+      },
+      modelManager: {
+        getSelectedModel: () => 'small',
+        getModelHealthForSizeSync: () => ({ status: 'missing' }),
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const status = manager.getHotMicEngineStatus();
+    expect(status.selectedEngine).toBe('whisper');
+    expect(status.readiness).toBe('not-downloaded');
+  });
+
+  it('reports corrupt when global Whisper model is incomplete', () => {
+    const manager: any = {
+      preferences: {
+        getPreference: (key: string) => key === 'transcriptionEngine' ? 'whisper' : undefined,
+      },
+      modelManager: {
+        getSelectedModel: () => 'small',
+        getModelHealthForSizeSync: () => ({ status: 'corrupt' }),
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const status = manager.getHotMicEngineStatus();
+    expect(status.selectedEngine).toBe('whisper');
+    expect(status.readiness).toBe('corrupt');
+  });
+
+  it('reports unsupported-arch for qwen on non-Apple Silicon', () => {
+    const manager: any = {
+      preferences: {
+        getPreference: (key: string) => key === 'transcriptionEngine' ? 'qwen' : undefined,
+      },
+      modelManager: {
+        getSelectedModel: () => 'small',
+        getModelHealthForSizeSync: () => ({ status: 'ready' }),
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const archSpy = vi.spyOn(process, 'arch', 'get').mockReturnValue('x64');
+    const status = manager.getHotMicEngineStatus();
+    archSpy.mockRestore();
+
+    expect(status.selectedEngine).toBe('qwen');
+    expect(status.readiness).toBe('unsupported-arch');
+    expect(status.fallbackAvailable).toBe(true);
+  });
+
+  it('reports warming when qwen server is starting', () => {
+    const manager: any = {
+      preferences: {
+        getPreference: (key: string) => key === 'transcriptionEngine' ? 'qwen' : undefined,
+      },
+      modelManager: {
+        getSelectedModel: () => 'small',
+        getModelHealthForSizeSync: () => ({ status: 'ready' }),
+      },
+      isQwenInstalledSync: () => true,
+      qwenServer: { isStarting: true, isReady: false },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const archSpy = vi.spyOn(process, 'arch', 'get').mockReturnValue('arm64');
+    const status = manager.getHotMicEngineStatus();
+    archSpy.mockRestore();
+
+    expect(status.selectedEngine).toBe('qwen');
+    expect(status.readiness).toBe('warming');
+  });
+
+  it('reports disabled when mlx-whisper runtime has fatal session disable reason', () => {
+    const manager: any = {
+      preferences: {
+        getPreference: (key: string) => key === 'transcriptionEngine' ? 'mlx-whisper' : undefined,
+      },
+      modelManager: {
+        getSelectedModel: () => 'small',
+        getModelHealthForSizeSync: () => ({ status: 'ready' }),
+      },
+      isMlxWhisperInstalled: () => true,
+      mlxWhisperServer: { disabledReason: 'ImportError: mlx_whisper not installed' },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const archSpy = vi.spyOn(process, 'arch', 'get').mockReturnValue('arm64');
+    const status = manager.getHotMicEngineStatus();
+    archSpy.mockRestore();
+
+    expect(status.selectedEngine).toBe('mlx-whisper');
+    expect(status.readiness).toBe('disabled');
+    expect(status.detail).toContain('ImportError');
   });
 });
 
