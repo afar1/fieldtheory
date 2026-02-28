@@ -1,6 +1,9 @@
 #!/bin/bash
-# Build whisper-cli with Metal acceleration for macOS
-# Outputs to: build-whisper/bin/whisper-cli
+# Build whisper-cli and whisper-server with Metal acceleration for macOS.
+# whisper-cli is the per-invocation binary (fallback).
+# whisper-server is the persistent HTTP server that keeps the model loaded
+# in memory for sub-100ms transcription latency on subsequent requests.
+# Outputs to: build-whisper/bin/whisper-cli, build-whisper/bin/whisper-server
 
 set -e
 
@@ -8,7 +11,7 @@ set -e
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-echo "Building whisper-cli with Metal acceleration..."
+echo "Building whisper-cli + whisper-server with Metal acceleration..."
 echo "Repo root: $REPO_ROOT"
 
 # Build directory
@@ -29,17 +32,26 @@ cmake -B "$BUILD_DIR" \
   -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_MIN_VERSION" \
   -DGGML_METAL_MACOSX_VERSION_MIN="$MACOS_MIN_VERSION"
 
-# Build only the whisper-cli target
+# Build both whisper-cli (fallback) and whisper-server (persistent engine)
 cmake --build "$BUILD_DIR" --target whisper-cli -j
+cmake --build "$BUILD_DIR" --target whisper-server -j
 
-# Verify the binary exists
+# Verify the binaries exist
 BINARY_PATH="$BUILD_DIR/bin/whisper-cli"
 if [ -f "$BINARY_PATH" ]; then
-  echo "✓ Built successfully: $BINARY_PATH"
-  # Show binary info
+  echo "✓ whisper-cli built successfully: $BINARY_PATH"
   file "$BINARY_PATH"
 else
-  echo "✗ Build failed - binary not found at $BINARY_PATH"
+  echo "✗ whisper-cli build failed - binary not found at $BINARY_PATH"
+  exit 1
+fi
+
+SERVER_PATH="$BUILD_DIR/bin/whisper-server"
+if [ -f "$SERVER_PATH" ]; then
+  echo "✓ whisper-server built successfully: $SERVER_PATH"
+  file "$SERVER_PATH"
+else
+  echo "✗ whisper-server build failed - binary not found at $SERVER_PATH"
   exit 1
 fi
 

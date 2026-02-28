@@ -5,7 +5,15 @@
 // =============================================================================
 
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { estimateWordsPerLine, summarizeTranscriptForHistory, summarizeTranscriptForIsland } from '../utils/textUtils';
+import {
+  countAppendedWords,
+  estimateWordsPerLine,
+  getCarouselWordVisual,
+  splitDrawerTranscriptForRender,
+  summarizeDrawerTranscript,
+  summarizeTranscriptForHistory,
+  summarizeTranscriptForIsland
+} from '../utils/textUtils';
 import {
   getLeftModeDotPresentation,
   type DynamicIslandInputMode,
@@ -41,6 +49,11 @@ const params = new URLSearchParams(window.location.search);
 const side = params.get('side') || 'left';
 const TRANSCRIPT_LEADING_WORDS = 5;
 const TRANSCRIPT_TRAILING_WORDS = 7;
+const DRAWER_LEADING_WORDS = 3;
+const DRAWER_TRAILING_WORDS = 10;
+const DRAWER_LEADING_CONTEXT_HOLD_MS = 2400;
+const DRAWER_WORD_ENTER_MAX_WORDS = 3;
+const DRAWER_WORD_ENTER_DURATION_MS = 180;
 const HISTORY_PREVIEW_TRAILING_WORDS = 5;
 const HISTORY_PREVIEW_MAX_LINES = 3;
 const HISTORY_PILL_OFFSET_PX = 82;
@@ -272,40 +285,105 @@ const gapFillStyles: Record<string, React.CSSProperties> = {
 
 function DrawerPill() {
   const [text, setText] = useState('');
-  const [speaking, setSpeaking] = useState(false);
   const [drawerTextSize, setDrawerTextSize] = useState(DRAWER_TEXT_SIZE_DEFAULT);
+  const [showLeadingContext, setShowLeadingContext] = useState(true);
+  const [fadingLeadingContext, setFadingLeadingContext] = useState(false);
+  const [animatedTailCount, setAnimatedTailCount] = useState(0);
+  const leadingContextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const leadingContextCollapseRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tailWordFadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const transcriptActiveRef = useRef(false);
+  const previousRawTextRef = useRef('');
+  const showLeadingContextRef = useRef(true);
 
-  const compactText = summarizeTranscriptForIsland(
-    text,
-    TRANSCRIPT_LEADING_WORDS,
-    TRANSCRIPT_TRAILING_WORDS
-  );
-  const tokens = compactText.trim().split(/\s+/).filter(Boolean);
-  const ellipsisIndex = tokens.indexOf('...');
+  const compactText = summarizeDrawerTranscript(text, {
+    leadingWords: DRAWER_LEADING_WORDS,
+    trailingWords: DRAWER_TRAILING_WORDS,
+    showLeadingContext,
+  });
+  const {
+    leadingText,
+    trailingWords,
+  } = splitDrawerTranscriptForRender(compactText, showLeadingContext);
 
-  let leadingText = '';
-  let trailingText = '';
+  const normalizedAnimatedTailCount = Math.max(0, Math.min(animatedTailCount, trailingWords.length));
   const normalizedDrawerTextSize = clampDrawerTextSize(drawerTextSize);
   const drawerLineHeight = Math.max(16, Math.round(normalizedDrawerTextSize * 1.3));
-  if (tokens.length > 0) {
-    if (ellipsisIndex >= 0) {
-      leadingText = tokens.slice(0, ellipsisIndex + 1).join(' ');
-      trailingText = tokens.slice(ellipsisIndex + 1).join(' ');
-    } else if (tokens.length > TRANSCRIPT_TRAILING_WORDS) {
-      leadingText = tokens.slice(0, -TRANSCRIPT_TRAILING_WORDS).join(' ');
-      trailingText = tokens.slice(-TRANSCRIPT_TRAILING_WORDS).join(' ');
-    } else {
-      trailingText = compactText;
-    }
-  }
+
+  useEffect(() => {
+    showLeadingContextRef.current = showLeadingContext;
+  }, [showLeadingContext]);
 
   useEffect(() => {
     const api = (window as any).dynamicIslandAPI;
     api?.onDrawerTranscript?.((t: string) => {
+      const normalized = t.trim().replace(/\s+/g, ' ');
+      const previousRawText = previousRawTextRef.current;
+      const appendedCount = countAppendedWords(
+        previousRawText,
+        normalized,
+        DRAWER_WORD_ENTER_MAX_WORDS
+      );
+      previousRawTextRef.current = normalized;
+
       setText(t);
-    });
-    api?.onDrawerSpeaking?.((isSpeaking: boolean) => {
-      setSpeaking(isSpeaking);
+      const hasText = t.trim().length > 0;
+      if (!hasText) {
+        transcriptActiveRef.current = false;
+        previousRawTextRef.current = '';
+        setShowLeadingContext(true);
+        showLeadingContextRef.current = true;
+        setFadingLeadingContext(false);
+        setAnimatedTailCount(0);
+        if (leadingContextTimerRef.current) {
+          clearTimeout(leadingContextTimerRef.current);
+          leadingContextTimerRef.current = null;
+        }
+        if (leadingContextCollapseRef.current) {
+          clearTimeout(leadingContextCollapseRef.current);
+          leadingContextCollapseRef.current = null;
+        }
+        if (tailWordFadeTimerRef.current) {
+          clearTimeout(tailWordFadeTimerRef.current);
+          tailWordFadeTimerRef.current = null;
+        }
+        return;
+      }
+
+      if (appendedCount > 0) {
+        setAnimatedTailCount(Math.min(DRAWER_WORD_ENTER_MAX_WORDS, appendedCount));
+        if (tailWordFadeTimerRef.current) {
+          clearTimeout(tailWordFadeTimerRef.current);
+        }
+        tailWordFadeTimerRef.current = setTimeout(() => {
+          tailWordFadeTimerRef.current = null;
+          setAnimatedTailCount(0);
+        }, DRAWER_WORD_ENTER_DURATION_MS);
+      }
+
+      if (!transcriptActiveRef.current) {
+        transcriptActiveRef.current = true;
+        setShowLeadingContext(true);
+        showLeadingContextRef.current = true;
+        setFadingLeadingContext(false);
+        if (leadingContextTimerRef.current) {
+          clearTimeout(leadingContextTimerRef.current);
+        }
+        if (leadingContextCollapseRef.current) {
+          clearTimeout(leadingContextCollapseRef.current);
+          leadingContextCollapseRef.current = null;
+        }
+        leadingContextTimerRef.current = setTimeout(() => {
+          leadingContextTimerRef.current = null;
+          setFadingLeadingContext(true);
+          leadingContextCollapseRef.current = setTimeout(() => {
+            leadingContextCollapseRef.current = null;
+            setShowLeadingContext(false);
+            showLeadingContextRef.current = false;
+            setFadingLeadingContext(false);
+          }, 220);
+        }, DRAWER_LEADING_CONTEXT_HOLD_MS);
+      }
     });
     api?.onDrawerTextSize?.((size: number) => {
       setDrawerTextSize(clampDrawerTextSize(size));
@@ -317,8 +395,19 @@ function DrawerPill() {
     }
     return () => {
       api?.removeAllListeners('dynamic-island-drawer-transcript');
-      api?.removeAllListeners('dynamic-island-drawer-speaking');
       api?.removeAllListeners('dynamic-island-drawer-text-size');
+      if (leadingContextTimerRef.current) {
+        clearTimeout(leadingContextTimerRef.current);
+        leadingContextTimerRef.current = null;
+      }
+      if (leadingContextCollapseRef.current) {
+        clearTimeout(leadingContextCollapseRef.current);
+        leadingContextCollapseRef.current = null;
+      }
+      if (tailWordFadeTimerRef.current) {
+        clearTimeout(tailWordFadeTimerRef.current);
+        tailWordFadeTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -334,14 +423,50 @@ function DrawerPill() {
           }}
         >
           {leadingText && (
-            <span>
+            <span style={{ opacity: fadingLeadingContext ? 0 : 1, transition: 'opacity 0.2s ease' }}>
               {leadingText}
-              {trailingText ? ' ' : ''}
+              {trailingWords.length > 0 ? ' ' : ''}
             </span>
           )}
-          {trailingText && (
-            <span className={speaking ? 'di-drawer-tail-speaking' : undefined}>
-              {trailingText}
+          {trailingWords.length > 0 && (
+            <span
+              style={showLeadingContext ? undefined : drawerStyles.carouselStrip}
+            >
+              {trailingWords.map((word, index) => {
+                const shouldAnimateEnter = normalizedAnimatedTailCount > 0
+                  && index >= trailingWords.length - normalizedAnimatedTailCount;
+                const visual = getCarouselWordVisual(index, trailingWords.length);
+                const wordClassName = shouldAnimateEnter
+                  ? 'di-drawer-word di-drawer-word-enter'
+                  : 'di-drawer-word';
+                const wordStyle: React.CSSProperties = {};
+                if (index < trailingWords.length - 1) {
+                  wordStyle.marginRight = '0.22em';
+                }
+                if (shouldAnimateEnter) {
+                  wordStyle.animationDuration = `${DRAWER_WORD_ENTER_DURATION_MS}ms`;
+                }
+                return (
+                  <span
+                    key={`${index}-${word}`}
+                    className={wordClassName}
+                    style={wordStyle}
+                  >
+                    <span
+                      style={{
+                        display: 'inline-block',
+                        opacity: visual.opacity,
+                        transform: `scale(${visual.scale})`,
+                        filter: `blur(${visual.blurPx}px)`,
+                        transition: 'opacity 120ms linear, transform 160ms ease-out, filter 160ms ease-out',
+                        transformOrigin: 'center',
+                      }}
+                    >
+                      {word}
+                    </span>
+                  </span>
+                );
+              })}
             </span>
           )}
         </span>
@@ -381,11 +506,16 @@ const drawerStyles: Record<string, React.CSSProperties> = {
     color: 'rgba(255, 255, 255, 0.75)',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
-    textOverflow: 'ellipsis',
+    textOverflow: 'clip',
     display: 'block',
     width: '100%',
     textAlign: 'left',
     lineHeight: '18px',
+  },
+  carouselStrip: {
+    display: 'inline-block',
+    WebkitMaskImage: 'linear-gradient(to right, transparent 0%, rgba(0,0,0,1) 18%, rgba(0,0,0,1) 100%)',
+    maskImage: 'linear-gradient(to right, transparent 0%, rgba(0,0,0,1) 18%, rgba(0,0,0,1) 100%)',
   },
 };
 
@@ -1275,9 +1405,15 @@ styleSheet.textContent = `
     from { opacity: 0; transform: scale(0.95); }
     to { opacity: 1; transform: scale(1); }
   }
-  @keyframes drawerTailSoftPulse {
-    0%, 100% { opacity: 0.96; }
-    50% { opacity: 0.78; }
+  @keyframes drawerWordEnter {
+    from {
+      opacity: 0;
+      filter: blur(1.1px);
+    }
+    to {
+      opacity: 1;
+      filter: blur(0);
+    }
   }
   div::-webkit-scrollbar {
     display: none;
@@ -1316,9 +1452,13 @@ styleSheet.textContent = `
   .di-right-copy-btn:hover {
     background-color: rgba(255, 255, 255, 0.12) !important;
   }
-  .di-drawer-tail-speaking {
-    color: rgba(255, 255, 255, 0.9);
-    animation: drawerTailSoftPulse 1.5s ease-in-out infinite;
+  .di-drawer-word {
+    display: inline-block;
+  }
+  .di-drawer-word-enter {
+    animation: drawerWordEnter 0.18s ease-out;
+    animation-fill-mode: both;
+    will-change: opacity, filter;
   }
 `;
 document.head.appendChild(styleSheet);

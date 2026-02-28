@@ -84,8 +84,10 @@ const TranscribeIPCChannels = {
   GET_TRANSCRIPTION_ENGINE: 'transcribe:getTranscriptionEngine',
   SET_TRANSCRIPTION_ENGINE: 'transcribe:setTranscriptionEngine',
   IS_QWEN_INSTALLED: 'transcribe:isQwenInstalled',
+  IS_MLX_WHISPER_INSTALLED: 'transcribe:isMlxWhisperInstalled',
   IS_APPLE_SILICON: 'transcribe:isAppleSilicon',
   SETUP_QWEN: 'transcribe:setupQwen',
+  SETUP_MLX_WHISPER: 'transcribe:setupMlxWhisper',
 } as const;
 
 const ClipboardIPCChannels = {
@@ -732,11 +734,13 @@ export interface TranscribeAPI {
   setAutoImproveMinWords: (minWords: number) => Promise<void>;
   getAutoImproveStats: () => Promise<AutoImproveStats>;
   resetAutoImproveStats: () => Promise<void>;
-  getTranscriptionEngine: () => Promise<'whisper' | 'qwen'>;
-  setTranscriptionEngine: (engine: 'whisper' | 'qwen') => Promise<void>;
+  getTranscriptionEngine: () => Promise<'whisper' | 'qwen' | 'mlx-whisper'>;
+  setTranscriptionEngine: (engine: 'whisper' | 'qwen' | 'mlx-whisper') => Promise<void>;
   isQwenInstalled: () => Promise<boolean>;
+  isMlxWhisperInstalled: () => Promise<boolean>;
   isAppleSilicon: () => Promise<boolean>;
   setupQwen: () => Promise<{ success: boolean; error?: string }>;
+  setupMlxWhisper: () => Promise<{ success: boolean; error?: string }>;
   toggleRecording: () => Promise<void>;
   getSoundConfig: () => Promise<SoundConfig>;
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
@@ -1216,16 +1220,20 @@ const transcribeAPI: TranscribeAPI = {
     return ipcRenderer.invoke(TranscribeIPCChannels.RESET_AUTO_IMPROVE_STATS);
   },
 
-  getTranscriptionEngine: async (): Promise<'whisper' | 'qwen'> => {
+  getTranscriptionEngine: async (): Promise<'whisper' | 'qwen' | 'mlx-whisper'> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.GET_TRANSCRIPTION_ENGINE);
   },
 
-  setTranscriptionEngine: async (engine: 'whisper' | 'qwen'): Promise<void> => {
+  setTranscriptionEngine: async (engine: 'whisper' | 'qwen' | 'mlx-whisper'): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, engine);
   },
 
   isQwenInstalled: async (): Promise<boolean> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.IS_QWEN_INSTALLED);
+  },
+
+  isMlxWhisperInstalled: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.IS_MLX_WHISPER_INSTALLED);
   },
 
   isAppleSilicon: async (): Promise<boolean> => {
@@ -1234,6 +1242,10 @@ const transcribeAPI: TranscribeAPI = {
 
   setupQwen: async (): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SETUP_QWEN);
+  },
+
+  setupMlxWhisper: async (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SETUP_MLX_WHISPER);
   },
 
   toggleRecording: async (): Promise<void> => {
@@ -3463,10 +3475,10 @@ const hotMicAPI = {
   getEnabled: async (): Promise<boolean> => {
     return ipcRenderer.invoke('hotmic:getEnabled');
   },
-  getTranscriptionEngineMode: async (): Promise<'default' | 'whisper' | 'qwen'> => {
+  getTranscriptionEngineMode: async (): Promise<'default' | 'whisper' | 'qwen' | 'mlx-whisper'> => {
     return ipcRenderer.invoke('hotmic:getTranscriptionEngineMode');
   },
-  setTranscriptionEngineMode: async (mode: 'default' | 'whisper' | 'qwen'): Promise<'default' | 'whisper' | 'qwen'> => {
+  setTranscriptionEngineMode: async (mode: 'default' | 'whisper' | 'qwen' | 'mlx-whisper'): Promise<'default' | 'whisper' | 'qwen' | 'mlx-whisper'> => {
     return ipcRenderer.invoke('hotmic:setTranscriptionEngineMode', mode);
   },
   getWhisperModel: async (): Promise<string> => {
@@ -3570,6 +3582,12 @@ const hotMicAPI = {
   },
   setCancelWords: async (words: string): Promise<string> => {
     return ipcRenderer.invoke('hotmic:setCancelWords', words);
+  },
+  getScrapWords: async (): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:getScrapWords');
+  },
+  setScrapWords: async (words: string): Promise<string> => {
+    return ipcRenderer.invoke('hotmic:setScrapWords', words);
   },
   getPrevWindowWords: async (): Promise<string> => {
     return ipcRenderer.invoke('hotmic:getPrevWindowWords');

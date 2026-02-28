@@ -13,23 +13,9 @@ interface IslandGeometrySettings {
   offsetY: number;
 }
 
-interface HotMicRuntimeStatus {
-  state: string;
-  condition: string | null;
-  engineReady: boolean;
-  whisperFallbackActive: boolean;
-  queueDepth: number;
-  lastChunkAgeMs: number | null;
-  chunksReceived: number;
-  micHealthy: boolean;
-}
-
-interface WhisperModelInfo {
-  name: string;
-  url: string;
-  sizeBytes: number;
-  description: string;
-}
+type HotMicRuntimeStatus = Awaited<
+  ReturnType<NonNullable<Window['hotMicAPI']>['getRuntimeStatus']>
+>;
 
 const DEFAULT_ISLAND_GEOMETRY: IslandGeometrySettings = {
   notchWidthOverride: 0,
@@ -58,11 +44,11 @@ export default function HotMicSettings() {
   const { theme } = useTheme();
 
   const [qwenInstalled, setQwenInstalled] = useState(false);
+  const [mlxWhisperInstalled, setMlxWhisperInstalled] = useState(false);
   const [appleSilicon, setAppleSilicon] = useState(true);
-  const [engine, setEngine] = useState<'whisper' | 'qwen'>('whisper');
-  const [hotMicEngineMode, setHotMicEngineMode] = useState<'default' | 'whisper' | 'qwen'>('default');
-  const [hotMicWhisperModel, setHotMicWhisperModel] = useState('small');
-  const [availableWhisperModels, setAvailableWhisperModels] = useState<Record<string, WhisperModelInfo>>({});
+  const [engine, setEngine] = useState<'whisper' | 'qwen' | 'mlx-whisper'>('whisper');
+  const [selectedWhisperModel, setSelectedWhisperModel] = useState('small');
+  const [whisperModelReady, setWhisperModelReady] = useState(true);
   const [enabled, setEnabled] = useState(false);
   const [backgroundFilterEnabled, setBackgroundFilterEnabled] = useState(false);
   const [backgroundFilterStrength, setBackgroundFilterStrength] = useState(4);
@@ -75,6 +61,8 @@ export default function HotMicSettings() {
   const [submitWord, setSubmitWord] = useState('');
   const [pasteWords, setPasteWords] = useState('');
   const [cancelWords, setCancelWords] = useState('');
+  const [scrapWords, setScrapWords] = useState('');
+  const [modeToggleHotkey, setModeToggleHotkey] = useState('');
   const [switchWords, setSwitchWords] = useState('');
   const [openAppPrefixes, setOpenAppPrefixes] = useState('');
   const [quitAppPrefixes, setQuitAppPrefixes] = useState('');
@@ -104,8 +92,11 @@ export default function HotMicSettings() {
   const [resettingDefaults, setResettingDefaults] = useState(false);
 
   const styles = getStyles(theme);
-  const resolvedEngine: 'whisper' | 'qwen' = hotMicEngineMode === 'default' ? engine : hotMicEngineMode;
-  const canEnableHotMic = resolvedEngine === 'qwen' ? (appleSilicon && qwenInstalled) : true;
+  const canEnableHotMic = engine === 'qwen'
+    ? (appleSilicon && qwenInstalled)
+    : engine === 'mlx-whisper'
+      ? (appleSilicon && mlxWhisperInstalled)
+      : whisperModelReady;
   const canToggleHotMic = enabled || canEnableHotMic;
 
   useEffect(() => {
@@ -114,28 +105,28 @@ export default function HotMicSettings() {
     // Check runtime availability and engine preferences
     Promise.all([
       window.transcribeAPI?.isQwenInstalled?.() ?? Promise.resolve(false),
+      window.transcribeAPI?.isMlxWhisperInstalled?.() ?? Promise.resolve(false),
       window.transcribeAPI?.isAppleSilicon?.() ?? Promise.resolve(true),
       window.transcribeAPI?.getTranscriptionEngine?.() ?? Promise.resolve('whisper' as const),
-      window.hotMicAPI?.getTranscriptionEngineMode?.() ?? Promise.resolve('default' as const),
-      window.hotMicAPI?.getWhisperModel?.() ?? Promise.resolve('small'),
+      window.transcribeAPI?.getSelectedModel?.() ?? Promise.resolve('small'),
+      window.transcribeAPI?.getModelDownloadStatus?.() ?? Promise.resolve({ small: true } as Record<string, boolean>),
       window.hotMicAPI?.getStatus?.() ?? Promise.resolve({ state: 'idle', muted: false }),
-      window.transcribeAPI?.getAvailableModels?.() ?? Promise.resolve({} as Record<string, WhisperModelInfo>),
-    ]).then(([qi, as, eng, hotMicMode, whisperModel, hotMicStatus, availableModels]) => {
+    ]).then(([qi, mwi, as, eng, selectedModel, downloadStatus, hotMicStatus]) => {
       setQwenInstalled(qi);
+      setMlxWhisperInstalled(mwi);
       setAppleSilicon(as);
       setEngine(eng);
-      setHotMicEngineMode(hotMicMode);
-      setHotMicWhisperModel(whisperModel);
+      setSelectedWhisperModel(selectedModel);
+      setWhisperModelReady(Boolean(downloadStatus?.[selectedModel]));
       setCurrentState(hotMicStatus.state);
       setCurrentMuted(hotMicStatus.muted);
-      setAvailableWhisperModels(availableModels);
     });
 
     const load = async () => {
       const [
         en,
-        hotMicMode,
-        whisperModel,
+        selectedModel,
+        downloadStatus,
         bgFilterEnabled,
         bgFilterStrengthValue,
         hotMicStatus,
@@ -143,6 +134,8 @@ export default function HotMicSettings() {
         submit,
         pw,
         cw,
+        skw,
+        hmk,
         sw,
         openPrefixes,
         quitPrefixes,
@@ -163,8 +156,8 @@ export default function HotMicSettings() {
         drawerTextSizeValue,
       ] = await Promise.all([
         window.hotMicAPI!.getEnabled(),
-        window.hotMicAPI!.getTranscriptionEngineMode(),
-        window.hotMicAPI!.getWhisperModel(),
+        window.transcribeAPI!.getSelectedModel(),
+        window.transcribeAPI!.getModelDownloadStatus(),
         window.hotMicAPI!.getBackgroundFilterEnabled(),
         window.hotMicAPI!.getBackgroundFilterStrength(),
         window.hotMicAPI!.getStatus?.() ?? Promise.resolve({ state: 'idle', muted: false }),
@@ -172,6 +165,8 @@ export default function HotMicSettings() {
         window.hotMicAPI!.getSubmitWord(),
         window.hotMicAPI!.getPasteWords(),
         window.hotMicAPI!.getCancelWords(),
+        window.hotMicAPI!.getScrapWords(),
+        window.hotMicAPI!.getHotkey(),
         window.hotMicAPI!.getSwitchWords(),
         window.hotMicAPI!.getOpenAppPrefixes(),
         window.hotMicAPI!.getQuitAppPrefixes(),
@@ -192,8 +187,8 @@ export default function HotMicSettings() {
         window.hotMicAPI!.getDrawerTextSize(),
       ]);
       setEnabled(en);
-      setHotMicEngineMode(hotMicMode);
-      setHotMicWhisperModel(whisperModel);
+      setSelectedWhisperModel(selectedModel);
+      setWhisperModelReady(Boolean(downloadStatus?.[selectedModel]));
       setBackgroundFilterEnabled(bgFilterEnabled);
       setBackgroundFilterStrength(Math.max(0, Math.min(100, Math.round(bgFilterStrengthValue))));
       setCurrentState(hotMicStatus.state);
@@ -202,6 +197,8 @@ export default function HotMicSettings() {
       setSubmitWord(submit);
       setPasteWords(pw);
       setCancelWords(cw);
+      setScrapWords(skw);
+      setModeToggleHotkey(hmk ?? '');
       setSwitchWords(sw);
       setOpenAppPrefixes(openPrefixes);
       setQuitAppPrefixes(quitPrefixes);
@@ -272,18 +269,6 @@ export default function HotMicSettings() {
     await window.hotMicAPI.setEnabled(value);
   }, []);
 
-  const handleHotMicEngineModeChange = useCallback(async (mode: 'default' | 'whisper' | 'qwen') => {
-    if (!window.hotMicAPI?.setTranscriptionEngineMode) return;
-    setHotMicEngineMode(mode);
-    await window.hotMicAPI.setTranscriptionEngineMode(mode);
-  }, []);
-
-  const handleHotMicWhisperModelChange = useCallback(async (model: string) => {
-    if (!window.hotMicAPI?.setWhisperModel) return;
-    setHotMicWhisperModel(model);
-    await window.hotMicAPI.setWhisperModel(model);
-  }, []);
-
   const handleBackgroundFilterEnabledChange = useCallback(async (value: boolean) => {
     if (!window.hotMicAPI) return;
     setBackgroundFilterEnabled(value);
@@ -336,6 +321,24 @@ export default function HotMicSettings() {
     if (!window.hotMicAPI || !cancelWords.trim()) return;
     await window.hotMicAPI.setCancelWords(cancelWords.trim());
   }, [cancelWords]);
+
+  const handleScrapWordsSave = useCallback(async () => {
+    if (!window.hotMicAPI || !scrapWords.trim()) return;
+    await window.hotMicAPI.setScrapWords(scrapWords.trim());
+  }, [scrapWords]);
+
+  const handleModeToggleHotkeySave = useCallback(async () => {
+    if (!window.hotMicAPI) return;
+    const normalized = modeToggleHotkey.trim();
+    const success = await window.hotMicAPI.setHotkey(normalized.length > 0 ? normalized : null);
+    if (!success) {
+      const current = await window.hotMicAPI.getHotkey();
+      setModeToggleHotkey(current ?? '');
+      return;
+    }
+    const saved = await window.hotMicAPI.getHotkey();
+    setModeToggleHotkey(saved ?? '');
+  }, [modeToggleHotkey]);
 
   const handlePrevWindowWordsSave = useCallback(async () => {
     if (!window.hotMicAPI || !prevWindowWords.trim()) return;
@@ -445,10 +448,11 @@ export default function HotMicSettings() {
     setResettingDefaults(true);
     try {
       await window.hotMicAPI.resetCommandDefaults();
-      const [submit, pw, cw, sw, openPrefixes, quitPrefixes, pvw, nww, cww, mp, hp, qp, rcw, rcdw, fp, cp, rsw, rsc, wc, cmds] = await Promise.all([
+      const [submit, pw, cw, skw, sw, openPrefixes, quitPrefixes, pvw, nww, cww, mp, hp, qp, rcw, rcdw, fp, cp, rsw, rsc, wc, cmds] = await Promise.all([
         window.hotMicAPI.getSubmitWord(),
         window.hotMicAPI.getPasteWords(),
         window.hotMicAPI.getCancelWords(),
+        window.hotMicAPI.getScrapWords(),
         window.hotMicAPI.getSwitchWords(),
         window.hotMicAPI.getOpenAppPrefixes(),
         window.hotMicAPI.getQuitAppPrefixes(),
@@ -471,6 +475,7 @@ export default function HotMicSettings() {
       setSubmitWord(submit);
       setPasteWords(pw);
       setCancelWords(cw);
+      setScrapWords(skw);
       setSwitchWords(sw);
       setOpenAppPrefixes(openPrefixes);
       setQuitAppPrefixes(quitPrefixes);
@@ -548,53 +553,63 @@ export default function HotMicSettings() {
         </button>
       </div>
 
-      {/* Hot Mic engine mode */}
-      <div style={styles.row}>
-        <span style={styles.rowLabel}>Hot Mic Engine</span>
-        <select
-          value={hotMicEngineMode}
-          onChange={(e) => void handleHotMicEngineModeChange(e.target.value as 'default' | 'whisper' | 'qwen')}
-          style={styles.select}
-        >
-          <option value="default">Use app default ({engine})</option>
-          <option value="whisper">Whisper</option>
-          <option value="qwen">Qwen</option>
-        </select>
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Mode Toggle Hotkey</span>
+        <input
+          type="text"
+          value={modeToggleHotkey}
+          onChange={(e) => setModeToggleHotkey(e.target.value)}
+          placeholder="optional (e.g. Option+Shift+M)"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleModeToggleHotkeySave}
+          onKeyDown={(e) => e.key === 'Enter' && void handleModeToggleHotkeySave()}
+        />
+        <p style={{ ...styles.description, marginTop: 6 }}>
+          Toggles between hot mic and standard mode.
+        </p>
       </div>
 
-      {resolvedEngine === 'whisper' && (
+      {/* Hot Mic engine source (single source of truth) */}
+      <div style={styles.row}>
+        <span style={styles.rowLabel}>Transcription Engine</span>
+        <span style={{ fontSize: '12px', color: theme.textSecondary }}>
+          {formatEngineLabel(engine)}
+        </span>
+      </div>
+      {engine === 'whisper' && (
         <div style={styles.row}>
           <span style={styles.rowLabel}>Whisper Model</span>
-          <select
-            value={hotMicWhisperModel}
-            onChange={(e) => void handleHotMicWhisperModelChange(e.target.value)}
-            style={styles.select}
-          >
-            {Object.entries(availableWhisperModels).map(([modelKey, modelInfo]) => (
-              <option key={modelKey} value={modelKey}>
-                {modelKey} ({Math.round(modelInfo.sizeBytes / (1024 * 1024))}MB)
-              </option>
-            ))}
-            {Object.keys(availableWhisperModels).length === 0 && (
-              <option value="small">small</option>
-            )}
-          </select>
+          <span style={{ fontSize: '12px', color: whisperModelReady ? theme.textSecondary : '#ef4444' }}>
+            {selectedWhisperModel}
+            {whisperModelReady ? '' : ' (not downloaded)'}
+          </span>
         </div>
       )}
 
-      {resolvedEngine === 'qwen' && !appleSilicon ? (
+      {engine === 'qwen' && !appleSilicon ? (
         <p style={{ ...styles.description, color: theme.textSecondary }}>
           Hot Mic requires Apple Silicon (M1 or later).
         </p>
-      ) : resolvedEngine === 'qwen' && !qwenInstalled ? (
+      ) : engine === 'qwen' && !qwenInstalled ? (
         <p style={{ ...styles.description, color: theme.textSecondary }}>
           Qwen voice model not installed. Run Qwen setup in Audio & Transcription settings.
         </p>
+      ) : engine === 'mlx-whisper' && !appleSilicon ? (
+        <p style={{ ...styles.description, color: theme.textSecondary }}>
+          MLX Whisper requires Apple Silicon (M1 or later).
+        </p>
+      ) : engine === 'mlx-whisper' && !mlxWhisperInstalled ? (
+        <p style={{ ...styles.description, color: theme.textSecondary }}>
+          MLX Whisper not installed. Run MLX Whisper setup in Audio & Transcription settings.
+        </p>
+      ) : engine === 'whisper' && !whisperModelReady ? (
+        <p style={{ ...styles.description, color: theme.textSecondary }}>
+          Whisper model is missing or incomplete. Download it in Audio & Transcription settings.
+        </p>
       ) : (
         <p style={styles.description}>
-          Hands-free voice input for multiple Claude/Codex terminals. When Claude finishes a turn,
-          the terminal is queued. Speak freely — your words buffer until you say the submit word
-          to flush and send. Say "skip" to cycle or "dismiss" to remove from queue.
+          Hot Mic now always uses the engine/model from Audio & Transcription. Change it there once,
+          and both standard recording and Hot Mic will use the same runtime.
         </p>
       )}
 
@@ -767,6 +782,22 @@ export default function HotMicSettings() {
       </div>
 
 
+
+      <div style={styles.divider} />
+
+      {/* Scrap draft */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Scrap Draft</span>
+        <input
+          type="text"
+          value={scrapWords}
+          onChange={(e) => setScrapWords(e.target.value)}
+          placeholder="scrap, scrap that"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleScrapWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleScrapWordsSave()}
+        />
+      </div>
 
       <div style={styles.divider} />
 
@@ -1229,6 +1260,11 @@ export default function HotMicSettings() {
           <span style={{ ...styles.rowLabel, marginBottom: '2px' }}>Health</span>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', fontSize: '11px', color: theme.textSecondary }}>
             <span>engine: {runtimeStatus.engineReady ? 'ready' : 'loading'}</span>
+            {runtimeStatus.engine && (
+              <span>
+                profile: {formatEngineLabel(runtimeStatus.engine.selectedEngine)} ({runtimeStatus.engine.readiness})
+              </span>
+            )}
             <span>queue: {runtimeStatus.queueDepth}</span>
             <span>chunks: {runtimeStatus.chunksReceived}</span>
             {runtimeStatus.whisperFallbackActive && (
@@ -1237,6 +1273,9 @@ export default function HotMicSettings() {
             <span style={{ color: runtimeStatus.micHealthy ? '#10b981' : '#ef4444' }}>
               mic: {runtimeStatus.micHealthy ? 'healthy' : 'stale'}
             </span>
+            {runtimeStatus.engine?.detail && (
+              <span style={{ color: '#f59e0b' }}>{runtimeStatus.engine.detail}</span>
+            )}
           </div>
         </div>
       )}
@@ -1253,6 +1292,12 @@ function getConditionColor(condition: string): string {
     case 'muted': return '#6b7280';
     default: return '#6b7280';
   }
+}
+
+function formatEngineLabel(engine: 'whisper' | 'qwen' | 'mlx-whisper'): string {
+  if (engine === 'mlx-whisper') return 'MLX Whisper (large-v3-turbo)';
+  if (engine === 'qwen') return 'Qwen3-ASR';
+  return 'Whisper';
 }
 
 function getStateColor(state: string): string {
