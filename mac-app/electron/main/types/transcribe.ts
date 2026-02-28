@@ -1,4 +1,13 @@
 /**
+ * Transcription engine identifiers. Defined once, used everywhere.
+ * 'whisper': whisper.cpp (local binary, CPU/Metal)
+ * 'qwen': Qwen3-ASR-0.6B via mlx-audio (Apple Silicon)
+ * 'mlx-whisper': Whisper large-v3-turbo via mlx-whisper (Apple Silicon)
+ */
+export type TranscriptionEngine = 'whisper' | 'qwen' | 'mlx-whisper';
+export type HotMicEngine = 'default' | TranscriptionEngine;
+
+/**
  * IPC channels for transcription functionality.
  */
 export const TranscribeIPCChannels = {
