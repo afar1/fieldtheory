@@ -1,1 +1,1 @@
-Now that you've done some work are there any parts you would go back and refactor? Any tests that you think should be written along the way?
+Now that you've done some work are there any parts you would go back and refactor. Refactor those. Write tests that you think should be written along the way.

@@ -33,12 +33,11 @@ import {
 import { ClipboardItem, isTerminalApp, isIDEWithTerminal, isFinder, obscureHomePath } from './clipboardManager';
 import { getHotkeyManager, KNOWN_CONFLICT_APPS } from './hotkeyManager';
 import {
-  improveTranscript,
   setSupabaseUrl as setEngineerSupabaseUrl,
 } from './promptEngineer';
 import { OnboardingWindow, OnboardingStep } from './onboardingWindow';
 import { OnboardingIPCChannels } from './types/onboarding';
-import { CursorStatusManager, CursorStatusState } from './cursorStatusManager';
+import { CursorStatusManager } from './cursorStatusManager';
 import {
   DynamicIslandManager,
   DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING,
@@ -74,6 +73,7 @@ import {
 } from './types/gaze';
 
 const log = createLogger('Main');
+const VISION_BUILD_ENABLED = false;
 
 // Helper for exec with timeout to prevent osascript hangs (especially with Finder)
 const { exec } = require('child_process');
@@ -196,9 +196,9 @@ let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
 
 /**
- * Shared entry point for all hot mic mode transitions.
- * Routes UI-triggered, IPC-triggered, and hook-triggered start/stop
- * through a single atomic path so mode is always persisted and broadcast.
+ * Shared entry point for direct hot mic start/stop actions.
+ * This controls runtime activation only; preference persistence and
+ * input-mode broadcasting happen through applyInputMode().
  */
 function applyHotMicMode(action: 'activate' | 'deactivate' | 'start'): void {
   if (!hotMicManager) return;
@@ -208,6 +208,25 @@ function applyHotMicMode(action: 'activate' | 'deactivate' | 'start'): void {
     hotMicManager.start();
   } else {
     hotMicManager.stop();
+  }
+}
+
+/**
+ * Route a newly captured screenshot/image item into the active voice workflow.
+ * Standard recording/silent stack owns item stacking when active; Hot Mic owns
+ * figure tracking while always-on listening is active.
+ */
+function routeCapturedItemToActiveSession(itemId: number): void {
+  if (itemId <= 0) return;
+
+  const transcriberStatus = transcriberManager?.getStatus();
+  if (transcriberManager && (transcriberStatus === 'recording' || transcriberStatus === 'silentStacking')) {
+    transcriberManager.addToStack(itemId);
+    return;
+  }
+
+  if (hotMicManager?.isActive) {
+    hotMicManager.addScreenshotToSession(itemId);
   }
 }
 let squaresManager: SquaresManager | null = null;
@@ -228,11 +247,47 @@ const HOT_MIC_ISLAND_GEOMETRY_LIMITS = {
 const HOT_MIC_DRAWER_TEXT_SIZE_DEFAULT = 14;
 const HOT_MIC_DRAWER_TEXT_SIZE_MIN = 11;
 const HOT_MIC_DRAWER_TEXT_SIZE_MAX = 22;
+type InputMode = 'hot-mic' | 'standard';
 
 function clampIslandGeometryInt(value: unknown, min: number, max: number, fallback: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
   const rounded = Math.round(value);
   return Math.max(min, Math.min(max, rounded));
+}
+
+function resolveInputModeFromHotMicEnabled(enabled: boolean): InputMode {
+  return enabled ? 'hot-mic' : 'standard';
+}
+
+function getCurrentInputMode(): InputMode {
+  const enabled = preferencesManager?.getPreference('hotMicEnabled') ?? false;
+  return resolveInputModeFromHotMicEnabled(enabled);
+}
+
+function broadcastInputMode(mode: InputMode): void {
+  dynamicIslandManager?.setInputMode(mode);
+  BrowserWindow.getAllWindows().forEach((win) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('hotmic:inputModeChanged', mode);
+    }
+  });
+}
+
+async function applyInputMode(mode: InputMode): Promise<InputMode> {
+  const normalized: InputMode = mode === 'hot-mic' ? 'hot-mic' : 'standard';
+  const shouldEnableHotMic = normalized === 'hot-mic';
+  await preferencesManager?.save({ hotMicEnabled: shouldEnableHotMic });
+
+  if (shouldEnableHotMic) {
+    if (hotMicManager && !hotMicManager.isActive) {
+      hotMicManager.activate();
+    }
+  } else if (hotMicManager?.isActive) {
+    hotMicManager.stop();
+  }
+
+  broadcastInputMode(normalized);
+  return normalized;
 }
 
 function normalizeHotMicIslandGeometry(
@@ -499,9 +554,7 @@ function registerHotkeysAfterOnboarding(): void {
   clipboardManager.registerScreenshotHotkey(async () => {
     const id = await clipboardManager!.captureScreenshot({ region: true });
     if (id > 0) {
-      if (transcriberManager) {
-        transcriberManager.addToStack(id);
-      }
+      routeCapturedItemToActiveSession(id);
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
@@ -514,9 +567,7 @@ function registerHotkeysAfterOnboarding(): void {
   clipboardManager.registerFullScreenHotkey(async () => {
     const id = await clipboardManager!.captureScreenshot({ fullScreen: true });
     if (id > 0) {
-      if (transcriberManager) {
-        transcriberManager.addToStack(id);
-      }
+      routeCapturedItemToActiveSession(id);
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
@@ -529,9 +580,7 @@ function registerHotkeysAfterOnboarding(): void {
   clipboardManager.registerActiveWindowHotkey(async () => {
     const id = await clipboardManager!.captureScreenshot({ activeWindow: true });
     if (id > 0) {
-      if (transcriberManager) {
-        transcriberManager.addToStack(id);
-      }
+      routeCapturedItemToActiveSession(id);
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
@@ -715,7 +764,7 @@ function registerHotkeysAfterOnboarding(): void {
             }
           }
 
-          clipboard.writeText(combinedText.trim());
+          clipboard.writeText(`${combinedText.trim()} `);
           await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
 
         } else {
@@ -731,7 +780,7 @@ function registerHotkeysAfterOnboarding(): void {
                 const imagePath = await clipboardManager.exportImageToCache(item);
                 if (imagePath) {
                   const resolvedPath = await resolveImagePath(imagePath);
-                  clipboard.writeText(resolvedPath);
+                  clipboard.writeText(`${resolvedPath} `);
                   await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
                 }
               } else {
@@ -756,30 +805,6 @@ function registerHotkeysAfterOnboarding(): void {
       }
   });
 
-  // Register Auto-improve toggle hotkey - now customizable via HotkeyManager
-  const autoImproveHotkey = prefs.autoImproveHotkey || 'Command+Shift+\\';
-  hotkeyManager.register('autoImprove', autoImproveHotkey, async () => {
-    if (!transcriberManager) {
-      return;
-    }
-
-    const currentState = transcriberManager.getAutoImprove();
-    const newState = !currentState;
-    await transcriberManager.setAutoImprove(newState);
-
-    // Refresh tray menu to show updated state
-    if (trayManager) {
-      trayManager.refreshMenu();
-    }
-
-    // Show cursor notification of the new state
-    if (cursorStatusManager) {
-      cursorStatusManager.showRecordingNote(
-        newState ? MESSAGES.recordingNote.autoImproveEnabled : MESSAGES.recordingNote.autoImproveDisabled
-      );
-    }
-  });
-
   // Register Command Launcher hotkey - now customizable via HotkeyManager
   // Simple toggle: open or close the command launcher
   const commandLauncherHotkey = prefs.commandLauncherHotkey || 'Command+Shift+K';
@@ -802,95 +827,6 @@ function registerHotkeysAfterOnboarding(): void {
       }
   });
 
-  // Register Improve Text hotkey - now customizable via HotkeyManager
-  const improveTextHotkey = prefs.improveTextHotkey || 'Command+Shift+I';
-  hotkeyManager.register('improveText', improveTextHotkey, async () => {
-    await handleImproveSelectedText();
-  });
-
-}
-
-/**
- * Handle Cmd+Shift+I to improve selected text.
- * 
- * Flow:
- * 1. Simulate Cmd+C to copy selected text (selection stays highlighted)
- * 2. If nothing selected, abort silently
- * 3. Show blue dot (improving state)
- * 4. Call improveTranscript API
- * 5. Paste improved text (replaces selection)
- * 6. Show green dot (done state)
- */
-async function handleImproveSelectedText(): Promise<void> {
-  const { exec } = require('child_process');
-  const { promisify } = require('util');
-  const execAsync = promisify(exec);
-
-  try {
-    // Simulate Cmd+C to copy selected text. The selection stays highlighted
-    // so when we paste, it will replace the selected text.
-    await execAsync('osascript -e \'tell application "System Events" to keystroke "c" using command down\'');
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    // Read clipboard to get the selected text.
-    const selectedText = clipboard.readText();
-
-    // If nothing selected, abort silently.
-    if (!selectedText || selectedText.trim().length === 0) {
-      return;
-    }
-
-    // Show blue dot (improving state).
-    cursorStatusManager?.setState('improving');
-
-    // Get auth token for cloud API.
-    const accessToken = authManager?.getSession()?.access_token;
-
-    // Call improve API (will use local LLM if no auth token).
-    const result = await improveTranscript(selectedText, accessToken);
-
-    if (!result.success || !result.refinedPrompt) {
-      log.error('Improvement failed:', result.error);
-      cursorStatusManager?.setState('idle');
-      return;
-    }
-
-    // Paste improved text. Since the original text is still selected,
-    // this will replace it with the improved version.
-    clipboard.writeText(result.refinedPrompt);
-    clipboardManager?.syncClipboardHash();
-    await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-
-    // Show done state briefly.
-    cursorStatusManager?.setState('done');
-
-    // Note: Text improvement usage is tracked server-side by the improve-text edge function.
-    // No client-side tracking needed here to avoid double-counting.
-
-    // Track auto-improve usage stats (only for API calls with usage data)
-    if (result.usage && preferencesManager) {
-      const inputWordCount = selectedText.trim().split(/\s+/).filter(w => w.length > 0).length;
-      const currentPrefs = preferencesManager.get();
-      const currentStats = currentPrefs.autoImproveStats || {
-        wordsImproved: 0,
-        apiCalls: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-      };
-      await preferencesManager.save({
-        autoImproveStats: {
-          wordsImproved: currentStats.wordsImproved + (result.wordCount || inputWordCount),
-          apiCalls: currentStats.apiCalls + 1,
-          inputTokens: currentStats.inputTokens + result.usage.inputTokens,
-          outputTokens: currentStats.outputTokens + result.usage.outputTokens,
-        },
-      });
-    }
-
-  } catch (error) {
-    log.error('ImproveText error:', error);
-    cursorStatusManager?.setState('idle');
-  }
 }
 
 /**
@@ -2479,36 +2415,20 @@ function setupTranscribeIPCHandlers(): void {
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE, () => {
-    if (!transcriberManager) {
-      return false;
-    }
-    return transcriberManager.getAutoImprove();
+    return false;
   });
 
-  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE, async (_event, enabled: boolean) => {
-    if (!transcriberManager) {
-      throw new Error('TranscriberManager not initialized');
-    }
-    await transcriberManager.setAutoImprove(enabled);
-
-    // Refresh tray menu to show updated state
-    if (trayManager) {
-      trayManager.refreshMenu();
-    }
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE, async () => {
+    if (!transcriberManager) return;
+    await transcriberManager.setAutoImprove(false);
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_MIN_WORDS, () => {
-    if (!transcriberManager) {
-      return 100; // Default value
-    }
-    return transcriberManager.getAutoImproveMinWords();
+    return 0;
   });
 
-  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_MIN_WORDS, async (_event, minWords: number) => {
-    if (!transcriberManager) {
-      throw new Error('TranscriberManager not initialized');
-    }
-    await transcriberManager.setAutoImproveMinWords(minWords);
+  ipcMain.handle(TranscribeIPCChannels.SET_AUTO_IMPROVE_MIN_WORDS, async () => {
+    return;
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_AUTO_IMPROVE_STATS, () => {
@@ -2540,6 +2460,7 @@ function setupTranscribeIPCHandlers(): void {
       throw new Error('PreferencesManager not initialized');
     }
     await preferencesManager.save({ transcriptionEngine: engine });
+    await transcriberManager?.restartTranscriptionRuntime();
   });
 
   // Sound settings handlers.
@@ -2693,6 +2614,7 @@ function setupClipboardIPCHandlers(): void {
     }
     const id = await clipboardManager.captureScreenshot({ region: region || false });
     if (id > 0) {
+      routeCapturedItemToActiveSession(id);
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
           window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
@@ -2906,9 +2828,10 @@ function setupClipboardIPCHandlers(): void {
             const figureRef = item.figureLabel
               ? `Figure ${item.figureLabel}: ${imagePath}`
               : imagePath;
-            clipboard.writeText(figureRef);
-            // Set hash directly from the text we just wrote
-            clipboardManager.setClipboardHashFromText(figureRef);
+            const figureRefWithSpace = `${figureRef} `;
+            clipboard.writeText(figureRefWithSpace);
+            // Set hash from exact clipboard payload to avoid self-capture churn.
+            clipboardManager.setClipboardHashFromText(figureRefWithSpace);
           } else {
             log.error('Failed to export image for terminal paste');
             return;
@@ -3118,7 +3041,7 @@ function setupClipboardIPCHandlers(): void {
               const imagePath = await clipboardManager!.exportImageToCache(item);
               if (imagePath) {
                 // Use real path for terminal compatibility
-                clipboard.writeText(imagePath);
+                clipboard.writeText(`${imagePath} `);
                 clipboardManager.syncClipboardHash();
                 try {
                   await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
@@ -3773,16 +3696,12 @@ function setupClipboardIPCHandlers(): void {
   const hotkeyPreferenceKeys: Record<string, string> = {
     superPaste: 'superPasteHotkey',
     commandLauncher: 'commandLauncherHotkey',
-    improveText: 'improveTextHotkey',
-    autoImprove: 'autoImproveHotkey',
   };
 
   // Default values for each hotkey
   const hotkeyDefaults: Record<string, string> = {
     superPaste: 'Command+Shift+V',
     commandLauncher: 'Command+Shift+K',
-    improveText: 'Command+Shift+I',
-    autoImprove: 'Command+Shift+\\',
   };
 
   ipcMain.handle('hotkey:get', async (_event, id: string) => {
@@ -4696,7 +4615,7 @@ function setupClipboardIPCHandlers(): void {
       // Use text-based file path for terminals and IDEs with integrated terminals.
       if (isTerminal || isIDE) {
         const referenceText = `[resume from handoff: ${fileName}]\n${filePath}`;
-        clipboard.writeText(referenceText);
+        clipboard.writeText(`${referenceText} `);
         clipboardManager?.syncClipboardHash();
       } else {
         // For other apps: paste the .md file as an attachment.
@@ -4755,7 +4674,7 @@ function setupClipboardIPCHandlers(): void {
       if (isTerminal || isIDE) {
         // For terminals and IDEs: paste a text reference with the file path below.
         const referenceText = `[run this command: ${command.name}.md]\n${command.filePath}`;
-        clipboard.writeText(referenceText);
+        clipboard.writeText(`${referenceText} `);
         clipboardManager?.syncClipboardHash();
       } else {
         // For other apps: paste the .md file as an attachment.
@@ -5209,11 +5128,6 @@ function broadcastTranscribeEvents(): void {
     // This ensures blur event doesn't hide the app when recording is active
     clipboardHistoryWindow?.setRecordingActive(status === 'recording');
 
-    // Update cursor status indicator.
-    if (cursorStatusManager) {
-      cursorStatusManager.setState(status as CursorStatusState);
-    }
-
     // Update dynamic island with recording state transitions.
     if (dynamicIslandManager) {
       if (status === 'recording') {
@@ -5221,6 +5135,7 @@ function broadcastTranscribeEvents(): void {
       } else if (status === 'transcribing') {
         dynamicIslandManager.setState('transcribing');
       } else if (status === 'idle') {
+        dynamicIslandManager.updateDrawerTranscript('');
         // Don't immediately dismiss - let transcript display timeout handle it.
         if (dynamicIslandManager.getState() !== 'showing-transcript') {
           dynamicIslandManager.setState('idle');
@@ -5237,15 +5152,16 @@ function broadcastTranscribeEvents(): void {
     }
   });
 
+  transcriberManager.on('standardLiveTranscript', (text: string) => {
+    dynamicIslandManager?.updateDrawerTranscript(text);
+  });
+
   transcriberManager.on('result', (text) => {
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send(TranscribeIPCChannels.RESULT, text);
       }
     });
-    // Store transcription for cursor status done state display
-    cursorStatusManager?.setLastTranscription(text);
-
     // Send final transcript to the dynamic island for display.
     dynamicIslandManager?.sendTranscript(text, true);
 
@@ -5266,15 +5182,6 @@ function broadcastTranscribeEvents(): void {
         dynamicIslandManager?.sendCommandDetected(name.toLowerCase(), 0, 0);
       });
     }
-  });
-
-  transcriberManager.on('wordsImproved', (wordCount: number) => {
-    metricsManager?.recordWordsImproved(wordCount);
-  });
-
-  // Show improving state on the dynamic island when AI improvement starts.
-  transcriberManager.on('improvingStarted', () => {
-    dynamicIslandManager?.setState('improving');
   });
 
   transcriberManager.on('autostackCreated', () => {
@@ -5303,46 +5210,30 @@ function broadcastTranscribeEvents(): void {
         window.webContents.send('transcribe:stackChanged', count);
       }
     });
-    // Update cursor status with screenshot count (for pipe indicator).
-    cursorStatusManager?.setScreenshotCount(count);
   });
   
   // Track if quota just exhausted - skip paste-success to preserve upgrade message.
   let quotaJustExhausted = false;
   
-  transcriberManager.on('paste-success', (transcription) => {
+  transcriberManager.on('paste-success', (_transcription) => {
     // If quota was just exhausted, skip the normal done state to preserve upgrade message.
     if (quotaJustExhausted) {
       quotaJustExhausted = false;
       return;
     }
-    if (cursorStatusManager) {
-      cursorStatusManager.setStateWithData('done', { transcription, pasteFailed: false });
-    }
   });
   
   transcriberManager.on('paste-failed', (_message, _transcription) => {
-    if (cursorStatusManager) {
-      // Don't show the actual transcription - just indicate it was saved
-      cursorStatusManager.setStateWithData('paste-failed', { transcription: 'Saved to Field Theory' });
-    }
+    return;
   });
   
   // Confirmation state events for cursor status widget
   transcriberManager.on('confirmation-show', () => {
-    if (cursorStatusManager) {
-      cursorStatusManager.setState('confirmation');
-    }
+    return;
   });
   
   transcriberManager.on('confirmation-hide', () => {
-    // Return to the actual current state (recording or silentStacking)
-    if (cursorStatusManager && transcriberManager) {
-      const status = transcriberManager.getStatus();
-      if (status === 'recording' || status === 'silentStacking') {
-        cursorStatusManager.setState(status);
-      }
-    }
+    return;
   });
   
   // Handle quota exhausted events - show upgrade prompt at cursor and broadcast to windows.
@@ -5491,9 +5382,7 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
     if (clipboardManager) {
       const id = await clipboardManager.captureScreenshot({ region: true });
       if (id > 0) {
-        if (transcriberManager) {
-          transcriberManager.addToStack(id);
-        }
+        routeCapturedItemToActiveSession(id);
         BrowserWindow.getAllWindows().forEach((window) => {
           if (!window.isDestroyed()) {
             window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
@@ -5508,9 +5397,7 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
     if (clipboardManager) {
       const id = await clipboardManager.captureScreenshot({ fullScreen: true });
       if (id > 0) {
-        if (transcriberManager) {
-          transcriberManager.addToStack(id);
-        }
+        routeCapturedItemToActiveSession(id);
         BrowserWindow.getAllWindows().forEach((window) => {
           if (!window.isDestroyed()) {
             window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
@@ -5525,9 +5412,7 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
     if (clipboardManager) {
       const id = await clipboardManager.captureScreenshot({ activeWindow: true });
       if (id > 0) {
-        if (transcriberManager) {
-          transcriberManager.addToStack(id);
-        }
+        routeCapturedItemToActiveSession(id);
         BrowserWindow.getAllWindows().forEach((window) => {
           if (!window.isDestroyed()) {
             window.webContents.send(ClipboardIPCChannels.ITEM_ADDED, id);
@@ -5579,87 +5464,89 @@ async function initTranscriberSystem(): Promise<void> {
     await preferencesManager.load();
   }
 
-  if (!gazeDebugOverlayManager) {
-    gazeDebugOverlayManager = new GazeDebugOverlayManager(preferencesManager);
-    gazeDebugOverlayManager.on('stateChanged', (state) => {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(GazeIPCChannels.DEBUG_OVERLAY_STATE_CHANGED, state);
-        }
+  if (VISION_BUILD_ENABLED) {
+    if (!gazeDebugOverlayManager) {
+      gazeDebugOverlayManager = new GazeDebugOverlayManager(preferencesManager);
+      gazeDebugOverlayManager.on('stateChanged', (state) => {
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send(GazeIPCChannels.DEBUG_OVERLAY_STATE_CHANGED, state);
+          }
+        });
       });
-    });
-    await gazeDebugOverlayManager.initFromPreferences();
-  }
+      await gazeDebugOverlayManager.initFromPreferences();
+    }
 
-  if (!gazeScreenOverlayManager) {
-    gazeScreenOverlayManager = new GazeScreenOverlayManager(preferencesManager);
-    gazeScreenOverlayManager.on('stateChanged', (state) => {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(GazeIPCChannels.SCREEN_OVERLAY_STATE_CHANGED, state);
-        }
+    if (!gazeScreenOverlayManager) {
+      gazeScreenOverlayManager = new GazeScreenOverlayManager(preferencesManager);
+      gazeScreenOverlayManager.on('stateChanged', (state) => {
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send(GazeIPCChannels.SCREEN_OVERLAY_STATE_CHANGED, state);
+          }
+        });
       });
-    });
-    await gazeScreenOverlayManager.initFromPreferences();
-  }
+      await gazeScreenOverlayManager.initFromPreferences();
+    }
 
-  // Initialize gaze tracking manager (capture + calibration + dwell/focus).
-  if (!gazeTrackingManager) {
-    gazeTrackingManager = new GazeTrackingManager(nativeHelper, preferencesManager);
+    // Initialize gaze tracking manager (capture + calibration + dwell/focus).
+    if (!gazeTrackingManager) {
+      gazeTrackingManager = new GazeTrackingManager(nativeHelper, preferencesManager);
 
-    gazeTrackingManager.on('statusChanged', (status) => {
-      gazeDebugOverlayManager?.updateStatus(status);
-      gazeScreenOverlayManager?.updateStatus(status);
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(GazeIPCChannels.STATUS_CHANGED, status);
-        }
+      gazeTrackingManager.on('statusChanged', (status) => {
+        gazeDebugOverlayManager?.updateStatus(status);
+        gazeScreenOverlayManager?.updateStatus(status);
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send(GazeIPCChannels.STATUS_CHANGED, status);
+          }
+        });
       });
-    });
 
-    gazeTrackingManager.on('sample', (sample) => {
-      gazeDebugOverlayManager?.updateSample(sample);
-      gazeScreenOverlayManager?.updateSample(sample);
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(GazeIPCChannels.SAMPLE, sample);
-        }
+      gazeTrackingManager.on('sample', (sample) => {
+        gazeDebugOverlayManager?.updateSample(sample);
+        gazeScreenOverlayManager?.updateSample(sample);
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send(GazeIPCChannels.SAMPLE, sample);
+          }
+        });
       });
-    });
 
-    gazeTrackingManager.on('calibrationChanged', (state) => {
-      gazeDebugOverlayManager?.updateCalibration(state);
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(GazeIPCChannels.CALIBRATION_CHANGED, state);
-        }
+      gazeTrackingManager.on('calibrationChanged', (state) => {
+        gazeDebugOverlayManager?.updateCalibration(state);
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send(GazeIPCChannels.CALIBRATION_CHANGED, state);
+          }
+        });
       });
-    });
 
-    gazeTrackingManager.on('dwellTriggered', (event) => {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(GazeIPCChannels.DWELL_TRIGGERED, event);
-        }
+      gazeTrackingManager.on('dwellTriggered', (event) => {
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send(GazeIPCChannels.DWELL_TRIGGERED, event);
+          }
+        });
       });
-    });
 
-    gazeTrackingManager.on('highlightWindow', (windowSnapshot) => {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send(GazeIPCChannels.HIGHLIGHT_WINDOW, windowSnapshot);
-        }
+      gazeTrackingManager.on('highlightWindow', (windowSnapshot) => {
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send(GazeIPCChannels.HIGHLIGHT_WINDOW, windowSnapshot);
+          }
+        });
       });
-    });
 
-    await gazeTrackingManager.init();
-    gazeDebugOverlayManager?.updateStatus(gazeTrackingManager.getStatus());
-    gazeScreenOverlayManager?.updateStatus(gazeTrackingManager.getStatus());
-    gazeDebugOverlayManager?.updateCalibration(gazeTrackingManager.getCalibrationState());
-    const latestSample = gazeTrackingManager.getLatestSample();
-    if (latestSample) {
-      gazeDebugOverlayManager?.updateSample(latestSample);
-      gazeScreenOverlayManager?.updateSample(latestSample);
+      await gazeTrackingManager.init();
+      gazeDebugOverlayManager?.updateStatus(gazeTrackingManager.getStatus());
+      gazeScreenOverlayManager?.updateStatus(gazeTrackingManager.getStatus());
+      gazeDebugOverlayManager?.updateCalibration(gazeTrackingManager.getCalibrationState());
+      const latestSample = gazeTrackingManager.getLatestSample();
+      if (latestSample) {
+        gazeDebugOverlayManager?.updateSample(latestSample);
+        gazeScreenOverlayManager?.updateSample(latestSample);
+      }
     }
   }
 
@@ -5862,7 +5749,8 @@ async function initTranscriberSystem(): Promise<void> {
   // Initialize the dynamic island overlay (fixed near the notch, shows transcript + history).
   dynamicIslandManager = new DynamicIslandManager();
   const hotMicEnabledOnLaunch = preferencesManager.getPreference('hotMicEnabled') ?? false;
-  dynamicIslandManager.setEnabled(hotMicEnabledOnLaunch);
+  dynamicIslandManager.setEnabled(true);
+  dynamicIslandManager.setInputMode(resolveInputModeFromHotMicEnabled(hotMicEnabledOnLaunch));
   dynamicIslandManager.setClipboardManager(clipboardManager);
   dynamicIslandManager.setGeometryTuning(getHotMicIslandGeometryFromPreferences());
   dynamicIslandManager.setDrawerTextSize(getHotMicDrawerTextSizeFromPreferences());
@@ -5957,7 +5845,6 @@ async function initTranscriberSystem(): Promise<void> {
         }
       });
     });
-
     hotMicManager.on('runtimeStatusChanged', (status: import('./hotMicManager').HotMicRuntimeStatus) => {
       BrowserWindow.getAllWindows().forEach(win => {
         if (!win.isDestroyed()) {
@@ -5965,11 +5852,16 @@ async function initTranscriberSystem(): Promise<void> {
         }
       });
     });
-  }
 
-  // Pass transcriberManager to trayManager for auto-improve toggle
-  if (trayManager) {
-    trayManager.setTranscriberManager(transcriberManager);
+    hotMicManager.on('statusChanged', (status: { state: string; muted: boolean }) => {
+      BrowserWindow.getAllWindows().forEach(win => {
+        if (!win.isDestroyed()) {
+          win.webContents.send('hotmic:statusChanged', status);
+        }
+      });
+    });
+
+    broadcastInputMode(getCurrentInputMode());
   }
 
   // Wire up confirmation response from cursor status widget to transcriber manager
@@ -6028,8 +5920,6 @@ async function initTranscriberSystem(): Promise<void> {
       }
     }
     transcriberManager.setCommandsManager(commandsManager);
-    // Provide access token getter for cloud-based transcript improvement.
-    transcriberManager.setAccessTokenGetter(() => authManager?.getSession()?.access_token);
   }
   if (hotMicManager) {
     hotMicManager.setCommandsManager(commandsManager);
@@ -6188,7 +6078,9 @@ async function initTranscriberSystem(): Promise<void> {
       // Re-apply per-user Dynamic Island tuning after preferences reload.
       dynamicIslandManager?.setGeometryTuning(getHotMicIslandGeometryFromPreferences());
       dynamicIslandManager?.setDrawerTextSize(getHotMicDrawerTextSizeFromPreferences());
-      dynamicIslandManager?.setEnabled(prefs.hotMicEnabled ?? false);
+      dynamicIslandManager?.setEnabled(true);
+      dynamicIslandManager?.setInputMode(resolveInputModeFromHotMicEnabled(prefs.hotMicEnabled ?? false));
+      broadcastInputMode(resolveInputModeFromHotMicEnabled(prefs.hotMicEnabled ?? false));
       await gazeTrackingManager?.reloadFromPreferences();
       await gazeDebugOverlayManager?.reloadFromPreferences();
       await gazeScreenOverlayManager?.reloadFromPreferences();
@@ -6386,6 +6278,8 @@ async function initClipboardCallbacks(): Promise<void> {
     const status = transcriberManager?.getStatus();
     if (item && transcriberManager && (status === 'recording' || status === 'silentStacking')) {
       transcriberManager.addToStack(id);
+    } else if (item && hotMicManager?.isActive && (item.type === 'screenshot' || item.type === 'image')) {
+      hotMicManager.addScreenshotToSession(id);
     }
 
     BrowserWindow.getAllWindows().forEach((window) => {
@@ -6509,6 +6403,16 @@ if (!gotTheLock) {
     setupDisplayListeners();
 
     // Hot Mic IPC handlers
+    ipcMain.handle('hotmic:getStatus', () => {
+      if (hotMicManager) {
+        return hotMicManager.getStatus();
+      }
+      return {
+        state: 'idle',
+        muted: preferencesManager?.getPreference('hotMicMuted') ?? false,
+      };
+    });
+
     ipcMain.handle('hotmic:getState', () => {
       return hotMicManager?.getState() ?? 'idle';
     });
@@ -6526,8 +6430,23 @@ if (!gotTheLock) {
       };
     });
 
+    ipcMain.handle('hotmic:getMuted', () => {
+      if (hotMicManager) {
+        return hotMicManager.getMuted();
+      }
+      return preferencesManager?.getPreference('hotMicMuted') ?? false;
+    });
+
     ipcMain.handle('hotmic:getEnabled', () => {
       return preferencesManager?.getPreference('hotMicEnabled') ?? false;
+    });
+
+    ipcMain.handle('hotmic:getInputMode', () => {
+      return getCurrentInputMode();
+    });
+
+    ipcMain.handle('hotmic:setInputMode', async (_event, mode: InputMode) => {
+      return await applyInputMode(mode);
     });
 
     ipcMain.handle('hotmic:getTranscriptionEngineMode', () => {
@@ -6537,16 +6456,7 @@ if (!gotTheLock) {
     ipcMain.handle('hotmic:setTranscriptionEngineMode', async (_event, mode: 'default' | 'whisper' | 'qwen') => {
       const normalized = mode === 'whisper' || mode === 'qwen' ? mode : 'default';
       await preferencesManager?.save({ hotMicTranscriptionEngine: normalized });
-      return normalized;
-    });
-
-    ipcMain.handle('hotmic:getAllowWhisperFallback', () => {
-      return preferencesManager?.getPreference('hotMicAllowWhisperFallback') ?? true;
-    });
-
-    ipcMain.handle('hotmic:setAllowWhisperFallback', async (_event, enabled: boolean) => {
-      const normalized = enabled !== false;
-      await preferencesManager?.save({ hotMicAllowWhisperFallback: normalized });
+      await transcriberManager?.restartTranscriptionRuntime();
       return normalized;
     });
 
@@ -6558,18 +6468,12 @@ if (!gotTheLock) {
       const validModels: ModelSize[] = ['small'];
       const normalized: ModelSize = validModels.includes(model) ? model : 'small';
       await preferencesManager?.save({ hotMicWhisperModel: normalized });
+      await transcriberManager?.restartTranscriptionRuntime();
       return normalized;
     });
 
     ipcMain.handle('hotmic:setEnabled', async (_event, enabled: boolean) => {
-      await preferencesManager?.save({ hotMicEnabled: enabled });
-      dynamicIslandManager?.setEnabled(enabled);
-      if (!enabled && hotMicManager?.isActive) {
-        hotMicManager.stop();
-      } else if (enabled && hotMicManager && !hotMicManager.isActive) {
-        // Start listening immediately when toggled on
-        hotMicManager.activate();
-      }
+      await applyInputMode(enabled ? 'hot-mic' : 'standard');
       return enabled;
     });
 

@@ -24,8 +24,6 @@ export default defineConfig(({ mode }) => {
           cursorStatus: path.resolve(__dirname, 'cursor-status.html'),
           commandLauncher: path.resolve(__dirname, 'command-launcher.html'),
           dynamicIsland: path.resolve(__dirname, 'dynamic-island.html'),
-          gazeDebugOverlay: path.resolve(__dirname, 'gaze-debug-overlay.html'),
-          gazeScreenOverlay: path.resolve(__dirname, 'gaze-screen-overlay.html'),
         },
       },
     },

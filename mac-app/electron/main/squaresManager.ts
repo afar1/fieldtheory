@@ -135,32 +135,8 @@ export class SquaresManager extends EventEmitter {
    * Called after onboarding is complete.
    */
   registerHotkeys(): void {
-    if (!this.config.enabled) {
-      log.info('Squares disabled, skipping hotkey registration');
-      return;
-    }
-
-    const entries = Object.entries(this.hotkeys) as [keyof SquaresHotkeys, string][];
-
-    for (const [action, accelerator] of entries) {
-      if (!accelerator) continue;
-
-      try {
-        const success = globalShortcut.register(accelerator, () => {
-          this.executeAction(action as SquaresAction);
-        });
-
-        if (success) {
-          this.registeredHotkeys.set(action, accelerator);
-        } else {
-          log.error(`Failed to register hotkey for ${action}: "${accelerator}" - may be in use`);
-        }
-      } catch (err) {
-        log.error(`Error registering hotkey for ${action}:`, err);
-      }
-    }
-
-    log.info(`Registered ${this.registeredHotkeys.size} Squares hotkeys`);
+    this.unregisterHotkeys();
+    log.info('Squares keyboard shortcut registration disabled (voice commands only)');
   }
 
   /**

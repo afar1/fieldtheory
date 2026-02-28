@@ -18,8 +18,6 @@ export type HotkeyId =
   | 'abandonRecording'
   | 'superPaste'
   | 'commandLauncher'
-  | 'improveText'
-  | 'autoImprove'
   | 'hotMic';
 
 /**
@@ -107,20 +105,6 @@ export const HOTKEY_CONFIGS: Record<HotkeyId, HotkeyConfig> = {
     preferenceKey: 'commandLauncherHotkey',
     description: 'Open command launcher',
     category: 'navigation',
-  },
-  improveText: {
-    id: 'improveText',
-    defaultKey: 'Command+Shift+I',
-    preferenceKey: 'improveTextHotkey',
-    description: 'Improve selected text',
-    category: 'text',
-  },
-  autoImprove: {
-    id: 'autoImprove',
-    defaultKey: 'Command+Shift+\\',
-    preferenceKey: 'autoImproveHotkey',
-    description: 'Toggle auto-improve',
-    category: 'text',
   },
   hotMic: {
     id: 'hotMic',

@@ -1,11 +1,15 @@
 // =============================================================================
 // DynamicIsland - Fixed-position overlay near the macOS notch.
-// Two pills: left (hamburger + expanded transcript bar) and right (hot-mic dot).
+// Two pills: left (mode toggle + history) and right (drawer controls).
 // The ?side= query param determines which pill to render.
 // =============================================================================
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { estimateWordsPerLine, summarizeTranscriptForHistory, summarizeTranscriptForIsland } from '../utils/textUtils';
+import {
+  getLeftModeDotPresentation,
+  type DynamicIslandInputMode,
+} from '../utils/dynamicIslandIndicator';
 
 type IslandState = 'idle' | 'recording' | 'transcribing' | 'showing-transcript' | 'improving';
 
@@ -93,13 +97,10 @@ function timeAgo(timestamp: number): string {
 }
 
 // =============================================================================
-// Right pill — hot-mic status dot + drawer controls
+// Right pill — drawer controls
 // =============================================================================
 
 function RightPill() {
-  const [active, setActive] = useState(false);
-  const [muted, setMuted] = useState(false);
-  const [recording, setRecording] = useState(false);
   const [drawerTranscript, setDrawerTranscript] = useState('');
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -109,18 +110,6 @@ function RightPill() {
     const api = (window as any).dynamicIslandAPI;
     if (!api) return;
 
-    api.onHotMicUpdate?.((data: { active: boolean; wordCount: number; lastWord: string }) => {
-      setActive(data.active);
-    });
-
-    api.onHotMicMute?.((isMuted: boolean) => {
-      setMuted(isMuted);
-    });
-
-    api.onStateChange?.((state: string) => {
-      setRecording(state === 'recording');
-    });
-
     api.onDrawerTranscript?.((text: string) => {
       setDrawerTranscript(text);
       if (!text.trim()) {
@@ -129,21 +118,12 @@ function RightPill() {
     });
 
     return () => {
-      api.removeAllListeners('dynamic-island-hotmic');
-      api.removeAllListeners('dynamic-island-hotmic-warn-discard');
-      api.removeAllListeners('dynamic-island-hotmic-slide-out');
-      api.removeAllListeners('dynamic-island-hotmic-mute');
-      api.removeAllListeners('dynamic-island-state');
       api.removeAllListeners('dynamic-island-drawer-transcript');
       if (copiedTimerRef.current) {
         clearTimeout(copiedTimerRef.current);
         copiedTimerRef.current = null;
       }
     };
-  }, []);
-
-  const handleDotClick = useCallback(() => {
-    (window as any).dynamicIslandAPI?.toggleMute?.();
   }, []);
 
   const handleDismissClick = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
@@ -173,9 +153,7 @@ function RightPill() {
     }
   }, [drawerTranscript]);
 
-  const dotColor = '#f97316';
-  const dotShadow = '0 0 8px rgba(249, 115, 22, 0.5)';
-  const showDot = active || recording || muted;
+  const showDrawerControls = hasTranscript;
 
   return (
     <div style={rightStyles.outerContainer}>
@@ -186,28 +164,7 @@ function RightPill() {
           justifyContent: hasTranscript ? 'flex-end' : 'center',
         }}
       >
-        <button
-          className="di-right-dot-btn"
-          onClick={handleDotClick}
-          style={rightStyles.iconButton}
-          title={muted ? 'unmute hot mic' : 'mute hot mic'}
-        >
-          {muted ? (
-            <svg className="di-right-dot" width="13" height="13" viewBox="0 0 14 14" fill="none">
-              <circle cx="7" cy="7" r="5.5" stroke="rgba(255,255,255,0.7)" strokeWidth="1.4" fill="none" />
-              <line x1="3.5" y1="10.5" x2="10.5" y2="3.5" stroke="rgba(255,255,255,0.7)" strokeWidth="1.4" strokeLinecap="round" />
-            </svg>
-          ) : (
-            <div className="di-right-dot" style={{
-              ...rightStyles.dot,
-              opacity: showDot ? 1 : 0,
-              backgroundColor: dotColor,
-              boxShadow: showDot ? dotShadow : 'none',
-              transition: 'opacity 0.2s ease',
-            }} />
-          )}
-        </button>
-        {hasTranscript && (
+        {showDrawerControls && (
           <button
             className="di-right-dismiss-btn"
             onClick={handleDismissClick}
@@ -220,7 +177,7 @@ function RightPill() {
             </svg>
           </button>
         )}
-        {hasTranscript && (
+        {showDrawerControls && (
           <button
             className="di-right-copy-btn"
             onClick={handleCopyClick}
@@ -264,27 +221,6 @@ const rightStyles: Record<string, React.CSSProperties> = {
     backgroundColor: '#000000',
     borderRadius: '0 0 16px 0',
     overflow: 'hidden',
-  },
-  iconButton: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '16px',
-    height: '16px',
-    flexShrink: 0,
-    padding: 0,
-    border: 'none',
-    borderRadius: '999px',
-    backgroundColor: 'transparent',
-    cursor: 'pointer',
-  },
-  dot: {
-    width: '8px',
-    height: '8px',
-    minWidth: '8px',
-    borderRadius: '50%',
-    flexShrink: 0,
-    transition: 'opacity 0.2s ease, background-color 0.15s ease',
   },
   dismissButton: {
     display: 'flex',
@@ -454,7 +390,7 @@ const drawerStyles: Record<string, React.CSSProperties> = {
 };
 
 // =============================================================================
-// Left pill — hamburger + expanded transcript bar (existing behavior)
+// Left pill — mode toggle + history controls
 // =============================================================================
 
 function LeftPill() {
@@ -467,6 +403,7 @@ function LeftPill() {
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [deletedId, setDeletedId] = useState<number | null>(null);
   const [dotCount, setDotCount] = useState(1);
+  const [inputMode, setInputMode] = useState<DynamicIslandInputMode>('standard');
   const [historyWordsPerLine, setHistoryWordsPerLine] = useState(10);
   const [voiceTuningVisible, setVoiceTuningVisible] = useState(false);
   const [backgroundFilterEnabled, setBackgroundFilterEnabled] = useState(false);
@@ -524,6 +461,13 @@ function LeftPill() {
       setHistoryVisible(false);
     });
 
+    api.onInputMode?.((mode: DynamicIslandInputMode) => {
+      setInputMode(mode);
+    });
+    if (api.getInputMode) {
+      void api.getInputMode().then((mode: DynamicIslandInputMode) => setInputMode(mode));
+    }
+
     void api.getHotMicBackgroundFilterEnabled?.().then((enabled: boolean) => {
       setBackgroundFilterEnabled(enabled);
       setFilterMeter((prev) => ({ ...prev, enabled }));
@@ -548,6 +492,7 @@ function LeftPill() {
       api.removeAllListeners('dynamic-island-history');
       api.removeAllListeners('dynamic-island-hide-history');
       api.removeAllListeners('dynamic-island-show-history');
+      api.removeAllListeners('dynamic-island-input-mode');
       api.removeAllListeners('dynamic-island-hotmic-filter-meter');
       if (copiedTimerRef.current) {
         clearTimeout(copiedTimerRef.current);
@@ -621,6 +566,22 @@ function LeftPill() {
     // it only toggles the main history window now.
     (window as any).dynamicIslandAPI?.openFieldTheory?.();
   }, []);
+
+  const toggleInputMode = useCallback(() => {
+    const nextMode: DynamicIslandInputMode = inputMode === 'hot-mic' ? 'standard' : 'hot-mic';
+    const previousMode = inputMode;
+    const setMode = (window as any).dynamicIslandAPI?.setInputMode;
+    if (setMode) {
+      void setMode(nextMode)
+        .then((savedMode: DynamicIslandInputMode) => {
+          setInputMode(savedMode);
+        })
+        .catch(() => {
+          setInputMode(previousMode);
+        });
+    }
+    setInputMode(nextMode);
+  }, [inputMode]);
 
   const handleCopyPaste = useCallback((text: string, id: number) => {
     (window as any).dynamicIslandAPI?.copyAndPaste(text);
@@ -737,6 +698,7 @@ function LeftPill() {
   const acceptedPct = Math.round(Math.max(0, Math.min(1, filterMeter.acceptedLevel)) * 100);
   const thresholdPct = Math.round(Math.max(0, Math.min(1, filterMeter.threshold)) * 100);
   const speechRatioPct = Math.round(Math.max(0, Math.min(1, filterMeter.speechRatio)) * 100);
+  const modeDot = getLeftModeDotPresentation(inputMode, state);
 
   return (
     <div style={styles.outerContainer}>
@@ -750,11 +712,26 @@ function LeftPill() {
         }}
       >
         <button
+          className="di-mode-toggle"
+          onClick={toggleInputMode}
+          style={styles.modeToggle}
+          title={inputMode === 'hot-mic' ? 'switch to standard mode' : 'switch to hot mic mode'}
+        >
+          <span
+            aria-hidden="true"
+            style={{
+              ...styles.modeStateDot,
+              backgroundColor: modeDot.color,
+              boxShadow: modeDot.shadow,
+            }}
+          />
+        </button>
+        <button
           className="di-hamburger"
           onClick={toggleHistory}
           style={{
             ...styles.hamburger,
-            backgroundColor: historyVisible ? 'rgba(255, 255, 255, 0.15)' : 'transparent',
+            backgroundColor: 'transparent',
           }}
           title="transcript history"
         >
@@ -946,14 +923,35 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '28px',
-    height: '28px',
-    minWidth: '28px',
+    width: '22px',
+    height: '22px',
+    minWidth: '22px',
     borderRadius: '8px',
     border: 'none',
     cursor: 'pointer',
     transition: 'background-color 0.15s ease',
     flexShrink: 0,
+  },
+
+  modeToggle: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '22px',
+    height: '22px',
+    minWidth: '22px',
+    borderRadius: '8px',
+    border: 'none',
+    backgroundColor: 'transparent',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+
+  modeStateDot: {
+    width: '8px',
+    height: '8px',
+    borderRadius: '50%',
+    transition: 'background-color 0.15s ease, box-shadow 0.15s ease',
   },
 
   contentArea: {
@@ -963,14 +961,6 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     minWidth: 0,
     overflow: 'hidden',
-  },
-
-  dot: {
-    width: '8px',
-    height: '8px',
-    minWidth: '8px',
-    borderRadius: '50%',
-    flexShrink: 0,
   },
 
   textContainer: {
@@ -1310,11 +1300,17 @@ styleSheet.textContent = `
   .di-voice-tuning-btn:hover {
     background-color: rgba(255, 255, 255, 0.16) !important;
   }
-  .di-hamburger:hover {
-    background-color: rgba(255, 255, 255, 0.12) !important;
+  .di-hamburger,
+  .di-hamburger:hover,
+  .di-hamburger:active,
+  .di-hamburger:focus,
+  .di-hamburger:focus-visible {
+    background-color: transparent !important;
+    outline: none !important;
+    box-shadow: none !important;
   }
-  .di-right-pill:hover .di-right-dot {
-    filter: brightness(1.2);
+  .di-mode-toggle:hover {
+    background-color: transparent !important;
   }
   .di-right-dismiss-btn:hover,
   .di-right-copy-btn:hover {
@@ -1349,11 +1345,14 @@ declare global {
       onHistoryUpdate: (cb: (history: HistoryItem[]) => void) => void;
       onHideHistory?: (cb: () => void) => void;
       onShowHistory?: (cb: () => void) => void;
-      onHotMicUpdate?: (cb: (data: { active: boolean; wordCount: number; lastWord: string }) => void) => void;
+      onHotMicUpdate?: (cb: (data: { active: boolean; wordCount: number; lastWord: string; muted?: boolean }) => void) => void;
       onHotMicWarnDiscard?: (cb: () => void) => void;
       onHotMicSlideOut?: (cb: () => void) => void;
       onHotMicMute?: (cb: (muted: boolean) => void) => void;
       onHotMicFilterMeter?: (cb: (data: HotMicFilterMeter) => void) => void;
+      onInputMode?: (cb: (mode: 'hot-mic' | 'standard') => void) => void;
+      getInputMode?: () => Promise<'hot-mic' | 'standard'>;
+      setInputMode?: (mode: 'hot-mic' | 'standard') => Promise<'hot-mic' | 'standard'>;
       toggleMute?: () => void;
       dismissTranscript?: () => void;
       onDrawerTranscript?: (cb: (text: string) => void) => void;

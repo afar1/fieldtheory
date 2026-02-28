@@ -13,6 +13,7 @@ import { CursorStatusManager } from './cursorStatusManager';
 import { CommandsManager } from './commandsManager';
 import { AudioManager } from './audioManager';
 import { DynamicIslandManager, type HotMicBackgroundFilterMeter } from './dynamicIslandManager';
+import { ClipboardItem, isTerminalApp } from './clipboardManager';
 import { HOT_MIC_DEFAULTS, HOT_MIC_DEFAULT_SYSTEM_COMMANDS } from './hotMicDefaults';
 import { getHotkeyManager } from './hotkeyManager';
 import { createLogger } from './logger';
@@ -42,6 +43,28 @@ interface PendingChunk {
   filePath: string;
   audioStats: ChunkAudioStats;
 }
+
+interface HotMicBufferSegment {
+  text: string;
+  endMs: number;
+}
+
+interface HotMicScreenshotMeta {
+  itemId: number;
+  figureLabel: string;
+  figureId: string;
+  capturedAtMs: number;
+}
+
+type HotMicClipboardBridge = {
+  storeText: (...args: any[]) => Promise<number>;
+  setClipboardHashFromText?: (text: string) => void;
+  syncClipboardHash?: () => void;
+  getItem?: (id: number) => ClipboardItem | null;
+  updateFigureLabel?: (itemId: number, figureLabel: string, figureId?: string) => void;
+  generateFigureId?: () => string;
+  exportImageToCache?: (item: ClipboardItem) => Promise<string | null>;
+};
 
 /**
  * Hot Mic states:
@@ -228,11 +251,7 @@ export class HotMicManager extends EventEmitter {
   private preferences: PreferencesManager;
   private modelManager: ModelManager;
   private soundManager: SoundManager;
-  private clipboardManager: {
-    storeText: (...args: any[]) => Promise<number>;
-    setClipboardHashFromText?: (text: string) => void;
-    syncClipboardHash?: () => void;
-  } | null = null;
+  private clipboardManager: HotMicClipboardBridge | null = null;
   private cursorStatusManager: CursorStatusManager | null = null;
   private commandsManager: CommandsManager | null = null;
   private audioManager: AudioManager | null = null;
@@ -241,6 +260,7 @@ export class HotMicManager extends EventEmitter {
 
   private state: HotMicState = 'idle';
   private condition: HotMicCondition | null = null;
+  private muted: boolean = false;
   private targetBundleId: string | null = null;
   private whisperProcess: ChildProcess | null = null;
 
@@ -264,18 +284,27 @@ export class HotMicManager extends EventEmitter {
   private drawerSpeaking: boolean = false;
   private drawerSpeakingTimeout: NodeJS.Timeout | null = null;
   private static readonly DRAWER_PREVIEW_MIN_WORDS = 3;
+  private static readonly DRAWER_PREVIEW_HEAD_WORDS = 3;
+  private static readonly DRAWER_PREVIEW_TAIL_WORDS = 7;
   private static readonly DRAWER_SPEAKING_HOLD_MS = 320;
   private static readonly FORCE_SNAPSHOT_CHECK_MS = 120;
   private static readonly FORCE_SNAPSHOT_SPEECH_GRACE_MS = 220;
   private static readonly FORCE_SNAPSHOT_COMMAND_MS = 700;
   private static readonly FORCE_SNAPSHOT_DICTATION_MS = 900;
   private static readonly FILTER_METER_UPDATE_MS = 90;
+  private static readonly AUDIO_DIAG_WINDOW_MS = 2200;
+  private static readonly AUDIO_DIAG_NO_EVENT_WARN_MS = 3200;
+  private static readonly AUDIO_DIAG_WARN_COOLDOWN_MS = 5000;
 
   // Warmup promise — awaited before first transcription to avoid race with Qwen startup
   private warmupPromise: Promise<void> | null = null;
 
   // Transcript buffer — accumulates chunks until submit word or silence discard
   private transcriptBuffer: string[] = [];
+  private hotMicBufferSegments: HotMicBufferSegment[] = [];
+  private hotMicSessionStartMs: number = 0;
+  private hotMicSessionItemIds: number[] = [];
+  private hotMicScreenshotMetadata: HotMicScreenshotMeta[] = [];
   private bufferDiscardTimer: NodeJS.Timeout | null = null;
   private lastTimerResetMs: number = 0;
   private lastSpeechDetectedMs: number = 0;
@@ -299,6 +328,16 @@ export class HotMicManager extends EventEmitter {
   private chunkRawPeakLevel: number = 0;
   private chunkSpeechPeakLevel: number = 0;
   private lastFilterMeterEmitMs: number = 0;
+  private readonly audioDiagnosticsVerbose: boolean = process.env.HOTMIC_AUDIO_DEBUG === 'true';
+  private audioDiagWindowStartMs: number = 0;
+  private audioDiagSampleCount: number = 0;
+  private audioDiagSpeechCount: number = 0;
+  private audioDiagLevelSum: number = 0;
+  private audioDiagPeakLevel: number = 0;
+  private lastAudioLevelEventMs: number = 0;
+  private lastAudioNoEventWarnMs: number = 0;
+  private lastSpeechMissWarnMs: number = 0;
+  private audioDiagnosticsTimer: NodeJS.Timeout | null = null;
 
   // Known whisper hallucination patterns (empty/silence audio)
   private readonly HALLUCINATION_PATTERNS = [
@@ -343,6 +382,7 @@ export class HotMicManager extends EventEmitter {
     this.nativeHelper = nativeHelper;
     this.preferences = preferences;
     this.soundManager = soundManager;
+    this.muted = this.preferences.getPreference('hotMicMuted') ?? false;
     this.modelManager = new ModelManager();
     this.modelManager.setSelectedModel('small');
     this.startServer();
@@ -484,11 +524,7 @@ export class HotMicManager extends EventEmitter {
     this.cursorStatusManager = manager;
   }
 
-  setClipboardManager(manager: {
-    storeText: (...args: any[]) => Promise<number>;
-    setClipboardHashFromText?: (text: string) => void;
-    syncClipboardHash?: () => void;
-  }): void {
+  setClipboardManager(manager: HotMicClipboardBridge): void {
     this.clipboardManager = manager;
   }
 
@@ -498,6 +534,7 @@ export class HotMicManager extends EventEmitter {
 
   setDynamicIslandManager(manager: DynamicIslandManager): void {
     this.dynamicIslandManager = manager;
+    this.syncDynamicIslandHotMicState();
   }
 
   setMetricsWordsRecorder(recorder: (wordCount: number) => void): void {
@@ -539,6 +576,30 @@ export class HotMicManager extends EventEmitter {
     this.appSwitcher = switcher;
   }
 
+  addScreenshotToSession(itemId: number): void {
+    if (!this.isActive || itemId <= 0) return;
+    if (this.hotMicSessionItemIds.includes(itemId)) return;
+    this.hotMicSessionItemIds.push(itemId);
+
+    const item = this.getClipboardItem(itemId);
+    if (!item || (item.type !== 'screenshot' && item.type !== 'image')) return;
+
+    const figureLabel = String(this.hotMicScreenshotMetadata.length + 1);
+    const figureId = this.clipboardManager?.generateFigureId?.() ?? this.generateFallbackFigureId();
+    const capturedAtMs = this.hotMicSessionStartMs > 0
+      ? Math.max(0, Date.now() - this.hotMicSessionStartMs)
+      : 0;
+
+    this.hotMicScreenshotMetadata.push({
+      itemId,
+      figureLabel,
+      figureId,
+      capturedAtMs,
+    });
+
+    this.clipboardManager?.updateFigureLabel?.(itemId, figureLabel, figureId);
+  }
+
   getState(): HotMicState {
     return this.state;
   }
@@ -557,7 +618,7 @@ export class HotMicManager extends EventEmitter {
 
     // Mic is healthy if we've received a chunk within the last 10 seconds
     // while in an active state — stale chunks suggest routing or VAD problems.
-    const micHealthy = this.state === 'idle' || this.condition === 'yielded'
+    const micHealthy = this.state === 'idle' || this.condition === 'yielded' || this.condition === 'muted'
       ? true
       : lastChunkAgeMs === null || lastChunkAgeMs < 10_000;
 
@@ -571,6 +632,14 @@ export class HotMicManager extends EventEmitter {
       chunksReceived: this.chunksReceivedCount,
       micHealthy,
     };
+  }
+
+  getStatus(): { state: HotMicState; muted: boolean } {
+    return { state: this.state, muted: this.muted };
+  }
+
+  getMuted(): boolean {
+    return this.muted;
   }
 
   get isActive(): boolean {
@@ -654,6 +723,8 @@ export class HotMicManager extends EventEmitter {
       log.warn('Hot Mic: cancel during yield failed:', error);
     });
 
+    this.updateOrangeDot();
+
     // Don't change state to idle — keep as listening so we know to resume.
     // The transcriber status getter will prevent us from restarting until it's done.
   }
@@ -699,6 +770,7 @@ export class HotMicManager extends EventEmitter {
           this.yieldedToTranscriber = false;
           this.setCondition(this.whisperFallbackActive ? 'degraded' : 'ready');
           this.startAudioMonitoring();
+          this.updateOrangeDot();
           return;
         } catch (error) {
           log.error('Hot Mic: failed to resume recording (attempt %d):', attempt + 1, error);
@@ -723,10 +795,12 @@ export class HotMicManager extends EventEmitter {
   // Mute/unmute — pause mic without deactivating
   // ---------------------------------------------------------------------------
 
-  private muted: boolean = false;
-
   get isMuted(): boolean {
     return this.muted;
+  }
+
+  private async persistMutedPreference(): Promise<void> {
+    await this.preferences.save({ hotMicMuted: this.muted } as any);
   }
 
   async toggleMute(): Promise<boolean> {
@@ -736,6 +810,7 @@ export class HotMicManager extends EventEmitter {
       // Unmute — resume recording.
       this.muted = false;
       this.setCondition(this.whisperFallbackActive ? 'degraded' : 'ready');
+      await this.persistMutedPreference();
       log.info('Hot Mic: unmuted');
       try {
         if (this.audioManager) {
@@ -747,21 +822,22 @@ export class HotMicManager extends EventEmitter {
       } catch (error) {
         log.error('Hot Mic: failed to unmute:', error);
       }
-      this.dynamicIslandManager?.sendMuteState(false);
-      this.dynamicIslandManager?.updateHotMic(true, this.getBufferWordCount(), this.getLastBufferWord());
+      this.syncDynamicIslandHotMicState();
+      this.emit('statusChanged', this.getStatus());
       return false;
     } else {
       // Mute — stop recording but stay in listening state.
       this.muted = true;
       this.setCondition('muted');
+      await this.persistMutedPreference();
       log.info('Hot Mic: muted');
       this.stopAudioMonitoring();
       this.stopBufferDiscardTimer();
       await this.nativeHelper.cancelRecording().catch(() => {});
-      this.dynamicIslandManager?.updateHotMic(false, 0, '');
       this.dynamicIslandManager?.updateDrawerTranscript('');
       this.clearDrawerSpeakingSignal();
-      this.dynamicIslandManager?.sendMuteState(true);
+      this.syncDynamicIslandHotMicState();
+      this.emit('statusChanged', this.getStatus());
       return true;
     }
   }
@@ -777,7 +853,7 @@ export class HotMicManager extends EventEmitter {
       log.info('Hot Mic: dismissed live transcript buffer (%d chunks)', this.transcriptBuffer.length);
     }
 
-    this.transcriptBuffer = [];
+    this.clearHotMicDraftContext(true);
     this.stopBufferDiscardTimer();
     this.lastTimerResetMs = 0;
     this.lastSpeechDetectedMs = 0;
@@ -814,12 +890,14 @@ export class HotMicManager extends EventEmitter {
    */
   private async startListening(): Promise<void> {
     this.transcriptBuffer = [];
+    this.resetHotMicFigureSession();
     this.resumeInFlight = false;
     this.yieldedToTranscriber = false;
     this.whisperFallbackActive = false;
     this.chunksReceivedCount = 0;
     this.clearDrawerSpeakingSignal();
     this.setState('listening');
+    this.syncDynamicIslandHotMicState();
 
     // Warm up transcription engine in parallel with recording start.
     // Store the promise so onChunkReady can await it before the first transcription,
@@ -847,6 +925,13 @@ export class HotMicManager extends EventEmitter {
     if (!hasWarmup) {
       this.engineReady = true;
       this.setCondition('ready');
+    }
+
+    if (this.muted) {
+      this.setCondition('muted');
+      log.warn('Hot Mic: listening started while muted; audio capture is paused until unmuted');
+      this.dynamicIslandManager?.updateDrawerTranscript('');
+      return;
     }
 
     try {
@@ -904,7 +989,6 @@ export class HotMicManager extends EventEmitter {
 
   deactivate(): void {
     log.info('Hot Mic deactivated');
-    this.muted = false;
     this.appsHidden = false;
     this.cleanup();
     this.setState('idle');
@@ -1060,6 +1144,132 @@ export class HotMicManager extends EventEmitter {
     this.publishBackgroundFilterMeter(level, acceptedLevel, isSpeech ? 1 : 0, false);
   }
 
+  private shouldWarnForSpeechMiss(peakLevel: number, avgLevel: number, speechRatio: number): boolean {
+    return peakLevel >= 0.018 && avgLevel >= 0.006 && speechRatio < 0.03;
+  }
+
+  private resetAudioDiagnosticsWindow(now: number = Date.now()): void {
+    this.audioDiagWindowStartMs = now;
+    this.audioDiagSampleCount = 0;
+    this.audioDiagSpeechCount = 0;
+    this.audioDiagLevelSum = 0;
+    this.audioDiagPeakLevel = 0;
+  }
+
+  private trackAudioDiagnostics(level: number, isSpeech: boolean): void {
+    const now = Date.now();
+    if (this.audioDiagWindowStartMs <= 0) {
+      this.resetAudioDiagnosticsWindow(now);
+    }
+
+    this.lastAudioLevelEventMs = now;
+    this.audioDiagSampleCount += 1;
+    if (isSpeech) this.audioDiagSpeechCount += 1;
+    this.audioDiagLevelSum += level;
+    if (level > this.audioDiagPeakLevel) {
+      this.audioDiagPeakLevel = level;
+    }
+
+    const elapsed = now - this.audioDiagWindowStartMs;
+    if (elapsed < HotMicManager.AUDIO_DIAG_WINDOW_MS) return;
+
+    const avgLevel = this.audioDiagSampleCount > 0
+      ? this.audioDiagLevelSum / this.audioDiagSampleCount
+      : 0;
+    const speechRatio = this.audioDiagSampleCount > 0
+      ? this.audioDiagSpeechCount / this.audioDiagSampleCount
+      : 0;
+    const shouldWarn = this.shouldWarnForSpeechMiss(this.audioDiagPeakLevel, avgLevel, speechRatio);
+
+    if (shouldWarn && (now - this.lastSpeechMissWarnMs) >= HotMicManager.AUDIO_DIAG_WARN_COOLDOWN_MS) {
+      this.lastSpeechMissWarnMs = now;
+      log.warn(
+        'Hot Mic: mic energy seen but speech detection stayed low (avg=%.3f peak=%.3f speechRatio=%.2f). Check mic routing or VAD sensitivity.',
+        avgLevel,
+        this.audioDiagPeakLevel,
+        speechRatio,
+      );
+      this.logAudioRouteSnapshot();
+    } else if (this.audioDiagnosticsVerbose) {
+      log.info(
+        'Hot Mic: audio window stats (avg=%.3f peak=%.3f speechRatio=%.2f samples=%d)',
+        avgLevel,
+        this.audioDiagPeakLevel,
+        speechRatio,
+        this.audioDiagSampleCount,
+      );
+    }
+
+    this.resetAudioDiagnosticsWindow(now);
+  }
+
+  private startAudioDiagnosticsTimer(): void {
+    this.stopAudioDiagnosticsTimer();
+    this.lastAudioNoEventWarnMs = 0;
+    this.audioDiagnosticsTimer = setInterval(() => {
+      if (this.state !== 'recording' && this.state !== 'listening') return;
+      if (this.muted) return;
+      if (!this.nativeHelper.isRecordingActive()) return;
+
+      const now = Date.now();
+      if (this.lastAudioLevelEventMs <= 0) return;
+      if ((now - this.lastAudioLevelEventMs) < HotMicManager.AUDIO_DIAG_NO_EVENT_WARN_MS) return;
+      if ((now - this.lastAudioNoEventWarnMs) < HotMicManager.AUDIO_DIAG_WARN_COOLDOWN_MS) return;
+
+      this.lastAudioNoEventWarnMs = now;
+      log.warn(
+        'Hot Mic: no audioLevel events for %dms while recording is active. Check helper stream and selected input.',
+        now - this.lastAudioLevelEventMs,
+      );
+      this.logAudioRouteSnapshot();
+    }, 1000);
+  }
+
+  private stopAudioDiagnosticsTimer(): void {
+    if (this.audioDiagnosticsTimer) {
+      clearInterval(this.audioDiagnosticsTimer);
+      this.audioDiagnosticsTimer = null;
+    }
+  }
+
+  private logAudioRouteSnapshot(): void {
+    if (!this.audioManager) return;
+
+    const state = this.audioManager.getState();
+    const devices = Array.isArray(state.devices) ? state.devices : [];
+    const defaultDevice = devices.find((device) => device.id === state.defaultInputId);
+    const priorityDevice = devices.find((device) => device.id === state.priorityDeviceId);
+    const defaultLabel = defaultDevice?.name ?? state.defaultInputId ?? 'none';
+    const priorityLabel = priorityDevice?.name ?? state.priorityDeviceId ?? 'none';
+
+    if (!state.defaultInputId) {
+      log.warn(
+        'Hot Mic: no default input device reported (priorityMode=%s priority=%s)',
+        state.priorityMode,
+        priorityLabel,
+      );
+      return;
+    }
+
+    if (state.priorityMode && state.priorityDeviceId && state.defaultInputId !== state.priorityDeviceId) {
+      log.warn(
+        'Hot Mic: default input differs from priority device (default=%s priority=%s)',
+        defaultLabel,
+        priorityLabel,
+      );
+      return;
+    }
+
+    if (this.audioDiagnosticsVerbose) {
+      log.info(
+        'Hot Mic: audio route snapshot (default=%s priorityMode=%s priority=%s)',
+        defaultLabel,
+        state.priorityMode,
+        priorityLabel,
+      );
+    }
+  }
+
   private evaluateChunkBackgroundFilter(stats: ChunkAudioStats): {
     suppressed: boolean;
     acceptedLevel: number;
@@ -1130,6 +1340,9 @@ export class HotMicManager extends EventEmitter {
     this.stopAudioMonitoring();
     this.lastChunkReadyMs = Date.now();
     this.lastFilterMeterEmitMs = 0;
+    this.lastAudioLevelEventMs = 0;
+    this.resetAudioDiagnosticsWindow(this.lastChunkReadyMs);
+    this.logAudioRouteSnapshot();
     this.resetChunkAudioStats();
     this.publishBackgroundFilterMeter(0, 0, 0, false);
 
@@ -1138,6 +1351,7 @@ export class HotMicManager extends EventEmitter {
     this.audioLevelListener = (level: number, isSpeech: boolean) => {
       if (this.state !== 'recording' && this.state !== 'listening') return;
       this.trackChunkAudioLevel(level, isSpeech);
+      this.trackAudioDiagnostics(level, isSpeech);
 
       if (isSpeech) {
         this.bumpDrawerSpeakingSignal();
@@ -1169,6 +1383,7 @@ export class HotMicManager extends EventEmitter {
 
     this.nativeHelper.on('audioLevel', this.audioLevelListener);
     this.nativeHelper.on('recordingChunkReady', this.chunkReadyListener);
+    this.startAudioDiagnosticsTimer();
     this.startForcedSnapshotLoop();
   }
 
@@ -1181,6 +1396,7 @@ export class HotMicManager extends EventEmitter {
       this.nativeHelper.removeListener('recordingChunkReady', this.chunkReadyListener);
       this.chunkReadyListener = null;
     }
+    this.stopAudioDiagnosticsTimer();
     this.stopForcedSnapshotLoop();
     this.forcedSnapshotInFlight = false;
     this.resetChunkAudioStats();
@@ -1325,7 +1541,7 @@ export class HotMicManager extends EventEmitter {
             const discardedText = this.transcriptBuffer.join(' ');
             void this.storeHotMicTranscript(discardedText);
             log.info('Hot Mic: silence timeout, discarding buffer (%d chunks)', this.transcriptBuffer.length);
-            this.transcriptBuffer = [];
+            this.clearHotMicDraftContext(true);
           }
           this.clearDrawerSpeakingSignal();
           this.dynamicIslandManager?.updateDrawerTranscript('');
@@ -1410,10 +1626,9 @@ export class HotMicManager extends EventEmitter {
       const transcript = rawTranscript.replace(/\([^)]*\)/g, '').trim();
       const tPost = performance.now();
       log.info(
-        'Hot Mic: [timing] transcribe: %dms (engine=%s, qwenFallback=%s)',
+        'Hot Mic: [timing] transcribe: %dms (engine=%s)',
         Math.round(tPost - t0),
-        this.getConfiguredTranscriptionEngineForLogs(),
-        (this.preferences.getPreference('hotMicAllowWhisperFallback') ?? true) ? 'on' : 'off'
+        this.getConfiguredTranscriptionEngineForLogs()
       );
 
       // Clean up WAV file
@@ -1490,7 +1705,7 @@ export class HotMicManager extends EventEmitter {
       if (target) {
         if (this.transcriptBuffer.length > 0) {
           log.info('Hot Mic: discarding buffer (%d chunks) for shortcut "%s"', this.transcriptBuffer.length, lower);
-          this.transcriptBuffer = [];
+          this.clearHotMicDraftUi(true);
         }
         this.dynamicIslandManager?.updateDrawerTranscript('');
         log.info('Hot Mic: auto-submitting shortcut "%s" → "%s"', lower, mapped);
@@ -1506,9 +1721,10 @@ export class HotMicManager extends EventEmitter {
     const tailMatch = await this.matchTailCommand(lower);
     if (tailMatch) {
       if (tailMatch.remainingText.trim()) {
-        const norm = tailMatch.remainingText.trim().replace(/\.+$/, '').trim();
-        this.transcriptBuffer.push(norm);
-        logTranscriptPayload('Hot Mic: buffered text before command', norm);
+        const normalizedRemaining = this.pushNormalizedTextToBuffer(tailMatch.remainingText);
+        if (normalizedRemaining) {
+          logTranscriptPayload('Hot Mic: buffered text before command', normalizedRemaining);
+        }
       }
 
       // If there's buffered text, flush it before executing the command.
@@ -1519,19 +1735,12 @@ export class HotMicManager extends EventEmitter {
       if (this.transcriptBuffer.length > 0) {
         if (isCancel) {
           log.info('Hot Mic: discarding buffer (%d chunks) for cancel command', this.transcriptBuffer.length);
-          this.transcriptBuffer = [];
-          this.dynamicIslandManager?.updateDrawerTranscript('');
-          this.updateOrangeDot();
+          this.clearHotMicDraftUi(true);
         } else {
-          const fullText = this.transcriptBuffer.join(' ');
-          this.transcriptBuffer = [];
-          this.dynamicIslandManager?.updateDrawerTranscript('');
-          this.updateOrangeDot();
-          if (fullText) {
-            let mappedText = this.applyMappings(fullText);
-            mappedText = this.applyCommandDetection(mappedText);
+          const target = this.getTypeTarget();
+          const mappedText = await this.consumeBufferedHotMicPayload(target);
+          if (mappedText) {
             void this.storeHotMicTranscript(mappedText);
-            const target = this.getTypeTarget();
             if (target) {
               log.info('Hot Mic: flushing buffer before command (%d chars)', mappedText.length);
               if (LOG_TRANSCRIPT_PAYLOADS) {
@@ -1568,20 +1777,15 @@ export class HotMicManager extends EventEmitter {
         log.debug('Hot Mic: paste phrase chunk: "%s"', trimmed);
       }
       if (pasteCleanedText.trim()) {
-        this.transcriptBuffer.push(pasteCleanedText.trim().toLowerCase().replace(/\.+$/, '').trim());
+        this.pushNormalizedTextToBuffer(pasteCleanedText);
       }
 
-      const fullText = this.transcriptBuffer.join(' ');
-      this.transcriptBuffer = [];
-      this.dynamicIslandManager?.updateDrawerTranscript('');
-      this.updateOrangeDot();
+      const target = this.getTypeTarget();
+      let mappedText = await this.consumeBufferedHotMicPayload(target);
 
-      if (fullText) {
-        let mappedText = this.applyMappings(fullText);
-        mappedText = this.applyCommandDetection(mappedText);
+      if (mappedText) {
         void this.storeHotMicTranscript(mappedText);
         // Trailing space so the next dictation flows naturally
-        const target = this.getTypeTarget();
         if (target) {
           mappedText = mappedText + ' ';
           log.info('Hot Mic: pasting buffer (%d chars, no submit) to %s', mappedText.length, target);
@@ -1611,20 +1815,15 @@ export class HotMicManager extends EventEmitter {
       }
       // Add any remaining text before the submit word to buffer
       if (cleanedText.trim()) {
-        this.transcriptBuffer.push(cleanedText.trim().toLowerCase().replace(/\.+$/, '').trim());
+        this.pushNormalizedTextToBuffer(cleanedText);
       }
 
       // Flush the entire buffer
-      const fullText = this.transcriptBuffer.join(' ');
-      this.transcriptBuffer = [];
-      this.dynamicIslandManager?.updateDrawerTranscript('');
-      this.updateOrangeDot();
+      const target = this.getTypeTarget();
+      const mappedText = await this.consumeBufferedHotMicPayload(target);
 
-      if (fullText) {
-        let mappedText = this.applyMappings(fullText);
-        mappedText = this.applyCommandDetection(mappedText);
+      if (mappedText) {
         void this.storeHotMicTranscript(mappedText);
-        const target = this.getTypeTarget();
         if (target) {
           log.info('Hot Mic: submitting buffer (%d chars) to %s', mappedText.length, target);
           if (LOG_TRANSCRIPT_PAYLOADS) {
@@ -1656,8 +1855,7 @@ export class HotMicManager extends EventEmitter {
     // Normalize for natural dictation: lowercase and strip trailing periods
     // (Qwen treats each chunk as a standalone utterance, adding false sentence-ending
     // periods at chunk boundaries). Internal periods and ?/! are preserved.
-    const normalized = trimmed.toLowerCase().replace(/\.+$/, '').trim();
-    this.transcriptBuffer.push(normalized);
+    const normalized = this.pushNormalizedTextToBuffer(trimmed);
     if (LOG_TRANSCRIPT_PAYLOADS) {
       log.debug('Hot Mic: buffered (%d total): "%s"', this.transcriptBuffer.length, normalized);
     } else {
@@ -2325,7 +2523,8 @@ export class HotMicManager extends EventEmitter {
     // Strip [cmd:name.md] refs from the text (they were inserted inline by detectCommands)
     let cleaned = detection.textWithoutCommandRefs
       .replace(/\s*\[cmd:[^\]]+\]/g, '')
-      .replace(/\s+/g, ' ')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
       .trim();
 
     // Append command references in the terminal-friendly format
@@ -2335,6 +2534,159 @@ export class HotMicManager extends EventEmitter {
     }
 
     return cleaned;
+  }
+
+  private resetHotMicFigureSession(): void {
+    this.hotMicSessionStartMs = Date.now();
+    this.hotMicSessionItemIds = [];
+    this.hotMicScreenshotMetadata = [];
+    this.hotMicBufferSegments = [];
+  }
+
+  private clearHotMicDraftUi(clearScreenshots: boolean): void {
+    this.clearHotMicDraftContext(clearScreenshots);
+    this.dynamicIslandManager?.updateDrawerTranscript('');
+    this.updateOrangeDot();
+  }
+
+  private getClipboardItem(itemId: number): ClipboardItem | null {
+    return this.clipboardManager?.getItem?.(itemId) ?? null;
+  }
+
+  private async exportClipboardItemToCache(item: ClipboardItem): Promise<string | null> {
+    if (!this.clipboardManager?.exportImageToCache) return null;
+    return this.clipboardManager.exportImageToCache(item);
+  }
+
+  private normalizeBufferText(text: string): string {
+    return text.trim().toLowerCase().replace(/\.+$/, '').trim();
+  }
+
+  private pushNormalizedTextToBuffer(text: string): string {
+    const normalized = this.normalizeBufferText(text);
+    if (!normalized) return '';
+    this.transcriptBuffer.push(normalized);
+    this.appendHotMicBufferSegment(normalized);
+    return normalized;
+  }
+
+  private async consumeBufferedHotMicPayload(targetBundleId: string | null): Promise<string> {
+    const fullText = this.transcriptBuffer.join(' ');
+    let payload = '';
+    if (fullText || this.hotMicScreenshotMetadata.length > 0) {
+      payload = await this.buildFigureAwareHotMicPayload(fullText, targetBundleId);
+    }
+    this.clearHotMicDraftUi(true);
+    return payload;
+  }
+
+  private clearHotMicDraftContext(clearScreenshots: boolean): void {
+    this.transcriptBuffer = [];
+    this.hotMicBufferSegments = [];
+    if (clearScreenshots) {
+      this.hotMicSessionItemIds = [];
+      this.hotMicScreenshotMetadata = [];
+      this.hotMicSessionStartMs = Date.now();
+    }
+  }
+
+  private appendHotMicBufferSegment(text: string): void {
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    if (!normalized) return;
+    const endMs = this.hotMicSessionStartMs > 0
+      ? Math.max(0, Date.now() - this.hotMicSessionStartMs)
+      : 0;
+    this.hotMicBufferSegments.push({ text: normalized, endMs });
+  }
+
+  private stripFigureReferences(text: string): string {
+    if (!text) return '';
+    return text
+      .replace(/\s*\[Figure\s+[A-Za-z0-9]+\]\s*/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private insertFigureReferencesIntoHotMicText(text: string): string {
+    const normalizedText = this.stripFigureReferences(text);
+    if (this.hotMicScreenshotMetadata.length === 0) {
+      return normalizedText;
+    }
+
+    const segments = this.hotMicBufferSegments
+      .map((segment) => ({ text: this.stripFigureReferences(segment.text), endMs: Math.max(0, segment.endMs) }))
+      .filter((segment) => segment.text.length > 0);
+
+    const sortedScreenshots = [...this.hotMicScreenshotMetadata].sort(
+      (a, b) => a.capturedAtMs - b.capturedAtMs
+    );
+
+    if (segments.length === 0) {
+      const refs = sortedScreenshots.map((meta) => `[Figure ${meta.figureLabel}]`).join(' ');
+      return [normalizedText, refs].filter(Boolean).join(' ').trim();
+    }
+
+    const segmentFigures: Map<number, string[]> = new Map();
+    for (const screenshot of sortedScreenshots) {
+      let segmentIndex = segments.findIndex((segment) => screenshot.capturedAtMs <= segment.endMs);
+      if (segmentIndex < 0) {
+        segmentIndex = segments.length - 1;
+      }
+      const figures = segmentFigures.get(segmentIndex) ?? [];
+      figures.push(screenshot.figureLabel);
+      segmentFigures.set(segmentIndex, figures);
+    }
+
+    const result = segments.map((segment, index) => {
+      const figures = segmentFigures.get(index);
+      if (!figures || figures.length === 0) return segment.text;
+      const refs = figures.map((label) => `[Figure ${label}]`).join(' ');
+      return `${segment.text} ${refs}`;
+    });
+
+    return result.join(' ').trim();
+  }
+
+  private async appendFigurePathsForTerminal(text: string, targetBundleId: string | null): Promise<string> {
+    if (!isTerminalApp(targetBundleId)) return text;
+    if (this.hotMicScreenshotMetadata.length === 0) return text;
+
+    const sortedScreenshots = [...this.hotMicScreenshotMetadata].sort(
+      (a, b) => a.capturedAtMs - b.capturedAtMs
+    );
+
+    const lines: string[] = [];
+    for (const screenshot of sortedScreenshots) {
+      const item = this.getClipboardItem(screenshot.itemId);
+      if (!item || !item.imageData) continue;
+      const imagePath = await this.exportClipboardItemToCache(item);
+      if (imagePath) {
+        lines.push(`Figure ${screenshot.figureLabel}: ${imagePath}`);
+      }
+    }
+
+    if (lines.length === 0) return text;
+    if (!text.trim()) {
+      return `${lines.join('\n')}\n\n`;
+    }
+    return `${text}\n\n${lines.join('\n')}\n\n`;
+  }
+
+  private async buildFigureAwareHotMicPayload(text: string, targetBundleId: string | null): Promise<string> {
+    let payload = this.applyMappings(text);
+    payload = this.insertFigureReferencesIntoHotMicText(payload);
+    payload = await this.appendFigurePathsForTerminal(payload, targetBundleId);
+    payload = this.applyCommandDetection(payload);
+    return payload.trim();
+  }
+
+  private generateFallbackFigureId(): string {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let id = '';
+    for (let i = 0; i < 5; i++) {
+      id += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return id;
   }
 
   // ---------------------------------------------------------------------------
@@ -2356,21 +2708,36 @@ export class HotMicManager extends EventEmitter {
     const combined = this.transcriptBuffer.join(' ').trim();
     if (!combined) return '';
 
-    const wordCount = combined.split(/\s+/).filter(w => w.length > 0).length;
-    if (wordCount < HotMicManager.DRAWER_PREVIEW_MIN_WORDS) {
+    const words = combined.split(/\s+/).filter(w => w.length > 0);
+    if (words.length < HotMicManager.DRAWER_PREVIEW_MIN_WORDS) {
       return '';
     }
 
-    return combined;
+    const previewCapacity = HotMicManager.DRAWER_PREVIEW_HEAD_WORDS + HotMicManager.DRAWER_PREVIEW_TAIL_WORDS;
+    if (words.length <= previewCapacity) {
+      return combined;
+    }
+
+    const head = words.slice(0, HotMicManager.DRAWER_PREVIEW_HEAD_WORDS).join(' ');
+    const tail = words.slice(-HotMicManager.DRAWER_PREVIEW_TAIL_WORDS).join(' ');
+    return `${head} ... ${tail}`;
   }
 
   private syncDrawerPreview(): void {
     this.dynamicIslandManager?.updateDrawerTranscript(this.getDrawerPreviewText());
   }
 
+  /**
+   * Keep Dynamic Island in sync with both hot-mic activity and mute state.
+   */
+  private syncDynamicIslandHotMicState(): void {
+    this.dynamicIslandManager?.sendMuteState(this.muted);
+    this.updateOrangeDot();
+  }
+
   private updateOrangeDot(): void {
-    // Show the dot whenever hot mic is active and not muted, regardless of buffer state.
-    const isActive = (this.state === 'listening' || this.state === 'recording') && !this.muted;
+    // Hide while yielded to standard recording so the red standard dot is the only source of truth.
+    const isActive = (this.state === 'listening' || this.state === 'recording') && !this.muted && !this.yieldedToTranscriber;
 
     if (isActive) {
       this.dynamicIslandManager?.updateHotMic(true, this.getBufferWordCount(), this.getLastBufferWord());
@@ -2602,6 +2969,7 @@ export class HotMicManager extends EventEmitter {
     this.state = state;
     log.info('Hot Mic state: %s → %s', prev, state);
     this.emit('stateChanged', state);
+    this.emit('statusChanged', this.getStatus());
 
     // Auto-derive condition from state transitions.
     if (state === 'idle') {
@@ -2635,7 +3003,7 @@ export class HotMicManager extends EventEmitter {
     this.resumeInFlight = false;
     this.yieldedToTranscriber = false;
     this.targetBundleId = null;
-    this.transcriptBuffer = [];
+    this.clearHotMicDraftContext(true);
     this.engineReady = false;
     this.whisperFallbackActive = false;
     if (this.pendingChunkQueue.length > 0) {

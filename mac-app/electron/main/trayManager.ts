@@ -3,7 +3,6 @@ import path from 'path';
 import { AudioState } from './types/audio';
 import { AudioManager } from './audioManager';
 import { QuotaManager } from './quotaManager';
-import { TranscriberManager } from './transcriberManager';
 import type { PreferencesManager } from './preferences';
 import { createLogger } from './logger';
 
@@ -27,7 +26,6 @@ export class TrayManager {
   private tray: Tray | null = null;
   private audioManager: AudioManager;
   private quotaManager: QuotaManager | null = null;
-  private transcriberManager: TranscriberManager | null = null;
   private preferencesManager: PreferencesManager | null = null;
   private showWindowCallback: (() => void) | null = null;
   private showMainWindowCallback: (() => void) | null = null;
@@ -64,18 +62,6 @@ export class TrayManager {
     });
 
     // Refresh menu to show quota
-    if (this.tray) {
-      this.updateTray(this.audioManager.getState());
-    }
-  }
-
-  /**
-   * Set the transcriber manager for accessing auto-improve state.
-   */
-  setTranscriberManager(transcriberManager: TranscriberManager): void {
-    this.transcriberManager = transcriberManager;
-
-    // Refresh menu to show auto-improve toggle
     if (this.tray) {
       this.updateTray(this.audioManager.getState());
     }
@@ -454,23 +440,6 @@ export class TrayManager {
         });
       }
 
-      items.push({ type: 'separator' });
-    }
-
-    // Auto-improve toggle
-    if (this.transcriberManager) {
-      const autoImproveEnabled = this.transcriberManager.getAutoImprove();
-      items.push({
-        label: `Auto-Improve Transcripts (${autoImproveEnabled ? 'On' : 'Off'})`,
-        accelerator: 'Command+Shift+\\',
-        click: async () => {
-          if (this.transcriberManager) {
-            const currentState = this.transcriberManager.getAutoImprove();
-            await this.transcriberManager.setAutoImprove(!currentState);
-            // Menu will refresh automatically on next open
-          }
-        },
-      });
       items.push({ type: 'separator' });
     }
 

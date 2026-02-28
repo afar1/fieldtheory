@@ -16,7 +16,6 @@ import { SoundManager } from './soundManager';
 import { QuotaManager } from './quotaManager';
 import { AudioManager } from './audioManager';
 import { CursorStatusManager } from './cursorStatusManager';
-import { improveTranscript } from './promptEngineer';
 import { CommandsManager } from './commandsManager';
 import { MESSAGES } from './messages';
 import * as plist from 'plist';
@@ -24,10 +23,6 @@ import { createLogger } from './logger';
 
 const log = createLogger('Transcriber');
 const LOG_TRANSCRIPT_PAYLOADS = process.env.LOG_TRANSCRIPT_PAYLOADS === 'true';
-
-// Feature flag for live transcript improvement.
-// When enabled, users can trigger AI improvement by ending recording with a different hotkey than started.
-const FEATURE_IMPROVE_ENABLED = true;
 
 const execAsync = promisify(exec);
 const SAFE_FALLBACK_TRANSCRIPTION_HOTKEY = 'Option+Shift+Space';
@@ -128,7 +123,6 @@ export class TranscriberManager extends EventEmitter {
   private cursorStatusManager: CursorStatusManager | null = null;
   private commandsManager: CommandsManager | null = null;
   private squaresManager: any | null = null;  // SquaresManager for voice-triggered window management
-  private accessTokenGetter: (() => string | undefined) | null = null;
   private hasShownQuotaMessageThisPeriod: boolean = false;
   private recordingStartTime: number = 0;
   private skipNextPasteFailedNotification: boolean = false;
@@ -139,15 +133,10 @@ export class TranscriberManager extends EventEmitter {
   // disable GPU and retry with CPU-only mode for the rest of the session.
   private gpuDisabled: boolean = false;
   
-  // Track which hotkey started recording for cross-hotkey improvement trigger.
-  // If user starts with primary and ends with secondary (or vice versa), trigger improvement.
-  private startedWithSecondaryHotkey: boolean = false;
-
   // Double-tap detection for silent stacking mode.
   // When user double-taps the hotkey, enters silentStacking instead of recording.
   private doubleTapThresholdMs: number = 300;
   private pendingHotkeyTimer: NodeJS.Timeout | null = null;
-  private pendingHotkeyIsSecondary: boolean = false;
 
   // Hot Mic delegation — when Hot Mic is active, hotkey presses are delegated to it.
   private hotMicDelegate: {
@@ -156,6 +145,16 @@ export class TranscriberManager extends EventEmitter {
     yieldToTranscriber: () => Promise<void>;
     resumeAfterTranscriber: () => Promise<void>;
   } | null = null;
+
+  // Standard (push-to-talk) real-time chunk transcription state.
+  private standardLiveTranscript: string = '';
+  private standardChunkReadyListener: ((filePath: string) => void) | null = null;
+  private standardPendingChunkQueue: Array<{ filePath: string; readyAtMs: number }> = [];
+  private standardRealtimeChunks: Array<{ text: string; endMs: number }> = [];
+  private standardChunkProcessingInFlight: boolean = false;
+  private standardChunkCommandTriggered: boolean = false;
+  private pendingImmediateSquaresAction: string | null = null;
+  private pendingImmediateSquaresText: string = '';
 
   constructor(nativeHelper: NativeHelper, preferences: PreferencesManager, clipboardManager?: ClipboardManager, quotaManager?: QuotaManager, audioManager?: AudioManager, cursorStatusManager?: CursorStatusManager, commandsManager?: CommandsManager) {
     super();
@@ -273,14 +272,6 @@ export class TranscriberManager extends EventEmitter {
    */
   setSquaresManager(manager: any): void {
     this.squaresManager = manager;
-  }
-
-  /**
-   * Set a function to get the current access token for API calls.
-   * Used for cloud-based transcript improvement.
-   */
-  setAccessTokenGetter(getter: () => string | undefined): void {
-    this.accessTokenGetter = getter;
   }
 
   /**
@@ -550,7 +541,7 @@ export class TranscriberManager extends EventEmitter {
    * Single-tap in silentStacking → start recording (keep existing stack)
    * @param isSecondary - True if triggered by secondary hotkey, false for primary
    */
-  private async handleHotkeyPress(isSecondary: boolean): Promise<void> {
+  private async handleHotkeyPress(_isSecondary: boolean): Promise<void> {
     if (this.status === 'idle') {
       if (this.pendingHotkeyTimer) {
         // Second tap within threshold → double-tap confirmed → silentStacking
@@ -559,10 +550,8 @@ export class TranscriberManager extends EventEmitter {
         await this.startSilentStacking();
       } else {
         // First tap → wait to see if it's a double-tap
-        this.pendingHotkeyIsSecondary = isSecondary;
         this.pendingHotkeyTimer = setTimeout(async () => {
           this.pendingHotkeyTimer = null;
-          this.startedWithSecondaryHotkey = this.pendingHotkeyIsSecondary;
           await this.startRecording();
         }, this.doubleTapThresholdMs);
       }
@@ -574,18 +563,15 @@ export class TranscriberManager extends EventEmitter {
         await this.finishSilentStacking();
       } else {
         // First tap in silentStacking → wait to distinguish single vs double
-        this.pendingHotkeyIsSecondary = isSecondary;
         this.pendingHotkeyTimer = setTimeout(async () => {
           this.pendingHotkeyTimer = null;
           // Single-tap → start recording (keep existing stack)
-          this.startedWithSecondaryHotkey = this.pendingHotkeyIsSecondary;
           await this.startRecordingFromSilentStack();
         }, this.doubleTapThresholdMs);
       }
     } else if (this.status === 'recording') {
       // No double-tap detection needed here - just stop recording
-      const shouldImprove = this.secondaryHotkey !== null && isSecondary !== this.startedWithSecondaryHotkey;
-      await this.stopRecordingAndTranscribe(shouldImprove);
+      await this.stopRecordingAndTranscribe();
     }
     // Ignore if transcribing
   }
@@ -671,12 +657,16 @@ export class TranscriberManager extends EventEmitter {
       
       // Play start recording sound (user-configurable).
       this.soundManager.play('recordingStart');
-      
-      this.nativeHelper.setHarvestMode('off');
+
+      this.resetStandardRealtimeSession();
+      this.attachStandardChunkListener();
+      this.nativeHelper.setHarvestMode('command');
       await this.nativeHelper.startRecording();
       log.info('Recording started');
     } catch (error) {
       log.error('Failed to start recording:', error);
+      this.detachStandardChunkListener();
+      this.clearStandardLiveTranscript();
       this.setStatus('idle');
       this.overlay.dismiss();
       this.unregisterAbandonHotkey();
@@ -792,16 +782,188 @@ export class TranscriberManager extends EventEmitter {
       // Play start recording sound.
       this.soundManager.play('recordingStart');
 
-      this.nativeHelper.setHarvestMode('off');
+      this.resetStandardRealtimeSession();
+      this.attachStandardChunkListener();
+      this.nativeHelper.setHarvestMode('command');
       await this.nativeHelper.startRecording();
       log.info('Recording started from silent stack (keeping %d existing figures)', this.screenshotMetadata.length);
     } catch (error) {
       log.error('Failed to start recording from silent stack:', error);
+      this.detachStandardChunkListener();
+      this.clearStandardLiveTranscript();
       this.setStatus('idle');
       this.overlay.dismiss();
       this.unregisterAbandonHotkey();
       this.emit('error', error as Error);
     }
+  }
+
+  private resetStandardRealtimeSession(): void {
+    this.standardLiveTranscript = '';
+    this.standardPendingChunkQueue = [];
+    this.standardRealtimeChunks = [];
+    this.standardChunkProcessingInFlight = false;
+    this.standardChunkCommandTriggered = false;
+    this.pendingImmediateSquaresAction = null;
+    this.pendingImmediateSquaresText = '';
+    this.emit('standardLiveTranscript', '');
+  }
+
+  private clearStandardLiveTranscript(): void {
+    this.standardLiveTranscript = '';
+    this.emit('standardLiveTranscript', '');
+  }
+
+  private attachStandardChunkListener(): void {
+    if (this.standardChunkReadyListener) {
+      this.detachStandardChunkListener();
+    }
+    this.standardChunkReadyListener = (filePath: string) => {
+      const readyAtMs = this.recordingStartTime > 0
+        ? Math.max(0, Date.now() - this.recordingStartTime)
+        : 0;
+      this.standardPendingChunkQueue.push({ filePath, readyAtMs });
+      void this.processStandardChunkQueue();
+    };
+    this.nativeHelper.on('recordingChunkReady', this.standardChunkReadyListener);
+  }
+
+  private detachStandardChunkListener(): void {
+    if (!this.standardChunkReadyListener) return;
+    this.nativeHelper.removeListener('recordingChunkReady', this.standardChunkReadyListener);
+    this.standardChunkReadyListener = null;
+    this.standardPendingChunkQueue = [];
+    this.standardChunkProcessingInFlight = false;
+  }
+
+  private async processStandardChunkQueue(): Promise<void> {
+    if (this.standardChunkProcessingInFlight) return;
+    this.standardChunkProcessingInFlight = true;
+    try {
+      while (this.standardPendingChunkQueue.length > 0) {
+        const chunk = this.standardPendingChunkQueue.shift();
+        if (!chunk) continue;
+        await this.onStandardChunkReady(chunk.filePath, chunk.readyAtMs);
+      }
+    } finally {
+      this.standardChunkProcessingInFlight = false;
+    }
+  }
+
+  private async waitForStandardChunkDrain(timeoutMs = 1200): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.standardChunkProcessingInFlight || this.standardPendingChunkQueue.length > 0) {
+      if (Date.now() >= deadline) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+
+  private async onStandardChunkReady(wavPath: string, chunkReadyAtMs?: number): Promise<void> {
+    try {
+      if (this.status !== 'recording') return;
+      if (this.pendingImmediateSquaresAction) return;
+
+      const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+      const rawChunkText = await this.transcribeWithEngineFallback(wavPath, engine);
+      const chunkText = this.sanitizeTranscriptText(rawChunkText);
+      const liveChunkText = this.stripFigureReferences(chunkText);
+      if (!liveChunkText) return;
+
+      const endMs = typeof chunkReadyAtMs === 'number'
+        ? Math.max(0, chunkReadyAtMs)
+        : (this.recordingStartTime > 0 ? Math.max(0, Date.now() - this.recordingStartTime) : 0);
+      this.standardRealtimeChunks.push({ text: liveChunkText, endMs });
+
+      this.standardLiveTranscript = [this.standardLiveTranscript, liveChunkText]
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+
+      this.emit('standardLiveTranscript', this.standardLiveTranscript);
+      this.nativeHelper.setHarvestMode(this.standardLiveTranscript.length === 0 ? 'command' : 'dictation');
+
+      if (this.squaresManager) {
+        const tailMatch = this.squaresManager.parseVoiceCommandFromTail(this.standardLiveTranscript.toLowerCase());
+        if (tailMatch) {
+          this.pendingImmediateSquaresAction = tailMatch.action;
+          this.pendingImmediateSquaresText = tailMatch.remainingText.trim();
+          this.standardLiveTranscript = this.pendingImmediateSquaresText;
+          this.standardRealtimeChunks = this.pendingImmediateSquaresText
+            ? [{ text: this.pendingImmediateSquaresText, endMs }]
+            : [];
+          this.emit('standardLiveTranscript', this.standardLiveTranscript);
+
+          if (!this.standardChunkCommandTriggered) {
+            this.standardChunkCommandTriggered = true;
+            void this.stopRecordingAndTranscribe();
+          }
+        }
+      }
+    } catch (error) {
+      log.error('Standard chunk transcription failed:', error);
+    } finally {
+      void fs.promises.unlink(wavPath).catch(() => {});
+    }
+  }
+
+  private sanitizeTranscriptText(text: string): string {
+    const trimmedText = text ? text.trim() : '';
+    if (!trimmedText) return '';
+
+    // Mirror Hot Mic chunk normalization for consistent standard-mode behavior:
+    // remove metadata-like bracket artifacts, strip parentheticals, apply substitutions,
+    // then normalize casing/chunk-ending periods.
+    let cleanedText = trimmedText.replace(/\s*\[(?!Figure\s+[A-Za-z0-9]+\])[^\]]+\]\s*/g, ' ').trim();
+    cleanedText = cleanedText.replace(/\([^)]*\)/g, ' ').trim();
+    cleanedText = this.applyWordSubstitutions(cleanedText);
+    cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
+    return cleanedText.toLowerCase().replace(/\.+$/, '').trim();
+  }
+
+  private stripFigureReferences(text: string): string {
+    if (!text) return '';
+    return text
+      .replace(/\s*\[Figure\s+[A-Za-z0-9]+\]\s*/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private insertFigureReferencesIntoRealtimeTranscript(): string {
+    const chunks = Array.isArray(this.standardRealtimeChunks) ? this.standardRealtimeChunks : [];
+    const segments = chunks
+      .map((chunk) => ({ text: chunk.text.trim(), endMs: Math.max(0, chunk.endMs) }))
+      .filter((segment) => segment.text.length > 0);
+
+    if (segments.length === 0) {
+      return this.insertFigureReferences(this.stripFigureReferences(this.standardLiveTranscript));
+    }
+
+    const sortedScreenshots = [...this.screenshotMetadata].sort(
+      (a, b) => a.capturedAtMs - b.capturedAtMs
+    );
+    const segmentFigures: Map<number, string[]> = new Map();
+
+    for (const screenshot of sortedScreenshots) {
+      let segmentIndex = segments.findIndex((segment) => screenshot.capturedAtMs <= segment.endMs);
+      if (segmentIndex < 0) {
+        segmentIndex = segments.length - 1;
+      }
+      const figures = segmentFigures.get(segmentIndex) ?? [];
+      figures.push(screenshot.figureLabel);
+      segmentFigures.set(segmentIndex, figures);
+    }
+
+    const result = segments.map((segment, index) => {
+      const figures = segmentFigures.get(index);
+      if (!figures || figures.length === 0) return segment.text;
+      const refs = figures.map((figureLabel) => `[Figure ${figureLabel}]`).join(' ');
+      return `${segment.text} ${refs}`;
+    });
+
+    return result.join(' ').trim();
   }
 
   /**
@@ -895,7 +1057,7 @@ export class TranscriberManager extends EventEmitter {
           const figureLabel = item.figureLabel || String(i + 1);
           const imagePath = await this.clipboardManager!.exportImageToCache(item);
           if (imagePath) {
-            clipboard.writeText(`Figure ${figureLabel}\n${imagePath}`);
+            clipboard.writeText(this.addFollowupTypingSpace(`Figure ${figureLabel}\n${imagePath}`));
             this.clipboardManager?.syncClipboardHash();
             await this.pasteText();
           }
@@ -930,9 +1092,8 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Stop recording and transcribe the audio.
-   * @param shouldImprove - If true, run AI improvement on the transcript after transcription
    */
-  private async stopRecordingAndTranscribe(shouldImprove: boolean = false): Promise<void> {
+  private async stopRecordingAndTranscribe(): Promise<void> {
     if (this.status !== 'recording') {
       return;
     }
@@ -943,72 +1104,97 @@ export class TranscriberManager extends EventEmitter {
       
       // Play stop recording sound (user-configurable).
       this.soundManager.play('recordingStop');
+
+      // Force one final harvest snapshot so trailing speech is captured even if
+      // the user stops before Swift's silence detector emits a chunk.
+      if (!this.pendingImmediateSquaresAction) {
+        try {
+          const tailChunkPath = await this.nativeHelper.snapshotRecording();
+          const readyAtMs = this.recordingStartTime > 0
+            ? Math.max(0, Date.now() - this.recordingStartTime)
+            : 0;
+          this.standardPendingChunkQueue.push({ filePath: tailChunkPath, readyAtMs });
+          void this.processStandardChunkQueue();
+        } catch {
+          // Snapshot can fail when no audio has accumulated yet; continue with normal stop.
+        }
+      }
       
       // Stop recording and get WAV file path
       const wavPath = await this.nativeHelper.stopRecording();
+      await this.waitForStandardChunkDrain();
+      this.detachStandardChunkListener();
+
+      const immediateSquaresAction = this.pendingImmediateSquaresAction;
+      this.pendingImmediateSquaresAction = null;
+      const immediateSquaresText = this.pendingImmediateSquaresText;
+      this.pendingImmediateSquaresText = '';
 
       // Track priority mic usage if a priority device was selected during recording.
       await this.trackPriorityMicUsage();
-
-      // Check if whisper model is available (skip for Qwen - it manages its own model)
-      const engineForModelCheck = this.preferences.getPreference('transcriptionEngine') || 'whisper';
-      if (engineForModelCheck === 'whisper') {
-        const selectedModel = this.modelManager.getSelectedModel();
-        const modelAvailable = await this.modelManager.isModelAvailable();
-        if (!modelAvailable) {
-          this.setStatus('idle');
-          this.handleOverlayAfterTranscription();
-          this.emit('error', new Error(`Model "${selectedModel}" not available. Please download the model first.`));
-          return;
-        }
-      }
 
       // Switch to transcribing state
       this.setStatus('transcribing');
       this.overlay.showTranscribing();
 
-      // Transcribe using configured engine
-      const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
-      const text = await this.transcribeWithEngineFallback(wavPath, engine);
-      
-      // Check for silence (empty or whitespace-only text)
-      const trimmedText = text ? text.trim() : '';
-      if (trimmedText.length === 0) {
-        // Still stack screenshots if any were taken during recording (no audio).
-        await this.stackScreenshotsIfAny();
-        this.setStatus('idle');
-        this.overlay.showStatus(MESSAGES.overlay.noAudioFound);
-        return;
+      let cleanedText = '';
+      let usedRealtimeTranscript = false;
+
+      if (immediateSquaresAction) {
+        cleanedText = this.sanitizeTranscriptText(immediateSquaresText);
+        usedRealtimeTranscript = true;
+      } else if (this.standardLiveTranscript.trim().length > 0) {
+        cleanedText = this.sanitizeTranscriptText(this.standardLiveTranscript);
+        usedRealtimeTranscript = true;
+      } else {
+        // Check if whisper model is available (skip for Qwen - it manages its own model).
+        const engineForModelCheck = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+        if (engineForModelCheck === 'whisper') {
+          const selectedModel = this.modelManager.getSelectedModel();
+          const modelAvailable = await this.modelManager.isModelAvailable();
+          if (!modelAvailable) {
+            this.clearStandardLiveTranscript();
+            this.setStatus('idle');
+            this.handleOverlayAfterTranscription();
+            this.emit('error', new Error(`Model "${selectedModel}" not available. Please download the model first.`));
+            return;
+          }
+        }
+
+        const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+        const text = await this.transcribeWithEngineFallback(wavPath, engine);
+        cleanedText = this.sanitizeTranscriptText(text);
       }
 
-      // Strip bracketed content like [BLANK_AUDIO], [MUSIC], [SILENCE] from anywhere in the text.
-      // These are whisper artifacts that shouldn't appear in final transcription.
-      // Preserve [Figure X] references by using a negative lookahead (X can be number or letter).
-      let cleanedText = trimmedText.replace(/\s*\[(?!Figure\s+[A-Za-z0-9]+\])[^\]]+\]\s*/g, ' ').trim();
+      if (usedRealtimeTranscript && Array.isArray(this.screenshotMetadata) && this.screenshotMetadata.length > 0) {
+        // Live chunk accumulation strips figure refs to keep Dynamic Island readable.
+        // Re-insert refs inline using per-chunk timing captured during realtime transcription.
+        cleanedText = this.insertFigureReferencesIntoRealtimeTranscript();
+      }
 
-      // Also strip all-caps parenthetical sound descriptions like (MUMBLING), (MUSIC), (LAUGHING).
-      // These are Whisper artifacts. Preserve normal parenthetical comments.
-      cleanedText = cleanedText.replace(/\s*\([A-Z\s]+\)\s*/g, ' ').trim();
-
-      // Apply user-configured word substitutions.
-      // This corrects common transcription mistakes like "main" -> "main" for the branch.
-      cleanedText = this.applyWordSubstitutions(cleanedText);
-      
-      // If nothing remains after stripping brackets, treat as silence.
-      if (cleanedText.length === 0) {
-        // Still stack screenshots if any were taken during recording (no audio).
-        await this.stackScreenshotsIfAny();
-        this.setStatus('idle');
-        this.overlay.showStatus(MESSAGES.overlay.noAudioFound);
-        return;
+      this.clearStandardLiveTranscript();
+      if (usedRealtimeTranscript) {
+        void fs.promises.unlink(wavPath).catch(() => {});
       }
       
-      // Figure references are now inserted inline during transcription parsing
-      // (in parseTimestampedOutput) when screenshots were captured during recording.
-
       // Check for Squares voice commands (e.g., "grid", "focus", "horizontal").
       // If the transcription is a window management command, execute it and skip pasting.
-      if (this.squaresManager) {
+      let deferredSquaresAction = immediateSquaresAction;
+      if (cleanedText.length === 0) {
+        if (deferredSquaresAction && this.squaresManager) {
+          await this.squaresManager.executeAction(deferredSquaresAction);
+          this.setStatus('idle');
+          this.handleOverlayAfterTranscription();
+          return;
+        }
+        // Still stack screenshots if any were taken during recording (no audio).
+        await this.stackScreenshotsIfAny();
+        this.setStatus('idle');
+        this.overlay.showStatus(MESSAGES.overlay.noAudioFound);
+        return;
+      }
+
+      if (!deferredSquaresAction && this.squaresManager) {
         const handled = await this.squaresManager.handleVoiceCommand(cleanedText);
         if (handled) {
           log.info(`Squares voice command executed: "${cleanedText}"`);
@@ -1097,105 +1283,10 @@ export class TranscriberManager extends EventEmitter {
       
       this.lastTranscription = cleanedText;
 
-      // If improvement was triggered (cross-hotkey) OR auto-improve is enabled, run AI improvement.
-      let finalText = cleanedText;
-      let improvedText: string | null = null;
+      // Transcript improvement is disabled in this release.
+      const finalText = cleanedText;
 
-      // Check if we should improve: explicit request OR auto-improve enabled
-      const autoImproveEnabled = this.getAutoImprove();
-
-      // Calculate word count for both threshold check and quota tracking (input words)
-      const wordCount = cleanedText.trim().split(/\s+/).filter(w => w.length > 0).length;
-
-      // For auto-improve, check word count meets minimum threshold
-      // Explicit improvement requests (shouldImprove) always run regardless of word count
-      let shouldTriggerImprovement = shouldImprove;
-      if (!shouldImprove && autoImproveEnabled) {
-        const minWords = this.getAutoImproveMinWords();
-        if (wordCount >= minWords) {
-          shouldTriggerImprovement = true;
-        }
-      }
-
-      if (shouldTriggerImprovement && FEATURE_IMPROVE_ENABLED && this.clipboardManager) {
-        // Check if we can improve: need an access token for cloud API.
-        const accessToken = this.accessTokenGetter?.();
-
-        if (accessToken) {
-          // Bail silently if no text to improve
-          if (!cleanedText || cleanedText.trim().length === 0) {
-            // No text to improve - skip silently
-          } else {
-            // Show improving state.
-            this.cursorStatusManager?.setState('improving');
-            this.emit('improvingStarted');
-
-            const result = await improveTranscript(cleanedText, accessToken);
-
-            if (result.success && result.refinedPrompt) {
-              improvedText = result.refinedPrompt;
-
-              // Re-insert command references if they were stripped by the LLM.
-              // The system prompt asks to preserve them, but LLMs sometimes drop them anyway.
-              // We store detected commands separately, so we can ensure they're present.
-              if (this.detectedCommands.length > 0) {
-                for (const cmd of this.detectedCommands) {
-                  const ref = `[cmd:${cmd.name}.md]`;
-                  if (!improvedText.includes(ref)) {
-                    improvedText += ` ${ref}`;
-                  }
-                }
-              }
-
-              finalText = improvedText;
-
-              // Track auto-improve usage stats (always, using 0 for tokens if not available)
-              const currentPrefs = this.preferences.get();
-              const currentStats = currentPrefs.autoImproveStats || {
-                wordsImproved: 0,
-                apiCalls: 0,
-                inputTokens: 0,
-                outputTokens: 0,
-              };
-              await this.preferences.save({
-                autoImproveStats: {
-                  wordsImproved: currentStats.wordsImproved + (result.wordCount || wordCount),
-                  apiCalls: currentStats.apiCalls + 1,
-                  inputTokens: currentStats.inputTokens + (result.usage?.inputTokens || 0),
-                  outputTokens: currentStats.outputTokens + (result.usage?.outputTokens || 0),
-                },
-              });
-
-              // Emit event for metrics tracking (server tracks quota via improve-text edge function)
-              const improvedWordCount = result.wordCount || wordCount;
-              this.emit('wordsImproved', improvedWordCount);
-
-              // Save improved content to the transcript item in the database.
-              // The transcript item is the last one added to currentStack.
-              const transcriptItemId = this.currentStack[this.currentStack.length - 1];
-              if (transcriptItemId) {
-                this.clipboardManager.saveImprovedContent(transcriptItemId, improvedText);
-              }
-            } else if (result.quotaExceeded) {
-              // Quota exceeded - show message once per billing period, then fail silently
-              if (result.showQuotaMessage && !this.hasShownQuotaMessageThisPeriod) {
-                this.hasShownQuotaMessageThisPeriod = true;
-                this.cursorStatusManager?.showCriticalMessage(MESSAGES.critical.improvementQuotaExhausted);
-              }
-              // Use raw transcript (already in finalText)
-            } else {
-              log.error('Improvement failed:', result.error);
-              // Fail silently - don't show error message, just fall back to original transcript
-            }
-          }
-        } else {
-          this.cursorStatusManager?.showCriticalMessage(MESSAGES.critical.noLlmConfigured);
-          // Skip paste-failed notification since we're showing the config message
-          this.skipNextPasteFailedNotification = true;
-        }
-      }
-
-      // Update lastTranscription with the final text (improved or original).
+      // Update lastTranscription with the final text.
       this.lastTranscription = finalText;
 
       // Paste, check accessibility in parallel for UI feedback.
@@ -1203,6 +1294,9 @@ export class TranscriberManager extends EventEmitter {
       // Stack is cleared when next recording starts.
       const accessibilityCheckPromise = this.nativeHelper.checkFocusedTextInput();
       await this.pasteStack(false);
+      if (deferredSquaresAction && this.squaresManager) {
+        await this.squaresManager.executeAction(deferredSquaresAction);
+      }
       this.emit('result', finalText);
 
       // Set status to idle BEFORE emitting paste events.
@@ -1221,6 +1315,8 @@ export class TranscriberManager extends EventEmitter {
       this.skipNextPasteFailedNotification = false;
     } catch (error) {
       log.error('Transcription failed:', error);
+      this.detachStandardChunkListener();
+      this.clearStandardLiveTranscript();
       this.setStatus('idle');
       this.handleOverlayAfterTranscription();
       this.emit('error', error as Error);
@@ -1246,6 +1342,8 @@ export class TranscriberManager extends EventEmitter {
     try {
       // Note: Cancel sound removed to avoid audio feedback on abandoned recordings.
       await this.nativeHelper.cancelRecording();
+      this.detachStandardChunkListener();
+      this.clearStandardLiveTranscript();
       this.setStatus('idle');
       this.hasAudioContent = false;
       this.currentStack = [];
@@ -1254,6 +1352,8 @@ export class TranscriberManager extends EventEmitter {
       this.unregisterAbandonHotkey();
     } catch (error) {
       log.error('Failed to cancel recording:', error);
+      this.detachStandardChunkListener();
+      this.clearStandardLiveTranscript();
       this.setStatus('idle');
       this.hasAudioContent = false;
       this.currentStack = [];
@@ -1427,7 +1527,7 @@ export class TranscriberManager extends EventEmitter {
    * Set whether to automatically improve transcripts after completion.
    */
   async setAutoImprove(enabled: boolean): Promise<void> {
-    await this.preferences.save({ autoImproveTranscripts: enabled });
+    await this.preferences.save({ autoImproveTranscripts: false });
   }
 
   /**
@@ -1435,7 +1535,7 @@ export class TranscriberManager extends EventEmitter {
    * Default is false (disabled) for new users.
    */
   getAutoImprove(): boolean {
-    return this.preferences.getPreference('autoImproveTranscripts') ?? false;
+    return false;
   }
 
   /**
@@ -2163,6 +2263,18 @@ export class TranscriberManager extends EventEmitter {
     }
   }
 
+  /**
+   * Restart runtime after engine/model settings change to avoid stale worker state.
+   */
+  async restartTranscriptionRuntime(): Promise<void> {
+    this.stopQwenServer();
+    const primaryEngine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+    const hotMicEngine = this.resolveHotMicTranscriptionEngine();
+    if (primaryEngine === 'qwen' || hotMicEngine === 'qwen') {
+      await this.startQwenServer();
+    }
+  }
+
   private resolveHotMicTranscriptionEngine(): 'whisper' | 'qwen' {
     const override = this.preferences.getPreference('hotMicTranscriptionEngine');
     if (override === 'whisper' || override === 'qwen') {
@@ -2197,8 +2309,8 @@ export class TranscriberManager extends EventEmitter {
   async transcribeAudioForHotMic(wavPath: string): Promise<string> {
     this.lastHotMicUsedWhisperFallback = false;
     const engine = this.resolveHotMicTranscriptionEngine();
-    const allowWhisperFallback = this.preferences.getPreference('hotMicAllowWhisperFallback') ?? true;
     const whisperModel = this.resolveHotMicWhisperModel();
+    const allowWhisperFallback = this.preferences.getPreference('hotMicAllowWhisperFallback') ?? true;
 
     if (engine !== 'qwen') {
       return this.transcribeWithEngineFallback(wavPath, engine, {
@@ -2212,7 +2324,7 @@ export class TranscriberManager extends EventEmitter {
         allowWhisperFallback,
         whisperModelOverride: whisperModel,
       });
-    } catch (error) {
+      } catch (error) {
       // If Qwen failed and fallback was not allowed, we still want callers
       // to know this was a Qwen failure they may want to surface.
       throw error;
@@ -2250,6 +2362,7 @@ export class TranscriberManager extends EventEmitter {
   async setSelectedModel(size: ModelSize): Promise<void> {
     this.modelManager.setSelectedModel(size);
     await this.preferences.save({ selectedModel: size });
+    await this.restartTranscriptionRuntime();
   }
 
   /**
@@ -2631,24 +2744,20 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Format text for terminal output by converting [cmd:name.md] to numbered refs.
-   * Adds a "Commands:" section at the end with file paths.
+   * Appends run-this-command references so terminal copilots invoke immediately.
    */
   private formatCommandsForTerminal(text: string): string {
-    // Use the common formatting
-    let formattedText = this.formatCommandReferences(text);
-
+    let formattedText = text.replace(/\s*\[cmd:[^\]]+\]/g, '').trim();
     if (this.detectedCommands.length === 0) {
       return formattedText;
     }
 
-    // Add the commands list at the end for terminals
-    const commandPaths = this.detectedCommands.map((cmd, index) => {
-      const cmdNum = index + 1;
-      return `[cmd${cmdNum}: ${cmd.name}] ${cmd.filePath}`;
+    const commandRefs = this.detectedCommands.map((cmd) => {
+      return `[run this command: ${cmd.name}.md]\n${cmd.filePath}`;
     });
 
-    if (commandPaths.length > 0) {
-      formattedText += '\n\nCommands:\n' + commandPaths.join('\n');
+    if (commandRefs.length > 0) {
+      formattedText += `\n${commandRefs.join('\n')}`;
     }
 
     return formattedText;
@@ -2679,6 +2788,22 @@ export class TranscriberManager extends EventEmitter {
     }
 
     return text;
+  }
+
+  /**
+   * Keep a trailing space after command/path payloads so users can continue typing immediately.
+   */
+  private addFollowupTypingSpace(text: string): string {
+    const trimmed = text.replace(/\s+$/g, '');
+    if (!trimmed) return text;
+    const lines = trimmed.split('\n');
+    const lastLine = lines[lines.length - 1] || '';
+    const looksLikePath = /^(\/|~\/)/.test(lastLine);
+    const looksLikeCommandRef = /(?:^|\n)\[(run this command|resume from handoff): [^\]]+\]\n[^\n]+$/i.test(trimmed);
+    if (!looksLikePath && !looksLikeCommandRef) {
+      return text;
+    }
+    return `${trimmed} `;
   }
 
   /**
@@ -2756,11 +2881,8 @@ export class TranscriberManager extends EventEmitter {
         if (isTerminal && this.detectedCommands.length > 0) {
           textContent = this.formatCommandsForTerminal(textContent);
         } else if (isIDE && this.detectedCommands.length > 0) {
-          // For IDEs like Cursor: strip command refs and append file paths as text
-          // This allows the IDE to reference the command files directly
-          textContent = textContent.replace(/\s*\[cmd:[^\]]+\]/g, '').trim();
-          const pathList = this.detectedCommands.map(cmd => cmd.filePath).join('\n');
-          textContent = textContent + '\n\n' + pathList;
+          // For IDE terminals, match hot-mic command invocation format.
+          textContent = this.formatCommandsForTerminal(textContent);
         } else if (this.detectedCommands.length > 0) {
           // For other multimodal apps, format command references as [cmd1: name]
           // Files will be pasted as attachments below
@@ -2777,7 +2899,7 @@ export class TranscriberManager extends EventEmitter {
           }
         }
 
-        clipboard.writeText(textContent);
+        clipboard.writeText(this.addFollowupTypingSpace(textContent));
         this.clipboardManager?.syncClipboardHash();
         await this.pasteText();
 
@@ -2801,7 +2923,7 @@ export class TranscriberManager extends EventEmitter {
           const imagePath = await this.clipboardManager!.exportImageToCache(item);
           if (imagePath) {
             // Use real path for terminal compatibility
-            clipboard.writeText(imagePath);
+            clipboard.writeText(`${imagePath} `);
             this.clipboardManager?.syncClipboardHash();
             await this.pasteText();
           }
@@ -2855,6 +2977,8 @@ export class TranscriberManager extends EventEmitter {
    */
   destroy(): void {
     this.unregisterAbandonHotkey();
+    this.detachStandardChunkListener();
+    this.clearStandardLiveTranscript();
 
     // Unregister transcription hotkeys via HotkeyManager
     const hotkeyManager = getHotkeyManager();

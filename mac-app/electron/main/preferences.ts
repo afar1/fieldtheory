@@ -74,7 +74,6 @@ interface Preferences {
   // Previously hardcoded hotkeys - now customizable
   superPasteHotkey?: string;
   commandLauncherHotkey?: string;
-  improveTextHotkey?: string;
   autoImproveHotkey?: string;
   
   // Note: improvedPromptsCount removed - server tracks text improve usage via improve-text edge function
@@ -152,8 +151,9 @@ interface Preferences {
   // Hot Mic - continuous voice input for Claude Code terminals.
   // When enabled, auto-records voice fragments and injects them into a target terminal.
   hotMicEnabled?: boolean;
+  hotMicMuted?: boolean;
   hotMicTranscriptionEngine?: 'default' | 'whisper' | 'qwen'; // Engine override for Hot Mic only
-  hotMicAllowWhisperFallback?: boolean; // If false, do not fall back to Whisper when Qwen fails
+  hotMicAllowWhisperFallback?: boolean; // Allow Qwen->Whisper fallback for Hot Mic when Qwen fails
   hotMicWhisperModel?: ModelSize; // Whisper model override for Hot Mic-only transcription
   hotMicTargetBundleId?: string; // e.g., "com.mitchellh.ghostty"
   hotMicSoundsEnabled?: boolean;
@@ -233,7 +233,6 @@ const DEFAULT_PREFERENCES: Preferences = {
   // Previously hardcoded hotkeys - now customizable
   superPasteHotkey: 'Command+Shift+V',
   commandLauncherHotkey: 'Command+Shift+K',
-  improveTextHotkey: 'Command+Shift+I',
   autoImproveHotkey: 'Command+Shift+\\',
   autoImproveTranscripts: false,
 
@@ -263,6 +262,7 @@ const DEFAULT_PREFERENCES: Preferences = {
   dataRetentionDays: -1,
 
   // Hot Mic background filtering is opt-in by default.
+  hotMicMuted: false,
   hotMicTranscriptionEngine: 'default',
   hotMicAllowWhisperFallback: true,
   hotMicWhisperModel: 'small',

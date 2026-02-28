@@ -61,7 +61,6 @@ export default function HotMicSettings() {
   const [appleSilicon, setAppleSilicon] = useState(true);
   const [engine, setEngine] = useState<'whisper' | 'qwen'>('whisper');
   const [hotMicEngineMode, setHotMicEngineMode] = useState<'default' | 'whisper' | 'qwen'>('default');
-  const [allowWhisperFallback, setAllowWhisperFallback] = useState(true);
   const [hotMicWhisperModel, setHotMicWhisperModel] = useState('small');
   const [availableWhisperModels, setAvailableWhisperModels] = useState<Record<string, WhisperModelInfo>>({});
   const [enabled, setEnabled] = useState(false);
@@ -70,6 +69,7 @@ export default function HotMicSettings() {
   const [drawerTextSize, setDrawerTextSize] = useState(14);
   const [currentState, setCurrentState] = useState('idle');
   const [runtimeStatus, setRuntimeStatus] = useState<HotMicRuntimeStatus | null>(null);
+  const [currentMuted, setCurrentMuted] = useState(false);
   const [hookInstalled, setHookInstalled] = useState(false);
   const [hookLoading, setHookLoading] = useState(false);
   const [submitWord, setSubmitWord] = useState('');
@@ -117,16 +117,17 @@ export default function HotMicSettings() {
       window.transcribeAPI?.isAppleSilicon?.() ?? Promise.resolve(true),
       window.transcribeAPI?.getTranscriptionEngine?.() ?? Promise.resolve('whisper' as const),
       window.hotMicAPI?.getTranscriptionEngineMode?.() ?? Promise.resolve('default' as const),
-      window.hotMicAPI?.getAllowWhisperFallback?.() ?? Promise.resolve(true),
       window.hotMicAPI?.getWhisperModel?.() ?? Promise.resolve('small'),
+      window.hotMicAPI?.getStatus?.() ?? Promise.resolve({ state: 'idle', muted: false }),
       window.transcribeAPI?.getAvailableModels?.() ?? Promise.resolve({} as Record<string, WhisperModelInfo>),
-    ]).then(([qi, as, eng, hotMicMode, fallbackEnabled, whisperModel, availableModels]) => {
+    ]).then(([qi, as, eng, hotMicMode, whisperModel, hotMicStatus, availableModels]) => {
       setQwenInstalled(qi);
       setAppleSilicon(as);
       setEngine(eng);
       setHotMicEngineMode(hotMicMode);
-      setAllowWhisperFallback(fallbackEnabled);
       setHotMicWhisperModel(whisperModel);
+      setCurrentState(hotMicStatus.state);
+      setCurrentMuted(hotMicStatus.muted);
       setAvailableWhisperModels(availableModels);
     });
 
@@ -134,11 +135,10 @@ export default function HotMicSettings() {
       const [
         en,
         hotMicMode,
-        fallbackEnabled,
         whisperModel,
         bgFilterEnabled,
         bgFilterStrengthValue,
-        state,
+        hotMicStatus,
         hookStatus,
         submit,
         pw,
@@ -164,11 +164,10 @@ export default function HotMicSettings() {
       ] = await Promise.all([
         window.hotMicAPI!.getEnabled(),
         window.hotMicAPI!.getTranscriptionEngineMode(),
-        window.hotMicAPI!.getAllowWhisperFallback(),
         window.hotMicAPI!.getWhisperModel(),
         window.hotMicAPI!.getBackgroundFilterEnabled(),
         window.hotMicAPI!.getBackgroundFilterStrength(),
-        window.hotMicAPI!.getState(),
+        window.hotMicAPI!.getStatus?.() ?? Promise.resolve({ state: 'idle', muted: false }),
         window.hotMicAPI!.isHookInstalled(),
         window.hotMicAPI!.getSubmitWord(),
         window.hotMicAPI!.getPasteWords(),
@@ -194,11 +193,11 @@ export default function HotMicSettings() {
       ]);
       setEnabled(en);
       setHotMicEngineMode(hotMicMode);
-      setAllowWhisperFallback(fallbackEnabled);
       setHotMicWhisperModel(whisperModel);
       setBackgroundFilterEnabled(bgFilterEnabled);
       setBackgroundFilterStrength(Math.max(0, Math.min(100, Math.round(bgFilterStrengthValue))));
-      setCurrentState(state);
+      setCurrentState(hotMicStatus.state);
+      setCurrentMuted(hotMicStatus.muted);
       setHookInstalled(hookStatus);
       setSubmitWord(submit);
       setPasteWords(pw);
@@ -247,6 +246,13 @@ export default function HotMicSettings() {
     const unsub = window.hotMicAPI!.onStateChanged((state) => {
       setCurrentState(state);
     });
+    const unsubStatus = window.hotMicAPI!.onStatusChanged?.((status) => {
+      setCurrentState(status.state);
+      setCurrentMuted(status.muted);
+    }) ?? (() => {});
+    const unsubInputMode = window.hotMicAPI!.onInputModeChanged?.((mode) => {
+      setEnabled(mode === 'hot-mic');
+    }) ?? (() => {});
 
     const unsubRuntime = window.hotMicAPI!.onRuntimeStatusChanged?.((status) => {
       setRuntimeStatus(status);
@@ -254,6 +260,8 @@ export default function HotMicSettings() {
 
     return () => {
       unsub();
+      unsubStatus();
+      unsubInputMode();
       unsubRuntime?.();
     };
   }, []);
@@ -268,12 +276,6 @@ export default function HotMicSettings() {
     if (!window.hotMicAPI?.setTranscriptionEngineMode) return;
     setHotMicEngineMode(mode);
     await window.hotMicAPI.setTranscriptionEngineMode(mode);
-  }, []);
-
-  const handleAllowWhisperFallbackChange = useCallback(async (value: boolean) => {
-    if (!window.hotMicAPI?.setAllowWhisperFallback) return;
-    setAllowWhisperFallback(value);
-    await window.hotMicAPI.setAllowWhisperFallback(value);
   }, []);
 
   const handleHotMicWhisperModelChange = useCallback(async (model: string) => {
@@ -518,6 +520,7 @@ export default function HotMicSettings() {
     }
   }, [appAliases]);
 
+  const displayState = currentState !== 'idle' && currentMuted ? 'muted' : currentState;
   const isActive = currentState !== 'idle';
 
   const handleBrowseAliasApp = useCallback(async () => {
@@ -579,21 +582,6 @@ export default function HotMicSettings() {
         </div>
       )}
 
-      <div style={styles.row}>
-        <span style={styles.rowLabel}>Fallback to Whisper</span>
-        <button
-          onClick={() => resolvedEngine === 'qwen' && handleAllowWhisperFallbackChange(!allowWhisperFallback)}
-          style={{
-            ...styles.toggle,
-            backgroundColor: allowWhisperFallback ? theme.success : '#d1d5db',
-            opacity: resolvedEngine === 'qwen' ? 1 : 0.5,
-            cursor: resolvedEngine === 'qwen' ? 'pointer' : 'not-allowed',
-          }}
-        >
-          <span style={{ ...styles.toggleKnob, transform: allowWhisperFallback ? 'translateX(20px)' : 'translateX(2px)' }} />
-        </button>
-      </div>
-
       {resolvedEngine === 'qwen' && !appleSilicon ? (
         <p style={{ ...styles.description, color: theme.textSecondary }}>
           Hot Mic requires Apple Silicon (M1 or later).
@@ -607,11 +595,6 @@ export default function HotMicSettings() {
           Hands-free voice input for multiple Claude/Codex terminals. When Claude finishes a turn,
           the terminal is queued. Speak freely — your words buffer until you say the submit word
           to flush and send. Say "skip" to cycle or "dismiss" to remove from queue.
-        </p>
-      )}
-      {resolvedEngine === 'qwen' && !allowWhisperFallback && (
-        <p style={{ ...styles.description, color: theme.warning ?? theme.textSecondary }}>
-          Fallback is off. Qwen failures will stay visible instead of auto-switching to Whisper.
         </p>
       )}
 
@@ -1219,8 +1202,8 @@ export default function HotMicSettings() {
       <div style={styles.row}>
         <span style={styles.rowLabel}>Status</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ ...styles.stateBadge, backgroundColor: getStateColor(currentState) }}>
-            {currentState}
+          <span style={{ ...styles.stateBadge, backgroundColor: getStateColor(displayState) }}>
+            {displayState}
           </span>
           {runtimeStatus?.condition && (
             <span style={{ ...styles.stateBadge, backgroundColor: getConditionColor(runtimeStatus.condition), fontSize: '10px' }}>
@@ -1276,6 +1259,7 @@ function getStateColor(state: string): string {
   switch (state) {
     case 'armed': return '#3b82f6';
     case 'listening': return '#10b981';
+    case 'muted': return '#f59e0b';
     case 'recording': return '#ef4444';
     default: return '#6b7280';
   }

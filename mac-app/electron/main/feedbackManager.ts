@@ -30,9 +30,11 @@ export interface FeedbackMessage {
   type: 'feedback';
   senderUserId: string;
   senderEmail: string | null;
+  senderCallsign: string | null;
   senderName: string | null;
   recipientUserId: string;
   recipientEmail: string | null;
+  recipientCallsign: string | null;
   recipientName: string | null;
   contentType: 'text' | 'image';
   contentText: string | null;
@@ -51,6 +53,7 @@ export interface FeedbackMessage {
 export interface UserProfile {
   id: string;
   email: string | null;
+  callsign: string | null;
   firstName: string | null;
   lastName: string | null;
   isAdmin: boolean;
@@ -92,6 +95,7 @@ interface MessageRow {
 interface ProfileRow {
   id: string;
   email: string | null;
+  callsign: string | null;
   first_name: string | null;
   last_name: string | null;
   is_admin: boolean;
@@ -255,6 +259,7 @@ export class FeedbackManager extends EventEmitter {
       const profile: UserProfile = {
         id: row.id,
         email: row.email,
+        callsign: row.callsign,
         firstName: row.first_name,
         lastName: row.last_name,
         isAdmin: row.is_admin,
@@ -323,6 +328,7 @@ export class FeedbackManager extends EventEmitter {
       type: 'feedback',
       senderUserId: row.sender_user_id,
       senderEmail: senderProfile?.email || null,
+      senderCallsign: senderProfile?.callsign || null,
       senderName: senderProfile?.firstName
         ? (senderProfile.lastName
           ? `${senderProfile.firstName} ${senderProfile.lastName}`
@@ -330,6 +336,7 @@ export class FeedbackManager extends EventEmitter {
         : null,
       recipientUserId: row.recipient_user_id,
       recipientEmail: recipientProfile?.email || null,
+      recipientCallsign: recipientProfile?.callsign || null,
       recipientName: recipientProfile?.firstName
         ? (recipientProfile.lastName
           ? `${recipientProfile.firstName} ${recipientProfile.lastName}`

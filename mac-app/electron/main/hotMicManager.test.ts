@@ -68,6 +68,7 @@ vi.mock('./logger', () => ({
 import { HotMicManager } from './hotMicManager';
 
 function createManager(preferences: Record<string, unknown> = {}) {
+  const clipboardItems = new Map<number, any>();
   const nativeHelper = {
     getFrontmostApp: vi.fn(() => ({ bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' })),
     typeIntoApp: vi.fn(async () => ({ success: true })),
@@ -92,9 +93,17 @@ function createManager(preferences: Record<string, unknown> = {}) {
     storeText: vi.fn(async () => 1),
     setClipboardHashFromText: vi.fn(),
     syncClipboardHash: vi.fn(),
+    getItem: vi.fn((id: number) => clipboardItems.get(id) ?? null),
+    updateFigureLabel: vi.fn(),
+    generateFigureId: vi
+      .fn()
+      .mockReturnValueOnce('fig01')
+      .mockReturnValueOnce('fig02')
+      .mockReturnValue('fig03'),
+    exportImageToCache: vi.fn(async (item: { id: number }) => `/tmp/figure-${item.id}.png`),
   };
   manager.setClipboardManager(clipboardManager as any);
-  return { manager, nativeHelper, prefs, clipboardManager };
+  return { manager, nativeHelper, prefs, clipboardManager, clipboardItems };
 }
 
 describe('HotMicManager run-command phrases', () => {
@@ -246,6 +255,120 @@ describe('HotMicManager transcript history persistence', () => {
   });
 });
 
+describe('HotMicManager screenshot figure integration', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('labels screenshots with sequential figure numbers during active hot mic', () => {
+    const { manager, clipboardManager, clipboardItems } = createManager();
+    (manager as any).state = 'listening';
+    (manager as any).hotMicSessionStartMs = Date.now() - 1000;
+
+    clipboardItems.set(101, { id: 101, type: 'screenshot', imageData: Buffer.from([1]) });
+    clipboardItems.set(102, { id: 102, type: 'screenshot', imageData: Buffer.from([2]) });
+
+    manager.addScreenshotToSession(101);
+    manager.addScreenshotToSession(102);
+
+    expect(clipboardManager.updateFigureLabel).toHaveBeenCalledWith(101, '1', 'fig01');
+    expect(clipboardManager.updateFigureLabel).toHaveBeenCalledWith(102, '2', 'fig02');
+    expect((manager as any).hotMicScreenshotMetadata).toHaveLength(2);
+    expect((manager as any).hotMicScreenshotMetadata[0].figureLabel).toBe('1');
+    expect((manager as any).hotMicScreenshotMetadata[1].figureLabel).toBe('2');
+
+    manager.destroy();
+  });
+
+  it('injects inline figure refs and terminal figure paths into submit payload', async () => {
+    const { manager, clipboardItems } = createManager();
+
+    clipboardItems.set(201, { id: 201, type: 'screenshot', imageData: Buffer.from([1]) });
+    clipboardItems.set(202, { id: 202, type: 'screenshot', imageData: Buffer.from([2]) });
+
+    (manager as any).hotMicBufferSegments = [
+      { text: 'alpha segment', endMs: 900 },
+      { text: 'beta segment', endMs: 1800 },
+    ];
+    (manager as any).hotMicScreenshotMetadata = [
+      { itemId: 201, figureLabel: '1', figureId: 'fig01', capturedAtMs: 500 },
+      { itemId: 202, figureLabel: '2', figureId: 'fig02', capturedAtMs: 1500 },
+    ];
+
+    const payload = await (manager as any).buildFigureAwareHotMicPayload(
+      'alpha segment beta segment',
+      'com.apple.Terminal'
+    );
+
+    expect(payload).toContain('alpha segment [Figure 1] beta segment [Figure 2]');
+    expect(payload).toContain('Figure 1: /tmp/figure-201.png');
+    expect(payload).toContain('Figure 2: /tmp/figure-202.png');
+
+    manager.destroy();
+  });
+
+  it('clears buffered figure/session state after submit flush', async () => {
+    const { manager, nativeHelper, clipboardItems } = createManager();
+    (manager as any).state = 'listening';
+    (manager as any).hotMicSessionStartMs = Date.now() - 2000;
+
+    clipboardItems.set(301, { id: 301, type: 'screenshot', imageData: Buffer.from([1]) });
+    manager.addScreenshotToSession(301);
+
+    await (manager as any).processListeningChunk('alpha go ahead');
+
+    expect(nativeHelper.typeIntoApp).toHaveBeenCalledWith(
+      'com.mitchellh.ghostty',
+      expect.stringContaining('[Figure 1]'),
+      true
+    );
+    expect((manager as any).transcriptBuffer).toEqual([]);
+    expect((manager as any).hotMicBufferSegments).toEqual([]);
+    expect((manager as any).hotMicScreenshotMetadata).toEqual([]);
+    expect((manager as any).hotMicSessionItemIds).toEqual([]);
+
+    manager.destroy();
+  });
+
+  it('keeps clipboard manager method context when reading/exporting figure items', async () => {
+    const { manager } = createManager();
+    (manager as any).state = 'listening';
+    (manager as any).hotMicSessionStartMs = Date.now() - 500;
+
+    const contextualClipboardManager = {
+      db: new Map<number, any>([
+        [401, { id: 401, type: 'screenshot', imageData: Buffer.from([1]) }],
+      ]),
+      storeText: vi.fn(async () => 1),
+      setClipboardHashFromText: vi.fn(),
+      syncClipboardHash: vi.fn(),
+      getItem(this: any, id: number) {
+        return this.db.get(id) ?? null;
+      },
+      updateFigureLabel: vi.fn(),
+      generateFigureId: vi.fn(() => 'ctx01'),
+      exportImageToCache: vi.fn(async function(this: any, item: { id: number }) {
+        return this.db.has(item.id) ? `/tmp/ctx-${item.id}.png` : null;
+      }),
+    };
+    manager.setClipboardManager(contextualClipboardManager as any);
+
+    expect(() => manager.addScreenshotToSession(401)).not.toThrow();
+    expect(contextualClipboardManager.updateFigureLabel).toHaveBeenCalledWith(401, '1', 'ctx01');
+
+    (manager as any).hotMicBufferSegments = [{ text: 'ctx payload', endMs: 900 }];
+    const payload = await (manager as any).buildFigureAwareHotMicPayload(
+      'ctx payload',
+      'com.apple.Terminal'
+    );
+
+    expect(payload).toContain('[Figure 1]');
+    expect(payload).toContain('Figure 1: /tmp/ctx-401.png');
+
+    manager.destroy();
+  });
+});
+
 describe('HotMicManager drawer preview threshold', () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -254,6 +377,8 @@ describe('HotMicManager drawer preview threshold', () => {
   it('only shows drawer transcript after at least 3 buffered words', async () => {
     const { manager } = createManager();
     const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      updateHotMic: vi.fn(),
       updateDrawerTranscript: vi.fn(),
       updateHotMicBackgroundFilterMeter: vi.fn(),
     };
@@ -270,6 +395,22 @@ describe('HotMicManager drawer preview threshold', () => {
 
     manager.destroy();
   });
+
+  it('truncates drawer transcript to first 3 and last 7 words', async () => {
+    const { manager } = createManager();
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMicBackgroundFilterMeter: vi.fn(),
+    };
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+
+    await (manager as any).processListeningChunk('one two three four five six seven eight nine ten eleven');
+    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenLastCalledWith('one two three ... five six seven eight nine ten eleven');
+
+    manager.destroy();
+  });
 });
 
 describe('HotMicManager transcript dismissal', () => {
@@ -280,6 +421,7 @@ describe('HotMicManager transcript dismissal', () => {
   it('clears the live buffer while keeping hot mic active when dismiss is requested', () => {
     const { manager, nativeHelper } = createManager();
     const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
       updateDrawerTranscript: vi.fn(),
       updateHotMic: vi.fn(),
       updateHotMicBackgroundFilterMeter: vi.fn(),
@@ -374,6 +516,8 @@ describe('HotMicManager background voice filter', () => {
 
     const updateHotMicBackgroundFilterMeter = vi.fn();
     manager.setDynamicIslandManager({
+      sendMuteState: vi.fn(),
+      updateHotMic: vi.fn(),
       updateHotMicBackgroundFilterMeter,
       updateDrawerTranscript: vi.fn(),
     } as any);
@@ -385,6 +529,39 @@ describe('HotMicManager background voice filter', () => {
     expect(payload.enabled).toBe(true);
     expect(payload.strength).toBe(50);
     expect(payload.rawLevel).toBeGreaterThan(0);
+    manager.destroy();
+  });
+});
+
+describe('HotMicManager audio diagnostics', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('flags sustained audio energy with near-zero speech ratio as a likely speech miss', () => {
+    const { manager } = createManager();
+
+    const shouldWarn = (manager as any).shouldWarnForSpeechMiss(0.03, 0.01, 0.0);
+    expect(shouldWarn).toBe(true);
+
+    manager.destroy();
+  });
+
+  it('does not flag low-energy input as a speech miss', () => {
+    const { manager } = createManager();
+
+    const shouldWarn = (manager as any).shouldWarnForSpeechMiss(0.01, 0.003, 0.0);
+    expect(shouldWarn).toBe(false);
+
+    manager.destroy();
+  });
+
+  it('does not flag healthy speech ratios as a speech miss', () => {
+    const { manager } = createManager();
+
+    const shouldWarn = (manager as any).shouldWarnForSpeechMiss(0.05, 0.015, 0.24);
+    expect(shouldWarn).toBe(false);
+
     manager.destroy();
   });
 });
@@ -554,6 +731,34 @@ describe('HotMicManager runtime condition', () => {
   });
 });
 
+describe('HotMicManager mute persistence', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('loads muted preference at startup', () => {
+    const { manager } = createManager({ hotMicMuted: true });
+    expect(manager.isMuted).toBe(true);
+    manager.destroy();
+  });
+
+  it('persists mute preference and emits unified status updates on toggle', async () => {
+    const { manager, prefs } = createManager();
+    const statusChanged = vi.fn();
+    manager.on('statusChanged', statusChanged);
+
+    (manager as any).state = 'listening';
+    await manager.toggleMute();
+    await manager.toggleMute();
+
+    expect(prefs.save).toHaveBeenCalledWith({ hotMicMuted: true });
+    expect(prefs.save).toHaveBeenCalledWith({ hotMicMuted: false });
+    expect(statusChanged).toHaveBeenCalledWith({ state: 'listening', muted: true });
+    expect(statusChanged).toHaveBeenCalledWith({ state: 'listening', muted: false });
+    manager.destroy();
+  });
+});
+
 // ===========================================================================
 // Runtime status
 // ===========================================================================
@@ -629,6 +834,17 @@ describe('HotMicManager runtime status', () => {
     const { manager } = createManager();
     (manager as any).state = 'listening';
     (manager as any).condition = 'yielded';
+    (manager as any).lastChunkReadyMs = Date.now() - 999_999;
+
+    const status = manager.getRuntimeStatus();
+    expect(status.micHealthy).toBe(true);
+    manager.destroy();
+  });
+
+  it('always reports mic as healthy when muted', () => {
+    const { manager } = createManager();
+    (manager as any).state = 'listening';
+    (manager as any).condition = 'muted';
     (manager as any).lastChunkReadyMs = Date.now() - 999_999;
 
     const status = manager.getRuntimeStatus();
@@ -768,6 +984,66 @@ describe('HotMicManager whisper fallback detection', () => {
     (manager as any).cleanup();
 
     expect((manager as any).whisperFallbackActive).toBe(false);
+    manager.destroy();
+  });
+});
+
+describe('HotMicManager dynamic island sync', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('syncs muted idle state when Dynamic Island attaches', () => {
+    const { manager } = createManager({ hotMicMuted: true });
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMicBackgroundFilterMeter: vi.fn(),
+    };
+
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+
+    expect(dynamicIslandManager.sendMuteState).toHaveBeenCalledWith(true);
+    expect(dynamicIslandManager.updateHotMic).toHaveBeenCalledWith(false, 0, '');
+    manager.destroy();
+  });
+
+  it('syncs active state with buffered words when Dynamic Island attaches', () => {
+    const { manager } = createManager();
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMicBackgroundFilterMeter: vi.fn(),
+    };
+
+    (manager as any).state = 'listening';
+    (manager as any).muted = false;
+    (manager as any).transcriptBuffer = ['alpha beta'];
+
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+
+    expect(dynamicIslandManager.sendMuteState).toHaveBeenCalledWith(false);
+    expect(dynamicIslandManager.updateHotMic).toHaveBeenCalledWith(true, 2, 'beta');
+    manager.destroy();
+  });
+
+  it('hides the orange dot while yielded to standard transcription', () => {
+    const { manager } = createManager();
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMicBackgroundFilterMeter: vi.fn(),
+    };
+
+    (manager as any).state = 'listening';
+    (manager as any).muted = false;
+    (manager as any).yieldedToTranscriber = true;
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+
+    expect(dynamicIslandManager.updateHotMic).toHaveBeenCalledWith(false, 0, '');
     manager.destroy();
   });
 });

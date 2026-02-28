@@ -474,6 +474,49 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(transcriptEvents[transcriptEvents.length - 1]?.args[0]).toBe('hello world again');
   });
 
+  it('includes mute state in right-pill hot-mic payloads', () => {
+    manager = new DynamicIslandManager();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    manager.sendMuteState(true);
+    manager.updateHotMic(true, 4, 'world');
+
+    const right = testState.getWindowBySide('right');
+    expect(right).toBeDefined();
+
+    const hotMicEvents = right?.webContents.sent.filter(
+      (entry) => entry.channel === 'dynamic-island-hotmic'
+    ) ?? [];
+    expect(hotMicEvents.length).toBeGreaterThan(0);
+    expect(hotMicEvents[hotMicEvents.length - 1]?.args[0]).toMatchObject({
+      active: true,
+      muted: true,
+    });
+  });
+
+  it('broadcasts input mode updates to island renderers', () => {
+    manager = new DynamicIslandManager();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    manager.setInputMode('hot-mic');
+
+    const left = testState.getWindowBySide('left');
+    const right = testState.getWindowBySide('right');
+    const leftModeEvents = left?.webContents.sent.filter(
+      (entry) => entry.channel === 'dynamic-island-input-mode'
+    ) ?? [];
+    const rightModeEvents = right?.webContents.sent.filter(
+      (entry) => entry.channel === 'dynamic-island-input-mode'
+    ) ?? [];
+
+    expect(leftModeEvents[leftModeEvents.length - 1]?.args[0]).toBe('hot-mic');
+    expect(rightModeEvents[rightModeEvents.length - 1]?.args[0]).toBe('hot-mic');
+  });
+
   it('keeps the top-left pill compact during recording and transcribing', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({

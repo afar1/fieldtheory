@@ -292,6 +292,24 @@ struct WindowListMessage: Codable {
     }
 }
 
+/// Gaze tracking status response.
+/// Vision tracking is disabled in this build, so this is always unavailable.
+struct GazeTrackingStatusMessage: Codable {
+    let type = "gazeTrackingStatus"
+    let running: Bool
+    let cameraAuthorized: Bool
+    let targetFps: Int
+    let reason: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case running
+        case cameraAuthorized
+        case targetFps
+        case reason
+    }
+}
+
 // MARK: - Window Animator (Squares)
 
 /// Manages window frame manipulation via the Accessibility API.
@@ -883,6 +901,15 @@ final class CoreAudioHelper {
         
         sendLog(level: "info", message: "Started monitoring CoreAudio changes")
     }
+}
+
+private func unavailableGazeStatus(targetFps: Int = 15) -> GazeTrackingStatusMessage {
+    GazeTrackingStatusMessage(
+        running: false,
+        cameraAuthorized: false,
+        targetFps: max(1, min(30, targetFps)),
+        reason: "Vision tracking is disabled in this build"
+    )
 }
 
 // MARK: - Accessibility Helper
@@ -2173,17 +2200,13 @@ final class MessageHandler {
 
         case .startGazeTracking:
             let targetFps = message.targetFps ?? 15
-            GazeTrackingHelper.shared.start(targetFps: targetFps) { status in
-                sendJSON(status)
-            }
+            sendJSON(unavailableGazeStatus(targetFps: targetFps))
 
         case .stopGazeTracking:
-            let status = GazeTrackingHelper.shared.stop()
-            sendJSON(status)
+            sendJSON(unavailableGazeStatus(targetFps: message.targetFps ?? 15))
 
         case .getGazeTrackingStatus:
-            let status = GazeTrackingHelper.shared.status()
-            sendJSON(status)
+            sendJSON(unavailableGazeStatus(targetFps: message.targetFps ?? 15))
         }
     }
 

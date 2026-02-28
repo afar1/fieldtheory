@@ -524,9 +524,11 @@ type SocialMessage = {
   type: 'dm' | 'feedback';
   senderUserId: string;
   senderEmail: string | null;
+  senderCallsign: string | null;
   senderName: string | null;
   recipientUserId: string;
   recipientEmail: string | null;
+  recipientCallsign: string | null;
   recipientName: string | null;
   contentType: 'text' | 'image' | 'stack';
   contentText: string | null;
@@ -686,7 +688,7 @@ export interface GazeAPI {
 }
 
 // Valid hotkey IDs that can be get/set via the hotkeyAPI
-export type HotkeyId = 'superPaste' | 'commandLauncher' | 'improveText' | 'autoImprove';
+export type HotkeyId = 'superPaste' | 'commandLauncher';
 
 export interface HotkeyTestResult {
   key: string;
@@ -3443,8 +3445,20 @@ contextBridge.exposeInMainWorld('squaresAPI', squaresAPI);
 
 // Hot Mic API - continuous voice input for Claude Code terminals
 const hotMicAPI = {
+  getInputMode: async (): Promise<'hot-mic' | 'standard'> => {
+    return ipcRenderer.invoke('hotmic:getInputMode');
+  },
+  setInputMode: async (mode: 'hot-mic' | 'standard'): Promise<'hot-mic' | 'standard'> => {
+    return ipcRenderer.invoke('hotmic:setInputMode', mode);
+  },
+  getStatus: async (): Promise<{ state: string; muted: boolean }> => {
+    return ipcRenderer.invoke('hotmic:getStatus');
+  },
   getState: async (): Promise<string> => {
     return ipcRenderer.invoke('hotmic:getState');
+  },
+  getMuted: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('hotmic:getMuted');
   },
   getEnabled: async (): Promise<boolean> => {
     return ipcRenderer.invoke('hotmic:getEnabled');
@@ -3454,12 +3468,6 @@ const hotMicAPI = {
   },
   setTranscriptionEngineMode: async (mode: 'default' | 'whisper' | 'qwen'): Promise<'default' | 'whisper' | 'qwen'> => {
     return ipcRenderer.invoke('hotmic:setTranscriptionEngineMode', mode);
-  },
-  getAllowWhisperFallback: async (): Promise<boolean> => {
-    return ipcRenderer.invoke('hotmic:getAllowWhisperFallback');
-  },
-  setAllowWhisperFallback: async (enabled: boolean): Promise<boolean> => {
-    return ipcRenderer.invoke('hotmic:setAllowWhisperFallback', enabled);
   },
   getWhisperModel: async (): Promise<string> => {
     return ipcRenderer.invoke('hotmic:getWhisperModel');
@@ -3705,6 +3713,24 @@ const hotMicAPI = {
     ipcRenderer.on('hotmic:runtimeStatusChanged', handler);
     return () => {
       ipcRenderer.removeListener('hotmic:runtimeStatusChanged', handler);
+    };
+  },
+  onStatusChanged: (callback: (status: { state: string; muted: boolean }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: { state: string; muted: boolean }) => {
+      callback(status);
+    };
+    ipcRenderer.on('hotmic:statusChanged', handler);
+    return () => {
+      ipcRenderer.removeListener('hotmic:statusChanged', handler);
+    };
+  },
+  onInputModeChanged: (callback: (mode: 'hot-mic' | 'standard') => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, mode: 'hot-mic' | 'standard') => {
+      callback(mode);
+    };
+    ipcRenderer.on('hotmic:inputModeChanged', handler);
+    return () => {
+      ipcRenderer.removeListener('hotmic:inputModeChanged', handler);
     };
   },
 };
