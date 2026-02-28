@@ -138,6 +138,14 @@
         {
           "from": "scripts/setup-qwen.sh",
           "to": "scripts/setup-qwen.sh"
+        },
+        {
+          "from": "scripts/mlx-whisper-transcribe.py",
+          "to": "scripts/mlx-whisper-transcribe.py"
+        },
+        {
+          "from": "scripts/setup-mlx-whisper.sh",
+          "to": "scripts/setup-mlx-whisper.sh"
         }
       ]
     },

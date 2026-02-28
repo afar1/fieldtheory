@@ -2455,7 +2455,7 @@ function setupTranscribeIPCHandlers(): void {
     return preferencesManager.getPreference('transcriptionEngine') ?? 'whisper';
   });
 
-  ipcMain.handle(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, async (_event, engine: 'whisper' | 'qwen') => {
+  ipcMain.handle(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, async (_event, engine: 'whisper' | 'qwen' | 'mlx-whisper') => {
     if (!preferencesManager) {
       throw new Error('PreferencesManager not initialized');
     }
@@ -2516,6 +2516,36 @@ function setupTranscribeIPCHandlers(): void {
 
     if (!fs.existsSync(scriptPath)) {
       return { success: false, error: `Qwen setup script not found at: ${scriptPath}` };
+    }
+
+    return new Promise<{ success: boolean; error?: string }>((resolve) => {
+      exec(`bash "${scriptPath}"`, { cwd: setupCwd, timeout: 600000 }, (error: Error | null, stdout: string, stderr: string) => {
+        if (error) {
+          const details = [stderr?.trim(), stdout?.trim(), error.message].filter(Boolean).join('\n');
+          resolve({ success: false, error: details });
+        } else {
+          resolve({ success: true });
+        }
+      });
+    });
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.IS_MLX_WHISPER_INSTALLED, async () => {
+    if (!transcriberManager) {
+      return false;
+    }
+    return transcriberManager.isMlxWhisperInstalled();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SETUP_MLX_WHISPER, async () => {
+    const macAppRoot = path.resolve(__dirname, '../..');
+    const scriptPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'scripts', 'setup-mlx-whisper.sh')
+      : path.join(macAppRoot, 'scripts', 'setup-mlx-whisper.sh');
+    const setupCwd = app.isPackaged ? app.getPath('userData') : macAppRoot;
+
+    if (!fs.existsSync(scriptPath)) {
+      return { success: false, error: `MLX Whisper setup script not found at: ${scriptPath}` };
     }
 
     return new Promise<{ success: boolean; error?: string }>((resolve) => {
@@ -6168,6 +6198,7 @@ async function initTranscriberSystem(): Promise<void> {
   powerMonitor.on('suspend', () => {
     log.info('[PowerMonitor] System going to sleep, stopping transcription servers');
     transcriberManager?.stopQwenServer();
+    transcriberManager?.stopMlxWhisperServer();
     transcriberManager?.stopWhisperServer();
   });
 
@@ -6454,8 +6485,8 @@ if (!gotTheLock) {
       return preferencesManager?.getPreference('hotMicTranscriptionEngine') ?? 'default';
     });
 
-    ipcMain.handle('hotmic:setTranscriptionEngineMode', async (_event, mode: 'default' | 'whisper' | 'qwen') => {
-      const normalized = mode === 'whisper' || mode === 'qwen' ? mode : 'default';
+    ipcMain.handle('hotmic:setTranscriptionEngineMode', async (_event, mode: 'default' | 'whisper' | 'qwen' | 'mlx-whisper') => {
+      const normalized = mode === 'whisper' || mode === 'qwen' || mode === 'mlx-whisper' ? mode : 'default';
       await preferencesManager?.save({ hotMicTranscriptionEngine: normalized });
       await transcriberManager?.restartTranscriptionRuntime();
       return normalized;
