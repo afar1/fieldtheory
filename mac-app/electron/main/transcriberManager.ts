@@ -90,6 +90,16 @@ export class TranscriberManager extends EventEmitter {
   private whisperServerDisabledReason: string | null = null;
   private whisperServerModelPath: string | null = null;
 
+  // MLX Whisper persistent server state. Same stdin/stdout JSON protocol as Qwen,
+  // but runs Whisper large-v3-turbo natively on MLX for Apple Silicon.
+  private mlxWhisperProcess: ChildProcess | null = null;
+  private mlxWhisperReady: boolean = false;
+  private mlxWhisperReadyPromise: Promise<void> | null = null;
+  private mlxWhisperPendingResolve: ((response: QwenServerResponse) => void) | null = null;
+  private mlxWhisperCommandChain: Promise<void> = Promise.resolve();
+  private mlxWhisperLifecycleGeneration: number = 0;
+  private mlxWhisperDisabledReason: string | null = null;
+
   private abandonHotkeyRegistered: boolean = false;
   private registeredAbandonHotkey: string = 'Escape'; // Track currently registered abandon hotkey
   
@@ -2036,16 +2046,44 @@ export class TranscriberManager extends EventEmitter {
    */
   private async transcribeWithEngineFallback(
     wavPath: string,
-    engine: 'whisper' | 'qwen',
+    engine: 'whisper' | 'qwen' | 'mlx-whisper',
     options: TranscribeWithEngineOptions = {}
   ): Promise<string> {
     const allowWhisperFallback = options.allowWhisperFallback ?? true;
     const whisperModelOverride = options.whisperModelOverride;
 
-    if (engine !== 'qwen') {
+    // Whisper (whisper.cpp) — direct path, no fallback needed.
+    if (engine === 'whisper') {
       return this.transcribe(wavPath, whisperModelOverride);
     }
 
+    // MLX Whisper — use the mlx-whisper persistent server.
+    // Falls back to whisper.cpp if server fails and a model is available.
+    if (engine === 'mlx-whisper') {
+      try {
+        return await this.transcribeWithMlxWhisper(wavPath);
+      } catch (mlxError) {
+        if (!allowWhisperFallback) throw mlxError;
+
+        const whisperAvailable = whisperModelOverride
+          ? await this.modelManager.isModelAvailableForSize(whisperModelOverride)
+          : await this.modelManager.isModelAvailable();
+        if (!whisperAvailable) throw mlxError;
+
+        log.warn('MLX Whisper failed, falling back to whisper.cpp: %s', (mlxError as Error).message);
+        this.lastHotMicUsedWhisperFallback = true;
+
+        try {
+          return await this.transcribe(wavPath, whisperModelOverride);
+        } catch (whisperError) {
+          throw new Error(
+            `MLX Whisper failed: ${(mlxError as Error).message}; Whisper fallback failed: ${(whisperError as Error).message}`
+          );
+        }
+      }
+    }
+
+    // Qwen — falls back to whisper.cpp on failure.
     try {
       return await this.transcribeWithQwen(wavPath);
     } catch (qwenError) {
@@ -2423,6 +2461,278 @@ export class TranscriberManager extends EventEmitter {
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
   }
 
+  // ---------------------------------------------------------------------------
+  // MLX Whisper persistent server management
+  //
+  // Identical stdin/stdout JSON protocol to the Qwen server, but runs Whisper
+  // large-v3-turbo natively on MLX. Gives Whisper-quality transcription at
+  // MLX-native speed (~2x faster than whisper.cpp).
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Get the Python path for the mlx-whisper venv.
+   */
+  private getMlxWhisperPythonPath(): string {
+    if (app.isPackaged) {
+      const userDataPath = app.getPath('userData');
+      return path.join(userDataPath, 'build-mlx-whisper', 'venv', 'bin', 'python');
+    } else {
+      const repoRoot = path.resolve(__dirname, '../../..');
+      return path.join(repoRoot, 'build-mlx-whisper', 'venv', 'bin', 'python');
+    }
+  }
+
+  /**
+   * Get the path to the mlx-whisper-transcribe.py script.
+   */
+  private getMlxWhisperScriptPath(): string {
+    if (app.isPackaged) {
+      return path.join(process.resourcesPath, 'scripts', 'mlx-whisper-transcribe.py');
+    } else {
+      const repoRoot = path.resolve(__dirname, '../../..');
+      return path.join(repoRoot, 'scripts', 'mlx-whisper-transcribe.py');
+    }
+  }
+
+  /**
+   * Check whether mlx-whisper is installed (venv + script exist).
+   */
+  isMlxWhisperInstalled(): boolean {
+    try {
+      return fs.existsSync(this.getMlxWhisperPythonPath()) &&
+             fs.existsSync(this.getMlxWhisperScriptPath());
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Start the persistent MLX Whisper server process.
+   * Same stdin/stdout JSON protocol as Qwen.
+   */
+  private startMlxWhisperServer(): Promise<void> {
+    if (this.mlxWhisperDisabledReason) {
+      return Promise.reject(new Error(this.mlxWhisperDisabledReason));
+    }
+
+    if (this.mlxWhisperReady && this.mlxWhisperProcess) {
+      return Promise.resolve();
+    }
+    if (this.mlxWhisperReadyPromise) {
+      return this.mlxWhisperReadyPromise;
+    }
+
+    const startupGeneration = ++this.mlxWhisperLifecycleGeneration;
+    const pythonPath = this.getMlxWhisperPythonPath();
+    const scriptPath = this.getMlxWhisperScriptPath();
+
+    this.mlxWhisperReadyPromise = new Promise<void>((resolve, reject) => {
+      const startupInvalidated = (): boolean => startupGeneration !== this.mlxWhisperLifecycleGeneration;
+
+      const proc = spawn(pythonPath, [scriptPath, '--server'], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      if (startupInvalidated()) {
+        proc.kill('SIGTERM');
+        this.mlxWhisperReadyPromise = null;
+        reject(new Error('MLX Whisper startup cancelled'));
+        return;
+      }
+
+      this.mlxWhisperProcess = proc;
+      let buffer = '';
+
+      const onData = (data: Buffer) => {
+        buffer += data.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const msg = JSON.parse(line);
+            if (msg.ready) {
+              if (startupInvalidated()) {
+                proc.kill('SIGTERM');
+                reject(new Error('MLX Whisper startup cancelled'));
+                return;
+              }
+              this.mlxWhisperReady = true;
+              proc.stdout?.removeListener('data', onData);
+              this.setupMlxWhisperLineHandler(proc, buffer);
+              buffer = '';
+              log.info('MLX Whisper server ready');
+              resolve();
+              return;
+            }
+          } catch {
+            // Not JSON yet during startup
+          }
+        }
+      };
+
+      proc.stdout?.on('data', onData);
+      proc.stderr?.on('data', (data: Buffer) => {
+        log.info('[MLX Whisper stderr] %s', data.toString().trim());
+      });
+
+      proc.on('error', (error) => {
+        if (startupInvalidated()) { reject(new Error('MLX Whisper startup cancelled')); return; }
+        this.mlxWhisperProcess = null;
+        this.mlxWhisperReady = false;
+        this.mlxWhisperReadyPromise = null;
+        reject(new Error(`Failed to start MLX Whisper server: ${error.message}`));
+      });
+
+      proc.on('close', (code) => {
+        if (startupInvalidated()) { reject(new Error('MLX Whisper startup cancelled')); return; }
+        const wasReady = this.mlxWhisperReady;
+        this.mlxWhisperProcess = null;
+        this.mlxWhisperReady = false;
+        this.mlxWhisperReadyPromise = null;
+
+        if (this.mlxWhisperPendingResolve) {
+          this.mlxWhisperPendingResolve({ ok: false, error: `MLX Whisper server exited with code ${code}` });
+          this.mlxWhisperPendingResolve = null;
+        }
+
+        if (!wasReady) {
+          reject(new Error(`MLX Whisper server exited during startup with code ${code}`));
+        } else {
+          log.warn('MLX Whisper server exited (code %d), will restart on next transcription', code);
+        }
+      });
+    });
+
+    return this.mlxWhisperReadyPromise;
+  }
+
+  private setupMlxWhisperLineHandler(proc: ChildProcess, initialBuffer: string): void {
+    let buffer = initialBuffer;
+    proc.stdout?.on('data', (data: Buffer) => {
+      buffer += data.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (this.mlxWhisperPendingResolve) {
+            this.mlxWhisperPendingResolve(msg);
+            this.mlxWhisperPendingResolve = null;
+          }
+        } catch {
+          log.warn('[MLX Whisper] Non-JSON stdout: %s', line);
+        }
+      }
+    });
+  }
+
+  stopMlxWhisperServer(): void {
+    this.mlxWhisperLifecycleGeneration += 1;
+    if (this.mlxWhisperPendingResolve) {
+      this.mlxWhisperPendingResolve({ ok: false, error: 'MLX Whisper server stopped' });
+      this.mlxWhisperPendingResolve = null;
+    }
+    if (this.mlxWhisperProcess) {
+      this.mlxWhisperProcess.kill('SIGTERM');
+      this.mlxWhisperProcess = null;
+    }
+    this.mlxWhisperReady = false;
+    this.mlxWhisperReadyPromise = null;
+  }
+
+  private sendMlxWhisperCommand(cmd: Record<string, unknown>): Promise<QwenServerResponse> {
+    return this.enqueueMlxWhisperCommand(() => this.sendMlxWhisperCommandInternal(cmd));
+  }
+
+  private enqueueMlxWhisperCommand<T>(run: () => Promise<T>): Promise<T> {
+    const queued = this.mlxWhisperCommandChain.then(run, run);
+    this.mlxWhisperCommandChain = queued.then(() => undefined, () => undefined);
+    return queued;
+  }
+
+  private sendMlxWhisperCommandInternal(cmd: Record<string, unknown>): Promise<QwenServerResponse> {
+    return new Promise((resolve, reject) => {
+      if (!this.mlxWhisperProcess || !this.mlxWhisperReady) {
+        reject(new Error('MLX Whisper server not running'));
+        return;
+      }
+      if (this.mlxWhisperPendingResolve) {
+        reject(new Error('MLX Whisper server already has an in-flight command'));
+        return;
+      }
+
+      const timeout = setTimeout(() => {
+        this.mlxWhisperPendingResolve = null;
+        reject(new Error('MLX Whisper server timed out (120s)'));
+      }, 120_000);
+
+      this.mlxWhisperPendingResolve = (response) => {
+        clearTimeout(timeout);
+        resolve(response);
+      };
+      const line = JSON.stringify(cmd) + '\n';
+      this.mlxWhisperProcess.stdin?.write(line, (err) => {
+        if (err) {
+          clearTimeout(timeout);
+          this.mlxWhisperPendingResolve = null;
+          reject(new Error(`Failed to write to MLX Whisper server: ${err.message}`));
+        }
+      });
+    });
+  }
+
+  /**
+   * Transcribe audio using MLX Whisper persistent server.
+   * Starts the server on first use, auto-restarts on crash (one retry).
+   */
+  private async transcribeWithMlxWhisper(wavPath: string): Promise<string> {
+    const needTimestamps = this.screenshotMetadata.length > 0;
+
+    const doTranscribe = async (): Promise<string> => {
+      await this.startMlxWhisperServer();
+
+      const response = await this.sendMlxWhisperCommand({
+        cmd: 'transcribe',
+        audio: wavPath,
+        timestamps: needTimestamps,
+      });
+
+      if (!response.ok) {
+        throw new Error(`MLX Whisper transcription failed: ${response.error}`);
+      }
+
+      const rawText = response.text || '';
+      if (needTimestamps) {
+        return this.parseTimestampedOutput(rawText);
+      }
+      return rawText.trim();
+    };
+
+    try {
+      return await doTranscribe();
+    } catch (error) {
+      const message = (error as Error)?.message || '';
+      const isFatal = message.includes('not installed') || message.includes('ImportError');
+
+      if (isFatal) {
+        if (!this.mlxWhisperDisabledReason) {
+          this.mlxWhisperDisabledReason = message;
+          log.warn('Disabling MLX Whisper for this session: %s', message);
+        }
+        throw error;
+      }
+
+      // One retry: restart server and try again.
+      log.warn('MLX Whisper transcription failed, restarting server: %s', message);
+      this.stopMlxWhisperServer();
+      return await doTranscribe();
+    }
+  }
+
   /**
    * Transcribe audio file using Whisper.
    * Prefers the persistent whisper-server for lower latency. Falls back to
@@ -2633,13 +2943,17 @@ export class TranscriberManager extends EventEmitter {
   async warmup(): Promise<void> {
     const primaryEngine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
     const hotMicEngine = this.resolveHotMicTranscriptionEngine();
+    const engines = [primaryEngine, hotMicEngine];
 
-    if (primaryEngine === 'qwen' || hotMicEngine === 'qwen') {
+    if (engines.includes('qwen')) {
       await this.startQwenServer();
     }
-
-    // Pre-warm the persistent whisper-server so model is already in memory.
-    if ((primaryEngine === 'whisper' || hotMicEngine === 'whisper') && this.isWhisperServerAvailable()) {
+    if (engines.includes('mlx-whisper') && this.isMlxWhisperInstalled()) {
+      this.startMlxWhisperServer().catch((err) => {
+        log.warn('MLX Whisper warmup failed: %s', (err as Error).message);
+      });
+    }
+    if (engines.includes('whisper') && this.isWhisperServerAvailable()) {
       this.startWhisperServer().catch((err) => {
         log.warn('whisper-server warmup failed (will fall back to whisper-cli): %s', (err as Error).message);
       });
@@ -2651,25 +2965,31 @@ export class TranscriberManager extends EventEmitter {
    */
   async restartTranscriptionRuntime(): Promise<void> {
     this.stopQwenServer();
+    this.stopMlxWhisperServer();
     this.stopWhisperServer();
 
     const primaryEngine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
     const hotMicEngine = this.resolveHotMicTranscriptionEngine();
+    const engines = [primaryEngine, hotMicEngine];
 
-    if (primaryEngine === 'qwen' || hotMicEngine === 'qwen') {
+    if (engines.includes('qwen')) {
       await this.startQwenServer();
     }
-
-    if ((primaryEngine === 'whisper' || hotMicEngine === 'whisper') && this.isWhisperServerAvailable()) {
+    if (engines.includes('mlx-whisper') && this.isMlxWhisperInstalled()) {
+      this.startMlxWhisperServer().catch((err) => {
+        log.warn('MLX Whisper restart failed: %s', (err as Error).message);
+      });
+    }
+    if (engines.includes('whisper') && this.isWhisperServerAvailable()) {
       this.startWhisperServer().catch((err) => {
         log.warn('whisper-server restart failed (will fall back to whisper-cli): %s', (err as Error).message);
       });
     }
   }
 
-  private resolveHotMicTranscriptionEngine(): 'whisper' | 'qwen' {
+  private resolveHotMicTranscriptionEngine(): 'whisper' | 'qwen' | 'mlx-whisper' {
     const override = this.preferences.getPreference('hotMicTranscriptionEngine');
-    if (override === 'whisper' || override === 'qwen') {
+    if (override === 'whisper' || override === 'qwen' || override === 'mlx-whisper') {
       return override;
     }
     return this.preferences.getPreference('transcriptionEngine') || 'whisper';
@@ -2691,6 +3011,10 @@ export class TranscriberManager extends EventEmitter {
     const engine = this.resolveHotMicTranscriptionEngine();
     if (engine === 'qwen') {
       await this.startQwenServer();
+    } else if (engine === 'mlx-whisper' && this.isMlxWhisperInstalled()) {
+      this.startMlxWhisperServer().catch((err) => {
+        log.warn('MLX Whisper warmup for Hot Mic failed: %s', (err as Error).message);
+      });
     } else if (engine === 'whisper' && this.isWhisperServerAvailable()) {
       const whisperModel = this.resolveHotMicWhisperModel();
       this.startWhisperServer(whisperModel).catch((err) => {
@@ -3389,6 +3713,7 @@ export class TranscriberManager extends EventEmitter {
       this.whisperProcess = null;
     }
     this.stopQwenServer();
+    this.stopMlxWhisperServer();
     this.stopWhisperServer();
     this.overlay.destroy();
   }
