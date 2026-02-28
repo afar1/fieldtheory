@@ -11,6 +11,7 @@ const log = createLogger('DynamicIsland');
 // =============================================================================
 
 export type DynamicIslandState = 'idle' | 'recording' | 'transcribing' | 'showing-transcript' | 'improving';
+export type DynamicIslandInputMode = 'hot-mic' | 'standard';
 
 interface TranscriptHistoryItem {
   id: number;
@@ -126,6 +127,8 @@ export class DynamicIslandManager extends EventEmitter {
   private hotMicActive: boolean = false;
   private hotMicWordCount: number = 0;
   private hotMicLastWord: string = '';
+  private hotMicMuted: boolean = false;
+  private inputMode: DynamicIslandInputMode = 'standard';
   private geometryTuning: DynamicIslandGeometryTuning = { ...DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING };
 
   constructor() {
@@ -232,6 +235,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.updateWindowSize();
     this.sendStateToRenderer(this.state);
     this.sendHotMicToRight();
+    this.sendInputModeToRenderers();
   }
 
   setGeometryTuning(tuning: Partial<DynamicIslandGeometryTuning>): DynamicIslandGeometryTuning {
@@ -331,10 +335,23 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   sendMuteState(muted: boolean): void {
+    this.hotMicMuted = muted;
     if (!this.enabled) return;
     if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
       this.rightWindow.webContents.send('dynamic-island-hotmic-mute', muted);
     }
+    this.sendHotMicToRight();
+  }
+
+  setInputMode(mode: DynamicIslandInputMode): DynamicIslandInputMode {
+    const normalized: DynamicIslandInputMode = mode === 'hot-mic' ? 'hot-mic' : 'standard';
+    this.inputMode = normalized;
+    this.sendInputModeToRenderers();
+    return normalized;
+  }
+
+  getInputMode(): DynamicIslandInputMode {
+    return this.inputMode;
   }
 
   updateHotMicBackgroundFilterMeter(data: HotMicBackgroundFilterMeter): void {
@@ -350,7 +367,18 @@ export class DynamicIslandManager extends EventEmitter {
         active: this.hotMicActive,
         wordCount: this.hotMicWordCount,
         lastWord: this.hotMicLastWord,
+        muted: this.hotMicMuted,
       });
+    }
+  }
+
+  private sendInputModeToRenderers(): void {
+    if (!this.enabled) return;
+    if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+      this.window.webContents.send('dynamic-island-input-mode', this.inputMode);
+    }
+    if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
+      this.rightWindow.webContents.send('dynamic-island-input-mode', this.inputMode);
     }
   }
 
@@ -500,6 +528,7 @@ export class DynamicIslandManager extends EventEmitter {
           return;
         }
         this.sendStateToRenderer(this.state);
+        this.sendInputModeToRenderers();
         this.sendHistory();
 
         if (this.pendingShow) {
@@ -580,6 +609,7 @@ export class DynamicIslandManager extends EventEmitter {
         this.rightWindow.webContents.send('dynamic-island-drawer-transcript', this.drawerTranscriptText);
         this.sendHotMicToRight();
         this.rightWindow.webContents.send('dynamic-island-state', this.state);
+        this.sendInputModeToRenderers();
       }
     });
   }
@@ -600,6 +630,7 @@ export class DynamicIslandManager extends EventEmitter {
       this.rightWindow.webContents.send('dynamic-island-drawer-transcript', this.drawerTranscriptText);
       this.sendHotMicToRight();
       this.rightWindow.webContents.send('dynamic-island-state', this.state);
+      this.sendInputModeToRenderers();
     }
   }
 

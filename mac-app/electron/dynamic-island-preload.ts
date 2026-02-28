@@ -65,8 +65,13 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
     ipcRenderer.on('dynamic-island-show-history', () => callback());
   },
 
+  // Input mode (standard vs hot mic) updates.
+  onInputMode: (callback: (mode: 'hot-mic' | 'standard') => void) => {
+    ipcRenderer.on('dynamic-island-input-mode', (_event, mode) => callback(mode));
+  },
+
   // Hot-mic status updates (right pill).
-  onHotMicUpdate: (callback: (data: { active: boolean; wordCount: number; lastWord: string }) => void) => {
+  onHotMicUpdate: (callback: (data: { active: boolean; wordCount: number; lastWord: string; muted?: boolean }) => void) => {
     ipcRenderer.on('dynamic-island-hotmic', (_event, data) => callback(data));
   },
 
@@ -134,6 +139,8 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
   getHotMicBackgroundFilterStrength: () => ipcRenderer.invoke('hotmic:getBackgroundFilterStrength'),
   setHotMicBackgroundFilterStrength: (strength: number) => ipcRenderer.invoke('hotmic:setBackgroundFilterStrength', strength),
   getHotMicDrawerTextSize: () => ipcRenderer.invoke('hotmic:getDrawerTextSize'),
+  getInputMode: () => ipcRenderer.invoke('hotmic:getInputMode'),
+  setInputMode: (mode: 'hot-mic' | 'standard') => ipcRenderer.invoke('hotmic:setInputMode', mode),
 
   removeAllListeners: (channel: string) => {
     ipcRenderer.removeAllListeners(channel);

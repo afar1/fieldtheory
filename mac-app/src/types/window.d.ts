@@ -785,9 +785,11 @@ interface SocialMessage {
   type: 'dm' | 'feedback';
   senderUserId: string;
   senderEmail: string | null;
+  senderCallsign: string | null;
   senderName: string | null;
   recipientUserId: string;
   recipientEmail: string | null;
+  recipientCallsign: string | null;
   recipientName: string | null;
   contentType: 'text' | 'image' | 'stack';
   contentText: string | null;
@@ -1147,14 +1149,16 @@ interface HotMicRuntimeStatus {
  * Hot Mic API for continuous voice input to Claude Code terminals.
  */
 interface HotMicAPI {
+  getInputMode: () => Promise<'hot-mic' | 'standard'>;
+  setInputMode: (mode: 'hot-mic' | 'standard') => Promise<'hot-mic' | 'standard'>;
+  getStatus: () => Promise<{ state: string; muted: boolean }>;
   getState: () => Promise<string>;
   getRuntimeStatus: () => Promise<HotMicRuntimeStatus>;
   onRuntimeStatusChanged: (handler: (status: HotMicRuntimeStatus) => void) => () => void;
+  getMuted: () => Promise<boolean>;
   getEnabled: () => Promise<boolean>;
   getTranscriptionEngineMode: () => Promise<'default' | 'whisper' | 'qwen'>;
   setTranscriptionEngineMode: (mode: 'default' | 'whisper' | 'qwen') => Promise<'default' | 'whisper' | 'qwen'>;
-  getAllowWhisperFallback: () => Promise<boolean>;
-  setAllowWhisperFallback: (enabled: boolean) => Promise<boolean>;
   getWhisperModel: () => Promise<string>;
   setWhisperModel: (model: string) => Promise<string>;
   setEnabled: (enabled: boolean) => Promise<boolean>;
@@ -1247,12 +1251,14 @@ interface HotMicAPI {
   uninstallHook: () => Promise<{ success: boolean; error?: string }>;
   resetCommandDefaults: () => Promise<boolean>;
   onStateChanged: (callback: (state: string) => void) => () => void;
+  onStatusChanged: (callback: (status: { state: string; muted: boolean }) => void) => () => void;
+  onInputModeChanged: (callback: (mode: 'hot-mic' | 'standard') => void) => () => void;
 }
 
 /**
  * Valid hotkey IDs that can be get/set via the hotkeyAPI.
  */
-type HotkeyId = 'superPaste' | 'commandLauncher' | 'improveText' | 'autoImprove';
+type HotkeyId = 'superPaste' | 'commandLauncher';
 
 /**
  * Generic hotkey management API for UI-configurable hotkeys.

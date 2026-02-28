@@ -28,11 +28,11 @@ let package = Package(
             name: "FieldTheoryHelper",
             dependencies: ["WebRTCVad"],
             path: "Sources/FieldTheoryHelper",
+            exclude: ["GazeTrackingHelper.swift"],
             linkerSettings: [
                 .linkedFramework("AVFoundation"),
                 .linkedFramework("CoreAudio"),
-                .linkedFramework("AudioToolbox"),
-                .linkedFramework("Vision")
+                .linkedFramework("AudioToolbox")
             ]
         )
     ]
