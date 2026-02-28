@@ -650,9 +650,9 @@ export class HotMicManager extends EventEmitter {
     return this.targetBundleId;
   }
 
-  private getConfiguredTranscriptionEngineForLogs(): 'whisper' | 'qwen' {
+  private getConfiguredTranscriptionEngineForLogs(): 'whisper' | 'qwen' | 'mlx-whisper' {
     const mode = this.preferences.getPreference('hotMicTranscriptionEngine');
-    if (mode === 'whisper' || mode === 'qwen') {
+    if (mode === 'whisper' || mode === 'qwen' || mode === 'mlx-whisper') {
       return mode;
     }
     return this.preferences.getPreference('transcriptionEngine') ?? 'whisper';

@@ -58,9 +58,10 @@ export default function HotMicSettings() {
   const { theme } = useTheme();
 
   const [qwenInstalled, setQwenInstalled] = useState(false);
+  const [mlxWhisperInstalled, setMlxWhisperInstalled] = useState(false);
   const [appleSilicon, setAppleSilicon] = useState(true);
-  const [engine, setEngine] = useState<'whisper' | 'qwen'>('whisper');
-  const [hotMicEngineMode, setHotMicEngineMode] = useState<'default' | 'whisper' | 'qwen'>('default');
+  const [engine, setEngine] = useState<'whisper' | 'qwen' | 'mlx-whisper'>('whisper');
+  const [hotMicEngineMode, setHotMicEngineMode] = useState<'default' | 'whisper' | 'qwen' | 'mlx-whisper'>('default');
   const [hotMicWhisperModel, setHotMicWhisperModel] = useState('small');
   const [availableWhisperModels, setAvailableWhisperModels] = useState<Record<string, WhisperModelInfo>>({});
   const [enabled, setEnabled] = useState(false);
@@ -104,8 +105,12 @@ export default function HotMicSettings() {
   const [resettingDefaults, setResettingDefaults] = useState(false);
 
   const styles = getStyles(theme);
-  const resolvedEngine: 'whisper' | 'qwen' = hotMicEngineMode === 'default' ? engine : hotMicEngineMode;
-  const canEnableHotMic = resolvedEngine === 'qwen' ? (appleSilicon && qwenInstalled) : true;
+  const resolvedEngine: 'whisper' | 'qwen' | 'mlx-whisper' = hotMicEngineMode === 'default' ? engine : hotMicEngineMode;
+  const canEnableHotMic = resolvedEngine === 'qwen'
+    ? (appleSilicon && qwenInstalled)
+    : resolvedEngine === 'mlx-whisper'
+      ? (appleSilicon && mlxWhisperInstalled)
+      : true;
   const canToggleHotMic = enabled || canEnableHotMic;
 
   useEffect(() => {
@@ -114,14 +119,16 @@ export default function HotMicSettings() {
     // Check runtime availability and engine preferences
     Promise.all([
       window.transcribeAPI?.isQwenInstalled?.() ?? Promise.resolve(false),
+      window.transcribeAPI?.isMlxWhisperInstalled?.() ?? Promise.resolve(false),
       window.transcribeAPI?.isAppleSilicon?.() ?? Promise.resolve(true),
       window.transcribeAPI?.getTranscriptionEngine?.() ?? Promise.resolve('whisper' as const),
       window.hotMicAPI?.getTranscriptionEngineMode?.() ?? Promise.resolve('default' as const),
       window.hotMicAPI?.getWhisperModel?.() ?? Promise.resolve('small'),
       window.hotMicAPI?.getStatus?.() ?? Promise.resolve({ state: 'idle', muted: false }),
       window.transcribeAPI?.getAvailableModels?.() ?? Promise.resolve({} as Record<string, WhisperModelInfo>),
-    ]).then(([qi, as, eng, hotMicMode, whisperModel, hotMicStatus, availableModels]) => {
+    ]).then(([qi, mwi, as, eng, hotMicMode, whisperModel, hotMicStatus, availableModels]) => {
       setQwenInstalled(qi);
+      setMlxWhisperInstalled(mwi);
       setAppleSilicon(as);
       setEngine(eng);
       setHotMicEngineMode(hotMicMode);
@@ -272,7 +279,7 @@ export default function HotMicSettings() {
     await window.hotMicAPI.setEnabled(value);
   }, []);
 
-  const handleHotMicEngineModeChange = useCallback(async (mode: 'default' | 'whisper' | 'qwen') => {
+  const handleHotMicEngineModeChange = useCallback(async (mode: 'default' | 'whisper' | 'qwen' | 'mlx-whisper') => {
     if (!window.hotMicAPI?.setTranscriptionEngineMode) return;
     setHotMicEngineMode(mode);
     await window.hotMicAPI.setTranscriptionEngineMode(mode);
@@ -553,11 +560,12 @@ export default function HotMicSettings() {
         <span style={styles.rowLabel}>Hot Mic Engine</span>
         <select
           value={hotMicEngineMode}
-          onChange={(e) => void handleHotMicEngineModeChange(e.target.value as 'default' | 'whisper' | 'qwen')}
+          onChange={(e) => void handleHotMicEngineModeChange(e.target.value as 'default' | 'whisper' | 'qwen' | 'mlx-whisper')}
           style={styles.select}
         >
           <option value="default">Use app default ({engine})</option>
           <option value="whisper">Whisper</option>
+          <option value="mlx-whisper">MLX Whisper</option>
           <option value="qwen">Qwen</option>
         </select>
       </div>

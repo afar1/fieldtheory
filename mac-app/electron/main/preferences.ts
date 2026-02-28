@@ -143,16 +143,17 @@ interface Preferences {
   // Server is authoritative; this is only for offline/startup display.
   cachedTier?: 'free' | 'pro';
 
-  // Transcription engine - experimental alternative to whisper.
-  // 'whisper' (default): uses whisper-cli (whisper.cpp)
+  // Transcription engine selection.
+  // 'whisper' (default): uses whisper-cli / whisper-server (whisper.cpp)
   // 'qwen': uses Qwen3-ASR-0.6B via mlx-audio (Apple Silicon only)
-  transcriptionEngine?: 'whisper' | 'qwen';
+  // 'mlx-whisper': uses Whisper large-v3-turbo via mlx-whisper (Apple Silicon only)
+  transcriptionEngine?: 'whisper' | 'qwen' | 'mlx-whisper';
 
   // Hot Mic - continuous voice input for Claude Code terminals.
   // When enabled, auto-records voice fragments and injects them into a target terminal.
   hotMicEnabled?: boolean;
   hotMicMuted?: boolean;
-  hotMicTranscriptionEngine?: 'default' | 'whisper' | 'qwen'; // Engine override for Hot Mic only
+  hotMicTranscriptionEngine?: 'default' | 'whisper' | 'qwen' | 'mlx-whisper'; // Engine override for Hot Mic only
   hotMicAllowWhisperFallback?: boolean; // Allow Qwen->Whisper fallback for Hot Mic when Qwen fails
   hotMicWhisperModel?: ModelSize; // Whisper model override for Hot Mic-only transcription
   hotMicTargetBundleId?: string; // e.g., "com.mitchellh.ghostty"
