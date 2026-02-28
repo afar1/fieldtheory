@@ -4,6 +4,8 @@ import { getHotkeyManager } from './hotkeyManager';
 import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import http from 'http';
+import net from 'net';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import crypto from 'crypto';
@@ -76,6 +78,18 @@ export class TranscriberManager extends EventEmitter {
   private qwenLifecycleGeneration: number = 0;
   private qwenDisabledReason: string | null = null;
   private qwenFallbackLoggedForDisabledReason: boolean = false;
+
+  // Persistent whisper-server state. Keeps the Whisper model loaded in memory
+  // and serves transcription requests over a local HTTP endpoint, eliminating
+  // the ~500ms model-load overhead that whisper-cli pays on every invocation.
+  private whisperServerProcess: ChildProcess | null = null;
+  private whisperServerPort: number = 0;
+  private whisperServerReady: boolean = false;
+  private whisperServerReadyPromise: Promise<void> | null = null;
+  private whisperServerLifecycleGeneration: number = 0;
+  private whisperServerDisabledReason: string | null = null;
+  private whisperServerModelPath: string | null = null;
+
   private abandonHotkeyRegistered: boolean = false;
   private registeredAbandonHotkey: string = 'Escape'; // Track currently registered abandon hotkey
   
@@ -2070,14 +2084,374 @@ export class TranscriberManager extends EventEmitter {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Persistent whisper-server management
+  //
+  // The whisper-server binary (from whisper.cpp) runs as a local HTTP server
+  // that keeps the GGML model loaded in GPU/CPU memory. This eliminates the
+  // ~500ms cold-start penalty of spawning whisper-cli per chunk, bringing
+  // chunk transcription latency down to ~50-100ms for short audio.
+  // ---------------------------------------------------------------------------
+
   /**
-   * Transcribe audio file using whisper-cli.
+   * Find an available TCP port by briefly binding to port 0.
+   */
+  private findFreePort(): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const srv = net.createServer();
+      srv.listen(0, '127.0.0.1', () => {
+        const addr = srv.address();
+        if (!addr || typeof addr === 'string') {
+          srv.close(() => reject(new Error('Could not determine port')));
+          return;
+        }
+        const port = addr.port;
+        srv.close(() => resolve(port));
+      });
+      srv.on('error', reject);
+    });
+  }
+
+  /**
+   * Get the path to the whisper-server binary.
+   */
+  private getWhisperServerPath(): string {
+    if (app.isPackaged) {
+      return path.join(process.resourcesPath, 'whisper-server');
+    } else {
+      const repoRoot = path.resolve(__dirname, '../../..');
+      return path.join(repoRoot, 'build-whisper', 'bin', 'whisper-server');
+    }
+  }
+
+  /**
+   * Check whether whisper-server binary exists on disk.
+   */
+  private isWhisperServerAvailable(): boolean {
+    try {
+      return fs.existsSync(this.getWhisperServerPath());
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Start the persistent whisper-server process.
+   * Loads the model once and listens on a random localhost port.
+   * Returns when the server reports healthy via GET /health.
+   */
+  private startWhisperServer(modelOverride?: ModelSize): Promise<void> {
+    if (this.whisperServerDisabledReason) {
+      return Promise.reject(new Error(this.whisperServerDisabledReason));
+    }
+
+    const modelPath = modelOverride
+      ? this.modelManager.getModelPathForSize(modelOverride)
+      : this.modelManager.getModelPath();
+
+    // If the server is already running with the same model, reuse it.
+    if (this.whisperServerReady && this.whisperServerProcess && this.whisperServerModelPath === modelPath) {
+      return Promise.resolve();
+    }
+
+    // If currently starting with the same model, wait for it.
+    if (this.whisperServerReadyPromise && this.whisperServerModelPath === modelPath) {
+      return this.whisperServerReadyPromise;
+    }
+
+    // If a different model is requested, stop the old server first.
+    if (this.whisperServerProcess && this.whisperServerModelPath !== modelPath) {
+      this.stopWhisperServer();
+    }
+
+    this.whisperServerModelPath = modelPath;
+    const startupGeneration = ++this.whisperServerLifecycleGeneration;
+
+    this.whisperServerReadyPromise = (async () => {
+      const startupInvalidated = (): boolean => startupGeneration !== this.whisperServerLifecycleGeneration;
+
+      const serverPath = this.getWhisperServerPath();
+      if (!fs.existsSync(serverPath)) {
+        this.whisperServerReadyPromise = null;
+        throw new Error('whisper-server binary not found. Run npm run build:whisper to build it.');
+      }
+
+      const port = await this.findFreePort();
+
+      if (startupInvalidated()) {
+        this.whisperServerReadyPromise = null;
+        throw new Error('whisper-server startup cancelled');
+      }
+
+      const args = [
+        '-m', modelPath,
+        '--host', '127.0.0.1',
+        '--port', String(port),
+        '--language', 'en',
+      ];
+
+      if (this.gpuDisabled) {
+        args.push('-ng');
+      }
+
+      const proc = spawn(serverPath, args, {
+        env: { ...process.env, NO_COLOR: '1' },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      if (startupInvalidated()) {
+        proc.kill('SIGTERM');
+        this.whisperServerReadyPromise = null;
+        throw new Error('whisper-server startup cancelled');
+      }
+
+      this.whisperServerProcess = proc;
+      this.whisperServerPort = port;
+
+      // Wait for the server to become healthy via polling /health.
+      // The server prints "whisper server listening at ..." to stdout when ready,
+      // but polling /health is more robust.
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        let stderrBuffer = '';
+
+        proc.stderr?.on('data', (data: Buffer) => {
+          stderrBuffer += data.toString();
+        });
+
+        proc.on('error', (error) => {
+          if (!settled) {
+            settled = true;
+            this.whisperServerProcess = null;
+            this.whisperServerReady = false;
+            this.whisperServerReadyPromise = null;
+            reject(new Error(`Failed to start whisper-server: ${error.message}`));
+          }
+        });
+
+        proc.on('close', (code) => {
+          if (startupInvalidated()) {
+            if (!settled) { settled = true; reject(new Error('whisper-server startup cancelled')); }
+            return;
+          }
+          if (!settled) {
+            settled = true;
+            this.whisperServerProcess = null;
+            this.whisperServerReady = false;
+            this.whisperServerReadyPromise = null;
+            const metalCrash = this.isMetalError(stderrBuffer);
+            const hint = metalCrash ? ' (Metal GPU error — will fall back to whisper-cli)' : '';
+            reject(new Error(`whisper-server exited during startup with code ${code}${hint}`));
+          } else {
+            this.whisperServerProcess = null;
+            this.whisperServerReady = false;
+            this.whisperServerReadyPromise = null;
+            log.warn('whisper-server process exited (code %d), will restart on next transcription', code);
+          }
+        });
+
+        // Poll /health every 200ms, give up after 30s.
+        const maxWaitMs = 30_000;
+        const pollIntervalMs = 200;
+        const deadline = Date.now() + maxWaitMs;
+
+        const poll = () => {
+          if (settled || startupInvalidated()) return;
+          if (Date.now() > deadline) {
+            settled = true;
+            proc.kill('SIGTERM');
+            this.whisperServerProcess = null;
+            this.whisperServerReadyPromise = null;
+            reject(new Error('whisper-server startup timed out after 30s'));
+            return;
+          }
+
+          const req = http.get(`http://127.0.0.1:${port}/health`, (res) => {
+            let body = '';
+            res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+            res.on('end', () => {
+              if (settled || startupInvalidated()) return;
+              try {
+                const parsed = JSON.parse(body);
+                if (parsed.status === 'ok') {
+                  settled = true;
+                  this.whisperServerReady = true;
+                  log.info('whisper-server ready on port %d (model: %s)', port, path.basename(modelPath));
+                  resolve();
+                  return;
+                }
+              } catch { /* not ready yet */ }
+              setTimeout(poll, pollIntervalMs);
+            });
+          });
+
+          req.on('error', () => {
+            if (!settled && !startupInvalidated()) {
+              setTimeout(poll, pollIntervalMs);
+            }
+          });
+          req.end();
+        };
+
+        setTimeout(poll, pollIntervalMs);
+      });
+    })();
+
+    return this.whisperServerReadyPromise;
+  }
+
+  /**
+   * Kill the persistent whisper-server. Called on suspend/sleep or model change.
+   * The next transcription will restart it automatically.
+   */
+  stopWhisperServer(): void {
+    this.whisperServerLifecycleGeneration += 1;
+    if (this.whisperServerProcess) {
+      this.whisperServerProcess.kill('SIGTERM');
+      this.whisperServerProcess = null;
+    }
+    this.whisperServerReady = false;
+    this.whisperServerReadyPromise = null;
+  }
+
+  /**
+   * Transcribe a WAV file via the persistent whisper-server HTTP endpoint.
+   * Sends the file as multipart/form-data to POST /inference.
+   */
+  private transcribeViaWhisperServer(wavPath: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const needTimestamps = this.screenshotMetadata.length > 0;
+      const fileContent = fs.readFileSync(wavPath);
+      const boundary = `----FieldTheory${crypto.randomBytes(8).toString('hex')}`;
+
+      // Build multipart body with the audio file and response format.
+      const parts: Buffer[] = [];
+
+      // File part
+      parts.push(Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="file"; filename="${path.basename(wavPath)}"\r\n` +
+        `Content-Type: audio/wav\r\n\r\n`
+      ));
+      parts.push(fileContent);
+      parts.push(Buffer.from('\r\n'));
+
+      // Response format — "text" gives us just the transcript text, no JSON wrapper.
+      const format = needTimestamps ? 'verbose_json' : 'text';
+      parts.push(Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="response_format"\r\n\r\n` +
+        `${format}\r\n`
+      ));
+
+      // Temperature 0 for deterministic output (matching whisper-cli defaults).
+      parts.push(Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="temperature"\r\n\r\n` +
+        `0.0\r\n`
+      ));
+
+      parts.push(Buffer.from(`--${boundary}--\r\n`));
+
+      const body = Buffer.concat(parts);
+
+      const req = http.request({
+        hostname: '127.0.0.1',
+        port: this.whisperServerPort,
+        path: '/inference',
+        method: 'POST',
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': body.length,
+        },
+        timeout: 120_000,
+      }, (res) => {
+        let data = '';
+        res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+        res.on('end', () => {
+          if (res.statusCode !== 200) {
+            reject(new Error(`whisper-server returned HTTP ${res.statusCode}: ${data}`));
+            return;
+          }
+
+          try {
+            if (needTimestamps) {
+              // verbose_json includes segments with start/end times.
+              const parsed = JSON.parse(data);
+              if (parsed.segments && Array.isArray(parsed.segments)) {
+                const timestampedLines = parsed.segments.map((seg: any) => {
+                  const t0 = this.formatSecondsAsTimestamp(seg.start);
+                  const t1 = this.formatSecondsAsTimestamp(seg.end);
+                  return `[${t0} --> ${t1}]${seg.text}`;
+                });
+                resolve(this.parseTimestampedOutput(timestampedLines.join('\n')));
+              } else {
+                resolve((parsed.text || '').trim());
+              }
+            } else {
+              // "text" format returns plain text directly.
+              resolve(data.trim());
+            }
+          } catch {
+            resolve(data.trim());
+          }
+        });
+      });
+
+      req.on('error', (err) => {
+        reject(new Error(`whisper-server request failed: ${err.message}`));
+      });
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('whisper-server request timed out (120s)'));
+      });
+      req.write(body);
+      req.end();
+    });
+  }
+
+  /**
+   * Format seconds as HH:MM:SS.mmm for whisper-server verbose_json timestamps.
+   */
+  private formatSecondsAsTimestamp(seconds: number): string {
+    const totalMs = Math.round(seconds * 1000);
+    const ms = totalMs % 1000;
+    const totalSec = Math.floor(totalMs / 1000);
+    const s = totalSec % 60;
+    const m = Math.floor(totalSec / 60) % 60;
+    const h = Math.floor(totalSec / 3600);
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
+  }
+
+  /**
+   * Transcribe audio file using Whisper.
+   * Prefers the persistent whisper-server for lower latency. Falls back to
+   * spawning whisper-cli per-invocation if the server is unavailable.
    */
   private async transcribe(wavPath: string, whisperModelOverride?: ModelSize): Promise<string> {
+    // Try the persistent server first for low-latency transcription.
+    if (this.isWhisperServerAvailable() && !this.whisperServerDisabledReason) {
+      try {
+        await this.startWhisperServer(whisperModelOverride);
+        return await this.transcribeViaWhisperServer(wavPath);
+      } catch (serverError: any) {
+        const message = serverError?.message || '';
+        const isFatal = this.isMetalError(message) || message.includes('binary not found');
+
+        if (isFatal && !this.whisperServerDisabledReason) {
+          this.whisperServerDisabledReason = message;
+          log.warn('Disabling whisper-server for this session: %s', message);
+        }
+
+        log.warn('whisper-server failed, falling back to whisper-cli: %s', message);
+        this.stopWhisperServer();
+      }
+    }
+
+    // Fallback to the per-invocation whisper-cli.
     try {
       return await this.runWhisper(wavPath, whisperModelOverride);
     } catch (error: any) {
-      // If GPU mode crashed with a Metal error, retry with GPU disabled.
       if (!this.gpuDisabled && this.isMetalError(error?.message || '')) {
         log.warn('Metal GPU error detected, retrying with CPU-only mode');
         this.gpuDisabled = true;
@@ -2252,14 +2626,23 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
-   * Pre-start the Qwen server so the first transcription is fast.
-   * No-op if already running or if engine is not qwen.
+   * Pre-start transcription engines so the first transcription is fast.
+   * Starts Qwen server if Qwen is selected, and pre-warms the persistent
+   * whisper-server if Whisper is selected and the server binary is available.
    */
   async warmup(): Promise<void> {
     const primaryEngine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
     const hotMicEngine = this.resolveHotMicTranscriptionEngine();
+
     if (primaryEngine === 'qwen' || hotMicEngine === 'qwen') {
       await this.startQwenServer();
+    }
+
+    // Pre-warm the persistent whisper-server so model is already in memory.
+    if ((primaryEngine === 'whisper' || hotMicEngine === 'whisper') && this.isWhisperServerAvailable()) {
+      this.startWhisperServer().catch((err) => {
+        log.warn('whisper-server warmup failed (will fall back to whisper-cli): %s', (err as Error).message);
+      });
     }
   }
 
@@ -2268,10 +2651,19 @@ export class TranscriberManager extends EventEmitter {
    */
   async restartTranscriptionRuntime(): Promise<void> {
     this.stopQwenServer();
+    this.stopWhisperServer();
+
     const primaryEngine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
     const hotMicEngine = this.resolveHotMicTranscriptionEngine();
+
     if (primaryEngine === 'qwen' || hotMicEngine === 'qwen') {
       await this.startQwenServer();
+    }
+
+    if ((primaryEngine === 'whisper' || hotMicEngine === 'whisper') && this.isWhisperServerAvailable()) {
+      this.startWhisperServer().catch((err) => {
+        log.warn('whisper-server restart failed (will fall back to whisper-cli): %s', (err as Error).message);
+      });
     }
   }
 
@@ -2299,6 +2691,11 @@ export class TranscriberManager extends EventEmitter {
     const engine = this.resolveHotMicTranscriptionEngine();
     if (engine === 'qwen') {
       await this.startQwenServer();
+    } else if (engine === 'whisper' && this.isWhisperServerAvailable()) {
+      const whisperModel = this.resolveHotMicWhisperModel();
+      this.startWhisperServer(whisperModel).catch((err) => {
+        log.warn('whisper-server warmup for Hot Mic failed: %s', (err as Error).message);
+      });
     }
   }
 
@@ -2992,6 +3389,7 @@ export class TranscriberManager extends EventEmitter {
       this.whisperProcess = null;
     }
     this.stopQwenServer();
+    this.stopWhisperServer();
     this.overlay.destroy();
   }
 }
