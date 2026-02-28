@@ -23,9 +23,11 @@ interface SocialMessage {
   type: 'dm' | 'feedback';
   senderUserId: string;
   senderEmail: string | null;
+  senderCallsign: string | null;
   senderName: string | null;
   recipientUserId: string;
   recipientEmail: string | null;
+  recipientCallsign: string | null;
   recipientName: string | null;
   contentType: 'text' | 'image' | 'stack';
   contentText: string | null;
@@ -148,6 +150,10 @@ export default function FeedbackView({ onSwitchToClipboard }: FeedbackViewProps)
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const replyInputRef = useRef<HTMLInputElement>(null);
+  const copyableTextStyle = {
+    userSelect: 'text',
+    WebkitUserSelect: 'text',
+  } as const;
 
   // ==========================================================================
   // Data Loading
@@ -162,6 +168,7 @@ export default function FeedbackView({ onSwitchToClipboard }: FeedbackViewProps)
     try {
       const admin = await window.socialAPI.isAdmin();
       setIsAdmin(admin);
+      setFeedbackFilter(admin ? 'open' : 'all');
 
       // Load feedback based on admin status.
       console.log('[FeedbackView] loadData: admin =', admin);
@@ -905,8 +912,12 @@ export default function FeedbackView({ onSwitchToClipboard }: FeedbackViewProps)
                           fontSize: '9px',
                           color: theme.textSecondary,
                           marginTop: '2px',
+                          ...copyableTextStyle,
                         }}>
-                          {formatDate(item.createdAt)}{isAdmin && item.senderEmail ? ` \u00B7 ${item.senderEmail}` : ''}
+                          {formatDate(item.createdAt)}
+                          {isAdmin && (item.senderCallsign || item.senderEmail)
+                            ? ` \u00B7 ${item.senderCallsign || 'no-callsign'} \u00B7 ${item.senderEmail || 'no-email'}`
+                            : ''}
                         </div>
                       </div>
                     </div>
@@ -1082,7 +1093,14 @@ export default function FeedbackView({ onSwitchToClipboard }: FeedbackViewProps)
                   borderLeft: `3px solid ${theme.accent}`,
                 }}>
                   <div style={{ fontSize: '9px', color: theme.textSecondary, marginBottom: '4px' }}>
-                    {selectedFeedback.senderEmail || 'You'} {'\u2022'} {formatRelativeTime(selectedFeedback.createdAt)}
+                    {selectedFeedback.senderCallsign && (
+                      <span style={copyableTextStyle}>{selectedFeedback.senderCallsign}</span>
+                    )}
+                    {selectedFeedback.senderCallsign && selectedFeedback.senderEmail && ' \u00B7 '}
+                    {selectedFeedback.senderEmail
+                      ? <span style={copyableTextStyle}>{selectedFeedback.senderEmail}</span>
+                      : (!selectedFeedback.senderCallsign ? 'You' : null)}
+                    {' \u2022 '} {formatRelativeTime(selectedFeedback.createdAt)}
                     <span style={{
                       marginLeft: '6px',
                       padding: '1px 4px',
@@ -1116,7 +1134,7 @@ export default function FeedbackView({ onSwitchToClipboard }: FeedbackViewProps)
                     </div>
                   )}
                   {selectedFeedback.contentText && (
-                    <div style={{ fontSize: '12px', color: theme.text, whiteSpace: 'pre-wrap' }}>
+                    <div style={{ fontSize: '12px', color: theme.text, whiteSpace: 'pre-wrap', ...copyableTextStyle }}>
                       {selectedFeedback.contentText}
                     </div>
                   )}
@@ -1157,7 +1175,7 @@ export default function FeedbackView({ onSwitchToClipboard }: FeedbackViewProps)
                             <>Status changed to <strong>{entry.newStatus}</strong> {'\u2022'} {formatRelativeTime(entry.createdAt)}</>
                           )}
                           {entry.action === 'replied' && (
-                            <>{entry.userEmail} replied {'\u2022'} {formatRelativeTime(entry.createdAt)}</>
+                            <><span style={copyableTextStyle}>{entry.userEmail}</span> replied {'\u2022'} {formatRelativeTime(entry.createdAt)}</>
                           )}
                         </div>
                       );
@@ -1174,11 +1192,16 @@ export default function FeedbackView({ onSwitchToClipboard }: FeedbackViewProps)
                           }}
                         >
                           <div style={{ fontSize: '9px', color: theme.textSecondary, marginBottom: '2px' }}>
-                            {/* Show "Field Theory Support" for admin replies instead of personal email */}
-                            {reply.senderUserId === selectedFeedback.senderUserId
-                              ? (reply.senderEmail || 'You')
-                              : 'Field Theory Support'
-                            } {'\u2022'} {formatRelativeTime(reply.createdAt)}
+                            {reply.senderCallsign && (
+                              <span style={copyableTextStyle}>{reply.senderCallsign}</span>
+                            )}
+                            {reply.senderCallsign && reply.senderEmail && ' \u00B7 '}
+                            {reply.senderEmail
+                              ? <span style={copyableTextStyle}>{reply.senderEmail}</span>
+                              : (!reply.senderCallsign
+                                ? (reply.senderUserId === selectedFeedback.senderUserId ? 'You' : 'Field Theory Support')
+                                : null)}
+                            {' \u2022 '} {formatRelativeTime(reply.createdAt)}
                           </div>
                           {reply.contentType === 'image' && reply.imageUrl && (
                             <div
@@ -1202,7 +1225,7 @@ export default function FeedbackView({ onSwitchToClipboard }: FeedbackViewProps)
                             </div>
                           )}
                           {reply.contentText && (
-                            <div style={{ fontSize: '12px', color: theme.text }}>
+                            <div style={{ fontSize: '12px', color: theme.text, ...copyableTextStyle }}>
                               {reply.contentText}
                             </div>
                           )}

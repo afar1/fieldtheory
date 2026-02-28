@@ -14,7 +14,6 @@ import DiagnosticsModal from './DiagnosticsModal';
 import CommandsSettings from './CommandsSettings';
 import ClaudeSettings from './ClaudeSettings';
 import LibrarianSettings from './LibrarianSettings';
-import VisionSettings from './VisionSettings';
 import UserStatsPanel from './UserStatsPanel';
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
@@ -26,7 +25,6 @@ type SettingsSection =
   | 'account'
   | 'appearance'
   | 'audio'
-  | 'auto-improve'
   | 'keyboard'
   | 'librarian'
   | 'commands'
@@ -34,8 +32,7 @@ type SettingsSection =
   | 'stats'
   | 'terminal-commands'
   | 'hot-mic'
-  | 'rectangle'
-  | 'vision';
+  | 'rectangle';
 
 // Hotkey capture state - only one hotkey can be captured at a time
 type HotkeyCapture =
@@ -57,7 +54,6 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'account': 'Account',
   'appearance': 'Appearance & System',
   'audio': 'Audio & Transcription',
-  'auto-improve': 'Auto-Improve',
   'keyboard': 'Keyboard Shortcuts',
   'librarian': 'Librarian',
   'commands': 'Portable Commands',
@@ -66,7 +62,6 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'terminal-commands': 'Allowlist',
   'hot-mic': 'Hot Mic',
   'rectangle': 'Windows',
-  'vision': 'Vision',
 };
 
 // Alphabetically ordered sections for navigation
@@ -75,13 +70,11 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'terminal-commands', // Allowlist
   'appearance',
   'audio',
-  'auto-improve',
   'keyboard',
   'librarian',
   'commands', // Portable Commands
   'hot-mic', // Hot Mic
   'rectangle', // Window management
-  'vision',
   'sounds',
   'stats',
 ];
@@ -229,17 +222,6 @@ export default function SettingsPanel({
   const [nameInput, setNameInput] = useState('');
   const [savingName, setSavingName] = useState(false);
 
-  // Auto-improve transcripts state
-  const [autoImprove, setAutoImprove] = useState(false);
-  const [autoImproveMinWords, setAutoImproveMinWords] = useState(70);
-  const [autoImproveStats, setAutoImproveStats] = useState<{
-    wordsImproved: number;
-    apiCalls: number;
-    inputTokens: number;
-    outputTokens: number;
-  }>({ wordsImproved: 0, apiCalls: 0, inputTokens: 0, outputTokens: 0 });
-  const [isResettingStats, setIsResettingStats] = useState(false);
-
   // Permission banner state - whether to show reminders for missing permissions.
   const [showPermissionReminders, setShowPermissionReminders] = useState(true);
   
@@ -333,18 +315,6 @@ export default function SettingsPanel({
         }
       });
       
-
-      // Load auto-improve settings
-      window.transcribeAPI?.getAutoImprove?.().then(enabled => {
-        setAutoImprove(enabled);
-      });
-      window.transcribeAPI?.getAutoImproveMinWords?.().then(minWords => {
-        setAutoImproveMinWords(minWords);
-      });
-      window.transcribeAPI?.getAutoImproveStats?.().then(stats => {
-        if (stats) setAutoImproveStats(stats);
-      });
-
       // Load permission banner setting
       window.clipboardAPI.getHideScreenRecordingBanner?.().then(hide => {
         setShowPermissionReminders(!hide);
@@ -493,45 +463,6 @@ export default function SettingsPanel({
     };
   }, []);
   
-  // Handler for toggling auto-improve
-  const handleAutoImproveChange = async (enabled: boolean) => {
-    if (!window.transcribeAPI?.setAutoImprove) return;
-
-    setAutoImprove(enabled);
-    try {
-      await window.transcribeAPI.setAutoImprove(enabled);
-    } catch (err) {
-      console.error('Failed to change auto-improve setting:', err);
-    }
-  };
-
-  // Handler for changing auto-improve minimum words
-  const handleAutoImproveMinWordsChange = async (minWords: number) => {
-    if (!window.transcribeAPI?.setAutoImproveMinWords) return;
-
-    setAutoImproveMinWords(minWords);
-    try {
-      await window.transcribeAPI.setAutoImproveMinWords(minWords);
-    } catch (err) {
-      console.error('Failed to change auto-improve min words:', err);
-    }
-  };
-
-  // Handler for resetting auto-improve stats
-  const handleResetAutoImproveStats = async () => {
-    if (!window.transcribeAPI?.resetAutoImproveStats) return;
-
-    setIsResettingStats(true);
-    try {
-      await window.transcribeAPI.resetAutoImproveStats();
-      setAutoImproveStats({ wordsImproved: 0, apiCalls: 0, inputTokens: 0, outputTokens: 0 });
-    } catch (err) {
-      console.error('Failed to reset auto-improve stats:', err);
-    } finally {
-      setIsResettingStats(false);
-    }
-  };
-
   // Handler for toggling continuous context enabled state
   const handleToggleContinuousContext = async (enabled: boolean) => {
     if (!window.clipboardAPI?.setContinuousContextEnabled) return;
@@ -1575,130 +1506,6 @@ export default function SettingsPanel({
         </>
       )}
 
-      {/* Auto-Improve Transcripts Section */}
-      {selectedSection === 'auto-improve' && (() => {
-        // Check if text improvement quota is exhausted (free tier only)
-        const textImproveExhausted = userTier === 'free' && quotaStatus?.textImprove && !quotaStatus.textImprove.allowed;
-
-        return (
-      <div style={styles.section}>
-        <SectionHeader title="Auto-Improve Transcripts" />
-
-        {/* Quota exhausted notice for free tier */}
-        {textImproveExhausted && quotaLimits && (
-          <div style={{
-            padding: '12px',
-            marginBottom: '12px',
-            borderRadius: '8px',
-            backgroundColor: theme.isDark ? 'rgba(239, 68, 68, 0.1)' : '#fef2f2',
-            border: `1px solid ${theme.isDark ? 'rgba(239, 68, 68, 0.3)' : '#fecaca'}`,
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
-                  Limit reached
-                </span>
-                <span style={{ fontSize: '12px', color: theme.textSecondary, marginLeft: '8px' }}>
-                  Resets in {daysUntilReset} day{daysUntilReset !== 1 ? 's' : ''} to {(quotaLimits?.textImprovementWords ?? 0).toLocaleString()} words
-                </span>
-              </div>
-              <button
-                onClick={() => {
-                  const paymentLink = window.stripeConfig?.paymentLink || '';
-                  const userId = session?.user?.id;
-                  const url = userId ? `${paymentLink}?client_reference_id=${userId}` : paymentLink;
-                  window.shellAPI?.openExternal(url);
-                }}
-                style={{
-                  ...styles.linkBtn,
-                  color: theme.accent,
-                  fontWeight: 500,
-                }}
-              >
-                Upgrade →
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Auto-Improve Toggle */}
-        {/* Allow turning OFF even when exhausted, but block turning ON */}
-        {(() => {
-          const canToggle = !textImproveExhausted || autoImprove;
-          return (
-            <div style={{ ...styles.row, opacity: canToggle ? 1 : 0.5 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                <span style={styles.rowLabel}>Auto-Improve</span>
-                <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-                  Automatically enhance transcripts with AI
-                </span>
-              </div>
-              <button
-                onClick={() => canToggle && handleAutoImproveChange(!autoImprove)}
-                disabled={!canToggle}
-                style={{
-                  ...styles.toggle,
-                  backgroundColor: autoImprove ? theme.success : '#d1d5db',
-                  cursor: canToggle ? 'pointer' : 'not-allowed',
-                }}
-              >
-                <span style={{ ...styles.toggleKnob, transform: autoImprove ? 'translateX(20px)' : 'translateX(2px)' }} />
-              </button>
-            </div>
-          );
-        })()}
-
-        {/* Settings shown when auto-improve is enabled */}
-        {autoImprove && (
-          <>
-            {/* Minimum words slider */}
-            <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: `1px solid ${theme.border}` }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                <span style={{ fontSize: '12px', color: theme.text }}>Minimum words to improve</span>
-                <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>{autoImproveMinWords} words</span>
-              </div>
-              <input
-                type="range"
-                min="30"
-                max="500"
-                step="10"
-                value={autoImproveMinWords}
-                onChange={(e) => handleAutoImproveMinWordsChange(Number(e.target.value))}
-                style={{
-                  width: '100%',
-                  height: '6px',
-                  borderRadius: '3px',
-                  background: `linear-gradient(to right, ${theme.success} 0%, ${theme.success} ${((autoImproveMinWords - 30) / (500 - 30)) * 100}%, ${theme.border} ${((autoImproveMinWords - 30) / (500 - 30)) * 100}%, ${theme.border} 100%)`,
-                  appearance: 'none',
-                  cursor: 'pointer',
-                }}
-              />
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
-                <span style={{ fontSize: '11px', color: theme.textSecondary }}>30</span>
-                <span style={{ fontSize: '11px', color: theme.textSecondary }}>500</span>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* Keyboard shortcut notice */}
-        <div style={{
-          fontSize: '10px',
-          color: theme.textSecondary,
-          marginTop: '16px',
-          textAlign: 'center',
-          padding: '8px 12px',
-          backgroundColor: theme.isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.03)',
-          border: `1px solid ${theme.border}`,
-          borderRadius: '6px',
-        }}>
-          Tip: You can also use <strong style={{ color: theme.text }}>Command + Shift + I</strong> on any highlighted text to improve it
-        </div>
-
-      </div>
-        );
-      })()}
-
       {/* Keyboard Shortcuts Section - First for easy access */}
       {selectedSection === 'keyboard' && (
       <div style={styles.section}>
@@ -1960,9 +1767,9 @@ export default function SettingsPanel({
 
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={styles.rowLabel}>Window Management Shortcuts</span>
+            <span style={styles.rowLabel}>Window Voice Commands</span>
             <span style={styles.rowHint}>
-              Configure/clear Squares keyboard shortcuts in Windows. Hot Mic voice actions remain available.
+              Configure spoken window actions (tile, focus, snap). Keyboard shortcuts for window management are not configured here.
             </span>
           </div>
           <div style={styles.rowControls}>
@@ -2189,14 +1996,6 @@ export default function SettingsPanel({
       </div>
       )}
 
-      {/* Vision Section */}
-      {selectedSection === 'vision' && (
-      <div style={styles.section}>
-        <SectionHeader title="Vision" />
-        <VisionSettings />
-      </div>
-      )}
-
       {/* Sounds Section */}
       {selectedSection === 'sounds' && (
       <div style={styles.section}>
@@ -2391,7 +2190,7 @@ export default function SettingsPanel({
                     </div>
 
                     {displayTier === 'pro' ? (
-                      <p style={styles.rowHint}>Unlimited priority mic, auto-stacking, and text improvements.</p>
+                      <p style={styles.rowHint}>Unlimited priority mic and auto-stacking.</p>
                     ) : quotaStatus && quotaLimits ? (
                       <div style={{
                         marginTop: '12px',

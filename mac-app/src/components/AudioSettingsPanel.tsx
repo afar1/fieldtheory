@@ -35,6 +35,7 @@ export default function AudioSettingsPanel() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [favoriteDeviceName, setFavoriteDeviceName] = useState<string | null>(null);
+  const [inputMode, setInputMode] = useState<'hot-mic' | 'standard'>('standard');
 
   const styles = getStyles(theme);
 
@@ -55,8 +56,13 @@ export default function AudioSettingsPanel() {
         const state = await window.audioAPI!.getState();
         setAudioState(state);
         // Also fetch the favorite device name
-        const favName = await window.audioAPI!.getFavoriteDeviceName();
+        const [favName, mode] = await Promise.all([
+          window.audioAPI!.getFavoriteDeviceName(),
+          window.hotMicAPI?.getInputMode?.()
+            ?? (window.hotMicAPI?.getEnabled?.().then((enabled) => enabled ? 'hot-mic' : 'standard') ?? Promise.resolve<'standard'>('standard')),
+        ]);
         setFavoriteDeviceName(favName);
+        setInputMode(mode);
         setError(null);
       } catch (err) {
         setError('Failed to fetch audio state');
@@ -75,9 +81,13 @@ export default function AudioSettingsPanel() {
       const favName = await window.audioAPI!.getFavoriteDeviceName();
       setFavoriteDeviceName(favName);
     });
+    const unsubscribeInputMode = window.hotMicAPI?.onInputModeChanged?.((mode) => {
+      setInputMode(mode);
+    }) ?? (() => {});
 
     return () => {
       unsubscribe();
+      unsubscribeInputMode();
     };
   }, [isMacOS]);
 
@@ -102,6 +112,19 @@ export default function AudioSettingsPanel() {
       console.error('Failed to set priority device:', err);
     }
   }, []);
+
+  const handleSetInputMode = useCallback(async (mode: 'hot-mic' | 'standard') => {
+    if (!window.hotMicAPI?.setInputMode) return;
+    const previousMode = inputMode;
+    setInputMode(mode);
+    try {
+      const savedMode = await window.hotMicAPI.setInputMode(mode);
+      setInputMode(savedMode);
+    } catch (err) {
+      setInputMode(previousMode);
+      console.error('Failed to set input mode:', err);
+    }
+  }, [inputMode]);
 
   // Handler for resetting user override.
   const handleResetOverride = useCallback(async () => {
@@ -198,6 +221,28 @@ export default function AudioSettingsPanel() {
               </option>
             ))}
           </select>
+          <div style={styles.modeSegment}>
+            <button
+              type="button"
+              onClick={() => handleSetInputMode('standard')}
+              style={{
+                ...styles.modeButton,
+                ...(inputMode === 'standard' ? styles.modeButtonActive : {}),
+              }}
+            >
+              Standard
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSetInputMode('hot-mic')}
+              style={{
+                ...styles.modeButton,
+                ...(inputMode === 'hot-mic' ? styles.modeButtonActive : {}),
+              }}
+            >
+              Hot Mic
+            </button>
+          </div>
           {audioState.userOverrideId && audioState.priorityMode && priorityDevice && (
             <button onClick={handleResetOverride} style={styles.btn}>
               Reset
@@ -288,6 +333,25 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
+  },
+  modeSegment: {
+    display: 'flex',
+    alignItems: 'center',
+    borderRadius: '8px',
+    border: `1px solid ${theme.border}`,
+    overflow: 'hidden',
+  },
+  modeButton: {
+    border: 'none',
+    backgroundColor: 'transparent',
+    color: theme.textSecondary,
+    fontSize: '11px',
+    padding: '4px 8px',
+    cursor: 'pointer',
+  },
+  modeButtonActive: {
+    backgroundColor: theme.accent,
+    color: '#fff',
   },
 
   // Button styles.
