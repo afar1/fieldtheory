@@ -143,10 +143,7 @@ interface Preferences {
   // Server is authoritative; this is only for offline/startup display.
   cachedTier?: 'free' | 'pro';
 
-  // Transcription engine selection.
-  // 'whisper' (default): uses whisper-cli / whisper-server (whisper.cpp)
-  // 'qwen': uses Qwen3-ASR-0.6B via mlx-audio (Apple Silicon only)
-  // 'mlx-whisper': uses Whisper large-v3-turbo via mlx-whisper (Apple Silicon only)
+  // Transcription engine selection. See TranscriptionEngine type in types/transcribe.ts.
   transcriptionEngine?: 'whisper' | 'qwen' | 'mlx-whisper';
 
   // Hot Mic - continuous voice input for Claude Code terminals.
