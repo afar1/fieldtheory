@@ -6166,8 +6166,9 @@ async function initTranscriberSystem(): Promise<void> {
   let wakeNetworkTimeout: ReturnType<typeof setTimeout> | null = null;
 
   powerMonitor.on('suspend', () => {
-    log.info('[PowerMonitor] System going to sleep, stopping Qwen server');
+    log.info('[PowerMonitor] System going to sleep, stopping transcription servers');
     transcriberManager?.stopQwenServer();
+    transcriberManager?.stopWhisperServer();
   });
 
   powerMonitor.on('resume', () => {
