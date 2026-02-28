@@ -57,6 +57,7 @@ export class StdioJsonServer {
 
   get isReady(): boolean { return this.ready; }
   get isRunning(): boolean { return this.process !== null && this.ready; }
+  get isStarting(): boolean { return this.readyPromise !== null && !this.ready; }
   get disabledReason(): string | null { return this._disabledReason; }
 
   disable(reason: string): void {

@@ -168,6 +168,162 @@ export function summarizeTranscriptForIsland(
 }
 
 /**
+ * Summarize drawer transcript text with optional leading-context visibility.
+ * When leading context is hidden, only the trailing window is shown with an
+ * ellipsis prefix once text exceeds the trailing budget.
+ */
+export function summarizeDrawerTranscript(
+  text: string,
+  options: {
+    leadingWords?: number;
+    trailingWords?: number;
+    showLeadingContext?: boolean;
+  } = {}
+): string {
+  const leadingWords = Math.max(0, options.leadingWords ?? 3);
+  const trailingWords = Math.max(1, options.trailingWords ?? 10);
+  const showLeadingContext = options.showLeadingContext ?? true;
+
+  const normalized = text.trim().replace(/\s+/g, ' ');
+  if (!normalized) return '';
+
+  const words = normalized.split(' ').filter(Boolean);
+
+  if (!showLeadingContext) {
+    if (words.length <= trailingWords) {
+      return normalized;
+    }
+    return `... ${words.slice(-trailingWords).join(' ')}`;
+  }
+
+  const threshold = leadingWords + trailingWords;
+  if (words.length <= threshold || leadingWords === 0) {
+    return normalized;
+  }
+
+  const firstWords = words.slice(0, leadingWords).join(' ');
+  const lastWords = words.slice(-trailingWords).join(' ');
+  return `${firstWords} ... ${lastWords}`;
+}
+
+/**
+ * Split compact drawer text into leading/trailing render parts.
+ * Input is expected to be the output of summarizeDrawerTranscript().
+ */
+export function splitDrawerTranscriptForRender(
+  compactText: string,
+  showLeadingContext: boolean
+): {
+  leadingText: string;
+  trailingWords: string[];
+  hasHiddenPrefix: boolean;
+} {
+  const tokens = compactText.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) {
+    return { leadingText: '', trailingWords: [], hasHiddenPrefix: false };
+  }
+
+  const ellipsisIndex = tokens.indexOf('...');
+  if (ellipsisIndex >= 0) {
+    const leadingTokens = tokens.slice(0, ellipsisIndex);
+    const trailingWords = tokens.slice(ellipsisIndex + 1);
+    return {
+      leadingText: showLeadingContext ? leadingTokens.join(' ') : '',
+      trailingWords,
+      hasHiddenPrefix: !showLeadingContext && trailingWords.length > 0,
+    };
+  }
+
+  return {
+    leadingText: '',
+    trailingWords: tokens,
+    hasHiddenPrefix: false,
+  };
+}
+
+/**
+ * Count how many words were appended at the end of the transcript between
+ * two updates, capped for UI animation.
+ */
+export function countAppendedWords(
+  previousText: string,
+  nextText: string,
+  maxAnimatedWords: number = 3
+): number {
+  const maxWords = Math.max(0, Math.floor(maxAnimatedWords));
+  if (maxWords === 0) return 0;
+
+  const prevWords = previousText.trim().replace(/\s+/g, ' ').split(' ').filter(Boolean);
+  const nextWords = nextText.trim().replace(/\s+/g, ' ').split(' ').filter(Boolean);
+
+  if (nextWords.length <= prevWords.length) {
+    return 0;
+  }
+
+  let prefixLen = 0;
+  const compareLen = Math.min(prevWords.length, nextWords.length);
+  while (prefixLen < compareLen && prevWords[prefixLen] === nextWords[prefixLen]) {
+    prefixLen += 1;
+  }
+
+  const appended = prefixLen === prevWords.length
+    ? nextWords.length - prevWords.length
+    : nextWords.length;
+
+  return Math.min(maxWords, appended);
+}
+
+/**
+ * Compute visual emphasis for a word in a one-line carousel strip.
+ * Center words appear brighter/larger/sharper than edge words.
+ */
+export function getCarouselWordVisual(
+  index: number,
+  totalWords: number,
+  options: {
+    minOpacity?: number;
+    maxOpacity?: number;
+    minScale?: number;
+    maxBlurPx?: number;
+    focusPosition?: number;
+    rightBiasWeight?: number;
+  } = {}
+): { opacity: number; scale: number; blurPx: number } {
+  const count = Math.max(1, Math.floor(totalWords));
+  const slot = Math.max(0, Math.min(count - 1, Math.floor(index)));
+
+  const minOpacity = Math.max(0, Math.min(1, options.minOpacity ?? 0.24));
+  const maxOpacity = Math.max(minOpacity, Math.min(1, options.maxOpacity ?? 0.92));
+  const minScale = Math.max(0.5, Math.min(1, options.minScale ?? 0.9));
+  const maxBlurPx = Math.max(0, options.maxBlurPx ?? 1.05);
+  const focusPosition = Math.max(0, Math.min(1, options.focusPosition ?? 0.72));
+  const rightBiasWeight = Math.max(0, Math.min(1, options.rightBiasWeight ?? 0.28));
+
+  if (count === 1) {
+    return { opacity: maxOpacity, scale: 1, blurPx: 0 };
+  }
+
+  const normalizedPos = slot / (count - 1);
+  const maxDistance = Math.max(focusPosition, 1 - focusPosition, 0.001);
+  const distance = Math.abs(normalizedPos - focusPosition);
+  const focusEmphasis = Math.max(0, Math.min(1, 1 - (distance / maxDistance)));
+  const emphasis = Math.max(
+    0,
+    Math.min(1, (focusEmphasis * (1 - rightBiasWeight)) + (normalizedPos * rightBiasWeight))
+  );
+
+  const opacity = minOpacity + ((maxOpacity - minOpacity) * emphasis);
+  const scale = minScale + ((1 - minScale) * emphasis);
+  const blurPx = maxBlurPx * (1 - emphasis);
+
+  return {
+    opacity: Number(opacity.toFixed(3)),
+    scale: Number(scale.toFixed(3)),
+    blurPx: Number(blurPx.toFixed(3)),
+  };
+}
+
+/**
  * Summarize transcript text for history rows.
  * Keeps as much leading context as possible within the max line budget, then
  * appends an inline ellipsis and the final trailing words.

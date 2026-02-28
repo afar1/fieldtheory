@@ -290,6 +290,33 @@ async function applyInputMode(mode: InputMode): Promise<InputMode> {
   return normalized;
 }
 
+function getDefaultHotMicRuntimeStatus(): import('./hotMicManager').HotMicRuntimeStatus {
+  return {
+    state: 'idle',
+    condition: null,
+    engineReady: false,
+    whisperFallbackActive: false,
+    queueDepth: 0,
+    lastChunkAgeMs: null,
+    chunksReceived: 0,
+    micHealthy: true,
+    engine: null,
+  };
+}
+
+function getHotMicRuntimeStatusSnapshot(): import('./hotMicManager').HotMicRuntimeStatus {
+  return hotMicManager?.getRuntimeStatus() ?? getDefaultHotMicRuntimeStatus();
+}
+
+function broadcastHotMicRuntimeStatus(): void {
+  const status = getHotMicRuntimeStatusSnapshot();
+  BrowserWindow.getAllWindows().forEach((win) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('hotmic:runtimeStatusChanged', status);
+    }
+  });
+}
+
 function normalizeHotMicIslandGeometry(
   geometry: Partial<DynamicIslandGeometryTuning> | null | undefined
 ): DynamicIslandGeometryTuning {
@@ -2345,7 +2372,9 @@ function setupTranscribeIPCHandlers(): void {
     if (!validSizes.includes(modelSize as ModelSize)) {
       throw new Error(`Invalid model size: ${modelSize}`);
     }
+    log.info('Transcription model set: %s', modelSize);
     await transcriberManager.setSelectedModel(modelSize as ModelSize);
+    broadcastHotMicRuntimeStatus();
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_HOTKEY, () => {
@@ -2459,8 +2488,14 @@ function setupTranscribeIPCHandlers(): void {
     if (!preferencesManager) {
       throw new Error('PreferencesManager not initialized');
     }
-    await preferencesManager.save({ transcriptionEngine: engine });
+    log.info('Transcription engine set: %s (Hot Mic follows global engine)', engine);
+    await preferencesManager.save({
+      transcriptionEngine: engine,
+      // Hot Mic now follows the global engine selection.
+      hotMicTranscriptionEngine: 'default',
+    });
     await transcriberManager?.restartTranscriptionRuntime();
+    broadcastHotMicRuntimeStatus();
   });
 
   // Sound settings handlers.
@@ -5854,6 +5889,7 @@ async function initTranscriberSystem(): Promise<void> {
     hotMicManager.setTranscribeFunction((wavPath) => transcriberManager!.transcribeAudioForHotMic(wavPath));
     hotMicManager.setWarmupFunction(() => transcriberManager!.warmupForHotMic());
     hotMicManager.setFallbackCheckFunction(() => transcriberManager?.lastHotMicUsedWhisperFallback ?? false);
+    hotMicManager.setEngineStatusGetter(() => transcriberManager!.getHotMicEngineStatus());
 
     // Wire hotkey delegation: when Hot Mic is active, hotkey presses go to it
     transcriberManager.setHotMicDelegate({
@@ -5875,12 +5911,8 @@ async function initTranscriberSystem(): Promise<void> {
         }
       });
     });
-    hotMicManager.on('runtimeStatusChanged', (status: import('./hotMicManager').HotMicRuntimeStatus) => {
-      BrowserWindow.getAllWindows().forEach(win => {
-        if (!win.isDestroyed()) {
-          win.webContents.send('hotmic:runtimeStatusChanged', status);
-        }
-      });
+    hotMicManager.on('runtimeStatusChanged', () => {
+      broadcastHotMicRuntimeStatus();
     });
 
     hotMicManager.on('statusChanged', (status: { state: string; muted: boolean }) => {
@@ -5889,6 +5921,11 @@ async function initTranscriberSystem(): Promise<void> {
           win.webContents.send('hotmic:statusChanged', status);
         }
       });
+    });
+
+    hotMicManager.on('toggleInputModeRequested', () => {
+      const nextMode: InputMode = getCurrentInputMode() === 'hot-mic' ? 'standard' : 'hot-mic';
+      void applyInputMode(nextMode);
     });
 
     broadcastInputMode(getCurrentInputMode());
@@ -6450,16 +6487,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getRuntimeStatus', () => {
-      return hotMicManager?.getRuntimeStatus() ?? {
-        state: 'idle',
-        condition: null,
-        engineReady: false,
-        whisperFallbackActive: false,
-        queueDepth: 0,
-        lastChunkAgeMs: null,
-        chunksReceived: 0,
-        micHealthy: true,
-      };
+      return getHotMicRuntimeStatusSnapshot();
     });
 
     ipcMain.handle('hotmic:getMuted', () => {
@@ -6482,25 +6510,33 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getTranscriptionEngineMode', () => {
-      return preferencesManager?.getPreference('hotMicTranscriptionEngine') ?? 'default';
+      return 'default';
     });
 
     ipcMain.handle('hotmic:setTranscriptionEngineMode', async (_event, mode: 'default' | 'whisper' | 'qwen' | 'mlx-whisper') => {
-      const normalized = mode === 'whisper' || mode === 'qwen' || mode === 'mlx-whisper' ? mode : 'default';
-      await preferencesManager?.save({ hotMicTranscriptionEngine: normalized });
+      if (mode !== 'default') {
+        log.info('Hot Mic engine override is deprecated; using global transcription engine');
+      }
+      await preferencesManager?.save({ hotMicTranscriptionEngine: 'default' });
       await transcriberManager?.restartTranscriptionRuntime();
-      return normalized;
+      broadcastHotMicRuntimeStatus();
+      return 'default';
     });
 
     ipcMain.handle('hotmic:getWhisperModel', () => {
-      return preferencesManager?.getPreference('hotMicWhisperModel') ?? 'small';
+      return transcriberManager?.getSelectedModel() ?? 'small';
     });
 
     ipcMain.handle('hotmic:setWhisperModel', async (_event, model: ModelSize) => {
       const validModels: ModelSize[] = ['small'];
       const normalized: ModelSize = validModels.includes(model) ? model : 'small';
-      await preferencesManager?.save({ hotMicWhisperModel: normalized });
-      await transcriberManager?.restartTranscriptionRuntime();
+      log.info('Hot Mic whisper model request mapped to global model: %s', normalized);
+      if (transcriberManager) {
+        await transcriberManager.setSelectedModel(normalized);
+      } else {
+        await preferencesManager?.save({ selectedModel: normalized });
+      }
+      broadcastHotMicRuntimeStatus();
       return normalized;
     });
 
@@ -6612,6 +6648,15 @@ if (!gotTheLock) {
 
     ipcMain.handle('hotmic:setCancelWords', async (_event, words: string) => {
       await preferencesManager?.save({ hotMicCancelWords: words });
+      return words;
+    });
+
+    ipcMain.handle('hotmic:getScrapWords', () => {
+      return preferencesManager?.getPreference('hotMicScrapWords') ?? HOT_MIC_DEFAULTS.scrapPhrases;
+    });
+
+    ipcMain.handle('hotmic:setScrapWords', async (_event, words: string) => {
+      await preferencesManager?.save({ hotMicScrapWords: words });
       return words;
     });
 
@@ -6817,6 +6862,7 @@ if (!gotTheLock) {
         hotMicSubmitWord: HOT_MIC_DEFAULTS.submitPhrases,
         hotMicPasteWords: HOT_MIC_DEFAULTS.pastePhrases,
         hotMicCancelWords: HOT_MIC_DEFAULTS.cancelPhrases,
+        hotMicScrapWords: HOT_MIC_DEFAULTS.scrapPhrases,
         hotMicPrevWindowWords: HOT_MIC_DEFAULTS.prevWindowPhrases,
         hotMicNewWindowWords: HOT_MIC_DEFAULTS.newWindowPhrases,
         hotMicCloseWindowWords: HOT_MIC_DEFAULTS.closeWindowPhrases,

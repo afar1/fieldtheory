@@ -16,6 +16,8 @@ import { DynamicIslandManager, type HotMicBackgroundFilterMeter } from './dynami
 import { ClipboardItem, isTerminalApp } from './clipboardManager';
 import { HOT_MIC_DEFAULTS, HOT_MIC_DEFAULT_SYSTEM_COMMANDS } from './hotMicDefaults';
 import { getHotkeyManager } from './hotkeyManager';
+import type { TranscriptionEngine } from './types/transcribe';
+import type { HotMicEngineStatus } from './types/hotMic';
 import { createLogger } from './logger';
 
 const log = createLogger('HotMic');
@@ -55,6 +57,16 @@ interface HotMicScreenshotMeta {
   figureId: string;
   capturedAtMs: number;
 }
+
+interface BackgroundFilterGate {
+  threshold: number;
+  ratioThreshold: number;
+  minSpeechSamples: number;
+  peakThreshold: number;
+  nearFieldPeakThreshold: number;
+}
+
+type HarvestMode = 'command' | 'dictation';
 
 type HotMicClipboardBridge = {
   storeText: (...args: any[]) => Promise<number>;
@@ -99,6 +111,7 @@ export interface HotMicRuntimeStatus {
   lastChunkAgeMs: number | null;
   chunksReceived: number;
   micHealthy: boolean;
+  engine: HotMicEngineStatus | null;
 }
 
 /**
@@ -283,18 +296,39 @@ export class HotMicManager extends EventEmitter {
   private static readonly MAX_CHUNK_QUEUE_DEPTH = 8;
   private drawerSpeaking: boolean = false;
   private drawerSpeakingTimeout: NodeJS.Timeout | null = null;
-  private static readonly DRAWER_PREVIEW_MIN_WORDS = 3;
-  private static readonly DRAWER_PREVIEW_HEAD_WORDS = 3;
-  private static readonly DRAWER_PREVIEW_TAIL_WORDS = 7;
+  private static readonly DRAWER_PREVIEW_MIN_WORDS = 1;
   private static readonly DRAWER_SPEAKING_HOLD_MS = 320;
   private static readonly FORCE_SNAPSHOT_CHECK_MS = 120;
   private static readonly FORCE_SNAPSHOT_SPEECH_GRACE_MS = 220;
   private static readonly FORCE_SNAPSHOT_COMMAND_MS = 700;
-  private static readonly FORCE_SNAPSHOT_DICTATION_MS = 900;
+  private static readonly FORCE_SNAPSHOT_MLX_MS = 1000;
+  private static readonly FORCE_SNAPSHOT_BACKPRESSURE_MS = 1400;
+  private static readonly HARVEST_BACKPRESSURE_QUEUE_THRESHOLD = 2;
   private static readonly FILTER_METER_UPDATE_MS = 90;
   private static readonly AUDIO_DIAG_WINDOW_MS = 2200;
   private static readonly AUDIO_DIAG_NO_EVENT_WARN_MS = 3200;
   private static readonly AUDIO_DIAG_WARN_COOLDOWN_MS = 5000;
+  private static readonly BACKGROUND_FILTER_THRESHOLD_BASE = 0.004;
+  private static readonly BACKGROUND_FILTER_THRESHOLD_SPAN = 0.085;
+  private static readonly BACKGROUND_FILTER_RATIO_BASE = 0.04;
+  private static readonly BACKGROUND_FILTER_RATIO_SPAN = 0.28;
+  private static readonly BACKGROUND_FILTER_MIN_SPEECH_BASE = 2;
+  private static readonly BACKGROUND_FILTER_MIN_SPEECH_SPAN = 6;
+  private static readonly BACKGROUND_FILTER_PEAK_MULTIPLIER_BASE = 1.05;
+  private static readonly BACKGROUND_FILTER_PEAK_MULTIPLIER_SPAN = 0.4;
+  private static readonly BACKGROUND_FILTER_NEAR_FIELD_MULTIPLIER = 1.65;
+  private static readonly REPETITION_COLLAPSED_MIN_CHARS = 30;
+  private static readonly REPETITION_SINGLE_CHAR_MIN_RUN = 25;
+  private static readonly REPETITION_UNIT_MIN = 2;
+  private static readonly REPETITION_UNIT_MAX = 8;
+  private static readonly REPETITION_UNIT_MIN_REPEATS = 8;
+  private static readonly REPETITION_SHORT_BURST_MIN_WORDS = 2;
+  private static readonly REPETITION_SHORT_BURST_ALWAYS_MIN_WORDS = 4;
+  private static readonly REPETITION_SHORT_BURST_LONG_WORD_LEN = 8;
+  private static readonly REPETITION_ANALYSIS_MIN_WORDS = 8;
+  private static readonly REPETITION_CONSECUTIVE_RUN_MIN = 8;
+  private static readonly REPETITION_UNIQUE_RATIO_MAX = 0.25;
+  private static readonly REPETITION_DOMINANT_RATIO_MIN = 0.7;
 
   // Warmup promise — awaited before first transcription to avoid race with Qwen startup
   private warmupPromise: Promise<void> | null = null;
@@ -338,6 +372,7 @@ export class HotMicManager extends EventEmitter {
   private lastAudioNoEventWarnMs: number = 0;
   private lastSpeechMissWarnMs: number = 0;
   private audioDiagnosticsTimer: NodeJS.Timeout | null = null;
+  private currentHarvestMode: HarvestMode | null = null;
 
   // Known whisper hallucination patterns (empty/silence audio)
   private readonly HALLUCINATION_PATTERNS = [
@@ -360,6 +395,7 @@ export class HotMicManager extends EventEmitter {
   private externalTranscribe: ((wavPath: string) => Promise<string>) | null = null;
   private externalWarmup: (() => Promise<void>) | null = null;
   private externalFallbackCheck: (() => boolean) | null = null;
+  private engineStatusGetter: (() => HotMicEngineStatus) | null = null;
 
   // Squares window management (voice-triggered snapping)
   private squaresManager: {
@@ -418,12 +454,7 @@ export class HotMicManager extends EventEmitter {
 
     const hotkeyManager = getHotkeyManager();
     const result = hotkeyManager.register('hotMic', hotkey, () => {
-      log.info('Hot Mic: hotkey pressed, toggling');
-      if (this.isActive) {
-        this.deactivate();
-      } else {
-        this.activate();
-      }
+      this.handleHotkeyToggle();
     });
 
     if (!result.success) {
@@ -448,12 +479,7 @@ export class HotMicManager extends EventEmitter {
     }
 
     const result = hotkeyManager.register('hotMic', hotkey, () => {
-      log.info('Hot Mic: hotkey pressed, toggling');
-      if (this.isActive) {
-        this.deactivate();
-      } else {
-        this.activate();
-      }
+      this.handleHotkeyToggle();
     });
 
     if (result.success) {
@@ -468,6 +494,22 @@ export class HotMicManager extends EventEmitter {
 
   getHotkey(): string | null {
     return this.preferences.getPreference('hotMicHotkey') || null;
+  }
+
+  private handleHotkeyToggle(): void {
+    if (this.listenerCount('toggleInputModeRequested') > 0) {
+      log.info('Hot Mic: hotkey pressed, requesting input mode toggle');
+      this.emit('toggleInputModeRequested');
+      return;
+    }
+
+    // Fallback when no input-mode delegate is wired.
+    log.info('Hot Mic: hotkey pressed, toggling hot mic directly');
+    if (this.isActive) {
+      this.deactivate();
+    } else {
+      this.activate();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -562,6 +604,11 @@ export class HotMicManager extends EventEmitter {
     this.externalFallbackCheck = fn;
   }
 
+  setEngineStatusGetter(fn: () => HotMicEngineStatus): void {
+    this.engineStatusGetter = fn;
+    this.emitRuntimeStatus();
+  }
+
   setSquaresManager(manager: {
     parseVoiceCommandFromTail(text: string): { action: string; remainingText: string } | null;
     executeAction(action: string): Promise<boolean>;
@@ -615,6 +662,22 @@ export class HotMicManager extends EventEmitter {
   getRuntimeStatus(): HotMicRuntimeStatus {
     const now = Date.now();
     const lastChunkAgeMs = this.lastChunkReadyMs > 0 ? now - this.lastChunkReadyMs : null;
+    let engine: HotMicEngineStatus | null = null;
+    if (this.engineStatusGetter) {
+      try {
+        engine = this.engineStatusGetter();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        engine = {
+          selectedEngine: this.getConfiguredTranscriptionEngineForLogs(),
+          source: 'global',
+          whisperModel: null,
+          readiness: 'disabled',
+          detail: `Engine status unavailable: ${message}`,
+          fallbackAvailable: false,
+        };
+      }
+    }
 
     // Mic is healthy if we've received a chunk within the last 10 seconds
     // while in an active state — stale chunks suggest routing or VAD problems.
@@ -631,6 +694,7 @@ export class HotMicManager extends EventEmitter {
       lastChunkAgeMs,
       chunksReceived: this.chunksReceivedCount,
       micHealthy,
+      engine,
     };
   }
 
@@ -650,11 +714,7 @@ export class HotMicManager extends EventEmitter {
     return this.targetBundleId;
   }
 
-  private getConfiguredTranscriptionEngineForLogs(): 'whisper' | 'qwen' | 'mlx-whisper' {
-    const mode = this.preferences.getPreference('hotMicTranscriptionEngine');
-    if (mode === 'whisper' || mode === 'qwen' || mode === 'mlx-whisper') {
-      return mode;
-    }
+  private getConfiguredTranscriptionEngineForLogs(): TranscriptionEngine {
     return this.preferences.getPreference('transcriptionEngine') ?? 'whisper';
   }
 
@@ -765,7 +825,7 @@ export class HotMicManager extends EventEmitter {
           if (this.audioManager) {
             await this.audioManager.ensurePriorityEnforced();
           }
-          this.nativeHelper.setHarvestMode('command');
+          this.setRealtimeHarvestMode();
           await this.nativeHelper.startRecording();
           this.yieldedToTranscriber = false;
           this.setCondition(this.whisperFallbackActive ? 'degraded' : 'ready');
@@ -816,7 +876,7 @@ export class HotMicManager extends EventEmitter {
         if (this.audioManager) {
           await this.audioManager.ensurePriorityEnforced();
         }
-        this.nativeHelper.setHarvestMode(this.transcriptBuffer.length === 0 ? 'command' : 'dictation');
+        this.setRealtimeHarvestMode();
         await this.nativeHelper.startRecording();
         this.startAudioMonitoring();
       } catch (error) {
@@ -861,7 +921,7 @@ export class HotMicManager extends EventEmitter {
     this.dynamicIslandManager?.updateDrawerTranscript('');
 
     if (!this.muted) {
-      this.nativeHelper.setHarvestMode('command');
+      this.setRealtimeHarvestMode();
     }
     this.updateOrangeDot();
   }
@@ -938,7 +998,7 @@ export class HotMicManager extends EventEmitter {
       if (this.audioManager) {
         await this.audioManager.ensurePriorityEnforced();
       }
-      this.nativeHelper.setHarvestMode('command');
+      this.setRealtimeHarvestMode();
       await this.nativeHelper.startRecording();
     } catch (error) {
       log.error('Hot Mic: failed to start recording in listening:', error);
@@ -1060,7 +1120,7 @@ export class HotMicManager extends EventEmitter {
       if (this.audioManager) {
         await this.audioManager.ensurePriorityEnforced();
       }
-      this.nativeHelper.setHarvestMode('command');
+      this.setRealtimeHarvestMode();
       await this.nativeHelper.startRecording();
     } catch (error) {
       log.error('Failed to start recording for Hot Mic:', error);
@@ -1083,8 +1143,65 @@ export class HotMicManager extends EventEmitter {
 
   private getBackgroundFilterThreshold(strength: number): number {
     const normalized = Math.max(0, Math.min(100, strength)) / 100;
-    // Lower values pass through; higher values progressively reject low-amplitude speech.
-    return 0.012 + normalized * 0.105;
+    // Keep low strictness permissive for near-field voices, while allowing
+    // high strictness to clamp far-field noise.
+    return HotMicManager.BACKGROUND_FILTER_THRESHOLD_BASE
+      + normalized * HotMicManager.BACKGROUND_FILTER_THRESHOLD_SPAN;
+  }
+
+  private getBackgroundFilterGate(strength: number): BackgroundFilterGate {
+    const normalized = Math.max(0, Math.min(100, strength)) / 100;
+    const threshold = this.getBackgroundFilterThreshold(strength);
+    return {
+      threshold,
+      ratioThreshold:
+        HotMicManager.BACKGROUND_FILTER_RATIO_BASE
+        + (normalized * HotMicManager.BACKGROUND_FILTER_RATIO_SPAN),
+      minSpeechSamples:
+        HotMicManager.BACKGROUND_FILTER_MIN_SPEECH_BASE
+        + Math.round(normalized * HotMicManager.BACKGROUND_FILTER_MIN_SPEECH_SPAN),
+      peakThreshold:
+        threshold
+        * (
+          HotMicManager.BACKGROUND_FILTER_PEAK_MULTIPLIER_BASE
+          + normalized * HotMicManager.BACKGROUND_FILTER_PEAK_MULTIPLIER_SPAN
+        ),
+      nearFieldPeakThreshold:
+        threshold * HotMicManager.BACKGROUND_FILTER_NEAR_FIELD_MULTIPLIER,
+    };
+  }
+
+  private setRealtimeHarvestMode(): void {
+    const nextMode = this.getPreferredHarvestMode();
+    if (this.currentHarvestMode === nextMode) {
+      return;
+    }
+    this.currentHarvestMode = nextMode;
+    this.nativeHelper.setHarvestMode(nextMode);
+    log.debug(
+      'Hot Mic: harvest mode -> %s (engine=%s, queue=%d)',
+      nextMode,
+      this.getConfiguredTranscriptionEngineForLogs(),
+      this.getTranscriptionPressureDepth()
+    );
+  }
+
+  private getPreferredHarvestMode(): HarvestMode {
+    const queueDepth = this.getTranscriptionPressureDepth();
+    if (queueDepth >= HotMicManager.HARVEST_BACKPRESSURE_QUEUE_THRESHOLD) {
+      return 'dictation';
+    }
+
+    const engine = this.getConfiguredTranscriptionEngineForLogs();
+    if (engine === 'mlx-whisper' && queueDepth > 0) {
+      return 'dictation';
+    }
+
+    return 'command';
+  }
+
+  private getTranscriptionPressureDepth(): number {
+    return this.pendingChunkQueue.length + (this.chunkProcessingInFlight ? 1 : 0);
   }
 
   private resetChunkAudioStats(): void {
@@ -1293,20 +1410,15 @@ export class HotMicManager extends EventEmitter {
     }
 
     const strength = this.getBackgroundFilterStrength();
-    const normalized = strength / 100;
-    const threshold = this.getBackgroundFilterThreshold(strength);
-    const ratioThreshold = 0.04 + (normalized * 0.28);
-    const minSpeechSamples = 2 + Math.round(normalized * 6);
-    const peakThreshold = threshold * (1.2 + normalized * 0.35);
-    const nearFieldPeakThreshold = threshold * 1.65;
+    const gate = this.getBackgroundFilterGate(strength);
 
-    const hasEnoughSpeechFrames = stats.speechSamples >= minSpeechSamples;
-    const hasSustainedSpeech = stats.speechRatio >= ratioThreshold;
-    const hasEnergy = stats.speechAverage >= threshold || stats.speechPeak >= peakThreshold;
-    const hasNearFieldPeak = stats.speechPeak >= nearFieldPeakThreshold;
+    const hasEnoughSpeechFrames = stats.speechSamples >= gate.minSpeechSamples;
+    const hasSustainedSpeech = stats.speechRatio >= gate.ratioThreshold;
+    const hasEnergy = stats.speechAverage >= gate.threshold || stats.speechPeak >= gate.peakThreshold;
+    const hasNearFieldPeak = stats.speechPeak >= gate.nearFieldPeakThreshold;
     const accepted = hasEnergy && (hasSustainedSpeech || (hasEnoughSpeechFrames && hasNearFieldPeak));
     const normalizedAcceptedLevel = accepted
-      ? Math.max(0, (stats.speechAverage - threshold) / Math.max(1e-6, (1 - threshold)))
+      ? Math.max(0, (stats.speechAverage - gate.threshold) / Math.max(1e-6, (1 - gate.threshold)))
       : 0;
 
     return {
@@ -1399,6 +1511,7 @@ export class HotMicManager extends EventEmitter {
     this.stopAudioDiagnosticsTimer();
     this.stopForcedSnapshotLoop();
     this.forcedSnapshotInFlight = false;
+    this.currentHarvestMode = null;
     this.resetChunkAudioStats();
     this.publishBackgroundFilterMeter(0, 0, 0, false);
   }
@@ -1445,6 +1558,7 @@ export class HotMicManager extends EventEmitter {
     }
 
     this.pendingChunkQueue.push({ filePath, audioStats });
+    this.setRealtimeHarvestMode();
     this.emitRuntimeStatus();
     void this.drainChunkQueue();
   }
@@ -1461,6 +1575,7 @@ export class HotMicManager extends EventEmitter {
       }
     } finally {
       this.chunkProcessingInFlight = false;
+      this.setRealtimeHarvestMode();
     }
   }
 
@@ -1480,9 +1595,17 @@ export class HotMicManager extends EventEmitter {
   }
 
   private getForcedSnapshotMaxMs(): number {
-    return this.transcriptBuffer.length === 0
-      ? HotMicManager.FORCE_SNAPSHOT_COMMAND_MS
-      : HotMicManager.FORCE_SNAPSHOT_DICTATION_MS;
+    const pressureDepth = this.getTranscriptionPressureDepth();
+    if (pressureDepth > 0) {
+      return HotMicManager.FORCE_SNAPSHOT_BACKPRESSURE_MS;
+    }
+
+    const engine = this.getConfiguredTranscriptionEngineForLogs();
+    if (engine === 'mlx-whisper') {
+      return HotMicManager.FORCE_SNAPSHOT_MLX_MS;
+    }
+
+    return HotMicManager.FORCE_SNAPSHOT_COMMAND_MS;
   }
 
   private async maybeForceSnapshotForContinuousSpeech(): Promise<void> {
@@ -1591,7 +1714,7 @@ export class HotMicManager extends EventEmitter {
         chunk.audioStats.speechPeak,
       );
       await fs.promises.unlink(wavPath).catch(() => {});
-      this.nativeHelper.setHarvestMode(this.transcriptBuffer.length === 0 ? 'command' : 'dictation');
+      this.setRealtimeHarvestMode();
       return;
     }
 
@@ -1623,7 +1746,7 @@ export class HotMicManager extends EventEmitter {
       logTranscriptPayload('Hot Mic: raw transcript', rawTranscript);
       // Detect snap gesture before stripping parentheticals
       const hasSnap = /\(snap\)/i.test(rawTranscript);
-      const transcript = rawTranscript.replace(/\([^)]*\)/g, '').trim();
+      const transcript = this.sanitizeTranscriptText(rawTranscript);
       const tPost = performance.now();
       log.info(
         'Hot Mic: [timing] transcribe: %dms (engine=%s)',
@@ -1642,18 +1765,19 @@ export class HotMicManager extends EventEmitter {
         await this.toggleAppVisibility();
         this.playSound('paste');
         this.updateOrangeDot();
-        this.nativeHelper.setHarvestMode(this.transcriptBuffer.length === 0 ? 'command' : 'dictation');
+        this.setRealtimeHarvestMode();
         // If the snap was the only content, skip normal processing
-        if (!transcript || this.isHallucination(transcript)) return;
+        if (!transcript || this.getHallucinationReason(transcript)) return;
       }
 
-      if (this.isHallucination(transcript)) {
-        log.info('Hot Mic: skipping hallucinated/empty chunk');
+      const hallucinationReason = this.getHallucinationReason(transcript);
+      if (hallucinationReason) {
+        log.info('Hot Mic: skipping hallucinated/empty chunk (%s)', hallucinationReason);
         // Don't call updateOrangeDot() here — the dot may have been shown
         // preemptively on speech detection, and the buffer discard timer
         // (started on first audio detection) guarantees it will be cleaned up.
         // Hiding immediately would make the island disappear before the 4s window.
-        this.nativeHelper.setHarvestMode(this.transcriptBuffer.length === 0 ? 'command' : 'dictation');
+        this.setRealtimeHarvestMode();
         return;
       }
 
@@ -1669,7 +1793,7 @@ export class HotMicManager extends EventEmitter {
       this.updateOrangeDot();
 
       // After processing, tell Swift which silence duration to use next
-      this.nativeHelper.setHarvestMode(this.transcriptBuffer.length === 0 ? 'command' : 'dictation');
+      this.setRealtimeHarvestMode();
     } catch (error) {
       log.error('Hot Mic chunk error:', error);
       // A transcription failure that wasn't caught by fallback means degraded state.
@@ -1690,7 +1814,16 @@ export class HotMicManager extends EventEmitter {
    * Adds to buffer, checks for submit word and shortcut commands.
    */
   private async processListeningChunk(transcript: string): Promise<void> {
-    const trimmed = this.applyWordSubstitutions(transcript.trim());
+    const sanitizedTranscript = this.sanitizeTranscriptText(transcript);
+    if (!sanitizedTranscript) {
+      return;
+    }
+    const trimmed = this.applyWordSubstitutions(sanitizedTranscript.trim());
+    const hallucinationReason = this.getHallucinationReason(trimmed);
+    if (hallucinationReason) {
+      log.info('Hot Mic: skipping hallucinated/empty chunk (%s)', hallucinationReason);
+      return;
+    }
     const stripped = trimmed.replace(/[.,!?;:]+$/, '').trim();
     const lower = stripped.toLowerCase();
 
@@ -1732,9 +1865,14 @@ export class HotMicManager extends EventEmitter {
       // would sit in the buffer and eventually be discarded by the silence timeout.
       // Cancel-type commands discard the buffer instead (user intent is to abort).
       const isCancel = tailMatch.commandName === 'cancel';
+      const isScrap = tailMatch.commandName === 'scrap';
       if (this.transcriptBuffer.length > 0) {
-        if (isCancel) {
-          log.info('Hot Mic: discarding buffer (%d chunks) for cancel command', this.transcriptBuffer.length);
+        if (isCancel || isScrap) {
+          log.info(
+            'Hot Mic: discarding buffer (%d chunks) for %s command',
+            this.transcriptBuffer.length,
+            isScrap ? 'scrap' : 'cancel'
+          );
           this.clearHotMicDraftUi(true);
         } else {
           const target = this.getTypeTarget();
@@ -1869,6 +2007,7 @@ export class HotMicManager extends EventEmitter {
   private static readonly DEFAULT_SUBMIT_PHRASES = HOT_MIC_DEFAULTS.submitPhrases;
   private static readonly DEFAULT_PASTE_PHRASES = HOT_MIC_DEFAULTS.pastePhrases;
   private static readonly DEFAULT_CANCEL_PHRASES = HOT_MIC_DEFAULTS.cancelPhrases;
+  private static readonly DEFAULT_SCRAP_PHRASES = HOT_MIC_DEFAULTS.scrapPhrases;
   private static readonly DEFAULT_NEW_WINDOW_PHRASES = HOT_MIC_DEFAULTS.newWindowPhrases;
   private static readonly DEFAULT_CLOSE_WINDOW_PHRASES = HOT_MIC_DEFAULTS.closeWindowPhrases;
   private static readonly DEFAULT_MINIMIZE_PHRASES = HOT_MIC_DEFAULTS.minimizePhrases;
@@ -2022,6 +2161,7 @@ export class HotMicManager extends EventEmitter {
         script: 'osascript -e \'tell application "System Events" to keystroke "q" using command down\'' },
       { name: 'cancel', phrases: this.getPhraseList('hotMicCancelWords', HotMicManager.DEFAULT_CANCEL_PHRASES),
         script: 'osascript -e \'tell application "System Events" to keystroke "c" using control down\'' },
+      { name: 'scrap', phrases: this.getPhraseList('hotMicScrapWords', HotMicManager.DEFAULT_SCRAP_PHRASES) },
       { name: 'start claude', phrases: this.getPhraseList('hotMicRunClaudeWords', HotMicManager.DEFAULT_RUN_CLAUDE_PHRASES),
         action: async () => {
           const target = this.getTypeTarget();
@@ -2077,7 +2217,11 @@ export class HotMicManager extends EventEmitter {
     const stripped = text.replace(/[.,!?;:]+$/, '').trim();
     const words = stripped.split(/\s+/);
 
-    log.debug('Hot Mic: tail-match input="%s" (%d commands)', text, commandSets.length);
+    log.debug(
+      'Hot Mic: tail-match input="%s" (%d commands)',
+      this.summarizeForLog(text),
+      commandSets.length
+    );
 
     for (const cmd of commandSets) {
       for (const phrase of cmd.phrases) {
@@ -2479,6 +2623,38 @@ export class HotMicManager extends EventEmitter {
   }
 
   /**
+   * Remove Whisper/Qwen metadata-like artifacts while preserving Figure refs.
+   */
+  private sanitizeTranscriptText(text: string): string {
+    const trimmedText = text ? text.trim() : '';
+    if (!trimmedText) return '';
+
+    const startedWithArtifact = /^\[(?!Figure\s+[A-Za-z0-9]+\])[^\]]+\]\s*/i.test(trimmedText);
+
+    let cleanedText = trimmedText
+      .replace(/\s*\[(?!Figure\s+[A-Za-z0-9]+\])[^\]]+\]\s*/g, ' ')
+      .replace(/\([^)]*\)/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    // When a chunk starts with a metadata artifact (e.g. "[take vo] vo ..."),
+    // drop a leading short orphan fragment that often survives bracket stripping.
+    if (startedWithArtifact && cleanedText) {
+      const words = cleanedText.split(/\s+/).filter(Boolean);
+      if (
+        words.length > 0
+        && words[0].length <= 2
+        && !['a', 'i'].includes(words[0].toLowerCase())
+      ) {
+        words.shift();
+        cleanedText = words.join(' ').trim();
+      }
+    }
+
+    return cleanedText;
+  }
+
+  /**
    * Apply user-configured word substitutions (e.g., "clod" → "claude").
    * Uses word boundaries to avoid partial matches.
    */
@@ -2560,6 +2736,12 @@ export class HotMicManager extends EventEmitter {
 
   private normalizeBufferText(text: string): string {
     return text.trim().toLowerCase().replace(/\.+$/, '').trim();
+  }
+
+  private summarizeForLog(text: string, maxChars: number = 180): string {
+    if (!text) return '';
+    if (text.length <= maxChars) return text;
+    return `${text.slice(0, maxChars)}…(${text.length} chars)`;
   }
 
   private pushNormalizedTextToBuffer(text: string): string {
@@ -2712,15 +2894,7 @@ export class HotMicManager extends EventEmitter {
     if (words.length < HotMicManager.DRAWER_PREVIEW_MIN_WORDS) {
       return '';
     }
-
-    const previewCapacity = HotMicManager.DRAWER_PREVIEW_HEAD_WORDS + HotMicManager.DRAWER_PREVIEW_TAIL_WORDS;
-    if (words.length <= previewCapacity) {
-      return combined;
-    }
-
-    const head = words.slice(0, HotMicManager.DRAWER_PREVIEW_HEAD_WORDS).join(' ');
-    const tail = words.slice(-HotMicManager.DRAWER_PREVIEW_TAIL_WORDS).join(' ');
-    return `${head} ... ${tail}`;
+    return combined;
   }
 
   private syncDrawerPreview(): void {
@@ -2751,7 +2925,11 @@ export class HotMicManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   private async processTranscriptDirectPaste(transcript: string): Promise<void> {
-    const trimmed = this.applyWordSubstitutions(transcript.trim());
+    const sanitizedTranscript = this.sanitizeTranscriptText(transcript);
+    if (!sanitizedTranscript) {
+      return;
+    }
+    const trimmed = this.applyWordSubstitutions(sanitizedTranscript.trim());
     const stripped = trimmed.replace(/[.,!?;:]+$/, '').trim();
     const lower = stripped.toLowerCase();
 
@@ -2937,16 +3115,142 @@ export class HotMicManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   private isHallucination(text: string): boolean {
-    if (!text || !text.trim()) return true;
+    return this.getHallucinationReason(text) !== null;
+  }
 
-    const words = text.trim().split(/\s+/);
-    if (words.length < 1) return true;
+  private getHallucinationReason(text: string): string | null {
+    const trimmed = text?.trim() ?? '';
+    if (!trimmed) return 'empty';
 
     for (const pattern of this.HALLUCINATION_PATTERNS) {
-      if (pattern.test(text.trim())) return true;
+      if (pattern.test(trimmed)) return 'pattern';
+    }
+
+    if (this.isRepetitionArtifact(trimmed)) {
+      return 'repetition-artifact';
+    }
+
+    return null;
+  }
+
+  private isRepetitionArtifact(text: string): boolean {
+    const normalized = this.normalizeForRepetition(text);
+    if (!normalized) return false;
+
+    const collapsed = normalized.replace(/\s+/g, '');
+    if (this.isCollapsedRepetitionArtifact(collapsed)) {
+      return true;
+    }
+
+    const words = normalized.split(' ').filter(Boolean);
+    if (this.isShortSingleTokenBurst(words)) {
+      return true;
+    }
+
+    if (words.length < HotMicManager.REPETITION_ANALYSIS_MIN_WORDS) {
+      return false;
+    }
+
+    if (this.hasConsecutiveWordRun(words, HotMicManager.REPETITION_CONSECUTIVE_RUN_MIN)) {
+      return true;
+    }
+
+    return this.hasDominantWordDistribution(words);
+  }
+
+  private normalizeForRepetition(text: string): string {
+    return text
+      .toLowerCase()
+      .replace(/[^\w\s']/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  private isCollapsedRepetitionArtifact(collapsed: string): boolean {
+    if (collapsed.length < HotMicManager.REPETITION_COLLAPSED_MIN_CHARS) {
+      return false;
+    }
+
+    const singleCharPattern = new RegExp(`^(.)\\1{${HotMicManager.REPETITION_SINGLE_CHAR_MIN_RUN - 1},}$`);
+    if (singleCharPattern.test(collapsed)) {
+      return true;
+    }
+
+    for (let unit = HotMicManager.REPETITION_UNIT_MIN; unit <= HotMicManager.REPETITION_UNIT_MAX; unit++) {
+      if (this.matchesRepeatedUnit(collapsed, unit, HotMicManager.REPETITION_UNIT_MIN_REPEATS)) {
+        return true;
+      }
     }
 
     return false;
+  }
+
+  private matchesRepeatedUnit(collapsed: string, unitSize: number, minRepeats: number): boolean {
+    const repeats = Math.floor(collapsed.length / unitSize);
+    if (repeats < minRepeats) return false;
+
+    const pattern = collapsed.slice(0, unitSize);
+    for (let i = 1; i < repeats; i++) {
+      if (collapsed.slice(i * unitSize, (i + 1) * unitSize) !== pattern) {
+        return false;
+      }
+    }
+
+    const remainder = collapsed.length % unitSize;
+    if (remainder === 0) return true;
+
+    const remainderChunk = collapsed.slice(repeats * unitSize);
+    return pattern.startsWith(remainderChunk);
+  }
+
+  private isShortSingleTokenBurst(words: string[]): boolean {
+    if (words.length < HotMicManager.REPETITION_SHORT_BURST_MIN_WORDS) {
+      return false;
+    }
+
+    const uniqueWords = new Set(words);
+    if (uniqueWords.size !== 1) {
+      return false;
+    }
+
+    const onlyWord = words[0] ?? '';
+    return words.length >= HotMicManager.REPETITION_SHORT_BURST_ALWAYS_MIN_WORDS
+      || onlyWord.length >= HotMicManager.REPETITION_SHORT_BURST_LONG_WORD_LEN;
+  }
+
+  private hasConsecutiveWordRun(words: string[], minRun: number): boolean {
+    let maxRun = 1;
+    let run = 1;
+    for (let i = 1; i < words.length; i++) {
+      if (words[i] === words[i - 1]) {
+        run += 1;
+        if (run > maxRun) {
+          maxRun = run;
+        }
+      } else {
+        run = 1;
+      }
+    }
+    return maxRun >= minRun;
+  }
+
+  private hasDominantWordDistribution(words: string[]): boolean {
+    const freq = new Map<string, number>();
+    for (const word of words) {
+      freq.set(word, (freq.get(word) ?? 0) + 1);
+    }
+
+    let maxFreq = 0;
+    for (const count of freq.values()) {
+      if (count > maxFreq) {
+        maxFreq = count;
+      }
+    }
+
+    const uniqueRatio = freq.size / words.length;
+    const dominantRatio = maxFreq / words.length;
+    return uniqueRatio <= HotMicManager.REPETITION_UNIQUE_RATIO_MAX
+      && dominantRatio >= HotMicManager.REPETITION_DOMINANT_RATIO_MIN;
   }
 
   // ---------------------------------------------------------------------------
