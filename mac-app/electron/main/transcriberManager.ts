@@ -20,6 +20,8 @@ import { AudioManager } from './audioManager';
 import { CursorStatusManager } from './cursorStatusManager';
 import { CommandsManager } from './commandsManager';
 import { MESSAGES } from './messages';
+import { StdioJsonServer } from './stdioJsonServer';
+import type { TranscriptionEngine, HotMicEngine } from './types/transcribe';
 import * as plist from 'plist';
 import { createLogger } from './logger';
 
@@ -34,7 +36,6 @@ const SAFE_FALLBACK_TRANSCRIPTION_HOTKEY = 'Option+Shift+Space';
  */
 export type TranscriptionStatus = 'idle' | 'silentStacking' | 'recording' | 'transcribing';
 
-type QwenServerResponse = { ok: boolean; text?: string; error?: string };
 type TranscribeWithEngineOptions = {
   allowWhisperFallback?: boolean;
   whisperModelOverride?: ModelSize;
@@ -69,19 +70,14 @@ export class TranscriberManager extends EventEmitter {
   private secondaryHotkey: string | null = null; // Optional secondary hotkey for transcription
   private registeredSecondaryHotkey: string | null = null; // Track currently registered secondary hotkey
   private whisperProcess: ChildProcess | null = null;
-  private qwenProcess: ChildProcess | null = null;
-  private qwenReady: boolean = false;
-  private qwenReadyPromise: Promise<void> | null = null;
-  private qwenPendingResolve: ((response: QwenServerResponse) => void) | null = null;
-  private qwenCommandChain: Promise<void> = Promise.resolve();
-  private qwenStarting: boolean = false;
-  private qwenLifecycleGeneration: number = 0;
-  private qwenDisabledReason: string | null = null;
+
+  // Persistent JSON server for Qwen and MLX Whisper engines.
+  // Both use the same stdin/stdout JSON protocol via StdioJsonServer.
+  private qwenServer: StdioJsonServer | null = null;
+  private mlxWhisperServer: StdioJsonServer | null = null;
   private qwenFallbackLoggedForDisabledReason: boolean = false;
 
-  // Persistent whisper-server state. Keeps the Whisper model loaded in memory
-  // and serves transcription requests over a local HTTP endpoint, eliminating
-  // the ~500ms model-load overhead that whisper-cli pays on every invocation.
+  // Persistent whisper-server (HTTP) state for whisper.cpp.
   private whisperServerProcess: ChildProcess | null = null;
   private whisperServerPort: number = 0;
   private whisperServerReady: boolean = false;
@@ -89,16 +85,6 @@ export class TranscriberManager extends EventEmitter {
   private whisperServerLifecycleGeneration: number = 0;
   private whisperServerDisabledReason: string | null = null;
   private whisperServerModelPath: string | null = null;
-
-  // MLX Whisper persistent server state. Same stdin/stdout JSON protocol as Qwen,
-  // but runs Whisper large-v3-turbo natively on MLX for Apple Silicon.
-  private mlxWhisperProcess: ChildProcess | null = null;
-  private mlxWhisperReady: boolean = false;
-  private mlxWhisperReadyPromise: Promise<void> | null = null;
-  private mlxWhisperPendingResolve: ((response: QwenServerResponse) => void) | null = null;
-  private mlxWhisperCommandChain: Promise<void> = Promise.resolve();
-  private mlxWhisperLifecycleGeneration: number = 0;
-  private mlxWhisperDisabledReason: string | null = null;
 
   private abandonHotkeyRegistered: boolean = false;
   private registeredAbandonHotkey: string = 'Escape'; // Track currently registered abandon hotkey
@@ -1747,242 +1733,32 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
-   * Start the persistent Qwen server process.
-   * Spawns the Python script with --server flag and waits for the ready signal.
+   * Get or create the Qwen StdioJsonServer instance.
+   * Lazily initialized because paths depend on runtime state.
    */
-  private startQwenServer(): Promise<void> {
-    if (this.qwenDisabledReason) {
-      return Promise.reject(new Error(this.qwenDisabledReason));
-    }
-
-    if (this.qwenReady && this.qwenProcess) {
-      return Promise.resolve();
-    }
-    if (this.qwenReadyPromise) {
-      return this.qwenReadyPromise;
-    }
-
-    this.qwenStarting = true;
-    const startupGeneration = this.qwenLifecycleGeneration;
-    const pythonPath = this.getQwenPythonPath();
-    const scriptPath = this.getQwenScriptPath();
-
-    this.qwenReadyPromise = new Promise<void>((resolve, reject) => {
-      const startupInvalidated = (): boolean => startupGeneration !== this.qwenLifecycleGeneration;
-
-      const launch = async () => {
-        try {
-          await this.ensureQwenPythonCompatible(pythonPath);
-        } catch (error) {
-          if (startupInvalidated()) {
-            reject(new Error('Qwen startup cancelled'));
-            return;
-          }
-          this.qwenProcess = null;
-          this.qwenReady = false;
-          this.qwenStarting = false;
-          this.qwenReadyPromise = null;
-          reject(error as Error);
-          return;
-        }
-
-        if (startupInvalidated()) {
-          reject(new Error('Qwen startup cancelled'));
-          return;
-        }
-
-        const proc = spawn(pythonPath, [scriptPath, '--server'], {
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-
-        if (startupInvalidated()) {
-          proc.kill('SIGTERM');
-          reject(new Error('Qwen startup cancelled'));
-          return;
-        }
-
-        this.qwenProcess = proc;
-        let buffer = '';
-
-        const onData = (data: Buffer) => {
-          buffer += data.toString();
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            try {
-              const msg = JSON.parse(line);
-              if (msg.ready) {
-                if (startupInvalidated()) {
-                  proc.kill('SIGTERM');
-                  reject(new Error('Qwen startup cancelled'));
-                  return;
-                }
-                // Server is ready — model loaded
-                this.qwenReady = true;
-                this.qwenStarting = false;
-                // Switch from startup handler to normal line handler
-                proc.stdout?.removeListener('data', onData);
-                this.setupQwenLineHandler(proc, buffer);
-                buffer = '';
-                log.info('Qwen server ready');
-                resolve();
-                return;
-              }
-            } catch {
-              // Not JSON, ignore during startup
-            }
-          }
-        };
-
-        proc.stdout?.on('data', onData);
-
-        proc.stderr?.on('data', (data: Buffer) => {
-          log.info('[Qwen stderr] %s', data.toString().trim());
-        });
-
-        proc.on('error', (error) => {
-          if (startupInvalidated()) {
-            reject(new Error('Qwen startup cancelled'));
-            return;
-          }
-          this.qwenProcess = null;
-          this.qwenReady = false;
-          this.qwenStarting = false;
-          this.qwenReadyPromise = null;
-          reject(new Error(`Failed to start qwen server: ${error.message}. Run Qwen setup from Settings > Transcription.`));
-        });
-
-        proc.on('close', (code) => {
-          if (startupInvalidated()) {
-            reject(new Error('Qwen startup cancelled'));
-            return;
-          }
-
-          const wasReady = this.qwenReady;
-          this.qwenProcess = null;
-          this.qwenReady = false;
-          this.qwenStarting = false;
-          this.qwenReadyPromise = null;
-
-          // Reject any pending transcription request
-          if (this.qwenPendingResolve) {
-            this.qwenPendingResolve({ ok: false, error: `Qwen server exited with code ${code}` });
-            this.qwenPendingResolve = null;
-          }
-
-          if (!wasReady) {
-            const hint = code === 134
-              ? ' (MLX runtime crashed; rerun Qwen setup from Settings to rebuild the environment)'
-              : '';
-            reject(new Error(`Qwen server exited during startup with code ${code}${hint}`));
-          } else {
-            log.warn('Qwen server process exited (code %d), will restart on next transcription', code);
-          }
-        });
-      };
-
-      void launch();
-    });
-
-    return this.qwenReadyPromise;
-  }
-
-  /**
-   * Set up the stdout line handler for the Qwen server process after startup.
-   * Parses JSON responses and resolves pending transcription requests.
-   */
-  private setupQwenLineHandler(proc: ChildProcess, initialBuffer: string): void {
-    let buffer = initialBuffer;
-
-    proc.stdout?.on('data', (data: Buffer) => {
-      buffer += data.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const msg = JSON.parse(line);
-          if (this.qwenPendingResolve) {
-            this.qwenPendingResolve(msg);
-            this.qwenPendingResolve = null;
-          }
-        } catch {
-          log.warn('[Qwen] Non-JSON stdout: %s', line);
-        }
-      }
-    });
-  }
-
-  /**
-   * Kill the Qwen server. Called on suspend/sleep so the process doesn't
-   * freeze and hang for 120s on wake. The next transcription request will
-   * restart it automatically.
-   */
-  stopQwenServer(): void {
-    this.qwenLifecycleGeneration += 1;
-    if (this.qwenPendingResolve) {
-      this.qwenPendingResolve({ ok: false, error: 'Qwen server stopped' });
-      this.qwenPendingResolve = null;
-    }
-    if (this.qwenProcess) {
-      this.qwenProcess.kill('SIGTERM');
-      this.qwenProcess = null;
-    }
-    this.qwenReady = false;
-    this.qwenStarting = false;
-    this.qwenReadyPromise = null;
-  }
-
-  /**
-   * Send a command to the Qwen server and wait for the response.
-   * Times out after 120 seconds to avoid hanging indefinitely on bad audio.
-   */
-  private sendQwenCommand(cmd: Record<string, unknown>): Promise<QwenServerResponse> {
-    return this.enqueueQwenCommand(() => this.sendQwenCommandInternal(cmd));
-  }
-
-  /**
-   * Serialize Qwen requests because server responses are single-line and routed
-   * through one pending resolver.
-   */
-  private enqueueQwenCommand<T>(run: () => Promise<T>): Promise<T> {
-    const queued = this.qwenCommandChain.then(run, run);
-    this.qwenCommandChain = queued.then(() => undefined, () => undefined);
-    return queued;
-  }
-
-  private sendQwenCommandInternal(cmd: Record<string, unknown>): Promise<QwenServerResponse> {
-    return new Promise((resolve, reject) => {
-      if (!this.qwenProcess || !this.qwenReady) {
-        reject(new Error('Qwen server not running'));
-        return;
-      }
-      if (this.qwenPendingResolve) {
-        reject(new Error('Qwen server already has an in-flight command'));
-        return;
-      }
-
-      const timeout = setTimeout(() => {
-        this.qwenPendingResolve = null;
-        reject(new Error('Qwen server timed out (120s)'));
-      }, 120_000);
-
-      this.qwenPendingResolve = (response) => {
-        clearTimeout(timeout);
-        resolve(response);
-      };
-      const line = JSON.stringify(cmd) + '\n';
-      this.qwenProcess.stdin?.write(line, (err) => {
-        if (err) {
-          clearTimeout(timeout);
-          this.qwenPendingResolve = null;
-          reject(new Error(`Failed to write to Qwen server: ${err.message}`));
-        }
+  private getOrCreateQwenServer(): StdioJsonServer {
+    if (!this.qwenServer) {
+      const pythonPath = this.getQwenPythonPath();
+      this.qwenServer = new StdioJsonServer({
+        name: 'Qwen',
+        command: pythonPath,
+        args: [this.getQwenScriptPath(), '--server'],
+        preStart: () => this.ensureQwenPythonCompatible(pythonPath),
       });
-    });
+    }
+    return this.qwenServer;
+  }
+
+  private startQwenServer(): Promise<void> {
+    return this.getOrCreateQwenServer().start();
+  }
+
+  stopQwenServer(): void {
+    this.qwenServer?.stop();
+  }
+
+  private sendQwenCommand(cmd: Record<string, unknown>) {
+    return this.getOrCreateQwenServer().send(cmd);
   }
 
   /**
@@ -2026,9 +1802,9 @@ export class TranscriberManager extends EventEmitter {
         message.includes('MLX runtime crashed');
       const shouldRetry = !isFatalQwenRuntimeError;
       if (!shouldRetry) {
-        if (!this.qwenDisabledReason) {
-          this.qwenDisabledReason = message || 'Qwen runtime is unavailable in this session';
-          log.warn('Disabling Qwen for this app session after fatal runtime error: %s', this.qwenDisabledReason);
+        const server = this.getOrCreateQwenServer();
+        if (!server.disabledReason) {
+          server.disable(message || 'Qwen runtime is unavailable in this session');
         }
         throw error;
       }
@@ -2046,7 +1822,7 @@ export class TranscriberManager extends EventEmitter {
    */
   private async transcribeWithEngineFallback(
     wavPath: string,
-    engine: 'whisper' | 'qwen' | 'mlx-whisper',
+    engine: TranscriptionEngine,
     options: TranscribeWithEngineOptions = {}
   ): Promise<string> {
     const allowWhisperFallback = options.allowWhisperFallback ?? true;
@@ -2099,7 +1875,8 @@ export class TranscriberManager extends EventEmitter {
       }
 
       const qwenMessage = (qwenError as Error).message;
-      const isDisabledReason = this.qwenDisabledReason !== null && qwenMessage === this.qwenDisabledReason;
+      const qwenDisabled = this.qwenServer?.disabledReason ?? null;
+      const isDisabledReason = qwenDisabled !== null && qwenMessage === qwenDisabled;
       if (!isDisabledReason || !this.qwenFallbackLoggedForDisabledReason) {
         log.warn(
           'Qwen transcription failed, falling back to Whisper: %s',
@@ -2462,41 +2239,23 @@ export class TranscriberManager extends EventEmitter {
   }
 
   // ---------------------------------------------------------------------------
-  // MLX Whisper persistent server management
-  //
-  // Identical stdin/stdout JSON protocol to the Qwen server, but runs Whisper
-  // large-v3-turbo natively on MLX. Gives Whisper-quality transcription at
-  // MLX-native speed (~2x faster than whisper.cpp).
+  // MLX Whisper server — uses StdioJsonServer (same as Qwen)
   // ---------------------------------------------------------------------------
 
-  /**
-   * Get the Python path for the mlx-whisper venv.
-   */
   private getMlxWhisperPythonPath(): string {
     if (app.isPackaged) {
-      const userDataPath = app.getPath('userData');
-      return path.join(userDataPath, 'build-mlx-whisper', 'venv', 'bin', 'python');
-    } else {
-      const repoRoot = path.resolve(__dirname, '../../..');
-      return path.join(repoRoot, 'build-mlx-whisper', 'venv', 'bin', 'python');
+      return path.join(app.getPath('userData'), 'build-mlx-whisper', 'venv', 'bin', 'python');
     }
+    return path.join(path.resolve(__dirname, '../../..'), 'build-mlx-whisper', 'venv', 'bin', 'python');
   }
 
-  /**
-   * Get the path to the mlx-whisper-transcribe.py script.
-   */
   private getMlxWhisperScriptPath(): string {
     if (app.isPackaged) {
       return path.join(process.resourcesPath, 'scripts', 'mlx-whisper-transcribe.py');
-    } else {
-      const repoRoot = path.resolve(__dirname, '../../..');
-      return path.join(repoRoot, 'scripts', 'mlx-whisper-transcribe.py');
     }
+    return path.join(path.resolve(__dirname, '../../..'), 'scripts', 'mlx-whisper-transcribe.py');
   }
 
-  /**
-   * Check whether mlx-whisper is installed (venv + script exist).
-   */
   isMlxWhisperInstalled(): boolean {
     try {
       return fs.existsSync(this.getMlxWhisperPythonPath()) &&
@@ -2506,183 +2265,27 @@ export class TranscriberManager extends EventEmitter {
     }
   }
 
-  /**
-   * Start the persistent MLX Whisper server process.
-   * Same stdin/stdout JSON protocol as Qwen.
-   */
-  private startMlxWhisperServer(): Promise<void> {
-    if (this.mlxWhisperDisabledReason) {
-      return Promise.reject(new Error(this.mlxWhisperDisabledReason));
+  private getOrCreateMlxWhisperServer(): StdioJsonServer {
+    if (!this.mlxWhisperServer) {
+      this.mlxWhisperServer = new StdioJsonServer({
+        name: 'MLX Whisper',
+        command: this.getMlxWhisperPythonPath(),
+        args: [this.getMlxWhisperScriptPath(), '--server'],
+      });
     }
-
-    if (this.mlxWhisperReady && this.mlxWhisperProcess) {
-      return Promise.resolve();
-    }
-    if (this.mlxWhisperReadyPromise) {
-      return this.mlxWhisperReadyPromise;
-    }
-
-    const startupGeneration = ++this.mlxWhisperLifecycleGeneration;
-    const pythonPath = this.getMlxWhisperPythonPath();
-    const scriptPath = this.getMlxWhisperScriptPath();
-
-    this.mlxWhisperReadyPromise = new Promise<void>((resolve, reject) => {
-      const startupInvalidated = (): boolean => startupGeneration !== this.mlxWhisperLifecycleGeneration;
-
-      const proc = spawn(pythonPath, [scriptPath, '--server'], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-
-      if (startupInvalidated()) {
-        proc.kill('SIGTERM');
-        this.mlxWhisperReadyPromise = null;
-        reject(new Error('MLX Whisper startup cancelled'));
-        return;
-      }
-
-      this.mlxWhisperProcess = proc;
-      let buffer = '';
-
-      const onData = (data: Buffer) => {
-        buffer += data.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const msg = JSON.parse(line);
-            if (msg.ready) {
-              if (startupInvalidated()) {
-                proc.kill('SIGTERM');
-                reject(new Error('MLX Whisper startup cancelled'));
-                return;
-              }
-              this.mlxWhisperReady = true;
-              proc.stdout?.removeListener('data', onData);
-              this.setupMlxWhisperLineHandler(proc, buffer);
-              buffer = '';
-              log.info('MLX Whisper server ready');
-              resolve();
-              return;
-            }
-          } catch {
-            // Not JSON yet during startup
-          }
-        }
-      };
-
-      proc.stdout?.on('data', onData);
-      proc.stderr?.on('data', (data: Buffer) => {
-        log.info('[MLX Whisper stderr] %s', data.toString().trim());
-      });
-
-      proc.on('error', (error) => {
-        if (startupInvalidated()) { reject(new Error('MLX Whisper startup cancelled')); return; }
-        this.mlxWhisperProcess = null;
-        this.mlxWhisperReady = false;
-        this.mlxWhisperReadyPromise = null;
-        reject(new Error(`Failed to start MLX Whisper server: ${error.message}`));
-      });
-
-      proc.on('close', (code) => {
-        if (startupInvalidated()) { reject(new Error('MLX Whisper startup cancelled')); return; }
-        const wasReady = this.mlxWhisperReady;
-        this.mlxWhisperProcess = null;
-        this.mlxWhisperReady = false;
-        this.mlxWhisperReadyPromise = null;
-
-        if (this.mlxWhisperPendingResolve) {
-          this.mlxWhisperPendingResolve({ ok: false, error: `MLX Whisper server exited with code ${code}` });
-          this.mlxWhisperPendingResolve = null;
-        }
-
-        if (!wasReady) {
-          reject(new Error(`MLX Whisper server exited during startup with code ${code}`));
-        } else {
-          log.warn('MLX Whisper server exited (code %d), will restart on next transcription', code);
-        }
-      });
-    });
-
-    return this.mlxWhisperReadyPromise;
+    return this.mlxWhisperServer;
   }
 
-  private setupMlxWhisperLineHandler(proc: ChildProcess, initialBuffer: string): void {
-    let buffer = initialBuffer;
-    proc.stdout?.on('data', (data: Buffer) => {
-      buffer += data.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const msg = JSON.parse(line);
-          if (this.mlxWhisperPendingResolve) {
-            this.mlxWhisperPendingResolve(msg);
-            this.mlxWhisperPendingResolve = null;
-          }
-        } catch {
-          log.warn('[MLX Whisper] Non-JSON stdout: %s', line);
-        }
-      }
-    });
+  private startMlxWhisperServer(): Promise<void> {
+    return this.getOrCreateMlxWhisperServer().start();
   }
 
   stopMlxWhisperServer(): void {
-    this.mlxWhisperLifecycleGeneration += 1;
-    if (this.mlxWhisperPendingResolve) {
-      this.mlxWhisperPendingResolve({ ok: false, error: 'MLX Whisper server stopped' });
-      this.mlxWhisperPendingResolve = null;
-    }
-    if (this.mlxWhisperProcess) {
-      this.mlxWhisperProcess.kill('SIGTERM');
-      this.mlxWhisperProcess = null;
-    }
-    this.mlxWhisperReady = false;
-    this.mlxWhisperReadyPromise = null;
+    this.mlxWhisperServer?.stop();
   }
 
-  private sendMlxWhisperCommand(cmd: Record<string, unknown>): Promise<QwenServerResponse> {
-    return this.enqueueMlxWhisperCommand(() => this.sendMlxWhisperCommandInternal(cmd));
-  }
-
-  private enqueueMlxWhisperCommand<T>(run: () => Promise<T>): Promise<T> {
-    const queued = this.mlxWhisperCommandChain.then(run, run);
-    this.mlxWhisperCommandChain = queued.then(() => undefined, () => undefined);
-    return queued;
-  }
-
-  private sendMlxWhisperCommandInternal(cmd: Record<string, unknown>): Promise<QwenServerResponse> {
-    return new Promise((resolve, reject) => {
-      if (!this.mlxWhisperProcess || !this.mlxWhisperReady) {
-        reject(new Error('MLX Whisper server not running'));
-        return;
-      }
-      if (this.mlxWhisperPendingResolve) {
-        reject(new Error('MLX Whisper server already has an in-flight command'));
-        return;
-      }
-
-      const timeout = setTimeout(() => {
-        this.mlxWhisperPendingResolve = null;
-        reject(new Error('MLX Whisper server timed out (120s)'));
-      }, 120_000);
-
-      this.mlxWhisperPendingResolve = (response) => {
-        clearTimeout(timeout);
-        resolve(response);
-      };
-      const line = JSON.stringify(cmd) + '\n';
-      this.mlxWhisperProcess.stdin?.write(line, (err) => {
-        if (err) {
-          clearTimeout(timeout);
-          this.mlxWhisperPendingResolve = null;
-          reject(new Error(`Failed to write to MLX Whisper server: ${err.message}`));
-        }
-      });
-    });
+  private sendMlxWhisperCommand(cmd: Record<string, unknown>) {
+    return this.getOrCreateMlxWhisperServer().send(cmd);
   }
 
   /**
@@ -2719,9 +2322,9 @@ export class TranscriberManager extends EventEmitter {
       const isFatal = message.includes('not installed') || message.includes('ImportError');
 
       if (isFatal) {
-        if (!this.mlxWhisperDisabledReason) {
-          this.mlxWhisperDisabledReason = message;
-          log.warn('Disabling MLX Whisper for this session: %s', message);
+        const server = this.getOrCreateMlxWhisperServer();
+        if (!server.disabledReason) {
+          server.disable(message);
         }
         throw error;
       }
@@ -2987,7 +2590,7 @@ export class TranscriberManager extends EventEmitter {
     }
   }
 
-  private resolveHotMicTranscriptionEngine(): 'whisper' | 'qwen' | 'mlx-whisper' {
+  private resolveHotMicTranscriptionEngine(): TranscriptionEngine {
     const override = this.preferences.getPreference('hotMicTranscriptionEngine');
     if (override === 'whisper' || override === 'qwen' || override === 'mlx-whisper') {
       return override;
@@ -3056,7 +2659,7 @@ export class TranscriberManager extends EventEmitter {
    * Whether Qwen is permanently disabled for this session (fatal runtime error).
    */
   isQwenDisabledForSession(): boolean {
-    return this.qwenDisabledReason !== null;
+    return this.qwenServer?.disabledReason !== null && this.qwenServer?.disabledReason !== undefined;
   }
 
   lastHotMicUsedWhisperFallback: boolean = false;
