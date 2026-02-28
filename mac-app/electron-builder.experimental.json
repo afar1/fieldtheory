@@ -32,6 +32,10 @@
         "to": "whisper-cli"
       },
       {
+        "from": "../../build-whisper/bin/whisper-server",
+        "to": "whisper-server"
+      },
+      {
         "from": "scripts/qwen-transcribe.py",
         "to": "scripts/qwen-transcribe.py"
       },
