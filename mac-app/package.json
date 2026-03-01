@@ -120,6 +120,10 @@
           "to": "whisper-server"
         },
         {
+          "from": "scripts/council.sh",
+          "to": "council.sh"
+        },
+        {
           "from": "electron/main/prompts",
           "to": "prompts"
         },

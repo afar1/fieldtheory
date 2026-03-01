@@ -168,6 +168,8 @@ export class TranscriberManager extends EventEmitter {
   private standardChunkCommandTriggered: boolean = false;
   private pendingImmediateSquaresAction: string | null = null;
   private pendingImmediateSquaresText: string = '';
+  private static readonly STANDARD_MAX_CHUNK_QUEUE_DEPTH = 8;
+  private static readonly STANDARD_HARVEST_BACKPRESSURE_QUEUE_THRESHOLD = 2;
 
   constructor(nativeHelper: NativeHelper, preferences: PreferencesManager, clipboardManager?: ClipboardManager, quotaManager?: QuotaManager, audioManager?: AudioManager, cursorStatusManager?: CursorStatusManager, commandsManager?: CommandsManager) {
     super();
@@ -673,7 +675,7 @@ export class TranscriberManager extends EventEmitter {
 
       this.resetStandardRealtimeSession();
       this.attachStandardChunkListener();
-      this.nativeHelper.setHarvestMode('command');
+      this.setStandardRealtimeHarvestMode();
       await this.nativeHelper.startRecording();
       log.info('Recording started');
     } catch (error) {
@@ -797,7 +799,7 @@ export class TranscriberManager extends EventEmitter {
 
       this.resetStandardRealtimeSession();
       this.attachStandardChunkListener();
-      this.nativeHelper.setHarvestMode('command');
+      this.setStandardRealtimeHarvestMode();
       await this.nativeHelper.startRecording();
       log.info('Recording started from silent stack (keeping %d existing figures)', this.screenshotMetadata.length);
     } catch (error) {
@@ -835,7 +837,18 @@ export class TranscriberManager extends EventEmitter {
       const readyAtMs = this.recordingStartTime > 0
         ? Math.max(0, Date.now() - this.recordingStartTime)
         : 0;
+      while (this.standardPendingChunkQueue.length >= TranscriberManager.STANDARD_MAX_CHUNK_QUEUE_DEPTH) {
+        const dropped = this.standardPendingChunkQueue.shift();
+        if (!dropped) break;
+        log.warn(
+          'Standard recording chunk queue full (%d), dropping oldest chunk: %s',
+          TranscriberManager.STANDARD_MAX_CHUNK_QUEUE_DEPTH,
+          dropped.filePath
+        );
+        void fs.promises.unlink(dropped.filePath).catch(() => {});
+      }
       this.standardPendingChunkQueue.push({ filePath, readyAtMs });
+      this.setStandardRealtimeHarvestMode();
       void this.processStandardChunkQueue();
     };
     this.nativeHelper.on('recordingChunkReady', this.standardChunkReadyListener);
@@ -847,6 +860,38 @@ export class TranscriberManager extends EventEmitter {
     this.standardChunkReadyListener = null;
     this.standardPendingChunkQueue = [];
     this.standardChunkProcessingInFlight = false;
+    this.nativeHelper.setHarvestMode('off');
+  }
+
+  private getStandardRealtimePressureDepth(): number {
+    const queueDepth = Array.isArray(this.standardPendingChunkQueue)
+      ? this.standardPendingChunkQueue.length
+      : 0;
+    return queueDepth + (this.standardChunkProcessingInFlight ? 1 : 0);
+  }
+
+  private getStandardRealtimeHarvestMode(): 'command' | 'dictation' {
+    const queueDepth = this.getStandardRealtimePressureDepth();
+    if (queueDepth === 0) {
+      return 'dictation';
+    }
+
+    const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+    if (engine === 'mlx-whisper' && queueDepth > 0) {
+      return 'command';
+    }
+
+    if (queueDepth >= TranscriberManager.STANDARD_HARVEST_BACKPRESSURE_QUEUE_THRESHOLD) {
+      return 'command';
+    }
+
+    return 'dictation';
+  }
+
+  private setStandardRealtimeHarvestMode(): void {
+    if (this.status !== 'recording') return;
+    const mode = this.getStandardRealtimeHarvestMode();
+    this.nativeHelper.setHarvestMode(mode);
   }
 
   private async processStandardChunkQueue(): Promise<void> {
@@ -860,6 +905,7 @@ export class TranscriberManager extends EventEmitter {
       }
     } finally {
       this.standardChunkProcessingInFlight = false;
+      this.setStandardRealtimeHarvestMode();
     }
   }
 
@@ -888,7 +934,6 @@ export class TranscriberManager extends EventEmitter {
         ? Math.max(0, chunkReadyAtMs)
         : (this.recordingStartTime > 0 ? Math.max(0, Date.now() - this.recordingStartTime) : 0);
       this.standardRealtimeChunks.push({ text: liveChunkText, endMs });
-
       this.standardLiveTranscript = [this.standardLiveTranscript, liveChunkText]
         .map((part) => part.trim())
         .filter(Boolean)
@@ -896,8 +941,7 @@ export class TranscriberManager extends EventEmitter {
         .trim();
 
       this.emit('standardLiveTranscript', this.standardLiveTranscript);
-      // Keep the harvest cadence in command mode for faster live transcript updates.
-      this.nativeHelper.setHarvestMode('command');
+      this.setStandardRealtimeHarvestMode();
 
       if (this.squaresManager) {
         const tailMatch = this.squaresManager.parseVoiceCommandFromTail(this.standardLiveTranscript.toLowerCase());

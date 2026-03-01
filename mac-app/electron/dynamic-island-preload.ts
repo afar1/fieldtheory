@@ -103,6 +103,42 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
     ipcRenderer.on('dynamic-island-hotmic-filter-meter', (_event, data) => callback(data));
   },
 
+  // Hot-mic runtime status updates (queue/latency/engine health).
+  onHotMicRuntimeStatus: (callback: (status: {
+    state: string;
+    condition: string | null;
+    engineReady: boolean;
+    whisperFallbackActive: boolean;
+    queueDepth: number;
+    lastChunkAgeMs: number | null;
+    chunksReceived: number;
+    micHealthy: boolean;
+    engine: {
+      selectedEngine: 'whisper' | 'qwen' | 'mlx-whisper';
+      readiness:
+        | 'ready'
+        | 'warming'
+        | 'cold'
+        | 'not-installed'
+        | 'not-downloaded'
+        | 'corrupt'
+        | 'unsupported-arch'
+        | 'disabled';
+      detail: string | null;
+    } | null;
+    timing: {
+      chunkIntervalMs: number | null;
+      queueWaitMs: number | null;
+      transcribeMs: number | null;
+      postProcessMs: number | null;
+      totalPipelineMs: number | null;
+      avgTranscribeMs: number | null;
+      avgTotalPipelineMs: number | null;
+    };
+  }) => void) => {
+    ipcRenderer.on('dynamic-island-hotmic-runtime', (_event, status) => callback(status));
+  },
+
   // Toggle hot-mic mute (right pill → main).
   toggleMute: () => {
     ipcRenderer.send('dynamic-island-toggle-mute');

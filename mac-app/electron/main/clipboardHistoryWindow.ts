@@ -282,6 +282,8 @@ export class ClipboardHistoryWindow {
     );
     // Update internal state immediately for instant toggle.
     this._isShowing = true;
+    const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+    const shouldShowApp = showInDock || app.isHidden();
 
     // If window exists, reposition and show it.
     // For existing windows, we can use renderer-based sound (instant via Web Audio API).
@@ -296,9 +298,11 @@ export class ClipboardHistoryWindow {
         });
       }
 
-      // Ensure app is visible (un-hide after app.hide() was called).
-      // This is needed for Cmd+Tab to properly show windows.
-      app.show();
+      // Keep panel mode from force-activating the app in Cmd+Tab/Dock.
+      // Only unhide when using Dock mode or when the app is actually hidden.
+      if (shouldShowApp) {
+        app.show();
+      }
 
       // Play sound via renderer (instant - Web Audio API) BEFORE showing window.
       // The renderer plays it immediately with ~1ms latency.
@@ -333,8 +337,11 @@ export class ClipboardHistoryWindow {
       this.soundManager.play('windowOpen');
     }
 
-    // Ensure app is visible (un-hide after app.hide() was called).
-    app.show();
+    // Keep panel mode from force-activating the app in Cmd+Tab/Dock.
+    // Only unhide when using Dock mode or when the app is actually hidden.
+    if (shouldShowApp) {
+      app.show();
+    }
 
     // Create new window.
     this.createWindow(savedBounds, showSettingsMode, false, transcriptHistoryMode);

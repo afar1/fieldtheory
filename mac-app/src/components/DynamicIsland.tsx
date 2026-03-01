@@ -44,6 +44,39 @@ interface HotMicFilterMeter {
   chunkSuppressed: boolean;
 }
 
+interface HotMicRuntimeStatus {
+  state: string;
+  condition: string | null;
+  engineReady: boolean;
+  whisperFallbackActive: boolean;
+  queueDepth: number;
+  lastChunkAgeMs: number | null;
+  chunksReceived: number;
+  micHealthy: boolean;
+  engine: {
+    selectedEngine: 'whisper' | 'qwen' | 'mlx-whisper';
+    readiness:
+      | 'ready'
+      | 'warming'
+      | 'cold'
+      | 'not-installed'
+      | 'not-downloaded'
+      | 'corrupt'
+      | 'unsupported-arch'
+      | 'disabled';
+    detail: string | null;
+  } | null;
+  timing: {
+    chunkIntervalMs: number | null;
+    queueWaitMs: number | null;
+    transcribeMs: number | null;
+    postProcessMs: number | null;
+    totalPipelineMs: number | null;
+    avgTranscribeMs: number | null;
+    avgTotalPipelineMs: number | null;
+  };
+}
+
 // Detect which pill this instance should render.
 const params = new URLSearchParams(window.location.search);
 const side = params.get('side') || 'left';
@@ -54,6 +87,7 @@ const DRAWER_TRAILING_WORDS = 10;
 const DRAWER_LEADING_CONTEXT_HOLD_MS = 2400;
 const DRAWER_WORD_ENTER_MAX_WORDS = 3;
 const DRAWER_WORD_ENTER_DURATION_MS = 180;
+const DRAWER_WORD_ENTER_STAGGER_MS = 50;
 const HISTORY_PREVIEW_TRAILING_WORDS = 5;
 const HISTORY_PREVIEW_MAX_LINES = 3;
 const HISTORY_PILL_OFFSET_PX = 82;
@@ -288,10 +322,12 @@ function DrawerPill() {
   const [drawerTextSize, setDrawerTextSize] = useState(DRAWER_TEXT_SIZE_DEFAULT);
   const [showLeadingContext, setShowLeadingContext] = useState(true);
   const [fadingLeadingContext, setFadingLeadingContext] = useState(false);
-  const [animatedTailCount, setAnimatedTailCount] = useState(0);
+  const [tailRevealTargetCount, setTailRevealTargetCount] = useState(0);
+  const [tailRevealCount, setTailRevealCount] = useState(0);
   const leadingContextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leadingContextCollapseRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const tailWordFadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tailRevealStepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tailRevealResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const transcriptActiveRef = useRef(false);
   const previousRawTextRef = useRef('');
   const showLeadingContextRef = useRef(true);
@@ -305,8 +341,10 @@ function DrawerPill() {
     leadingText,
     trailingWords,
   } = splitDrawerTranscriptForRender(compactText, showLeadingContext);
-
-  const normalizedAnimatedTailCount = Math.max(0, Math.min(animatedTailCount, trailingWords.length));
+  const normalizedTailRevealTarget = Math.max(0, Math.min(tailRevealTargetCount, trailingWords.length));
+  const normalizedTailRevealCount = Math.max(0, Math.min(tailRevealCount, normalizedTailRevealTarget));
+  const revealStartIndex = trailingWords.length - normalizedTailRevealTarget;
+  const revealEndExclusive = revealStartIndex + normalizedTailRevealCount;
   const normalizedDrawerTextSize = clampDrawerTextSize(drawerTextSize);
   const drawerLineHeight = Math.max(16, Math.round(normalizedDrawerTextSize * 1.3));
 
@@ -334,7 +372,8 @@ function DrawerPill() {
         setShowLeadingContext(true);
         showLeadingContextRef.current = true;
         setFadingLeadingContext(false);
-        setAnimatedTailCount(0);
+        setTailRevealTargetCount(0);
+        setTailRevealCount(0);
         if (leadingContextTimerRef.current) {
           clearTimeout(leadingContextTimerRef.current);
           leadingContextTimerRef.current = null;
@@ -343,22 +382,60 @@ function DrawerPill() {
           clearTimeout(leadingContextCollapseRef.current);
           leadingContextCollapseRef.current = null;
         }
-        if (tailWordFadeTimerRef.current) {
-          clearTimeout(tailWordFadeTimerRef.current);
-          tailWordFadeTimerRef.current = null;
+        if (tailRevealStepTimerRef.current) {
+          clearTimeout(tailRevealStepTimerRef.current);
+          tailRevealStepTimerRef.current = null;
+        }
+        if (tailRevealResetTimerRef.current) {
+          clearTimeout(tailRevealResetTimerRef.current);
+          tailRevealResetTimerRef.current = null;
         }
         return;
       }
 
       if (appendedCount > 0) {
-        setAnimatedTailCount(Math.min(DRAWER_WORD_ENTER_MAX_WORDS, appendedCount));
-        if (tailWordFadeTimerRef.current) {
-          clearTimeout(tailWordFadeTimerRef.current);
+        const target = Math.min(DRAWER_WORD_ENTER_MAX_WORDS, appendedCount);
+
+        if (tailRevealStepTimerRef.current) {
+          clearTimeout(tailRevealStepTimerRef.current);
+          tailRevealStepTimerRef.current = null;
         }
-        tailWordFadeTimerRef.current = setTimeout(() => {
-          tailWordFadeTimerRef.current = null;
-          setAnimatedTailCount(0);
-        }, DRAWER_WORD_ENTER_DURATION_MS);
+        if (tailRevealResetTimerRef.current) {
+          clearTimeout(tailRevealResetTimerRef.current);
+          tailRevealResetTimerRef.current = null;
+        }
+
+        setTailRevealTargetCount(target);
+        // Reveal first word immediately to reduce perceived lag; stagger only
+        // the remaining words in the batch.
+        setTailRevealCount(1);
+
+        if (target <= 1) {
+          tailRevealResetTimerRef.current = setTimeout(() => {
+            tailRevealResetTimerRef.current = null;
+            setTailRevealTargetCount(0);
+            setTailRevealCount(0);
+          }, DRAWER_WORD_ENTER_DURATION_MS);
+          return;
+        }
+
+        let nextVisibleCount = 1;
+        const revealNext = () => {
+          nextVisibleCount += 1;
+          setTailRevealCount(nextVisibleCount);
+          if (nextVisibleCount >= target) {
+            tailRevealStepTimerRef.current = null;
+            tailRevealResetTimerRef.current = setTimeout(() => {
+              tailRevealResetTimerRef.current = null;
+              setTailRevealTargetCount(0);
+              setTailRevealCount(0);
+            }, DRAWER_WORD_ENTER_DURATION_MS);
+            return;
+          }
+          tailRevealStepTimerRef.current = setTimeout(revealNext, DRAWER_WORD_ENTER_STAGGER_MS);
+        };
+
+        tailRevealStepTimerRef.current = setTimeout(revealNext, DRAWER_WORD_ENTER_STAGGER_MS);
       }
 
       if (!transcriptActiveRef.current) {
@@ -404,9 +481,13 @@ function DrawerPill() {
         clearTimeout(leadingContextCollapseRef.current);
         leadingContextCollapseRef.current = null;
       }
-      if (tailWordFadeTimerRef.current) {
-        clearTimeout(tailWordFadeTimerRef.current);
-        tailWordFadeTimerRef.current = null;
+      if (tailRevealStepTimerRef.current) {
+        clearTimeout(tailRevealStepTimerRef.current);
+        tailRevealStepTimerRef.current = null;
+      }
+      if (tailRevealResetTimerRef.current) {
+        clearTimeout(tailRevealResetTimerRef.current);
+        tailRevealResetTimerRef.current = null;
       }
     };
   }, []);
@@ -433,8 +514,16 @@ function DrawerPill() {
               style={showLeadingContext ? undefined : drawerStyles.carouselStrip}
             >
               {trailingWords.map((word, index) => {
-                const shouldAnimateEnter = normalizedAnimatedTailCount > 0
-                  && index >= trailingWords.length - normalizedAnimatedTailCount;
+                const isInRevealSlice = normalizedTailRevealTarget > 0
+                  && index >= revealStartIndex
+                  && index < revealEndExclusive;
+                const isPendingReveal = normalizedTailRevealTarget > 0
+                  && index >= revealStartIndex
+                  && index >= revealEndExclusive;
+                if (isPendingReveal) {
+                  return null;
+                }
+                const shouldAnimateEnter = isInRevealSlice;
                 const visual = getCarouselWordVisual(index, trailingWords.length);
                 const wordClassName = shouldAnimateEnter
                   ? 'di-drawer-word di-drawer-word-enter'
@@ -549,6 +638,26 @@ function LeftPill() {
     speechRatio: 0,
     chunkSuppressed: false,
   });
+  const [runtimeStatus, setRuntimeStatus] = useState<HotMicRuntimeStatus>({
+    state: 'idle',
+    condition: null,
+    engineReady: false,
+    whisperFallbackActive: false,
+    queueDepth: 0,
+    lastChunkAgeMs: null,
+    chunksReceived: 0,
+    micHealthy: true,
+    engine: null,
+    timing: {
+      chunkIntervalMs: null,
+      queueWaitMs: null,
+      transcribeMs: null,
+      postProcessMs: null,
+      totalPipelineMs: null,
+      avgTranscribeMs: null,
+      avgTotalPipelineMs: null,
+    },
+  });
 
   const transcriptRef = useRef<HTMLDivElement>(null);
   const historyScrollRef = useRef<HTMLDivElement>(null);
@@ -612,6 +721,9 @@ function LeftPill() {
       setBackgroundFilterEnabled(data.enabled);
       setBackgroundFilterStrength(Math.max(0, Math.min(100, Math.round(data.strength))));
     });
+    api.onHotMicRuntimeStatus?.((status: HotMicRuntimeStatus) => {
+      setRuntimeStatus(status);
+    });
 
     api.requestHistory();
 
@@ -624,6 +736,7 @@ function LeftPill() {
       api.removeAllListeners('dynamic-island-show-history');
       api.removeAllListeners('dynamic-island-input-mode');
       api.removeAllListeners('dynamic-island-hotmic-filter-meter');
+      api.removeAllListeners('dynamic-island-hotmic-runtime');
       if (copiedTimerRef.current) {
         clearTimeout(copiedTimerRef.current);
         copiedTimerRef.current = null;
@@ -829,6 +942,27 @@ function LeftPill() {
   const thresholdPct = Math.round(Math.max(0, Math.min(1, filterMeter.threshold)) * 100);
   const speechRatioPct = Math.round(Math.max(0, Math.min(1, filterMeter.speechRatio)) * 100);
   const modeDot = getLeftModeDotPresentation(inputMode, state);
+  const formatMs = (value: number | null): string => (
+    value === null ? '--' : `${Math.max(0, Math.round(value))}ms`
+  );
+  const chunkAgeLabel = formatMs(runtimeStatus.lastChunkAgeMs);
+  const chunkIntervalLabel = formatMs(runtimeStatus.timing.chunkIntervalMs);
+  const queueWaitLabel = formatMs(runtimeStatus.timing.queueWaitMs);
+  const asrMsLabel = formatMs(runtimeStatus.timing.transcribeMs);
+  const postMsLabel = formatMs(runtimeStatus.timing.postProcessMs);
+  const totalPipelineLabel = formatMs(runtimeStatus.timing.totalPipelineMs);
+  const avgAsrMsLabel = formatMs(runtimeStatus.timing.avgTranscribeMs);
+  const avgTotalPipelineLabel = formatMs(runtimeStatus.timing.avgTotalPipelineMs);
+  const runtimeConditionLabel = runtimeStatus.condition ?? 'idle';
+  const engineLabel = runtimeStatus.engine?.selectedEngine ?? 'n/a';
+  const readinessLabel = runtimeStatus.engine?.readiness ?? 'n/a';
+  const healthLabel = runtimeStatus.micHealthy ? 'mic ok' : 'mic stale';
+  const healthTone = runtimeStatus.micHealthy ? styles.hudPillGood : styles.hudPillWarn;
+  const pressureTone =
+    runtimeStatus.queueDepth >= 4 || (runtimeStatus.lastChunkAgeMs ?? 0) >= 1800
+      ? styles.hudPillWarn
+      : styles.hudPillGood;
+  const showCompactHud = inputMode === 'hot-mic';
 
   return (
     <div style={styles.outerContainer}>
@@ -837,6 +971,7 @@ function LeftPill() {
         style={{
           ...styles.island,
           ...styles.islandIdle,
+          justifyContent: showCompactHud ? 'flex-start' : 'center',
           width: `${compactPillWidth}px`,
           height: `${compactPillHeight}px`,
         }}
@@ -871,6 +1006,19 @@ function LeftPill() {
             <path d="M0 9H14V10H0V9Z" fill="rgba(255,255,255,0.78)" />
           </svg>
         </button>
+        {showCompactHud && (
+          <div style={styles.compactHud}>
+            <div style={styles.compactHudTopRow}>
+              <span style={styles.compactHudEngine}>{engineLabel}</span>
+              <span style={{ ...styles.compactHudBadge, ...healthTone }}>{healthLabel}</span>
+              <span style={{ ...styles.compactHudBadge, ...pressureTone }}>q{runtimeStatus.queueDepth}</span>
+            </div>
+            <div style={styles.compactHudBottomRow}>
+              asr {asrMsLabel} · total {totalPipelineLabel} · age {chunkAgeLabel}
+              {runtimeStatus.whisperFallbackActive ? ' · fallback' : ''}
+            </div>
+          </div>
+        )}
 
       </div>
 
@@ -998,6 +1146,26 @@ function LeftPill() {
                   {filterMeter.chunkSuppressed ? ' · suppressed chunk' : ''}
                 </div>
               </div>
+              <div style={styles.runtimeHud}>
+                <div style={styles.runtimeHudHeader}>
+                  <span style={styles.runtimeHudTitle}>live hud</span>
+                  <span style={{ ...styles.runtimeHudPill, ...healthTone }}>{healthLabel}</span>
+                  <span style={{ ...styles.runtimeHudPill, ...pressureTone }}>q{runtimeStatus.queueDepth}</span>
+                </div>
+                <div style={styles.runtimeHudStatLine}>
+                  age {chunkAgeLabel} · chunks {runtimeStatus.chunksReceived}
+                </div>
+                <div style={styles.runtimeHudStatLine}>
+                  cad {chunkIntervalLabel} · qwait {queueWaitLabel} · asr {asrMsLabel} · post {postMsLabel} · total {totalPipelineLabel}
+                </div>
+                <div style={styles.runtimeHudMetaLine}>
+                  avg asr {avgAsrMsLabel} · avg total {avgTotalPipelineLabel}
+                </div>
+                <div style={styles.runtimeHudMetaLine}>
+                  {engineLabel} · {readinessLabel} · {runtimeConditionLabel}
+                  {runtimeStatus.whisperFallbackActive ? ' · fallback' : ''}
+                </div>
+              </div>
             </div>
           )}
           <button
@@ -1060,6 +1228,49 @@ const styles: Record<string, React.CSSProperties> = {
     border: 'none',
     cursor: 'pointer',
     transition: 'background-color 0.15s ease',
+    flexShrink: 0,
+  },
+
+  compactHud: {
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
+    marginLeft: '2px',
+    gap: '1px',
+    flex: 1,
+  },
+
+  compactHudTopRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    minWidth: 0,
+  },
+
+  compactHudBottomRow: {
+    fontSize: '9px',
+    color: 'rgba(255, 255, 255, 0.56)',
+    textTransform: 'lowercase',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    fontVariantNumeric: 'tabular-nums',
+  },
+
+  compactHudEngine: {
+    fontSize: '9px',
+    color: 'rgba(255, 255, 255, 0.78)',
+    textTransform: 'lowercase',
+    marginRight: 'auto',
+  },
+
+  compactHudBadge: {
+    padding: '1px 4px',
+    borderRadius: '999px',
+    fontSize: '8px',
+    fontWeight: 600,
+    letterSpacing: '0.01em',
+    lineHeight: 1.2,
     flexShrink: 0,
   },
 
@@ -1363,6 +1574,63 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: 'lowercase',
   },
 
+  runtimeHud: {
+    marginTop: '4px',
+    padding: '6px',
+    borderRadius: '8px',
+    backgroundColor: 'rgba(0, 0, 0, 0.34)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '3px',
+  },
+
+  runtimeHudHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+  },
+
+  runtimeHudTitle: {
+    fontSize: '9.5px',
+    color: 'rgba(255, 255, 255, 0.55)',
+    textTransform: 'lowercase',
+    marginRight: 'auto',
+  },
+
+  runtimeHudPill: {
+    padding: '1px 5px',
+    borderRadius: '999px',
+    fontSize: '9px',
+    fontWeight: 600,
+    letterSpacing: '0.01em',
+  },
+
+  hudPillGood: {
+    color: 'rgba(34, 197, 94, 0.96)',
+    backgroundColor: 'rgba(34, 197, 94, 0.16)',
+  },
+
+  hudPillWarn: {
+    color: 'rgba(255, 159, 10, 0.97)',
+    backgroundColor: 'rgba(255, 159, 10, 0.18)',
+  },
+
+  runtimeHudStatLine: {
+    fontSize: '10px',
+    color: 'rgba(255, 255, 255, 0.78)',
+    fontVariantNumeric: 'tabular-nums',
+    textTransform: 'lowercase',
+  },
+
+  runtimeHudMetaLine: {
+    fontSize: '9.5px',
+    color: 'rgba(255, 255, 255, 0.56)',
+    textTransform: 'lowercase',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+
   openFieldTheoryButton: {
     width: '100%',
     height: '40px',
@@ -1490,6 +1758,7 @@ declare global {
       onHotMicSlideOut?: (cb: () => void) => void;
       onHotMicMute?: (cb: (muted: boolean) => void) => void;
       onHotMicFilterMeter?: (cb: (data: HotMicFilterMeter) => void) => void;
+      onHotMicRuntimeStatus?: (cb: (status: HotMicRuntimeStatus) => void) => void;
       onInputMode?: (cb: (mode: 'hot-mic' | 'standard') => void) => void;
       getInputMode?: () => Promise<'hot-mic' | 'standard'>;
       setInputMode?: (mode: 'hot-mic' | 'standard') => Promise<'hot-mic' | 'standard'>;
