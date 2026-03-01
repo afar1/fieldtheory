@@ -3755,6 +3755,59 @@ const hotMicAPI = {
 contextBridge.exposeInMainWorld('hotMicAPI', hotMicAPI);
 
 // =============================================================================
+// Council API — AI-vs-AI structured debates
+// =============================================================================
+
+const CouncilIPCChannels = {
+  START: 'council:start',
+  STOP: 'council:stop',
+  GET_STATUS: 'council:getStatus',
+  SHOW_WINDOW: 'council:showWindow',
+  EVENT: 'council:event',
+  STATUS_CHANGED: 'council:statusChanged',
+} as const;
+
+const councilAPI = {
+  start: async (config: { topic: string; maxTurns?: number; repoPath?: string; opusVsOpus?: boolean }): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(CouncilIPCChannels.START, config);
+  },
+
+  stop: async (): Promise<void> => {
+    return ipcRenderer.invoke(CouncilIPCChannels.STOP);
+  },
+
+  showWindow: async (): Promise<void> => {
+    return ipcRenderer.invoke(CouncilIPCChannels.SHOW_WINDOW);
+  },
+
+  getStatus: async (): Promise<{ state: string; currentRound: number; topic: string | null; error: string | null }> => {
+    return ipcRenderer.invoke(CouncilIPCChannels.GET_STATUS);
+  },
+
+  onEvent: (callback: (event: any) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, councilEvent: any) => {
+      callback(councilEvent);
+    };
+    ipcRenderer.on(CouncilIPCChannels.EVENT, handler);
+    return () => {
+      ipcRenderer.removeListener(CouncilIPCChannels.EVENT, handler);
+    };
+  },
+
+  onStatusChanged: (callback: (status: any) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: any) => {
+      callback(status);
+    };
+    ipcRenderer.on(CouncilIPCChannels.STATUS_CHANGED, handler);
+    return () => {
+      ipcRenderer.removeListener(CouncilIPCChannels.STATUS_CHANGED, handler);
+    };
+  },
+};
+
+contextBridge.exposeInMainWorld('councilAPI', councilAPI);
+
+// =============================================================================
 // Auto-subscribe to auth debug events for DevTools visibility
 // =============================================================================
 // This ensures auth events are always logged to the DevTools console without

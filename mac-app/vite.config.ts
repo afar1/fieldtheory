@@ -24,6 +24,7 @@ export default defineConfig(({ mode }) => {
           cursorStatus: path.resolve(__dirname, 'cursor-status.html'),
           commandLauncher: path.resolve(__dirname, 'command-launcher.html'),
           dynamicIsland: path.resolve(__dirname, 'dynamic-island.html'),
+          council: path.resolve(__dirname, 'council.html'),
         },
       },
     },

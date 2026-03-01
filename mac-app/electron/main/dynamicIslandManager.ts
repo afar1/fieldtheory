@@ -30,6 +30,39 @@ export interface HotMicBackgroundFilterMeter {
   chunkSuppressed: boolean;
 }
 
+export interface DynamicIslandHotMicRuntimeStatus {
+  state: string;
+  condition: string | null;
+  engineReady: boolean;
+  whisperFallbackActive: boolean;
+  queueDepth: number;
+  lastChunkAgeMs: number | null;
+  chunksReceived: number;
+  micHealthy: boolean;
+  engine: {
+    selectedEngine: 'whisper' | 'qwen' | 'mlx-whisper';
+    readiness:
+      | 'ready'
+      | 'warming'
+      | 'cold'
+      | 'not-installed'
+      | 'not-downloaded'
+      | 'corrupt'
+      | 'unsupported-arch'
+      | 'disabled';
+    detail: string | null;
+  } | null;
+  timing: {
+    chunkIntervalMs: number | null;
+    queueWaitMs: number | null;
+    transcribeMs: number | null;
+    postProcessMs: number | null;
+    totalPipelineMs: number | null;
+    avgTranscribeMs: number | null;
+    avgTotalPipelineMs: number | null;
+  };
+}
+
 export interface DynamicIslandGeometryTuning {
   notchWidthOverride: number; // 0 means "use profile/auto notch width"
   pillWidth: number;
@@ -68,6 +101,7 @@ export class DynamicIslandManager extends EventEmitter {
 
   private readonly ISLAND_WIDTH = 460;
   private readonly ISLAND_WIDTH_IDLE = 72;
+  private readonly ISLAND_WIDTH_IDLE_WITH_HUD = 620;
   private readonly ISLAND_HEIGHT = 52;
   private readonly ISLAND_HEIGHT_IDLE = 38;
   private readonly ISLAND_HEIGHT_WITH_TRANSCRIPT = 64;
@@ -128,6 +162,26 @@ export class DynamicIslandManager extends EventEmitter {
   private hotMicWordCount: number = 0;
   private hotMicLastWord: string = '';
   private hotMicMuted: boolean = false;
+  private hotMicRuntimeStatus: DynamicIslandHotMicRuntimeStatus = {
+    state: 'idle',
+    condition: null,
+    engineReady: false,
+    whisperFallbackActive: false,
+    queueDepth: 0,
+    lastChunkAgeMs: null,
+    chunksReceived: 0,
+    micHealthy: true,
+    engine: null,
+    timing: {
+      chunkIntervalMs: null,
+      queueWaitMs: null,
+      transcribeMs: null,
+      postProcessMs: null,
+      totalPipelineMs: null,
+      avgTranscribeMs: null,
+      avgTotalPipelineMs: null,
+    },
+  };
   private inputMode: DynamicIslandInputMode = 'standard';
   private geometryTuning: DynamicIslandGeometryTuning = { ...DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING };
 
@@ -236,6 +290,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.sendStateToRenderer(this.state);
     this.sendHotMicToRight();
     this.sendInputModeToRenderers();
+    this.sendHotMicRuntimeStatusToLeft();
   }
 
   setGeometryTuning(tuning: Partial<DynamicIslandGeometryTuning>): DynamicIslandGeometryTuning {
@@ -346,6 +401,7 @@ export class DynamicIslandManager extends EventEmitter {
   setInputMode(mode: DynamicIslandInputMode): DynamicIslandInputMode {
     const normalized: DynamicIslandInputMode = mode === 'hot-mic' ? 'hot-mic' : 'standard';
     this.inputMode = normalized;
+    this.updateWindowSize();
     this.sendInputModeToRenderers();
     return normalized;
   }
@@ -361,6 +417,12 @@ export class DynamicIslandManager extends EventEmitter {
     }
   }
 
+  updateHotMicRuntimeStatus(status: DynamicIslandHotMicRuntimeStatus): void {
+    this.hotMicRuntimeStatus = status;
+    if (!this.enabled) return;
+    this.sendHotMicRuntimeStatusToLeft();
+  }
+
   private sendHotMicToRight(): void {
     if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
       this.rightWindow.webContents.send('dynamic-island-hotmic', {
@@ -369,6 +431,12 @@ export class DynamicIslandManager extends EventEmitter {
         lastWord: this.hotMicLastWord,
         muted: this.hotMicMuted,
       });
+    }
+  }
+
+  private sendHotMicRuntimeStatusToLeft(): void {
+    if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+      this.window.webContents.send('dynamic-island-hotmic-runtime', this.hotMicRuntimeStatus);
     }
   }
 
@@ -530,6 +598,7 @@ export class DynamicIslandManager extends EventEmitter {
         this.sendStateToRenderer(this.state);
         this.sendInputModeToRenderers();
         this.sendHistory();
+        this.sendHotMicRuntimeStatusToLeft();
 
         if (this.pendingShow) {
           this.pendingShow = false;
@@ -1135,7 +1204,9 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   private getIdlePillWidth(): number {
-    return this.geometryTuning.pillWidth;
+    const baseWidth = this.geometryTuning.pillWidth;
+    const hudWidth = this.inputMode === 'hot-mic' ? this.ISLAND_WIDTH_IDLE_WITH_HUD : this.ISLAND_WIDTH_IDLE;
+    return Math.max(baseWidth, hudWidth);
   }
 
   private getIdlePillHeight(): number {

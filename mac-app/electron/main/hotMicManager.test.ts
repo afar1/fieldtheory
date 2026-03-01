@@ -145,6 +145,25 @@ describe('HotMicManager run-command phrases', () => {
 
     manager.destroy();
   });
+
+  it('matches submit phrase when only short trailing ASR noise follows it', () => {
+    const { manager } = createManager();
+
+    const result = (manager as any).checkSubmitPhrases('go ahead p.a.c.t');
+    expect(result.shouldSubmit).toBe(true);
+    expect(result.cleanedText).toBe('');
+
+    manager.destroy();
+  });
+
+  it('does not match submit phrase when meaningful trailing words follow it', () => {
+    const { manager } = createManager();
+
+    const result = (manager as any).checkSubmitPhrases('go ahead with this');
+    expect(result.shouldSubmit).toBe(false);
+
+    manager.destroy();
+  });
 });
 
 describe('HotMicManager clipboard hash sync', () => {
@@ -241,6 +260,23 @@ describe('HotMicManager transcript history persistence', () => {
     manager.destroy();
   });
 
+  it('submits when submit phrase is split across chunk boundary', async () => {
+    const { manager, nativeHelper } = createManager();
+    (manager as any).state = 'listening';
+
+    await (manager as any).processListeningChunk('alpha beta go');
+    await (manager as any).processListeningChunk('ahead');
+
+    expect(nativeHelper.typeIntoApp).toHaveBeenCalledWith(
+      'com.mitchellh.ghostty',
+      'alpha beta',
+      true
+    );
+    expect((manager as any).transcriptBuffer).toEqual([]);
+
+    manager.destroy();
+  });
+
   it('documents that spoken buffers above five words are saved on silence timeout even without submit words', async () => {
     vi.useFakeTimers();
     try {
@@ -274,8 +310,8 @@ describe('HotMicManager screenshot figure integration', () => {
     (manager as any).state = 'listening';
     (manager as any).hotMicSessionStartMs = Date.now() - 1000;
 
-    clipboardItems.set(101, { id: 101, type: 'screenshot', imageData: Buffer.from([1]) });
-    clipboardItems.set(102, { id: 102, type: 'screenshot', imageData: Buffer.from([2]) });
+    clipboardItems.set(101, { id: 101, type: 'screenshot', imageData: Buffer.from([1]), createdAt: Date.now() - 800 });
+    clipboardItems.set(102, { id: 102, type: 'screenshot', imageData: Buffer.from([2]), createdAt: Date.now() - 500 });
 
     manager.addScreenshotToSession(101);
     manager.addScreenshotToSession(102);
@@ -285,6 +321,27 @@ describe('HotMicManager screenshot figure integration', () => {
     expect((manager as any).hotMicScreenshotMetadata).toHaveLength(2);
     expect((manager as any).hotMicScreenshotMetadata[0].figureLabel).toBe('1');
     expect((manager as any).hotMicScreenshotMetadata[1].figureLabel).toBe('2');
+
+    manager.destroy();
+  });
+
+  it('ignores stale screenshot callbacks from a prior draft window', () => {
+    const { manager, clipboardManager, clipboardItems } = createManager();
+    (manager as any).state = 'listening';
+    (manager as any).hotMicSessionStartMs = Date.now();
+
+    clipboardItems.set(111, {
+      id: 111,
+      type: 'screenshot',
+      imageData: Buffer.from([1]),
+      createdAt: Date.now() - 5000,
+    });
+
+    manager.addScreenshotToSession(111);
+
+    expect(clipboardManager.updateFigureLabel).not.toHaveBeenCalled();
+    expect((manager as any).hotMicScreenshotMetadata).toHaveLength(0);
+    expect((manager as any).hotMicSessionItemIds).toHaveLength(0);
 
     manager.destroy();
   });
@@ -375,6 +432,35 @@ describe('HotMicManager screenshot figure integration', () => {
     expect(payload).toContain('Figure 1: /tmp/ctx-401.png');
 
     manager.destroy();
+  });
+
+  it('expires screenshot-only draft state on silence timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, clipboardItems } = createManager();
+      (manager as any).state = 'listening';
+      (manager as any).hotMicSessionStartMs = Date.now() - 300;
+
+      clipboardItems.set(501, {
+        id: 501,
+        type: 'screenshot',
+        imageData: Buffer.from([1]),
+        createdAt: Date.now() - 200,
+      });
+
+      manager.addScreenshotToSession(501);
+      expect((manager as any).hotMicScreenshotMetadata).toHaveLength(1);
+
+      vi.advanceTimersByTime(4500);
+      await Promise.resolve();
+
+      expect((manager as any).hotMicScreenshotMetadata).toEqual([]);
+      expect((manager as any).hotMicSessionItemIds).toEqual([]);
+
+      manager.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -481,7 +567,7 @@ describe('HotMicManager transcript dismissal', () => {
     expect((manager as any).transcriptBuffer).toEqual([]);
     expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenCalledWith('');
     expect(dynamicIslandManager.updateHotMic).toHaveBeenCalledWith(true, 0, '');
-    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('command');
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation');
 
     manager.destroy();
   });
@@ -1168,7 +1254,7 @@ describe('HotMicManager chunk queue backpressure', () => {
     manager.destroy();
   });
 
-  it('switches harvest mode to dictation under queue pressure', () => {
+  it('switches harvest mode to command under queue pressure', () => {
     const { manager, nativeHelper } = createManager();
     const queue = (manager as any).pendingChunkQueue;
     queue.push({ filePath: '/tmp/a.wav', audioStats: {} });
@@ -1176,7 +1262,7 @@ describe('HotMicManager chunk queue backpressure', () => {
 
     (manager as any).setRealtimeHarvestMode();
 
-    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation');
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('command');
     manager.destroy();
   });
 
@@ -1187,11 +1273,11 @@ describe('HotMicManager chunk queue backpressure', () => {
     (manager as any).setRealtimeHarvestMode();
 
     expect(nativeHelper.setHarvestMode).toHaveBeenCalledTimes(1);
-    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('command');
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation');
     manager.destroy();
   });
 
-  it('returns harvest mode to command after queue pressure clears', () => {
+  it('returns harvest mode to dictation after queue pressure clears', () => {
     const { manager, nativeHelper } = createManager({ transcriptionEngine: 'mlx-whisper' });
     const queue = (manager as any).pendingChunkQueue;
     queue.push({ filePath: '/tmp/a.wav', audioStats: {} });
@@ -1202,8 +1288,8 @@ describe('HotMicManager chunk queue backpressure', () => {
     (manager as any).chunkProcessingInFlight = false;
     (manager as any).setRealtimeHarvestMode();
 
-    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(1, 'dictation');
-    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(2, 'command');
+    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(1, 'command');
+    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(2, 'dictation');
     manager.destroy();
   });
 

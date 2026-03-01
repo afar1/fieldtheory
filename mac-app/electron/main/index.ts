@@ -58,6 +58,10 @@ import { HotMicManager, KNOWN_TERMINALS } from './hotMicManager';
 import { HOT_MIC_DEFAULTS, HOT_MIC_DEFAULT_SYSTEM_COMMANDS, HOT_MIC_DEFAULT_WINDOW_COMMANDS } from './hotMicDefaults';
 import { detectSSHSession, scpToRemote, SSHTarget } from './sshDetector';
 import { SquaresManager } from './squaresManager';
+import { CouncilManager } from './councilManager';
+import { CouncilWindow } from './councilWindow';
+import { CouncilIPCChannels } from './types/council';
+import type { CouncilConfig } from './types/council';
 import { SquaresIPCChannels, SquaresAction } from './types/squares';
 import { GazeTrackingManager } from './gaze/gazeTrackingManager';
 import { GazeDebugOverlayManager } from './gaze/gazeDebugOverlayManager';
@@ -230,6 +234,8 @@ function routeCapturedItemToActiveSession(itemId: number): void {
   }
 }
 let squaresManager: SquaresManager | null = null;
+let councilManager: CouncilManager | null = null;
+let councilWindow: CouncilWindow | null = null;
 let gazeTrackingManager: GazeTrackingManager | null = null;
 let gazeDebugOverlayManager: GazeDebugOverlayManager | null = null;
 let gazeScreenOverlayManager: GazeScreenOverlayManager | null = null;
@@ -301,6 +307,15 @@ function getDefaultHotMicRuntimeStatus(): import('./hotMicManager').HotMicRuntim
     chunksReceived: 0,
     micHealthy: true,
     engine: null,
+    timing: {
+      chunkIntervalMs: null,
+      queueWaitMs: null,
+      transcribeMs: null,
+      postProcessMs: null,
+      totalPipelineMs: null,
+      avgTranscribeMs: null,
+      avgTotalPipelineMs: null,
+    },
   };
 }
 
@@ -310,6 +325,7 @@ function getHotMicRuntimeStatusSnapshot(): import('./hotMicManager').HotMicRunti
 
 function broadcastHotMicRuntimeStatus(): void {
   const status = getHotMicRuntimeStatusSnapshot();
+  dynamicIslandManager?.updateHotMicRuntimeStatus(status);
   BrowserWindow.getAllWindows().forEach((win) => {
     if (!win.isDestroyed()) {
       win.webContents.send('hotmic:runtimeStatusChanged', status);
@@ -3482,6 +3498,10 @@ function setupClipboardIPCHandlers(): void {
     // Clean up TranscriberManager (kill persistent Qwen server, unregister hotkeys)
     transcriberManager?.destroy();
 
+    // Clean up Council (kill debate process)
+    councilManager?.destroy();
+    councilWindow?.destroy();
+
     const fs = require('fs');
     for (const tempFile of dragTempFiles) {
       try {
@@ -4818,6 +4838,33 @@ function setupClipboardIPCHandlers(): void {
   });
 
   // =========================================================================
+  // Council IPC Handlers
+  // =========================================================================
+
+  ipcMain.handle(CouncilIPCChannels.START, async (_event, config: CouncilConfig) => {
+    if (!councilManager) {
+      return { success: false, error: 'Council not initialized' };
+    }
+    const result = await councilManager.start(config);
+    if (result.success) {
+      councilWindow?.show();
+    }
+    return result;
+  });
+
+  ipcMain.handle(CouncilIPCChannels.SHOW_WINDOW, async () => {
+    councilWindow?.show();
+  });
+
+  ipcMain.handle(CouncilIPCChannels.STOP, async () => {
+    councilManager?.stop();
+  });
+
+  ipcMain.handle(CouncilIPCChannels.GET_STATUS, async () => {
+    return councilManager?.getStatus() ?? { state: 'idle', currentRound: 0, topic: null, error: null };
+  });
+
+  // =========================================================================
   // Feedback IPC Handlers
   // =========================================================================
 
@@ -5378,6 +5425,9 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
 
     // Don't auto-hide during recording
     if (clipboardHistoryWindow?.getRecordingActive()) return;
+
+    // Don't auto-hide if council window is open (user needs persistent window)
+    if (councilWindow?.isVisible()) return;
 
     // Small delay to allow focus to settle - another Field Theory window
     // might be gaining focus (e.g., switching between our windows)
@@ -6047,6 +6097,42 @@ async function initTranscriberSystem(): Promise<void> {
   // Pass nativeHelper for instant access to cached frontmost app info.
   commandLauncherWindow = new CommandLauncherWindow(nativeHelper ?? undefined);
 
+  // Initialize council manager and window for AI debate feature.
+  councilManager = new CouncilManager();
+  councilWindow = new CouncilWindow({
+    getShowInDock: () => preferencesManager?.getPreference('showInDock') ?? false,
+  });
+
+  // Seed the council.md portable command if it doesn't exist yet.
+  councilManager.ensureCommandFile();
+
+  // Wire handoffs directory so transcripts land there automatically.
+  if (commandsManager) {
+    councilManager.setHandoffsDirectory(commandsManager.getHandoffsDirectory());
+  }
+
+  // Watch for kickoff files to auto-start debates.
+  const kickoffsDir = path.join(process.env.HOME || '~', '.fieldtheory', 'council', 'kickoffs');
+  councilManager.watchKickoffs(kickoffsDir);
+
+  councilManager.on('kickoffDetected', () => {
+    councilWindow?.show();
+  });
+
+  // Forward council events to the council window.
+  councilManager.on('event', (event) => {
+    councilWindow?.getWindow()?.webContents.send(CouncilIPCChannels.EVENT, event);
+  });
+
+  // Broadcast status changes to all windows (so command launcher can show state).
+  councilManager.on('statusChanged', (status) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(CouncilIPCChannels.STATUS_CHANGED, status);
+      }
+    });
+  });
+
   // Set up escape key priority: dismiss clipboard history before canceling recording
   transcriberManager.setClipboardHistoryVisibilityChecker(() => {
     return clipboardHistoryWindow?.isVisible() ?? false;
@@ -6171,6 +6257,10 @@ async function initTranscriberSystem(): Promise<void> {
     }
     if (commandsManager) {
       await commandsManager.reinitializeForUser();
+      // Ensure ~/.fieldtheory/commands/ is watched so seeded commands (e.g. council.md) appear in the UI.
+      // Must run after reinitializeForUser() which reloads per-user settings.
+      const fieldtheoryCommandsDir = path.join(process.env.HOME || '~', '.fieldtheory', 'commands');
+      await commandsManager.addWatchedDir(fieldtheoryCommandsDir);
     }
     // Register Hot Mic hotkey and auto-start if enabled (now that user prefs are loaded)
     if (hotMicManager) {

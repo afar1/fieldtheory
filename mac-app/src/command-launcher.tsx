@@ -229,6 +229,14 @@ function getBuiltInActions(hotkeys: typeof DEFAULT_HOTKEYS, isDarkMode: boolean)
       hotkeyDisplay: '⇧ ⌘ L',
       actionId: 'toggle-theme',
     },
+    {
+      id: 'action-council',
+      type: 'action',
+      name: 'council debate',
+      displayName: 'Start Council Debate',
+      keywords: ['council', 'debate', 'ai', 'discuss', 'opus', 'claude', 'codex', 'versus'],
+      actionId: 'start-council',
+    },
   ];
 }
 
@@ -614,6 +622,11 @@ function CommandLauncher() {
             const currentIsDark = await themeAPI.getTheme();
             await themeAPI.setTheme(!currentIsDark);
           })();
+          break;
+        case 'start-council':
+          // Paste council command into active terminal, then show debate window
+          await commandsAPI.invokeCommand('council');
+          window.councilAPI?.showWindow?.();
           break;
         // Other actions are handled by closing and letting main process handle.
         default:

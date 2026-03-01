@@ -1734,6 +1734,36 @@ declare global {
     onConfigChanged: (callback: (config: SquaresConfig) => void) => () => void;
   }
 
+  type CouncilState = 'idle' | 'starting' | 'debating' | 'finalizing' | 'done' | 'error';
+
+  interface CouncilStatus {
+    state: CouncilState;
+    currentRound: number;
+    topic: string | null;
+    error: string | null;
+  }
+
+  interface CouncilConfig {
+    topic: string;
+    maxTurns?: number;
+    repoPath?: string;
+    opusVsOpus?: boolean;
+  }
+
+  interface CouncilEvent {
+    type: string;
+    [key: string]: any;
+  }
+
+  interface CouncilAPI {
+    start: (config: CouncilConfig) => Promise<{ success: boolean; error?: string }>;
+    stop: () => Promise<void>;
+    showWindow: () => Promise<void>;
+    getStatus: () => Promise<CouncilStatus>;
+    onEvent: (callback: (event: CouncilEvent) => void) => () => void;
+    onStatusChanged: (callback: (status: CouncilStatus) => void) => () => void;
+  }
+
   interface Window {
     audioAPI?: AudioAPI;
     gazeAPI?: GazeAPI;
@@ -1761,6 +1791,7 @@ declare global {
     narrationAPI?: NarrationAPI;  // Stub - feature disabled
     hotMicAPI?: HotMicAPI;
     squaresAPI?: SquaresAPI;
+    councilAPI?: CouncilAPI;
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;
   }
