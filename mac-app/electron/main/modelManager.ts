@@ -9,9 +9,16 @@ const log = createLogger('Model');
 
 /**
  * Available Whisper model sizes.
- * The small English model provides fast, reliable transcription.
+ * Small is the default balance for latency and quality.
  */
 export type ModelSize = 'small';
+
+export const DEFAULT_MODEL_SIZE: ModelSize = 'small';
+export const SUPPORTED_MODEL_SIZES: readonly ModelSize[] = ['small'];
+
+export function isModelSize(value: unknown): value is ModelSize {
+  return typeof value === 'string' && (SUPPORTED_MODEL_SIZES as readonly string[]).includes(value);
+}
 
 /**
  * Model metadata including name, URL, and expected size.
@@ -41,7 +48,7 @@ const MODELS: Record<ModelSize, ModelInfo> = {
     name: 'ggml-small.en.bin',
     url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin',
     sizeBytes: 466 * 1024 * 1024, // ~466MB
-    description: 'English transcription model',
+    description: 'Small English transcription model',
   },
 };
 
@@ -51,7 +58,7 @@ const MODELS: Record<ModelSize, ModelInfo> = {
  */
 export class ModelManager {
   private modelsDir: string;
-  private selectedModel: ModelSize = 'small';
+  private selectedModel: ModelSize = DEFAULT_MODEL_SIZE;
   private downloadingModels: Set<ModelSize> = new Set();
   private statusCache: { status: Record<ModelSize, boolean>; timestamp: number } | null = null;
   private static STATUS_CACHE_TTL = 5000; // 5 second cache
@@ -120,7 +127,7 @@ export class ModelManager {
     }
 
     const status: Record<ModelSize, boolean> = {} as Record<ModelSize, boolean>;
-    const modelSizes: ModelSize[] = ['small'];
+    const modelSizes = SUPPORTED_MODEL_SIZES;
 
     await Promise.all(
       modelSizes.map(async (size) => {

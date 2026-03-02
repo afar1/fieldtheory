@@ -3,7 +3,7 @@ import os from 'os';
 import fs from 'fs/promises';
 import path from 'path';
 import { PreferencesManager } from './preferences';
-import { ModelManager, ModelSize } from './modelManager';
+import { ModelManager, SUPPORTED_MODEL_SIZES } from './modelManager';
 import { AudioManager } from './audioManager';
 import { AudioDevice } from './types/audio';
 import { createLogger } from './logger';
@@ -221,11 +221,10 @@ export class DiagnosticsCollector {
 
     const selectedModel = this.modelManager.getSelectedModel();
     const modelsDir = path.join(app.getPath('userData'), 'models');
-    const availableModels = this.modelManager.getAvailableModels();
     const downloadingModels = this.modelManager.getDownloadingModels();
 
     const models: ModelDiagnostics[] = [];
-    for (const size of ['small', 'medium'] as ModelSize[]) {
+    for (const size of SUPPORTED_MODEL_SIZES) {
       const modelPath = this.modelManager.getModelPathForSize(size);
       let fileSizeMB: number | null = null;
       let downloaded = false;

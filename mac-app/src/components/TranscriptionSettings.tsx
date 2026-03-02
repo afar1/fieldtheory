@@ -11,32 +11,39 @@ type ModelInfo = {
   description: string;
 };
 
+const DEFAULT_WHISPER_MODELS: Record<string, ModelInfo> = {
+  small: {
+    name: 'ggml-small.en.bin',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin',
+    sizeBytes: 466 * 1024 * 1024,
+    description: 'Small English transcription model',
+  },
+};
+
+function withDefaultWhisperModels(models: Record<string, ModelInfo>): Record<string, ModelInfo> {
+  return {
+    ...DEFAULT_WHISPER_MODELS,
+    ...models,
+  };
+}
+
 export default function TranscriptionSettings() {
   const { theme } = useTheme();
   const [status, setStatus] = useState<TranscriptionStatus>('idle');
   const [modelStatus, setModelStatus] = useState<ModelStatus>('missing');
-  const [downloadProgress, setDownloadProgress] = useState<{ downloaded: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isDownloading, setIsDownloading] = useState(false);
   const [hotkey, setHotkey] = useState<string>('Option+/');
   const [isCapturingHotkey, setIsCapturingHotkey] = useState(false);
+  const [hotMicHotkey, setHotMicHotkey] = useState<string | null>(null);
+  const [isCapturingHotMicHotkey, setIsCapturingHotMicHotkey] = useState(false);
   const [hotkeyError, setHotkeyError] = useState<string | null>(null);
-  const [availableModels, setAvailableModels] = useState<Record<string, ModelInfo>>({});
+  const [availableModels, setAvailableModels] = useState<Record<string, ModelInfo>>(DEFAULT_WHISPER_MODELS);
   const [selectedModel, setSelectedModel] = useState<string>('small');
   const [modelDownloadStatus, setModelDownloadStatus] = useState<Record<string, boolean>>({});
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [deletingModel, setDeletingModel] = useState<string | null>(null);
   const [modelDownloadProgress, setModelDownloadProgress] = useState<Record<string, { downloaded: number; total: number }>>({});
-  const [engine, setEngine] = useState<'whisper' | 'qwen' | 'mlx-whisper'>('whisper');
-  const [qwenInstalled, setQwenInstalled] = useState(false);
-  const [mlxWhisperInstalled, setMlxWhisperInstalled] = useState(false);
-  const [appleSilicon, setAppleSilicon] = useState(true);
-  const [qwenSetupStatus, setQwenSetupStatus] = useState<'idle' | 'installing' | 'done' | 'error'>('idle');
-  const [qwenSetupError, setQwenSetupError] = useState<string | null>(null);
-  const [mlxWhisperSetupStatus, setMlxWhisperSetupStatus] = useState<'idle' | 'installing' | 'done' | 'error'>('idle');
-  const [mlxWhisperSetupError, setMlxWhisperSetupError] = useState<string | null>(null);
-  const [qwenSetupTick, setQwenSetupTick] = useState(0);
-  const [copiedError, setCopiedError] = useState<'qwen' | 'mlx-whisper' | 'general' | null>(null);
+  const [copiedError, setCopiedError] = useState<'general' | null>(null);
 
   const [abandonHotkey, setAbandonHotkey] = useState<string>('Escape');
   const [isCapturingAbandonHotkey, setIsCapturingAbandonHotkey] = useState(false);
@@ -53,7 +60,17 @@ export default function TranscriptionSettings() {
 
     const fetchStatus = async () => {
       try {
-        const [currentStatus, currentModelStatus, currentHotkey, models, currentSelectedModel, downloadStatus, downloadingModels, currentAbandonHotkey] = await Promise.all([
+        const [
+          currentStatus,
+          currentModelStatus,
+          currentHotkey,
+          models,
+          currentSelectedModel,
+          downloadStatus,
+          downloadingModels,
+          currentAbandonHotkey,
+          currentHotMicHotkey,
+        ] = await Promise.all([
           window.transcribeAPI!.getStatus(),
           window.transcribeAPI!.getModelStatus(),
           window.transcribeAPI!.getHotkey(),
@@ -62,11 +79,12 @@ export default function TranscriptionSettings() {
           window.transcribeAPI!.getModelDownloadStatus(),
           window.transcribeAPI!.getDownloadingModels?.() ?? [],
           window.transcribeAPI!.getAbandonHotkey?.() ?? 'Escape',
+          window.hotMicAPI?.getHotkey?.() ?? null,
         ]);
         setStatus(currentStatus);
         setModelStatus(currentModelStatus);
         setHotkey(currentHotkey);
-        setAvailableModels(models);
+        setAvailableModels(withDefaultWhisperModels(models));
         setSelectedModel(currentSelectedModel);
         setModelDownloadStatus(downloadStatus);
         // If a download is in progress, restore that state.
@@ -74,20 +92,13 @@ export default function TranscriptionSettings() {
           setDownloadingModel(downloadingModels[0]);
         }
         setAbandonHotkey(currentAbandonHotkey);
+        setHotMicHotkey(currentHotMicHotkey);
 
-        // Fetch transcription engine
+        // Whisper is now the only exposed engine for Voice & Transcription.
         const currentEngine = await window.transcribeAPI!.getTranscriptionEngine?.() ?? 'whisper';
-        setEngine(currentEngine);
-
-        // Fetch engine installation statuses
-        const [qi, mwi, as] = await Promise.all([
-          window.transcribeAPI!.isQwenInstalled?.() ?? false,
-          window.transcribeAPI!.isMlxWhisperInstalled?.() ?? false,
-          window.transcribeAPI!.isAppleSilicon?.() ?? true,
-        ]);
-        setQwenInstalled(qi);
-        setMlxWhisperInstalled(mwi);
-        setAppleSilicon(as);
+        if (currentEngine !== 'whisper') {
+          await window.transcribeAPI!.setTranscriptionEngine?.('whisper');
+        }
       } catch (err) {
         console.error('Failed to fetch transcription status:', err);
       }
@@ -109,7 +120,6 @@ export default function TranscriptionSettings() {
     });
 
     const unsubscribeProgress = window.transcribeAPI!.onModelDownloadProgress((downloaded, total) => {
-      setDownloadProgress({ downloaded, total });
       setModelDownloadProgress(prev => {
         if (downloadingModel) {
           return {
@@ -133,28 +143,6 @@ export default function TranscriptionSettings() {
       unsubscribeHotkey();
     };
   }, [isMacOS, downloadingModel]);
-
-  const handleDownloadModel = useCallback(async () => {
-    if (!window.transcribeAPI || isDownloading) return;
-
-    setIsDownloading(true);
-    setError(null);
-    setModelStatus('downloading');
-
-    try {
-      await window.transcribeAPI.downloadModel(selectedModel);
-      setModelStatus('downloaded');
-      setDownloadProgress(null);
-      const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
-      setModelDownloadStatus(downloadStatus);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to download model');
-      setModelStatus('missing');
-      console.error('Failed to download model:', err);
-    } finally {
-      setIsDownloading(false);
-    }
-  }, [isDownloading, selectedModel]);
 
   const handleDownloadModelForSize = useCallback(async (modelSize: string) => {
     if (!window.transcribeAPI || downloadingModel) return;
@@ -189,7 +177,7 @@ export default function TranscriptionSettings() {
   }, [downloadingModel]);
 
   const handleModelChange = useCallback(async (newModel: string) => {
-    if (!window.transcribeAPI || isDownloading) return;
+    if (!window.transcribeAPI || downloadingModel) return;
     
     setSelectedModel(newModel);
     setError(null);
@@ -197,14 +185,13 @@ export default function TranscriptionSettings() {
       await window.transcribeAPI.setSelectedModel(newModel);
       const newModelStatus = await window.transcribeAPI.getModelStatus();
       setModelStatus(newModelStatus);
-      setDownloadProgress(null);
       const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
       setModelDownloadStatus(downloadStatus);
     } catch (err) {
       console.error('Failed to change model:', err);
       setError(err instanceof Error ? err.message : 'Failed to change model');
     }
-  }, [isDownloading]);
+  }, [downloadingModel]);
 
   const handleDeleteModel = useCallback(async (modelSize: string) => {
     if (!window.transcribeAPI || deletingModel) return;
@@ -257,81 +244,17 @@ export default function TranscriptionSettings() {
     }
   }, []);
 
-  const handleSetupQwen = useCallback(async () => {
-    if (!window.transcribeAPI?.setupQwen) return;
-    setQwenSetupStatus('installing');
-    setQwenSetupError(null);
-    try {
-      const result = await window.transcribeAPI.setupQwen();
-      if (result.success) {
-        setQwenSetupStatus('done');
-        setQwenInstalled(true);
-        // Auto-switch engine to Qwen
-        if (window.transcribeAPI.setTranscriptionEngine) {
-          await window.transcribeAPI.setTranscriptionEngine('qwen');
-          setEngine('qwen');
-        }
-      } else {
-        setQwenSetupStatus('error');
-        setQwenSetupError(result.error || 'Setup failed');
-      }
-    } catch (err) {
-      setQwenSetupStatus('error');
-      setQwenSetupError(err instanceof Error ? err.message : 'Setup failed');
-    }
-  }, []);
-
-  const handleEngineChange = useCallback(async (newEngine: 'whisper' | 'qwen' | 'mlx-whisper') => {
-    if (!window.transcribeAPI?.setTranscriptionEngine) return;
-    setEngine(newEngine);
-    try {
-      await window.transcribeAPI.setTranscriptionEngine(newEngine);
-    } catch (err) {
-      console.error('Failed to set transcription engine:', err);
-      setEngine(engine);
-    }
-  }, [engine]);
-
-  const handleMlxWhisperSetup = useCallback(async () => {
-    if (!window.transcribeAPI?.setupMlxWhisper) return;
-    setMlxWhisperSetupStatus('installing');
-    setMlxWhisperSetupError(null);
-    try {
-      const result = await window.transcribeAPI.setupMlxWhisper();
-      if (result.success) {
-        setMlxWhisperSetupStatus('done');
-        setMlxWhisperInstalled(true);
-        if (window.transcribeAPI.setTranscriptionEngine) {
-          await window.transcribeAPI.setTranscriptionEngine('mlx-whisper');
-          setEngine('mlx-whisper');
-        }
-      } else {
-        setMlxWhisperSetupStatus('error');
-        setMlxWhisperSetupError(result.error || 'Setup failed');
-      }
-    } catch (err) {
-      setMlxWhisperSetupStatus('error');
-      setMlxWhisperSetupError(err instanceof Error ? err.message : 'Setup failed');
-    }
-  }, []);
-
-  useEffect(() => {
-    if (qwenSetupStatus !== 'installing') {
-      setQwenSetupTick(0);
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      setQwenSetupTick((prev) => (prev + 1) % 3);
-    }, 400);
-
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [qwenSetupStatus]);
-
   const handleStartCaptureHotkey = useCallback(() => {
     setIsCapturingHotkey(true);
+    setIsCapturingHotMicHotkey(false);
+    setIsCapturingAbandonHotkey(false);
+    setHotkeyError(null);
+  }, []);
+
+  const handleStartCaptureHotMicHotkey = useCallback(() => {
+    setIsCapturingHotMicHotkey(true);
+    setIsCapturingHotkey(false);
+    setIsCapturingAbandonHotkey(false);
     setHotkeyError(null);
   }, []);
 
@@ -352,7 +275,27 @@ export default function TranscriptionSettings() {
     }
   }, []);
 
-  const copyErrorText = useCallback(async (text: string, source: 'qwen' | 'mlx-whisper' | 'general') => {
+  const handleSetHotMicHotkey = useCallback(async (newHotkey: string | null) => {
+    if (!window.hotMicAPI?.setHotkey) return;
+
+    setIsCapturingHotMicHotkey(false);
+    setHotkeyError(null);
+
+    try {
+      const success = await window.hotMicAPI.setHotkey(newHotkey);
+      if (success) {
+        const savedHotkey = await window.hotMicAPI.getHotkey();
+        setHotMicHotkey(savedHotkey);
+      } else {
+        setHotkeyError('Failed to register Hot Mic hotkey. It may be in use by another application.');
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set Hot Mic hotkey');
+      console.error('Failed to set Hot Mic hotkey:', err);
+    }
+  }, []);
+
+  const copyErrorText = useCallback(async (text: string, source: 'general') => {
     try {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(text);
@@ -377,7 +320,13 @@ export default function TranscriptionSettings() {
   }, []);
 
   useEffect(() => {
-    const capturing = isCapturingHotkey ? 'transcription' : isCapturingAbandonHotkey ? 'abandon' : null;
+    const capturing = isCapturingHotkey
+      ? 'transcription'
+      : isCapturingHotMicHotkey
+        ? 'hotMic'
+        : isCapturingAbandonHotkey
+          ? 'abandon'
+          : null;
     if (!capturing) return;
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -436,6 +385,8 @@ export default function TranscriptionSettings() {
           const modifierName = event.key === 'Meta' ? 'Command' : event.key;
           if (capturing === 'transcription') {
             handleSetHotkey(modifierName);
+          } else if (capturing === 'hotMic') {
+            handleSetHotMicHotkey(modifierName);
           } else if (capturing === 'abandon') {
             handleSetAbandonHotkey(modifierName);
           }
@@ -456,6 +407,8 @@ export default function TranscriptionSettings() {
 
       if (capturing === 'transcription') {
         handleSetHotkey(hotkeyString);
+      } else if (capturing === 'hotMic') {
+        handleSetHotMicHotkey(hotkeyString);
       } else if (capturing === 'abandon') {
         handleSetAbandonHotkey(hotkeyString);
       }
@@ -465,7 +418,14 @@ export default function TranscriptionSettings() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isCapturingHotkey, isCapturingAbandonHotkey, handleSetHotkey, handleSetAbandonHotkey]);
+  }, [
+    isCapturingHotkey,
+    isCapturingHotMicHotkey,
+    isCapturingAbandonHotkey,
+    handleSetHotkey,
+    handleSetHotMicHotkey,
+    handleSetAbandonHotkey,
+  ]);
 
   if (!isMacOS) {
     return (
@@ -499,140 +459,91 @@ export default function TranscriptionSettings() {
     <div style={styles.container}>
       <div style={{ marginTop: '16px' }}>
         <div style={styles.sectionHeader}>
-          <span style={styles.sectionTitle}>TRANSCRIPTION ENGINE</span>
+          <span style={styles.sectionTitle}>SHORTCUTS</span>
           <div style={styles.sectionLine} />
         </div>
         <div style={styles.row}>
-          <span style={styles.rowLabel}>Engine</span>
-          <select
-            value={engine}
-            onChange={(e) => handleEngineChange(e.target.value as 'whisper' | 'qwen' | 'mlx-whisper')}
-            style={styles.select}
-          >
-            <option value="whisper">Whisper (default)</option>
-            <option value="mlx-whisper" disabled={!appleSilicon}>MLX Whisper (large-v3-turbo){!appleSilicon ? ' (requires Apple Silicon)' : ''}</option>
-            <option value="qwen" disabled={!appleSilicon}>Qwen3-ASR{!appleSilicon ? ' (requires Apple Silicon)' : ''}</option>
-          </select>
+          <span style={styles.rowLabel}>Standard Recording</span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={handleStartCaptureHotkey}
+              disabled={isCapturingHotMicHotkey || isCapturingAbandonHotkey}
+              style={{ ...styles.btn, ...(isCapturingHotkey ? styles.btnActive : {}) }}
+            >
+              {isCapturingHotkey ? 'Press keys...' : hotkey}
+            </button>
+            {isCapturingHotkey && (
+              <button
+                onClick={() => {
+                  setIsCapturingHotkey(false);
+                  setHotkeyError(null);
+                }}
+                style={styles.btnGhost}
+              >
+                Cancel
+              </button>
+            )}
+          </div>
         </div>
-        {!appleSilicon && engine !== 'qwen' && (
-          <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '4px' }}>
-            Qwen requires Apple Silicon (M1 or later).
-          </div>
-        )}
-        {appleSilicon && !qwenInstalled && (
-          <div style={{ marginTop: '8px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              {qwenSetupStatus === 'installing' ? (
-                <span style={{ fontSize: '12px', color: theme.textSecondary }}>
-                  Installing Qwen voice model{'.'.repeat(qwenSetupTick + 1)}
-                </span>
-              ) : qwenSetupStatus === 'done' ? (
-                <span style={{ fontSize: '12px', color: theme.success }}>Installed</span>
-              ) : (
-                <button
-                  onClick={handleSetupQwen}
-                  style={{
-                    padding: '6px 14px',
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    color: '#fff',
-                    backgroundColor: theme.info,
-                    border: 'none',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Download Qwen Voice Model
-                </button>
-              )}
-              {qwenSetupStatus === 'error' && qwenSetupError && (
-                <div style={styles.copyableErrorBlock}>
-                  <pre style={styles.copyableErrorText}>{qwenSetupError}</pre>
-                  <button
-                    onClick={() => copyErrorText(qwenSetupError, 'qwen')}
-                    style={styles.copyErrorButton}
-                  >
-                    {copiedError === 'qwen' ? 'Copied' : 'Copy error'}
-                  </button>
-                </div>
-              )}
-            </div>
-            {qwenSetupStatus === 'installing' && (
-              <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '6px' }}>
-                Download in progress. This can take a few minutes.
-              </div>
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>Toggle Hot Mic / Standard</span>
+          <div style={styles.rowControls}>
+            {window.hotMicAPI?.setHotkey ? (
+              <>
+                {isCapturingHotMicHotkey ? (
+                  <>
+                    <button
+                      style={{ ...styles.btn, ...styles.btnActive }}
+                    >
+                      Press keys...
+                    </button>
+                    <button
+                      onClick={() => {
+                        setIsCapturingHotMicHotkey(false);
+                        setHotkeyError(null);
+                      }}
+                      style={styles.btnGhost}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {hotMicHotkey && (
+                      <button
+                        onClick={() => void handleSetHotMicHotkey(null)}
+                        style={styles.btnGhost}
+                      >
+                        Clear
+                      </button>
+                    )}
+                    <button
+                      onClick={handleStartCaptureHotMicHotkey}
+                      disabled={isCapturingHotkey || isCapturingAbandonHotkey}
+                      style={styles.btn}
+                    >
+                      {hotMicHotkey || 'Not set'}
+                    </button>
+                  </>
+                )}
+              </>
+            ) : (
+              <span style={{ fontSize: '11px', color: theme.textSecondary }}>Unavailable</span>
             )}
-            <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '6px' }}>
-              Requires Python 3. If setup says python is missing, run{' '}
-              <code style={{ fontFamily: 'monospace' }}>brew install python</code>{' '}
-              in Terminal, then try again.
-            </div>
+          </div>
+        </div>
+        {hotkeyError && (
+          <div style={{ fontSize: '11px', color: theme.error, marginTop: '6px' }}>
+            {hotkeyError}
           </div>
         )}
-        {appleSilicon && qwenInstalled && engine === 'qwen' && (
-          <div style={{ fontSize: '11px', color: theme.success, marginTop: '4px' }}>
-            Qwen voice model installed.
-          </div>
-        )}
-        {appleSilicon && !mlxWhisperInstalled && engine === 'mlx-whisper' && (
-          <div style={{ marginTop: '8px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              {mlxWhisperSetupStatus === 'installing' ? (
-                <span style={{ fontSize: '12px', color: theme.textSecondary }}>
-                  Installing MLX Whisper model{'.'.repeat(qwenSetupTick + 1)}
-                </span>
-              ) : mlxWhisperSetupStatus === 'done' ? (
-                <span style={{ fontSize: '12px', color: theme.success }}>Installed</span>
-              ) : (
-                <button
-                  onClick={handleMlxWhisperSetup}
-                  style={{
-                    padding: '6px 14px',
-                    fontSize: '12px',
-                    fontWeight: 500,
-                    color: '#fff',
-                    backgroundColor: theme.info,
-                    border: 'none',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Download MLX Whisper Model (~1.6 GB)
-                </button>
-              )}
-              {mlxWhisperSetupStatus === 'error' && mlxWhisperSetupError && (
-                <div style={styles.copyableErrorBlock}>
-                  <pre style={styles.copyableErrorText}>{mlxWhisperSetupError}</pre>
-                  <button
-                    onClick={() => copyErrorText(mlxWhisperSetupError, 'mlx-whisper')}
-                    style={styles.copyErrorButton}
-                  >
-                    {copiedError === 'mlx-whisper' ? 'Copied' : 'Copy error'}
-                  </button>
-                </div>
-              )}
-            </div>
-            {mlxWhisperSetupStatus === 'installing' && (
-              <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '6px' }}>
-                Download in progress. This can take a few minutes (~1.6 GB model).
-              </div>
-            )}
-            <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '6px' }}>
-              Whisper large-v3-turbo running natively on MLX. Higher quality and faster than whisper.cpp.
-              Requires Apple Silicon and Python 3.
-            </div>
-          </div>
-        )}
-        {appleSilicon && mlxWhisperInstalled && engine === 'mlx-whisper' && (
-          <div style={{ fontSize: '11px', color: theme.success, marginTop: '4px' }}>
-            MLX Whisper model installed.
-          </div>
-        )}
+
+        <div style={{ height: '12px' }} />
       </div>
 
-      <div style={{ ...styles.modelsSection, opacity: engine !== 'whisper' ? 0.4 : 1, pointerEvents: engine !== 'whisper' ? 'none' : 'auto' }}>
+      <div style={styles.modelsSection}>
         <div style={styles.sectionHeader}>
-          <span style={styles.sectionTitle}>LOCAL TRANSCRIPTION MODELS</span>
+          <span style={styles.sectionTitle}>WHISPER MODELS</span>
           <div style={styles.sectionLine} />
         </div>
 
@@ -647,7 +558,7 @@ export default function TranscriptionSettings() {
           <select
             value={selectedModel}
             onChange={(e) => handleModelChange(e.target.value)}
-            disabled={isDownloading || downloadingModel !== null}
+            disabled={downloadingModel !== null}
             style={styles.select}
           >
             {!Object.values(modelDownloadStatus).some(Boolean) && (
@@ -674,7 +585,9 @@ export default function TranscriptionSettings() {
               const progressPercent = progress ? Math.round((progress.downloaded / progress.total) * 100) : 0;
               const sizeMB = (info.sizeBytes / 1024 / 1024).toFixed(0);
 
-              const qualityHint = size === 'small' ? 'Fast and reliable accuracy' : '';
+              const qualityHint = size === 'small'
+                ? 'Fast and reliable accuracy'
+                : '';
 
               return (
                 <div

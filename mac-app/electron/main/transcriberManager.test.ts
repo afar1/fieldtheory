@@ -29,6 +29,7 @@ vi.mock('./logger', () => ({
   }),
 }));
 
+import { clipboard } from 'electron';
 import { TranscriberManager } from './transcriberManager';
 
 // Command queue tests for Qwen/MLX Whisper are now covered by stdioJsonServer.test.ts,
@@ -531,12 +532,140 @@ describe('TranscriberManager command paste formatting', () => {
   });
 });
 
+describe('TranscriberManager standard paste target fallback', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('pastes into last external target when Field Theory is frontmost', async () => {
+    const typeIntoApp = vi.fn(async () => ({ success: true }));
+    const manager: any = {
+      sketchModeChecker: null,
+      clipboardManager: {
+        getItem: vi.fn((id: number) => (id === 1 ? { id: 1, type: 'transcript', content: 'hello world' } : null)),
+        setClipboardHashFromText: vi.fn(),
+        syncClipboardHash: vi.fn(),
+      },
+      currentStack: [1],
+      detectedCommands: [],
+      getFrontmostAppBundleId: vi.fn(async () => 'com.fieldtheory.app'),
+      nativeHelper: {
+        getFrontmostApp: vi.fn(() => ({ bundleId: 'com.mitchellh.ghostty' })),
+        typeIntoApp,
+      },
+      lastExternalPasteTargetBundleId: null,
+      lastTranscription: 'hello world',
+      emit: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.pasteStack(false);
+
+    expect(typeIntoApp).toHaveBeenCalledWith('com.mitchellh.ghostty', 'hello world', false);
+    expect(manager.emit).not.toHaveBeenCalledWith(
+      'paste-failed',
+      'Field Theory has focus - press Cmd+V in your target app',
+      expect.any(String),
+    );
+  });
+
+  it('treats dev Electron bundle as Field Theory and falls back to external target', async () => {
+    const typeIntoApp = vi.fn(async () => ({ success: true }));
+    const manager: any = {
+      sketchModeChecker: null,
+      clipboardManager: {
+        getItem: vi.fn((id: number) => (id === 1 ? { id: 1, type: 'transcript', content: 'hello world' } : null)),
+        setClipboardHashFromText: vi.fn(),
+        syncClipboardHash: vi.fn(),
+      },
+      currentStack: [1],
+      detectedCommands: [],
+      getFrontmostAppBundleId: vi.fn(async () => 'com.github.Electron'),
+      nativeHelper: {
+        getFrontmostApp: vi.fn(() => ({ bundleId: 'com.mitchellh.ghostty' })),
+        typeIntoApp,
+      },
+      lastExternalPasteTargetBundleId: null,
+      lastTranscription: 'hello world',
+      emit: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.pasteStack(false);
+
+    expect(typeIntoApp).toHaveBeenCalledWith('com.mitchellh.ghostty', 'hello world', false);
+  });
+
+  it('emits paste-failed when Field Theory is frontmost and no external app is known', async () => {
+    const typeIntoApp = vi.fn(async () => ({ success: true }));
+    const manager: any = {
+      sketchModeChecker: null,
+      clipboardManager: {
+        getItem: vi.fn(() => ({ id: 1, type: 'transcript', content: 'hello world' })),
+      },
+      currentStack: [1],
+      detectedCommands: [],
+      getFrontmostAppBundleId: vi.fn(async () => 'com.fieldtheory.app'),
+      nativeHelper: {
+        getFrontmostApp: vi.fn(() => null),
+        typeIntoApp,
+      },
+      lastExternalPasteTargetBundleId: null,
+      lastTranscription: 'hello world',
+      emit: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.pasteStack(false);
+
+    expect(typeIntoApp).not.toHaveBeenCalled();
+    expect(manager.emit).toHaveBeenCalledWith(
+      'paste-failed',
+      'Field Theory has focus - press Cmd+V in your target app',
+      'hello world',
+    );
+  });
+
+  it('falls back to clipboard paste when forced target injection fails', async () => {
+    const typeIntoApp = vi.fn(async () => ({ success: false, error: 'injection failed' }));
+    const clearStack = vi.fn();
+    const pasteText = vi.fn(async () => undefined);
+    const manager: any = {
+      sketchModeChecker: null,
+      clipboardManager: {
+        getItem: vi.fn(() => ({ id: 1, type: 'transcript', content: 'hello world' })),
+        syncClipboardHash: vi.fn(),
+      },
+      currentStack: [1],
+      detectedCommands: [],
+      getFrontmostAppBundleId: vi.fn(async () => 'com.fieldtheory.app'),
+      nativeHelper: {
+        getFrontmostApp: vi.fn(() => ({ bundleId: 'com.mitchellh.ghostty' })),
+        typeIntoApp,
+      },
+      clearStack,
+      pasteText,
+      lastExternalPasteTargetBundleId: null,
+      lastTranscription: 'hello world',
+      emit: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.pasteStack(false);
+
+    expect(typeIntoApp).toHaveBeenCalledWith('com.mitchellh.ghostty', 'hello world', false);
+    expect(clipboard.writeText).toHaveBeenCalledWith('hello world');
+    expect(pasteText).toHaveBeenCalledWith('com.mitchellh.ghostty');
+    expect(clearStack).not.toHaveBeenCalled();
+  });
+});
+
 describe('TranscriberManager standard real-time chunking', () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  it('uses accumulated real-time transcript text without running full-file transcription', async () => {
+  it('runs full-file transcription even when real-time transcript text exists', async () => {
     const transcribeWithEngineFallback = vi.fn(async () => 'full file text');
     const manager: any = {
       status: 'recording',
@@ -559,6 +688,10 @@ describe('TranscriberManager standard real-time chunking', () => {
       standardLiveTranscript: 'chunked transcript text',
       sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
       clearStandardLiveTranscript: vi.fn(),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
       squaresManager: null,
       commandsManager: null,
       clipboardManager: null,
@@ -576,11 +709,60 @@ describe('TranscriberManager standard real-time chunking', () => {
 
     await manager.stopRecordingAndTranscribe();
 
-    expect(transcribeWithEngineFallback).not.toHaveBeenCalled();
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'whisper');
     expect(manager.processStandardChunkQueue).toHaveBeenCalledTimes(1);
     expect(manager.pasteStack).toHaveBeenCalledWith(false);
-    expect(manager.emit).toHaveBeenCalledWith('result', 'chunked transcript text');
+    expect(manager.emit).toHaveBeenCalledWith('result', 'full file text');
     expect(manager.emit).not.toHaveBeenCalledWith('improvingStarted');
+  });
+
+  it('falls back to live transcript when full-file transcription is empty', async () => {
+    const transcribeWithEngineFallback = vi.fn(async () => '');
+    const manager: any = {
+      status: 'recording',
+      unregisterAbandonHotkey: vi.fn(),
+      soundManager: { play: vi.fn() },
+      nativeHelper: {
+        snapshotRecording: vi.fn(async () => '/tmp/chunk.wav'),
+        stopRecording: vi.fn(async () => '/tmp/full.wav'),
+        checkFocusedTextInput: vi.fn(async () => true),
+      },
+      processStandardChunkQueue: vi.fn(async () => {}),
+      waitForStandardChunkDrain: vi.fn(async () => {}),
+      detachStandardChunkListener: vi.fn(),
+      pendingImmediateSquaresAction: null,
+      pendingImmediateSquaresText: '',
+      standardPendingChunkQueue: [],
+      trackPriorityMicUsage: vi.fn(async () => {}),
+      setStatus: vi.fn(),
+      overlay: { showTranscribing: vi.fn() },
+      standardLiveTranscript: 'chunked transcript text',
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      clearStandardLiveTranscript: vi.fn(),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
+      squaresManager: null,
+      commandsManager: null,
+      clipboardManager: null,
+      detectedCommands: [],
+      accessTokenGetter: null,
+      lastTranscription: '',
+      pasteStack: vi.fn(async () => {}),
+      emit: vi.fn(),
+      skipNextPasteFailedNotification: false,
+      handleOverlayAfterTranscription: vi.fn(),
+      transcribeWithEngineFallback,
+      preferences: { getPreference: vi.fn(() => 'whisper') },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.stopRecordingAndTranscribe();
+
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'whisper');
+    expect(manager.pasteStack).toHaveBeenCalledWith(false);
+    expect(manager.emit).toHaveBeenCalledWith('result', 'chunked transcript text');
   });
 
   it('stops recording immediately when a tail Squares command is detected in a chunk', async () => {
@@ -590,7 +772,6 @@ describe('TranscriberManager standard real-time chunking', () => {
       pendingImmediateSquaresAction: null,
       pendingImmediateSquaresText: '',
       standardLiveTranscript: '',
-      standardRealtimeChunks: [],
       standardChunkCommandTriggered: false,
       preferences: { getPreference: vi.fn(() => 'whisper') },
       transcribeWithEngineFallback: vi.fn(async () => 'draft tile'),
@@ -628,7 +809,6 @@ describe('TranscriberManager standard real-time chunking', () => {
       status: 'recording',
       pendingImmediateSquaresAction: null,
       standardLiveTranscript: '',
-      standardRealtimeChunks: [],
       standardChunkCommandTriggered: false,
       preferences: { getPreference: vi.fn(() => 'whisper') },
       transcribeWithEngineFallback: vi
@@ -650,8 +830,8 @@ describe('TranscriberManager standard real-time chunking', () => {
     expect(manager.emit).toHaveBeenCalledWith('standardLiveTranscript', 'hello again');
   });
 
-  it('adds figure references once at finalize when using realtime transcript', async () => {
-    const transcribeWithEngineFallback = vi.fn(async () => 'full file text');
+  it('keeps standard finalization on full-file transcription even when figure metadata exists', async () => {
+    const transcribeWithEngineFallback = vi.fn(async () => 'full file transcript [Figure 1]');
     const manager: any = {
       status: 'recording',
       unregisterAbandonHotkey: vi.fn(),
@@ -673,6 +853,10 @@ describe('TranscriberManager standard real-time chunking', () => {
       standardLiveTranscript: 'chunked [Figure 1] transcript [Figure 1]',
       sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
       clearStandardLiveTranscript: vi.fn(),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
       squaresManager: null,
       commandsManager: null,
       clipboardManager: null,
@@ -690,12 +874,12 @@ describe('TranscriberManager standard real-time chunking', () => {
 
     await manager.stopRecordingAndTranscribe();
 
-    expect(transcribeWithEngineFallback).not.toHaveBeenCalled();
-    expect(manager.emit).toHaveBeenCalledWith('result', 'chunked transcript [Figure 1]');
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'whisper');
+    expect(manager.emit).toHaveBeenCalledWith('result', 'full file transcript [Figure 1]');
   });
 
-  it('inserts figure references inline by realtime chunk timing at finalize', async () => {
-    const transcribeWithEngineFallback = vi.fn(async () => 'full file text');
+  it('uses full-file output for final standard transcript even when live chunks exist', async () => {
+    const transcribeWithEngineFallback = vi.fn(async () => 'authoritative full transcript');
     const manager: any = {
       status: 'recording',
       unregisterAbandonHotkey: vi.fn(),
@@ -722,6 +906,10 @@ describe('TranscriberManager standard real-time chunking', () => {
       standardLiveTranscript: 'first chunk second chunk third chunk',
       sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
       clearStandardLiveTranscript: vi.fn(),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
       squaresManager: null,
       commandsManager: null,
       clipboardManager: null,
@@ -743,10 +931,58 @@ describe('TranscriberManager standard real-time chunking', () => {
 
     await manager.stopRecordingAndTranscribe();
 
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'whisper');
+    expect(manager.emit).toHaveBeenCalledWith('result', 'authoritative full transcript');
+  });
+
+  it('uses immediate tail command text and skips full-file transcription', async () => {
+    const transcribeWithEngineFallback = vi.fn(async () => 'full file text');
+    const manager: any = {
+      status: 'recording',
+      unregisterAbandonHotkey: vi.fn(),
+      soundManager: { play: vi.fn() },
+      nativeHelper: {
+        snapshotRecording: vi.fn(async () => '/tmp/chunk.wav'),
+        stopRecording: vi.fn(async () => '/tmp/full.wav'),
+        checkFocusedTextInput: vi.fn(async () => true),
+      },
+      processStandardChunkQueue: vi.fn(async () => {}),
+      waitForStandardChunkDrain: vi.fn(async () => {}),
+      detachStandardChunkListener: vi.fn(),
+      pendingImmediateSquaresAction: 'grid',
+      pendingImmediateSquaresText: 'draft layout',
+      standardPendingChunkQueue: [],
+      trackPriorityMicUsage: vi.fn(async () => {}),
+      setStatus: vi.fn(),
+      overlay: { showTranscribing: vi.fn() },
+      standardLiveTranscript: 'ignored live text',
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      clearStandardLiveTranscript: vi.fn(),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
+      squaresManager: {
+        executeAction: vi.fn(async () => {}),
+      },
+      commandsManager: null,
+      clipboardManager: null,
+      detectedCommands: [],
+      lastTranscription: '',
+      pasteStack: vi.fn(async () => {}),
+      emit: vi.fn(),
+      skipNextPasteFailedNotification: false,
+      handleOverlayAfterTranscription: vi.fn(),
+      transcribeWithEngineFallback,
+      preferences: { getPreference: vi.fn(() => 'whisper') },
+      screenshotMetadata: [],
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.stopRecordingAndTranscribe();
+
     expect(transcribeWithEngineFallback).not.toHaveBeenCalled();
-    expect(manager.emit).toHaveBeenCalledWith(
-      'result',
-      'first chunk [Figure 1] second chunk [Figure 2] third chunk [Figure 3]'
-    );
+    expect(manager.squaresManager.executeAction).toHaveBeenCalledWith('grid');
+    expect(manager.emit).toHaveBeenCalledWith('result', 'draft layout');
   });
 });

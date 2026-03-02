@@ -101,7 +101,6 @@ export class DynamicIslandManager extends EventEmitter {
 
   private readonly ISLAND_WIDTH = 460;
   private readonly ISLAND_WIDTH_IDLE = 72;
-  private readonly ISLAND_WIDTH_IDLE_WITH_HUD = 620;
   private readonly ISLAND_HEIGHT = 52;
   private readonly ISLAND_HEIGHT_IDLE = 38;
   private readonly ISLAND_HEIGHT_WITH_TRANSCRIPT = 64;
@@ -1205,8 +1204,7 @@ export class DynamicIslandManager extends EventEmitter {
 
   private getIdlePillWidth(): number {
     const baseWidth = this.geometryTuning.pillWidth;
-    const hudWidth = this.inputMode === 'hot-mic' ? this.ISLAND_WIDTH_IDLE_WITH_HUD : this.ISLAND_WIDTH_IDLE;
-    return Math.max(baseWidth, hudWidth);
+    return Math.max(baseWidth, this.ISLAND_WIDTH_IDLE);
   }
 
   private getIdlePillHeight(): number {
