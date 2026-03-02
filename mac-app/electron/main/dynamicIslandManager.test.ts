@@ -553,6 +553,9 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(left).toBeDefined();
     expect(left?.getSize()).toEqual([72, 38]);
 
+    manager.setInputMode('hot-mic');
+    expect(left?.getSize()).toEqual([72, 38]);
+
     manager.setState('recording');
     expect(left?.getSize()).toEqual([72, 38]);
 

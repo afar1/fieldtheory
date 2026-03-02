@@ -10,7 +10,12 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import crypto from 'crypto';
 import { NativeHelper } from './nativeHelper';
-import { ModelManager, ModelSize } from './modelManager';
+import {
+  DEFAULT_MODEL_SIZE,
+  isModelSize,
+  ModelManager,
+  ModelSize,
+} from './modelManager';
 import { PreferencesManager } from './preferences';
 import { RecordingOverlay } from './recordingOverlay';
 import { ClipboardManager, ClipboardItem, isTerminalApp, isIDEWithTerminal } from './clipboardManager';
@@ -141,6 +146,12 @@ export class TranscriberManager extends EventEmitter {
   private skipNextPasteFailedNotification: boolean = false;
   private priorityMicSkippedForQuota: boolean = false; // True when quota exhausted, skip tracking
   private autoStackLimitShownThisSession: boolean = false; // Only show limit message once per session
+  private lastExternalPasteTargetBundleId: string | null = null;
+  private static readonly FIELD_THEORY_BUNDLE_IDS = new Set([
+    'com.fieldtheory.app',
+    'com.fieldtheory.experimental',
+    'com.github.electron',
+  ]);
 
   // GPU fallback: if whisper-cli crashes due to Metal shader compilation failure,
   // disable GPU and retry with CPU-only mode for the rest of the session.
@@ -163,7 +174,6 @@ export class TranscriberManager extends EventEmitter {
   private standardLiveTranscript: string = '';
   private standardChunkReadyListener: ((filePath: string) => void) | null = null;
   private standardPendingChunkQueue: Array<{ filePath: string; readyAtMs: number }> = [];
-  private standardRealtimeChunks: Array<{ text: string; endMs: number }> = [];
   private standardChunkProcessingInFlight: boolean = false;
   private standardChunkCommandTriggered: boolean = false;
   private pendingImmediateSquaresAction: string | null = null;
@@ -215,6 +225,15 @@ export class TranscriberManager extends EventEmitter {
     
     this.overlay.on('abandon-cancelled', () => {
       this.handleConfirmationResponse(false);
+    });
+
+    // Keep track of the latest non-Field-Theory app so standard recording can
+    // still paste to the user's target app when recording is toggled from our UI.
+    this.nativeHelper.on('frontmostAppChanged', (appInfo: { bundleId?: string | null }) => {
+      const bundleId = appInfo?.bundleId ?? null;
+      if (bundleId && !this.isFieldTheoryBundleId(bundleId)) {
+        this.lastExternalPasteTargetBundleId = bundleId;
+      }
     });
   }
   
@@ -296,16 +315,26 @@ export class TranscriberManager extends EventEmitter {
   async init(): Promise<void> {
     // Load preferences
     await this.preferences.load();
+    const configuredEngine = this.preferences.getPreference('transcriptionEngine');
+    if (configuredEngine && configuredEngine !== 'whisper') {
+      log.info(
+        'Transcription engine "%s" is no longer exposed in settings; reverting to whisper',
+        configuredEngine
+      );
+      await this.preferences.save({
+        transcriptionEngine: 'whisper',
+        hotMicTranscriptionEngine: 'default',
+      });
+    }
     this.hotkey = this.preferences.getPreference('transcriptionHotkey');
     this.secondaryHotkey = this.preferences.getPreference('transcriptionSecondaryHotkey') || null;
 
     // Set the selected model from preferences.
-    // Validate that the model is still supported (base was removed in v0.1.29, medium in v0.1.54).
-    const validModels: ModelSize[] = ['small'];
+    // Validate against currently supported whisper.cpp model sizes.
     let selectedModel = this.preferences.getPreference('selectedModel');
-    if (!validModels.includes(selectedModel)) {
-      selectedModel = 'small';
-      await this.preferences.save({ selectedModel: 'small' });
+    if (!isModelSize(selectedModel)) {
+      selectedModel = DEFAULT_MODEL_SIZE;
+      await this.preferences.save({ selectedModel: DEFAULT_MODEL_SIZE });
     }
     this.modelManager.setSelectedModel(selectedModel);
 
@@ -816,7 +845,6 @@ export class TranscriberManager extends EventEmitter {
   private resetStandardRealtimeSession(): void {
     this.standardLiveTranscript = '';
     this.standardPendingChunkQueue = [];
-    this.standardRealtimeChunks = [];
     this.standardChunkProcessingInFlight = false;
     this.standardChunkCommandTriggered = false;
     this.pendingImmediateSquaresAction = null;
@@ -930,10 +958,6 @@ export class TranscriberManager extends EventEmitter {
       const liveChunkText = this.stripFigureReferences(chunkText);
       if (!liveChunkText) return;
 
-      const endMs = typeof chunkReadyAtMs === 'number'
-        ? Math.max(0, chunkReadyAtMs)
-        : (this.recordingStartTime > 0 ? Math.max(0, Date.now() - this.recordingStartTime) : 0);
-      this.standardRealtimeChunks.push({ text: liveChunkText, endMs });
       this.standardLiveTranscript = [this.standardLiveTranscript, liveChunkText]
         .map((part) => part.trim())
         .filter(Boolean)
@@ -949,9 +973,6 @@ export class TranscriberManager extends EventEmitter {
           this.pendingImmediateSquaresAction = tailMatch.action;
           this.pendingImmediateSquaresText = tailMatch.remainingText.trim();
           this.standardLiveTranscript = this.pendingImmediateSquaresText;
-          this.standardRealtimeChunks = this.pendingImmediateSquaresText
-            ? [{ text: this.pendingImmediateSquaresText, endMs }]
-            : [];
           this.emit('standardLiveTranscript', this.standardLiveTranscript);
 
           if (!this.standardChunkCommandTriggered) {
@@ -987,41 +1008,6 @@ export class TranscriberManager extends EventEmitter {
       .replace(/\s*\[Figure\s+[A-Za-z0-9]+\]\s*/gi, ' ')
       .replace(/\s+/g, ' ')
       .trim();
-  }
-
-  private insertFigureReferencesIntoRealtimeTranscript(): string {
-    const chunks = Array.isArray(this.standardRealtimeChunks) ? this.standardRealtimeChunks : [];
-    const segments = chunks
-      .map((chunk) => ({ text: chunk.text.trim(), endMs: Math.max(0, chunk.endMs) }))
-      .filter((segment) => segment.text.length > 0);
-
-    if (segments.length === 0) {
-      return this.insertFigureReferences(this.stripFigureReferences(this.standardLiveTranscript));
-    }
-
-    const sortedScreenshots = [...this.screenshotMetadata].sort(
-      (a, b) => a.capturedAtMs - b.capturedAtMs
-    );
-    const segmentFigures: Map<number, string[]> = new Map();
-
-    for (const screenshot of sortedScreenshots) {
-      let segmentIndex = segments.findIndex((segment) => screenshot.capturedAtMs <= segment.endMs);
-      if (segmentIndex < 0) {
-        segmentIndex = segments.length - 1;
-      }
-      const figures = segmentFigures.get(segmentIndex) ?? [];
-      figures.push(screenshot.figureLabel);
-      segmentFigures.set(segmentIndex, figures);
-    }
-
-    const result = segments.map((segment, index) => {
-      const figures = segmentFigures.get(index);
-      if (!figures || figures.length === 0) return segment.text;
-      const refs = figures.map((figureLabel) => `[Figure ${figureLabel}]`).join(' ');
-      return `${segment.text} ${refs}`;
-    });
-
-    return result.join(' ').trim();
   }
 
   /**
@@ -1081,7 +1067,7 @@ export class TranscriberManager extends EventEmitter {
     const frontmostBundleId = await this.getFrontmostAppBundleId();
 
     // Skip paste if Field Theory itself is frontmost.
-    if (frontmostBundleId === 'com.fieldtheory.app' || frontmostBundleId === 'com.fieldtheory.experimental') {
+    if (this.isFieldTheoryBundleId(frontmostBundleId)) {
       this.emit('paste-failed', 'Field Theory has focus - press Cmd+V in your target app', '');
       return;
     }
@@ -1196,16 +1182,15 @@ export class TranscriberManager extends EventEmitter {
       this.overlay.showTranscribing();
 
       let cleanedText = '';
-      let usedRealtimeTranscript = false;
+      const liveTranscriptFallback = this.standardLiveTranscript.trim();
 
       if (immediateSquaresAction) {
+        // Immediate Squares actions are finalized from the detected tail text so we can
+        // execute the command deterministically even if recording is stopped mid-phrase.
         cleanedText = this.sanitizeTranscriptText(immediateSquaresText);
-        usedRealtimeTranscript = true;
-      } else if (this.standardLiveTranscript.trim().length > 0) {
-        cleanedText = this.sanitizeTranscriptText(this.standardLiveTranscript);
-        usedRealtimeTranscript = true;
       } else {
-        // Check if whisper model is available (skip for Qwen - it manages its own model).
+        // Standard recording is accuracy-first: always run a full-file pass at stop.
+        // Live chunks are used only for in-session preview/UX.
         const engineForModelCheck = this.preferences.getPreference('transcriptionEngine') || 'whisper';
         if (engineForModelCheck === 'whisper') {
           const selectedModel = this.modelManager.getSelectedModel();
@@ -1224,20 +1209,21 @@ export class TranscriberManager extends EventEmitter {
         cleanedText = this.sanitizeTranscriptText(text);
       }
 
-      if (usedRealtimeTranscript && Array.isArray(this.screenshotMetadata) && this.screenshotMetadata.length > 0) {
-        // Live chunk accumulation strips figure refs to keep Dynamic Island readable.
-        // Re-insert refs inline using per-chunk timing captured during realtime transcription.
-        cleanedText = this.insertFigureReferencesIntoRealtimeTranscript();
-      }
-
       this.clearStandardLiveTranscript();
-      if (usedRealtimeTranscript) {
-        void fs.promises.unlink(wavPath).catch(() => {});
-      }
       
       // Check for Squares voice commands (e.g., "grid", "focus", "horizontal").
       // If the transcription is a window management command, execute it and skip pasting.
       let deferredSquaresAction = immediateSquaresAction;
+      if (cleanedText.length === 0 && !deferredSquaresAction && liveTranscriptFallback.length > 0) {
+        const fallbackText = this.sanitizeTranscriptText(liveTranscriptFallback);
+        if (fallbackText.length > 0) {
+          cleanedText = fallbackText;
+          log.warn(
+            'Full-file transcription empty; falling back to live transcript (%d chars)',
+            fallbackText.length
+          );
+        }
+      }
       if (cleanedText.length === 0) {
         if (deferredSquaresAction && this.squaresManager) {
           await this.squaresManager.executeAction(deferredSquaresAction);
@@ -2536,8 +2522,13 @@ export class TranscriberManager extends EventEmitter {
   /**
    * Paste text into the active application using AppleScript.
    */
-  private async pasteText(): Promise<void> {
+  private async pasteText(targetBundleId: string | null = null): Promise<void> {
     try {
+      if (targetBundleId) {
+        const safeBundleId = targetBundleId.replace(/"/g, '');
+        await execAsync(`osascript -e 'tell application id "${safeBundleId}" to activate'`);
+        await new Promise((resolve) => setTimeout(resolve, 80));
+      }
       // Use AppleScript to send Command+V
       await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
     } catch (error) {
@@ -3376,6 +3367,78 @@ export class TranscriberManager extends EventEmitter {
     return `${trimmed} `;
   }
 
+  private isFieldTheoryBundleId(bundleId: string | null | undefined): boolean {
+    return !!bundleId && TranscriberManager.FIELD_THEORY_BUNDLE_IDS.has(bundleId.toLowerCase());
+  }
+
+  /**
+   * Match Hot Mic behavior: prefer current non-Field-Theory frontmost app.
+   * If Field Theory is frontmost (user clicked our UI), fall back to the last
+   * known external app so standard recording can still paste to the user's target.
+   */
+  private resolveStandardPasteTargetBundleId(frontmostBundleId: string | null): string | null {
+    if (frontmostBundleId && !this.isFieldTheoryBundleId(frontmostBundleId)) {
+      this.lastExternalPasteTargetBundleId = frontmostBundleId;
+      return null;
+    }
+
+    const cachedFrontmost = this.nativeHelper.getFrontmostApp()?.bundleId ?? null;
+    if (cachedFrontmost && !this.isFieldTheoryBundleId(cachedFrontmost)) {
+      this.lastExternalPasteTargetBundleId = cachedFrontmost;
+      return cachedFrontmost;
+    }
+
+    return this.lastExternalPasteTargetBundleId;
+  }
+
+  private async typeIntoAppWithClipboardSync(
+    bundleId: string,
+    text: string,
+    pressEnter: boolean
+  ): Promise<{ success: boolean; error?: string }> {
+    const clipboardManager = this.clipboardManager;
+    if (text) {
+      clipboardManager?.setClipboardHashFromText?.(text);
+    }
+    const result = await this.nativeHelper.typeIntoApp(bundleId, text, pressEnter);
+    if (!result.success && text) {
+      clipboardManager?.syncClipboardHash?.();
+    }
+    return result;
+  }
+
+  private emitPasteFailureAndMaybeClear(message: string, clearAfter: boolean): void {
+    this.emit('paste-failed', message, this.lastTranscription);
+    if (clearAfter) {
+      this.clearStack();
+    }
+  }
+
+  private async pasteTextIntoResolvedTarget(
+    text: string,
+    forcedTargetBundleId: string | null,
+    clearAfter: boolean
+  ): Promise<boolean> {
+    if (forcedTargetBundleId) {
+      const result = await this.typeIntoAppWithClipboardSync(forcedTargetBundleId, text, false);
+      if (!result.success) {
+        // Fall back to legacy clipboard + Cmd+V path if direct injection fails.
+        // This matches historical behavior and improves compatibility with apps
+        // where typeIntoApp can fail transiently.
+        clipboard.writeText(text);
+        this.clipboardManager?.syncClipboardHash();
+        await this.pasteText(forcedTargetBundleId);
+        return true;
+      }
+      return true;
+    }
+
+    clipboard.writeText(text);
+    this.clipboardManager?.syncClipboardHash();
+    await this.pasteText();
+    return true;
+  }
+
   /**
    * Paste all items in the current stack.
    * Pastes text and images sequentially with delays between each.
@@ -3396,14 +3459,17 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
-    // Skip paste if Field Theory itself is frontmost - user may have clicked in our UI.
-    // Content is still in clipboard, user can Cmd+V manually in their target app.
+    // Match Hot Mic behavior:
+    // - If a non-Field-Theory app is frontmost, paste there as usual.
+    // - If Field Theory is frontmost (user clicked our UI), fall back to the
+    //   last known external app and inject there.
     const frontmostBundleId = await this.getFrontmostAppBundleId();
-    if (frontmostBundleId === 'com.fieldtheory.app' || frontmostBundleId === 'com.fieldtheory.experimental') {
-      this.emit('paste-failed', 'Field Theory has focus - press Cmd+V in your target app', this.lastTranscription);
-      if (clearAfter) {
-        this.clearStack();
-      }
+    const forcedTargetBundleId = this.resolveStandardPasteTargetBundleId(frontmostBundleId);
+    if (this.isFieldTheoryBundleId(frontmostBundleId) && !forcedTargetBundleId) {
+      this.emitPasteFailureAndMaybeClear(
+        'Field Theory has focus - press Cmd+V in your target app',
+        clearAfter
+      );
       return;
     }
 
@@ -3415,9 +3481,10 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
-    // Detect if frontmost app is a terminal/CLI or an IDE with terminal-like behavior
-    const isTerminal = isTerminalApp(frontmostBundleId);
-    const isIDE = isIDEWithTerminal(frontmostBundleId);
+    // Detect app capabilities from the effective paste target.
+    const effectiveTargetBundleId = forcedTargetBundleId ?? frontmostBundleId;
+    const isTerminal = isTerminalApp(effectiveTargetBundleId);
+    const isIDE = isIDEWithTerminal(effectiveTargetBundleId);
 
     // Check if we have a transcript with figures
     const hasTranscriptWithFigures =
@@ -3469,9 +3536,10 @@ export class TranscriberManager extends EventEmitter {
           }
         }
 
-        clipboard.writeText(this.addFollowupTypingSpace(textContent));
-        this.clipboardManager?.syncClipboardHash();
-        await this.pasteText();
+        const payload = this.addFollowupTypingSpace(textContent);
+        if (!(await this.pasteTextIntoResolvedTarget(payload, forcedTargetBundleId, clearAfter))) {
+          return;
+        }
 
         // For non-terminal, non-IDE apps, paste command files as actual file attachments
         // using NSFilenamesPboardType so apps can receive them like Finder-copied files
@@ -3481,7 +3549,7 @@ export class TranscriberManager extends EventEmitter {
           const plistData = plist.build(filePaths);
           clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
           this.clipboardManager?.syncClipboardHash();
-          await this.pasteText();
+          await this.pasteText(forcedTargetBundleId);
         }
       } else if (item.imageData) {
         if (isTerminal) {
@@ -3495,7 +3563,7 @@ export class TranscriberManager extends EventEmitter {
             // Use real path for terminal compatibility
             clipboard.writeText(`${imagePath} `);
             this.clipboardManager?.syncClipboardHash();
-            await this.pasteText();
+            await this.pasteText(forcedTargetBundleId);
           }
         } else {
           // For non-terminals, paste the actual image so multimodal apps can see it.
@@ -3506,16 +3574,16 @@ export class TranscriberManager extends EventEmitter {
           clipboard.writeImage(image);
           // Set hash directly from the buffer (avoids expensive toPNG() call)
           this.clipboardManager?.setClipboardHashFromBuffer(imageBuffer);
-          await this.pasteText();
+          await this.pasteText(forcedTargetBundleId);
         }
       }
 
       // Blank line between items for all apps.
       if (itemIdx < items.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 100));
-        clipboard.writeText('\n');
-        this.clipboardManager?.syncClipboardHash();
-        await this.pasteText();
+        if (!(await this.pasteTextIntoResolvedTarget('\n', forcedTargetBundleId, clearAfter))) {
+          return;
+        }
       }
 
       await new Promise(resolve => setTimeout(resolve, 100));

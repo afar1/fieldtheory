@@ -206,10 +206,7 @@ function RightPill() {
     <div style={rightStyles.outerContainer}>
       <div
         className="di-right-pill"
-        style={{
-          ...rightStyles.pill,
-          justifyContent: hasTranscript ? 'flex-end' : 'center',
-        }}
+        style={rightStyles.pill}
       >
         {showDrawerControls && (
           <button
@@ -260,10 +257,10 @@ const rightStyles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '4px',
+    gap: '10px',
     width: '100%',
     height: '100%',
-    padding: '0 2px',
+    padding: '0 8px',
     boxSizing: 'border-box',
     backgroundColor: '#000000',
     borderRadius: '0 0 16px 0',
@@ -273,8 +270,8 @@ const rightStyles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '12px',
-    height: '12px',
+    width: '16px',
+    height: '16px',
     flexShrink: 0,
     padding: 0,
     border: 'none',
@@ -286,8 +283,8 @@ const rightStyles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '12px',
-    height: '12px',
+    width: '16px',
+    height: '16px',
     flexShrink: 0,
     padding: 0,
     border: 'none',
@@ -962,7 +959,6 @@ function LeftPill() {
     runtimeStatus.queueDepth >= 4 || (runtimeStatus.lastChunkAgeMs ?? 0) >= 1800
       ? styles.hudPillWarn
       : styles.hudPillGood;
-  const showCompactHud = inputMode === 'hot-mic';
 
   return (
     <div style={styles.outerContainer}>
@@ -971,7 +967,7 @@ function LeftPill() {
         style={{
           ...styles.island,
           ...styles.islandIdle,
-          justifyContent: showCompactHud ? 'flex-start' : 'center',
+          justifyContent: 'center',
           width: `${compactPillWidth}px`,
           height: `${compactPillHeight}px`,
         }}
@@ -1006,20 +1002,6 @@ function LeftPill() {
             <path d="M0 9H14V10H0V9Z" fill="rgba(255,255,255,0.78)" />
           </svg>
         </button>
-        {showCompactHud && (
-          <div style={styles.compactHud}>
-            <div style={styles.compactHudTopRow}>
-              <span style={styles.compactHudEngine}>{engineLabel}</span>
-              <span style={{ ...styles.compactHudBadge, ...healthTone }}>{healthLabel}</span>
-              <span style={{ ...styles.compactHudBadge, ...pressureTone }}>q{runtimeStatus.queueDepth}</span>
-            </div>
-            <div style={styles.compactHudBottomRow}>
-              asr {asrMsLabel} · total {totalPipelineLabel} · age {chunkAgeLabel}
-              {runtimeStatus.whisperFallbackActive ? ' · fallback' : ''}
-            </div>
-          </div>
-        )}
-
       </div>
 
       {historyVisible && (
@@ -1228,49 +1210,6 @@ const styles: Record<string, React.CSSProperties> = {
     border: 'none',
     cursor: 'pointer',
     transition: 'background-color 0.15s ease',
-    flexShrink: 0,
-  },
-
-  compactHud: {
-    display: 'flex',
-    flexDirection: 'column',
-    minWidth: 0,
-    marginLeft: '2px',
-    gap: '1px',
-    flex: 1,
-  },
-
-  compactHudTopRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '4px',
-    minWidth: 0,
-  },
-
-  compactHudBottomRow: {
-    fontSize: '9px',
-    color: 'rgba(255, 255, 255, 0.56)',
-    textTransform: 'lowercase',
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    fontVariantNumeric: 'tabular-nums',
-  },
-
-  compactHudEngine: {
-    fontSize: '9px',
-    color: 'rgba(255, 255, 255, 0.78)',
-    textTransform: 'lowercase',
-    marginRight: 'auto',
-  },
-
-  compactHudBadge: {
-    padding: '1px 4px',
-    borderRadius: '999px',
-    fontSize: '8px',
-    fontWeight: 600,
-    letterSpacing: '0.01em',
-    lineHeight: 1.2,
     flexShrink: 0,
   },
 

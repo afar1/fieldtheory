@@ -11,7 +11,11 @@ import { TrayManager } from './trayManager';
 import { TranscriberManager } from './transcriberManager';
 import { PreferencesManager } from './preferences';
 import { ClipboardManager } from './clipboardManager';
-import { ModelSize } from './modelManager';
+import {
+  DEFAULT_MODEL_SIZE,
+  isModelSize,
+  ModelSize,
+} from './modelManager';
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
 import { FeedbackManager } from './feedbackManager';
 import { AuthManager } from './authManager';
@@ -2317,10 +2321,17 @@ function setupTranscribeIPCHandlers(): void {
       throw new Error('TranscriberManager not initialized');
     }
     const modelManager = transcriberManager.getModelManager();
+    let requestedModel: ModelSize | undefined;
+    if (typeof modelSize === 'string') {
+      if (!isModelSize(modelSize)) {
+        throw new Error(`Invalid model size: ${modelSize}`);
+      }
+      requestedModel = modelSize;
+    }
     
-    const downloadFn = modelSize
+    const downloadFn = requestedModel
       ? (onProgress?: (downloaded: number, total: number) => void) =>
-          modelManager.downloadModelForSize(modelSize as 'small', onProgress)
+          modelManager.downloadModelForSize(requestedModel, onProgress)
       : (onProgress?: (downloaded: number, total: number) => void) =>
           modelManager.downloadModel(onProgress);
     
@@ -2342,11 +2353,10 @@ function setupTranscribeIPCHandlers(): void {
       throw new Error('TranscriberManager not initialized');
     }
     const modelManager = transcriberManager.getModelManager();
-    const validSizes: ModelSize[] = ['small'];
-    if (!validSizes.includes(modelSize as ModelSize)) {
+    if (!isModelSize(modelSize)) {
       throw new Error(`Invalid model size: ${modelSize}`);
     }
-    return await modelManager.deleteModelForSize(modelSize as ModelSize);
+    return await modelManager.deleteModelForSize(modelSize);
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_AVAILABLE_MODELS, () => {
@@ -2375,7 +2385,7 @@ function setupTranscribeIPCHandlers(): void {
 
   ipcMain.handle(TranscribeIPCChannels.GET_SELECTED_MODEL, () => {
     if (!transcriberManager) {
-      return 'small';
+      return DEFAULT_MODEL_SIZE;
     }
     return transcriberManager.getSelectedModel();
   });
@@ -2384,12 +2394,11 @@ function setupTranscribeIPCHandlers(): void {
     if (!transcriberManager) {
       throw new Error('TranscriberManager not initialized');
     }
-    const validSizes: ModelSize[] = ['small'];
-    if (!validSizes.includes(modelSize as ModelSize)) {
+    if (!isModelSize(modelSize)) {
       throw new Error(`Invalid model size: ${modelSize}`);
     }
     log.info('Transcription model set: %s', modelSize);
-    await transcriberManager.setSelectedModel(modelSize as ModelSize);
+    await transcriberManager.setSelectedModel(modelSize);
     broadcastHotMicRuntimeStatus();
   });
 
@@ -2497,16 +2506,27 @@ function setupTranscribeIPCHandlers(): void {
     if (!preferencesManager) {
       return 'whisper';
     }
-    return preferencesManager.getPreference('transcriptionEngine') ?? 'whisper';
+    const configured = preferencesManager.getPreference('transcriptionEngine');
+    if (configured && configured !== 'whisper') {
+      void preferencesManager.save({
+        transcriptionEngine: 'whisper',
+        hotMicTranscriptionEngine: 'default',
+      });
+    }
+    return 'whisper';
   });
 
   ipcMain.handle(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, async (_event, engine: 'whisper' | 'qwen' | 'mlx-whisper') => {
     if (!preferencesManager) {
       throw new Error('PreferencesManager not initialized');
     }
-    log.info('Transcription engine set: %s (Hot Mic follows global engine)', engine);
+    if (engine !== 'whisper') {
+      log.info('Ignoring unsupported engine request "%s"; using whisper only', engine);
+    } else {
+      log.info('Transcription engine set: whisper');
+    }
     await preferencesManager.save({
-      transcriptionEngine: engine,
+      transcriptionEngine: 'whisper',
       // Hot Mic now follows the global engine selection.
       hotMicTranscriptionEngine: 'default',
     });
@@ -6614,12 +6634,11 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getWhisperModel', () => {
-      return transcriberManager?.getSelectedModel() ?? 'small';
+      return transcriberManager?.getSelectedModel() ?? DEFAULT_MODEL_SIZE;
     });
 
     ipcMain.handle('hotmic:setWhisperModel', async (_event, model: ModelSize) => {
-      const validModels: ModelSize[] = ['small'];
-      const normalized: ModelSize = validModels.includes(model) ? model : 'small';
+      const normalized: ModelSize = isModelSize(model) ? model : DEFAULT_MODEL_SIZE;
       log.info('Hot Mic whisper model request mapped to global model: %s', normalized);
       if (transcriberManager) {
         await transcriberManager.setSelectedModel(normalized);

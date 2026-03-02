@@ -4,6 +4,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
+import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
 
 interface IslandGeometrySettings {
   notchWidthOverride: number;
@@ -43,10 +44,6 @@ function clampInt(value: number, min: number, max: number): number {
 export default function HotMicSettings() {
   const { theme } = useTheme();
 
-  const [qwenInstalled, setQwenInstalled] = useState(false);
-  const [mlxWhisperInstalled, setMlxWhisperInstalled] = useState(false);
-  const [appleSilicon, setAppleSilicon] = useState(true);
-  const [engine, setEngine] = useState<'whisper' | 'qwen' | 'mlx-whisper'>('whisper');
   const [selectedWhisperModel, setSelectedWhisperModel] = useState('small');
   const [whisperModelReady, setWhisperModelReady] = useState(true);
   const [enabled, setEnabled] = useState(false);
@@ -63,6 +60,8 @@ export default function HotMicSettings() {
   const [cancelWords, setCancelWords] = useState('');
   const [scrapWords, setScrapWords] = useState('');
   const [modeToggleHotkey, setModeToggleHotkey] = useState('');
+  const [isCapturingModeToggleHotkey, setIsCapturingModeToggleHotkey] = useState(false);
+  const [modeToggleHotkeyError, setModeToggleHotkeyError] = useState<string | null>(null);
   const [switchWords, setSwitchWords] = useState('');
   const [openAppPrefixes, setOpenAppPrefixes] = useState('');
   const [quitAppPrefixes, setQuitAppPrefixes] = useState('');
@@ -92,11 +91,7 @@ export default function HotMicSettings() {
   const [resettingDefaults, setResettingDefaults] = useState(false);
 
   const styles = getStyles(theme);
-  const canEnableHotMic = engine === 'qwen'
-    ? (appleSilicon && qwenInstalled)
-    : engine === 'mlx-whisper'
-      ? (appleSilicon && mlxWhisperInstalled)
-      : whisperModelReady;
+  const canEnableHotMic = whisperModelReady;
   const canToggleHotMic = enabled || canEnableHotMic;
 
   useEffect(() => {
@@ -104,18 +99,10 @@ export default function HotMicSettings() {
 
     // Check runtime availability and engine preferences
     Promise.all([
-      window.transcribeAPI?.isQwenInstalled?.() ?? Promise.resolve(false),
-      window.transcribeAPI?.isMlxWhisperInstalled?.() ?? Promise.resolve(false),
-      window.transcribeAPI?.isAppleSilicon?.() ?? Promise.resolve(true),
-      window.transcribeAPI?.getTranscriptionEngine?.() ?? Promise.resolve('whisper' as const),
       window.transcribeAPI?.getSelectedModel?.() ?? Promise.resolve('small'),
       window.transcribeAPI?.getModelDownloadStatus?.() ?? Promise.resolve({ small: true } as Record<string, boolean>),
       window.hotMicAPI?.getStatus?.() ?? Promise.resolve({ state: 'idle', muted: false }),
-    ]).then(([qi, mwi, as, eng, selectedModel, downloadStatus, hotMicStatus]) => {
-      setQwenInstalled(qi);
-      setMlxWhisperInstalled(mwi);
-      setAppleSilicon(as);
-      setEngine(eng);
+    ]).then(([selectedModel, downloadStatus, hotMicStatus]) => {
       setSelectedWhisperModel(selectedModel);
       setWhisperModelReady(Boolean(downloadStatus?.[selectedModel]));
       setCurrentState(hotMicStatus.state);
@@ -327,18 +314,47 @@ export default function HotMicSettings() {
     await window.hotMicAPI.setScrapWords(scrapWords.trim());
   }, [scrapWords]);
 
-  const handleModeToggleHotkeySave = useCallback(async () => {
+  const handleSetModeToggleHotkey = useCallback(async (newHotkey: string | null) => {
     if (!window.hotMicAPI) return;
-    const normalized = modeToggleHotkey.trim();
+    setIsCapturingModeToggleHotkey(false);
+    setModeToggleHotkeyError(null);
+
+    const normalized = (newHotkey ?? '').trim();
     const success = await window.hotMicAPI.setHotkey(normalized.length > 0 ? normalized : null);
     if (!success) {
       const current = await window.hotMicAPI.getHotkey();
       setModeToggleHotkey(current ?? '');
+      setModeToggleHotkeyError('Failed to register hotkey. It may be in use by another application.');
       return;
     }
     const saved = await window.hotMicAPI.getHotkey();
     setModeToggleHotkey(saved ?? '');
-  }, [modeToggleHotkey]);
+  }, []);
+
+  const handleStartCaptureModeToggleHotkey = useCallback(() => {
+    setIsCapturingModeToggleHotkey(true);
+    setModeToggleHotkeyError(null);
+  }, []);
+
+  useEffect(() => {
+    if (!isCapturingModeToggleHotkey) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const hotkeyString = buildHotkeyString(event);
+      if (!hotkeyString || isModifierOnly(hotkeyString)) {
+        setModeToggleHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+        return;
+      }
+      void handleSetModeToggleHotkey(hotkeyString);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isCapturingModeToggleHotkey, handleSetModeToggleHotkey]);
 
   const handlePrevWindowWordsSave = useCallback(async () => {
     if (!window.hotMicAPI || !prevWindowWords.trim()) return;
@@ -553,63 +569,61 @@ export default function HotMicSettings() {
         </button>
       </div>
 
-      <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Mode Toggle Hotkey</span>
-        <input
-          type="text"
-          value={modeToggleHotkey}
-          onChange={(e) => setModeToggleHotkey(e.target.value)}
-          placeholder="optional (e.g. Option+Shift+M)"
-          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
-          onBlur={handleModeToggleHotkeySave}
-          onKeyDown={(e) => e.key === 'Enter' && void handleModeToggleHotkeySave()}
-        />
-        <p style={{ ...styles.description, marginTop: 6 }}>
-          Toggles between hot mic and standard mode.
-        </p>
-      </div>
-
-      {/* Hot Mic engine source (single source of truth) */}
       <div style={styles.row}>
-        <span style={styles.rowLabel}>Transcription Engine</span>
-        <span style={{ fontSize: '12px', color: theme.textSecondary }}>
-          {formatEngineLabel(engine)}
+        <span style={styles.rowLabel}>Mode Toggle Hotkey</span>
+        <div style={styles.rowControls}>
+          {isCapturingModeToggleHotkey ? (
+            <>
+              <button style={{ ...styles.btn, ...styles.btnActive }}>Press keys...</button>
+              <button
+                onClick={() => {
+                  setIsCapturingModeToggleHotkey(false);
+                  setModeToggleHotkeyError(null);
+                }}
+                style={styles.btnGhost}
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              {modeToggleHotkey && (
+                <button
+                  onClick={() => void handleSetModeToggleHotkey(null)}
+                  style={styles.btnGhost}
+                >
+                  Clear
+                </button>
+              )}
+              <button
+                onClick={handleStartCaptureModeToggleHotkey}
+                style={styles.btn}
+              >
+                {modeToggleHotkey || 'Not set'}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      <p style={styles.description}>
+        Toggles between hot mic and standard mode.
+      </p>
+      {modeToggleHotkeyError && <p style={styles.hotkeyError}>{modeToggleHotkeyError}</p>}
+
+      <div style={styles.row}>
+        <span style={styles.rowLabel}>Whisper Model</span>
+        <span style={{ fontSize: '12px', color: whisperModelReady ? theme.textSecondary : '#ef4444' }}>
+          {selectedWhisperModel}
+          {whisperModelReady ? '' : ' (not downloaded)'}
         </span>
       </div>
-      {engine === 'whisper' && (
-        <div style={styles.row}>
-          <span style={styles.rowLabel}>Whisper Model</span>
-          <span style={{ fontSize: '12px', color: whisperModelReady ? theme.textSecondary : '#ef4444' }}>
-            {selectedWhisperModel}
-            {whisperModelReady ? '' : ' (not downloaded)'}
-          </span>
-        </div>
-      )}
-
-      {engine === 'qwen' && !appleSilicon ? (
-        <p style={{ ...styles.description, color: theme.textSecondary }}>
-          Hot Mic requires Apple Silicon (M1 or later).
-        </p>
-      ) : engine === 'qwen' && !qwenInstalled ? (
-        <p style={{ ...styles.description, color: theme.textSecondary }}>
-          Qwen voice model not installed. Run Qwen setup in Audio & Transcription settings.
-        </p>
-      ) : engine === 'mlx-whisper' && !appleSilicon ? (
-        <p style={{ ...styles.description, color: theme.textSecondary }}>
-          MLX Whisper requires Apple Silicon (M1 or later).
-        </p>
-      ) : engine === 'mlx-whisper' && !mlxWhisperInstalled ? (
-        <p style={{ ...styles.description, color: theme.textSecondary }}>
-          MLX Whisper not installed. Run MLX Whisper setup in Audio & Transcription settings.
-        </p>
-      ) : engine === 'whisper' && !whisperModelReady ? (
-        <p style={{ ...styles.description, color: theme.textSecondary }}>
-          Whisper model is missing or incomplete. Download it in Audio & Transcription settings.
+      {whisperModelReady ? (
+        <p style={styles.description}>
+          Hot Mic follows Voice & Transcription and uses Whisper only.
         </p>
       ) : (
-        <p style={styles.description}>
-          Hot Mic now always uses the engine/model from Audio & Transcription. Change it there once,
-          and both standard recording and Hot Mic will use the same runtime.
+        <p style={{ ...styles.description, color: theme.textSecondary }}>
+          Whisper model is missing or incomplete. Download it in Voice & Transcription settings.
         </p>
       )}
 
@@ -1325,6 +1339,43 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     fontSize: '12px',
     color: theme.text,
     fontWeight: 400,
+  },
+  rowControls: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  btn: {
+    padding: '6px 12px',
+    fontSize: '12px',
+    fontWeight: 500,
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
+    borderRadius: '6px',
+    cursor: 'pointer',
+    minWidth: '80px',
+    textAlign: 'center' as const,
+  },
+  btnActive: {
+    backgroundColor: theme.info,
+    color: '#fff',
+    borderColor: theme.info,
+  },
+  btnGhost: {
+    backgroundColor: 'transparent',
+    border: 'none',
+    color: theme.textSecondary,
+    minWidth: 'auto',
+    padding: '6px 8px',
+    fontSize: '12px',
+    cursor: 'pointer',
+  },
+  hotkeyError: {
+    fontSize: '11px',
+    color: theme.error,
+    margin: '4px 0 0 0',
+    lineHeight: 1.35,
   },
   sectionToggle: {
     width: '100%',
