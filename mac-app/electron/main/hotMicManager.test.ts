@@ -277,6 +277,32 @@ describe('HotMicManager transcript history persistence', () => {
     manager.destroy();
   });
 
+  it('dedupes overlapping boundary words across adjacent chunks', async () => {
+    const { manager } = createManager();
+    (manager as any).state = 'listening';
+
+    await (manager as any).processListeningChunk('we are testing boundary stitching');
+    await (manager as any).processListeningChunk('boundary stitching right now');
+
+    expect((manager as any).transcriptBuffer.join(' ')).toBe(
+      'we are testing boundary stitching right now'
+    );
+
+    manager.destroy();
+  });
+
+  it('drops a fully duplicated chunk after boundary stitching', async () => {
+    const { manager } = createManager();
+    (manager as any).state = 'listening';
+
+    await (manager as any).processListeningChunk('this is a test');
+    await (manager as any).processListeningChunk('this is a test');
+
+    expect((manager as any).transcriptBuffer).toEqual(['this is a test']);
+
+    manager.destroy();
+  });
+
   it('documents that spoken buffers above five words are saved on silence timeout even without submit words', async () => {
     vi.useFakeTimers();
     try {

@@ -353,6 +353,8 @@ export class HotMicManager extends EventEmitter {
   private static readonly REPETITION_CONSECUTIVE_RUN_MIN = 8;
   private static readonly REPETITION_UNIQUE_RATIO_MAX = 0.25;
   private static readonly REPETITION_DOMINANT_RATIO_MIN = 0.7;
+  private static readonly BOUNDARY_STITCH_MIN_WORDS = 2;
+  private static readonly BOUNDARY_STITCH_MAX_WORDS = 6;
 
   // Warmup promise — awaited before first transcription to avoid race with Qwen startup
   private warmupPromise: Promise<void> | null = null;
@@ -3030,6 +3032,66 @@ export class HotMicManager extends EventEmitter {
     return text.trim().toLowerCase().replace(/\.+$/, '').trim();
   }
 
+  private normalizeBoundaryToken(token: string): string {
+    return token
+      .toLowerCase()
+      .replace(/^[^a-z0-9']+|[^a-z0-9']+$/g, '');
+  }
+
+  private stitchChunkBoundaryOverlap(normalizedChunk: string): string {
+    if (this.transcriptBuffer.length === 0) return normalizedChunk;
+
+    const chunkTokens = normalizedChunk.split(/\s+/).filter(Boolean);
+    if (chunkTokens.length === 0) return '';
+
+    // Look at recent buffered tail, not just the last chunk.
+    const bufferedTail = this.transcriptBuffer.slice(-3).join(' ');
+    const tailTokens = bufferedTail.split(/\s+/).filter(Boolean);
+    if (tailTokens.length === 0) return normalizedChunk;
+
+    const maxOverlap = Math.min(
+      HotMicManager.BOUNDARY_STITCH_MAX_WORDS,
+      tailTokens.length,
+      chunkTokens.length
+    );
+
+    let overlapWords = 0;
+    for (let overlap = maxOverlap; overlap >= HotMicManager.BOUNDARY_STITCH_MIN_WORDS; overlap--) {
+      let matched = true;
+      for (let i = 0; i < overlap; i++) {
+        const tailWord = this.normalizeBoundaryToken(tailTokens[tailTokens.length - overlap + i] ?? '');
+        const chunkWord = this.normalizeBoundaryToken(chunkTokens[i] ?? '');
+        if (!tailWord || !chunkWord || tailWord !== chunkWord) {
+          matched = false;
+          break;
+        }
+      }
+      if (matched) {
+        overlapWords = overlap;
+        break;
+      }
+    }
+
+    if (overlapWords === 0) return normalizedChunk;
+    if (overlapWords >= chunkTokens.length) {
+      log.debug(
+        'Hot Mic: boundary stitch dropped duplicate chunk (%d overlap words): "%s"',
+        overlapWords,
+        this.summarizeForLog(normalizedChunk, 100)
+      );
+      return '';
+    }
+
+    const stitched = chunkTokens.slice(overlapWords).join(' ');
+    log.debug(
+      'Hot Mic: boundary stitch overlap=%d "%s" -> "%s"',
+      overlapWords,
+      this.summarizeForLog(normalizedChunk, 100),
+      this.summarizeForLog(stitched, 100)
+    );
+    return stitched;
+  }
+
   private summarizeForLog(text: string, maxChars: number = 180): string {
     if (!text) return '';
     if (text.length <= maxChars) return text;
@@ -3039,9 +3101,11 @@ export class HotMicManager extends EventEmitter {
   private pushNormalizedTextToBuffer(text: string): string {
     const normalized = this.normalizeBufferText(text);
     if (!normalized) return '';
-    this.transcriptBuffer.push(normalized);
-    this.appendHotMicBufferSegment(normalized);
-    return normalized;
+    const stitched = this.stitchChunkBoundaryOverlap(normalized);
+    if (!stitched) return '';
+    this.transcriptBuffer.push(stitched);
+    this.appendHotMicBufferSegment(stitched);
+    return stitched;
   }
 
   private async consumeBufferedHotMicPayload(targetBundleId: string | null): Promise<string> {
