@@ -6123,9 +6123,6 @@ async function initTranscriberSystem(): Promise<void> {
     getShowInDock: () => preferencesManager?.getPreference('showInDock') ?? false,
   });
 
-  // Seed the council.md portable command if it doesn't exist yet.
-  councilManager.ensureCommandFile();
-
   // Wire handoffs directory so transcripts land there automatically.
   if (commandsManager) {
     councilManager.setHandoffsDirectory(commandsManager.getHandoffsDirectory());
@@ -6277,10 +6274,6 @@ async function initTranscriberSystem(): Promise<void> {
     }
     if (commandsManager) {
       await commandsManager.reinitializeForUser();
-      // Ensure ~/.fieldtheory/commands/ is watched so seeded commands (e.g. council.md) appear in the UI.
-      // Must run after reinitializeForUser() which reloads per-user settings.
-      const fieldtheoryCommandsDir = path.join(process.env.HOME || '~', '.fieldtheory', 'commands');
-      await commandsManager.addWatchedDir(fieldtheoryCommandsDir);
     }
     // Register Hot Mic hotkey and auto-start if enabled (now that user prefs are loaded)
     if (hotMicManager) {
