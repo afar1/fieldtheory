@@ -16,25 +16,12 @@ import type { CouncilConfig, CouncilState, CouncilStatus, CouncilEvent } from '.
 
 const log = createLogger('Council');
 
-const COUNCIL_COMMAND_CONTENT = `Summarize what we're currently working on — the problem, approach, key constraints,
-and any open questions. Be specific and concrete.
-
-Write this summary as a markdown file to ~/.fieldtheory/council/kickoffs/ with filename
-format YYYY-MM-DD_HH-MM-SS.md.
-
-Include:
-- A clear topic statement (1-2 sentences) at the top
-- Key context that debate participants would need
-- Specific questions or decisions to resolve
-`;
-
 export interface CouncilManagerOptions {
   spawnFn?: typeof defaultSpawn;
   execSyncFn?: typeof defaultExecSync;
   existsSyncFn?: typeof fs.existsSync;
   readFileSyncFn?: typeof fs.readFileSync;
   mkdirSyncFn?: typeof fs.mkdirSync;
-  writeFileSyncFn?: typeof fs.writeFileSync;
 }
 
 export class CouncilManager extends EventEmitter {
@@ -51,7 +38,6 @@ export class CouncilManager extends EventEmitter {
   private existsSyncFn: typeof fs.existsSync;
   private readFileSyncFn: typeof fs.readFileSync;
   private mkdirSyncFn: typeof fs.mkdirSync;
-  private writeFileSyncFn: typeof fs.writeFileSync;
 
   constructor(options: CouncilManagerOptions = {}) {
     super();
@@ -60,7 +46,6 @@ export class CouncilManager extends EventEmitter {
     this.existsSyncFn = options.existsSyncFn || fs.existsSync;
     this.readFileSyncFn = options.readFileSyncFn || fs.readFileSync;
     this.mkdirSyncFn = options.mkdirSyncFn || fs.mkdirSync;
-    this.writeFileSyncFn = options.writeFileSyncFn || fs.writeFileSync;
   }
 
   /**
@@ -71,18 +56,6 @@ export class CouncilManager extends EventEmitter {
       return path.join(process.resourcesPath, 'council.sh');
     }
     return path.join(app.getAppPath(), 'scripts', 'council.sh');
-  }
-
-  /**
-   * Ensure the council.md portable command exists. Writes it if missing,
-   * but never overwrites user edits.
-   */
-  ensureCommandFile(): void {
-    const commandPath = path.join(process.env.HOME || '~', '.fieldtheory', 'commands', 'council.md');
-    if (this.existsSyncFn(commandPath)) return;
-    this.mkdirSyncFn(path.dirname(commandPath), { recursive: true });
-    this.writeFileSyncFn(commandPath, COUNCIL_COMMAND_CONTENT);
-    log.info('Wrote default council command to %s', commandPath);
   }
 
   /**

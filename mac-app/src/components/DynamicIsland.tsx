@@ -996,7 +996,7 @@ function LeftPill() {
           }}
           title="transcript history"
         >
-          <svg width="14" height="10" viewBox="0 0 14 10" fill="none" shapeRendering="crispEdges" aria-hidden="true">
+          <svg width="12" height="8" viewBox="0 0 14 10" fill="none" shapeRendering="crispEdges" aria-hidden="true">
             <path d="M0 1H14V2H0V1Z" fill="rgba(255,255,255,0.78)" />
             <path d="M0 5H10V6H0V5Z" fill="rgba(255,255,255,0.78)" />
             <path d="M0 9H14V10H0V9Z" fill="rgba(255,255,255,0.78)" />
@@ -1228,8 +1228,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
 
   modeStateDot: {
-    width: '8px',
-    height: '8px',
+    width: '7px',
+    height: '7px',
     borderRadius: '50%',
     transition: 'background-color 0.15s ease, box-shadow 0.15s ease',
   },
