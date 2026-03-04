@@ -85,9 +85,11 @@ const TranscribeIPCChannels = {
   SET_TRANSCRIPTION_ENGINE: 'transcribe:setTranscriptionEngine',
   IS_QWEN_INSTALLED: 'transcribe:isQwenInstalled',
   IS_MLX_WHISPER_INSTALLED: 'transcribe:isMlxWhisperInstalled',
+  IS_PARAKEET_INSTALLED: 'transcribe:isParakeetInstalled',
   IS_APPLE_SILICON: 'transcribe:isAppleSilicon',
   SETUP_QWEN: 'transcribe:setupQwen',
   SETUP_MLX_WHISPER: 'transcribe:setupMlxWhisper',
+  SETUP_PARAKEET: 'transcribe:setupParakeet',
 } as const;
 
 const ClipboardIPCChannels = {
@@ -738,9 +740,11 @@ export interface TranscribeAPI {
   setTranscriptionEngine: (engine: 'whisper' | 'qwen' | 'mlx-whisper') => Promise<void>;
   isQwenInstalled: () => Promise<boolean>;
   isMlxWhisperInstalled: () => Promise<boolean>;
+  isParakeetInstalled: () => Promise<boolean>;
   isAppleSilicon: () => Promise<boolean>;
   setupQwen: () => Promise<{ success: boolean; error?: string }>;
   setupMlxWhisper: () => Promise<{ success: boolean; error?: string }>;
+  setupParakeet: () => Promise<{ success: boolean; error?: string }>;
   toggleRecording: () => Promise<void>;
   getSoundConfig: () => Promise<SoundConfig>;
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
@@ -1235,6 +1239,9 @@ const transcribeAPI: TranscribeAPI = {
   isMlxWhisperInstalled: async (): Promise<boolean> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.IS_MLX_WHISPER_INSTALLED);
   },
+  isParakeetInstalled: async (): Promise<boolean> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.IS_PARAKEET_INSTALLED);
+  },
 
   isAppleSilicon: async (): Promise<boolean> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.IS_APPLE_SILICON);
@@ -1246,6 +1253,9 @@ const transcribeAPI: TranscribeAPI = {
 
   setupMlxWhisper: async (): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SETUP_MLX_WHISPER);
+  },
+  setupParakeet: async (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SETUP_PARAKEET);
   },
 
   toggleRecording: async (): Promise<void> => {

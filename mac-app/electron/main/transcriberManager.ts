@@ -79,10 +79,11 @@ export class TranscriberManager extends EventEmitter {
   private registeredSecondaryHotkey: string | null = null; // Track currently registered secondary hotkey
   private whisperProcess: ChildProcess | null = null;
 
-  // Persistent JSON server for Qwen and MLX Whisper engines.
-  // Both use the same stdin/stdout JSON protocol via StdioJsonServer.
+  // Persistent JSON server for Qwen, MLX Whisper, and Parakeet engines.
+  // All use the same stdin/stdout JSON protocol via StdioJsonServer.
   private qwenServer: StdioJsonServer | null = null;
   private mlxWhisperServer: StdioJsonServer | null = null;
+  private parakeetServer: StdioJsonServer | null = null;
   private qwenFallbackLoggedForDisabledReason: boolean = false;
 
   // Persistent whisper-server (HTTP) state for whisper.cpp.
@@ -1875,6 +1876,32 @@ export class TranscriberManager extends EventEmitter {
       return this.transcribe(wavPath, whisperModelOverride);
     }
 
+    // Parakeet (NVIDIA Parakeet TDT 0.6B v2 via onnx-asr).
+    // Falls back to whisper.cpp if server fails and a model is available.
+    if (engine === 'parakeet') {
+      try {
+        return await this.transcribeWithParakeet(wavPath);
+      } catch (parakeetError) {
+        if (!allowWhisperFallback) throw parakeetError;
+
+        const whisperAvailable = whisperModelOverride
+          ? await this.modelManager.isModelAvailableForSize(whisperModelOverride)
+          : await this.modelManager.isModelAvailable();
+        if (!whisperAvailable) throw parakeetError;
+
+        log.warn('Parakeet failed, falling back to whisper.cpp: %s', (parakeetError as Error).message);
+        this.lastHotMicUsedWhisperFallback = true;
+
+        try {
+          return await this.transcribe(wavPath, whisperModelOverride);
+        } catch (whisperError) {
+          throw new Error(
+            `Parakeet failed: ${(parakeetError as Error).message}; Whisper fallback failed: ${(whisperError as Error).message}`
+          );
+        }
+      }
+    }
+
     // MLX Whisper — use the mlx-whisper persistent server.
     // Falls back to whisper.cpp if server fails and a model is available.
     if (engine === 'mlx-whisper') {
@@ -2382,6 +2409,125 @@ export class TranscriberManager extends EventEmitter {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Parakeet (NVIDIA Parakeet TDT 0.6B v2 via onnx-asr)
+  // ---------------------------------------------------------------------------
+
+  private getParakeetPythonPath(): string {
+    if (app.isPackaged) {
+      return path.join(app.getPath('userData'), 'build-parakeet', 'venv', 'bin', 'python');
+    }
+    const macAppRoot = path.resolve(__dirname, '../..');
+    return path.join(macAppRoot, 'build-parakeet', 'venv', 'bin', 'python');
+  }
+
+  private getParakeetScriptPath(): string {
+    if (app.isPackaged) {
+      return path.join(process.resourcesPath, 'scripts', 'parakeet-transcribe.py');
+    }
+    const macAppRoot = path.resolve(__dirname, '../..');
+    return path.join(macAppRoot, 'scripts', 'parakeet-transcribe.py');
+  }
+
+  isParakeetInstalled(): boolean {
+    try {
+      return fs.existsSync(this.getParakeetPythonPath()) &&
+             fs.existsSync(this.getParakeetScriptPath());
+    } catch {
+      return false;
+    }
+  }
+
+  private getParakeetSetupScriptPath(): string {
+    if (app.isPackaged) {
+      return path.join(process.resourcesPath, 'scripts', 'setup-parakeet.sh');
+    }
+    const macAppRoot = path.resolve(__dirname, '../..');
+    return path.join(macAppRoot, 'scripts', 'setup-parakeet.sh');
+  }
+
+  async setupParakeet(): Promise<{ success: boolean; error?: string }> {
+    const setupScript = this.getParakeetSetupScriptPath();
+    if (!fs.existsSync(setupScript)) {
+      return { success: false, error: `Setup script not found: ${setupScript}` };
+    }
+
+    const venvDir = path.dirname(this.getParakeetPythonPath());
+    const venvBase = path.dirname(venvDir);
+
+    try {
+      const { stdout, stderr } = await execAsync(`bash "${setupScript}" "${venvBase}"`, {
+        timeout: 300_000,
+      });
+      log.info('Parakeet setup stdout: %s', stdout);
+      if (stderr) log.info('Parakeet setup stderr: %s', stderr);
+      return { success: true };
+    } catch (error: any) {
+      const message = error?.message || String(error);
+      log.error('Parakeet setup failed: %s', message);
+      return { success: false, error: message };
+    }
+  }
+
+  private getOrCreateParakeetServer(): StdioJsonServer {
+    if (!this.parakeetServer) {
+      this.parakeetServer = new StdioJsonServer({
+        name: 'Parakeet',
+        command: this.getParakeetPythonPath(),
+        args: [this.getParakeetScriptPath(), '--server'],
+      });
+    }
+    return this.parakeetServer;
+  }
+
+  private startParakeetServer(): Promise<void> {
+    return this.getOrCreateParakeetServer().start();
+  }
+
+  stopParakeetServer(): void {
+    this.parakeetServer?.stop();
+  }
+
+  private sendParakeetCommand(cmd: Record<string, unknown>) {
+    return this.getOrCreateParakeetServer().send(cmd);
+  }
+
+  /**
+   * Transcribe audio using NVIDIA Parakeet TDT 0.6B v2.
+   * Starts the server on first use, auto-restarts on crash (one retry).
+   */
+  private async transcribeWithParakeet(wavPath: string): Promise<string> {
+    const needTimestamps = this.screenshotMetadata.length > 0;
+
+    const doTranscribe = async (): Promise<string> => {
+      await this.startParakeetServer();
+
+      const response = await this.sendParakeetCommand({
+        cmd: 'transcribe',
+        audio: wavPath,
+        timestamps: needTimestamps,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Parakeet transcription failed: ${response.error}`);
+      }
+
+      return (response.text || '').trim();
+    };
+
+    try {
+      return await doTranscribe();
+    } catch (firstError: any) {
+      const message = firstError?.message || '';
+      if (message.includes('not running') || message.includes('timed out') || message.includes('startup cancelled')) {
+        throw firstError;
+      }
+      log.warn('Parakeet transcription failed, restarting server: %s', message);
+      this.stopParakeetServer();
+      return await doTranscribe();
+    }
+  }
+
   /**
    * Transcribe audio file using Whisper.
    * Prefers the persistent whisper-server for lower latency. Falls back to
@@ -2605,6 +2751,9 @@ export class TranscriberManager extends EventEmitter {
     if (engines.includes('mlx-whisper') && this.isMlxWhisperInstalled()) {
       await this.startMlxWhisperServer();
     }
+    if (engines.includes('parakeet') && this.isParakeetInstalled()) {
+      await this.startParakeetServer();
+    }
     if (engines.includes('whisper') && this.isWhisperServerAvailable()) {
       await this.startWhisperServer();
     }
@@ -2616,6 +2765,7 @@ export class TranscriberManager extends EventEmitter {
   async restartTranscriptionRuntime(): Promise<void> {
     this.stopQwenServer();
     this.stopMlxWhisperServer();
+    this.stopParakeetServer();
     this.stopWhisperServer();
 
     const primaryEngine = this.getConfiguredTranscriptionEngine();
@@ -2628,6 +2778,9 @@ export class TranscriberManager extends EventEmitter {
     if (engines.includes('mlx-whisper') && this.isMlxWhisperInstalled()) {
       await this.startMlxWhisperServer();
     }
+    if (engines.includes('parakeet') && this.isParakeetInstalled()) {
+      await this.startParakeetServer();
+    }
     if (engines.includes('whisper') && this.isWhisperServerAvailable()) {
       await this.startWhisperServer();
     }
@@ -2635,7 +2788,7 @@ export class TranscriberManager extends EventEmitter {
 
   private getConfiguredTranscriptionEngine(): TranscriptionEngine {
     const configured = this.preferences.getPreference('transcriptionEngine');
-    if (configured === 'qwen' || configured === 'mlx-whisper') {
+    if (configured === 'qwen' || configured === 'mlx-whisper' || configured === 'parakeet') {
       return configured;
     }
     return 'whisper';
@@ -2735,6 +2888,53 @@ export class TranscriberManager extends EventEmitter {
         fallbackAvailable,
         'ready',
         'Using whisper-cli (persistent server unavailable)'
+      );
+    }
+
+    // Parakeet runs on any architecture (ONNX Runtime CPU), no Apple Silicon needed.
+    if (selectedEngine === 'parakeet') {
+      if (!this.isParakeetInstalled()) {
+        return this.buildHotMicEngineStatus(
+          selectedEngine,
+          whisperModel,
+          fallbackAvailable,
+          'not-installed',
+          'Parakeet runtime is not installed'
+        );
+      }
+      if (this.parakeetServer?.disabledReason) {
+        return this.buildHotMicEngineStatus(
+          selectedEngine,
+          whisperModel,
+          fallbackAvailable,
+          'disabled',
+          this.parakeetServer.disabledReason
+        );
+      }
+      if (this.parakeetServer?.isReady) {
+        return this.buildHotMicEngineStatus(
+          selectedEngine,
+          whisperModel,
+          fallbackAvailable,
+          'ready',
+          'Parakeet server is ready'
+        );
+      }
+      if (this.parakeetServer?.isStarting) {
+        return this.buildHotMicEngineStatus(
+          selectedEngine,
+          whisperModel,
+          fallbackAvailable,
+          'warming',
+          'Parakeet server is warming up'
+        );
+      }
+      return this.buildHotMicEngineStatus(
+        selectedEngine,
+        whisperModel,
+        fallbackAvailable,
+        'cold',
+        'Parakeet server is idle (starts on first chunk)'
       );
     }
 
@@ -2854,6 +3054,14 @@ export class TranscriberManager extends EventEmitter {
         return;
       }
       await this.startMlxWhisperServer();
+      return;
+    }
+
+    if (engine === 'parakeet') {
+      if (!this.isParakeetInstalled()) {
+        return;
+      }
+      await this.startParakeetServer();
       return;
     }
 
