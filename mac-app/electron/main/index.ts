@@ -2631,6 +2631,20 @@ function setupTranscribeIPCHandlers(): void {
     });
   });
 
+  ipcMain.handle(TranscribeIPCChannels.IS_PARAKEET_INSTALLED, async () => {
+    if (!transcriberManager) {
+      return false;
+    }
+    return transcriberManager.isParakeetInstalled();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SETUP_PARAKEET, async () => {
+    if (!transcriberManager) {
+      return { success: false, error: 'Transcriber manager not initialized' };
+    }
+    return transcriberManager.setupParakeet();
+  });
+
   ipcMain.handle('transcribe:getStackCount', () => {
     if (!transcriberManager) {
       return 0;

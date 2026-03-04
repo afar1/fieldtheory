@@ -54,7 +54,7 @@ interface HotMicRuntimeStatus {
   chunksReceived: number;
   micHealthy: boolean;
   engine: {
-    selectedEngine: 'whisper' | 'qwen' | 'mlx-whisper';
+    selectedEngine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet';
     readiness:
       | 'ready'
       | 'warming'

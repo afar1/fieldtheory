@@ -257,13 +257,15 @@ interface TranscribeAPI {
   setAutoImproveMinWords?: (minWords: number) => Promise<void>;
   getAutoImproveStats?: () => Promise<{ wordsImproved: number; apiCalls: number; inputTokens: number; outputTokens: number }>;
   resetAutoImproveStats?: () => Promise<void>;
-  getTranscriptionEngine?: () => Promise<'whisper' | 'qwen' | 'mlx-whisper'>;
-  setTranscriptionEngine?: (engine: 'whisper' | 'qwen' | 'mlx-whisper') => Promise<void>;
+  getTranscriptionEngine?: () => Promise<'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet'>;
+  setTranscriptionEngine?: (engine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet') => Promise<void>;
   isQwenInstalled?: () => Promise<boolean>;
   isMlxWhisperInstalled?: () => Promise<boolean>;
+  isParakeetInstalled?: () => Promise<boolean>;
   isAppleSilicon?: () => Promise<boolean>;
   setupQwen?: () => Promise<{ success: boolean; error?: string }>;
   setupMlxWhisper?: () => Promise<{ success: boolean; error?: string }>;
+  setupParakeet?: () => Promise<{ success: boolean; error?: string }>;
   getDownloadingModels?: () => Promise<string[]>;
   toggleRecording?: () => Promise<void>;
   getSoundConfig?: () => Promise<SoundConfig>;
@@ -1175,8 +1177,8 @@ interface HotMicAPI {
   onRuntimeStatusChanged: (handler: (status: HotMicRuntimeStatus) => void) => () => void;
   getMuted: () => Promise<boolean>;
   getEnabled: () => Promise<boolean>;
-  getTranscriptionEngineMode: () => Promise<'default' | 'whisper' | 'qwen' | 'mlx-whisper'>;
-  setTranscriptionEngineMode: (mode: 'default' | 'whisper' | 'qwen' | 'mlx-whisper') => Promise<'default' | 'whisper' | 'qwen' | 'mlx-whisper'>;
+  getTranscriptionEngineMode: () => Promise<'default' | 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet'>;
+  setTranscriptionEngineMode: (mode: 'default' | 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet') => Promise<'default' | 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet'>;
   getWhisperModel: () => Promise<string>;
   setWhisperModel: (model: string) => Promise<string>;
   setEnabled: (enabled: boolean) => Promise<boolean>;

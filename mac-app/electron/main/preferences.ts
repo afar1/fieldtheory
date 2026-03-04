@@ -144,13 +144,13 @@ interface Preferences {
   cachedTier?: 'free' | 'pro';
 
   // Transcription engine selection. See TranscriptionEngine type in types/transcribe.ts.
-  transcriptionEngine?: 'whisper' | 'qwen' | 'mlx-whisper';
+  transcriptionEngine?: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet';
 
   // Hot Mic - continuous voice input for Claude Code terminals.
   // When enabled, auto-records voice fragments and injects them into a target terminal.
   hotMicEnabled?: boolean;
   hotMicMuted?: boolean;
-  hotMicTranscriptionEngine?: 'default' | 'whisper' | 'qwen' | 'mlx-whisper'; // Deprecated: Hot Mic now follows transcriptionEngine
+  hotMicTranscriptionEngine?: 'default' | 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet'; // Deprecated: Hot Mic now follows transcriptionEngine
   hotMicAllowWhisperFallback?: boolean; // Allow Qwen->Whisper fallback for Hot Mic when Qwen fails
   hotMicWhisperModel?: ModelSize; // Deprecated: Hot Mic now follows selectedModel
   hotMicTargetBundleId?: string; // e.g., "com.mitchellh.ghostty"
