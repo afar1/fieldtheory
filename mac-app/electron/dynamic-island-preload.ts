@@ -65,6 +65,11 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
     ipcRenderer.on('dynamic-island-show-history', () => callback());
   },
 
+  // Stack count updates (screenshots captured during standard recording).
+  onStackChanged: (callback: (count: number) => void) => {
+    ipcRenderer.on('dynamic-island-stack-changed', (_event, count) => callback(count));
+  },
+
   // Input mode (standard vs hot mic) updates.
   onInputMode: (callback: (mode: 'hot-mic' | 'standard') => void) => {
     ipcRenderer.on('dynamic-island-input-mode', (_event, mode) => callback(mode));
