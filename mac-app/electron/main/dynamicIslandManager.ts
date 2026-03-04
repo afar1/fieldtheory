@@ -156,6 +156,9 @@ export class DynamicIslandManager extends EventEmitter {
   private dismissTimer: NodeJS.Timeout | null = null;
   private readonly TRANSCRIPT_DISPLAY_MS = 4000;
 
+  // Stack count for screenshots captured during standard recording.
+  private stackCount: number = 0;
+
   // Hot-mic state tracked for the right pill.
   private hotMicActive: boolean = false;
   private hotMicWordCount: number = 0;
@@ -359,6 +362,18 @@ export class DynamicIslandManager extends EventEmitter {
 
   getState(): DynamicIslandState {
     return this.state;
+  }
+
+  // -------------------------------------------------------------------------
+  // Stack count (screenshots during standard recording, forwarded to left pill)
+  // -------------------------------------------------------------------------
+
+  updateStackCount(count: number): void {
+    this.stackCount = count;
+    if (!this.enabled) return;
+    if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+      this.window.webContents.send('dynamic-island-stack-changed', count);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -598,6 +613,10 @@ export class DynamicIslandManager extends EventEmitter {
         this.sendInputModeToRenderers();
         this.sendHistory();
         this.sendHotMicRuntimeStatusToLeft();
+        // Restore stack count on reconnect.
+        if (this.stackCount > 0) {
+          this.window!.webContents.send('dynamic-island-stack-changed', this.stackCount);
+        }
 
         if (this.pendingShow) {
           this.pendingShow = false;
@@ -1444,5 +1463,6 @@ export class DynamicIslandManager extends EventEmitter {
     ipcMain.removeAllListeners('dynamic-island-toggle-mute');
     ipcMain.removeAllListeners('dynamic-island-dismiss-transcript');
     ipcMain.removeAllListeners('dynamic-island-open-field-theory');
+    this.stackCount = 0;
   }
 }
