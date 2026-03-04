@@ -626,6 +626,9 @@ function LeftPill() {
   const [backgroundFilterStrength, setBackgroundFilterStrength] = useState(50);
   const [compactPillWidth, setCompactPillWidth] = useState<number>(() => window.innerWidth);
   const [compactPillHeight, setCompactPillHeight] = useState<number>(() => window.innerHeight);
+  // Stack/pipe count for screenshots captured during standard recording.
+  const [pipeCount, setPipeCount] = useState(0);
+  const [animatedPipes, setAnimatedPipes] = useState<Set<number>>(new Set());
   const [filterMeter, setFilterMeter] = useState<HotMicFilterMeter>({
     enabled: false,
     strength: 50,
@@ -672,7 +675,31 @@ function LeftPill() {
         setTranscript('');
         setCommands([]);
         setIsFinal(false);
+        setPipeCount(0);
+        setAnimatedPipes(new Set());
       }
+    });
+
+    // Stack count updates (screenshots captured during standard recording).
+    api.onStackChanged?.((count: number) => {
+      setPipeCount((prev) => {
+        if (count < prev) {
+          setAnimatedPipes(new Set());
+          return count;
+        }
+        if (count > prev) {
+          setTimeout(() => {
+            setAnimatedPipes((animPrev) => {
+              const next = new Set(animPrev);
+              for (let i = prev; i < count; i++) {
+                next.add(i);
+              }
+              return next;
+            });
+          }, 50);
+        }
+        return count;
+      });
     });
 
     api.onTranscriptUpdate((data: { text: string; isFinal: boolean }) => {
@@ -734,6 +761,7 @@ function LeftPill() {
       api.removeAllListeners('dynamic-island-input-mode');
       api.removeAllListeners('dynamic-island-hotmic-filter-meter');
       api.removeAllListeners('dynamic-island-hotmic-runtime');
+      api.removeAllListeners('dynamic-island-stack-changed');
       if (copiedTimerRef.current) {
         clearTimeout(copiedTimerRef.current);
         copiedTimerRef.current = null;
@@ -960,6 +988,14 @@ function LeftPill() {
       ? styles.hudPillWarn
       : styles.hudPillGood;
 
+  // Whether we're in a standard-mode active state (recording or transcribing).
+  const isStandardActive = inputMode === 'standard' && (state === 'recording' || state === 'transcribing' || state === 'improving');
+  const statusLabel = state === 'recording'
+    ? 'recording'
+    : state === 'transcribing' || state === 'improving'
+      ? 'transcribing'
+      : '';
+
   return (
     <div style={styles.outerContainer}>
       <div
@@ -972,36 +1008,78 @@ function LeftPill() {
           height: `${compactPillHeight}px`,
         }}
       >
-        <button
-          className="di-mode-toggle"
-          onClick={toggleInputMode}
-          style={styles.modeToggle}
-          title={inputMode === 'hot-mic' ? 'switch to standard mode' : 'switch to hot mic mode'}
-        >
-          <span
-            aria-hidden="true"
-            style={{
-              ...styles.modeStateDot,
-              backgroundColor: modeDot.color,
-              boxShadow: modeDot.shadow,
-            }}
-          />
-        </button>
-        <button
-          className="di-hamburger"
-          onClick={toggleHistory}
-          style={{
-            ...styles.hamburger,
-            backgroundColor: 'transparent',
-          }}
-          title="transcript history"
-        >
-          <svg width="12" height="8" viewBox="0 0 14 10" fill="none" shapeRendering="crispEdges" aria-hidden="true">
-            <path d="M0 1H14V2H0V1Z" fill="rgba(255,255,255,0.78)" />
-            <path d="M0 5H10V6H0V5Z" fill="rgba(255,255,255,0.78)" />
-            <path d="M0 9H14V10H0V9Z" fill="rgba(255,255,255,0.78)" />
-          </svg>
-        </button>
+        {isStandardActive ? (
+          // Standard recording/transcribing: colored dot + label + pipes.
+          <div style={styles.standardStatusContainer}>
+            <span
+              aria-hidden="true"
+              className="di-standard-dot"
+              style={{
+                ...styles.modeStateDot,
+                backgroundColor: modeDot.color,
+                boxShadow: modeDot.shadow,
+                animation: state === 'recording' ? 'pulse 1.8s ease-in-out infinite' : 'none',
+              }}
+            />
+            <span style={styles.standardStatusLabel}>
+              {statusLabel}
+              {(state === 'transcribing' || state === 'improving') && '.'.repeat(dotCount)}
+            </span>
+            {pipeCount > 0 && (
+              <div style={styles.pipeContainer}>
+                {Array.from({ length: Math.min(pipeCount, 3) }, (_, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      width: '2px',
+                      height: '10px',
+                      backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                      opacity: animatedPipes.has(i) ? 1 : 0,
+                      transition: 'opacity 0.2s ease-in',
+                    }}
+                  />
+                ))}
+                {pipeCount > 3 && (
+                  <span style={styles.pipeOverflow}>+{pipeCount - 3}</span>
+                )}
+              </div>
+            )}
+          </div>
+        ) : (
+          // Idle / hot-mic: mode toggle dot + hamburger.
+          <>
+            <button
+              className="di-mode-toggle"
+              onClick={toggleInputMode}
+              style={styles.modeToggle}
+              title={inputMode === 'hot-mic' ? 'switch to standard mode' : 'switch to hot mic mode'}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  ...styles.modeStateDot,
+                  backgroundColor: modeDot.color,
+                  boxShadow: modeDot.shadow,
+                }}
+              />
+            </button>
+            <button
+              className="di-hamburger"
+              onClick={toggleHistory}
+              style={{
+                ...styles.hamburger,
+                backgroundColor: 'transparent',
+              }}
+              title="transcript history"
+            >
+              <svg width="12" height="8" viewBox="0 0 14 10" fill="none" shapeRendering="crispEdges" aria-hidden="true">
+                <path d="M0 1H14V2H0V1Z" fill="rgba(255,255,255,0.78)" />
+                <path d="M0 5H10V6H0V5Z" fill="rgba(255,255,255,0.78)" />
+                <path d="M0 9H14V10H0V9Z" fill="rgba(255,255,255,0.78)" />
+              </svg>
+            </button>
+          </>
+        )}
       </div>
 
       {historyVisible && (
@@ -1232,6 +1310,41 @@ const styles: Record<string, React.CSSProperties> = {
     height: '7px',
     borderRadius: '50%',
     transition: 'background-color 0.15s ease, box-shadow 0.15s ease',
+    flexShrink: 0,
+  },
+
+  // Standard recording/transcribing status shown centered in the left pill.
+  standardStatusContainer: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
+    width: '100%',
+    height: '100%',
+  },
+
+  standardStatusLabel: {
+    fontSize: '11px',
+    fontWeight: 500,
+    color: 'rgba(255, 255, 255, 0.85)',
+    letterSpacing: '0.02em',
+    whiteSpace: 'nowrap' as const,
+    textTransform: 'lowercase' as const,
+  },
+
+  // Vertical pipes showing screenshot stacks during recording.
+  pipeContainer: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '2px',
+    marginLeft: '2px',
+  },
+
+  pipeOverflow: {
+    fontSize: '8px',
+    fontWeight: 600,
+    color: 'rgba(255, 255, 255, 0.9)',
+    marginLeft: '2px',
   },
 
   contentArea: {
@@ -1698,6 +1811,7 @@ declare global {
       onHotMicMute?: (cb: (muted: boolean) => void) => void;
       onHotMicFilterMeter?: (cb: (data: HotMicFilterMeter) => void) => void;
       onHotMicRuntimeStatus?: (cb: (status: HotMicRuntimeStatus) => void) => void;
+      onStackChanged?: (cb: (count: number) => void) => void;
       onInputMode?: (cb: (mode: 'hot-mic' | 'standard') => void) => void;
       getInputMode?: () => Promise<'hot-mic' | 'standard'>;
       setInputMode?: (mode: 'hot-mic' | 'standard') => Promise<'hot-mic' | 'standard'>;

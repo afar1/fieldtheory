@@ -5284,9 +5284,9 @@ function broadcastTranscribeEvents(): void {
     }
   });
 
-  transcriberManager.on('standardLiveTranscript', (text: string) => {
-    dynamicIslandManager?.updateDrawerTranscript(text);
-  });
+  // Standard mode no longer shows live preview in the drawer.
+  // The left pill displays "Recording" / "Transcribing" status instead.
+  // Hot Mic still uses the drawer via its own path.
 
   transcriberManager.on('result', (text) => {
     BrowserWindow.getAllWindows().forEach((window) => {
@@ -5342,6 +5342,8 @@ function broadcastTranscribeEvents(): void {
         window.webContents.send('transcribe:stackChanged', count);
       }
     });
+    // Forward stack count to the Dynamic Island for pipe display.
+    dynamicIslandManager?.updateStackCount(count);
   });
   
   // Track if quota just exhausted - skip paste-success to preserve upgrade message.
