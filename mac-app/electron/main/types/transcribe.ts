@@ -3,8 +3,9 @@
  * 'whisper': whisper.cpp (local binary, CPU/Metal)
  * 'qwen': Qwen3-ASR-0.6B via mlx-audio (Apple Silicon)
  * 'mlx-whisper': Whisper large-v3-turbo via mlx-whisper (Apple Silicon)
+ * 'parakeet': NVIDIA Parakeet TDT 0.6B v2 via onnx-asr (CPU/ONNX Runtime)
  */
-export type TranscriptionEngine = 'whisper' | 'qwen' | 'mlx-whisper';
+export type TranscriptionEngine = 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet';
 export type HotMicEngine = 'default' | TranscriptionEngine;
 
 /**
@@ -51,9 +52,11 @@ export const TranscribeIPCChannels = {
   // Engine installation and setup
   IS_QWEN_INSTALLED: 'transcribe:isQwenInstalled',
   IS_MLX_WHISPER_INSTALLED: 'transcribe:isMlxWhisperInstalled',
+  IS_PARAKEET_INSTALLED: 'transcribe:isParakeetInstalled',
   IS_APPLE_SILICON: 'transcribe:isAppleSilicon',
   SETUP_QWEN: 'transcribe:setupQwen',
   SETUP_MLX_WHISPER: 'transcribe:setupMlxWhisper',
+  SETUP_PARAKEET: 'transcribe:setupParakeet',
 
   // Main -> Renderer (send pattern)
   STATUS_CHANGED: 'transcribe:statusChanged',
@@ -147,13 +150,15 @@ export interface TranscribeAPI {
   setAutoImproveMinWords: (minWords: number) => Promise<void>;
   getAutoImproveStats: () => Promise<AutoImproveStats>;
   resetAutoImproveStats: () => Promise<void>;
-  getTranscriptionEngine: () => Promise<'whisper' | 'qwen' | 'mlx-whisper'>;
-  setTranscriptionEngine: (engine: 'whisper' | 'qwen' | 'mlx-whisper') => Promise<void>;
+  getTranscriptionEngine: () => Promise<'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet'>;
+  setTranscriptionEngine: (engine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet') => Promise<void>;
   isQwenInstalled: () => Promise<boolean>;
   isMlxWhisperInstalled: () => Promise<boolean>;
+  isParakeetInstalled: () => Promise<boolean>;
   isAppleSilicon: () => Promise<boolean>;
   setupQwen: () => Promise<{ success: boolean; error?: string }>;
   setupMlxWhisper: () => Promise<{ success: boolean; error?: string }>;
+  setupParakeet: () => Promise<{ success: boolean; error?: string }>;
   getSoundConfig: () => Promise<SoundConfig>;
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
   getAvailableSounds: () => Promise<SoundOption[]>;
