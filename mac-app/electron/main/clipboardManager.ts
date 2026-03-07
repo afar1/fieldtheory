@@ -258,7 +258,6 @@ export class ClipboardManager extends EventEmitter {
   }
   private pollInterval: NodeJS.Timeout | null = null;
   private lastContentHash: string = '';
-  private lastClipboardFormats: string = '';  // Cheap change detection to avoid expensive toPNG()
   private config: ClipboardConfig;
   private screenshotHotkeyRegistered: boolean = false;
   private fullScreenHotkeyRegistered: boolean = false;
@@ -342,7 +341,6 @@ export class ClipboardManager extends EventEmitter {
 
     // Reset state and restart polling
     this.lastContentHash = '';
-    this.lastClipboardFormats = '';
     this.startPolling();
   }
 
@@ -360,7 +358,6 @@ export class ClipboardManager extends EventEmitter {
     }
     this.dbPath = null;
     this.lastContentHash = '';
-    this.lastClipboardFormats = '';
   }
 
   /**
@@ -610,6 +607,28 @@ export class ClipboardManager extends EventEmitter {
   }
 
   /**
+   * Handle a clipboard content change: update hash, notify listeners,
+   * and store or deduplicate against existing items.
+   */
+  private async processClipboardChange(hash: string, store: () => Promise<number>): Promise<void> {
+    if (hash === this.lastContentHash) return;
+
+    this.lastContentHash = hash;
+    this.onClipboardChangeCallback?.();
+
+    const existing = this.db
+      .prepare('SELECT id FROM clipboard_items WHERE content_hash = ?')
+      .get(hash) as { id: number } | undefined;
+
+    if (!existing) {
+      await store();
+    } else {
+      // Item already exists - still notify so it can be added to stack during recording/silentStacking
+      this.onItemAddedCallback?.(existing.id);
+    }
+  }
+
+  /**
    * Check clipboard for changes and store if new.
    */
   private async checkClipboard(): Promise<void> {
@@ -620,66 +639,28 @@ export class ClipboardManager extends EventEmitter {
     }
 
     try {
-      const formats = clipboard.availableFormats().sort().join(',');
-
       // Check for text first (cheap operation)
       const text = clipboard.readText();
       if (text) {
-        const hash = this.hashContent(text);
-        if (hash !== this.lastContentHash) {
-          this.lastContentHash = hash;
-          this.lastClipboardFormats = formats;
-
-          // Notify clipboard change (fires even for duplicates)
-          this.onClipboardChangeCallback?.();
-
-          const existing = this.db
-            .prepare('SELECT id FROM clipboard_items WHERE content_hash = ?')
-            .get(hash) as { id: number } | undefined;
-
-          if (!existing) {
-            await this.storeText(text);
-          } else {
-            // Item already exists - still notify so it can be added to stack during recording/silentStacking
-            this.onItemAddedCallback?.(existing.id);
-          }
-        } else {
-          this.lastClipboardFormats = formats;
-        }
+        await this.processClipboardChange(
+          this.hashContent(text),
+          () => this.storeText(text)
+        );
         return;
       }
 
-      // Check for image (skip expensive toPNG() if formats unchanged)
-      if (formats === this.lastClipboardFormats && this.lastContentHash) {
-        return;
-      }
+      // Check for image — always read and hash, because different images
+      // can share the same clipboard format strings (e.g. two screenshots).
       const image = clipboard.readImage();
       if (!image.isEmpty()) {
         const imageBuffer = image.toPNG();
-        const hash = this.hashContent(imageBuffer);
-        if (hash !== this.lastContentHash) {
-          this.lastContentHash = hash;
-          this.lastClipboardFormats = formats;
-
-          // Notify clipboard change (fires even for duplicates)
-          this.onClipboardChangeCallback?.();
-
-          const existing = this.db
-            .prepare('SELECT id FROM clipboard_items WHERE content_hash = ?')
-            .get(hash) as { id: number } | undefined;
-
-          if (!existing) {
-            await this.storeImage(image, imageBuffer);
-          } else {
-            // Item already exists - still notify so it can be added to stack during recording/silentStacking
-            this.onItemAddedCallback?.(existing.id);
-          }
-        } else {
-          this.lastClipboardFormats = formats;
-        }
+        await this.processClipboardChange(
+          this.hashContent(imageBuffer),
+          () => this.storeImage(image, imageBuffer)
+        );
       }
     } catch (error) {
-      // Silently handle errors (clipboard might be locked)
+      log.warn('Clipboard read failed (may be locked by another app):', error);
     }
   }
 
@@ -1968,7 +1949,7 @@ export class ClipboardManager extends EventEmitter {
         this.lastContentHash = this.hashContent(imageBuffer);
       }
     } catch (error) {
-      // Silently handle errors
+      log.warn('Clipboard sync failed:', error);
     }
   }
 
