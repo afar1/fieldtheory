@@ -610,7 +610,7 @@ export class ClipboardManager extends EventEmitter {
    * Handle a clipboard content change: update hash, notify listeners,
    * and store or deduplicate against existing items.
    */
-  private async processClipboardChange(hash: string, store: () => Promise<void>): Promise<void> {
+  private async processClipboardChange(hash: string, store: () => Promise<number>): Promise<void> {
     if (hash === this.lastContentHash) return;
 
     this.lastContentHash = hash;
