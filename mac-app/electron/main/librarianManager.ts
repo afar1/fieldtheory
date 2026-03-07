@@ -10,6 +10,44 @@ import { createLogger } from './logger';
 const log = createLogger('Librarian');
 
 /**
+ * Parse markdown content to extract metadata (title, context, reading time).
+ * Only reads first ~20 lines for efficiency.
+ */
+export function parseMarkdownHeader(content: string): { title: string; context: string | null; readingTime: string | null } {
+  const lines = content.split('\n').slice(0, 20);
+  let title = 'Untitled Reading';
+  let context: string | null = null;
+  let readingTime: string | null = null;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // Extract title from first heading (H1, H2, or H3)
+    const headingMatch = trimmed.match(/^(#{1,3})\s+(.+)/);
+    if (headingMatch && title === 'Untitled Reading') {
+      title = headingMatch[2].trim();
+      continue;
+    }
+
+    // Extract reading time (e.g., *Reading time: ~4 minutes*)
+    const readingTimeMatch = trimmed.match(/^\*Reading time:\s*(.+?)\*$/i);
+    if (readingTimeMatch) {
+      readingTime = readingTimeMatch[1].trim();
+      continue;
+    }
+
+    // Extract context (e.g., *Context: Auth architecture refactoring*)
+    const contextMatch = trimmed.match(/^\*Context:\s*(.+?)\*$/i);
+    if (contextMatch) {
+      context = contextMatch[1].trim();
+      continue;
+    }
+  }
+
+  return { title, context, readingTime };
+}
+
+/**
  * Auto-run frequency for generating readings.
  * @deprecated Kept only for migration. State-enforced mode is now the only option.
  */
@@ -491,41 +529,8 @@ export class LibrarianManager extends EventEmitter {
   // Markdown Parsing
   // ===========================================================================
 
-  /**
-   * Parse markdown content to extract metadata.
-   * Only reads first ~20 lines for efficiency.
-   */
   private parseMarkdownHeader(content: string): { title: string; context: string | null; readingTime: string | null } {
-    const lines = content.split('\n').slice(0, 20);
-    let title = 'Untitled Reading';
-    let context: string | null = null;
-    let readingTime: string | null = null;
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-
-      // Extract H1 title
-      if (trimmed.startsWith('# ') && title === 'Untitled Reading') {
-        title = trimmed.slice(2).trim();
-        continue;
-      }
-
-      // Extract reading time (e.g., *Reading time: ~4 minutes*)
-      const readingTimeMatch = trimmed.match(/^\*Reading time:\s*(.+?)\*$/i);
-      if (readingTimeMatch) {
-        readingTime = readingTimeMatch[1].trim();
-        continue;
-      }
-
-      // Extract context (e.g., *Context: Auth architecture refactoring*)
-      const contextMatch = trimmed.match(/^\*Context:\s*(.+?)\*$/i);
-      if (contextMatch) {
-        context = contextMatch[1].trim();
-        continue;
-      }
-    }
-
-    return { title, context, readingTime };
+    return parseMarkdownHeader(content);
   }
 
   /**

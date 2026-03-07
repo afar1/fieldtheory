@@ -13,6 +13,7 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactDOM from 'react-dom/client';
+import { formatHotkeyDisplay, formatTimeAgo, SQUARES_ACTION_DEFS, SQUARES_ACTION_IDS, DEFAULT_SQUARES_HOTKEYS } from './commandLauncherUtils';
 
 // =============================================================================
 // Types
@@ -77,58 +78,22 @@ interface LauncherTranscribeAPI {
   toggleRecording: () => Promise<void>;
 }
 
-interface LauncherTodoAPI {
-  getHotkey: () => Promise<string>;
-}
-
 interface LauncherThemeAPI {
   getTheme: () => Promise<boolean>;
   setTheme: (isDark: boolean) => Promise<void>;
+}
+
+interface LauncherSquaresAPI {
+  executeAction: (action: string) => Promise<boolean>;
+  getHotkeys: () => Promise<Record<string, string>>;
 }
 
 // Type-safe accessors for the launcher context
 const commandsAPI = window.commandsAPI as unknown as LauncherCommandsAPI;
 const clipboardAPI = window.clipboardAPI as unknown as LauncherClipboardAPI;
 const transcribeAPI = window.transcribeAPI as unknown as LauncherTranscribeAPI;
-const todoAPI = window.todoAPI as unknown as LauncherTodoAPI;
 const themeAPI = window.themeAPI as unknown as LauncherThemeAPI;
-
-// =============================================================================
-// Hotkey Formatting
-// =============================================================================
-
-function formatHotkeyDisplay(hotkey: string): string {
-  if (!hotkey) return '';
-  return hotkey
-    .replace(/Command/g, '⌘')
-    .replace(/Cmd/g, '⌘')
-    .replace(/Shift/g, '⇧')
-    .replace(/Option/g, '⌥')
-    .replace(/Alt/g, '⌥')
-    .replace(/Control/g, '⌃')
-    .replace(/Ctrl/g, '⌃')
-    .replace(/\+/g, ' ')
-    .replace(/\\/g, '\\');
-}
-
-// =============================================================================
-// Time Formatting
-// =============================================================================
-
-function formatTimeAgo(timestamp: number): string {
-  const now = Date.now();
-  const diff = now - timestamp;
-  const minutes = Math.floor(diff / 60000);
-  const hours = Math.floor(diff / 3600000);
-  const days = Math.floor(diff / 86400000);
-
-  if (minutes < 1) return 'just now';
-  if (minutes < 60) return `${minutes}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  if (days === 1) return 'yesterday';
-  if (days < 7) return `${days}d ago`;
-  return new Date(timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
+const squaresAPI = window.squaresAPI as unknown as LauncherSquaresAPI;
 
 // =============================================================================
 // Default Hotkeys
@@ -147,7 +112,7 @@ const DEFAULT_HOTKEYS = {
 // Built-in Actions
 // =============================================================================
 
-function getBuiltInActions(hotkeys: typeof DEFAULT_HOTKEYS, isDarkMode: boolean): LauncherItem[] {
+function getBuiltInActions(hotkeys: typeof DEFAULT_HOTKEYS, isDarkMode: boolean, squaresHotkeys: Record<string, string> = DEFAULT_SQUARES_HOTKEYS): LauncherItem[] {
   return [
     {
       id: 'action-settings',
@@ -229,6 +194,16 @@ function getBuiltInActions(hotkeys: typeof DEFAULT_HOTKEYS, isDarkMode: boolean)
       hotkeyDisplay: '⇧ ⌘ L',
       actionId: 'toggle-theme',
     },
+    ...SQUARES_ACTION_DEFS.map(def => ({
+      id: `action-${def.actionId.replace(/([A-Z])/g, '-$1').toLowerCase()}`,
+      type: 'action' as const,
+      name: def.name,
+      displayName: def.displayName,
+      keywords: [...def.keywords, 'windows'],
+      hotkey: squaresHotkeys[def.actionId],
+      hotkeyDisplay: formatHotkeyDisplay(squaresHotkeys[def.actionId]),
+      actionId: def.actionId,
+    })),
   ];
 }
 
@@ -325,6 +300,7 @@ function CommandLauncher() {
   const [commands, setCommands] = useState<PortableCommandInfo[]>([]);
   const [handoffs, setHandoffs] = useState<HandoffInfo[]>([]);
   const [hotkeys, setHotkeys] = useState(DEFAULT_HOTKEYS);
+  const [squaresHotkeys, setSquaresHotkeys] = useState<Record<string, string>>(DEFAULT_SQUARES_HOTKEYS);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [filtered, setFiltered] = useState<LauncherItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -357,9 +333,10 @@ function CommandLauncher() {
   // Load hotkeys from preferences.
   const loadHotkeys = useCallback(async () => {
     try {
-      const [clipboardHotkeys, transcriptionHotkey] = await Promise.all([
+      const [clipboardHotkeys, transcriptionHotkey, sqHotkeys] = await Promise.all([
         clipboardAPI.getHotkeys?.() ?? {},
         transcribeAPI.getHotkey?.() ?? DEFAULT_HOTKEYS.transcription,
+        squaresAPI.getHotkeys?.() ?? DEFAULT_SQUARES_HOTKEYS,
       ]);
 
       setHotkeys({
@@ -370,6 +347,10 @@ function CommandLauncher() {
         transcription: transcriptionHotkey as string || DEFAULT_HOTKEYS.transcription,
         superPaste: DEFAULT_HOTKEYS.superPaste,
       });
+
+      if (sqHotkeys && typeof sqHotkeys === 'object') {
+        setSquaresHotkeys({ ...DEFAULT_SQUARES_HOTKEYS, ...sqHotkeys });
+      }
     } catch (err) {
       console.error('[CommandLauncher] Failed to load hotkeys:', err);
     }
@@ -429,10 +410,10 @@ function CommandLauncher() {
       timeAgo: formatTimeAgo(h.lastModified),
     }));
 
-    const actionItems = getBuiltInActions(hotkeys, isDarkMode);
+    const actionItems = getBuiltInActions(hotkeys, isDarkMode, squaresHotkeys);
 
     return [...commandItems, ...handoffItems, ...actionItems];
-  }, [commands, handoffs, hotkeys, isDarkMode]);
+  }, [commands, handoffs, hotkeys, squaresHotkeys, isDarkMode]);
 
   // Check if query is a help command.
   const isHelpQuery = useMemo(() => {
@@ -615,10 +596,11 @@ function CommandLauncher() {
             await themeAPI.setTheme(!currentIsDark);
           })();
           break;
-        // Other actions are handled by closing and letting main process handle.
+        // Route Squares window management actions.
         default:
-          // For actions that need main process handling, we'll extend the IPC later.
-          console.log(`[CommandLauncher] Action: ${item.actionId}`);
+          if (item.actionId && SQUARES_ACTION_IDS.has(item.actionId)) {
+            squaresAPI.executeAction(item.actionId);
+          }
           break;
       }
       commandsAPI.launcherClose();
