@@ -18,6 +18,11 @@ import {
   getLeftModeDotPresentation,
   type DynamicIslandInputMode,
 } from '../utils/dynamicIslandIndicator';
+import {
+  AudioLevelRingBuffer,
+  scaleAudioLevel,
+  WAVEFORM_BAR_COUNT,
+} from '../utils/audioWaveform';
 
 type IslandState = 'idle' | 'recording' | 'transcribing' | 'showing-transcript' | 'improving';
 
@@ -618,7 +623,6 @@ function LeftPill() {
   const [historyVisible, setHistoryVisible] = useState(false);
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [deletedId, setDeletedId] = useState<number | null>(null);
-  const [dotCount, setDotCount] = useState(1);
   const [inputMode, setInputMode] = useState<DynamicIslandInputMode>('standard');
   const [historyWordsPerLine, setHistoryWordsPerLine] = useState(10);
   const [voiceTuningVisible, setVoiceTuningVisible] = useState(false);
@@ -663,7 +667,10 @@ function LeftPill() {
   const historyScrollRef = useRef<HTMLDivElement>(null);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deletedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dotIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Waveform: ring buffer of recent audio levels for hot-mic visualization.
+  const waveformBufferRef = useRef(new AudioLevelRingBuffer(WAVEFORM_BAR_COUNT));
+  const [waveformLevels, setWaveformLevels] = useState<number[]>(new Array(WAVEFORM_BAR_COUNT).fill(0));
 
   useEffect(() => {
     const api = (window as any).dynamicIslandAPI;
@@ -773,22 +780,13 @@ function LeftPill() {
     };
   }, []);
 
+  // Update waveform ring buffer when audio levels arrive in hot-mic mode.
   useEffect(() => {
-    if (state === 'transcribing' || state === 'improving') {
-      dotIntervalRef.current = setInterval(() => {
-        setDotCount(prev => (prev % 3) + 1);
-      }, 400);
-    } else {
-      if (dotIntervalRef.current) {
-        clearInterval(dotIntervalRef.current);
-        dotIntervalRef.current = null;
-      }
-      setDotCount(1);
-    }
-    return () => {
-      if (dotIntervalRef.current) clearInterval(dotIntervalRef.current);
-    };
-  }, [state]);
+    if (inputMode !== 'hot-mic') return;
+    const buf = waveformBufferRef.current;
+    buf.push(filterMeter.rawLevel);
+    setWaveformLevels(buf.getOrdered().map(scaleAudioLevel));
+  }, [filterMeter.rawLevel, inputMode]);
 
   useEffect(() => {
     if (transcriptRef.current) {
@@ -990,11 +988,6 @@ function LeftPill() {
 
   // Whether we're in a standard-mode active state (recording or transcribing).
   const isStandardActive = inputMode === 'standard' && (state === 'recording' || state === 'transcribing' || state === 'improving');
-  const statusLabel = state === 'recording'
-    ? 'recording'
-    : state === 'transcribing' || state === 'improving'
-      ? 'transcribing'
-      : '';
 
   return (
     <div style={styles.outerContainer}>
@@ -1009,22 +1002,27 @@ function LeftPill() {
         }}
       >
         {isStandardActive ? (
-          // Standard recording/transcribing: colored dot + label + pipes.
+          // Standard recording/transcribing: animated waveform + pipes.
           <div style={styles.standardStatusContainer}>
-            <span
-              aria-hidden="true"
-              className="di-standard-dot"
-              style={{
-                ...styles.modeStateDot,
-                backgroundColor: modeDot.color,
-                boxShadow: modeDot.shadow,
-                animation: state === 'recording' ? 'pulse 1.8s ease-in-out infinite' : 'none',
-              }}
-            />
-            <span style={styles.standardStatusLabel}>
-              {statusLabel}
-              {(state === 'transcribing' || state === 'improving') && '.'.repeat(dotCount)}
-            </span>
+            <div aria-hidden="true" style={styles.waveformContainer}>
+              {Array.from({ length: WAVEFORM_BAR_COUNT }, (_, i) => (
+                <div
+                  key={i}
+                  style={{
+                    width: '2px',
+                    borderRadius: '1px',
+                    backgroundColor: modeDot.color,
+                    height: '14px',
+                    transformOrigin: 'center',
+                    animation: state === 'recording'
+                      ? `waveformPulse 0.7s ease-in-out ${i * 0.09}s infinite`
+                      : `waveformPulse 1.2s ease-in-out ${i * 0.15}s infinite`,
+                    opacity: state === 'recording' ? 1 : 0.6,
+                    transition: 'opacity 0.2s ease',
+                  }}
+                />
+              ))}
+            </div>
             {pipeCount > 0 && (
               <div style={styles.pipeContainer}>
                 {Array.from({ length: Math.min(pipeCount, 3) }, (_, i) => (
@@ -1046,7 +1044,7 @@ function LeftPill() {
             )}
           </div>
         ) : (
-          // Idle / hot-mic: mode toggle dot + hamburger.
+          // Idle / hot-mic: mode toggle dot (or waveform) + hamburger.
           <>
             <button
               className="di-mode-toggle"
@@ -1054,14 +1052,32 @@ function LeftPill() {
               style={styles.modeToggle}
               title={inputMode === 'hot-mic' ? 'switch to standard mode' : 'switch to hot mic mode'}
             >
-              <span
-                aria-hidden="true"
-                style={{
-                  ...styles.modeStateDot,
-                  backgroundColor: modeDot.color,
-                  boxShadow: modeDot.shadow,
-                }}
-              />
+              {inputMode === 'hot-mic' ? (
+                <div aria-hidden="true" style={styles.waveformContainer}>
+                  {waveformLevels.map((level, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        width: '2px',
+                        borderRadius: '1px',
+                        backgroundColor: modeDot.color,
+                        height: `${Math.max(2, Math.round(level * 14))}px`,
+                        opacity: 0.5 + 0.5 * level,
+                        transition: 'height 0.08s ease-out, opacity 0.08s ease-out',
+                      }}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <span
+                  aria-hidden="true"
+                  style={{
+                    ...styles.modeStateDot,
+                    backgroundColor: modeDot.color,
+                    boxShadow: modeDot.shadow,
+                  }}
+                />
+              )}
             </button>
             <button
               className="di-hamburger"
@@ -1291,6 +1307,13 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
 
+  waveformContainer: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '1.5px',
+    height: '14px',
+  },
+
   modeToggle: {
     display: 'flex',
     alignItems: 'center',
@@ -1321,15 +1344,6 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '6px',
     width: '100%',
     height: '100%',
-  },
-
-  standardStatusLabel: {
-    fontSize: '11px',
-    fontWeight: 500,
-    color: 'rgba(255, 255, 255, 0.85)',
-    letterSpacing: '0.02em',
-    whiteSpace: 'nowrap' as const,
-    textTransform: 'lowercase' as const,
   },
 
   // Vertical pipes showing screenshot stacks during recording.
@@ -1716,6 +1730,10 @@ styleSheet.textContent = `
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
+  }
+  @keyframes waveformPulse {
+    0%, 100% { transform: scaleY(0.15); }
+    50% { transform: scaleY(1); }
   }
   @keyframes slideDown {
     from { opacity: 0; transform: translateY(-8px); }

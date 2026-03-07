@@ -110,9 +110,10 @@ def main():
         )
         sys.exit(1)
 
-    # Load model once - onnx-asr handles download and caching automatically.
+    # Force CPU provider — CoreML fails with "model_path must not be empty"
+    # when loading from HuggingFace cache on macOS.
     print(f"Loading {MODEL_NAME}...", file=sys.stderr)
-    model = onnx_asr.load_model(MODEL_NAME)
+    model = onnx_asr.load_model(MODEL_NAME, providers=["CPUExecutionProvider"])
     print("Model loaded.", file=sys.stderr)
 
     if args.server:
