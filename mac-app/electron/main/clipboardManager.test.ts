@@ -3,11 +3,11 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 // --- Hoisted mocks (must be defined before any vi.mock) ---
 
 const testState = vi.hoisted(() => {
-  const readText = vi.fn(() => '');
-  const readImage = vi.fn(() => ({ isEmpty: () => true, toPNG: () => Buffer.from([]) }));
-  const availableFormats = vi.fn(() => []);
+  const readText = vi.fn((): string => '');
+  const readImage = vi.fn((): any => ({ isEmpty: () => true, toPNG: () => Buffer.from([]) }));
+  const availableFormats = vi.fn((): string[] => []);
 
-  const dbPrepare = vi.fn(() => ({
+  const dbPrepare = vi.fn((): any => ({
     get: vi.fn(() => undefined),
     run: vi.fn(),
     all: vi.fn(() => []),
@@ -81,29 +81,17 @@ vi.mock('./logger', () => ({
 
 import { ClipboardManager } from './clipboardManager';
 
-// Access private methods for testing via prototype
-type ClipboardManagerPrivate = ClipboardManager & {
-  checkClipboard: () => Promise<void>;
-  lastContentHash: string;
-  screenshotInProgress: boolean;
-  storeText: (...args: any[]) => Promise<number>;
-  storeImage: (...args: any[]) => Promise<number>;
-  processClipboardChange: (hash: string, store: () => Promise<void>) => Promise<void>;
-  onClipboardChangeCallback: (() => void) | null;
-  onItemAddedCallback: ((id: number) => void) | null;
-  db: any;
-};
-
-function createManager(): ClipboardManagerPrivate {
-  const manager = new ClipboardManager() as ClipboardManagerPrivate;
-  // Stub storeText/storeImage so they don't hit the real DB insert path
-  manager.storeText = vi.fn(async () => 1);
-  manager.storeImage = vi.fn(async () => 2);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing private members in tests
+function createManager(): any {
+  const manager = new ClipboardManager();
+  (manager as any).storeText = vi.fn(async () => 1);
+  (manager as any).storeImage = vi.fn(async () => 2);
   return manager;
 }
 
 describe('ClipboardManager.checkClipboard', () => {
-  let manager: ClipboardManagerPrivate;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let manager: any;
 
   beforeEach(() => {
     vi.clearAllMocks();
