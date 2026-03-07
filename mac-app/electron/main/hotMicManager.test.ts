@@ -495,7 +495,7 @@ describe('HotMicManager drawer preview threshold', () => {
     vi.clearAllMocks();
   });
 
-  it('shows drawer transcript from the first buffered word', async () => {
+  it('suppresses drawer transcript in hot-mic mode (waveform-only)', async () => {
     const { manager } = createManager();
     const dynamicIslandManager = {
       sendMuteState: vi.fn(),
@@ -506,34 +506,16 @@ describe('HotMicManager drawer preview threshold', () => {
     manager.setDynamicIslandManager(dynamicIslandManager as any);
 
     await (manager as any).processListeningChunk('hello');
-    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenLastCalledWith('hello');
-
     await (manager as any).processListeningChunk('world');
-    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenLastCalledWith('hello world');
 
-    await (manager as any).processListeningChunk('again');
-    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenLastCalledWith('hello world again');
-
-    manager.destroy();
-  });
-
-  it('keeps full drawer transcript text and lets renderer handle summarization', async () => {
-    const { manager } = createManager();
-    const dynamicIslandManager = {
-      sendMuteState: vi.fn(),
-      updateHotMic: vi.fn(),
-      updateDrawerTranscript: vi.fn(),
-      updateHotMicBackgroundFilterMeter: vi.fn(),
-    };
-    manager.setDynamicIslandManager(dynamicIslandManager as any);
-
-    await (manager as any).processListeningChunk('one two three four five six seven eight nine ten eleven');
-    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenLastCalledWith('one two three four five six seven eight nine ten eleven');
+    // Drawer is suppressed — transcript still buffered but not sent to drawer.
+    expect(dynamicIslandManager.updateDrawerTranscript).not.toHaveBeenCalled();
+    expect((manager as any).transcriptBuffer).toEqual(['hello', 'world']);
 
     manager.destroy();
   });
 
-  it('strips bracketed metadata artifacts before updating drawer transcript', async () => {
+  it('still buffers text correctly after sanitizing bracketed artifacts', async () => {
     const { manager } = createManager();
     const dynamicIslandManager = {
       sendMuteState: vi.fn(),
@@ -545,7 +527,10 @@ describe('HotMicManager drawer preview threshold', () => {
 
     await (manager as any).processListeningChunk('[take vo] vo this should render cleanly');
 
-    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenLastCalledWith('this should render cleanly');
+    expect(dynamicIslandManager.updateDrawerTranscript).not.toHaveBeenCalled();
+    // Buffer should have sanitized text.
+    expect((manager as any).transcriptBuffer.length).toBe(1);
+    expect((manager as any).transcriptBuffer[0]).toContain('should render cleanly');
 
     manager.destroy();
   });
