@@ -315,7 +315,6 @@ export class HotMicManager extends EventEmitter {
   private static readonly MAX_CHUNK_QUEUE_DEPTH = 8;
   private drawerSpeaking: boolean = false;
   private drawerSpeakingTimeout: NodeJS.Timeout | null = null;
-  private static readonly DRAWER_PREVIEW_MIN_WORDS = 1;
   private static readonly DRAWER_SPEAKING_HOLD_MS = 320;
   // Quality-critical: native helper must be the single chunk boundary source.
   // Re-enabling this fallback reintroduces duplicate micro-chunks and noticeably
@@ -3242,19 +3241,9 @@ export class HotMicManager extends EventEmitter {
     return words[words.length - 1] || '';
   }
 
-  private getDrawerPreviewText(): string {
-    const combined = this.transcriptBuffer.join(' ').trim();
-    if (!combined) return '';
-
-    const words = combined.split(/\s+/).filter(w => w.length > 0);
-    if (words.length < HotMicManager.DRAWER_PREVIEW_MIN_WORDS) {
-      return '';
-    }
-    return combined;
-  }
-
   private syncDrawerPreview(): void {
-    this.dynamicIslandManager?.updateDrawerTranscript(this.getDrawerPreviewText());
+    // Drawer is suppressed for hot-mic — the waveform in the pill is sufficient.
+    // Transcript is still buffered for paste/submit, just not shown in the drawer.
   }
 
   /**

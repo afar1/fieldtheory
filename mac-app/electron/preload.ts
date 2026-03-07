@@ -736,8 +736,8 @@ export interface TranscribeAPI {
   setAutoImproveMinWords: (minWords: number) => Promise<void>;
   getAutoImproveStats: () => Promise<AutoImproveStats>;
   resetAutoImproveStats: () => Promise<void>;
-  getTranscriptionEngine: () => Promise<'whisper' | 'qwen' | 'mlx-whisper'>;
-  setTranscriptionEngine: (engine: 'whisper' | 'qwen' | 'mlx-whisper') => Promise<void>;
+  getTranscriptionEngine: () => Promise<'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet'>;
+  setTranscriptionEngine: (engine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet') => Promise<void>;
   isQwenInstalled: () => Promise<boolean>;
   isMlxWhisperInstalled: () => Promise<boolean>;
   isParakeetInstalled: () => Promise<boolean>;
@@ -1228,7 +1228,7 @@ const transcribeAPI: TranscribeAPI = {
     return ipcRenderer.invoke(TranscribeIPCChannels.GET_TRANSCRIPTION_ENGINE);
   },
 
-  setTranscriptionEngine: async (engine: 'whisper' | 'qwen' | 'mlx-whisper'): Promise<void> => {
+  setTranscriptionEngine: async (engine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet'): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, engine);
   },
 

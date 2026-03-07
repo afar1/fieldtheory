@@ -1413,9 +1413,9 @@ final class RecordingHelper {
 
     private static let SPEECH_THRESHOLD: Double = 0.02  // RMS fallback when VAD unavailable
     private static let SILENCE_COMMAND_MS: Int = 300
-    private static let SILENCE_DICTATION_MS: Int = 550
+    private static let SILENCE_DICTATION_MS: Int = 200
     private static let MAX_ACTIVE_CHUNK_COMMAND_MS: Double = 300
-    private static let MAX_ACTIVE_CHUNK_DICTATION_MS: Double = 550
+    private static let MAX_ACTIVE_CHUNK_DICTATION_MS: Double = 15000
     private static let SPEECH_START_HOLD_MS: Double = 100
     private static let MIN_VOICED_MS: Double = 170
     private static let MIN_VOICED_RATIO: Double = 0.14
